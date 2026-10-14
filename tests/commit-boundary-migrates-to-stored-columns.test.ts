@@ -17,14 +17,13 @@
 // .test.ts` idiom, so the same fixture-builder keeps testing the real migration
 // once it exists rather than a shape only a pre-GREEN build can produce.
 //
-// The real-scale case touches `data/crucible.db` ONLY as one `copyFileSync`
-// snapshot (database file + `-wal`/`-shm` siblings) into an mkdtemp directory,
-// duplicated there for the before and after stores; the live file itself is
-// never opened, written or migrated. When
-// there is no dev store (CI, a clean checkout) the case states that and skips.
+// The real-scale case is a fixture too: several projects (one archived) and
+// many plans, built deterministically through the same door and downgraded the
+// same way. No case here reads the live dev store: the gate measures the
+// code, never the age of whatever data a board happens to hold.
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
 import { Database } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, SCHEMA_VERSION, MIGRATIONS } from "../src/store.ts";
@@ -339,24 +338,125 @@ describe("the migration chain: schema v18 -> v19 (CR-CRU-169 §S1)", () => {
   });
 });
 
-// ── AC1 — real scale, against a copy of the dev store ──────────────────────
+// ── AC1 — real scale, against a fixture this file builds ───────────────────
 
-const LIVE_STORE = join(process.cwd(), "data", "crucible.db");
+/** The project shapes the real-scale fixture spreads its plans across: two
+ *  live projects and one that is archived once its plans are filed, so the
+ *  comparison reaches plans `listProjects` answers on both sides of the flag. */
+const SCALE_PROJECTS = [
+  { key: "boundary-scale-alpha", archived: false },
+  { key: "boundary-scale-beta", archived: false },
+  { key: "boundary-scale-gamma", archived: true },
+] as const;
+
+/** Merged plans per project; each gets 1–3 cycles by its index. */
+const SCALE_MERGED_PLANS = 6;
 
 /**
- * A PLAIN FILE COPY of the live store (main file + `-wal`/`-shm` siblings, when
- * present) into `dest` — `copyFileSync`, never `sqlite3 .backup`, and the
- * original is opened by nothing here. Returns `false` (never throws) when
- * there is no live store to copy.
+ * A store at real scale, built deterministically through the ordinary door
+ * and then downgraded to `PRE_BOUNDARY_VERSION` on disk: per project, merged
+ * plans of one to three cycles whose runs INTERLEAVE across the cycles in
+ * time; runs with and without git context; runs posted in the SAME
+ * millisecond (so the insert-sequence tie-break decides first and last); git
+ * context arriving on milestones and gate snapshots as well as test runs; a
+ * merged plan whose only git context is on a milestone; a merged plan with no
+ * runs at all; and the open, aborted and closed-unmerged plans that must keep
+ * no boundary. Every clock read is pinned, so two builds hold the same rows.
  */
-function copyLiveStore(dest: string): boolean {
-  if (!existsSync(LIVE_STORE)) return false;
-  copyFileSync(LIVE_STORE, dest);
-  for (const suffix of ["-wal", "-shm"]) {
-    const src = `${LIVE_STORE}${suffix}`;
-    if (existsSync(src)) copyFileSync(src, `${dest}${suffix}`);
+function buildScaleFixture(): { dir: string; dbPath: string } {
+  const dir = tmpDir();
+  const dbPath = join(dir, "crucible.db");
+  const store = new Store(dbPath);
+  let clock = t0;
+  const tick = (ms: number): number => {
+    clock += ms;
+    setSystemTime(clock);
+    return clock;
+  };
+  setSystemTime(clock);
+
+  SCALE_PROJECTS.forEach(({ key }, projectIndex) => {
+    store.addProject({ key, name: key, type: "backend", sutRoot: "/tmp", retention: 1_000_000 });
+    const branch = `feat/scale-${String(projectIndex)}`;
+
+    for (let planIndex = 0; planIndex < SCALE_MERGED_PLANS; planIndex++) {
+      const cycleCount = 1 + (planIndex % 3);
+      const labels = Array.from({ length: cycleCount }, (_, c) => `c${String(c + 1)}`);
+      tick(1_000);
+      const plan = filePlanWithCycles(store, key, `SCALE-${String(projectIndex)}-${String(planIndex)}`, labels);
+      const cycleIds = plan.cycles.map((cycle) => cycle.id);
+      const commit = (n: number): string => `p${String(projectIndex)}-${String(planIndex)}-${String(n)}`;
+
+      if (planIndex === 4) {
+        // Git context only on a milestone: test runs carry none.
+        recordRun(store, key, tick(10), { cycleId: cycleIds[0]! });
+        store.recordMilestoneEvent(key, "fixture-agent", "cr-merged", {
+          label: `scale-${String(planIndex)}`,
+          context: { cycleId: cycleIds[0]!, git: { branch, commit: commit(0) } },
+        });
+      } else if (planIndex !== 5) {
+        // Plan 5 records nothing at all; every other merged plan interleaves
+        // runs across its cycles, newest cycle first, so display order and
+        // time order disagree.
+        for (let round = 0; round < 3; round++) {
+          for (const cycleId of [...cycleIds].reverse()) {
+            const at = tick(round === 1 ? 0 : 7);
+            const withGit = (round + cycleId) % 2 === 0 || planIndex === 0;
+            recordRun(store, key, at, {
+              cycleId,
+              ...(withGit ? { git: { branch, commit: commit(round * 10 + cycleId) } } : {}),
+            });
+          }
+        }
+        tick(5);
+        store.recordGateEvent(
+          key,
+          "fixture-agent",
+          { status: "pass", run: { id: `scale-gate-${String(projectIndex)}-${String(planIndex)}` } },
+          { context: { cycleId: cycleIds[cycleIds.length - 1]!, git: { branch, commit: commit(99) } } },
+        );
+        if (planIndex % 2 === 1) {
+          // A milestone in the SAME millisecond as the gate: the tie-break
+          // decides which of the two is the plan's last commit.
+          store.recordMilestoneEvent(key, "fixture-agent", "cr-merged", {
+            label: `scale-${String(planIndex)}`,
+            context: { cycleId: cycleIds[0]!, git: { branch, commit: commit(98) } },
+          });
+        }
+      }
+
+      for (const cycleId of cycleIds) {
+        tick(3);
+        sealCycle(store, key, plan.planId, cycleId);
+      }
+      tick(3);
+      planned(store.closePlan(key, plan.planId, { commit: `merge-${commit(0)}` }));
+    }
+
+    tick(1_000);
+    filePlanWithCycles(store, key, `SCALE-${String(projectIndex)}-OPEN`, ["c1"]);
+    tick(1_000);
+    const aborted = filePlanWithCycles(store, key, `SCALE-${String(projectIndex)}-ABORT`, ["c1"]);
+    planned(store.abortPlan(key, aborted.planId, changeRecord(`scale-abort-${String(projectIndex)}`)));
+    tick(1_000);
+    const unmerged = filePlanWithCycles(store, key, `SCALE-${String(projectIndex)}-UNMERGED`, ["c1"]);
+    recordRun(store, key, tick(10), {
+      cycleId: unmerged.cycles[0]!.id,
+      git: { branch, commit: "never-merged" },
+    });
+    tick(3);
+    sealCycle(store, key, unmerged.planId, unmerged.cycles[0]!.id);
+    tick(3);
+    planned(store.closePlan(key, unmerged.planId));
+  });
+
+  for (const { key, archived } of SCALE_PROJECTS) {
+    if (archived) store.archiveProject(key);
   }
-  return true;
+
+  closeStore(store);
+  downgradeToPreBoundary(dbPath);
+  return { dir, dbPath };
 }
 
 function allPlanBoundaries(store: Store): Record<string, CommitBoundary | null> {
@@ -376,8 +476,9 @@ function allPlanBoundaries(store: Store): Record<string, CommitBoundary | null> 
  * `src/store.ts` as of commit 9a11ae6, the rule every plan read applied
  * before the boundary was stored. It is restated here, never imported, so the
  * baseline cannot move with the code it checks. Read through a raw
- * connection on the snapshot COPY only, for every plan of every project (the
- * plans `allPlanBoundaries` reaches through `listProjects`):
+ * connection on the downgraded fixture BEFORE it is ever opened through
+ * `Store`, for every plan of every project (the plans `allPlanBoundaries`
+ * reaches through `listProjects`):
  *   - only a closed plan with a merge commit and a close time has a boundary;
  *   - its cycles in display order (`seq`, then `cycle_id`); for each of
  *     `events`, `milestones`, `gates`, then each cycle, the rows with that
@@ -404,7 +505,7 @@ function referenceBoundaries(dbPath: string): Record<string, CommitBoundary | nu
     const tail = Number(id.slice(id.lastIndexOf("-") + 1));
     return Number.isFinite(tail) ? tail : 0;
   };
-  const db = new Database(dbPath);
+  const db = new Database(dbPath, { readonly: true });
   try {
     const out: Record<string, CommitBoundary | null> = {};
     const plans = db
@@ -464,57 +565,34 @@ function referenceBoundaries(dbPath: string): Record<string, CommitBoundary | nu
   }
 }
 
-describe("AC1 — a copy of the dev store, migrated, answers every plan's commitBoundary exactly as today's build does", () => {
-  test("every plan's commitBoundary on a migrated copy of the dev store equals the SAME copy-of-today's-build answer, byte for byte", () => {
-    if (!existsSync(LIVE_STORE)) {
-      console.log(
-        `[CR-CRU-169 §S1] SKIPPED: no ${LIVE_STORE} to copy — a clean checkout and CI carry no ` +
-          `dev store, and its data is never committed.`,
-      );
-      return;
-    }
-    const dir = tmpDir();
-    const snapshotPath = join(dir, "snapshot.db");
-    const beforePath = join(dir, "before.db");
-    const afterPath = join(dir, "after.db");
+describe("AC1 — a real-scale store, migrated, answers every plan's commitBoundary exactly as the pre-migration derivation does", () => {
+  test("every plan's commitBoundary on a migrated real-scale fixture equals the frozen pre-migration derivation over the SAME rows, byte for byte", () => {
+    const fixture = buildScaleFixture();
+    expect(userVersion(fixture.dbPath)).toBe(PRE_BOUNDARY_VERSION);
 
-    // TWO INDEPENDENT DUPLICATES of one snapshot, never one read twice — reasoned out:
-    //
-    // `Store.open` always migrates whatever it opens up to THIS build's own
-    // `SCHEMA_VERSION`, and a migration cannot be undone in place, and this
-    // build READS the stored boundary rather than deriving it — so no open of
-    // a store through this build can answer what today's derivation answers.
-    // The `beforePath` copy is therefore never opened through `Store` at all:
-    // `referenceBoundaries` reads it through a raw connection and applies the
-    // pre-change derivation rule, frozen in this file. The `afterPath` copy is
-    // opened the ordinary way and migrates all the way to `SCHEMA_VERSION`,
-    // exercising the real chain. Comparing the two is then "the migrated
-    // answer equals today's", which is what AC1 states.
-    if (!copyLiveStore(snapshotPath)) {
-      throw new Error(`copyFileSync of ${LIVE_STORE} failed after existsSync reported it present`);
-    }
-    // ONE copy of the live store, then duplicated: the live board writes while
-    // suites run, so two separate copies of the live file can diverge or tear.
-    // The snapshot's own `-wal`/`-shm` siblings travel with each duplicate.
-    for (const dest of [beforePath, afterPath]) {
-      copyFileSync(snapshotPath, dest);
-      for (const suffix of ["-wal", "-shm"]) {
-        if (existsSync(`${snapshotPath}${suffix}`)) copyFileSync(`${snapshotPath}${suffix}`, `${dest}${suffix}`);
-      }
-    }
+    // The fixture is read through a raw connection FIRST, with the
+    // pre-change rule frozen in this file — `Store.open` always migrates what
+    // it opens, so no open through this build can answer what the
+    // pre-migration derivation answers. Only then is it opened the ordinary
+    // way and migrated all the way to `SCHEMA_VERSION`, exercising the real
+    // chain.
+    const beforeBoundaries = referenceBoundaries(fixture.dbPath);
 
-    const beforeBoundaries = referenceBoundaries(beforePath);
+    // Non-vacuity: the fixture reaches every shape the comparison must hold.
+    const planCount = SCALE_PROJECTS.length * (SCALE_MERGED_PLANS + 3);
+    const values = Object.values(beforeBoundaries);
+    expect(values.length).toBe(planCount);
+    expect(values.filter((b) => b === null).length).toBe(SCALE_PROJECTS.length * 3);
+    const withGit = values.filter((b) => b?.firstRunCommit !== undefined);
+    expect(withGit.length).toBe(SCALE_PROJECTS.length * (SCALE_MERGED_PLANS - 1));
+    expect(withGit.some((b) => b!.firstRunCommit !== b!.lastRunCommit)).toBe(true);
+    expect(values.filter((b) => b !== null && b.firstRunCommit === undefined).length).toBe(
+      SCALE_PROJECTS.length,
+    );
 
-    if (Object.keys(beforeBoundaries).length === 0) {
-      console.log(
-        `[CR-CRU-169 §S1] SKIPPED: the dev store copy holds no plans to compare — the proof's ` +
-          `reach, not the proof, is what is lost here.`,
-      );
-      return;
-    }
-
-    const after = Store.open(afterPath);
-    expect(after.schemaVersion).toBeGreaterThan(PRE_BOUNDARY_VERSION);
+    const after = Store.open(fixture.dbPath);
+    expect(after.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(after.migration?.from).toBe(PRE_BOUNDARY_VERSION);
     const afterBoundaries = allPlanBoundaries(after);
     closeStore(after);
 

@@ -55,24 +55,17 @@
 //      list and nothing else — it cannot say how to declare, because there is
 //      nothing to declare with. The assertion is on the REMEDY, not on the 400.
 //   4. SEEDED. `gap-analysis`, `design-review` and `stage-flip` are server
-//      constants today; after §S4 they are seeded CONFIGURATION. The case is
-//      driven by this project's REAL population, read off a `sqlite3 -readonly`
-//      replica rather than pinned, because it grows daily.
+//      constants today; after §S4 they are seeded CONFIGURATION. The case
+//      records every type the closed route accepted before §S4 through a
+//      project that declares nothing.
 //
 // ── Safety ────────────────────────────────────────────────────────────────
 // Every store here is `:memory:` and every server binds port 0; the dog-food
-// port 3849 is never touched. The live `data/crucible.db` is opened ONLY by
-// `sqlite3 -readonly … .backup` (the idiom `liveStoreReplica` in
-// `tests/milestone-dates-migration.test.ts` established), into an mkdtemp
-// replica, and the case measures
-// the live file's size and mtime before and after and fails if either moved.
+// port 3849 is never touched, and the operator's dev store is never read.
 // Fixture cr ids come from the REGISTERED synthetic namespaces the
 // project-namespace tripwire allows (`CR-SHIPPED-*`, `CR-AUTH-*`).
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { Store, migrateMilestoneRecords } from "../src/store.ts";
 import { startServer, type ServerHandle } from "../src/server.ts";
 
@@ -125,46 +118,12 @@ interface AnyBody {
   [key: string]: unknown;
 }
 
-/**
- * A READ-ONLY replica of the live store, or the STATED reason there is none —
- * the repo's live-subject idiom (`liveStoreReplica` in
- * `tests/milestone-dates-migration.test.ts`).
- * A clean checkout and CI have no live store and may have no `sqlite3`; a case
- * that THREW there would report a missing operator file as a broken invariant.
- */
-function liveStoreReplica(
-  dir: string,
-): { live: string; replica: string; sizeBefore: number; mtimeBefore: number } | { skip: string } {
-  const live = join(process.cwd(), "data", "crucible.db");
-  if (!existsSync(live)) {
-    return { skip: `there is no live store at ${live}, and its data is never committed` };
-  }
-  const replica = join(dir, "replica.db");
-  const before = statSync(live);
-  try {
-    const backup = Bun.spawnSync(["sqlite3", "-readonly", live, `.backup '${replica}'`]);
-    if (backup.exitCode !== 0) {
-      return {
-        skip:
-          `sqlite3 could not take a read-only replica of ${live} — exit ` +
-          `${String(backup.exitCode)}: ${backup.stderr.toString().trim()}`,
-      };
-    }
-  } catch (failure) {
-    const said = failure instanceof Error ? failure.message : String(failure);
-    return { skip: `\`sqlite3\`, which takes the read-only replica, is not runnable here (${said})` };
-  }
-  return { live, replica, sizeBefore: before.size, mtimeBefore: before.mtimeMs };
-}
-
 describe("CR-CRU-130 §S4 — reserved types stay reserved; every other type is definable", () => {
   let handle: ServerHandle | undefined;
-  const scratchDirs: string[] = [];
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
-    while (scratchDirs.length > 0) rmSync(scratchDirs.pop()!, { recursive: true, force: true });
   });
 
   function boot(): ServerHandle {
@@ -620,73 +579,4 @@ describe("CR-CRU-130 §S4 — reserved types stay reserved; every other type is 
     },
   );
 
-  test(
-    "every non-reserved type this project's LIVE store actually holds is accepted by a project " +
-      "that declared nothing — the seed is measured against the real population, not a list",
-    async () => {
-      const dir = mkdtempSync(join(tmpdir(), "cru130-c3-live-"));
-      scratchDirs.push(dir);
-      const taken = liveStoreReplica(dir);
-      if ("skip" in taken) {
-        console.warn(`live-population reach NOT RUN: ${taken.skip}`);
-        expect(taken.skip.length).toBeGreaterThan(0);
-        return;
-      }
-
-      const replica = new Database(taken.replica);
-      let population: string[];
-      try {
-        population = replica
-          .query<{ type: string | null }, []>(
-            `SELECT DISTINCT type FROM milestones WHERE type IS NOT NULL`,
-          )
-          .all()
-          .flatMap((row) => (row.type === null ? [] : [row.type]));
-      } finally {
-        replica.close();
-      }
-
-      // THE LIVE STORE WAS NEVER WRITTEN — measured, not asserted in prose.
-      const liveAfter = statSync(taken.live);
-      expect(liveAfter.size).toBe(taken.sizeBefore);
-      expect(liveAfter.mtimeMs).toBe(taken.mtimeBefore);
-
-      // Non-vacuity: the replica really holds a population. Measured
-      // 2026-09-13 at 6 distinct types over 70 rows; a FLOOR, because it
-      // grows daily and a pin would rot by tomorrow.
-      expect(population.length).toBeGreaterThanOrEqual(4);
-
-      // `release-proposal` is excluded because §S2 RETIRES it as a type: the
-      // 2 rows carrying it are legacy rows the C2 migration rewrites into
-      // undelivered `release` records, and
-      // the `release-proposal` tripwire test in
-      // `tests/roadmap-registration-routes.test.ts` is the standing
-      // tripwire that the generic door must keep refusing it.
-      const projectOwned = population.filter(
-        (type) => !RESERVED.includes(type as (typeof RESERVED)[number]) && type !== "release-proposal",
-      );
-      expect(projectOwned.length).toBeGreaterThanOrEqual(2);
-
-      // The proof: a fresh project, declaring NOTHING, accepts every one of
-      // them — which is what "seeded from configuration so nothing that
-      // records them today breaks" means when it is measured rather than
-      // promised. Asked of the SERVER, through the channel that publishes the
-      // accepted set, so the answer is the one a real client would get.
-      boot();
-      const key = await seedProject("cru130-live-population-reach");
-      const seeded = await acceptedTypes(key);
-      for (const type of projectOwned) {
-        expect(seeded).toContain(type);
-      }
-      for (const reserved of RESERVED) {
-        expect(seeded).toContain(reserved);
-      }
-      // …and each is genuinely RECORDABLE, not merely advertised.
-      for (const type of projectOwned) {
-        expect([200, 201]).toContain(
-          (await postMilestone(key, { type, label: `${type}-from-the-live-population` })).status,
-        );
-      }
-    },
-  );
 });

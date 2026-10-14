@@ -54,9 +54,9 @@
 // auto-abort tests await a CONDITION (polling) rather than a guessed duration.
 //
 // ── Safety ─────────────────────────────────────────────────────────────────
-// Every store is an mkdtempSync scratch file, ":memory:", or a `sqlite3
-// .backup` snapshot of the live store COPIED to tmp — `data/crucible.db` is
-// never opened by a Store. Every server binds port 0; NEVER the dog-food 3849.
+// Every store is an mkdtempSync scratch file or ":memory:" — the populated
+// store is one this file builds itself; `data/crucible.db` is never read,
+// copied or opened. Every server binds port 0; NEVER the dog-food 3849.
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
@@ -74,6 +74,7 @@ import {
   writeConfig,
 } from "./helpers/server-limits-fixture.ts";
 import type { RunEvent } from "../src/types.ts";
+import { populateStore } from "./helpers/populated-store.ts";
 
 // ── the §S0 contract, spelled once ─────────────────────────────────────────
 
@@ -349,14 +350,42 @@ function makePreLifecycleStore(rows = 3): PreLifecycleStore {
   };
 }
 
-const LIVE_STORE = path.join(import.meta.dir, "..", "data", "crucible.db");
-
-/** A WAL-safe `sqlite3 .backup` snapshot of the live store into tmp, or null. */
-function snapshotLiveStore(): string | null {
-  if (!fs.existsSync(LIVE_STORE)) return null;
-  const dest = path.join(tmpDir(), "crucible.db");
-  const done = Bun.spawnSync({ cmd: ["sqlite3", LIVE_STORE, `.backup '${dest}'`] });
-  return done.exitCode === 0 ? dest : null;
+/**
+ * A POPULATED store this test builds itself (tests/helpers/populated-store.ts)
+ * through the ordinary door, then walked BACK to the version just before the
+ * lifecycle step: the three lifecycle columns dropped from `events` (with any
+ * index naming them) and the chain stamped back. Every later step then re-runs
+ * over a long-used board's whole population on the next open.
+ */
+function makePopulatedPreLifecycleStore(): string {
+  const dbPath = path.join(tmpDir(), "crucible.db");
+  const built = Store.open(dbPath);
+  populateStore(built);
+  (built as unknown as { db: Database }).db.close();
+  const db = new Database(dbPath);
+  try {
+    db.exec("PRAGMA journal_mode = DELETE;");
+    for (const index of db
+      .query<{ name: string; sql: string | null }, []>(
+        `SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'events'`,
+      )
+      .all()) {
+      const sql = index.sql ?? "";
+      if (LIFECYCLE_COLUMNS.some((column) => new RegExp(`\\b${column}\\b`).test(sql))) {
+        db.exec(`DROP INDEX IF EXISTS "${index.name}"`);
+      }
+    }
+    const present = new Set(
+      db.query<{ name: string }, []>(`PRAGMA table_info(events)`).all().map((c) => c.name),
+    );
+    for (const column of LIFECYCLE_COLUMNS) {
+      if (present.has(column)) db.exec(`ALTER TABLE events DROP COLUMN "${column}"`);
+    }
+  } finally {
+    db.close();
+  }
+  stampUserVersion(dbPath, lifecycleStep().from);
+  return dbPath;
 }
 
 // ── server harness ─────────────────────────────────────────────────────────
@@ -676,14 +705,9 @@ describe("CR-CRU-017 §S0-3 — the upgrade is LOSSLESS: every pre-existing row 
     }
   });
 
-  test("the REAL dog-food store (read-only `.backup` snapshot, copied to tmp) migrates to SCHEMA_VERSION with identical counts and gains the lifecycle columns", () => {
-    const snapshot = snapshotLiveStore();
-    if (snapshot === null) {
-      // No live store here (CI) — the synthetic fixture above already carries
-      // the contract; inventing a stand-in and calling it "the real store"
-      // would only weaken it.
-      return;
-    }
+  test("a POPULATED store (built by this test, walked back to the version before the lifecycle step) migrates to SCHEMA_VERSION with identical counts and gains the lifecycle columns", () => {
+    const snapshot = makePopulatedPreLifecycleStore();
+    expect(missingLifecycleColumns(snapshot)).toEqual([...LIFECYCLE_COLUMNS]);
     // CR-CRU-129 §S1 — `events`, `milestones` and `gates` are counted TOGETHER
     // and the claim is CONSERVATION, not a per-table constant: the migration
     // MOVES every milestone and gate row out of the capped buffer into its own
@@ -702,8 +726,9 @@ describe("CR-CRU-017 §S0-3 — the upgrade is LOSSLESS: every pre-existing row 
       }, 0);
     const before = tables.map((t) => [t, countRows(snapshot, t)] as const);
     const eventsBefore = countEventRows(snapshot);
-    // Non-vacuity: the real store carries rows in the buffer to begin with.
+    // Non-vacuity: the populated store carries rows in every counted table.
     expect(eventsBefore).toBeGreaterThan(0);
+    for (const [, rows] of before) expect(rows).toBeGreaterThan(0);
 
     expect(Store.open(snapshot).schemaVersion).toBe(SCHEMA_VERSION);
 
