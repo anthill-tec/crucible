@@ -1820,6 +1820,27 @@ def _bound_cycle_id(resp, agent_id):
     return (False, None)
 
 
+def _active_cycle_ids(get, project_key):
+    """The ids of the project's ACTIVE cycles, read from its open plans, or
+    `()` when the board did not answer. An unanswered read is not evidence of
+    an active cycle, so it can never turn into a refusal: the run proceeds
+    under the soft `no-cycle` warning, exactly as it did before this read."""
+    try:
+        resp = get(f"{plans_path(project_key)}?status={PLANS_STATUS_OPEN}",
+                   timeout=PREFLIGHT_TIMEOUT_S)
+    except Exception:  # an unanswered read refuses nothing — see docstring
+        return ()
+    if not isinstance(resp, dict) or not resp.get("ok"):
+        return ()
+    plans = resp.get("plans")
+    if not isinstance(plans, list):
+        return ()
+    return tuple(cycle.get("id") for plan in plans if isinstance(plan, dict)
+                 for cycle in (plan.get("cycles") or [])
+                 if isinstance(cycle, dict) and cycle.get("status") == "active"
+                 and cycle.get("id") is not None)
+
+
 def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
                              context=None, stream=None, release=None):
     """§S3 — the pre-flight attribution check every ingesting run makes BEFORE
@@ -1827,14 +1848,22 @@ def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
     one `{code, detail}`) and prints the same warning's stderr line, so both
     channels are fed from ONE decision.
 
-    Best-effort and NEVER blocking, per AC5: an unreachable board, a timeout,
-    a malformed answer or ANY raised exception yields no warning and the run
+    Best-effort on the board's account: an unreachable board, a timeout, a
+    malformed answer or ANY raised exception yields no warning and the run
     proceeds. `get` is the calling client's own `_get` (its test harnesses
     patch that name), called with the short `PREFLIGHT_TIMEOUT_S` bound.
 
+    The one hard stop is a verdict the board ANSWERED: an agent it holds bound
+    to no cycle, no `--cycle`, no `--release`, while the project has an active
+    cycle. That run would be stored with no cycle while one is open, so this
+    raises `UnattributedRunRefused` — before the runner spawns — for `run_verb`
+    to convert. With no active cycle it stays the `no-cycle` warning: a run
+    between CRs is project-scoped on purpose.
+
     §S1 — a run filed under `release` is unattributed to a cycle on purpose:
     the binding is read as for any run, but the verdict is the `release-run`
-    note (`release_run_note`), never `no-cycle`, on either channel.
+    note (`release_run_note`), never `no-cycle`, on either channel, and it is
+    never refused.
     """
     try:
         if not agent_id or not project_key:
@@ -1855,12 +1884,19 @@ def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
         known, bound = _bound_cycle_id(resp, agent_id)
         if not known or bound is not None:
             return []
-        print(no_cycle_line(), file=stream if stream is not None else sys.stderr)
-        return [no_cycle_warning()]
+        active = _active_cycle_ids(get, project_key)
+        if not active:
+            print(no_cycle_line(),
+                  file=stream if stream is not None else sys.stderr)
+            return [no_cycle_warning()]
     except Exception:
         # Attribution is a courtesy; a suite must never become unrunnable
         # because it could not be computed.
         return []
+    # The board answered: a known, unbound agent, no `--cycle`/`--release`,
+    # and an active cycle on the project. Raised OUTSIDE the courtesy catch
+    # above, so this one verdict is never swallowed into "proceed".
+    raise UnattributedRunRefused(agent_id, active)
 
 
 # ── CR-CRU-058 §S1/§S2 — the toolchain-gate help/warning vocabulary ────────
@@ -2338,6 +2374,55 @@ def emit_release_run_refused_hard_stop(verb, refusal, context=None):
     return 1
 
 
+# §S2 — the fifth hard stop: a run that would carry no cycle while the project
+# has an active one. Raised by `preflight_cycle_warnings` (the one pre-flight
+# every client's run verbs make), converted by `run_verb` — so the runner never
+# starts and nothing is ingested.
+
+UNATTRIBUTED_RUN_REFUSED_CODE = "unattributed-run-refused"
+
+
+class UnattributedRunRefused(Exception):
+    """§S2 — raised by `preflight_cycle_warnings` when an agent bound to no
+    cycle starts a run with neither `--cycle` nor `--release` while the
+    project has an active cycle. `help[]` names the active cycle's id."""
+
+    def __init__(self, agent_id, active_cycle_ids):
+        self.agent_id = agent_id
+        self.active_cycle_ids = tuple(active_cycle_ids)
+        named = ", ".join(str(cid) for cid in self.active_cycle_ids)
+        self.detail = (f"the project has an active cycle ({named}) and this run "
+                       f"would carry none: agent {agent_id} is bound to no "
+                       f"cycle and neither --cycle nor --release was given; "
+                       f"refused before the runner started, so nothing ran "
+                       f"and nothing was filed")
+        if len(self.active_cycle_ids) == 1:
+            lever = (f"re-run with --cycle {self.active_cycle_ids[0]} — the "
+                     f"project's active cycle")
+        else:
+            lever = (f"re-run with --cycle <id> naming the cycle this run "
+                     f"belongs to — active cycles: {named}")
+        self.help = [
+            lever,
+            "or register the agent bound to that cycle first "
+            "(register --agent <agentId> --cycle <id>), then re-run",
+            "or file a release's verification run with --release <label>, "
+            "which carries no cycle by design"]
+        super().__init__(self.detail)
+
+
+def emit_unattributed_run_refused_hard_stop(verb, refusal, context=None):
+    """§S2 — emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for a run refused for carrying no cycle, and return the non-zero
+    exit code. Nothing is run, nothing is ingested from this path."""
+    emit_axi(verb or "unknown", False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=(f"error: {UNATTRIBUTED_RUN_REFUSED_CODE} — "
+                          f"{refusal.detail}"))
+    return 1
+
+
 def _hard_stop_context(args, project_key_fn, agent_id=None):
     """The best-effort `context` a hard-stopped verb's envelope carries.
 
@@ -2357,8 +2442,9 @@ def _hard_stop_context(args, project_key_fn, agent_id=None):
 def run_verb(func, args, project_key_fn=None):
     """Fleet-uniform subcommand dispatch: run the resolved verb and convert a
     typed hard stop — an undeclared agent identity (§S5), an unresolvable
-    cycle list (CR-CRU-107 §S2) or a tier with no declared target
-    (CR-CRU-111 §S1) — into the `ok:false` envelope and a non-zero exit code
+    cycle list (CR-CRU-107 §S2), a tier with no declared target
+    (CR-CRU-111 §S1), a refused release run, or a run that would carry no
+    cycle while one is active — into the `ok:false` envelope and a non-zero exit code
     instead of an unhandled traceback.
 
     CR-CRU-111 §S5 — a dispatch has ingested nothing YET, so the envelope's
@@ -2384,6 +2470,10 @@ def run_verb(func, args, project_key_fn=None):
         return emit_release_run_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
             _hard_stop_context(args, project_key_fn))
+    except UnattributedRunRefused as refusal:
+        return emit_unattributed_run_refused_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn, refusal.agent_id))
     except RunAbandoned as abandoned:
         # A signal that escaped a gated-run bracket: the bracket already
         # aborted its open run and removed its identity.

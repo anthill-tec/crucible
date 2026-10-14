@@ -1891,9 +1891,17 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
     release = getattr(args, "release", None)
     narrator, run_id, run_warnings = None, None, []
     if args.agent:
+        # The pre-flight attribution check every other run verb makes, before
+        # llvm-cov spawns: an unbound run while the project has an active cycle
+        # is refused here, and with no active cycle it carries `no-cycle`. A
+        # release run keeps its own note below and is never refused.
+        preflight_warnings = [] if release else _axi().preflight_cycle_warnings(
+            _get, _project_key(project_dir), args.agent,
+            cycle_id=getattr(args, "cycle", None), context=_run_context())
         narrator = _narrator(project_dir, args.agent, identity)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier="regression",
                                           context=_run_context(), release=release)
+        run_warnings = list(preflight_warnings) + run_warnings
         # §S1 — the release run's note, as `_smoke_test` carries it.
         if release:
             run_warnings = [_axi().release_run_note(release)] + run_warnings
