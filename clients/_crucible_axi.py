@@ -5971,7 +5971,7 @@ def _python_suite_argv(tokens):
 _SUITE_ARGV_BY_STACK = {"python": _python_suite_argv}
 
 
-def sibling_client_argv(stack, command, agent=None, *, release=None):
+def sibling_client_argv(stack, command, agent=None, *, release=None, cycle=None):
     """§S1's DISPATCH — the invocation of `stack`'s OWN client that runs what
     `command` declares, or None when this declaration cannot be dispatched.
 
@@ -5988,7 +5988,12 @@ def sibling_client_argv(stack, command, agent=None, *, release=None):
     which is this one.
 
     §S1 — a gate given `--release` passes it on the same way, and only then,
-    so a release's gate is filed under the release whole."""
+    so a release's gate is filed under the release whole.
+
+    A gate given `--cycle` passes it on the same way, and only then: the
+    dispatched client runs as its own process, after the gate's own bracket
+    removed the identity it bound, so without the flag its run would carry no
+    cycle, and be refused while that cycle is active."""
     try:
         tokens = shlex.split(command or "")
     except ValueError:
@@ -6004,6 +6009,8 @@ def sibling_client_argv(stack, command, agent=None, *, release=None):
         argv += ["--agent", agent]
     if argv and release:
         argv += ["--release", release]
+    if argv and cycle is not None:
+        argv += ["--cycle", str(cycle)]
     return argv
 
 

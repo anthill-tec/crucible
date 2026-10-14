@@ -1683,7 +1683,8 @@ def _dispatch_gate_suite(args, suite):
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     return (_axi().sibling_client_argv(suite.stack, suite.command,
                                        agent=args.agent,
-                                       release=getattr(args, "release", None)),
+                                       release=getattr(args, "release", None),
+                                       cycle=getattr(args, "cycle", None)),
             package_dir)
 
 
