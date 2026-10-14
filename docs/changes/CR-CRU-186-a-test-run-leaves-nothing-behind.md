@@ -54,8 +54,16 @@ database directory when the run ends (global teardown).
 The bun test preload (`tests/helpers/isolated-store-preload.ts`, wired in `bunfig.toml`) creates one
 directory per test run, points `TMPDIR` at it before any suite loads, and removes it when the run
 exits. The per-run directory lives under the system temp root, so a path a test checks against
-that root still matches. Child processes (spawned clients, Playwright and its test server) inherit
-`TMPDIR`. A test that forgets its cleanup then leaves nothing in the system temp root.
+that root still matches. It covers the test process's own temp paths and every child spawned with
+the environment passed explicitly.
+
+Bun (1.4.2) hands a child spawned WITHOUT an explicit `env` the environment as it stood when the
+process started, so a `TMPDIR` set in the preload never reaches it. That reach comes from the
+client instead (user ruling, 2026-10-14): `bun-crucible.py` exports a run-scoped `TMPDIR` (one
+directory per run, under the system temp root) for every runner it spawns for a test-family verb
+(`test`, `regression`, `pre-merge-gate`, declared scripts including `e2e`), and removes it when the
+runner exits, on every exit path. Every child of a client-driven run then inherits it. A bare
+`bun test` run by hand relies on each file's own cleanup (§S1).
 
 The python client suite left nothing in either measured run, so it gets no backstop. A test that
 writes to a hard-coded `/tmp` path bypasses `TMPDIR`; the guard in the acceptance criteria catches it.
@@ -97,8 +105,14 @@ exits 0 with zero results keeps today's behaviour.
       gone after it runs, on a passing and on a failing run. That holds with the run-scoped temp root
       disabled, so the backstop is not what passes it.
 - [ ] **The temp root is run-scoped.** Under the preload, `os.tmpdir()` (bun) and
-      `tempfile.gettempdir()` (in a spawned python client) resolve inside one per-run directory, and
+      `tempfile.gettempdir()` (in a python child spawned with the environment passed) resolve inside
+      one per-run directory, and
       that directory is removed when the run exits, including when a test fails.
+- [ ] **The client scopes the run's temp root.** For EACH test-family verb of `bun-crucible.py`
+      (`test`, `regression`, a declared script), the spawned runner sees `TMPDIR` set to one
+      directory under the system temp root, a child it spawns WITHOUT an explicit env sees the same
+      value, and the directory is gone after the client exits: on a pass, a failure, a runner with
+      no report, and SIGTERM.
 - [ ] **The runner's tree is killed.** For EACH of the five clients' `test` verb, with a fake runner
       that starts a long-lived grandchild, SIGTERM to the client during the runner leaves no
       descendant process alive after the client exits (checked by pid), and the exit is 143. A
