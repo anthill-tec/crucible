@@ -1745,6 +1745,12 @@ def _smoke_run(args, verb, project_dir, identity=None):
                           agent_id=args.agent),
                       "[smoke-test] no junit.xml found — nothing to ingest")
             return 1
+        if _axi().ran_nothing(result.returncode,
+                              _axi().junit_testcase_count([junit_path])):
+            return _axi().emit_ran_nothing(
+                verb, "junit.xml", result.returncode, result.stdout or "",
+                run_id, run_warnings, post_fn=_post,
+                project_key=_project_key(project_dir), agent_id=args.agent)
 
         payload = {
             "projectKey": _project_key(project_dir),
@@ -1919,6 +1925,12 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
                       agent_id=args.agent),
                   f"[crucible] ERROR: no junit.xml at {junit_path}")
         return 1
+    if _axi().ran_nothing(result.returncode,
+                          _axi().junit_testcase_count([junit_path])):
+        return _axi().emit_ran_nothing(
+            verb, "junit.xml", result.returncode, result.stdout or "",
+            run_id, run_warnings, post_fn=_post,
+            project_key=_project_key(project_dir), agent_id=args.agent)
 
     # CR-CRU-051 §S3 — the pre-merge-gate site's own distinct-source `files`
     # count, and its resolved GRANULARITY for this client (per test BINARY;
