@@ -346,7 +346,7 @@ block_after = _env_int("FAKE_BLOCK_AFTER_INDEX", "0")
 release_file = os.environ.get("FAKE_RELEASE_FILE")
 marker = os.environ.get("FAKE_MARKER_LINE")
 no_report = os.environ.get("FAKE_NO_REPORT") == "1"
-# CR-CRU-186 \u00a7S4 fixture \u2014 a SECOND starvation shape: the runner writes a
+# The ran-nothing fixture \u2014 a SECOND starvation shape: the runner writes a
 # report that EXISTS but holds ZERO results (no testcases), with a
 # caller-controlled exit code (default 1 \u2014 the \"exited non-zero\" shape \u00a7S4
 # is about; a caller proving the UNCHANGED exit-0 pin sets FAKE_EXIT_CODE=0).
@@ -612,7 +612,7 @@ def write_fake_bun(project_dir, n_declared):
                              FAKE_BUN.format(python=sys.executable))
 
 
-# CR-CRU-186 \u00a7S4 \u2014 the `bun-crucible.py e2e` shape: a DECLARED RAW-report
+# The ran-nothing e2e fixture \u2014 the `bun-crucible.py e2e` shape: a DECLARED RAW-report
 # target (`test:e2e`, this repo's own declaration), run via `bun run <script>`.
 # `FAKE_BUN_E2E` is faithful to `bun run` the one way this scenario needs: it
 # reads the invoked script's body out of the fixture's OWN `package.json` and

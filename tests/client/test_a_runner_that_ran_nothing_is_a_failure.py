@@ -1,4 +1,4 @@
-"""CR-CRU-186 \u00a7S4 (cycle 673) \u2014 a runner that ran nothing is a failure.
+"""A runner that ran nothing is a failure.
 
 \u00a7S4's gap: a runner's report can EXIST and still hold ZERO results while the
 runner itself exited non-zero \u2014 what Playwright writes when it cannot start
@@ -7,7 +7,7 @@ report file exists" as "something ran": it parses/ingests it, the runner's
 own exit code is never consulted, and the run is filed `ok: true, total: 0`.
 \u00a7S4 ends that: this exact shape now takes the SAME exit the runner producing
 NO report at all already takes \u2014 `ok: false`, non-zero, a `no_report_warning`
-naming the runner's exit code, and the open run ABORTED (CR-CRU-170's existing
+naming the runner's exit code, and the open run ABORTED (the existing
 `abort_run` route) rather than filed.
 
 Measured against this branch today (confirmed per test, by driving the REAL
@@ -123,7 +123,7 @@ class _ZeroResultCase(unittest.TestCase):
 
     def assert_run_aborted_or_left_open(self, axi, run_id):
         """\u00a7S4 \u2014 \"the run aborted\": the SAME abort-posting mechanism the
-        existing no-report path already drives (CR-CRU-170's `abort_run`), so
+        existing no-report path already drives (the shared `abort_run`), so
         either the board settled it (`run-aborted`) or refused the abort and
         fell back to the EXISTING `run-left-open` warning \u2014 never silence on
         both, and never a run left with neither warning."""
@@ -305,7 +305,9 @@ class EmptyReportWithNonzeroExitAbortsTheRunTest(_ZeroResultCase):
         self.assertNotEqual(result.returncode, 0, f"stdout={result.stdout!r}")
         axi = self.axi(result.stdout)
         self.assertEqual(axi.get("ok"), False, f"got axi={axi!r}")
-        self.assert_names_exit_code(self.no_report_warning(axi), 1)
+        # The runner is `make junit`, and make exits 2 when a recipe fails,
+        # whatever code the recipe itself exited with.
+        self.assert_names_exit_code(self.no_report_warning(axi), 2)
         self.assert_run_aborted_or_left_open(axi, RUN_ID)
         self.assert_never_filed()
 
