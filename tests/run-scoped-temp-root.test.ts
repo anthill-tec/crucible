@@ -296,6 +296,7 @@ describe("run-scoped temp root — the per-run directory itself", () => {
           '  console.log("BUN_TMPDIR=" + os.tmpdir());',
           "  const py = Bun.spawnSync({",
           '    cmd: ["python3", "-c", "import tempfile; print(\\"PY_TMPDIR=\\" + tempfile.gettempdir())"],',
+          "    env: process.env,",
           "  });",
           "  process.stdout.write(py.stdout);",
           `  ${assertion}`,
