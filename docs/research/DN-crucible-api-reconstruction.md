@@ -41,7 +41,7 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 | # | Endpoint | Method | Purpose | Evidence |
 |---|---|---|---|---|
 | 1 | `/api/projects` | GET | List projects, optional `?name=` filter | all skill endpoint tables |
-| 2 | `/api/projects/add` | POST | Register a project (idempotent for clients: duplicate key → 400, ignored) | `_ensure_project` in `clients/arduino-crucible.py` |
+| 2 | `/api/projects/add` | POST | Register a project (idempotent for clients: duplicate key → 400, ignored) | the v1 arduino client's self-registration helper (since removed) |
 | 3 | `/api/agents/heartbeat` | POST | Register agent + heartbeat (same endpoint for both) | all clients |
 | 4 | `/api/agents/remove` | POST | Unregister agent | all clients |
 | 5 | `/api/agents` | GET | List agents, optional `?projectKey=` | skill tables |
@@ -61,8 +61,9 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 {"key": "<uuid>", "name": "<display name>", "sut_root": "/abs/path/to/project"}
 ```
 - `sut_root` is snake_case (only snake_case field in the API — preserve verbatim).
-- Duplicate key → HTTP 400; `arduino-crucible.py:_ensure_project` deliberately ignores it
-  ("Idempotent self-registration; a pre-existing project returns 400 (ignored)").
+- Duplicate key → HTTP 400; the v1 arduino client self-registered through a helper (since
+  removed) that deliberately ignored it ("Idempotent self-registration; a pre-existing
+  project returns 400 (ignored)").
 - Projects are otherwise created in the dashboard (crucible-report-python: "there is no
   create endpoint — projects are made in the Crucible dashboard" — outdated w.r.t.
   `/api/projects/add`, but proves dashboard-side creation existed).

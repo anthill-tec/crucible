@@ -82,8 +82,9 @@
 // v2 endpoint ground truth (read directly from src/v2.ts, NOT assumed):
 // `POST /api/v2/agents/register`, `POST /api/v2/agents/unregister`,
 // `POST /api/v2/projects` ({key?, name} — key must be a UUID or omitted;
-// a pre-existing key returns 200 {changed:false}, perfect for arduino's
-// idempotent self-registration), `POST /api/v2/runs/parsed` (summary+tree,
+// a pre-existing key returns 200 {changed:false}; arduino once called it to
+// self-register, which was removed — no client registers a project now),
+// `POST /api/v2/runs/parsed` (summary+tree,
 // v2 equivalent of v1 `/api/ingest/parsed`), `POST /api/v2/runs/compile`
 // (rejects an EMPTY `errors` string with 400 — `handleRunsCompile` in src/v2.ts — this is the
 // exact 400 the CR's bug note is about), `GET /api/v2/events/<id>` returns
@@ -116,10 +117,17 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
+import { hints } from "../src/hints.ts";
+import { decode } from "@toon-format/toon";
 import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
 const PYTHON_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "python-crucible.py");
 const ARDUINO_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "arduino-crucible.py");
+
+// A well-formed UUID the board has never been asked to hold — the exact
+// shape of key a mistyped or invented `.env` carries. Every client reads
+// its key verbatim and sends it on; none of them invents or repairs one.
+const UNKNOWN_PROJECT_KEY = "00000000-0000-0000-0000-000000000000";
 
 interface RunResult {
   code: number;
@@ -216,6 +224,14 @@ async function getAgents(
 
 async function getAgentIds(baseUrl: string, key: string): Promise<string[]> {
   return (await getAgents(baseUrl, key)).map((a) => a.agentId);
+}
+
+/** The project keys the board currently holds, sorted — so a refused write
+ *  that must leave the project list untouched can be pinned before/after. */
+async function listProjectKeys(baseUrl: string): Promise<string[]> {
+  const res = await fetch(`${baseUrl}/api/v2/projects`);
+  const body = (await res.json()) as { projects: Array<{ key: string }> };
+  return body.projects.map((p) => p.key).sort();
 }
 
 async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: string }>> {
@@ -647,6 +663,77 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
     expect(res.stdout).toContain("ok: false");
     expect(res.stdout).toContain("--cycle");
     expect(await getAgentIds(baseUrl, key)).not.toContain("p-no-plan");
+  });
+});
+
+describe("clients/python-crucible.py — a key no project holds is refused by every write, not silently adopted", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test("register against a key the board does not hold exits non-zero, names the key, carries the board's own help[] and a warning naming the .env path — the project list and agent roster are both untouched", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const before = await listProjectKeys(baseUrl);
+    const dir = scratch.dir("python-crucible-unknown-key-");
+    writeEnvFile(dir, UNKNOWN_PROJECT_KEY);
+    const envPath = join(dir, ".env");
+
+    const res = await runScript(
+      PYTHON_SCRIPT_PATH,
+      ["register", "--agent", "p-unknown-key", "--role", "report", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
+    // The TOP-LEVEL help[] — the verb's usual canned next step — is
+    // REPLACED by the board's own hint, not merely echoed somewhere inside the
+    // raw HTTP error body (which already carries it verbatim and would make a
+    // bare substring check pass before the fix lands).
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
+    expect(res.stdout).toContain(envPath);
+    expect(await listProjectKeys(baseUrl)).toEqual(before);
+    expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
+  });
+
+  test("'test' against a key the board does not hold is refused the SAME way: non-zero exit, the board's own unknown-project envelope — no project is created and no run is recorded", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const before = await listProjectKeys(baseUrl);
+    const dir = scratch.dir("python-crucible-unknown-key-test-");
+    writeEnvFile(dir, UNKNOWN_PROJECT_KEY);
+    const envPath = join(dir, ".env");
+    const pythonPath = writeFakePyModules(scratch.dir("python-crucible-unknown-key-fakepy-"));
+
+    const res = await runScript(
+      PYTHON_SCRIPT_PATH,
+      ["test", "--agent", "p-unknown-key-test", "--project-dir", dir],
+      {
+        cwd: dir,
+        crucibleUrl: baseUrl,
+        env: {
+          PYTHONPATH: pythonPath,
+          FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("fixture", [{ name: "one" }]),
+          FAKE_XMLRUNNER_EXIT_CODE: "0",
+        },
+      },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
+    expect(res.stdout).toContain(envPath);
+    expect(await listProjectKeys(baseUrl)).toEqual(before);
+    expect(await nonLifecycleEvents(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
+    expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
   });
 });
 
@@ -1193,7 +1280,7 @@ describe("clients/python-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> 
 // clients/arduino-crucible.py
 // ═══════════════════════════════════════════════════════════════════════
 
-describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project self-registration, agent lifecycle) (CR-CRU-008 §S2)", () => {
+describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (agent lifecycle; never creates a project) (CR-CRU-008 §S2)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   let proxy: ReturnType<typeof startCapturingProxy> | undefined;
   const scratch = makeScratchTracker();
@@ -1206,37 +1293,99 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
     scratch.cleanup();
   });
 
-  test("register hits BOTH POST /api/v2/projects (self-registration, never v1 /api/projects/add) AND POST /api/v2/agents/register (never v1 /api/agents/heartbeat) via CRUCIBLE_URL", async () => {
+  test("register, test, the compile run (check) and auto-ingest each succeed against an ALREADY-REGISTERED key, and the board never receives a POST /api/v2/projects — this replaces the old self-registration pin, which this client no longer does", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
-    const key = await createProject(baseUrl, "clients-ac-register-v2");
+    const key = await createProject(baseUrl, "clients-ac-registered-key-posts-no-project");
     const dir = scratch.dir("arduino-crucible-proj-");
-    writeArduinoEnvFile(dir, key, "clients-ac-register-v2");
-    // CR-CRU-056 §S2/§S3c — RED (a TDD role) now REQUIRES an explicit
-    // cycle binding; this test's subject (self-registration + which
-    // endpoint/verb gets hit) is unaffected, so a fixture plan+active-cycle
-    // is filed and reused (same primitive as filePlan/activateCycle used
-    // elsewhere in this file).
-    const plan = await filePlan(baseUrl, key, "CR-AC-register-v2");
-    await activateCycle(baseUrl, key, plan.planId, plan.cycles[0]!.id);
+    writeArduinoEnvFile(dir, key, "clients-ac-registered-key-posts-no-project");
+
+    const reportsDir = join(dir, "tests", "native", "reports");
+    mkdirSync(reportsDir, { recursive: true });
+    writeJunitXml(join(reportsDir, "TEST-native_fixture.xml"), "native_fixture", [{ name: "led_on" }]);
+
+    const binDir = scratch.dir("fake-make-bin-");
+    writeExecutable(join(binDir, "make"), NOOP_SCRIPT);
+    const fakeCliPath = join(binDir, "fake-arduino-cli-ok");
+    writeExecutable(fakeCliPath, NOOP_SCRIPT);
+    const env = { PATH: `${binDir}:${process.env.PATH ?? ""}`, ARDUINO_CLI: fakeCliPath };
+
     proxy = startCapturingProxy(baseUrl);
 
-    const res = await runScript(
+    const registerRes = await runScript(
       ARDUINO_SCRIPT_PATH,
-      ["register", "--agent", "a1", "--role", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
-      { cwd: dir, crucibleUrl: proxy.url },
+      ["register", "--agent", "a1", "--role", "report", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: proxy.url, env },
+    );
+    const testRes = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["test", "--agent", "a1", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: proxy.url, env },
+    );
+    const checkRes = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["check", "--agent", "a1", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: proxy.url, env },
+    );
+    // 'test' (above) relocates the pre-placed report out of tests/native/reports
+    // into its own per-agent run directory (the Makefile-ignored-REPORTS_DIR
+    // path) — a fresh fixture is re-placed here so 'auto-ingest' (no toolchain
+    // of its own) finds a report where it looks, exactly as a real run between
+    // the two verbs would leave one.
+    writeJunitXml(join(reportsDir, "TEST-native_fixture.xml"), "native_fixture", [{ name: "led_on" }]);
+    const autoIngestRes = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["auto-ingest", "--agent", "a1", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: proxy.url, env },
     );
 
-    expect(res.code).toBe(0);
+    expect(registerRes.code).toBe(0);
+    expect(testRes.code).toBe(0);
+    expect(checkRes.code).toBe(0);
+    expect(autoIngestRes.code).toBe(0);
     expect(await getAgentIds(baseUrl, key)).toContain("a1");
     expect(
       proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/projects"),
-    ).toBe(true);
-    expect(proxy.calls.some((c) => c.path === "/api/projects/add")).toBe(false);
+    ).toBe(false);
     expect(
       proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/agents/register"),
     ).toBe(true);
     expect(proxy.calls.some((c) => c.path === "/api/agents/heartbeat")).toBe(false);
+  });
+
+  test("the project name is OPTIONAL: a .env carrying only CRUCIBLE_PROJECT_KEY still registers and runs 'test' against an already-registered key", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-name-optional");
+    const dir = scratch.dir("arduino-crucible-name-optional-");
+    writeEnvFile(dir, key);
+
+    const reportsDir = join(dir, "tests", "native", "reports");
+    mkdirSync(reportsDir, { recursive: true });
+    writeJunitXml(join(reportsDir, "TEST-native_fixture.xml"), "native_fixture", [{ name: "led_on" }]);
+    const binDir = scratch.dir("fake-make-bin-");
+    writeExecutable(join(binDir, "make"), NOOP_SCRIPT);
+    // This checkout's own ambient CRUCIBLE_PROJECT_NAME (its dev .env, inherited
+    // by every spawned child unless explicitly cleared) would otherwise rescue
+    // a client that still falls back to it, masking the exact defect this test
+    // exists to catch — so it is explicitly unset here, not merely absent
+    // from the fixture `.env`.
+    const env = { PATH: `${binDir}:${process.env.PATH ?? ""}`, CRUCIBLE_PROJECT_NAME: undefined };
+
+    const registerRes = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["register", "--agent", "a-name-optional", "--role", "report", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl, env },
+    );
+    const testRes = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["test", "--agent", "a-name-optional", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl, env },
+    );
+
+    expect(registerRes.code).toBe(0);
+    expect(testRes.code).toBe(0);
+    expect(await getAgentIds(baseUrl, key)).toContain("a-name-optional");
   });
 
   test("unregister hits POST /api/v2/agents/unregister (never v1 /api/agents/remove); agent vanishes from GET /api/v2/agents", async () => {
@@ -1317,6 +1466,69 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
     expect(res.stdout).toContain("ok: false");
     expect(res.stdout).toContain("--cycle");
     expect(await getAgentIds(baseUrl, key)).not.toContain("a-no-plan");
+  });
+});
+
+describe("clients/arduino-crucible.py — a key no project holds is refused by every write, not silently adopted", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test("register against a key the board does not hold exits non-zero, names the key, carries the board's own help[] and a warning naming the .env path — the project list and agent roster are both untouched", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const before = await listProjectKeys(baseUrl);
+    const dir = scratch.dir("arduino-crucible-unknown-key-");
+    writeArduinoEnvFile(dir, UNKNOWN_PROJECT_KEY, "unknown-key-fixture");
+    const envPath = join(dir, ".env");
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["register", "--agent", "a-unknown-key", "--role", "report", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
+    expect(res.stdout).toContain(envPath);
+    expect(await listProjectKeys(baseUrl)).toEqual(before);
+    expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
+  });
+
+  test("'test' against a key the board does not hold is refused the SAME way: non-zero exit, the board's own unknown-project envelope — no project is created and no run is recorded", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const before = await listProjectKeys(baseUrl);
+    const dir = scratch.dir("arduino-crucible-unknown-key-test-");
+    writeArduinoEnvFile(dir, UNKNOWN_PROJECT_KEY, "unknown-key-fixture");
+    const envPath = join(dir, ".env");
+    const reportsDir = join(dir, "tests", "native", "reports");
+    mkdirSync(reportsDir, { recursive: true });
+    writeJunitXml(join(reportsDir, "TEST-native_fixture.xml"), "native_fixture", [{ name: "led_on" }]);
+    const binDir = scratch.dir("fake-make-bin-");
+    writeExecutable(join(binDir, "make"), NOOP_SCRIPT);
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["test", "--agent", "a-unknown-key-test", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl, env: { PATH: `${binDir}:${process.env.PATH ?? ""}` } },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
+    expect(res.stdout).toContain(envPath);
+    expect(await listProjectKeys(baseUrl)).toEqual(before);
+    expect(await nonLifecycleEvents(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
+    expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
   });
 });
 

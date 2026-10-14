@@ -8,9 +8,10 @@
 Runs native host tests / firmware compile and reports to Crucible via the v2 API
 (the board the project's `crucible.toml` declares as `[client] url`, shipped
 default http://localhost:3849). Mirrors the bun/rust/python/mvn
-`.env` + /api/v2/* ingest pattern, extended with per-subproject self-registration:
-identity from the SUBPROJECT's .env (CRUCIBLE_PROJECT_KEY + CRUCIBLE_PROJECT_NAME),
-agent `Vidushi - <NAME>`.
+`.env` + /api/v2/* ingest pattern: identity from the SUBPROJECT's .env
+(CRUCIBLE_PROJECT_KEY only, as the other four clients read it). The client never
+registers a project: a key the board does not hold is refused by the board, and
+that refusal is reported with the board's own help[].
 
 CR-CRU-030 §S1/§S2: every AXI verb prints a clients/toon.py-encoded envelope
 `{"axi": {verb, ok, <result fields>, context, warnings}}` on STDOUT (the machine
@@ -99,6 +100,9 @@ def _project_dir(args):
 
 
 def _load_env(pd):
+    """The project key from the SUBPROJECT's `.env`. Only CRUCIBLE_PROJECT_KEY
+    is read, as the other four clients read it; a `.env` that still carries
+    CRUCIBLE_PROJECT_NAME keeps working, and that line is ignored."""
     path = os.path.join(pd, ".env")
     env = {}
     with open(path) as fh:
@@ -110,19 +114,15 @@ def _load_env(pd):
             env[k.strip()] = v.strip().strip('"').strip("'")
     # The SUBPROJECT's .env is authoritative for the key (matches the rest of
     # the fleet — python/rust/bun/mvn read only the project .env): an empty or
-    # absent .env key is a missing one, never filled from the ambient env. The
-    # name keeps its ambient fallback.
+    # absent .env key is a missing one, never filled from the ambient env.
     key = env.get("CRUCIBLE_PROJECT_KEY", "").strip()
-    name = env.get("CRUCIBLE_PROJECT_NAME") or os.environ.get("CRUCIBLE_PROJECT_NAME")
     if not key:
         sys.exit(f"[crucible] CRUCIBLE_PROJECT_KEY not set in {path}")
-    if not name:
-        sys.exit(f"[crucible] CRUCIBLE_PROJECT_NAME not set in {path}")
-    return key, name
+    return key
 
 
 def _project_key(pd):
-    return _load_env(pd)[0]
+    return _load_env(pd)
 
 
 # ── HTTP transport seam (mocked in-process by the client test harnesses) ─────
@@ -300,12 +300,7 @@ def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
     _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
 
 
-# ── project self-registration + JUnit parsing ────────────────────────────────
-
-
-def _ensure_project(key, name, pd):
-    """Idempotent self-registration; a pre-existing key returns 200 {changed:false}."""
-    _post("/api/v2/projects", {"key": key, "name": name, "sutRoot": pd})
+# ── JUnit parsing ────────────────────────────────────────────────────────────
 
 
 def _parse_junit(path):
@@ -401,16 +396,6 @@ def _ingest_compile(project_dir, key, agent_id, errors, context=None):
 # ── Agent lifecycle ──────────────────────────────────────────────────────────
 
 
-def _ensure_project_registered(project_dir):
-    """arduino's UNIQUE registration bootstrap (DN §3): this client self-registers
-    its project before the agent row is posted, reading the subproject `.env` for
-    the CRUCIBLE_PROJECT_NAME the other four clients never need. Handed to the
-    shared `cmd_register` as its `pre_register` hook — it runs only AFTER the §S5
-    identity hard stop, so an undeclared identity still posts nothing."""
-    key, name = _load_env(project_dir)
-    _ensure_project(key, name, project_dir)
-
-
 def _register_message(args, role):
     """arduino's own register message convention, a per-client PARAMETER of the
     shared `cmd_register` (the other four send `Starting <role> phase`)."""
@@ -434,12 +419,10 @@ def cmd_register(args):
     CR-CRU-054 §S2b — delegates to the shared implementation, which owns the
     §S5 runtime identity hard stop (DN §4 finding #3) and the documented-enum
     `--source` strategy (finding #5).
-    arduino's project self-registration, its `report` role floor (a defensive
-    floor for a hand-built Namespace — §S3 makes `--role` REQUIRED on the
-    subparser), its message convention and its legacy line stay per-client
-    PARAMETERS."""
+    arduino's `report` role floor (a defensive floor for a hand-built
+    Namespace — §S3 makes `--role` REQUIRED on the subparser), its message
+    convention and its legacy line stay per-client PARAMETERS."""
     return _axi().cmd_register(args, _project_dir(args), _ops(),
-                               pre_register=_ensure_project_registered,
                                role_default="report",
                                message_fn=_register_message,
                                legacy_format=REGISTER_LEGACY_FORMAT)
@@ -651,14 +634,13 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     preflight_warnings = list(preflight_warnings)
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
-    key, name = _load_env(pd)
+    key = _load_env(pd)
     # CR-CRU-044 §S5 — a run with no `--agent` INGESTS NOTHING (see the
     # no-ingest early return below), so it needs no declared identity; the id is
     # REQUIRED only on the POSTing path, resolved there. Never fabricated either way.
     agent_id = _axi().optional_agent_id(args)
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
-    _ensure_project(key, name, pd)
     own_dir = _run_reports_dir(args, pd)
     make_env = _make_reports_env(own_dir, want_coverage)
     narrator, run_id = None, None
@@ -737,7 +719,7 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
 
     if not args.agent and not os.environ.get("AGENT_ID"):
         # No ingest requested — just report the run outcome.
-        print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
+        print(f"[crucible] {verb} -> '{key}': {summary['passed']}/{summary['total']} passed, "
               f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
               f"{files} files",
               file=sys.stderr)
@@ -746,7 +728,7 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     # §S5 — past this point the run IS ingested under an agentId, so the
     # identity must be DECLARED (hard stop when it is not).
     agent_id = _agent_id(args)
-    payload = {"projectKey": key, "name": name, "agentId": agent_id,
+    payload = {"projectKey": key, "agentId": agent_id,
                "summary": summary, "tree": tree}
     # CR-CRU-111 §S2/AC3 — the tier rides ONLY when the caller stated one (a
     # verb whose own name is the tier). A `tier: None` key is not the same
@@ -772,7 +754,7 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     _axi().close_narration(narrator)
     resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
                               release=release)
-    print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
+    print(f"[crucible] {verb} -> '{key}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
           f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
     # CR-CRU-058 §S2 — a GATE run's next step is derived from the run state it
@@ -849,12 +831,11 @@ def _compile_run(args, pd):
     so the envelope-owning verbs that run it (`check`/`compile` via
     `_compile_gate`, and `pre-merge-gate`'s fail-fast step 0) each put exactly
     ONE document on stdout. Returns `{exit, ok, agent_id}`; its caller emits."""
-    key, name = _load_env(pd)
+    key = _load_env(pd)
     # CR-CRU-044 §S5 — the gate only INGESTS when an identity was declared, so
     # the id is optional here (omitted from the envelope context when absent)
     # and REQUIRED only on the ingest branch below. Never fabricated either way.
     agent_id = _axi().optional_agent_id(args)
-    _ensure_project(key, name, pd)
     run = subprocess.run(
         [ARDUINO_CLI, "compile", "--fqbn", FQBN,
          "--build-path", os.path.join(pd, "build"), pd],
@@ -891,7 +872,7 @@ def cmd_auto_ingest(args):
     agent's run is server-stamped with its registered cycle. Uniform with
     bun/python/mvn/rust."""
     pd = _project_dir(args)
-    key, name = _load_env(pd)
+    key = _load_env(pd)
     agent_id = _agent_id(args)
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
@@ -912,7 +893,6 @@ def cmd_auto_ingest(args):
                   [_axi().no_report_warning("auto-ingest", "TEST-*.xml", 1, "")],
                   message)
         return 1
-    _ensure_project(key, name, pd)
     summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
     tree = []
     files = 0
@@ -929,7 +909,7 @@ def cmd_auto_ingest(args):
     # what dependency that run took — the DICT-KEY spelling of the unearned
     # stamp, and AC3's own named worse case. AC13's "every test ingest carries
     # a tier" governs the runs this client RUNS, never the reports it finds.
-    payload = {"projectKey": key, "name": name, "agentId": agent_id,
+    payload = {"projectKey": key, "agentId": agent_id,
                "summary": summary, "tree": tree}
     context = _run_context()
     if context:
@@ -941,7 +921,7 @@ def cmd_auto_ingest(args):
         _get, key, agent_id, cycle_id=getattr(args, "cycle", None),
         context=context)
     resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
-    print(f"[crucible] auto-ingest -> '{name}': {summary['passed']}/{summary['total']} passed, "
+    print(f"[crucible] auto-ingest -> '{key}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
           f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
     _emit_ingest_summary_axi("auto-ingest", resp, summary, files, pd, agent_id,

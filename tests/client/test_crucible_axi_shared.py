@@ -58,13 +58,17 @@ Fallback:
 import argparse
 import ast
 import contextlib
+import email.message
 import importlib.util
 import io
+import json
 import os
 import re
 import shutil
 import tempfile
 import unittest
+import unittest.mock
+import urllib.error
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -2136,6 +2140,102 @@ class SharedRunReportsDirTableTest(unittest.TestCase):
             "agent-x", got,
             "an explicit --reports must never be nested by agent id",
         )
+
+
+class SharedAxiUnknownProjectRefusalIsPerInvocationTest(unittest.TestCase):
+    """A write the board refused as `unknown project: <key>` belongs to the
+    invocation that made it. `http_request` notes the board's help[] in module
+    state and `emit_axi` takes it; a verb that left WITHOUT that exit (the
+    fleet's `sys.exit(<message>)` exit writes no envelope) must not hand its
+    refusal to the next verb dispatched in the same process.
+
+    Driven through `run_verb`, the dispatcher every client routes every verb
+    through, with only the HTTP layer (`urllib.request.urlopen`) patched: the
+    first verb's write reaches the real `http_request` and is refused; the
+    second verb is the shared `plan-file` refused for naming no cycle, which
+    carries its own help[] and touches the board not at all."""
+
+    UNKNOWN_KEY = "00000000-0000-7000-8000-00000000dead"
+    BOARD_HELP = ["register the project: POST /api/v2/projects {name}"]
+
+    def setUp(self):
+        self.axi = _load_axi_module()
+        self.toon = _load_toon_module()
+        self.tmpdir = tempfile.mkdtemp(prefix="crucible-axi-unknown-project-")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _refusing_urlopen(self, request, timeout=None):
+        body = json.dumps({"ok": False,
+                           "error": f"unknown project: {self.UNKNOWN_KEY}",
+                           "help": self.BOARD_HELP}).encode()
+        raise urllib.error.HTTPError(request.full_url, 404, "Not Found",
+                                     email.message.Message(), io.BytesIO(body))
+
+    def _refused_write_verb(self, _args):
+        """A verb whose write the board refuses, and which then leaves through
+        the fleet's `sys.exit(<message>)` exit -- no envelope written."""
+        self.axi.http_request("http://127.0.0.1:0", "POST",
+                              "/api/v2/agents/register",
+                              {"projectKey": self.UNKNOWN_KEY, "agentId": "a"})
+        raise SystemExit("[crucible] ERROR: the board refused the write")
+
+    def _plan_file_ops(self):
+        def unreachable(*_args, **_kwargs):
+            raise AssertionError("a refused plan-file touches no transport")
+
+        return self.axi.ClientOps(
+            get=unreachable, post=unreachable, patch=unreachable,
+            emit=self.axi.emit_axi,
+            context=lambda project_dir, **kw: dict({"projectKey": "pk"}, **kw),
+            agent_id=self.axi.require_agent_id,
+            project_key=lambda project_dir: "pk",
+            plans_path=lambda project_dir: "/api/v2/projects/pk/plans",
+            open_plans=unreachable, resolve_plan=unreachable,
+            post_gate=unreachable, post_milestone=unreachable,
+            base_url="http://127.0.0.1:0")
+
+    def _dispatch(self, func, args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = self.axi.run_verb(func, args)
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else 1
+        return code, out.getvalue()
+
+    def test_a_second_verb_in_one_process_does_not_inherit_an_unknown_project_refusal(self):
+        with unittest.mock.patch("urllib.request.urlopen", self._refusing_urlopen):
+            first_code, first_out = self._dispatch(
+                self._refused_write_verb, _PlanFileArgs(cmd="register"))
+        self.assertEqual(first_code, 1,
+                         f"the first verb exits on its refused write; "
+                         f"got stdout={first_out!r}")
+
+        args = _PlanFileArgs(cr="CR-FLAG", agent="test-agent", title="a plan",
+                             wave="5", cycles=None, cycle=None,
+                             cycle_kind=None, project_dir=self.tmpdir,
+                             cmd="plan-file")
+        ops = self._plan_file_ops()
+        _code, out = self._dispatch(
+            lambda a: self.axi.cmd_plan_file(a, self.tmpdir, ops), args)
+        axi = self.toon.decode(out)["axi"]
+        self.assertIs(axi.get("ok"), False, f"got {axi!r}")
+        help_list = [str(h) for h in (axi.get("help") or [])]
+        self.assertNotEqual(
+            help_list, self.BOARD_HELP,
+            f"the second verb's envelope must carry ITS OWN help[], not the "
+            f"board's help for the first verb's refusal; got {axi!r}")
+        self.assertTrue(
+            any("--cycle " in h for h in help_list),
+            f"plan-file's own refusal hands back the `--cycle` call; "
+            f"got help={help_list!r}")
+        codes = [w.get("code") for w in (axi.get("warnings") or [])]
+        self.assertNotIn(
+            self.axi.UNKNOWN_PROJECT_CODE, codes,
+            f"no unknown-project warning on a verb the board never refused; "
+            f"got warnings={axi.get('warnings')!r}")
 
 
 if __name__ == "__main__":

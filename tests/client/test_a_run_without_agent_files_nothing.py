@@ -73,10 +73,10 @@ from tests.client.live_run_harness import (
 TIMEOUT = 60
 
 # The AC's own enumeration of "posts nothing": no /api/v2/runs/start, no
-# ingest on /api/v2/runs, /runs/parsed or /runs/compile, no abort. A harmless
-# idempotent /api/v2/projects upsert (arduino's own `_ensure_project`, fired
-# on every verb regardless of --agent) is not a RUN post and is deliberately
-# excluded, so these assertions track exactly what the AC names.
+# ingest on /api/v2/runs, /runs/parsed or /runs/compile, no abort. Only those
+# run-filing paths are matched, so these assertions track exactly what the AC
+# names. (arduino once also upserted /api/v2/projects on every verb; that
+# self-registration was removed, and no client registers a project.)
 _RUN_FILING_PATHS = ("/api/v2/runs/start", "/api/v2/runs",
                      "/api/v2/runs/parsed", "/api/v2/runs/compile")
 

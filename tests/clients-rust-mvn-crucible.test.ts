@@ -75,10 +75,17 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
+import { hints } from "../src/hints.ts";
+import { decode } from "@toon-format/toon";
 import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
 const RUST_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "rust-crucible.py");
 const MVN_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "mvn-crucible.py");
+
+// A well-formed UUID the board has never been asked to hold — the exact
+// shape of key a mistyped or invented `.env` carries. Every client reads
+// its key verbatim and sends it on; none of them invents or repairs one.
+const UNKNOWN_PROJECT_KEY = "00000000-0000-0000-0000-000000000000";
 
 interface RunResult {
   code: number;
@@ -177,6 +184,14 @@ async function getAgents(
 
 async function getAgentIds(baseUrl: string, key: string): Promise<string[]> {
   return (await getAgents(baseUrl, key)).map((a) => a.agentId);
+}
+
+/** The project keys the board currently holds, sorted — so a refused write
+ *  that must leave the project list untouched can be pinned before/after. */
+async function listProjectKeys(baseUrl: string): Promise<string[]> {
+  const res = await fetch(`${baseUrl}/api/v2/projects`);
+  const body = (await res.json()) as { projects: Array<{ key: string }> };
+  return body.projects.map((p) => p.key).sort();
 }
 
 async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: string }>> {
@@ -539,6 +554,71 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
     expect(res.code).toBe(0);
     expect(res.stdout).not.toContain("no-active-cycle");
     expect(await getAgentIds(baseUrl, key)).toContain("r-tolerant");
+  });
+});
+
+describe("clients/rust-crucible.py — a key no project holds is refused by every write, not silently adopted", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test("register against a key the board does not hold exits non-zero, names the key, carries the board's own help[] and a warning naming the .env path — the project list and agent roster are both untouched", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const before = await listProjectKeys(baseUrl);
+    const dir = scratch.dir("rust-crucible-unknown-key-");
+    writeEnvFile(dir, UNKNOWN_PROJECT_KEY);
+    const envPath = join(dir, ".env");
+
+    const res = await runScript(
+      RUST_SCRIPT_PATH,
+      ["register", "--agent", "r-unknown-key", "--role", "report", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
+    // The TOP-LEVEL help[] is REPLACED by the board's own hint, not merely
+    // echoed somewhere inside the raw HTTP error body.
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
+    expect(res.stdout).toContain(envPath);
+    expect(await listProjectKeys(baseUrl)).toEqual(before);
+    expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
+  });
+
+  test("'test' against a key the board does not hold is refused the SAME way: non-zero exit, the board's own unknown-project envelope — no project is created and no run is recorded", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const before = await listProjectKeys(baseUrl);
+    const dir = scratch.dir("rust-crucible-unknown-key-test-");
+    writeEnvFile(dir, UNKNOWN_PROJECT_KEY);
+    const envPath = join(dir, ".env");
+    const junitDir = join(dir, "target", "nextest", "ci");
+    Bun.spawnSync({ cmd: ["mkdir", "-p", junitDir] });
+    writeJunitXml(join(junitDir, "junit.xml"), "unknown_key_fixture", [{ name: "alpha" }]);
+    const binDir = scratch.dir("fake-cargo-bin-");
+    writeExecutable(join(binDir, "cargo"), NOOP_SCRIPT);
+
+    const res = await runScript(
+      RUST_SCRIPT_PATH,
+      ["test", "--agent", "r-unknown-key-test", "--crate", "demo-crate", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl, env: { PATH: `${binDir}:${process.env.PATH ?? ""}` } },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
+    expect(res.stdout).toContain(envPath);
+    expect(await listProjectKeys(baseUrl)).toEqual(before);
+    expect(await nonLifecycleEvents(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
+    expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
   });
 });
 
@@ -1221,6 +1301,70 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
     expect(res.code).toBe(0);
     expect(res.stdout).not.toContain("no-active-cycle");
     expect(await getAgentIds(baseUrl, key)).toContain("m-tolerant");
+  });
+});
+
+describe("clients/mvn-crucible.py — a key no project holds is refused by every write, not silently adopted", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test("register against a key the board does not hold exits non-zero, names the key, carries the board's own help[] and a warning naming the .env path — the project list and agent roster are both untouched", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const before = await listProjectKeys(baseUrl);
+    const dir = scratch.dir("mvn-crucible-unknown-key-");
+    writeEnvFile(dir, UNKNOWN_PROJECT_KEY);
+    const envPath = join(dir, ".env");
+
+    const res = await runScript(
+      MVN_SCRIPT_PATH,
+      ["register", "--agent", "m-unknown-key", "--role", "report", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
+    // The TOP-LEVEL help[] is REPLACED by the board's own hint, not merely
+    // echoed somewhere inside the raw HTTP error body.
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
+    expect(res.stdout).toContain(envPath);
+    expect(await listProjectKeys(baseUrl)).toEqual(before);
+    expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
+  });
+
+  test("'test' against a key the board does not hold is refused the SAME way: non-zero exit, the board's own unknown-project envelope — no project is created and no run is recorded", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const before = await listProjectKeys(baseUrl);
+    const dir = scratch.dir("mvn-crucible-unknown-key-test-");
+    writeEnvFile(dir, UNKNOWN_PROJECT_KEY);
+    const envPath = join(dir, ".env");
+    writeExecutable(join(dir, "mvnw"), NOOP_SCRIPT);
+    const reportsDir = join(dir, "target", "surefire-reports");
+    Bun.spawnSync({ cmd: ["mkdir", "-p", reportsDir] });
+    writeJunitXml(join(reportsDir, "TEST-UnknownKeyTest.xml"), "UnknownKeyTest", [{ name: "testAlpha" }]);
+
+    const res = await runScript(
+      MVN_SCRIPT_PATH,
+      ["test", "--agent", "m-unknown-key-test", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain(`unknown project: ${UNKNOWN_PROJECT_KEY}`);
+    const envelope = decode(res.stdout) as { axi: { help: string[] } };
+    expect(envelope.axi.help).toEqual(hints.unknownProject);
+    expect(res.stdout).toContain(envPath);
+    expect(await listProjectKeys(baseUrl)).toEqual(before);
+    expect(await nonLifecycleEvents(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
+    expect(await getAgentIds(baseUrl, UNKNOWN_PROJECT_KEY)).toEqual([]);
   });
 });
 

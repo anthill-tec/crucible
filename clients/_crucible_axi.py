@@ -657,6 +657,8 @@ def http_request(base_url, method, path, payload=None, timeout=None):
         if isinstance(body, dict):
             carried = {k: v for k, v in body.items() if k not in ("ok", "error")}
             failure.update(carried)
+            if method != "GET":
+                note_unknown_project_refusal(body)
         return failure
     except urllib.error.URLError as e:
         return {"ok": False, "error": f"connection failed: {e.reason} "
@@ -681,6 +683,60 @@ def http_request(base_url, method, path, payload=None, timeout=None):
         return {"ok": False, "error": f"request timed out after {timeout}s "
                                       f"(is Crucible at {base_url} overloaded?)"}
     return json.loads(body) if body else {"ok": True}
+
+
+# A write the board refused because it holds no project under the key the
+# client sent. The transport above is the one seam every write of every client
+# passes through, so the refusal is NOTED there, once, and `emit_axi` -- the
+# one exit every verb passes through -- reports it: the board's own help[] in
+# place of the verb's usual next steps, and a warning naming the `.env` the
+# key was read from. No client works out or registers a key itself.
+UNKNOWN_PROJECT_CODE = "unknown-project"
+UNKNOWN_PROJECT_ERROR_PREFIX = "unknown project: "
+
+_unknown_project_help = None
+
+
+def note_unknown_project_refusal(body):
+    """Remember the board's own help[] when `body` (a refused write's parsed
+    answer) is the board's `unknown project: <key>` refusal; any other body
+    is left alone."""
+    global _unknown_project_help
+    error = body.get("error")
+    help_steps = body.get("help")
+    if (isinstance(error, str) and error.startswith(UNKNOWN_PROJECT_ERROR_PREFIX)
+            and isinstance(help_steps, list)):
+        _unknown_project_help = list(help_steps)
+
+
+def take_unknown_project_help():
+    """The board's help[] noted for an unknown-project refusal on this
+    invocation, or None -- cleared as it is returned, so one exit's envelope
+    reports it exactly once."""
+    global _unknown_project_help
+    taken, _unknown_project_help = _unknown_project_help, None
+    return taken
+
+
+def forget_unknown_project_refusal():
+    """Clear a noted unknown-project refusal. Called once per verb dispatch
+    (`run_verb`), so a refusal a verb left unreported (it exited without an
+    envelope) is never carried into the next verb of the same process."""
+    global _unknown_project_help
+    _unknown_project_help = None
+
+
+def unknown_project_warning():
+    """The warning an unknown-project refusal carries: the `.env` the key was
+    read from, which is where the operator corrects it."""
+    env_path = (os.path.join(_PROJECT_DIR, ".env") if _PROJECT_DIR
+                else "the project's .env")
+    return {
+        "code": UNKNOWN_PROJECT_CODE,
+        "detail": (f"the board holds no project under the CRUCIBLE_PROJECT_KEY "
+                   f"read from {env_path} -- correct the key there, or register "
+                   f"the project (see help) and put the key it issues there"),
+    }
 
 
 # The reports location every client resolves its run's outputs under. One
@@ -875,10 +931,20 @@ def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None,
 
     §S8 — `fmt=AXI_FORMAT_JSON` writes the same `axi` object (from
     `axi_object`) as ONE unwrapped JSON object instead; the stderr line is
-    unchanged either way."""
+    unchanged either way.
+
+    A write the board refused as `unknown project: <key>` (noted by
+    `http_request`) makes a failed exit carry the board's own help[] in place
+    of the verb's usual next steps, and a warning naming the `.env` the key
+    was read from."""
     refused = take_refused_ingest_warnings()
-    axi = axi_object(verb, False if refused else ok, result_fields, context,
-                     list(warnings) + refused)
+    ok = False if refused else ok
+    warnings = list(warnings) + refused
+    board_help = take_unknown_project_help()
+    if board_help is not None and not ok:
+        result_fields = {**result_fields, "help": board_help}
+        warnings.append(unknown_project_warning())
+    axi = axi_object(verb, ok, result_fields, context, warnings)
     if fmt == AXI_FORMAT_JSON:
         envelope = json.dumps(axi, ensure_ascii=False) + "\n"
     else:
@@ -2296,8 +2362,10 @@ def run_verb(func, args, project_key_fn=None):
 
     CR-CRU-111 §S5 — a dispatch has ingested nothing YET, so the envelope's
     tier statement starts from `none` here: an invocation may never inherit
-    what an earlier one in the same process put on the board."""
+    what an earlier one in the same process put on the board. Nor may it
+    inherit an unknown-project refusal an earlier one was handed."""
     forget_ingested_run()
+    forget_unknown_project_refusal()
     try:
         return func(args)
     except AgentIdentityRequired:
@@ -3726,9 +3794,8 @@ def cmd_cycle_skip(args, project_dir, ops):
 #   * a client's own register/unregister payload helper (`register_fn` /
 #     `unregister_fn`) — bun/python send an `identity.repoPath` and expose
 #     `--display-name`, and bun's helper also serves its gate-run brackets;
-#   * arduino's unique self-registration bootstrap (`pre_register`), its
-#     `report` role floor (`role_default`) and its message convention
-#     (`message_fn`).
+#   * arduino's `report` role floor (`role_default`) and its message
+#     convention (`message_fn`).
 
 AGENT_REGISTER_PATH = "/api/v2/agents/register"
 AGENT_UNREGISTER_PATH = "/api/v2/agents/unregister"
@@ -3740,7 +3807,7 @@ AGENT_UNREGISTER_PATH = "/api/v2/agents/unregister"
 DEFAULT_IDENTITY_SOURCE = "claude-md"
 
 
-def cmd_register(args, project_dir, ops, *, register_fn=None, pre_register=None,
+def cmd_register(args, project_dir, ops, *, register_fn=None,
                  role_default=None, message_fn=None, legacy_format=None):
     """Register / heartbeat. CR-CRU-056 §S1/§S2 — `--cycle` binds the agent to
     an ACTIVE cycle of an OPEN plan; the server validates the binding and
@@ -3751,15 +3818,12 @@ def cmd_register(args, project_dir, ops, *, register_fn=None, pre_register=None,
     CR-CRU-054 §S2b (DN §4 finding #3) — the identity is resolved through the
     fleet's §S5 runtime hard stop, so a missing --agent produces the SAME
     ok:false AXI envelope every other mutating verb emits, not argparse's bare
-    usage error. Resolved FIRST: nothing is posted (and no per-client
-    `pre_register` bootstrap runs) without it.
+    usage error. Resolved FIRST: nothing is posted without it.
 
     CR-CRU-054 §S2b (DN §4 finding #5) — ONE `source` strategy for the fleet:
     the configurable `--source` with a fleet-wide `claude-md` default, never a
     hardcoded value."""
     agent_id = ops.agent_id(args)
-    if pre_register is not None:
-        pre_register(project_dir)
     declared_role = getattr(args, "role", None)
     role = declared_role or role_default
     message = (message_fn(args, declared_role) if message_fn is not None
