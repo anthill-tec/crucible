@@ -10,6 +10,7 @@ runner here is a small python program speaking the real tool's output shape.
 """
 
 import atexit
+import contextlib
 import http.server
 import importlib.util
 import json
@@ -346,6 +347,45 @@ release_file = os.environ.get("FAKE_RELEASE_FILE")
 marker = os.environ.get("FAKE_MARKER_LINE")
 no_report = os.environ.get("FAKE_NO_REPORT") == "1"
 
+# \u00a7S3 fixture \u2014 a long-lived GRANDCHILD this runner starts on its own
+# (never the client's direct child), to prove a group-kill reaches it. It
+# writes its own pid to FAKE_GRANDCHILD_PIDFILE and sleeps; inert unless that
+# var is set, so every pre-existing fake runner that never sets it is
+# unchanged.
+grandchild_pidfile = os.environ.get("FAKE_GRANDCHILD_PIDFILE")
+if grandchild_pidfile:
+    import subprocess as _gc_subprocess
+    _gc_body = (
+        "import os, sys, time\\n"
+        "with open(sys.argv[1], 'w') as _gc_f:\\n"
+        "    _gc_f.write(str(os.getpid()))\\n"
+        "    _gc_f.flush()\\n"
+        "time.sleep(120)\\n"
+    )
+    # stdio is explicitly DEVNULL \u2014 inheriting the runner's own stdout pipe
+    # would hold it open past the runner's own exit (a SEPARATE, orthogonal
+    # pipe-EOF hang), which is not this fixture's concern: it proves ONLY
+    # that the process ITSELF (by pid) is gone, exactly what \u00a7S3 asks.
+    _gc_subprocess.Popen([sys.executable, "-c", _gc_body, grandchild_pidfile],
+                         stdin=_gc_subprocess.DEVNULL, stdout=_gc_subprocess.DEVNULL,
+                         stderr=_gc_subprocess.DEVNULL)
+
+# \u00a7S2 client-paragraph fixture \u2014 the TMPDIR this runner itself sees, and
+# the TMPDIR a CHILD IT SPAWNS WITHOUT AN EXPLICIT ENV sees, both written to
+# FAKE_TMPDIR_CAPTURE_FILE before any test case runs. Inert unless that var
+# is set.
+tmpdir_capture_file = os.environ.get("FAKE_TMPDIR_CAPTURE_FILE")
+if tmpdir_capture_file:
+    import subprocess as _tc_subprocess
+    _tc_own = os.environ.get("TMPDIR", "")
+    _tc_child = _tc_subprocess.run(
+        [sys.executable, "-c",
+         "import os, sys; sys.stdout.write(os.environ.get('TMPDIR', ''))"],
+        capture_output=True, text=True)
+    _tc_isdir = "1" if (_tc_own and os.path.isdir(_tc_own)) else "0"
+    with open(tmpdir_capture_file, "w") as _tc_f:
+        _tc_f.write(_tc_own + "\\n" + (_tc_child.stdout or "") + "\\n" + _tc_isdir)
+
 def maybe_block(i, stream=sys.stdout):
     if i != block_after:
         return
@@ -362,22 +402,34 @@ outfile = None
 for a in sys.argv[1:]:
     if a.startswith("--reporter-outfile="):
         outfile = a.split("=", 1)[1]
+# \u00a7S2 client-paragraph fixture \u2014 mark the LAST FAKE_FAIL_COUNT cases as
+# failing (a real \"a failure\" run), instead of the always-clean suite below.
+# 0 (the default) is byte-for-byte the pre-existing always-passing behaviour.
+fail_count = _env_int("FAKE_FAIL_COUNT", "0")
 sys.stdout.write("narration.test.ts:\\n")
 sys.stdout.flush()
 cases = []
+any_failed = False
 for i in range(1, total + 1):
     maybe_block(i)
-    sys.stdout.write("(pass) narration.test.ts > case_%d [0.01ms]\\n" % i)
-    sys.stdout.flush()
-    cases.append('<testcase name="case_%d" file="narration.test.ts" time="0.001"></testcase>' % i)
+    if i > total - fail_count:
+        any_failed = True
+        sys.stdout.write("(fail) narration.test.ts > case_%d [0.01ms]\\n" % i)
+        sys.stdout.flush()
+        cases.append('<testcase name="case_%d" file="narration.test.ts" time="0.001">'
+                     '<failure message="planted">planted failure</failure></testcase>' % i)
+    else:
+        sys.stdout.write("(pass) narration.test.ts > case_%d [0.01ms]\\n" % i)
+        sys.stdout.flush()
+        cases.append('<testcase name="case_%d" file="narration.test.ts" time="0.001"></testcase>' % i)
 if outfile and not no_report:
     d = os.path.dirname(outfile)
     if d:
         os.makedirs(d, exist_ok=True)
     with open(outfile, "w") as f:
         f.write('<?xml version="1.0"?><testsuites><testsuite name="narration.test.ts" '
-                'tests="%d" failures="0">%s</testsuite></testsuites>' % (total, "".join(cases)))
-sys.exit(0)
+                'tests="%d" failures="%d">%s</testsuite></testsuites>' % (total, fail_count, "".join(cases)))
+sys.exit(1 if any_failed else 0)
 """
 
 FAKE_MVNW = "#!{python}\n" + _PROLOGUE + """
@@ -671,6 +723,97 @@ def new_scratch(prefix):
     scratch = tempfile.mkdtemp(prefix=prefix)
     atexit.register(shutil.rmtree, scratch, ignore_errors=True)
     return scratch
+
+
+# \u2500\u2500 \u00a7S3 / \u00a7S2-client fixtures: a grandchild's pid, and process-tree checks \u2500\u2500
+
+_GRANDCHILD_SEQ = [0]
+
+
+def fresh_grandchild_pidfile(scratch):
+    """A grandchild-pidfile path no earlier drive in this process has used."""
+    _GRANDCHILD_SEQ[0] += 1
+    return os.path.join(scratch, f"grandchild-{os.getpid()}-{_GRANDCHILD_SEQ[0]}.pid")
+
+
+_CAPTURE_SEQ = [0]
+
+
+def fresh_capture_path(scratch, name):
+    """A capture-file path no earlier drive in this process has used."""
+    _CAPTURE_SEQ[0] += 1
+    return os.path.join(scratch, f"{name}-{os.getpid()}-{_CAPTURE_SEQ[0]}")
+
+
+def wait_for_pidfile(path, timeout=15):
+    """Poll for the grandchild's own pidfile and return the int pid it wrote,
+    or None if it never appeared \u2014 the caller's own signal that the
+    grandchild never actually started, which is a fixture failure, never a
+    RED failure."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        text = _read(path).strip()
+        if text:
+            try:
+                return int(text)
+            except ValueError:
+                pass
+        time.sleep(0.02)
+    return None
+
+
+def pid_alive(pid):
+    """Whether `pid` still names a live process \u2014 `os.kill(pid, 0)` sends no
+    signal, only probes."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def wait_for_pid_gone(pid, timeout=10):
+    """Poll until `pid` is no longer alive, or the timeout passes \u2014 GREEN's
+    own SIGTERM-then-SIGKILL grace needs a short window, never an instant
+    check."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not pid_alive(pid):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def kill_pid_if_alive(pid):
+    """Best-effort SIGKILL cleanup for a grandchild this process's OWN test
+    started on purpose \u2014 called from every test's `finally`/`tearDown`
+    regardless of whether the assertion under test passed, so a RED failure
+    (today's bug: the grandchild survives) never leaks a sleeping process
+    past this test."""
+    if pid is None:
+        return
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.kill(pid, signal.SIGKILL)
+
+
+def read_tmpdir_capture(path):
+    """Decode a `FAKE_TMPDIR_CAPTURE_FILE`: `(own_tmpdir, child_tmpdir,
+    isdir)`, the runner's own `TMPDIR`, the one a child it spawned WITHOUT
+    an explicit `env` saw, and whether `own_tmpdir` actually existed as a
+    directory at capture time (`"1"`/`"0"`). `(None, None, None)` when the
+    file was never written (the runner never reached the capture point,
+    which the caller's own assertion on it must fail loudly on, not
+    silently)."""
+    text = _read(path)
+    if not text:
+        return None, None, None
+    lines = text.split("\n")
+    own = lines[0] if len(lines) > 0 else ""
+    child = lines[1] if len(lines) > 1 else ""
+    isdir = lines[2] if len(lines) > 2 else ""
+    return own, child, isdir
 
 
 SIGNALS = (signal.SIGINT, signal.SIGTERM)
