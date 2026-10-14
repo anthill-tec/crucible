@@ -1467,11 +1467,13 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
                       f"{verb}: ok=False — no {ingest_name}, nothing to ingest")
             return 1
 
-        # A declared raw report that EXISTS but holds no results, from a
-        # runner that exited non-zero, is a run that never ran: it takes the
-        # no-report exit above, never a `total: 0` ingest.
-        if raw_report and _axi().ran_nothing(
-                result.returncode, _raw_report_result_count(raw_report)):
+        # A report that EXISTS but holds no results — the declared raw report,
+        # or the JUnit XML this client parses — from a runner that exited
+        # non-zero, is a run that never ran: it takes the no-report exit
+        # above, never a `total: 0` ingest.
+        result_count = (_raw_report_result_count(raw_report) if raw_report
+                        else _axi().junit_testcase_count([junit_path]))
+        if _axi().ran_nothing(result.returncode, result_count):
             return _axi().emit_ran_nothing(
                 verb, ingest_name, result.returncode,
                 getattr(result, "stdout", None) or "", run_id, run_warnings,
