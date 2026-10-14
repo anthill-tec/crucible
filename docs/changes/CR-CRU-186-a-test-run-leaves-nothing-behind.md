@@ -100,44 +100,44 @@ exits 0 with zero results keeps today's behaviour.
 
 ## Acceptance criteria
 
-- [ ] **A full run leaves `/tmp` as it found it.** A guard test runs representative suites (each
+- [x] **A full run leaves `/tmp` as it found it.** A guard test runs representative suites (each
       file in the table above) as a child `bun test` with the normal preload, and asserts the system
       temp root holds no new entry afterwards. The same check, measured by the orchestrator on a full
       bun run and a full python client run through the client, finds zero new entries.
-- [ ] **Each named file cleans up.** For EACH file in the table, plus `backend-liveness.steps.ts`,
+- [x] **Each named file cleans up.** For EACH file in the table, plus `backend-liveness.steps.ts`,
       `ephemeral.playwright.config.ts` and `live_run_harness.py`, the directories it creates are
       gone after it runs, on a passing and on a failing run. That holds with the run-scoped temp root
       disabled, so the backstop is not what passes it.
-- [ ] **The temp root is run-scoped.** Under the preload, `os.tmpdir()` (bun) and
+- [x] **The temp root is run-scoped.** Under the preload, `os.tmpdir()` (bun) and
       `tempfile.gettempdir()` (in a python child spawned with the environment passed) resolve inside
       one per-run directory, and
       that directory is removed when the run exits, including when a test fails.
-- [ ] **The client scopes the run's temp root.** For EACH test-family verb of `bun-crucible.py`
+- [x] **The client scopes the run's temp root.** For EACH test-family verb of `bun-crucible.py`
       (`test`, `regression`, a declared script), the spawned runner sees `TMPDIR` set to one
       directory under the system temp root, a child it spawns WITHOUT an explicit env sees the same
       value, and the directory is gone after the client exits: on a pass, a failure, a runner with
       no report, and SIGTERM.
-- [ ] **The runner's tree is killed.** For EACH of the five clients' `test` verb, with a fake runner
+- [x] **The runner's tree is killed.** For EACH of the five clients' `test` verb, with a fake runner
       that starts a long-lived grandchild, SIGTERM to the client during the runner leaves no
       descendant process alive after the client exits (checked by pid), and the exit is 143. A
       runner that exits on its own leaves its normal exit unchanged.
-- [ ] **Both branches, and Ctrl-C without an agent.** The same grandchild check holds for
+- [x] **Both branches, and Ctrl-C without an agent.** The same grandchild check holds for
       `run_streamed`'s inherited-stdio branch, and for SIGINT delivered to a client run WITHOUT
       `--agent` (no trap installed).
-- [ ] **An e2e that never ran fails.** `bun-crucible.py e2e` against a project whose Playwright
+- [x] **An e2e that never ran fails.** `bun-crucible.py e2e` against a project whose Playwright
       exits 1 before running anything (e.g. its port is taken) exits non-zero with `ok: false`, the
       `no_report_warning` naming the runner's exit code, and the run aborted, never filed as
       `total: 0`. The same holds for `test` in EACH of the five clients with a fake runner that
       exits non-zero and writes a report holding zero results.
-- [ ] **Every report-ingesting verb.** The same holds for each other test-family verb that ingests a
+- [x] **Every report-ingesting verb.** The same holds for each other test-family verb that ingests a
       report: bun `regression` on its JUnit route (and so `pre-merge-gate`'s whole-suite step and
       a declared script on that route), python `regression`, rust `workspace-regression` and
       `smoke-test`, mvn's surefire tiers (`unit`, `module`), its failsafe tiers (`integration`,
       `e2e`) and `regression`. One case per verb, each through the real client.
-- [ ] **Existing exits unchanged.** Every existing no-report and abort test passes unchanged,
+- [x] **Existing exits unchanged.** Every existing no-report and abort test passes unchanged,
       including bun `test`'s synthetic compile failure for a missing JUnit report, and a runner
       that exits 0 with zero results.
-- [ ] **No new CR literals.** No CR-shaped literal is added under `clients/`, `src/` or `tests/`
+- [x] **No new CR literals.** No CR-shaped literal is added under `clients/`, `src/` or `tests/`
       comments, and the citation tripwire's pins are unchanged.
 
 ## How it is worked
