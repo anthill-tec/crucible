@@ -72,8 +72,10 @@ Examples:
   RUST_CRUCIBLE_PROJECT_DIR=/path/to/other/rust/repo rust-crucible.py register --agent foo --role RED
 """
 
-import argparse
+# pi-lens-ignore: I001 — tomllib is stdlib (3.11+); ruff's default 3.10 target misfiles it as third-party
+import argparse  # noqa: I001
 import atexit
+import contextlib
 import importlib.util
 import os
 import re
@@ -462,7 +464,8 @@ def _parse_junit(junit_path):
     is coarser than per-file for those. Named honestly rather than claiming
     blanket per-file precision. It rides the printed/enveloped line only — it
     never enters `summary`/`payload` (CR-CRU-047 §S2)."""
-    root = ET.parse(junit_path).getroot()
+    # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
+    root = ET.parse(junit_path).getroot()  # noqa: S314
     tree_nodes = []
     total = passed = failed = pending = 0
     duration_ms = 0
@@ -619,11 +622,12 @@ def _pid_is_gate_runner(pid):
 
 def _lock_field(path, key):
     try:
-        for ln in open(path):
-            if ln.startswith(key + "="):
-                return ln.split("=", 1)[1].strip()
+        with open(path) as f:
+            for ln in f:
+                if ln.startswith(key + "="):
+                    return ln.split("=", 1)[1].strip()
     except OSError:
-        pass
+        return None
     return None
 
 
@@ -632,10 +636,8 @@ def _release_gate_lock(*_a):
     global _HELD_GATE_LOCK
     path, _HELD_GATE_LOCK = _HELD_GATE_LOCK, None
     if path:
-        try:
+        with contextlib.suppress(OSError):
             os.remove(path)
-        except OSError:
-            pass
 
 
 def _gate_lock_signal(signum, _frame):
@@ -674,10 +676,8 @@ def _acquire_gate_lock(project_dir, agent):
                if not holder_live else
                f"lock age {age}s exceeds max {STALE_LOCK_MAX_AGE_S}s — abandoned")
         print(f"[crucible] reclaiming stale gate lock ({why})", file=sys.stderr)
-        try:
+        with contextlib.suppress(OSError):
             os.remove(path)
-        except OSError:
-            pass
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except FileExistsError:
@@ -696,10 +696,8 @@ def _acquire_gate_lock(project_dir, agent):
     _HELD_GATE_LOCK = path
     atexit.register(_release_gate_lock)
     for _sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        try:
+        with contextlib.suppress(OSError, ValueError, RuntimeError):
             signal.signal(_sig, _gate_lock_signal)
-        except (OSError, ValueError, RuntimeError):
-            pass
     print(f"[crucible] gate lock created at {path} (owner={agent}, pid={os.getpid()})",
           file=sys.stderr)
     return True
@@ -1498,10 +1496,9 @@ def _clippy_workspace_gate(project_dir, agent, cycle_id=None):
     print(f"[crucible:clippy-gate] cargo clippy exit={result.returncode} "
           f"errors={err_count} warnings={warn_count}", file=sys.stderr)
     warnings = []
-    if agent:
-        if _ingest_rustc_stderr(project_dir, agent, result.stderr, kind="clippy",
-                                cycle_id=cycle_id) != 0:
-            warnings.append(_axi().ingest_failed_warning("workspace clippy", _base_url()))
+    if agent and _ingest_rustc_stderr(project_dir, agent, result.stderr, kind="clippy",
+                                      cycle_id=cycle_id) != 0:
+        warnings.append(_axi().ingest_failed_warning("workspace clippy", _base_url()))
     if result.returncode != 0:
         tail = "\n".join(result.stderr.strip().splitlines()[-25:])
         print(f"[crucible:clippy-gate] ⛔ ABORT — clippy -D warnings failed:\n{tail}",
@@ -1664,8 +1661,8 @@ def _smoke_refusal(args, verb, project_dir):
     # 2026-05-31): measured AFTER any clean. Hard-abort (rc 2) if a full run can't
     # fit, rather than ENOSPC mid-build. No post-run reclaim here — smoke / docker-
     # e2e deliberately reuses the --all-features build across runs (unless --clean).
-    if args.all_features:
-        if not _disk_guard("smoke-test", project_dir, getattr(args, "min_free_g", 80)):
+    if args.all_features and not _disk_guard("smoke-test", project_dir,
+                                             getattr(args, "min_free_g", 80)):
             _emit_axi(verb, False,
                       {"help": _disk_abort_help(verb,
                                                 getattr(args, "min_free_g", 80))},
@@ -3405,7 +3402,8 @@ def main():
     tier_verb = _axi().TierVerb
     _axi().add_tier_verbs(
         sub,
-        dict(unit=tier_verb(
+        # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, which the tier-mirror guard reads as a copy of the tier vocabulary
+        dict(unit=tier_verb(  # noqa: C408
                  cmd_unit,
                  "Runs `cargo nextest run --lib` — cargo's own in-crate unit "
                  "target — and ingests junit.",

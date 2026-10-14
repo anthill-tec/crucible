@@ -76,6 +76,7 @@ CR-SAN-001-A-RED) are readability habits only. Identity carries displayName + so
 """
 
 import argparse
+import contextlib
 import glob
 import importlib.util
 import os
@@ -485,10 +486,8 @@ def _wipe(reports_dir):
     if os.path.isdir(reports_dir):
         for entry in os.listdir(reports_dir):
             if entry.startswith("TEST-") and entry.endswith(".xml"):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(os.path.join(reports_dir, entry))
-                except OSError:
-                    pass
 
 
 def _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir):
@@ -527,7 +526,8 @@ def _parse_junit_dir(reports_dir):
     duration_ms = 0
     files = set()
     for xml_file in sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml"))):
-        root = ET.parse(xml_file).getroot()
+        # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
+        root = ET.parse(xml_file).getroot()  # noqa: S314
         suites = root.findall(".//testsuite") or [root]
         for suite in suites:
             children = []
@@ -1734,7 +1734,8 @@ def main():
     tier_verb = _axi().TierVerb
     _axi().add_tier_verbs(
         sub,
-        dict(regression=tier_verb(
+        # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, which the tier-mirror guard reads as a copy of the tier vocabulary
+        dict(regression=tier_verb(  # noqa: C408
             cmd_regression,
             "Runs full-suite unittest discovery via xmlrunner and ingests it; "
             "--coverage adds coverage.py.",
