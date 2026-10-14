@@ -82,6 +82,10 @@ receive it, takes the group down, so a Ctrl-C still stops the whole tree with or
 A client killed by SIGKILL cannot clean up; that is a non-goal. The compile, check and docker helpers that call `subprocess.run` directly are not
 interrupted runs, and are a non-goal.
 
+The teed branch of `run_streamed` waits for the runner inside the same guard that takes the group
+down, so a signal that lands after the runner's output ends but before it is reaped still takes the
+group down.
+
 ### §S4 — a runner that ran nothing is a failure
 
 A runner that exits without writing a report is already handled: the verb aborts its run and reports
@@ -125,6 +129,11 @@ exits 0 with zero results keeps today's behaviour.
       `no_report_warning` naming the runner's exit code, and the run aborted, never filed as
       `total: 0`. The same holds for `test` in EACH of the five clients with a fake runner that
       exits non-zero and writes a report holding zero results.
+- [ ] **Every report-ingesting verb.** The same holds for each other test-family verb that ingests a
+      report: bun `regression` on its JUnit route (and so `pre-merge-gate`'s whole-suite step and
+      a declared script on that route), python `regression`, rust `workspace-regression` and
+      `smoke-test`, mvn's surefire tiers (`unit`, `module`), its failsafe tiers (`integration`,
+      `e2e`) and `regression`. One case per verb, each through the real client.
 - [ ] **Existing exits unchanged.** Every existing no-report and abort test passes unchanged,
       including bun `test`'s synthetic compile failure for a missing JUnit report, and a runner
       that exits 0 with zero results.
