@@ -59,25 +59,25 @@ register projects and that a project is registered by an explicit act.
 
 ## Acceptance criteria
 
-- [ ] **No project is created.** For EACH of the five clients, against a live in-process board, with
+- [x] **No project is created.** For EACH of the five clients, against a live in-process board, with
       a scratch project whose `.env` names a key the board does not hold:
       - `register` and the client's `test` verb each exit non-zero;
       - each envelope's `error` contains `unknown project: <key>`, its `help[]` is the board's (it
         names `GET /api/v2/projects`), and a warning names the `.env` path;
       - afterwards, `GET /api/v2/projects` lists exactly the projects it listed before, and no run
         or agent row exists under that key.
-- [ ] **A registered key still works, and posts no project.** For the arduino client, against a
+- [x] **A registered key still works, and posts no project.** For the arduino client, against a
       board where the key is registered first, `register`, `test`, the compile run and
       `auto-ingest` each succeed as today, and the board receives no `POST /api/v2/projects`
       (a capturing proxy). The existing test that pins arduino's self-registration is replaced
       by this one.
-- [ ] **The name is optional.** The arduino client, given a `.env` with `CRUCIBLE_PROJECT_KEY` and no
+- [x] **The name is optional.** The arduino client, given a `.env` with `CRUCIBLE_PROJECT_KEY` and no
       `CRUCIBLE_PROJECT_NAME`, runs `register` and `test` against a registered key and succeeds.
-- [ ] **No caller left.** `_ensure_project`, `_ensure_project_registered` and the shared
+- [x] **No caller left.** `_ensure_project`, `_ensure_project_registered` and the shared
       `pre_register` hook's arduino use are gone from `clients/`. No client posts to
       `POST /api/v2/projects` (asserted over the source of all five clients and the shared module).
-- [ ] **Docs.** The PRD and the client-fleet DN no longer describe client self-registration.
-- [ ] **No new CR literals.** No CR-shaped literal is added under `clients/` or `src/`. If deleting
+- [x] **Docs.** The PRD and the client-fleet DN no longer describe client self-registration.
+- [x] **No new CR literals.** No CR-shaped literal is added under `clients/` or `src/`. If deleting
       the self-registration code lowers the `clients` count, the citation tripwire's `head` pin is
       re-recorded once, to the measured figure, in the same commit.
 
