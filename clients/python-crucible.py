@@ -659,20 +659,22 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     return resp
 
 
-def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None):
+def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None,
+                    cycle_id=None):
     """Ingest a syntax/collection failure to /api/v2/runs/compile (with run context).
 
     CR-CRU-111 AC13a — no COMPILE ingest carries a test tier, so this helper takes
     none: it is the shape `arduino-crucible.py:_ingest_compile` already had, and the
     only way to keep a build event out of the board's test-tier record for good.
-    `run_id` is the OPEN run this ingest closes, as on the parsed ingest."""
+    `run_id` is the OPEN run this ingest closes, as on the parsed ingest.
+    `cycle_id` is a `--cycle` the result is filed under."""
     payload = {
         "projectKey": _project_key(project_dir),
         "format": "python",
         "errors": errors_text,
         "agentId": agent_id,
     }
-    context = _run_context()
+    context = _axi().cycle_context(_run_context(), cycle_id)
     if context:
         payload["context"] = context
     if run_id:
@@ -1051,7 +1053,9 @@ def cmd_auto_ingest(args):
     # CR-CRU-111 §S2/AC3 — this verb runs NO tests: it ingests reports it merely
     # found, so it cannot know their tier by construction and states none.
     resp = _ingest_parsed(project_dir, args.agent, summary, tree,
-                          context=_run_context(), files=files)
+                          context=_axi().cycle_context(
+                              _run_context(), getattr(args, "cycle", None)),
+                          files=files)
     _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
                      warnings=preflight_warnings)
     return 0 if resp.get("ok") else 1
@@ -1102,7 +1106,8 @@ def _check_gate(args, project_dir):
     if not ok:
         sys.stderr.write(result.stderr)
         if args.agent:
-            _ingest_compile(project_dir, args.agent, result.stderr)
+            _ingest_compile(project_dir, args.agent, result.stderr,
+                            cycle_id=getattr(args, "cycle", None))
     return {"exit": result.returncode, "ok": ok}
 
 
@@ -1110,9 +1115,16 @@ def cmd_pre_merge_gate(args):
     """ORCHESTRATOR pre-merge gate — the ONLY path that measures coverage. Steps:
     fail-fast `check` (py_compile) → full `regression --coverage`."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # The gate files from its first step on (a failing py_compile files a
+    # compile result), so an unattributed gate is refused before that step.
+    _axi().refuse_unattributed_run(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        release=getattr(args, "release", None), context=_run_context())
     if not getattr(args, "skip_check", False):
         check_args = argparse.Namespace(
             paths=None, agent=args.agent, python=args.python, project_dir=args.project_dir,
+            cycle=getattr(args, "cycle", None),
         )
         # The STEP form (no envelope of its own) — this gate owns stdout.
         state = _check_gate(check_args, project_dir)
@@ -1740,6 +1752,7 @@ def main():
                         "a cycle-bound agent's ingests are server-stamped with its registered "
                         "cycle.")
     a.add_argument("--reports", help=f"Reports dir (default: {DEFAULT_REPORTS})")
+    _axi().add_filing_cycle_arg(a)
     _add_project_dir_arg(a)
     a.set_defaults(func=cmd_auto_ingest)
 
@@ -1748,6 +1761,7 @@ def main():
     c.add_argument("--paths", nargs="+",
                    help="Files/dirs to compile (default: app tests)")
     c.add_argument("--agent", help="If set, ingest compile errors on failure")
+    _axi().add_filing_cycle_arg(c)
     _add_python_arg(c)
     _add_project_dir_arg(c)
     c.set_defaults(func=cmd_check)
@@ -1827,6 +1841,7 @@ def main():
                              "Requires --agent <registered id> (§S2b).")
     cc.add_argument("--commit", required=True, help="Merge commit sha.")
     cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _axi().add_cr_close_gate_arg(cc)
     _add_workflow_agent_arg(
         cc, extra=" The same id posts the closing cr-merged milestone (§S5).")
     _add_project_dir_arg(cc)
@@ -2064,7 +2079,9 @@ def main():
     # non-zero exit (POSTing nothing) instead of an unhandled traceback.
     sys.exit(_axi().run_verb(
         args.func, args,
-        lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None)))))
+        lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None))),
+        ops_fn=_ops,
+        project_dir_fn=lambda a: _resolve_project_dir(getattr(a, "project_dir", None))))
 
 
 if __name__ == "__main__":

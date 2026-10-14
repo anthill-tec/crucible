@@ -361,9 +361,10 @@ class CrCloseCrMergedMilestoneHookTest(_BaseClientVerbTest):
 
     def _get_recorder(self):
         def fake_get(path):
+            # cr-close closes only over a green pre-merge-gate result: the board holds one.
             return {"ok": True, "plans": [
                 {"planId": self.PLAN_ID, "cr": self.CR_ID, "status": "open", "cycles": []},
-            ]}
+            ], "milestones": [{"type": "pre-merge-gate", "label": self.CR_ID, "outcome": "pass", "passed": 1, "failed": 0, "timestamp": 1}]}
         return fake_get
 
     def test_cr_close_emits_cr_merged_milestone_on_successful_close(self):

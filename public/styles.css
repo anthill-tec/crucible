@@ -2612,3 +2612,6 @@ body {
 }
 .app-workflow-show-now > .app-pane-runway > .app-workflow-cols { background: var(--bg-2); }
 .app-workflow-show-history > .app-pane-runway > .app-workflow-history { background: var(--bg-1); }
+
+/* A CR that closed over a red pre-merge gate, on its History row. */
+.app-cr-accepted-failing-gate { color: var(--fail); }

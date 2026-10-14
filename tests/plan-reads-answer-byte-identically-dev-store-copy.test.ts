@@ -1,5 +1,5 @@
-// §S2 — every plan read answers byte-identically to today's, on a copy of
-// the dev store.
+// §S2 — every plan read answers byte-identically to today's, on a
+// populated store this file builds itself.
 //
 // This is NOT "compare two Store instances running the same code" — that
 // would be trivially identical before GREEN exists at all. The REFERENCE
@@ -13,11 +13,13 @@
 // GUARDS: they already pass, and exist to catch GREEN quietly changing a
 // byte of output while it changes the query count.
 //
-// Every store here is a PLAIN FILE COPY of `data/crucible.db` (+ `-wal`/
-// `-shm`), copied ONCE into one scratch dir, then duplicated — the live
-// board writes while suites run, so two independent copies of the live file
-// could diverge or tear. SKIPPED (not failed) when no dev store exists: a
-// clean checkout and CI carry no dev data.
+// Every store here is a POPULATED store this file builds itself
+// (tests/helpers/populated-store.ts): several projects, one archived, and
+// plans of every status — merged, unmerged, aborted, open with an active,
+// failed, renamed, skipped and appended cycle — written through the ordinary
+// door under a pinned clock. The reference reads it through a raw connection
+// before any `Store` opens it; nothing here reads the operator's dev store, so
+// the answer depends on the code alone.
 //
 // EXCLUDED: an ACTIVE cycle's live `activeMs` — it moves with `Date.now()`,
 // so neither side can be pinned against it here. It is pinned separately,
@@ -25,14 +27,13 @@
 // ("a batched plan read still checkpoints every ACTIVE cycle correctly").
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/store.ts";
 import { handleV2, type V2Deps } from "../src/v2.ts";
 import type { Plan, PlanCycle } from "../src/types.ts";
-
-const LIVE_STORE = join(process.cwd(), "data", "crucible.db");
+import { populateStore } from "./helpers/populated-store.ts";
 
 const scratchDirs: string[] = [];
 
@@ -49,19 +50,15 @@ function tmpDir(): string {
 }
 
 /**
- * A PLAIN FILE COPY of the live store (main file + `-wal`/`-shm` siblings
- * when present) into `dest` — `copyFileSync`, never `sqlite3 .backup`; the
- * original is opened by nothing here. Returns `false` (never throws) when
- * there is no live store to copy.
+ * A populated store, written through the ordinary door and closed, at a fresh
+ * scratch path — the subject every case below reads.
  */
-function copyLiveStore(dest: string): boolean {
-  if (!existsSync(LIVE_STORE)) return false;
-  copyFileSync(LIVE_STORE, dest);
-  for (const suffix of ["-wal", "-shm"]) {
-    const src = `${LIVE_STORE}${suffix}`;
-    if (existsSync(src)) copyFileSync(src, `${dest}${suffix}`);
-  }
-  return true;
+function buildPopulatedStore(): string {
+  const dbPath = join(tmpDir(), "populated.db");
+  const built = Store.open(dbPath);
+  populateStore(built);
+  closeStore(built);
+  return dbPath;
 }
 
 function closeStore(store: Store): void {
@@ -198,53 +195,25 @@ function sortedPlanIds(plans: readonly Plan[]): number[] {
   return plans.map((plan) => plan.planId).sort((a, b) => a - b);
 }
 
-describe("§S2 — every plan read, on a copy of the dev store, answers byte-identically to the pre-change per-plan read", () => {
-  test("store.listPlans(key), for every project, equals the frozen reference built off the SAME copy (GUARD)", () => {
-    if (!existsSync(LIVE_STORE)) {
-      console.log(
-        `[§S2] SKIPPED: no ${LIVE_STORE} to copy — a clean checkout and CI carry no dev store.`,
-      );
-      return;
-    }
-    const dir = tmpDir();
-    const snapshotPath = join(dir, "snapshot.db");
-    if (!copyLiveStore(snapshotPath)) {
-      throw new Error(`copyFileSync of ${LIVE_STORE} failed after existsSync reported it present`);
-    }
-    // TWO INDEPENDENT DUPLICATES of the ONE snapshot: the reference reads one
-    // raw, unmigrated by anything here; `Store.open` migrates the other to
-    // THIS build's SCHEMA_VERSION (today's build's real chain) and answers
-    // through the real `listPlans`.
-    const referencePath = join(dir, "reference.db");
-    const livePath = join(dir, "live.db");
-    for (const dest of [referencePath, livePath]) {
-      copyFileSync(snapshotPath, dest);
-      for (const suffix of ["-wal", "-shm"]) {
-        if (existsSync(`${snapshotPath}${suffix}`)) copyFileSync(`${snapshotPath}${suffix}`, `${dest}${suffix}`);
-      }
-    }
+describe("§S2 — every plan read, on a populated store, answers byte-identically to the pre-change per-plan read", () => {
+  test("store.listPlans(key), for every project, equals the frozen reference built off the SAME store (GUARD)", () => {
+    const dbPath = buildPopulatedStore();
+    // The reference reads the file raw FIRST, before any `Store` opens it.
+    const referenceByPlanId = byPlanId(referencePlans(dbPath).map(stripActiveMs));
+    // Non-vacuity: the population really holds plans of every status, across
+    // live and archived projects.
+    expect(referenceByPlanId.size).toBeGreaterThan(20);
+    const statuses = new Set([...referenceByPlanId.values()].map((plan) => plan.status));
+    expect([...statuses].sort()).toEqual(["aborted", "closed", "open"]);
 
-    const liveStore = Store.open(livePath);
+    const store = Store.open(dbPath);
     const projectKeys = [
-      ...liveStore.listProjects(false).map((p) => p.key),
-      ...liveStore.listProjects(true).map((p) => p.key),
+      ...store.listProjects(false).map((p) => p.key),
+      ...store.listProjects(true).map((p) => p.key),
     ];
-    const liveByPlanId = byPlanId(
-      projectKeys.flatMap((key) => liveStore.listPlans(key).map(stripActiveMs)),
-    );
-    closeStore(liveStore);
-
-    // The reference reads the OTHER duplicate directly — never migrated by
-    // anything but `referencePlans`' own raw SQL, which only ever SELECTs
-    // the columns this build's schema already carries.
-    const migratedForSchema = Store.open(referencePath); // run the SAME migration chain so the columns referencePlans reads exist
-    closeStore(migratedForSchema);
-    const referenceByPlanId = byPlanId(referencePlans(referencePath).map(stripActiveMs));
-
-    if (referenceByPlanId.size === 0) {
-      console.log(`[§S2] SKIPPED: the dev store copy holds no plans to compare.`);
-      return;
-    }
+    expect(store.listProjects(true).length).toBeGreaterThan(0);
+    const liveByPlanId = byPlanId(projectKeys.flatMap((key) => store.listPlans(key).map(stripActiveMs)));
+    closeStore(store);
 
     expect(sortedPlanIds([...liveByPlanId.values()])).toEqual(sortedPlanIds([...referenceByPlanId.values()]));
     for (const [planId, reference] of referenceByPlanId) {
@@ -253,7 +222,7 @@ describe("§S2 — every plan read, on a copy of the dev store, answers byte-ide
   });
 });
 
-describe("§S2 — the `plans`, `status` and global (Workflow home) v2 routes answer byte-identically to the reference, on a copy of the dev store", () => {
+describe("§S2 — the `plans`, `status` and global (Workflow home) v2 routes answer byte-identically to the reference, on a populated store", () => {
   const deps: V2Deps = { version: "probe", healthPayload: () => ({}) };
 
   async function getJson(store: Store, path: string): Promise<any> {
@@ -265,80 +234,45 @@ describe("§S2 — the `plans`, `status` and global (Workflow home) v2 routes an
   }
 
   test("GET …/projects/<key>/plans (unfiltered) and ?status=closed both answer byte-identically to the reference, per project (GUARD)", async () => {
-    if (!existsSync(LIVE_STORE)) {
-      console.log(`[§S2] SKIPPED: no ${LIVE_STORE} to copy.`);
-      return;
-    }
-    const dir = tmpDir();
-    const snapshotPath = join(dir, "snapshot.db");
-    if (!copyLiveStore(snapshotPath)) {
-      throw new Error(`copyFileSync of ${LIVE_STORE} failed after existsSync reported it present`);
-    }
-    const referencePath = join(dir, "reference.db");
-    const livePath = join(dir, "live.db");
-    for (const dest of [referencePath, livePath]) {
-      copyFileSync(snapshotPath, dest);
-      for (const suffix of ["-wal", "-shm"]) {
-        if (existsSync(`${snapshotPath}${suffix}`)) copyFileSync(`${snapshotPath}${suffix}`, `${dest}${suffix}`);
-      }
-    }
-    closeStore(Store.open(referencePath)); // migrate the reference's duplicate too, same reason as above.
-    const reference = referencePlans(referencePath).map(stripActiveMs);
-    if (reference.length === 0) {
-      console.log(`[§S2] SKIPPED: the dev store copy holds no plans to compare.`);
-      return;
-    }
+    const dbPath = buildPopulatedStore();
+    const reference = referencePlans(dbPath).map(stripActiveMs);
+    expect(reference.length).toBeGreaterThan(20);
 
-    const liveStore = Store.open(livePath);
-    const projectKeys = liveStore.listProjects(false).map((p) => p.key);
-    expect(projectKeys.length).toBeGreaterThan(0);
+    const store = Store.open(dbPath);
+    const projectKeys = store.listProjects(false).map((p) => p.key);
+    expect(projectKeys.length).toBeGreaterThan(1);
 
     for (const key of projectKeys) {
       const referenceForProject = reference.filter((plan) => plan.projectKey === key);
-      const body = await getJson(liveStore, `/api/v2/projects/${key}/plans`);
+      expect(referenceForProject.length).toBeGreaterThan(0);
+      const body = await getJson(store, `/api/v2/projects/${key}/plans`);
       const routePlans: Plan[] = body.plans.map(stripActiveMs);
       expect(byPlanId(routePlans)).toEqual(byPlanId(referenceForProject));
 
       const referenceClosed = referenceForProject.filter((plan) => plan.status === "closed");
-      const closedBody = await getJson(liveStore, `/api/v2/projects/${key}/plans?status=closed`);
+      expect(referenceClosed.length).toBeGreaterThan(0);
+      const closedBody = await getJson(store, `/api/v2/projects/${key}/plans?status=closed`);
       const routeClosed: Plan[] = closedBody.plans.map(stripActiveMs);
       expect(byPlanId(routeClosed)).toEqual(byPlanId(referenceClosed));
     }
-    closeStore(liveStore);
+    closeStore(store);
   });
 
   test("GET /api/v2/plans (the global read behind the Workflow home view) answers byte-identically to the reference, across every non-archived project (GUARD)", async () => {
-    if (!existsSync(LIVE_STORE)) {
-      console.log(`[§S2] SKIPPED: no ${LIVE_STORE} to copy.`);
-      return;
-    }
-    const dir = tmpDir();
-    const snapshotPath = join(dir, "snapshot.db");
-    if (!copyLiveStore(snapshotPath)) {
-      throw new Error(`copyFileSync of ${LIVE_STORE} failed after existsSync reported it present`);
-    }
-    const referencePath = join(dir, "reference.db");
-    const livePath = join(dir, "live.db");
-    for (const dest of [referencePath, livePath]) {
-      copyFileSync(snapshotPath, dest);
-      for (const suffix of ["-wal", "-shm"]) {
-        if (existsSync(`${snapshotPath}${suffix}`)) copyFileSync(`${snapshotPath}${suffix}`, `${dest}${suffix}`);
-      }
-    }
-    closeStore(Store.open(referencePath));
-    const reference = referencePlans(referencePath).map(stripActiveMs);
-    if (reference.length === 0) {
-      console.log(`[§S2] SKIPPED: the dev store copy holds no plans to compare.`);
-      return;
-    }
+    const dbPath = buildPopulatedStore();
+    const reference = referencePlans(dbPath).map(stripActiveMs);
 
-    const liveStore = Store.open(livePath);
-    const nonArchivedKeys = new Set(liveStore.listProjects(false).map((p) => p.key));
+    const store = Store.open(dbPath);
+    const nonArchivedKeys = new Set(store.listProjects(false).map((p) => p.key));
     const referenceGlobal = reference.filter((plan) => nonArchivedKeys.has(plan.projectKey));
+    // Non-vacuity: the archived project's plans are really left out, and the
+    // global read still has several projects' plans to answer.
+    expect(referenceGlobal.length).toBeLessThan(reference.length);
+    expect(new Set(referenceGlobal.map((plan) => plan.projectKey)).size).toBeGreaterThan(1);
 
-    const body = await getJson(liveStore, "/api/v2/plans");
+    const body = await getJson(store, "/api/v2/plans");
     const routePlans: Plan[] = body.plans.map(stripActiveMs);
-    closeStore(liveStore);
+    closeStore(store);
 
     expect(byPlanId(routePlans)).toEqual(byPlanId(referenceGlobal));
   });

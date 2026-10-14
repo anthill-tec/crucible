@@ -38,19 +38,20 @@
 // §S2's unification), so the locator here matches `§S2` specifically rather
 // than the CR id alone.
 //
-// ── Safety: the live store is READ, never written ─────────────────────────
-// The real-scale case works on a `sqlite3 -readonly … .backup` REPLICA in an
-// mkdtemp directory, and MEASURES the live file's size and mtime around its
-// own read. Every other case is a scratch file. Nothing here talks to the
-// running board.
+// ── Safety ────────────────────────────────────────────────────────────────
+// Every case is a scratch file this suite builds itself; the real-scale case
+// builds a POPULATED store (tests/helpers/populated-store.ts) and ages it the
+// same way the synthetic case does. Nothing here reads the operator's dev
+// store or talks to the running board.
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Store, SCHEMA_VERSION, type MigrationStep } from "../src/store.ts";
+import { Store, SCHEMA_VERSION } from "../src/store.ts";
 import * as storeModule from "../src/store.ts";
 import { startServer, type ServerHandle } from "../src/server.ts";
+import { populateStore } from "./helpers/populated-store.ts";
 
 const ORCH = "cru130-c2-migration";
 
@@ -98,7 +99,7 @@ interface AnyBody {
 
 /** What ONE label must look like after the step, derived from the rows that
  *  were there BEFORE it — never hand-pinned, so the same rule judges the
- *  synthetic population and the live replica. */
+ *  synthetic population and the populated one. */
 interface Expectation {
   projectKey: string;
   label: string;
@@ -148,21 +149,6 @@ function unificationPosition(): number {
   const chain = migrationChain();
   const at = chain.findIndex((step) => /CR-(CRU-)?130 §S2/.test(step.description ?? ""));
   return at === -1 ? chain.length : at;
-}
-
-/**
- * Run every step BEFORE this CR's §S2 step, and stop there.
- *
- * The replica is a real board's file at whatever version that board last
- * wrote (measured 2026-09-13: `user_version` 11, which predates §S1's date
- * columns). It has to be brought to the version §S2's step upgrades FROM
- * before its pre-state can be read at all — and it must be brought there by
- * the CHAIN, using CR-CRU-071 §S1's own `migrations` seam, rather than by
- * hand-written DDL that would drift from it.
- */
-function bringToStepFrom(dbPath: string): void {
-  const chain = migrationChain() as readonly MigrationStep[];
-  closeStore(Store.open(dbPath, { migrations: chain.slice(0, unificationPosition()) }));
 }
 
 /**
@@ -325,103 +311,6 @@ function ageToPreUnification(db: Database, at: number): void {
   }
 }
 
-/**
- * A READ-ONLY replica of the live store, or the STATED reason there is none.
- *
- * The repo's idiom for a live subject (`liveBoardQueue` in
- * tests/queue-release-membership-mandatory.test.ts): the reason is
- * returned, the case STATES it and returns, and what is lost is the proof's
- * REACH — a real population grown over months — never the proof, which the
- * synthetic population always runs.
- */
-function liveStoreReplica(
-  dir: string,
-): { live: string; replica: string; sizeBefore: number; mtimeBefore: number } | { skip: string } {
-  const live = join(process.cwd(), "data", "crucible.db");
-  if (!existsSync(live)) {
-    return { skip: `there is no live store at ${live}, and its data is never committed` };
-  }
-  const replica = join(dir, "replica.db");
-  const before = statSync(live);
-  try {
-    const backup = Bun.spawnSync(["sqlite3", "-readonly", live, `.backup '${replica}'`]);
-    if (backup.exitCode !== 0) {
-      return {
-        skip:
-          `sqlite3 could not take a read-only replica of ${live} — exit ` +
-          `${String(backup.exitCode)}: ${backup.stderr.toString().trim()}`,
-      };
-    }
-  } catch (failure) {
-    const said = failure instanceof Error ? failure.message : String(failure);
-    return {
-      skip: `\`sqlite3\`, which takes the read-only replica, is not runnable here (${said})`,
-    };
-  }
-  return { live, replica, sizeBefore: before.size, mtimeBefore: before.mtimeMs };
-}
-
-/**
- * Does the replica still hold the type §S2's step RETIRES — or has that step
- * already run against this board?
- *
- * A REAL-SCALE MIGRATION PROOF IS SINGLE-USE. It borrows its population from
- * the live board, so it can only run while that board still holds the shape
- * its step rewrites; the moment the migrated build boots against
- * `data/crucible.db`, a replica of it carries ZERO `release-proposal` rows and
- * the guards below correctly refuse to pass on an empty set. Nor can a
- * downgrade rescue it: `ageToPreUnification` measured exactly that asymmetry —
- * re-typing and re-stamping cannot SPLIT a unified record back into the pair a
- * pre-§S2 board held. This is a PRECONDITION, not a relaxation: nothing below
- * is weakened, and every assertion runs exactly as written whenever the
- * replica does hold that shape.
- *
- * MEASURED FROM THE REPLICA, never from `user_version` alone — a version check
- * would also silence a board that legitimately predates this step. The version
- * is REPORTED regardless, because "already migrated" and "no store on this
- * machine" must be tellable apart from the one line the case prints.
- */
-function preUnificationPopulation(
-  replica: string,
-): { pre: number; version: number } | { skip: string } {
-  const db = new Database(replica);
-  try {
-    const version =
-      db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? -1;
-    const at = `\`user_version\` ${String(version)} on the replica`;
-    const carried =
-      "the invariant itself is carried, unweakened, by this case's synthetic sibling above, " +
-      "which always runs";
-    const table = db
-      .query<{ name: string }, []>(
-        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'milestones'`,
-      )
-      .get();
-    if (table === null) {
-      return {
-        skip:
-          `the replica holds no \`milestones\` table at all (${at}), so it predates the record ` +
-          `table this step rewrites — ${carried}`,
-      };
-    }
-    const proposals = db
-      .query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM milestones WHERE type = ?`)
-      .get(RETIRED_TYPE)!.n;
-    if (proposals === 0) {
-      return {
-        skip:
-          `the live store is ALREADY MIGRATED — not one \`${RETIRED_TYPE}\` row is left in it ` +
-          `(${at}), so a replica of it cannot supply the pre-§S2 population this case migrates, ` +
-          `and no downgrade can rebuild one: re-typing and re-stamping cannot split a unified ` +
-          `record back into the pair a pre-§S2 board held — ${carried}`,
-      };
-    }
-    return { pre: proposals, version };
-  } finally {
-    db.close();
-  }
-}
-
 describe("CR-CRU-130 §S2 — two types become one record, and history keeps everything else", () => {
   const scratchDirs: string[] = [];
   const openDbs: Database[] = [];
@@ -439,8 +328,8 @@ describe("CR-CRU-130 §S2 — two types become one record, and history keeps eve
     return dir;
   }
 
-  /** A direct handle on a SCRATCH file — a replica or a throwaway store, never
-   *  the live database, which is read only by `sqlite3 -readonly`, once. */
+  /** A direct handle on a SCRATCH file this suite built — never the
+   *  operator's dev store. */
   function raw(dbPath: string): Database {
     const db = new Database(dbPath);
     openDbs.push(db);
@@ -700,55 +589,36 @@ describe("CR-CRU-130 §S2 — two types become one record, and history keeps eve
     },
   );
 
-  // ── AC — and at REAL scale, against a replica of the live store ─────────
+  // ── AC — and at REAL scale, over a populated store ──────────────────────
   //
-  // WHY THIS CASE MAY STOP RUNNING WITHOUT HAVING ROTTED: a real-scale
-  // migration proof is SINGLE-USE. It can only run while the live store still
-  // holds the shape its step rewrites, because once that board has been
-  // migrated it cannot supply a pre-migration population any more, and a
-  // DOWNGRADE cannot reconstruct one — `ageToPreUnification` above measures
-  // exactly that asymmetry: a unified record cannot be split back into the
-  // `release-proposal` + `release` pair a pre-§S2 board held. So a NOT RUN
-  // below means "this board has already been migrated", not "this proof
-  // decayed" — and the invariant it reaches for keeps being proved, on every
-  // run, by the synthetic sibling above.
+  // The synthetic case above holds each shape once. A long-used board holds
+  // them many times over, across several projects (one archived), beside
+  // dozens of milestones of other types — so the population here is built by
+  // tests/helpers/populated-store.ts and aged by the SAME `ageToPreUnification`
+  // the synthetic case uses, then judged by the same rule.
 
   test(
-    "at this project's real population, whatever its size — where a proposal has no matching " +
-      "release and a release has no surviving proposal — every label migrates into exactly " +
-      "one record",
+    "at real scale — several projects, where a proposal has no matching release and a release " +
+      "has no surviving proposal — every label migrates into exactly one record",
     async () => {
-      const taken = liveStoreReplica(scratch("cru130-c2-live-replica-"));
-      if ("skip" in taken) {
-        console.log(`[CR-CRU-130] §S2 real-scale migration NOT RUN: ${taken.skip}`);
-        return;
-      }
-      // THE PRECONDITION — the same stated-reason mechanism as the two above,
-      // for one more way the replica can fail to be a subject, and read BEFORE
-      // the chain is run over it so what is measured is the shape the board
-      // itself last wrote. Nothing after this point is conditional: every
-      // assertion, including the non-vacuity guards, runs exactly as written
-      // whenever the replica DOES hold the type this step retires.
-      const population = preUnificationPopulation(taken.replica);
-      if ("skip" in population) {
-        console.log(`[CR-CRU-130] §S2 real-scale migration NOT RUN: ${population.skip}`);
-        return;
-      }
+      const dbPath = join(scratch("cru130-c2-populated-"), "crucible.db");
+      const built = Store.open(dbPath);
+      const populated = populateStore(built);
+      closeStore(built);
 
-      // The replica is a real board's file, at the version that board last
-      // wrote. Bring it to the version §S2's step upgrades FROM — by the chain
-      // itself — so the pre-state below is the one that step really reads.
-      bringToStepFrom(taken.replica);
+      const aging = raw(dbPath);
+      ageToPreUnification(aging, SHIPPED_AT * 1000);
+      stampToStepFrom(aging);
+      closeRaw(aging);
 
-      const proof = await proveUnification(taken.replica);
+      const proof = await proveUnification(dbPath);
 
-      // REAL SCALE, and the two partnerless shapes are really present. Every
-      // expectation is derived from the rows the replica held; no count is
-      // pinned, because the live population grows every day.
+      // REAL SCALE, and the two partnerless shapes are really present.
       const proposalsBefore = proof.before.filter((row) => row.type === RETIRED_TYPE);
       const releasesBefore = proof.before.filter((row) => row.type === "release");
-      expect(proposalsBefore.length).toBeGreaterThan(0);
-      expect(releasesBefore.length).toBeGreaterThan(0);
+      expect(new Set(proof.before.map((row) => row.project_key)).size).toBe(populated.projects.length);
+      expect(proposalsBefore.length).toBeGreaterThan(populated.projects.length);
+      expect(releasesBefore.length).toBeGreaterThan(populated.projects.length);
       expect(proof.untouched).toBeGreaterThan(10);
       // THE TRAP, asserted as a property of the fixture rather than assumed:
       // at least one proposal whose label NO release shares, and at least one
@@ -761,14 +631,19 @@ describe("CR-CRU-130 §S2 — two types become one record, and history keeps eve
       expect(releasesBefore.filter((row) => !proposalLabels.has(row.label)).length).toBeGreaterThan(
         0,
       );
+      // A CONSUMED pair and a REVISED proposal are there too.
+      expect(
+        proposalsBefore.filter((row) => row.retired_at !== null && releaseLabels.has(row.label)).length,
+      ).toBeGreaterThan(0);
+      const perLabel = new Map<string, number>();
+      for (const row of proposalsBefore) {
+        const groupKey = `${row.project_key}\u0000${row.label ?? ""}`;
+        perLabel.set(groupKey, (perLabel.get(groupKey) ?? 0) + 1);
+      }
+      expect([...perLabel.values()].some((count) => count > 1)).toBe(true);
       // Both halves really exist after the rewrite.
       expect(proof.expectations.filter((e) => e.deliveredAt !== null).length).toBeGreaterThan(0);
       expect(proof.expectations.filter((e) => e.deliveredAt === null).length).toBeGreaterThan(0);
-
-      // THE LIVE STORE WAS NEVER WRITTEN.
-      const liveAfter = statSync(taken.live);
-      expect(liveAfter.size).toBe(taken.sizeBefore);
-      expect(liveAfter.mtimeMs).toBe(taken.mtimeBefore);
     },
   );
 });

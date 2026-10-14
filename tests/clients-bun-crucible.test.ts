@@ -1804,6 +1804,17 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
       });
     }
 
+    // cr-close closes only over a green pre-merge-gate result: the board holds one.
+    const gated = await fetch(`${baseUrl}/api/v2/milestones`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectKey: key, agentId: "test-agent", type: "pre-merge-gate",
+        label: (await getPlans(baseUrl, key))[0]!.cr, outcome: "pass", passed: 1, failed: 0,
+      }),
+    });
+    expect(gated.status).toBe(201);
+
     // CR-CRU-044 §S5 — cr-close POSTs a cr-merged milestone, so it needs a
     // DECLARED identity; there is no fabricated fallback any more.
     const res = await runScript(
@@ -2176,7 +2187,10 @@ describe("clients/bun-crucible.py — CR-CRU-056 (C5): a gated run removes only 
   }
 
   /** Seeds project → open plan → ACTIVE cycle, and a fixture bun package. */
-  async function seedBoundFixture(name: string): Promise<{
+  // `activate: false` leaves the filed cycle PENDING, so the project has no
+  // active cycle: an unbound run is then project-scoped on purpose rather than
+  // refused for carrying no cycle.
+  async function seedBoundFixture(name: string, opts: { activate?: boolean } = {}): Promise<{
     baseUrl: string;
     key: string;
     dir: string;
@@ -2187,7 +2201,9 @@ describe("clients/bun-crucible.py — CR-CRU-056 (C5): a gated run removes only 
     const key = await createProject(baseUrl, name);
     const plan = await filePlan(baseUrl, key, `CR-CRU-056-${name}`);
     const cycleId = plan.cycles[0]!.id;
-    await activateCycle(baseUrl, key, plan.planId, cycleId);
+    if (opts.activate !== false) {
+      await activateCycle(baseUrl, key, plan.planId, cycleId);
+    }
     const dir = scratchDir("bun-crucible-c5-");
     writeFixtureBunProject(dir, key);
     return { baseUrl, key, dir, cycleId };
@@ -2288,11 +2304,15 @@ describe("clients/bun-crucible.py — CR-CRU-056 (C5): a gated run removes only 
   });
 
   test("a gated run WITHOUT --cycle never invents one for a run-created identity — no client-side cycle resolution survives (§S3)", async () => {
-    const { baseUrl, key, dir } = await seedBoundFixture("clients-bc-c5-no-invention");
+    // The cycle is filed but left PENDING, so the project has no ACTIVE
+    // cycle: an unbound run there is project-scoped on purpose and is stored.
+    // (While a cycle IS active the same run is refused before it starts,
+    // proved by the unattributed-run refusal suite.) A cycle exists on this
+    // project, and an unbound run-created agent must still attach to
+    // NOTHING: no client-side resolution picks one for it.
+    const { baseUrl, key, dir } = await seedBoundFixture("clients-bc-c5-no-invention",
+                                                         { activate: false });
 
-    // An ACTIVE cycle exists on this project — the deleted resolver would
-    // have silently picked it. An unbound run-created agent must attach to
-    // NOTHING instead.
     const res = await runScript(
       ["test", "--agent", "bc-c5-unbound", "--project-dir", dir, "--package-dir", dir],
       { cwd: dir, crucibleUrl: baseUrl },

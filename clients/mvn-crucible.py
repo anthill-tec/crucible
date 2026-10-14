@@ -904,7 +904,7 @@ def _smart_ingest(project_dir, agent, dirs, tier=None, context=None,
 
 
 def _compile_fallback(maven_dir, project_dir, agent, common_flags, run_id=None,
-                      release=None):
+                      release=None, context=None):
     """No test reports → tests didn't compile. Run `mvn clean test-compile` and
     ingest the build output as a compile failure (the RED-as-compile path).
 
@@ -918,8 +918,8 @@ def _compile_fallback(maven_dir, project_dir, agent, common_flags, run_id=None,
           file=sys.stderr)
     result = subprocess.run(cmd, cwd=maven_dir, capture_output=True, text=True)
     output = (result.stdout or "") + (result.stderr or "")
-    return (_ingest_compile(project_dir, agent, output, run_id=run_id,
-                            release=release), output)
+    return (_ingest_compile(project_dir, agent, output, context=context,
+                            run_id=run_id, release=release), output)
 
 
 # --------------------------------------------------------------------------- #
@@ -948,6 +948,12 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
     env = os.environ.copy()
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
+    # The pre-flight every run verb makes, before maven spawns: an unbound run
+    # while the project has an active cycle is refused here. A release run
+    # keeps its own note below and is never refused.
+    preflight_warnings = [] if release else _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None), context=_run_context())
     # §S3 — human narration on stderr; stdout carries the §S1 envelope alone.
     print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     narrator, run_id, run_warnings = None, None, []
@@ -961,8 +967,9 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
                                           context=_run_context(),
                                           release=release)
-        # §S1 — this body makes no pre-flight, so a release run's note rides
-        # ahead of the run's own warnings, where the pre-flight's would.
+        run_warnings = list(preflight_warnings) + run_warnings
+        # §S1 — a release run's note rides ahead of the run's own warnings,
+        # where the pre-flight's would.
         if release:
             run_warnings = [_axi().release_run_note(release)] + run_warnings
     # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: a `unit`
@@ -1173,6 +1180,10 @@ def _failsafe_tier_run(args, goals, label, project_dir, identity):
     module = getattr(args, "module", None)
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
+    # The pre-flight, as `_surefire_tier_run` makes it, before maven spawns.
+    preflight_warnings = [] if release else _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None), context=_run_context())
     narrator, run_id, run_warnings = None, None, []
     if args.agent:
         # The shared run path, as `_run_surefire_tier` walks it.
@@ -1183,6 +1194,7 @@ def _failsafe_tier_run(args, goals, label, project_dir, identity):
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
                                           context=_run_context(),
                                           release=release)
+        run_warnings = list(preflight_warnings) + run_warnings
         # §S1 — the release run's note, as `_run_surefire_tier` carries it.
         if release:
             run_warnings = [_axi().release_run_note(release)] + run_warnings
@@ -1247,6 +1259,12 @@ def cmd_compile(args):
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
     cmd = _mvn_base(maven_dir) + ["clean", "test-compile"] + common
+    # `compile` INGESTS the build output, so it makes the pre-flight every
+    # filing verb makes, before maven spawns.
+    cycle = getattr(args, "cycle", None)
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent, cycle_id=cycle,
+        context=_run_context())
     print(f"[compile] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     result = subprocess.run(cmd, cwd=maven_dir, capture_output=True, text=True)
     output = (result.stdout or "") + (result.stderr or "")
@@ -1256,14 +1274,15 @@ def cmd_compile(args):
     print(f"[compile] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
-    rc = _ingest_compile(project_dir, args.agent, output)
+    rc = _ingest_compile(project_dir, args.agent, output,
+                         context=_axi().cycle_context(_run_context(), cycle))
     ok = result.returncode == 0
     # CR-CRU-058 §S1/§S2 — the compile verb reached only a plain-print ingest
     # helper before this; its envelope names the build outcome, and its help[]
     # the state actually reached (a clean build points at the next verb, a
     # broken one at the errors just ingested).
-    warnings = ([] if rc == 0
-                else [_axi().ingest_failed_warning("compile", _base_url())])
+    warnings = list(preflight_warnings) + (
+        [] if rc == 0 else [_axi().ingest_failed_warning("compile", _base_url())])
     _emit_axi("compile", ok,
               {"exit": result.returncode,
                "help": (_axi().HELP_STEPS["check"] if ok else
@@ -1299,6 +1318,12 @@ def cmd_e2e(args):
     optionally native. No coverage. Optional docker compose lifecycle."""
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
+    # Refused before docker is touched; the tier body's own pre-flight carries
+    # the warnings.
+    _axi().refuse_unattributed_run(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        release=getattr(args, "release", None), context=_run_context())
     _docker_clean_check(maven_dir)
 
     docker_up = False
@@ -1594,7 +1619,9 @@ def cmd_check(args):
     print(f"[check] mvn exit={result.returncode}", file=sys.stderr)
     ok = result.returncode == 0
     if not ok and args.agent:
-        _ingest_compile(project_dir, args.agent, output)
+        _ingest_compile(project_dir, args.agent, output,
+                        context=_axi().cycle_context(
+                            _run_context(), getattr(args, "cycle", None)))
     legacy = f"check: ok={ok} exit={result.returncode}"
     _emit_axi("check", ok,
               {"exit": result.returncode, "help": _axi().HELP_STEPS["check"]},
@@ -1609,22 +1636,23 @@ def cmd_auto_ingest(args):
     no reports exist."""
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
+    ctx = _axi().cycle_context(_run_context(), getattr(args, "cycle", None))
+    # CR-CRU-094 §S3 — this verb's ingest is the furthest from the run that
+    # produced the reports, so an unattributed store here is the hardest to
+    # notice; checked before EITHER branch files — the no-report branch runs
+    # maven and files its compile result.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None), context=ctx)
     su = _dirs_with_xml(_report_dirs(maven_dir, getattr(args, "module", None), "surefire"))
     fs = _dirs_with_xml(_report_dirs(maven_dir, getattr(args, "module", None), "failsafe"))
     dirs = su + fs
     if not dirs:
         print("[auto-ingest] no reports found", file=sys.stderr)
         rc, _ = _compile_fallback(maven_dir, project_dir, args.agent,
-                                  _common_mvn_flags(args))
+                                  _common_mvn_flags(args), context=ctx)
         return rc
     _warn_if_stale(dirs)
-    ctx = _run_context()
-    # CR-CRU-094 §S3 — this verb runs no maven and offers no `--cycle`, so its
-    # ingest is the furthest from the run that produced the reports and an
-    # unattributed store here is the hardest to notice; checked before the POST.
-    preflight_warnings = _axi().preflight_cycle_warnings(
-        _get, _project_key(project_dir), args.agent,
-        cycle_id=getattr(args, "cycle", None), context=ctx)
     # CR-CRU-111 §S2/AC3 — this verb runs NO maven: it ingests surefire/failsafe
     # reports it merely discovered, so it cannot know their tier by construction
     # and states none on either branch. `--coverage` selects the parsed path, not
@@ -1781,6 +1809,11 @@ def _docker_down(args, project_dir):
 def cmd_pre_merge_gate(args):
     """ORCHESTRATOR one-shot: docker-up → regression → docker-down (always)."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # An unattributed gate is refused before its first step brings the stack up.
+    _axi().refuse_unattributed_run(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        release=getattr(args, "release", None), context=_run_context())
     up_args = argparse.Namespace(
         project_dir=args.project_dir, compose_file=args.compose_file,
         no_wait=True, services=None, all_services=False, maven_dir=args.maven_dir)
@@ -2417,6 +2450,7 @@ def main():
 
     co = sub.add_parser("compile", help="mvn clean test-compile → ingest /api/v2/runs/compile (RED compile path).")
     co.add_argument("--agent", help="If set, ingest the build output as a compile result")
+    _axi().add_filing_cycle_arg(co)
     _add_mvn_flags(co)
     _add_project_args(co)
     co.set_defaults(func=cmd_compile)
@@ -2429,6 +2463,7 @@ def main():
                          "cycle.")
     ai.add_argument("--coverage", action="store_true",
                     help="Also attach JaCoCo (ONLY valid after a known-green full regression)")
+    _axi().add_filing_cycle_arg(ai)
     _add_mvn_flags(ai)
     _add_project_args(ai)
     ai.set_defaults(func=cmd_auto_ingest)
@@ -2491,6 +2526,7 @@ def main():
 
     ck = sub.add_parser("check", help="CHECK gate: mvn clean test-compile → ingest /api/v2/runs/compile on failure (§S2).")
     ck.add_argument("--agent", help="If set, ingest the build output as a compile result")
+    _axi().add_filing_cycle_arg(ck)
     _add_mvn_flags(ck)
     _add_project_args(ck)
     ck.set_defaults(func=cmd_check)
@@ -2542,6 +2578,7 @@ def main():
                              "Requires --agent <registered id> (§S2b).")
     cc.add_argument("--commit", required=True, help="Merge commit sha.")
     cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _axi().add_cr_close_gate_arg(cc)
     _add_workflow_agent_arg(
         cc, extra=" The same id posts the closing cr-merged milestone (§S5).")
     _add_project_args(cc)
@@ -2770,7 +2807,9 @@ def main():
     # non-zero exit (POSTing nothing) instead of an unhandled traceback.
     sys.exit(_axi().run_verb(
         args.func, args,
-        lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None)))))
+        lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None))),
+        ops_fn=_ops,
+        project_dir_fn=lambda a: _resolve_project_dir(getattr(a, "project_dir", None))))
 
 
 if __name__ == "__main__":

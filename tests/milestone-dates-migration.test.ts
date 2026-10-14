@@ -28,20 +28,20 @@
 // destination IS the contract — "the columns landed" is unprovable without
 // saying where. Same carve-out CR-CRU-129's migration suite states.
 //
-// ── Safety: the live store is READ, never written ─────────────────────────
-// The real-scale case works on a `sqlite3 -readonly … .backup` REPLICA in an
-// mkdtemp directory. The live `data/crucible.db` is opened read-only by the
-// backup command and by nothing else; the test MEASURES its size and mtime
-// before and after and fails if either moved. Every other case is a scratch
-// file. Nothing here talks to the running board.
+// ── Safety ────────────────────────────────────────────────────────────────
+// Every case is a scratch file this suite builds itself; the real-scale case
+// builds a POPULATED store (tests/helpers/populated-store.ts) and ages it into
+// the shape a board held before these steps. Nothing here reads the operator's dev
+// store or talks to the running board.
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, SCHEMA_VERSION } from "../src/store.ts";
 import * as storeModule from "../src/store.ts";
 import { startServer, type ServerHandle } from "../src/server.ts";
+import { populateStore } from "./helpers/populated-store.ts";
 
 /** THE TWO SPELLING DECISIONS, isolated — see the header. */
 const TARGET_COLUMN = "target_at";
@@ -53,114 +53,6 @@ const ORCH = "cru130-c1-migration";
 const SHIPPED_AT = 1_780_000_000;
 const PROPOSED_FOR = 1_800_000_000;
 const DAY = 86_400;
-
-/**
- * A READ-ONLY replica of the live store, or the STATED reason there is none.
- *
- * The live file is opened by `sqlite3 -readonly … .backup` and by nothing
- * else, and the caller asserts its size and mtime are unmoved afterwards.
- *
- * A replica is the OPERATOR'S disk, not the project's: a clean checkout and CI
- * have no live store and may have no `sqlite3`, and a case that THREW there
- * would report a missing file as a broken invariant. The repo's own idiom for
- * a live subject applies instead (`tests/queue-release-membership-mandatory
- * .test.ts`'s `liveBoardQueue`): the reason is returned, the case STATES it and
- * returns, and what is lost is the proof's REACH — a real population grown over
- * months — never the proof, which the synthetic population always runs.
- */
-function liveStoreReplica(
-  dir: string,
-): { live: string; replica: string; sizeBefore: number; mtimeBefore: number } | { skip: string } {
-  const live = join(process.cwd(), "data", "crucible.db");
-  if (!existsSync(live)) {
-    return { skip: `there is no live store at ${live}, and its data is never committed` };
-  }
-  const replica = join(dir, "replica.db");
-  const before = statSync(live);
-  try {
-    const backup = Bun.spawnSync(["sqlite3", "-readonly", live, `.backup '${replica}'`]);
-    if (backup.exitCode !== 0) {
-      return {
-        skip:
-          `sqlite3 could not take a read-only replica of ${live} — exit ` +
-          `${String(backup.exitCode)}: ${backup.stderr.toString().trim()}`,
-      };
-    }
-  } catch (failure) {
-    const said = failure instanceof Error ? failure.message : String(failure);
-    return { skip: `\`sqlite3\`, which takes the read-only replica, is not runnable here (${said})` };
-  }
-  return { live, replica, sizeBefore: before.size, mtimeBefore: before.mtimeMs };
-}
-
-/**
- * Does the replica still hold the shape §S1's step REWRITES — payload dates
- * with no columns to hold them — or has that step already run against this
- * board?
- *
- * A REAL-SCALE MIGRATION PROOF IS SINGLE-USE. It borrows its population from
- * the live board, so it can only run while that board still holds the shape
- * its step rewrites; the moment the migrated build boots against
- * `data/crucible.db`, a replica of it carries ZERO pre-migration rows, and the
- * case's own non-vacuity guards correctly fire rather than pass on an empty
- * set. This is a PRECONDITION, not a relaxation: nothing below is weakened,
- * and every assertion runs exactly as written whenever the replica does hold
- * that shape.
- *
- * MEASURED FROM THE REPLICA, never from `user_version` alone — a version check
- * would also silence a board that legitimately predates this step, and what a
- * reader needs to know is which shape the file actually holds. The version is
- * REPORTED regardless, because "already migrated" and "no store on this
- * machine" must be tellable apart from the one line the case prints.
- */
-function preMigrationPopulation(
-  replica: string,
-): { pre: number; version: number } | { skip: string } {
-  const db = new Database(replica);
-  try {
-    const version =
-      db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? -1;
-    const at = `\`user_version\` ${String(version)} on the replica`;
-    const carried =
-      "the invariant itself is carried, unweakened, by this case's synthetic sibling above, " +
-      "which always runs";
-    const columns = columnsOf(db, "milestones");
-    if (columns.length === 0) {
-      return {
-        skip:
-          `the replica holds no \`milestones\` table at all (${at}), so it predates the record ` +
-          `table this step adds its columns to — ${carried}`,
-      };
-    }
-    if (columns.includes(TARGET_COLUMN) || columns.includes(DELIVERED_COLUMN)) {
-      return {
-        skip:
-          `the live store is ALREADY MIGRATED — its \`milestones\` table carries ` +
-          `\`${TARGET_COLUMN}\`/\`${DELIVERED_COLUMN}\` already (${at}), so a replica of it holds ` +
-          `zero rows of the shape this step rewrites and the proof would run against an empty ` +
-          `population — ${carried}`,
-      };
-    }
-    const dated = db
-      .query<{ n: number }, []>(
-        `SELECT COUNT(*) AS n FROM milestones
-          WHERE json_extract(payload, '$.releasedAt') IS NOT NULL
-             OR json_extract(payload, '$.targetAt') IS NOT NULL`,
-      )
-      .get()!.n;
-    if (dated === 0) {
-      return {
-        skip:
-          `the replica's \`milestones\` table has the two columns absent but not one row whose ` +
-          `payload carries \`releasedAt\` or \`targetAt\` (${at}), so this step has no date to ` +
-          `derive at real scale — ${carried}`,
-      };
-    }
-    return { pre: dated, version };
-  } finally {
-    db.close();
-  }
-}
 
 interface ChainStep {
   readonly from: number;
@@ -326,11 +218,9 @@ describe("the dates a milestone already held become columns, and history keeps e
   }
 
   /**
-   * A direct handle on a SCRATCH file — a replica or a throwaway store, never
-   * the live database (which is read only by `sqlite3 -readonly`, once, to
-   * take the replica). Not opened read-only, because a WAL store with no
-   * companion `-shm` cannot be opened that way; a replica is ours to open
-   * however we like.
+   * A direct handle on a SCRATCH file this suite built — never the
+   * operator's dev store. Not opened read-only, because a WAL store with no
+   * companion `-shm` cannot be opened that way.
    */
   function raw(dbPath: string): Database {
     const db = new Database(dbPath);
@@ -535,10 +425,8 @@ describe("the dates a milestone already held become columns, and history keeps e
    *   3. THE WIRE answers the same record it always did, plus the two new
    *      fields and nothing else.
    *
-   * Shared by the synthetic population below — which ALWAYS runs — and by the
-   * live replica, so an absent replica costs the proof's REACH (a real
-   * population, grown over months, with shapes no fixture would think to
-   * write) and never the proof itself.
+   * Shared by the synthetic population below and by the populated store the
+   * real-scale case builds, so both are judged by the same proof.
    */
   async function proveMigration(
     dbPath: string,
@@ -582,7 +470,7 @@ describe("the dates a milestone already held become columns, and history keeps e
     // steps run on the ONE boot below, so a byte-identity claim about the
     // first cannot survive the second, whose whole job is rewriting exactly
     // those rows. The comparison therefore covers every record neither step
-    // rewrites — on the live replica, all but six — and §S2's rewrite is
+    // rewrites, and §S2's rewrite is
     // proved row by row, by its own rule, in
     // `tests/release-unification-migration.test.ts`.
     const nowStored = storedRows(after);
@@ -878,65 +766,79 @@ describe("the dates a milestone already held become columns, and history keeps e
     },
   );
 
-  // ── AC — and at REAL scale, against a replica of the live store ──────────
+  // ── AC — and at REAL scale, over a populated store ──────────────────────
   //
-  // WHY THIS CASE MAY STOP RUNNING WITHOUT HAVING ROTTED: a real-scale
-  // migration proof is SINGLE-USE. It can only run while the live store still
-  // holds the shape its step rewrites, because once that board has been
-  // migrated it cannot supply a pre-migration population any more, and a
-  // DOWNGRADE cannot reconstruct one — dropping the columns and re-stamping
-  // the version puts back the schema, never the rows; §S2's sibling states the
-  // sharper form of the same limit, that a unified record cannot be split back
-  // into the `release-proposal` + `release` PAIR a pre-§S2 board held. So a
-  // NOT RUN below means "this board has already been migrated", not "this
-  // proof decayed" — and the invariant it reaches for keeps being proved, on
-  // every run, by the synthetic sibling above.
+  // The synthetic population above holds each shape once, and every row in it
+  // is one this step alone rewrites. A long-used board holds them many times
+  // over, across several projects, AND rows from before the release
+  // unification — `release-proposal` records the NEXT step rewrites on the
+  // same boot, which the byte-identity comparison must scope out rather than
+  // trip on. So
+  // the population here is built by tests/helpers/populated-store.ts and aged
+  // into that older shape.
 
   test(
-    "at this project's real population, every record survives the migration byte-identically " +
-      "except for the two fields it adds",
+    "at real scale — several projects, holding rows the next step rewrites too — every record " +
+      "survives the migration byte-identically except for the two fields it adds",
     async () => {
-      const taken = liveStoreReplica(scratch("cru130-live-replica-"));
-      if ("skip" in taken) {
-        console.log(`[CR-CRU-130] §S1 real-scale migration NOT RUN: ${taken.skip}`);
-        return;
-      }
-      // THE PRECONDITION — the same stated-reason mechanism as the two above,
-      // for one more way the replica can fail to be a subject. Nothing after
-      // this point is conditional: every assertion, including the non-vacuity
-      // guards, runs exactly as written whenever the replica DOES hold the
-      // shape this step rewrites.
-      const population = preMigrationPopulation(taken.replica);
-      if ("skip" in population) {
-        console.log(`[CR-CRU-130] §S1 real-scale migration NOT RUN: ${population.skip}`);
-        return;
-      }
+      const dbPath = join(scratch("cru130-populated-"), "crucible.db");
+      const built = Store.open(dbPath);
+      // Every project left live: the wire walk reads each project's records
+      // through its own route, and archiving is no part of this step.
+      const populated = populateStore(built, { archiveLast: false });
+      closeStore(built);
 
-      const proof = await proveMigration(taken.replica);
+      // AGE THE HISTORY into the shape before these steps: an UNDELIVERED release is
+      // what a proposal became, so it is put back under the retired type
+      // (column and payload alike), and a delivered release spells its
+      // delivery `releasedAt` and nothing else. `json_set`/`json_remove` touch
+      // only those keys.
+      const aging = raw(dbPath);
+      aging.exec(
+        `UPDATE milestones SET type = 'release-proposal',
+                payload = json_set(payload, '$.type', 'release-proposal')
+          WHERE type = 'release' AND delivered_at IS NULL`,
+      );
+      aging.exec(
+        `UPDATE milestones SET payload = json_remove(payload, '$.deliveredAt')
+          WHERE type = 'release' AND json_extract(payload, '$.releasedAt') IS NOT NULL`,
+      );
+      const proposals = aging
+        .query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM milestones WHERE type = 'release-proposal'`)
+        .get()!.n;
+      aging.close();
+      openDbs.splice(openDbs.indexOf(aging), 1);
+      // The ageing really produced rows the next step rewrites.
+      expect(proposals).toBeGreaterThan(populated.projects.length);
+
+      const proof = await proveMigration(dbPath);
 
       // REAL SCALE, and the two shapes the migration derives from are really
-      // present. Every expectation is derived from the rows the replica held;
-      // no count is pinned, because the live population grows every day.
+      // present.
       const payloads = proof.rowsBefore.map(payloadOf);
+      expect(new Set(proof.rowsBefore.map((row) => row.project_key)).size).toBe(
+        populated.projects.length,
+      );
       expect(proof.rowsBefore.length).toBeGreaterThan(10);
       expect(payloads.filter((p) => p.releasedAt !== undefined).length).toBeGreaterThan(0);
       expect(payloads.filter((p) => p.targetAt !== undefined).length).toBeGreaterThan(0);
+      expect(payloads.filter((p) => p.deliveredAt !== undefined).length).toBeGreaterThan(0);
       // The wire walk really compared the population, and really saw rows that
-      // GAINED a date (otherwise "nothing changed except the two fields" would
-      // be satisfied by a migration that added nothing at all).
+      // GAINED a date.
       expect(proof.compared).toBeGreaterThan(10);
       expect(proof.comparedWithDates).toBeGreaterThan(0);
-      // CR-CRU-130 §S2 — and the scoping above is NOT vacuous at real scale:
-      // this population really does hold rows §S2's step rewrites, so a
-      // comparison that skipped everything would fail here rather than pass
-      // by having nothing left to check.
+      // The scoping is NOT vacuous: this population really holds rows the next
+      // step rewrites, and every row is accounted for \u2014 compared by this
+      // step's claim, served as one the next step rewrote, or a SUPERSEDED
+      // proposal (a revision's retired predecessor), which the next step folds
+      // into its label's one record, proved by its own rule in
+      // tests/release-unification-migration.test.ts.
+      const superseded = proof.rowsBefore.filter(
+        (row) => row.type === "release-proposal" && row.retired_at !== null,
+      ).length;
+      expect(superseded).toBe(populated.projects.length);
       expect(proof.rewritten).toBeGreaterThan(0);
-      expect(proof.compared + proof.rewritten).toBe(proof.rowsBefore.length);
-
-      // THE LIVE STORE WAS NEVER WRITTEN.
-      const liveAfter = statSync(taken.live);
-      expect(liveAfter.size).toBe(taken.sizeBefore);
-      expect(liveAfter.mtimeMs).toBe(taken.mtimeBefore);
+      expect(proof.compared + proof.rewritten + superseded).toBe(proof.rowsBefore.length);
     },
   );
 });

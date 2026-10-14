@@ -18,10 +18,12 @@ import type {
   CycleStatus,
   GateDecision,
   GateDecisionAction,
+  GateMilestoneFields,
   LivenessConfig,
   PackageRef,
   Plan,
   PlanCycle,
+  PlanMerge,
   Project,
   QueueEntry,
   QueueLifecycle,
@@ -948,7 +950,7 @@ export function defaultRetention(): number | undefined {
  * remove either — its narration would land in `listReleases` and re-break the
  * membership derivation CR-CRU-129 repaired.
  */
-export const RESERVED_MILESTONE_TYPES = ["release", "cr-merged"] as const;
+export const RESERVED_MILESTONE_TYPES = ["release", "cr-merged", "pre-merge-gate"] as const;
 
 export type ReservedMilestoneType = (typeof RESERVED_MILESTONE_TYPES)[number];
 
@@ -964,6 +966,8 @@ const RESERVED_MILESTONE_TYPE_DERIVATIONS: Record<ReservedMilestoneType, string>
   "cr-merged":
     "the landing evidence a release's own crs is measured against — the provenance the " +
     "release ceremony reads",
+  "pre-merge-gate":
+    "the gate outcome cr-close reads before it closes a CR — a red one refuses the close",
 };
 
 /**
@@ -3506,6 +3510,16 @@ export class Store {
         PRIMARY KEY (project_key, meta_key)
       );
 
+      -- A plan that closed over a pre-merge gate that was not green: the
+      -- reason its closer gave, one row per such plan. Every other plan has
+      -- no row. A new TABLE in the base pass, on the project_metadata
+      -- precedent above: no chain step, no schema version.
+      CREATE TABLE IF NOT EXISTS plan_gate_acceptances (
+        plan_id INTEGER PRIMARY KEY,
+        project_key TEXT NOT NULL,
+        reason TEXT NOT NULL
+      );
+
       -- CR-CRU-014 §S1 — the CR execution queue (project roadmap). The table
       -- itself arrived ADDITIVELY (CREATE TABLE IF NOT EXISTS, no chain step):
       -- a full-replace POST rewrites a project's rows wholesale, so
@@ -3869,6 +3883,8 @@ export class Store {
       this.db.query(`DELETE FROM project_milestone_types WHERE project_key = ?`).run(key);
       // §S1 — its metadata dies with it, on the same terms: not a reported count.
       this.db.query(`DELETE FROM project_metadata WHERE project_key = ?`).run(key);
+      // And the reasons its plans closed over a red gate, with those plans.
+      this.db.query(`DELETE FROM plan_gate_acceptances WHERE project_key = ?`).run(key);
       this.db.query(`DELETE FROM projects WHERE key = ?`).run(key);
     })();
     // Emitted only after the transaction COMMITS — a rolled-back teardown
@@ -4438,6 +4454,10 @@ export class Store {
        */
       deliveredAt?: number;
       repairProvenance?: boolean;
+      /** A `pre-merge-gate` milestone's verdict, counts and failing tests. */
+      gate?: GateMilestoneFields;
+      /** A `cr-merged` milestone's reason for closing over a gate that was not green. */
+      acceptedFailingGateReason?: string;
     },
   ): { event: RunEvent; changed: boolean; shrink?: ProvenanceShrink; refused?: boolean } {
     this.touchAgent(projectKey, agentId);
@@ -4506,6 +4526,13 @@ export class Store {
     const targetAt = meta?.targetAt;
     const deliveredAt = meta?.deliveredAt ?? releasedAt;
     const version = type === "release" ? meta?.label : undefined;
+    // A gate's verdict belongs to a `pre-merge-gate` record and nothing else,
+    // and a closer's reason for overriding one to a `cr-merged` record: the
+    // release-provenance rule above, applied to the two types cr-close reads
+    // and writes.
+    const gate = type === "pre-merge-gate" ? meta?.gate : undefined;
+    const acceptedFailingGateReason =
+      type === "cr-merged" ? meta?.acceptedFailingGateReason : undefined;
     // CR-CRU-130 §S2 — ONE RECORD, TWO POINTS IN ITS LIFE.
     //
     // A release that is already held OUTSTANDING for this label — proposed, or
@@ -4579,6 +4606,15 @@ export class Store {
       ...(packages !== undefined ? { packages } : {}),
       ...(targetAt !== undefined ? { targetAt } : {}),
       ...(deliveredAt !== undefined ? { deliveredAt } : {}),
+      ...(gate !== undefined
+        ? {
+            outcome: gate.outcome,
+            passed: gate.passed,
+            failed: gate.failed,
+            ...(gate.failingTests !== undefined ? { failingTests: gate.failingTests } : {}),
+          }
+        : {}),
+      ...(acceptedFailingGateReason !== undefined ? { acceptedFailingGateReason } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
     };
     if (version !== undefined) {
@@ -5788,6 +5824,15 @@ export class Store {
       // what stops the two representations disagreeing.
       ...(event.targetAt !== undefined ? { targetAt: event.targetAt } : {}),
       ...(event.deliveredAt !== undefined ? { deliveredAt: event.deliveredAt } : {}),
+      // A gate's verdict, and a closer's reason for overriding one, ride the
+      // same blob: no column, no migration.
+      ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
+      ...(event.passed !== undefined ? { passed: event.passed } : {}),
+      ...(event.failed !== undefined ? { failed: event.failed } : {}),
+      ...(event.failingTests !== undefined ? { failingTests: event.failingTests } : {}),
+      ...(event.acceptedFailingGateReason !== undefined
+        ? { acceptedFailingGateReason: event.acceptedFailingGateReason }
+        : {}),
     };
     return Object.keys(payloadObj).length > 0 ? JSON.stringify(payloadObj) : null;
   }
@@ -6095,6 +6140,19 @@ export class Store {
       // CR-CRU-084 §S1 — the delivered packages, read back from the same blob;
       // a release recorded before this CR simply has no key (AC4).
       ...(Array.isArray(payload.packages) ? { packages: payload.packages as PackageRef[] } : {}),
+      // A gate's verdict and a closer's override reason, from the same blob;
+      // each ABSENT on every record that never carried it.
+      ...(payload.outcome === "pass" || payload.outcome === "fail"
+        ? { outcome: payload.outcome }
+        : {}),
+      ...(typeof payload.passed === "number" ? { passed: payload.passed } : {}),
+      ...(typeof payload.failed === "number" ? { failed: payload.failed } : {}),
+      ...(Array.isArray(payload.failingTests)
+        ? { failingTests: payload.failingTests as string[] }
+        : {}),
+      ...(typeof payload.acceptedFailingGateReason === "string"
+        ? { acceptedFailingGateReason: payload.acceptedFailingGateReason }
+        : {}),
       // CR-CRU-038 §S2b — run-level raw output, from its detail row.
       ...(detail?.raw !== undefined ? { raw: detail.raw } : {}),
       ...(row.action !== null ? { action: row.action as "registered" | "unregistered" } : {}),
@@ -6920,7 +6978,7 @@ export class Store {
   closePlan(
     projectKey: string,
     planId: number,
-    merge?: { commit: string },
+    merge?: PlanMerge,
   ): Plan | PlanOpError {
     const row = this.getPlanRow(projectKey, planId);
     if (row === null) {
@@ -6970,6 +7028,16 @@ export class Store {
           boundary.boundary_last_commit,
           planId,
         );
+      // A close over a gate that was not green stores the closer's reason in
+      // the same transaction, so the plan is never closed without it.
+      if (mergeCommit !== null && merge?.acceptedFailingGateReason !== undefined) {
+        this.db
+          .query(
+            `INSERT OR REPLACE INTO plan_gate_acceptances (plan_id, project_key, reason)
+             VALUES (?, ?, ?)`,
+          )
+          .run(planId, projectKey, merge.acceptedFailingGateReason);
+      }
       return boundary;
     });
     const boundary = close();
@@ -7184,7 +7252,19 @@ export class Store {
       if (group === undefined) cyclesByPlan.set(cycle.plan_id, [cycle]);
       else group.push(cycle);
     }
-    return kept.map((row) => this.toPlan(row, cyclesByPlan.get(row.plan_id) ?? []));
+    // And one read of every reason a plan of the project closed over a red
+    // gate, for the same reason: never one statement per plan.
+    const accepted = new Map(
+      this.db
+        .query<{ plan_id: number; reason: string }, [string]>(
+          `SELECT plan_id, reason FROM plan_gate_acceptances WHERE project_key = ?`,
+        )
+        .all(projectKey)
+        .map((row) => [row.plan_id, row.reason] as const),
+    );
+    return kept.map((row) =>
+      this.toPlan(row, cyclesByPlan.get(row.plan_id) ?? [], accepted),
+    );
   }
 
   /**
@@ -8066,6 +8146,7 @@ export class Store {
   private toPlan(
     row: PlanRow,
     cycleRows: PlanCycleRow[] = this.listCycleRows(row.project_key, row.plan_id),
+    accepted?: ReadonlyMap<number, string>,
   ): Plan {
     const cycles: PlanCycle[] = cycleRows.map(
       (cycle) => ({
@@ -8105,7 +8186,7 @@ export class Store {
       // them as open. "open"/"closed" behaviour is unchanged.
       status: Store.planStatusOf(row.status),
       cycles,
-      ...(row.merge_commit !== null ? { merge: { commit: row.merge_commit } } : {}),
+      ...(row.merge_commit !== null ? { merge: this.planMergeOf(row.plan_id, row.merge_commit, accepted) } : {}),
       ...(row.closed_at !== null ? { closedAt: row.closed_at } : {}),
       // CR-CRU-165 §S2b — an abort's record (absent on unrecorded aborts).
       ...(typeof row.abort_reason === "string" ? { reason: row.abort_reason } : {}),
@@ -8125,6 +8206,28 @@ export class Store {
       closedAt: plan.closedAt,
     };
     return { ...plan, commitBoundary };
+  }
+
+  /**
+   * A merged plan's `merge`: its commit, and the reason its closer gave when
+   * the CR closed over a pre-merge gate that was not green (absent otherwise).
+   * A list read hands in the project's reasons, read once; a single-plan read
+   * looks its own up.
+   */
+  private planMergeOf(
+    planId: number,
+    commit: string,
+    accepted?: ReadonlyMap<number, string>,
+  ): PlanMerge {
+    const reason =
+      accepted !== undefined
+        ? accepted.get(planId)
+        : this.db
+            .query<{ reason: string }, [number]>(
+              `SELECT reason FROM plan_gate_acceptances WHERE plan_id = ?`,
+            )
+            .get(planId)?.reason;
+    return { commit, ...(reason !== undefined ? { acceptedFailingGateReason: reason } : {}) };
   }
 
   onChange(fn: ChangeListener): () => void {

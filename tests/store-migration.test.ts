@@ -58,10 +58,10 @@
 //
 // ── Safety ─────────────────────────────────────────────────────────────────
 // Every store here is an mkdtempSync scratch file, a COPY of the committed
-// fixture, or ":memory:". The live `data/crucible.db` is NEVER opened — the
-// AC2 snapshots the live store at RUN TIME (never a committed fixture) via `sqlite3 .backup`
-// snapshot of it, and is itself copied to a tmp path before any Store touches
-// it. Every server binds port 0 (ephemeral) — NEVER the dog-food :3849.
+// fixture, or ":memory:". The live `data/crucible.db` is NEVER read, copied
+// or opened — AC2's populated store is one this file builds itself
+// (tests/helpers/populated-store.ts). Every server binds port 0 (ephemeral) —
+// NEVER the dog-food :3849.
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
@@ -72,6 +72,7 @@ import { Store } from "../src/store.ts";
 import * as storeModule from "../src/store.ts";
 import type { ServerHandle } from "../src/server.ts";
 import * as serverModule from "../src/server.ts";
+import { populateStore } from "./helpers/populated-store.ts";
 
 // ── the seam types this suite is written against ───────────────────────────
 
@@ -95,47 +96,8 @@ interface StoreMigration {
   backupPath: string | null;
 }
 
-/**
- * AC2's "prove it against the REAL dog-food store" fixture.
- *
- * DERIVED AT RUN TIME from `data/crucible.db`, never committed. Two reasons a
- * checked-in snapshot was rejected:
- *
- *   1. it is 8.8 MB against a 7.1 MB repo — more than doubling git history,
- *      permanently, for a file regenerable in one command;
- *   2. a live store GROWS. Literal expected counts drift within HOURS (this
- *      suite's first draft pinned `agents: 1`; by the time it ran, the live
- *      store said 2), so a pinned snapshot stops being "the real store" and
- *      starts being a stale copy that quietly weakens the AC.
- *
- * So the counts are measured FROM THE COPY, and the assertion is
- * before-vs-after EQUALITY — which is what AC2 actually demands ("no data
- * movement"), and is immune to the store growing. Absolute values would only
- * re-assert what sqlite already guarantees.
- *
- * When there is no live store (CI), the AC2 test SKIPS with a reason rather
- * than inventing a synthetic stand-in and calling it the real thing.
- */
-const LIVE_STORE = path.join(import.meta.dir, "..", "data", "crucible.db");
-
 const COUNTED_TABLES = ["projects", "plans", "plan_cycles", "events", "rollups",
                         "agents"] as const;
-
-/** A WAL-safe snapshot of the live store into `dest`, or null when absent. */
-function snapshotLiveStore(dest: string): string | null {
-  if (!fs.existsSync(LIVE_STORE)) {
-    return null;
-  }
-  // `.backup` (not copyFileSync): the live store is WAL-mode and may have a
-  // hot -wal; a file copy can land torn or stale.
-  const done = Bun.spawnSync({
-    cmd: ["sqlite3", LIVE_STORE, `.backup '${dest}'`],
-  });
-  if (done.exitCode !== 0) {
-    return null;
-  }
-  return dest;
-}
 
 const scratchDirs: string[] = [];
 const handles: ServerHandle[] = [];
@@ -336,10 +298,10 @@ const CORRUPT_RE = /\.corrupt-\d+$/;
 
 // ── fixtures ───────────────────────────────────────────────────────────────
 
-/**
- * A tmp snapshot of the live dog-food store, or null when there is none.
- * The live file is never opened by a Store — only read by `sqlite3 .backup`.
- */
+function closeStore(store: Store): void {
+  (store as unknown as { db: Database }).db.close();
+}
+
 /** Put a snapshot back into the pre-CR-071 condition: unstamped. */
 function resetUserVersion(dbPath: string): void {
   const db = new Database(dbPath);
@@ -348,10 +310,6 @@ function resetUserVersion(dbPath: string): void {
   } finally {
     db.close();
   }
-}
-
-function copyOfRealStore(): string | null {
-  return snapshotLiveStore(path.join(tmpDir(), "crucible.db"));
 }
 
 /**
@@ -489,7 +447,7 @@ function classificationsOf(
 
 /**
  * CR-CRU-100 — THE PRESERVATION STATEMENT, said ONCE and asserted by both the
- * §S1 synthetic store and the §S2 copy of the real one, so the two cannot
+ * §S1 synthetic store and AC2's populated store, so the two cannot
  * drift into saying different things about the same guarantee.
  *
  * Every classification present BEFORE the migration is present and UNCHANGED
@@ -640,117 +598,44 @@ describe("CR-CRU-071 AC1 — the store carries a schema version", () => {
   });
 });
 
-/**
- * CR-CRU-100 AC5 — whether the live dog-food store is here at all, decided
- * ONCE at collection time so the AC2 check below can be a real bun skip.
- */
-const LIVE_STORE_PRESENT = fs.existsSync(LIVE_STORE);
-
-if (!LIVE_STORE_PRESENT) {
-  // AC5 demands the skip SAY WHY. `test.skipIf` reports the skip but prints no
-  // reason, so the reason is emitted here, at the moment the decision is made.
-  console.log(
-    "[cr071] AC2 SKIPPED: no data/crucible.db to snapshot — the live " +
-      "dog-food store is never committed (`git ls-files data/` is empty), so " +
-      "this check cannot run here; CR-CRU-100 §S1 covers role preservation " +
-      "on a store the test builds",
-  );
-}
-
 describe("CR-CRU-071 AC2 — existing stores are baselined without loss", () => {
-  // CR-CRU-100 AC5 — a DECLARATION-time skip, so a run without the live store
-  // reports this as SKIPPED and not as a green line that never executed. That
-  // green line is this CR's own defect one layer down: `data/crucible.db` is
-  // never committed (`git ls-files data/` is empty), so CI takes this branch
-  // EVERY time. Nothing is lost to it — CR-CRU-100 §S1 asserts the same
-  // role-preservation statement on a store the test builds, which is exactly
-  // what runs where this one cannot.
-  test.skipIf(!LIVE_STORE_PRESENT)(
-    "AC2 — a copy of the REAL dog-food store is stamped from 0 with identical row counts",
-    () => {
-      const dbPath = copyOfRealStore();
-      if (dbPath === null) {
-        // The RESIDUAL case, named rather than hidden: the live store EXISTS
-        // (the declaration-time skip did not fire) AND `sqlite3` is on PATH,
-        // but `.backup` exited non-zero — an unreadable, locked or corrupt
-        // source, or a destination it could not write. A declaration-time
-        // skip cannot see that, and bun has no runtime skip, so this branch
-        // STILL READS AS A PASS.
-        //
-        // Which case is LOUD and which is SILENT, because the distinction is
-        // the whole justification: a machine with NO sqlite3 is already RED
-        // and is deliberately left that way. TWO routes reach this branch and
-        // NEITHER of them is the missing-binary one. `snapshotLiveStore`
-        // returns null from its `existsSync` guard, which is evaluated at RUN
-        // time while `LIVE_STORE_PRESENT` and the `test.skipIf` are decided
-        // once at module load — so it fires only if the live store vanished
-        // between collection and here, with sqlite3 never invoked at all. Its
-        // other return needs `exitCode !== 0`, which requires `Bun.spawnSync`
-        // to have RETURNED, and on a missing executable it THROWS, so that
-        // machine fails this test rather than passing it. This silent branch
-        // therefore buys nothing for the missing-binary case; it covers only
-        // the strictly rarer ones where the binary is present and the copy
-        // itself fails, or the source disappeared underfoot (the log below
-        // names the first, being the only one anything in this suite could
-        // plausibly produce). THAT is what makes the silence acceptable:
-        // an unreadable or locked store is a genuinely exceptional local
-        // condition, not a machine shape CI can have, whereas the common,
-        // reproducible "this host has no sqlite3" is loud already. The log
-        // says it out loud here instead. Never a synthetic stand-in called
-        // "the real dog-food store": AC2's whole point is that the proof runs
-        // against the highest-value database in the project (CR-CRU-043).
-        console.log(
-          "[cr071] AC2 NOT RUN, and reported as a PASS: data/crucible.db is " +
-            "present but `sqlite3 .backup` failed, so there is no copy to " +
-            "migrate; CR-CRU-100 §S1 still covers role preservation",
-        );
-        return;
-      }
+  // A populated store this test builds itself (tests/helpers/populated-store
+  // .ts): projects (one archived), plans of every status with their cycles,
+  // test/compile/lifecycle runs under declared and undeclared roles, gates,
+  // milestones of every type, rollups folded from evicted runs, agents and a
+  // queue — the population a long-used board holds, written through the
+  // ordinary door and so in this build's own schema. The gate measures the
+  // code, never the age of whatever data the operator's own board holds.
+  test("AC2 — a populated store, put back into the UNSTAMPED condition, is stamped from 0 with identical row counts and every role preserved", () => {
+    const dbPath = path.join(tmpDir(), "crucible.db");
+    const built = Store.open(dbPath);
+    populateStore(built);
+    closeStore(built);
 
-      // Counts are MEASURED from the copy, never pinned as literals: the live
-      // store grows, and the assertion AC2 actually demands is before-vs-after
-      // EQUALITY ("no data movement"), which absolute numbers would not add
-      // to. The live store is STAMPED once this CR has shipped and actually
-      // run against it, so asserting it arrives unstamped would make this test
-      // self-invalidating — it would pass only until the feature worked. (It
-      // did: the dog-food store went to v5 the day CR-071 merged.) The AC is
-      // "an UNSTAMPED store is baselined losslessly", so the copy is put back
-      // into that condition explicitly. Legitimate because this is a throwaway
-      // snapshot, never the live file.
-      resetUserVersion(dbPath);
+    // The AC is "an UNSTAMPED store is baselined losslessly", so the fixture
+    // is put back into that condition explicitly.
+    resetUserVersion(dbPath);
 
-      const before = rowCounts(dbPath);
-      // The classifications the copy carries BEFORE the migration, read under
-      // the CURRENT column names: the live store is long past CR-CRU-059's
-      // rename, so both reads address `role`/`role_inferred`. (§S1's synthetic
-      // store starts pre-rename — which is why the helper takes the names.)
-      const classifiedBefore = classificationsOf(dbPath, CURRENT_CLASSIFICATION);
-      expect(userVersion(dbPath)).toBe(0);
-      // Guard against a vacuous pass on an empty db: the real store has rows.
-      expect(before.events).toBeGreaterThan(0);
-      expect(before.plans).toBeGreaterThan(0);
+    const before = rowCounts(dbPath);
+    const classifiedBefore = classificationsOf(dbPath, CURRENT_CLASSIFICATION);
+    expect(userVersion(dbPath)).toBe(0);
+    // Non-vacuity: every counted table really holds rows to lose.
+    for (const table of COUNTED_TABLES) {
+      expect(before[table]).toBeGreaterThan(0);
+    }
 
-      const store = Store.open(dbPath);
+    const store = Store.open(dbPath);
 
-      // No data movement.
-      expect(rowCounts(dbPath)).toEqual(before);
-      // No retrofit re-ran destructively: CR-CRU-057's classifications
-      // survive. CR-CRU-100 §S2 — an equality of role COUNT stood here and
-      // drifted RED between sessions, because a count is a property of the
-      // store's CONTENTS, not of the migration: the backfill ADDS a role to
-      // any classifiable-but-unclassified event, so the number moves whenever
-      // the live store gains one. The statement CR-CRU-057 actually guarantees
-      // is preservation, asserted through the SAME helper §S1 uses so the real
-      // store can say nothing weaker, and nothing different.
-      expectRolesPreserved(
-        classifiedBefore,
-        classificationsOf(dbPath, CURRENT_CLASSIFICATION),
-      );
-      // ... and the store now knows what shape it is.
-      expect(userVersion(dbPath)).toBe(schemaVersion());
-      expect(schemaVersionOf(store)).toBe(schemaVersion());
-    },
-  );
+    // No data movement.
+    expect(rowCounts(dbPath)).toEqual(before);
+    // No retrofit re-ran destructively: every declared classification
+    // survives, asserted through the SAME helper §S1 uses.
+    expectRolesPreserved(classifiedBefore, classificationsOf(dbPath, CURRENT_CLASSIFICATION));
+    // ... and the store now knows what shape it is.
+    expect(userVersion(dbPath)).toBe(schemaVersion());
+    expect(schemaVersionOf(store)).toBe(schemaVersion());
+    closeStore(store);
+  });
 });
 
 describe("CR-CRU-071 AC3 — migrations are an ordered, idempotent chain", () => {
@@ -1111,7 +996,7 @@ describe("CR-CRU-100 §S1 — roles are PRESERVED across a migration, on a store
     const after = classificationsOf(dbPath, CURRENT_CLASSIFICATION);
 
     // THE INVARIANT, stated once in `expectRolesPreserved` and asserted here
-    // and against the real store (§S2) by the same helper: every role present
+    // and against AC2's populated store by the same helper: every role present
     // before the migration is present and unchanged after, and none was
     // re-derived over an existing value. It is what the equality-of-count
     // assertion this CR replaces contradicted.
@@ -1132,8 +1017,8 @@ describe("CR-CRU-100 §S1 — roles are PRESERVED across a migration, on a store
     // `e-cr100-unclassifiable` by the NULL/NULL assertion below, which has
     // always failed if that row goes missing (a deleted row reads back as
     // `undefined`, never as NULL/NULL).
-    // The helper keeps the bare `> 0` floor for §S2, whose store is the real
-    // one and whose membership cannot be enumerated.
+    // The helper keeps the bare `> 0` floor for AC2, whose populated store's
+    // membership is not enumerated here.
     expect(Object.keys(declaredBefore).sort()).toEqual([
       "e-cr100-agreeing",
       "e-cr100-unparseable",
