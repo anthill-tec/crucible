@@ -306,9 +306,12 @@ class EveryVerbThatFilesARunIsRefusedTest(unittest.TestCase):
         seeded = _seed(client_key, verb, project_dir)
         self._register_unbound(project_key, agent_id)
         subparser = _filing_verbs(client_key)[verb]
-        # Flags ahead of the census argv's trailing positionals (bun's tier
-        # passthrough); its own placeholder agent is replaced by this one.
+        # The census argv without its trailing positionals (bun's tier
+        # passthrough, which takes nothing here), and with this agent in place
+        # of its placeholder.
         census = build_argv(verb, subparser, project_dir)[1:]
+        positionals = sum(1 for a in subparser._actions if not a.option_strings)
+        census = census[:len(census) - positionals]
         census[census.index("--agent") + 1] = agent_id
         argv = [verb] + seeded + list(extra_argv) + census
         result = drive_verb(
