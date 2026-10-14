@@ -593,8 +593,10 @@ _HELD_GATE_LOCK = None  # path of a gate lock THIS process created (to clean up)
 def _pid_alive(pid):
     try:
         os.kill(pid, 0)
+    # pi-lens-ignore: unreachable-except — ProcessLookupError is caught before its base OSError, so every clause is reached
     except ProcessLookupError:
         return False
+    # pi-lens-ignore: unreachable-except — PermissionError is caught before its base OSError, so every clause is reached
     except PermissionError:
         return True   # exists, just not ours to signal
     except OSError:
@@ -2062,6 +2064,7 @@ def _clean_stale_bind_mounts(project_dir):
                     )
                     break
         except PermissionError:
+            # pi-lens-ignore: python-empty-except — best-effort hygiene: a bind-mount dir this user cannot list is left as it is and the run goes on
             pass
 
 

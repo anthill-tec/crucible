@@ -258,6 +258,7 @@ def _prescan_test_total(package_dir, targets):
             with open(p, encoding="utf-8", errors="replace") as f:
                 total += len(_TEST_DECL.findall(f.read()))
         except OSError:
+            # pi-lens-ignore: python-empty-except — the total is approximate by design; an unreadable source is simply not counted
             pass
     return total
 
@@ -710,6 +711,7 @@ def _parse_junit_file(junit_path):
 # line, so both matcher families accept both forms and the marrying logic
 # downstream is unchanged. (`_ANSI_SGR_RUN` is zero-or-more, so the existing
 # duration-tail pattern already matches the plain `[0.15ms]` tail.)
+# pi-lens-ignore: python-unsafe-regex — compiles a module-built constant pattern; no user input reaches it
 _ANSI_SGR_RE = re.compile(_ANSI_SGR_RUN)
 _DURATION_TAIL = (r"(?:\s+" + _ANSI_SGR_RUN + r"\[" + _ANSI_SGR_RUN
                   + r"[0-9.]+\s*m?s" + _ANSI_SGR_RUN + r"\])?")

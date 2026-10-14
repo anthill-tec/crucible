@@ -1712,6 +1712,7 @@ def _clean_stale_bind_mounts(project_dir):
                     )
                     break
         except PermissionError:
+            # pi-lens-ignore: python-empty-except — best-effort hygiene: a bind-mount dir this user cannot list is left as it is and the run goes on
             pass
 
 
