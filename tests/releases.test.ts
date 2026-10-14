@@ -18,8 +18,8 @@
 // AC1-c deliberately asserts each pre-existing type INDIVIDUALLY with a
 // literal string rather than importing MILESTONE_TYPES and looping — an
 // imported set would make the assertion vacuous the instant the set changes.
-import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { describe, test, expect, afterEach, afterAll } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
@@ -67,16 +67,33 @@ interface ReleasesListResponse extends OkResponse {
 
 describe("CR-CRU-074 — releases are first class (§S1 milestone type + §S3 read route)", () => {
   let handle: ServerHandle | undefined;
+  /** Every scratch store directory `boot()` made — removed after each test
+   *  (and once more after the suite), whether the test passed or failed. */
+  const scratchDirs: string[] = [];
+
+  function removeScratchDirs(): void {
+    for (const dir of scratchDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
+    removeScratchDirs();
+  });
+
+  afterAll(() => {
+    handle?.stop();
+    handle = undefined;
+    removeScratchDirs();
   });
 
   /** An on-disk, per-boot ephemeral store — never data/crucible.db, and the
    *  server always takes an OS-assigned port (never 3849, the live board). */
   function boot(): ServerHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru074-releases-"));
+    scratchDirs.push(dir);
     return startServer({ port: 0, dbPath: join(dir, "crucible.db") });
   }
 

@@ -33,8 +33,54 @@
 // name under the OS temp dir keeps it inspectable when something does open it
 // by accident — which is the bug, and is then visible outside the checkout
 // instead of silently landing on the live board's own database.
+//
+// ── A run-scoped temp root ────────────────────────────────────────────────
+//
+// A test that forgets to remove its scratch directory must not leave it in
+// the system temp root. So, before any suite loads, this preload makes ONE
+// directory for the whole run UNDER the inherited temp root, points `TMPDIR`
+// at it (so `os.tmpdir()`, and every child spawned with this process's
+// environment, resolves inside it) and removes it when the run exits — on a
+// passing run, a failing run, or an interrupt. Because it lives under the
+// inherited root, a path a test checks against that root still matches.
+//
+// `CRUCIBLE_TEST_TMPROOT_DISABLE=1` skips it entirely, so a check can prove
+// a suite cleans up on its own rather than being swept up after.
+//
+// "When the run exits" needs one more thing under this runner: `bun test`
+// (measured on 1.4.2) ends without emitting the process `exit` event, so an
+// `exit` listener — the one end-of-process hook a module can register
+// whether it is loaded by `bun test`, by plain `bun`, or by Node (a
+// Playwright config is all three) — never runs. A root-level `afterAll`
+// here runs after every file's own hooks, and emits that event once, so a
+// module's own `exit` cleanup runs at the end of a test run exactly as it
+// does at the end of any other process. This is independent of the switch
+// above: it removes nothing itself, it only lets a module's own cleanup run.
+import { afterAll } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+
+const TMPROOT_DISABLE_ENV = "CRUCIBLE_TEST_TMPROOT_DISABLE";
+
+afterAll(() => {
+  process.emit("exit", typeof process.exitCode === "number" ? process.exitCode : 0);
+});
+
+if (process.env[TMPROOT_DISABLE_ENV] !== "1") {
+  const runDir = mkdtempSync(path.join(os.tmpdir(), "crucible-test-run-"));
+  process.env.TMPDIR = runDir;
+  const removeRunDir = (): void => {
+    rmSync(runDir, { recursive: true, force: true });
+  };
+  process.on("exit", removeRunDir);
+  const exitOnSignal = (code: number) => (): void => {
+    removeRunDir();
+    process.exit(code);
+  };
+  process.once("SIGINT", exitOnSignal(130));
+  process.once("SIGTERM", exitOnSignal(143));
+}
 
 process.env.CRUCIBLE_DB = path.join(
   os.tmpdir(),

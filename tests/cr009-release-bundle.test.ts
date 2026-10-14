@@ -1354,11 +1354,24 @@ describe("§S5 CI builds/packs the npm server artifact too, on the same uncondit
     // exact script GREEN wrote, run against the exact repo state, on the
     // exact filesystem a GitHub runner would see (network-free: `npm pack
     // --dry-run` never contacts a registry).
-    const proc = Bun.spawnSync(["bash", "-c", script], {
-      cwd: REPO_ROOT,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    //
+    // The step writes its file list to a `mktemp` file it never removes (a CI
+    // runner is thrown away after the job). Here it gets a temp root of its
+    // own, removed once the step has run, so the run leaves nothing behind.
+    const stepTmp = mkdtempSync(join(tmpdir(), "release-pack-step-"));
+    const runStep = () =>
+      Bun.spawnSync(["bash", "-c", script], {
+        cwd: REPO_ROOT,
+        env: { ...process.env, TMPDIR: stepTmp },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    let proc: ReturnType<typeof runStep>;
+    try {
+      proc = runStep();
+    } finally {
+      rmSync(stepTmp, { recursive: true, force: true });
+    }
     const output = `${proc.stdout.toString()}\n${proc.stderr.toString()}`;
 
     // POSITIVE — the real, observable outcome: the packaging command

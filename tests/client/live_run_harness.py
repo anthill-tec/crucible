@@ -9,10 +9,12 @@ Never the live :3849/:3850 Crucible server and never a real toolchain: every
 runner here is a small python program speaking the real tool's output shape.
 """
 
+import atexit
 import http.server
 import importlib.util
 import json
 import os
+import shutil
 import signal
 import stat
 import subprocess
@@ -663,7 +665,12 @@ def drive_and_close_stderr(cmd, cwd, env, scratch, timeout=30):
 
 
 def new_scratch(prefix):
-    return tempfile.mkdtemp(prefix=prefix)
+    """A fresh scratch directory that is removed when this process exits \u2014
+    cleanly or on an uncaught error \u2014 whether or not the caller also
+    removes it (a caller's own earlier removal makes this a no-op)."""
+    scratch = tempfile.mkdtemp(prefix=prefix)
+    atexit.register(shutil.rmtree, scratch, ignore_errors=True)
+    return scratch
 
 
 SIGNALS = (signal.SIGINT, signal.SIGTERM)

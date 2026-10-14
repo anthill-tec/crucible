@@ -261,6 +261,9 @@ interface Drive {
 let handle: ServerHandle | undefined;
 let proxy: { url: string; posts: string[]; stop(): void } | undefined;
 let driven: Promise<Drive> | undefined;
+/** The drive's scratch project directory — removed by the file's own
+ *  `afterAll`, whether the drive passed or failed. */
+let scratchDir: string | undefined;
 
 /** A capturing proxy in front of the board: records the POST paths the spawned
  *  client hit and relays everything verbatim. The pattern is
@@ -323,6 +326,7 @@ async function runTheSuiteThroughTheClient(): Promise<Drive> {
   });
 
   const scratch = mkdtempSync(join(tmpdir(), "e2e-suite-ingest-"));
+  scratchDir = scratch;
   writeFileSync(join(scratch, ".env"), `CRUCIBLE_PROJECT_KEY=${projectKey}\n`);
   declareClientBoard(proxy.url, scratch);
 
@@ -428,6 +432,8 @@ afterAll(() => {
   handle?.stop();
   proxy = undefined;
   handle = undefined;
+  if (scratchDir !== undefined) rmSync(scratchDir, { recursive: true, force: true });
+  scratchDir = undefined;
 });
 
 describe("CR-CRU-015 §S1 — the BDD suite's declaration cannot be renamed or retiered", () => {

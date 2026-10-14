@@ -28,7 +28,7 @@
 // activeMs computation; no real wall-clock waits are needed for the
 // server-side pins (unlike the UI ticking pins in tests/cycle-timers.test.ts).
 
-import { describe, test, expect, afterEach } from "bun:test";
+import { describe, test, expect, afterAll, afterEach } from "bun:test";
 import { setSystemTime } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -68,10 +68,21 @@ interface PlansListResponse {
   }>;
 }
 
+/** Every scratch directory `freshTmpDbPath()` made — removed after each test
+ *  (and once more after the file), whether the test passed or failed. */
+const scratchDirs: string[] = [];
+
+function removeScratchDirs(): void {
+  for (const dir of scratchDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 function freshTmpDbPath(): string {
   // NEVER inside the repo — a fresh OS tmpdir per test (same technique as
   // tests/boot-safety.test.ts's freshTmpDir()).
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crucible-epochs-test-"));
+  scratchDirs.push(dir);
   return path.join(dir, "crucible.db");
 }
 
@@ -90,6 +101,15 @@ afterEach(() => {
   }
   servers = [];
   setSystemTime(); // reset the injected clock so it never leaks to other files
+  removeScratchDirs();
+});
+
+afterAll(() => {
+  for (const handle of servers) {
+    handle.stop();
+  }
+  servers = [];
+  removeScratchDirs();
 });
 
 // CR-CRU-056 §S2b fixture-repair (C3): every mutating v2 WORKFLOW verb

@@ -58,8 +58,8 @@
 //
 // SSE frame + reader technique: identical to tests/project-archive.test.ts /
 // tests/v2-stream-paging.test.ts.
-import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { describe, test, expect, afterEach, afterAll } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
@@ -280,16 +280,34 @@ async function nextFrameMatching(
 
 describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
   let handle: ServerHandle | undefined;
+  /** Every scratch store directory `boot()` made — removed after each test
+   *  (and once more after the suite, for any made after a timed-out test's
+   *  own teardown already ran), whether the test passed or failed. */
+  const scratchDirs: string[] = [];
+
+  function removeScratchDirs(): void {
+    for (const dir of scratchDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
+    removeScratchDirs();
+  });
+
+  afterAll(() => {
+    handle?.stop();
+    handle = undefined;
+    removeScratchDirs();
   });
 
   /** An on-disk, per-boot ephemeral store — never data/crucible.db, and the
    *  server always takes an OS-assigned port (never 3849, the live board). */
   function boot(): ServerHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru014-queue-"));
+    scratchDirs.push(dir);
     return startServer({ port: 0, dbPath: join(dir, "crucible.db") });
   }
 
