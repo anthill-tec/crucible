@@ -1,6 +1,6 @@
 # CR-CRU-188 — a gate measures the code, a red gate stops the merge, and the clients are lint-clean
 
-**Type** fix (patch CR) · **Points** 8 (re-scoped twice on 2026-10-14; filed at 2) · **Wave** 8 (0.4.0) ·
+**Type** fix (patch CR) · **Points** 13 (re-scored at gap analysis, 2026-10-14; filed at 2) · **Wave** 8 (0.4.0) ·
 **Depends on** — · **Status** PENDING — filed 2026-10-14; re-scoped the same day (user ruling: a
 patch CR, worked immediately, for the failure that got past the gates)
 
@@ -29,7 +29,10 @@ gates and onto develop.
 2. **Nothing stops a merge on a red gate.** CR-CRU-186's `pre-merge-gate` reported `ok: false`
    (5868/1) and the CR merged: the failure was reported as pre-existing and the user ruled to merge.
    `git flow feature finish`, `cr-close` and the `cr-merged` milestone all accept a CR whose gate is
-   red, without a word.
+   red, without a word. Nor is a gate run tied to its CR: every run warns `no-cycle — … supply
+   --cycle <id> now (nothing backfills a stored run's cycle)` when its agent is unbound and no
+   `--cycle` is given, and the orchestrator's summary-only reading of the output dropped that
+   warning on every gate of 2026-10-13/14. All of them are stored with no cycle and no branch.
 3. **The clients carry blocking static-analysis findings that no gate checks.** pi-lens flags them on
    every edit to these files; they predate this CR's wave and were waved through as "not ours".
    Measured 2026-10-14 (`lens_diagnostics`, session, full):
@@ -40,14 +43,15 @@ gates and onto develop.
    | `clients/arduino-crucible.py` | 7 | ast-grep: an unguarded throwing call (L108, L366, L568, L572, L591, L600, L601) |
    | `clients/mvn-crucible.py` | 6 | ast-grep: an unguarded throwing call (L137, L171, L611, L613, L649, L757) |
    | `clients/python-crucible.py` | 6 | ast-grep: an unguarded throwing call (L126, L486, L580, L722, L775, L906) |
+   | `clients/rust-crucible.py` | 6 | ast-grep: an unguarded throwing call (L154, L535, L837, L858, L862, L873) |
    | `clients/bun-crucible.py` | 4 | ast-grep: an unguarded throwing call (L145, L880, L1188, L1336) |
    | `clients/toon.py` | 4 | Pyright: a possibly-`None` match or value used (L552, L1109, L1177, L1216) |
    | `tests/client/test_crucible_axi_shared.py` | 1 | Pyright: a possibly-`None` callable called (L1261) |
    | `tests/client/test_cr054_http_core_lift.py` | 2 | Pyright: a `dict` passed as `HTTPError` headers (L186); a zero-argument `read` assigned (L187) |
 
    Warnings also stand: unguarded `int()`/`float()` parses in `_crucible_axi.py` (L3248, L4683,
-   L4692) and `arduino-crucible.py` (L369–L375). `clients/rust-crucible.py` was not answered by the
-   ast-grep lane in that sweep and is measured at gap analysis.
+   L4692), `arduino-crucible.py` (L369–L375) and `rust-crucible.py` (L480, L538–L544, L662, L663,
+   L694, L750, L835).
 
 ## Steps
 
@@ -61,9 +65,16 @@ migrate it, keep proving the migration on every run.
 A guard test fails if any test opens or copies the live dev store (`data/crucible.db`), other than
 that one case.
 
-### §S2 — a red gate stops the close
+### §S2 — a run belongs to a cycle, and a red gate stops the close
 
-`cr-close` reads the CR's most recent `pre-merge-gate` result. When it is not a pass, `cr-close`
+**An unattributed run is refused while a cycle is active.** When the project has an active cycle,
+every client's run verbs (`test`, `regression`, `pre-merge-gate` and the stack's other run verbs)
+refuse a run that would carry no cycle: the agent is bound to no cycle, and neither `--cycle` nor
+`--release` is given. The refusal exits non-zero before the runner starts, and its help names the
+active cycle (`--cycle <id>`). With no active cycle, today's `no-cycle` warning stands: a run
+between CRs (a baseline, say) is project-scoped on purpose.
+
+**A red gate stops the close.** `cr-close` reads the CR's most recent `pre-merge-gate` result. When it is not a pass, `cr-close`
 refuses, naming the run, its failed count and the failing tests. It closes anyway only with an
 explicit `--accept-failing-gate "<reason>"`. The reason is stored on the plan, and the `cr-merged`
 milestone and History both show that the CR closed over a red gate and why.
@@ -71,8 +82,10 @@ milestone and History both show that the CR closed over a red gate and why.
 A CR with no recorded `pre-merge-gate` result is refused the same way, with a help entry naming
 `pre-merge-gate`.
 
-(How a gate run is tied to its CR — the active verify cycle, or the branch — is settled at gap
-analysis.)
+Each `pre-merge-gate` ends by posting one milestone of a new type, `pre-merge-gate`, under its
+cycle (user ruling, 2026-10-14): the CR, the outcome (pass or fail), the passed and failed counts,
+the failing tests and the head commit. It posts it on a failing gate too. `cr-close` reads the CR's
+most recent `pre-merge-gate` milestone.
 
 ### §S3 — the clients are clean under pi-lens
 
@@ -91,6 +104,15 @@ No behaviour a test pins changes.
       v18-to-current cases pass unchanged.
 - [ ] **No other live-store test.** The guard fails on a test that copies or opens
       `data/crucible.db` (proved with a planted fixture), and passes on the current tree.
+- [ ] **An unattributed run is refused.** For EACH of the five clients, with an active cycle on a
+      live in-process board, `test` and `pre-merge-gate` run by an unbound agent with no `--cycle`
+      exit non-zero before the runner starts, naming the active cycle id in `help[]`. With
+      `--cycle <id>`, the run proceeds and is stored under that cycle. With no active cycle, the run
+      proceeds and warns `no-cycle` as today. A `--release` run is never refused.
+- [ ] **The gate records its outcome.** For EACH of the five clients, a passing and a failing
+      `pre-merge-gate --cycle <id>` each post exactly one `pre-merge-gate` milestone under that
+      cycle, carrying the CR, the outcome, the counts, the failing tests (on a failure) and the head
+      commit.
 - [ ] **A red gate refuses the close.** For EACH of the five clients, against a live in-process board,
       `cr-close` on a CR whose last `pre-merge-gate` failed exits non-zero, closes nothing, and names
       the run and its failing count. The same holds for a CR with no gate result.
@@ -106,5 +128,6 @@ No behaviour a test pins changes.
 
 ## How it is worked
 
-On a feature branch: one cycle each for §S1, §S2 and §S3, RED first (for §S3, the sweep's findings
+On a feature branch: one cycle for §S1, two for §S2 (run attribution; the gate milestone and the
+close) and one for §S3, RED first (for §S3, the sweep's findings
 are the failing check, and a test pins each fixed behaviour), then verify.
