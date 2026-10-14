@@ -1381,6 +1381,13 @@ GATE_CYCLE_HELP = (
     "`register --cycle`. An agent that ALREADY registered bound needs no "
     "--cycle here: the gated run leaves its registration and binding intact.")
 
+# `--cycle` on a verb that files a result without a gated identity: the
+# result itself carries the cycle, and the agent's registration is untouched.
+FILING_CYCLE_HELP = (
+    "Cycle id to file this result under (an ACTIVE cycle of an OPEN plan; the "
+    "SERVER validates it). Required while the project has an active cycle and "
+    "this agent is bound to none; an agent registered bound needs no --cycle.")
+
 # The ONE `--release` help text for the GATE verbs, so all five clients
 # document the flag identically. OPTIONAL, because a gate on a feature branch
 # gates no release.
@@ -1821,6 +1828,14 @@ def _bound_cycle_id(resp, agent_id):
     return (False, None)
 
 
+def _answered_agent_list(resp):
+    """True when a `GET /api/v2/agents` response is the board's answered list
+    — evidence about every agent it holds, so an id missing from it is held
+    by none and bound to no cycle."""
+    return (isinstance(resp, dict) and bool(resp.get("ok"))
+            and isinstance(resp.get("agents"), list))
+
+
 def _active_cycle_ids(get, project_key):
     """The ids of the project's ACTIVE cycles, read from its open plans, or
     `()` when the board did not answer. An unanswered read is not evidence of
@@ -1855,11 +1870,13 @@ def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
     patch that name), called with the short `PREFLIGHT_TIMEOUT_S` bound.
 
     The one hard stop is a verdict the board ANSWERED: an agent it holds bound
-    to no cycle, no `--cycle`, no `--release`, while the project has an active
-    cycle. That run would be stored with no cycle while one is open, so this
-    raises `UnattributedRunRefused` — before the runner spawns — for `run_verb`
-    to convert. With no active cycle it stays the `no-cycle` warning: a run
-    between CRs is project-scoped on purpose.
+    to no cycle — or one its answered agent list does not hold at all, which is
+    bound to none either — no `--cycle`, no `--release`, while the project has
+    an active cycle. That run would be stored with no cycle while one is open,
+    so this raises `UnattributedRunRefused` — before the runner spawns — for
+    `run_verb` to convert. With no active cycle it stays the `no-cycle` warning
+    for an agent the board holds (a run between CRs is project-scoped on
+    purpose), and nothing for one it does not, as before.
 
     §S1 — a run filed under `release` is unattributed to a cycle on purpose:
     the binding is read as for any run, but the verdict is the `release-run`
@@ -1883,10 +1900,12 @@ def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
                   file=stream if stream is not None else sys.stderr)
             return [note]
         known, bound = _bound_cycle_id(resp, agent_id)
-        if not known or bound is not None:
+        if bound is not None or not (known or _answered_agent_list(resp)):
             return []
         active = _active_cycle_ids(get, project_key)
         if not active:
+            if not known:
+                return []
             print(no_cycle_line(),
                   file=stream if stream is not None else sys.stderr)
             return [no_cycle_warning()]
@@ -1894,10 +1913,33 @@ def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
         # Attribution is a courtesy; a suite must never become unrunnable
         # because it could not be computed.
         return []
-    # The board answered: a known, unbound agent, no `--cycle`/`--release`,
-    # and an active cycle on the project. Raised OUTSIDE the courtesy catch
-    # above, so this one verdict is never swallowed into "proceed".
+    # The board answered: an unbound agent, no `--cycle`/`--release`, and an
+    # active cycle on the project. Raised OUTSIDE the courtesy catch above, so
+    # this one verdict is never swallowed into "proceed".
     raise UnattributedRunRefused(agent_id, active)
+
+
+def refuse_unattributed_run(get, project_key, agent_id, cycle_id=None,
+                            release=None, context=None):
+    """The refusal half of `preflight_cycle_warnings` alone, for the earliest
+    point of a verb whose own pre-flight comes later or not at all: a gate's
+    first step, or the cleanup and docker bring-up a run makes before its
+    runner. Raises `UnattributedRunRefused` on the same verdict; prints and
+    returns nothing otherwise, so the verb's own pre-flight still owns the
+    `no-cycle` warning. A release run is never refused."""
+    if release:
+        return
+    preflight_cycle_warnings(get, project_key, agent_id, cycle_id=cycle_id,
+                             context=context, stream=io.StringIO())
+
+
+def cycle_context(context, cycle_id):
+    """The run context a verb that opens no gated identity files under when
+    `--cycle` is given: `context` with `cycleId` set, which the board validates
+    and stores the result under. Unchanged without a cycle."""
+    if cycle_id is None:
+        return context
+    return {**(context or {}), "cycleId": cycle_id}
 
 
 # ── CR-CRU-058 §S1/§S2 — the toolchain-gate help/warning vocabulary ────────
@@ -2403,21 +2445,32 @@ class UnattributedRunRefused(Exception):
         else:
             lever = (f"re-run with --cycle <id> naming the cycle this run "
                      f"belongs to — active cycles: {named}")
+        # The release lever is offered only by a verb that accepts --release
+        # (`help_for`); every verb this refusal covers accepts --cycle.
+        self.release_help = ("or file a release's verification run with "
+                             "--release <label>, which carries no cycle by design")
         self.help = [
             lever,
             "or register the agent bound to that cycle first "
             "(register --agent <agentId> --cycle <id>), then re-run",
-            "or file a release's verification run with --release <label>, "
-            "which carries no cycle by design"]
+            self.release_help]
         super().__init__(self.detail)
 
+    def help_for(self, offers_release):
+        """`help[]` naming only levers the refused verb takes."""
+        return [h for h in self.help
+                if offers_release or h != self.release_help]
 
-def emit_unattributed_run_refused_hard_stop(verb, refusal, context=None):
+
+def emit_unattributed_run_refused_hard_stop(verb, refusal, context=None,
+                                            offers_release=True):
     """§S2 — emit the `ok:false` envelope (stdout) plus the human error line
     (stderr) for a run refused for carrying no cycle, and return the non-zero
-    exit code. Nothing is run, nothing is ingested from this path."""
+    exit code. Nothing is run, nothing is ingested from this path.
+    `offers_release` is False for a verb with no `--release`, whose help then
+    names no such lever."""
     emit_axi(verb or "unknown", False,
-             {"error": refusal.detail, "help": refusal.help},
+             {"error": refusal.detail, "help": refusal.help_for(offers_release)},
              context or {}, [],
              legacy_line=(f"error: {UNATTRIBUTED_RUN_REFUSED_CODE} — "
                           f"{refusal.detail}"))
@@ -2479,7 +2532,8 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
     except UnattributedRunRefused as refusal:
         return emit_unattributed_run_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
-            _hard_stop_context(args, project_key_fn, refusal.agent_id))
+            _hard_stop_context(args, project_key_fn, refusal.agent_id),
+            offers_release=hasattr(args, "release"))
     except RunAbandoned as abandoned:
         # A signal that escaped a gated-run bracket: the bracket already
         # aborted its open run and removed its identity.
@@ -7719,6 +7773,13 @@ def add_gate_cycle_arg(p):
     """CR-CRU-056 — bind `--cycle` on a GATED verb (test/regression/
     pre-merge-gate): the binding for the register-inside-the-run case."""
     p.add_argument("--cycle", type=int, help=GATE_CYCLE_HELP)
+
+
+def add_filing_cycle_arg(p):
+    """`--cycle` on a verb that files a result without opening a gated
+    identity (check/compile/auto-ingest/clippy): the cycle the result is filed
+    under, which the board validates."""
+    p.add_argument("--cycle", type=int, help=FILING_CYCLE_HELP)
 
 
 def add_gate_release_arg(p):
