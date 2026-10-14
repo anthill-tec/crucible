@@ -81,9 +81,14 @@ declares.
 
 ### §S4 — a deliberate construct is marked in place
 
-`unreachable-except`, `python-empty-except` and `use-defused-xml-parse` are suppressed at each
-flagged site with `# pi-lens-ignore: <rule> — <reason>`, the reason stating why the code is right
-as written. `SIM114` in `test_cr054_drift_guard.py` is fixed, not marked.
+`unreachable-except`, `python-empty-except`, `python-unsafe-regex`, `python-command-injection`,
+`python-subprocess-shell` and `use-defused-xml-parse` are suppressed at each flagged site with
+`# pi-lens-ignore: <rule> — <reason>`, the reason stating why the code is right as written.
+
+Every ruff finding that pi-lens's own ruff configuration reports over the same files is cleared too
+(user ruling at cycle 2: pi-lens's edit hook blocks on them). A mechanical finding is fixed with no
+behaviour change, `SIM114` in `test_cr054_drift_guard.py` among them. A security rule on deliberate
+code is marked in place with its reason, as above, plus the `# noqa: <code>` ruff needs.
 
 ## Acceptance criteria
 
@@ -116,7 +121,7 @@ as written. `SIM114` in `test_cr054_drift_guard.py` is fixed, not marked.
       5,000 lines, and `_crucible_axi.py` is over that.
 - [ ] **Lint-clean.** A pi-lens sweep (`lens_diagnostics`, `source: session`, `mode: full`,
       `refreshRunners: all`) over the same files reports zero blocking findings and no `unchecked-*`
-      warnings. Each `pi-lens-ignore` carries a reason. A file an analyser did not answer for is
+      warnings, and ruff under pi-lens's own configuration reports none. Each `pi-lens-ignore` carries a reason. A file an analyser did not answer for is
       re-swept after it is touched, never counted as clean.
 - [ ] **No pinned behaviour moves.** Both full suites pass, and the typecheck is clean.
 - [ ] **No new CR literals.** No CR-shaped literal is added under `clients/`, `crucible_axi/` or in
