@@ -44,6 +44,7 @@ import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 
 # Sentinel distinguishing "cycle_id not supplied" (omit the key) from an
 # explicit `cycle_id=None` (emit an EXPLICIT null — the §S3 orphan signal).
@@ -6637,6 +6638,57 @@ def no_report_left_open_warnings(run_id, artifact, *, post_fn, project_key,
     return [abort_run(
         post_fn, project_key, agent_id, run_id,
         f"the runner produced no {artifact}, so there was nothing to ingest")]
+
+
+def junit_testcase_count(paths):
+    """The number of `<testcase>` elements across the JUnit reports at
+    `paths` \u2014 the result count of a run whose report is decoded by the BOARD,
+    taken before that report is offered to it.
+
+    `None` when a report cannot be read or parsed: the count is then unknown,
+    so `ran_nothing` cannot claim the run ran nothing, and the report goes to
+    the board as it stands (whose own decoder names what is wrong with it)."""
+    count = 0
+    for path in paths:
+        try:
+            root = ET.parse(path).getroot()
+        except (ET.ParseError, OSError) as exc:
+            print(f"[crucible] WARN: could not count the results in {path} "
+                  f"({exc}) \u2014 it is filed as it stands", file=sys.stderr)
+            return None
+        count += sum(1 for _ in root.iter("testcase"))
+    return count
+
+
+def ran_nothing(exit_code, total):
+    """(PURE) A runner that exited non-zero and whose report holds ZERO results
+    ran nothing: the report EXISTS (what Playwright writes when it cannot
+    start), but there is no result in it to file. Such a run takes the same
+    exit as a runner that wrote no report at all (`emit_ran_nothing`).
+
+    A runner that exits 0 with zero results, and a report whose count is
+    unknown (`total` None), are NOT this shape: they are filed as before."""
+    return bool(exit_code) and total == 0
+
+
+def emit_ran_nothing(verb, artifact, exit_code, output, run_id, warnings=(),
+                     *, post_fn, project_key, agent_id):
+    """The exit of a run `ran_nothing` describes \u2014 the no-report exit, never
+    an ingest: the run this client opened is aborted
+    (`no_report_left_open_warnings`: `run-aborted`, or `run-left-open` when
+    the abort is refused), and ONE ok:false envelope carries the caller's
+    `warnings` and the `no_report_warning` naming the runner's exit code and
+    the tail of its `output`. Returns the exit code, never 0."""
+    closing = no_report_left_open_warnings(
+        run_id, artifact, post_fn=post_fn, project_key=project_key,
+        agent_id=agent_id)
+    emit_axi(verb, False, {"help": no_report_help(verb, artifact)},
+             axi_context(project_key, agent_id=agent_id),
+             list(warnings) + closing
+             + [no_report_warning(verb, artifact, exit_code, output)],
+             f"[crucible] ERROR: the {verb} runner exited {exit_code} and its "
+             f"{artifact} holds no results \u2014 nothing was filed")
+    return exit_code or 1
 
 
 class RunAbandoned(BaseException):

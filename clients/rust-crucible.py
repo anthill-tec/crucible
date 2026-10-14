@@ -1290,6 +1290,13 @@ def _test_run(args, tier, select, profile, project_dir, identity):
         junit_path = _claim_output(_resolve_junit_path(project_dir, profile),
                                    own_dir, _OWN_JUNIT_FILE)
         if junit_path:
+            if _axi().ran_nothing(result.returncode,
+                                  _axi().junit_testcase_count([junit_path])):
+                return _axi().emit_ran_nothing(
+                    verb, "junit.xml", result.returncode, result.stdout or "",
+                    run_id, preflight_warnings, post_fn=_post,
+                    project_key=_project_key(project_dir),
+                    agent_id=args.agent)
             resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier=tier,
                                      context=_run_context(), run_id=run_id,
                                      release=release)

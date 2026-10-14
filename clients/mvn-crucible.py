@@ -1527,6 +1527,13 @@ def _test_run(args, tier, project_dir, identity):
                                   run_id=run_id, release=release)
         return rc
     _warn_if_stale(dirs)
+    if _axi().ran_nothing(result.returncode, _axi().junit_testcase_count(
+            sorted(glob.glob(os.path.join(dirs[0], "TEST-*.xml"))))):
+        return _axi().emit_ran_nothing(
+            "test", "surefire reports", result.returncode,
+            getattr(result, "stdout", None) or "", run_id,
+            preflight_warnings, post_fn=_post,
+            project_key=_project_key(project_dir), agent_id=args.agent)
     ctx = _run_context()
     resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier=tier, context=ctx,
                              run_id=run_id, release=release)

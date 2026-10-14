@@ -707,6 +707,11 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
         # harness that repeated a source across reports would over-count.
         files += f
         tree.extend(t)
+    if _axi().ran_nothing(run.returncode, summary["total"]):
+        return _axi().emit_ran_nothing(
+            verb, "TEST-*.xml", run.returncode, run.stdout or "", run_id,
+            preflight_warnings, post_fn=_post, project_key=_project_key(pd),
+            agent_id=agent_id)
 
     coverage = None
     if want_coverage:
