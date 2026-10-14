@@ -369,6 +369,18 @@ if grandchild_pidfile:
     _gc_subprocess.Popen([sys.executable, "-c", _gc_body, grandchild_pidfile],
                          stdin=_gc_subprocess.DEVNULL, stdout=_gc_subprocess.DEVNULL,
                          stderr=_gc_subprocess.DEVNULL)
+    # The grandchild is LIVE (its pid on disk) before this runner goes on to
+    # print anything, the signal marker included: a signal that lands on the
+    # marker always finds the grandchild already running. Bounded.
+    _gc_deadline = time.time() + 10
+    while time.time() < _gc_deadline:
+        try:
+            with open(grandchild_pidfile) as _gc_f:
+                if _gc_f.read().strip():
+                    break
+        except FileNotFoundError:
+            pass
+        time.sleep(0.02)
 
 # \u00a7S2 client-paragraph fixture \u2014 the TMPDIR this runner itself sees, and
 # the TMPDIR a CHILD IT SPAWNS WITHOUT AN EXPLICIT ENV sees, both written to
@@ -642,10 +654,13 @@ def drive_live(cmd, cwd, env, scratch, marker, log_path=None, timeout=60):
                  live_in_log)
 
 
-def drive_and_signal(cmd, cwd, env, scratch, signum, timeout=30):
+def drive_and_signal(cmd, cwd, env, scratch, signum, timeout=30,
+                     pre_signal=None):
     """Run `cmd`, wait until its blocked runner's marker has reached the
     client's stderr (the client is reading the run, its run already open),
-    then deliver `signum` to the CLIENT process."""
+    then deliver `signum` to the CLIENT process. `pre_signal`, when given, is
+    called once the marker is seen and BEFORE the signal is sent, so a caller
+    can observe the live run first."""
     marker = "LIVE_RUN_SIGNAL_MARKER"
     # A fresh release file per drive: an earlier drive's release must never
     # unblock this one's runner before the signal lands.
@@ -659,6 +674,8 @@ def drive_and_signal(cmd, cwd, env, scratch, signum, timeout=30):
         try:
             reached = _wait_for(stderr_path, marker, 15)
             if reached:
+                if pre_signal is not None:
+                    pre_signal()
                 proc.send_signal(signum)
             stdout, _ = proc.communicate(timeout=timeout)
         finally:

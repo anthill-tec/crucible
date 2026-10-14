@@ -20,7 +20,7 @@ Empirically confirmed against the CURRENT fleet (not asserted from reading
 alone): a fake runner that forks a long-lived grandchild and writes its pid
 (`FAKE_GRANDCHILD_PIDFILE`, `tests/client/live_run_harness.py`), driven
 through each of the five clients' `test` verb and interrupted mid-run via
-`drive_and_signal`, already exits 128+signum today — CR-CRU-184's trap
+`drive_and_signal`, already exits 128+signum today — the interrupt trap
 already covers the DIRECT child correctly — but the grandchild is still
 alive, by pid, after the client process has fully exited, for every one of
 the five clients. That is the one new assertion every test below fails on;
@@ -162,22 +162,32 @@ class SigtermTakesTheWholeRunnerTreeDownTest(_ProcessTreeCase):
                 pidfile = fresh_grandchild_pidfile(self.scratch)
                 cmd = getattr(self, builder_name)()
                 env = dict(self.env(), FAKE_GRANDCHILD_PIDFILE=pidfile)
+                before_signal = {}
+
+                def observe_grandchild(observed=before_signal, path=pidfile):
+                    # Once the marker is seen and BEFORE the signal: the fake
+                    # runner has written the grandchild's pid by now.
+                    observed["pid"] = wait_for_pidfile(path, timeout=10)
+                    if observed["pid"] is not None:
+                        self._grandchild_pids.append(observed["pid"])
+                        observed["alive"] = pid_alive(observed["pid"])
+
                 reached, code, stdout, stderr = drive_and_signal(
-                    cmd, self.project, env, self.scratch, signal.SIGTERM)
+                    cmd, self.project, env, self.scratch, signal.SIGTERM,
+                    pre_signal=observe_grandchild)
                 self.assertTrue(
                     reached,
                     f"{key}: the runner never blocked mid-run; "
                     f"stderr={stderr[-2000:]!r}")
-                pid = wait_for_pidfile(pidfile, timeout=10)
+                pid = before_signal.get("pid")
                 self.assertIsNotNone(
                     pid,
                     f"{key}: fixture failure — the grandchild never wrote "
                     f"its own pidfile; stderr={stderr[-2000:]!r}")
-                self._grandchild_pids.append(pid)
                 self.assertTrue(
-                    pid_alive(pid),
+                    before_signal.get("alive"),
                     f"{key}: fixture failure — the grandchild must be alive "
-                    f"right after it reported its pid")
+                    f"right before the signal is sent")
                 self.assertEqual(
                     code, 143,
                     f"{key}: a SIGTERM to the client during the runner "
@@ -228,13 +238,17 @@ def _drive_no_agent_signal(cmd, cwd, env, scratch, signum, pidfile, timeout=30):
     — its inherited-stdio `subprocess.run` branch) until the fake runner's
     grandchild has written its own pidfile — a readiness proxy that fires
     right at runner start, well before the runner's own mid-case block —
-    then signal the CLIENT process and wait for it to exit."""
+    then signal the CLIENT process and wait for it to exit. Returns whether
+    the grandchild was alive right BEFORE the signal was sent, alongside its
+    pid."""
     proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True)
     pid = None
+    alive_before_signal = False
     try:
         pid = wait_for_pidfile(pidfile, timeout=15)
         if pid is not None:
+            alive_before_signal = pid_alive(pid)
             proc.send_signal(signum)
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
@@ -245,7 +259,7 @@ def _drive_no_agent_signal(cmd, cwd, env, scratch, signum, pidfile, timeout=30):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
-    return pid, proc.returncode, stdout, stderr
+    return pid, alive_before_signal, proc.returncode, stdout, stderr
 
 
 class BothRunStreamedBranchesAreGroupKilledTest(_ProcessTreeCase):
@@ -262,7 +276,7 @@ class BothRunStreamedBranchesAreGroupKilledTest(_ProcessTreeCase):
         release = f"{pidfile}.release"
         env = dict(self.env(), FAKE_GRANDCHILD_PIDFILE=pidfile,
                    FAKE_BLOCK_AFTER_INDEX="1", FAKE_RELEASE_FILE=release)
-        pid, code, stdout, stderr = _drive_no_agent_signal(
+        pid, alive_before_signal, code, stdout, stderr = _drive_no_agent_signal(
             cmd_without_agent, self.project, env, self.scratch,
             signal.SIGINT, pidfile)
         self.assertIsNotNone(
@@ -271,9 +285,9 @@ class BothRunStreamedBranchesAreGroupKilledTest(_ProcessTreeCase):
             f"pidfile; stdout={stdout!r} stderr={stderr[-2000:]!r}")
         self._grandchild_pids.append(pid)
         self.assertTrue(
-            pid_alive(pid),
+            alive_before_signal,
             f"{key}: fixture failure — the grandchild must be alive right "
-            f"after it reported its pid")
+            f"before the signal is sent")
         self.assertNotEqual(
             code, 0,
             f"{key}: a SIGINT delivered while the inherited-stdio runner "
