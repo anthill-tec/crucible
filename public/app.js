@@ -564,6 +564,9 @@
       setIfChanged(historyReleases, {
         projectKey,
         releases: Array.isArray(body.releases) ? body.releases : [],
+        // Every CR the project closed over a red pre-merge gate, with the
+        // reason its closer gave — shown on that CR's row.
+        acceptedFailingGates: Array.isArray(body.acceptedFailingGates) ? body.acceptedFailingGates : [],
       });
     }
     // Whichever way the Workflow tab opens — its tab, the landing, a jump
@@ -6739,6 +6742,15 @@
       );
     };
 
+    // The reason a CR closed over a red pre-merge gate, from the held
+    // `/history` read, or null when it closed over none.
+    const acceptedFailingGateReason = (cr) => {
+      const held = historyReleases.val;
+      if (held === null || held.projectKey !== state.route.projectKey) return null;
+      const accepted = (held.acceptedFailingGates ?? []).filter((entry) => entry.cr === cr);
+      return accepted.length > 0 ? accepted[accepted.length - 1].reason : null;
+    };
+
     const LensCrGroup = (node) => {
       const key = lensKey("cr", node.cr);
       const props = {
@@ -6788,6 +6800,15 @@
                 ),
               ]
             : null,
+          () => {
+            const reason = acceptedFailingGateReason(node.cr);
+            return reason === null
+              ? ""
+              : span(
+                  { "data-testid": "cr-accepted-failing-gate", class: "app-cr-accepted-failing-gate" },
+                  ` · closed over a red gate: ${reason}`,
+                );
+          },
           ...(node.source === "declared" ? planChangeSummary(node) : []),
         ),
         () =>
