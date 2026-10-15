@@ -1,13 +1,13 @@
 # CR-CRU-190 — the 0.4.0 follow-ups list
 
-**Type** fix (patch CR, one list of follow-ups) · **Points** 13 (set at filing, 2026-10-14; items 6–8 added the same day;
-the gap analysis splits it if the list outgrows the cap) · **Wave** 8 (0.4.0) · **Depends on**
+**Type** fix (patch CR, one list of follow-ups) · **Points** 13 (set at filing, 2026-10-14; items 6–8 added the same day, items 9–11 on
+2026-10-16; the gap analysis splits it if the list outgrows the cap) · **Wave** 8 (0.4.0) · **Depends on**
 CR-CRU-184 · **Status** PENDING — filed 2026-10-14 (user ruling: the open follow-ups are ONE patch
 CR, not several; placed after CR-CRU-189)
 
 ## Problem
 
-Eight follow-ups came out of wave 8's work and Model B's mail. Each is small, and the user ruled that
+Eleven follow-ups came out of wave 8's work and Model B's mail. Each is small, and the user ruled that
 they are worked as one CR.
 
 1. **An agent's badge names its cycle by a board-wide id.** Noticed by the user (2026-10-14). An agent's
@@ -48,6 +48,23 @@ they are worked as one CR.
 8. **One `--cycle` help line misdescribes its verb.** rust `docker-e2e-gate` opens no gated
    identity, but its `--cycle` help says the gated run leaves its registration and binding intact
    (the wording the gated verbs use) rather than the filing wording `check`/`compile` carry.
+9. **The declared python floor is not the baseline.** Found during CR-CRU-191. `pyproject.toml`
+   declares `requires-python = ">=3.10"` and classifiers 3.10–3.13, but the clients and the
+   installer import `tomllib`, which needs 3.11. Python 3.14 is the adopted baseline (user ruling,
+   2026-10-16). The low floor is also why ruff files `tomllib` as third-party, which three
+   `I001` suppressions currently paper over.
+10. **One block in the rust client is indented a level too deep.** In `_smoke_refusal`, two nested
+    `if`s were merged into one, but the body kept its old indent. It is valid and behaves the same,
+    but it reads as nested one level deeper than it is.
+11. **gitleaks reports identifiers as secrets.** pi-lens's gitleaks pass, with its default rules,
+    reports 814 `generic-api-key` findings across the tree. None is a secret:
+    - 694 are project keys (UUIDv7). 512 of them are this project's own key, in run output, tests
+      and `.env`; the rest are test projects' keys.
+    - 120 are test fixtures' made-up keys and agent ids.
+
+    101 of the findings are in tracked files (45 test files, a design note and a project skill). The
+    rest are in gitignored run output under `test-reports/` and `__pycache__/`. A real secret would
+    be lost among them.
 
 ## Steps
 
@@ -101,6 +118,24 @@ own post is not refused for it.
 `docker-e2e-gate`'s `--cycle` help uses the filing wording, and a census test checks that each
 verb's `--cycle` help matches whether that verb opens a gated identity.
 
+### §S9 — the python floor is the 3.14 baseline
+
+`pyproject.toml` declares `requires-python = ">=3.14"`, with classifiers naming 3.14 only, and the
+release workflow's python setup names 3.14. Since `tomllib` is then stdlib at the declared floor,
+the three `I001` suppressions for it are removed, and the imports are ordered as ruff orders them
+at that target.
+
+### §S10 — the rust client's `_smoke_refusal` reads as it runs
+
+The merged condition's body is indented to its real depth. Nothing else changes.
+
+### §S11 — gitleaks reports secrets, not identifiers
+
+A gitleaks configuration in the repo extends gitleaks' default rules. It allows a project key (a
+UUIDv7) and a test fixture's key or id where it appears as a key or id value. It also excludes the
+gitignored run output (`test-reports/`, `__pycache__/`). No default rule is disabled, so a real
+secret anywhere in the tree is still reported.
+
 ## Acceptance criteria
 
 - [ ] **Badge.** On a board whose plan has five cycles, an idle agent bound to the second shows
@@ -126,10 +161,23 @@ verb's `--cycle` help matches whether that verb opens a gated identity.
       that cycle is marked done, `cr-close`'s own `cr-merged` post succeeds.
 - [ ] **Help matches the verb.** For EACH client, every verb's `--cycle` help matches whether the
       verb opens a gated identity.
+- [ ] **The floor is 3.14.** `pyproject.toml` declares `requires-python = ">=3.14"` and only the 3.14
+      classifier, the release workflow sets up python 3.14, and no `I001` suppression for `tomllib`
+      remains under `clients/` or `crucible_axi/`. Ruff under pi-lens's own configuration and
+      Pyright 1.1.414 (pi-lens's bundled CLI) both stay clean over `clients/` and `crucible_axi/`,
+      and the full python and bun suites pass on python 3.14.
+- [ ] **`_smoke_refusal` is indented truly.** Its body sits one level inside the merged `if`, and the
+      rust client's existing tests pass unchanged.
+- [ ] **gitleaks is quiet on identifiers and loud on secrets.** pi-lens's gitleaks pass, run over the
+      whole tree, reports zero findings on the current tree. With a planted fixture holding a real
+      token shape (e.g. a GitHub token pattern) in a tracked test file, it reports that one. The
+      repo's gitleaks configuration extends the default rules and disables none.
 - [ ] **No new CR literals.** No CR-shaped literal is added in `src/`, `public/`, `clients/` or test
       comments, and the citation tripwire's pins are unchanged.
 
 ## How it is worked
 
-On a feature branch: one red-green cycle per section, then verify. Model B hears of §S2, §S4 and §S5
-in the 0.4.0 release notes.
+On a feature branch: one red-green cycle per section, then verify. Before §S9's cycle this repo's
+`.venv` is rebuilt on python 3.14 (`uv venv --python 3.14`, then `uv pip install
+unittest-xml-reporting coverage`), so the client's runs use the baseline interpreter. Model B hears of §S2, §S4, §S5
+and §S9 (the 3.14 floor) in the 0.4.0 release notes.
