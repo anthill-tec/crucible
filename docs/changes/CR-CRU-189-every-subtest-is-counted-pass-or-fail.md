@@ -127,8 +127,9 @@ The run is still filed, and its exit is unchanged.
 On a feature branch: RED (the probe as a fixture), GREEN in the runner module and the python
 client, then verify. Existing tests that change with §S1, each edit needing approval and going in its
 own commit:
-- **The exact packaged fleet is pinned in three places:** `tests/client/test_cr090_fleet_stage.py`,
-  `tests/client/test_cr090_cli_install_integration.py` and `tests/clients-python-arduino-crucible.test.ts`.
+- **The exact packaged fleet is pinned in two places:** `tests/client/test_cr090_fleet_stage.py` and
+  `tests/client/test_cr090_cli_install_integration.py`. The tests that read `install.FLEET_FILES`
+  itself follow it with no edit.
 - **Two tests fake `xmlrunner` as a package holding only `__main__.py`:**
   `tests/clients-python-arduino-crucible.test.ts` and `tests/shim-retirement.test.ts`. Under the
   runner they meet §S3's fallback, which runs xmlrunner's own entry point, so they keep passing
