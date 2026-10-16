@@ -327,22 +327,28 @@ class NestedAndSkippedCase(unittest.TestCase):
 
 
 class NestedAndSkippedSubtestsTest(_SubtestCountingCase):
-    """Each `subTest` block -- nested or not -- is its own case; a skip
-    raised inside a subtest is one pending case named as the subtest.
+    """An enclosing `subTest` block that holds only further `subTest` blocks
+    is counted AS its inner subtests, never as a case of its own -- it is a
+    case of its own only when it fails or errors outside them, which never
+    happens in this fixture. A skip raised inside a subtest is one pending
+    case named as the subtest.
 
     Measured directly against the installed `unittest` (via a bare
     `TestCase.run()` with a result that records every `addSubTest` call):
     when every nested subtest passes, `addSubTest` fires once for EACH of
     the outer block and the two inner blocks (three calls, each carrying its
-    own merged parameter set), plus the method's own success -- which a
-    correct runner must suppress since subtests were used. When the second
-    inner subtest fails, `unittest` itself never calls `addSubTest` for the
-    OUTER block at all (its own success flag is already false by the time
-    its block finishes) and never calls `addSuccess`/`addFailure` for the
-    parent either -- so that run's correct total is the two inner cases plus
-    the pending skip, not three."""
+    own merged parameter set), plus the method's own success. A correct
+    runner must suppress BOTH the method's own success (subtests were used)
+    AND the outer block's own pass call (it only ever wraps further
+    subtests, so it is counted as them). When the second inner subtest
+    fails, `unittest` itself never calls `addSubTest` for the OUTER block at
+    all (its own success flag is already false by the time its block
+    finishes) and never calls `addSuccess`/`addFailure` for the parent
+    either. So the correct total is the SAME in both runs: the two inner
+    cases plus the pending skip, three, and the outer block is never a case
+    of its own either way."""
 
-    def test_each_subtest_block_is_its_own_case_when_every_nested_subtest_passes(self):
+    def test_outer_block_is_never_its_own_case_and_the_total_matches_the_failing_run_when_every_nested_subtest_passes(self):
         _code, _out, err, board = self._run_scenario(
             ["test", "--start-dir", "pkg", "--pattern", "fixture_nested_and_skipped.py"],
             NESTED_AND_SKIPPED_FIXTURE_SOURCE, env={},
@@ -350,23 +356,27 @@ class NestedAndSkippedSubtestsTest(_SubtestCountingCase):
         payload = _last_parsed_payload(board)
         summary = payload["summary"]
         self.assertEqual(
-            summary["total"], 4,
-            f"the outer block, its two passing inner blocks, and the pending "
-            f"skip must total 4; got summary={summary!r} stderr={err!r}")
-        self.assertEqual(summary["passed"], 3, summary)
+            summary["total"], 3,
+            f"the two passing inner blocks plus the pending skip must total "
+            f"3 -- the SAME total as when an inner subtest fails -- and the "
+            f"outer block must never be counted as a case of its own since "
+            f"its body holds nothing but the two inner subtests; got "
+            f"summary={summary!r} stderr={err!r}")
+        self.assertEqual(summary["passed"], 2, summary)
         self.assertEqual(summary.get("pending", 0), 1, summary)
         self.assertEqual(summary["failed"], 0, summary)
         names = set(_case_names(payload))
         expected = {
-            "test_outer_with_two_inner_subtests (outer=0)",
             "test_outer_with_two_inner_subtests (inner=0, outer=0)",
             "test_outer_with_two_inner_subtests (inner=1, outer=0)",
             "test_one_subtest_skips (case=0)",
         }
         self.assertEqual(
             names, expected,
-            f"each subTest block (outer and both inner) must be named and "
-            f"counted on its own, plus the skip; got names={names!r}")
+            f"only the two inner subTest blocks and the skip may be named "
+            f"as cases -- the outer block (bare or with an `(outer=0)` "
+            f"suffix) must never appear, and these are the SAME three names "
+            f"the failing run below reports; got names={names!r}")
 
     def test_a_failing_inner_subtest_is_its_own_case_and_the_skip_stays_pending(self):
         _code, _out, err, board = self._run_scenario(
