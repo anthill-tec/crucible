@@ -22,6 +22,7 @@ import contextlib
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import unittest
@@ -30,13 +31,16 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.client.python_coverage_project import (  # noqa: E402
+    BLOCKING_TEST_SOURCE,
     CORE_COVERED,
     CORE_TOTAL,
+    DIES_TEST_SOURCE,
     EXTRA_COVERED,
     EXTRA_TOTAL,
     FAILING_TEST_SOURCE,
     LCOV_UNAVAILABLE,
     NO_REPORT_CODE,
+    RAN_NOTHING_TEST_SOURCE,
     REAL_VENV_PYTHON,
     REPO_ROOT,
     TESTS_COVERED,
@@ -49,6 +53,7 @@ from tests.client.python_coverage_project import (  # noqa: E402
     base_files,
     coverage_run_lines,
     drive,
+    drive_interrupted,
     ingested_coverage,
     line_counts,
     load_client,
@@ -218,6 +223,90 @@ class UndeclaredSourceMeasuresTheProjectTest(_CoverageRunCase):
                     len(warnings_with_code(result.axi, ZERO_DISCOVERY_CODE)), 1,
                     f"{label}: fixture -- an empty start dir is the "
                     f"zero-discovery failure; {result.describe()}")
+                self._assert_one_undeclared_warning(label, result)
+
+    def test_an_undeclared_source_under_a_relative_project_dir_is_passed_as_the_absolute_root(self):
+        """Only the `--source` is pinned here. The gate is given
+        `--skip-check`: its py_compile step, and the reports directory the
+        run hands its runner, do not yet resolve a relative project dir, and
+        neither is what this test is about."""
+        for label, verb in VERBS:
+            with self.subTest(verb=label):
+                project_dir, board = make_project(self, base_files())
+                self.addCleanup(os.chdir, os.getcwd())
+                os.chdir(os.path.dirname(project_dir))
+                relative = os.path.basename(project_dir)
+                skip_check = ("--skip-check",) if verb[0] == "pre-merge-gate" else ()
+                result = drive(relative, board, verb, extra_argv=skip_check)
+                line = self._the_coverage_run_line(label, result)
+                sources = source_values(line)
+                self.assertEqual(
+                    len(sources), 1,
+                    f"{label}: an undeclared source is passed as one "
+                    f"--source; got {line!r}")
+                self.assertTrue(
+                    os.path.isabs(sources[0]),
+                    f"{label}: under the relative --project-dir {relative!r} "
+                    f"the root is still passed as an absolute path; got "
+                    f"{sources[0]!r}")
+                self.assertEqual(
+                    os.path.realpath(sources[0]), os.path.realpath(project_dir),
+                    f"{label}: the --source must be the project root; got "
+                    f"{sources[0]!r}, root {project_dir!r}")
+
+
+class UndeclaredWarningRidesEveryFailureEnvelopeTest(_CoverageRunCase):
+    """With nothing declared and no `--cov-source`, the run's failure
+    envelopes carry the undeclared-source warning too: a run that wrote no
+    report, a run whose report holds no results, and an interrupted run.
+    A pin: it holds today."""
+
+    def test_a_no_report_envelope_carries_the_warning(self):
+        for label, verb in VERBS:
+            with self.subTest(verb=label):
+                project_dir, board = make_project(
+                    self, base_files(),
+                    extra_files={"dies/__init__.py": "",
+                                 "dies/test_dies.py": DIES_TEST_SOURCE})
+                result = drive(project_dir, board, verb, start_dir="dies")
+                self.assertEqual(
+                    len(warnings_with_code(result.axi, NO_REPORT_CODE)), 1,
+                    f"{label}: fixture -- a runner that dies before any "
+                    f"report is the no-report failure; {result.describe()}")
+                self.assertIs((result.axi or {}).get("ok"), False, result.describe())
+                self._assert_one_undeclared_warning(label, result)
+
+    def test_a_ran_nothing_envelope_carries_the_warning(self):
+        for label, verb in VERBS:
+            with self.subTest(verb=label):
+                project_dir, board = make_project(
+                    self, base_files(),
+                    extra_files={"empty_report/__init__.py": "",
+                                 "empty_report/test_empty_report.py":
+                                     RAN_NOTHING_TEST_SOURCE})
+                result = drive(project_dir, board, verb, start_dir="empty_report")
+                self.assertIn(
+                    "holds no results", result.err,
+                    f"{label}: fixture -- a report with zero results and a "
+                    f"non-zero exit is the ran-nothing failure; "
+                    f"{result.describe()}")
+                self.assertIs((result.axi or {}).get("ok"), False, result.describe())
+                self._assert_one_undeclared_warning(label, result)
+
+    def test_an_interrupted_runs_envelope_carries_the_warning(self):
+        for label, verb in VERBS:
+            with self.subTest(verb=label):
+                project_dir, board = make_project(
+                    self, base_files(),
+                    extra_files={"blocks/__init__.py": "",
+                                 "blocks/test_blocks.py": BLOCKING_TEST_SOURCE})
+                result = drive_interrupted(self, project_dir, board, verb,
+                                           start_dir="blocks")
+                self.assertEqual(
+                    result.code, 128 + signal.SIGTERM,
+                    f"{label}: fixture -- the client was interrupted mid-run "
+                    f"by SIGTERM; {result.describe()}")
+                self.assertIs((result.axi or {}).get("ok"), False, result.describe())
                 self._assert_one_undeclared_warning(label, result)
 
 

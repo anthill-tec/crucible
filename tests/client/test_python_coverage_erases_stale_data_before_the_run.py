@@ -28,8 +28,12 @@ from tests.client.python_coverage_project import (  # noqa: E402
     AGENT,
     CORE_COVERED,
     CORE_TOTAL,
+    EXTRA_COVERED,
+    EXTRA_TOTAL,
     LCOV_UNAVAILABLE,
     REAL_VENV_PYTHON,
+    TESTS_COVERED,
+    TESTS_TOTAL,
     VERBS,
     base_files,
     drive,
@@ -40,6 +44,11 @@ from tests.client.python_coverage_project import (  # noqa: E402
 )
 
 PARALLEL_CONFIG = "[tool.coverage.run]\nparallel = true\n"
+DECLARED_CONFIG = '[tool.coverage.run]\nsource = ["mypkg"]\n'
+PARALLEL_DECLARED_CONFIG = DECLARED_CONFIG + "parallel = true\n"
+ENV_DATA_FILE = os.path.join("envdata", ".covenv")
+CONFIG_DATA_FILE = os.path.join("cfgdata", ".covcfg")
+CONFIG_DATA_FILE_LINE = f'data_file = "{CONFIG_DATA_FILE}"\n'
 EXPLICIT_REPORTS = ("--reports", "test-reports/explicit")
 GIVEN_SOURCE = ("--cov-source", "mypkg")
 
@@ -52,12 +61,13 @@ class _StaleDataCase(unittest.TestCase):
             f"these tests need the repo's interpreter with coverage.py and "
             f"unittest-xml-reporting installed, at {REAL_VENV_PYTHON}")
 
-    def _assert_only_this_runs_coverage(self, label, result):
+    def _assert_only_this_runs_coverage(self, label, result,
+                                        expected=(CORE_TOTAL, CORE_COVERED)):
         stored = ingested_coverage(result.board)
         self.assertEqual(
-            line_counts(stored), (CORE_TOTAL, CORE_COVERED),
+            line_counts(stored), expected,
             f"{label}: only this run's coverage may be reported -- "
-            f"{CORE_TOTAL} statements, {CORE_COVERED} executed; an earlier "
+            f"{expected[0]} statements, {expected[1]} executed; an earlier "
             f"run's data was merged in if either count is higher. Got "
             f"coverage={stored!r} ({result.describe()})")
         self.assertNotIn(
@@ -65,7 +75,9 @@ class _StaleDataCase(unittest.TestCase):
             f"{label}: the coverage report must succeed; got "
             f"stderr={result.err!r}")
 
-    def _run_after_an_earlier_run(self, config, data_file_rel, extra_argv):
+    def _run_after_an_earlier_run(self, config, data_file_rel, extra_argv,
+                                  source_argv=GIVEN_SOURCE,
+                                  expected=(CORE_TOTAL, CORE_COVERED)):
         for label, verb in VERBS:
             with self.subTest(verb=label):
                 files = base_files()
@@ -75,8 +87,8 @@ class _StaleDataCase(unittest.TestCase):
                 plant_earlier_parallel_data(
                     self, project_dir, os.path.join(project_dir, data_file_rel))
                 result = drive(project_dir, board, verb,
-                               extra_argv=GIVEN_SOURCE + tuple(extra_argv))
-                self._assert_only_this_runs_coverage(label, result)
+                               extra_argv=tuple(source_argv) + tuple(extra_argv))
+                self._assert_only_this_runs_coverage(label, result, expected)
 
 
 class StaleDataIsNotMergedTest(_StaleDataCase):
@@ -110,6 +122,74 @@ class OneDataFileIsUnchangedTest(_StaleDataCase):
                     [".coverage"],
                     f"{label}: the run writes one unsuffixed data file; got "
                     f"{sorted(os.listdir(own_dir))!r}")
+
+
+class StaleDataIsErasedWithoutAGivenSourceTest(_StaleDataCase):
+    """With no `--cov-source`, the erase still runs: an earlier run's
+    parallel files are gone whether the project's configuration declares the
+    source or declares none. A pin: it holds today."""
+
+    def test_a_declared_source_run_does_not_merge_an_earlier_runs_files_at_the_project_root(self):
+        self._run_after_an_earlier_run(
+            PARALLEL_DECLARED_CONFIG, ".coverage", EXPLICIT_REPORTS, source_argv=())
+
+    def test_a_declared_source_run_does_not_merge_an_earlier_runs_files_in_the_agents_own_directory(self):
+        self._run_after_an_earlier_run(
+            PARALLEL_DECLARED_CONFIG, os.path.join("test-reports", AGENT, ".coverage"),
+            (), source_argv=())
+
+    def test_an_undeclared_source_run_does_not_merge_an_earlier_runs_files(self):
+        self._run_after_an_earlier_run(
+            None, ".coverage", EXPLICIT_REPORTS, source_argv=(),
+            expected=(CORE_TOTAL + EXTRA_TOTAL + TESTS_TOTAL,
+                      CORE_COVERED + EXTRA_COVERED + TESTS_COVERED))
+
+
+class TheDataFileIsCoveragePysTest(_StaleDataCase):
+    """Without the run's own `--data-file`, the erase follows the data file
+    coverage.py resolves itself -- `COVERAGE_FILE`, else `[run] data_file`,
+    each relative to the project root -- with and without `--cov-source`.
+    The earlier run's files are planted beside that file, so a run that
+    erased anywhere else merges them. A pin: it holds today."""
+
+    def _assert_erased_beside(self, config, env, data_file_rel, unused_rel=None):
+        for label, verb in VERBS:
+            for given, source_argv in (("with --cov-source", GIVEN_SOURCE),
+                                       ("without --cov-source", ())):
+                with self.subTest(verb=label, source=given):
+                    where = f"{label} / {given}"
+                    files = base_files()
+                    files["pyproject.toml"] = config
+                    project_dir, board = make_project(self, files)
+                    data_file = os.path.join(project_dir, data_file_rel)
+                    plant_earlier_parallel_data(self, project_dir, data_file)
+                    result = drive(project_dir, board, verb, env=env,
+                                   extra_argv=tuple(source_argv) + EXPLICIT_REPORTS)
+                    self._assert_only_this_runs_coverage(where, result)
+                    self.assertTrue(
+                        os.path.isfile(data_file),
+                        f"{where}: fixture -- the run writes its data to "
+                        f"{data_file_rel!r}, beside the planted files; "
+                        f"{result.describe()}")
+                    if unused_rel:
+                        self.assertFalse(
+                            os.path.exists(os.path.join(project_dir, unused_rel)),
+                            f"{where}: fixture -- the run never writes "
+                            f"{unused_rel!r}; {result.describe()}")
+
+    def test_coverage_file_names_the_data_file_the_erase_clears(self):
+        self._assert_erased_beside(
+            DECLARED_CONFIG, {"COVERAGE_FILE": ENV_DATA_FILE}, ENV_DATA_FILE)
+
+    def test_run_data_file_names_the_data_file_the_erase_clears(self):
+        self._assert_erased_beside(
+            DECLARED_CONFIG + CONFIG_DATA_FILE_LINE, None, CONFIG_DATA_FILE)
+
+    def test_coverage_file_wins_over_run_data_file_for_the_erase(self):
+        self._assert_erased_beside(
+            DECLARED_CONFIG + CONFIG_DATA_FILE_LINE,
+            {"COVERAGE_FILE": ENV_DATA_FILE}, ENV_DATA_FILE,
+            unused_rel=CONFIG_DATA_FILE)
 
 
 if __name__ == "__main__":

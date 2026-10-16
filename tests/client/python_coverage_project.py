@@ -19,10 +19,12 @@ import contextlib
 import io
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -32,10 +34,12 @@ from tests.client.live_run_harness import (  # noqa: E402
     install_project,
     load_client,
     load_toon,
+    scrubbed_env,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REAL_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
+CLIENT_PATH = REPO_ROOT / "clients" / "python-crucible.py"
 
 AGENT = "coverage-config-fixture-agent"
 PROJECT_KEY = "coverage-config-fixture-key"
@@ -161,6 +165,56 @@ TOOL_TEST_SOURCE = textwrap.dedent('''\
     ''')
 
 
+# A suite whose runner dies mid-test before writing any report: no JUnit XML,
+# no "Ran 0 tests", no traceback -- the no-report shape.
+DIES_TEST_SOURCE = textwrap.dedent('''\
+    import os
+    import unittest
+
+    class DiesMidRunTest(unittest.TestCase):
+        def test_the_runner_dies_before_any_report(self):
+            os._exit(3)
+    ''')
+
+# A suite whose runner leaves a report holding zero results and exits
+# non-zero -- the ran-nothing shape. The report goes where the runner was
+# told to write its reports (`-o`).
+RAN_NOTHING_TEST_SOURCE = textwrap.dedent('''\
+    import os
+    import sys
+    import unittest
+
+    def _reports_dir():
+        argv = sys.argv
+        for i, arg in enumerate(argv):
+            if arg == "-o" and i + 1 < len(argv):
+                return argv[i + 1]
+        raise RuntimeError("no -o reports dir on " + repr(argv))
+
+    class LeavesAnEmptyReportTest(unittest.TestCase):
+        def test_the_runner_leaves_an_empty_report_and_exits_non_zero(self):
+            path = os.path.join(_reports_dir(), "TEST-ran_nothing.Empty.xml")
+            with open(path, "w") as f:
+                f.write('<?xml version="1.0"?><testsuite name="ran_nothing.Empty" '
+                        'tests="0" errors="0" failures="0" skipped="0">'
+                        '</testsuite>')
+            os._exit(3)
+    ''')
+
+# A suite that says it has started (by writing the file the environment
+# names) and then blocks until the run is interrupted.
+BLOCKING_TEST_SOURCE = textwrap.dedent('''\
+    import os
+    import time
+    import unittest
+
+    class BlocksUntilInterruptedTest(unittest.TestCase):
+        def test_blocks_until_the_run_is_interrupted(self):
+            with open(os.environ["COVERAGE_FIXTURE_STARTED"], "w") as f:
+                f.write("started")
+            time.sleep(60)
+    ''')
+
 def base_files():
     """The scratch project's sources, keyed by path relative to its root."""
     return {
@@ -251,12 +305,56 @@ def drive(project_dir, board, verb_argv, *, start_dir="tests", python=None,
             code = 0
         except SystemExit as exc:
             code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
-    out = stdout.getvalue()
+    return Drive(code, stdout.getvalue(), stderr.getvalue(),
+                 _decode_envelope(toon, stdout.getvalue()), board)
+
+def _decode_envelope(toon, out):
     try:
-        axi = toon.decode(out).get("axi") if out.strip() else None
+        return toon.decode(out).get("axi") if out.strip() else None
     except Exception:  # an undecodable stdout is reported by the assertion that reads it
-        axi = None
-    return Drive(code, out, stderr.getvalue(), axi, board)
+        return None
+
+def drive_interrupted(test, project_dir, board, verb_argv, *, start_dir,
+                      signum=signal.SIGTERM, start_timeout=60):
+    """Run the real client as its OWN process for `verb_argv` against
+    `project_dir`, whose suite under `start_dir` blocks once it has started
+    (`BLOCKING_TEST_SOURCE`); send `signum` to the client once the suite says
+    it has started, and collect what the client printed. Returns a `Drive`;
+    `code` is the client's exit status."""
+    scratch = tempfile.mkdtemp(prefix="coverage-config-interrupt-")
+    test.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
+    started = os.path.join(scratch, "started")
+    with scrubbed_coverage_env():
+        env = scrubbed_env(COVERAGE_FIXTURE_STARTED=started)
+    cmd = [str(REAL_VENV_PYTHON), str(CLIENT_PATH), *verb_argv,
+           "--start-dir", start_dir, "--pattern", "test_*.py",
+           "--project-dir", project_dir, "--agent", AGENT,
+           "--python", str(REAL_VENV_PYTHON)]
+    err_path = os.path.join(scratch, "stderr")
+    with open(err_path, "w") as err_file:
+        proc = subprocess.Popen(cmd, cwd=project_dir, env=env, text=True,
+                                stdout=subprocess.PIPE, stderr=err_file)
+        try:
+            deadline = time.monotonic() + start_timeout
+            while (not os.path.exists(started) and proc.poll() is None
+                   and time.monotonic() < deadline):
+                time.sleep(0.05)
+            if os.path.exists(started) and proc.poll() is None:
+                proc.send_signal(signum)
+            try:
+                out, _ = proc.communicate(timeout=60)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                out, _ = proc.communicate(timeout=10)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+    err = Path(err_path).read_text(encoding="utf-8", errors="replace")
+    if not os.path.exists(started):
+        err = "[fixture] the blocking suite never started\n" + err
+    return Drive(proc.returncode, out or "", err,
+                 _decode_envelope(load_toon(), out or ""), board)
 
 
 # ── readers ────────────────────────────────────────────────────────────────
