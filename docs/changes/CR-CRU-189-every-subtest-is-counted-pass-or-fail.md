@@ -134,5 +134,12 @@ own commit:
   `tests/clients-python-arduino-crucible.test.ts` and `tests/shim-retirement.test.ts`. Under the
   runner they meet §S3's fallback, which runs xmlrunner's own entry point, so they keep passing
   unchanged. Neither asserts on warnings, so §S3's warning needs no edit to them either (user
-  ruling 2026-10-16). The full python suite's reported total will rise once, by the
+  ruling 2026-10-16).
+- **The fake `coverage` in `tests/clients-python-arduino-crucible.test.ts`** replayed only
+  `coverage run … -m <module>`. It learns the script-path form real coverage.py also takes
+  (`coverage run [options] <script> <args>`), which is how the runner is run under coverage.
+- **`tests/client/test_gate_catches_the_python_suite_regression.py`** derives its expected python
+  total from the historical test file's AST, whose methods include a loop over subtests. The
+  derivation counts a literal-loop subtest as its own cases, and raises on any subtest it cannot
+  count, rather than guessing. The full python suite's reported total will rise once, by the
 passing subtests now counted. Model B hears of it in the 0.4.0 release notes.
