@@ -90,15 +90,10 @@ class CovSourceDefaultTest(unittest.TestCase):
         args = _run_main_capturing_cov_source(
             module, ["regression", "--agent", "cr040-red-probe"], "cmd_regression"
         )
-        self.assertIn(
-            "crucible_axi", args.cov_source,
-            f"regression --cov-source default {args.cov_source!r} must "
-            f"reference crucible_axi",
-        )
-        self.assertIn(
-            "clients", args.cov_source,
-            f"regression --cov-source default {args.cov_source!r} must "
-            f"reference clients",
+        self.assertIsNone(
+            args.cov_source,
+            f"regression --cov-source must set no default source (the "
+            f"project's coverage config decides); got {args.cov_source!r}",
         )
         self.assertNotEqual(
             args.cov_source, "app",
@@ -112,15 +107,10 @@ class CovSourceDefaultTest(unittest.TestCase):
             module, ["pre-merge-gate", "--agent", "cr040-red-probe"],
             "cmd_pre_merge_gate",
         )
-        self.assertIn(
-            "crucible_axi", args.cov_source,
-            f"pre-merge-gate --cov-source default {args.cov_source!r} must "
-            f"reference crucible_axi",
-        )
-        self.assertIn(
-            "clients", args.cov_source,
-            f"pre-merge-gate --cov-source default {args.cov_source!r} must "
-            f"reference clients",
+        self.assertIsNone(
+            args.cov_source,
+            f"pre-merge-gate --cov-source must set no default source (the "
+            f"project's coverage config decides); got {args.cov_source!r}",
         )
         self.assertNotEqual(
             args.cov_source, "app",
