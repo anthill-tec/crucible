@@ -830,15 +830,24 @@ _UNDECLARED_SOURCE_DETAIL = (
 
 def _run_coverage_probe(python, project_dir, env, script, *argv):
     """Run a coverage.py probe in the run's interpreter, cwd and environment.
-    Silent: it announces no `[crucible] running:` line. Returns the completed
-    process, or None when the interpreter could not be run at all."""
+    Silent: it announces no `[crucible] running:` line and prints nothing.
+    Returns `(stdout, cause)`: `cause` is None on success, else one line
+    naming why the probe failed -- the type of the error raised (the last line
+    of the probe's traceback, or the client's own `TimeoutExpired`/`OSError`),
+    never the probe's source."""
     try:
-        return subprocess.run([python, "-c", script, *argv], cwd=project_dir,
-                              env=env, capture_output=True, text=True,
-                              timeout=_COVERAGE_PROBE_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"[crucible] coverage probe could not run ({exc})", file=sys.stderr)
-        return None
+        r = subprocess.run([python, "-c", script, *argv], cwd=project_dir,
+                           env=env, capture_output=True, text=True,
+                           timeout=_COVERAGE_PROBE_TIMEOUT)
+    except subprocess.TimeoutExpired as exc:
+        return "", f"TimeoutExpired: no answer within {exc.timeout}s"
+    except OSError as exc:
+        return "", f"{type(exc).__name__}: {exc}"
+    if r.returncode != 0:
+        lines = [line.strip() for line in (r.stderr or "").splitlines()
+                 if line.strip()]
+        return r.stdout, lines[-1] if lines else f"exit {r.returncode}"
+    return r.stdout, None
 
 
 def _coverage_source_declared(python, project_dir, env):
@@ -847,11 +856,14 @@ def _coverage_source_declared(python, project_dir, env):
     that cannot be read (no coverage.py, a failed read, unreadable output)
     counts as declared, so the run passes no `--source` and fails, if it
     must, for its own cause."""
-    r = _run_coverage_probe(python, project_dir, env, _COVERAGE_SOURCE_PROBE)
-    if r is None or r.returncode != 0:
+    stdout, cause = _run_coverage_probe(python, project_dir, env,
+                                        _COVERAGE_SOURCE_PROBE)
+    if cause is not None:
+        print(f"[crucible] coverage config not read ({cause}); passing no "
+              f"--source", file=sys.stderr)
         return True
     try:
-        declared = json.loads(r.stdout.strip())
+        declared = json.loads(stdout.strip())
     except ValueError:
         return True
     return declared if isinstance(declared, bool) else True
@@ -861,11 +873,12 @@ def _erase_coverage_data(python, project_dir, env, data_file=None):
     """Erase an earlier run's coverage data for the data file this run writes,
     suffixed parallel files included, so the report-time combine folds in
     only this run's data. A failed erase never fails the run."""
-    r = _run_coverage_probe(python, project_dir, env, _COVERAGE_ERASE_PROBE,
-                            *([data_file] if data_file else []))
-    if r is not None and r.returncode != 0:
-        print("[crucible] coverage erase skipped (earlier data not erased)",
-              file=sys.stderr)
+    _stdout, cause = _run_coverage_probe(
+        python, project_dir, env, _COVERAGE_ERASE_PROBE,
+        *([data_file] if data_file else []))
+    if cause is not None:
+        print(f"[crucible] coverage erase skipped ({cause}); earlier data not "
+              f"erased", file=sys.stderr)
 
 
 def cmd_test(args, tier=None, verb="test"):
