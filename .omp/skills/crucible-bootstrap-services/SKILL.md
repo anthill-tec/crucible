@@ -1,6 +1,6 @@
 ---
 name: crucible-bootstrap-services
-description: "Crucible project service lifecycle for the Mainline orchestrator — RESTORE at every /bootstrap mainline (the DEVELOPMENT board, whose port its own crucible.toml declares — a separate production install is never touched — vidushi registration, both Lavish sessions, the three Chrome tabs opened as new pages in the user's running Chrome through chrome-devtools-axi, one storyboard poll) and TEAR DOWN at every /shutdown (close the tabs, end the Lavish sessions, stop the poll and the browser bridge, unregister, stop the board). Use whenever bootstrapping, shutting down, or after an omp restart in ~/Documents/data_projects/crucible."
+description: "Crucible project service lifecycle for the Mainline orchestrator — RESTORE at every /bootstrap mainline (the DEVELOPMENT board, whose port its own crucible.toml declares — a separate production install is never touched — vidushi registration, both Lavish sessions, the three Chrome tabs through the global `chrome-ui-relay` skill, one storyboard poll) and TEAR DOWN at every /shutdown (close the tabs through `chrome-ui-relay`, end the Lavish sessions, stop the poll, unregister, stop the board). Use whenever bootstrapping, shutting down, or after an omp restart in ~/Documents/data_projects/crucible."
 ---
 
 # Crucible — service lifecycle (bootstrap restore / shutdown teardown)
@@ -47,20 +47,26 @@ with a stale tab leaves the user looking at a dead page (done wrong 2026-09-16).
 rendered text before reporting it healthy — a `domcontentloaded` read of this SPA returns ~370
 chars and looks EMPTY.
 
-## 1b. Chrome: the user's running Chrome, reached through chrome-devtools-axi (Pi, 2026-10-16)
+## 1b. Chrome: through the global `chrome-ui-relay` skill (Model B CR-MDB-061)
 
-Under Pi the tabs go through `chrome-devtools-axi` with `CHROME_DEVTOOLS_AXI_AUTO_CONNECT=1`. It
-attaches to the user's already-running Chrome (its remote-debugging port, 9222) through its own
-bridge on :9224, and in this mode it starts no Chrome of its own.
+Every browser step is the global **`chrome-ui-relay`** skill's (`~/.agents/skills/chrome-ui-relay/SKILL.md`),
+dev-deployed from Model B develop `564f913` (user ruling 2026-10-16: adopt the dev-deployed copy
+ahead of Model B 1.0.0). Read it before step 4 and follow it exactly: its session, its open and
+close procedures, its handling of a bridge that cannot attach, and its rule that every
+`chrome-devtools-axi` envelope is read whole. This skill only supplies its inputs.
 
-- **Do NOT start `pi-relay`** (`scripts/pi-relay.ts`). It is the omp-era relay: its extension half
-  does not connect under Pi, and it takes :9224, which chrome-devtools-axi's bridge needs. Every
-  call then fails with `BRIDGE_NOT_READY` ("exited with code 48 … port 9224 is already in use"),
-  as it did on 2026-10-16. `open-tabs.ts`, `claim-tabs.ts` and `close-tabs.ts` belong to the same
-  relay and are omp-only too.
-- If nothing answers on 9222, say so and wait. Never cold-start Chrome, and never start a
-  supervised one.
-- Under Pi the tabs are not grouped: the `Pi` tab group needed the omp relay's claims.
+- **Session:** `PROJECT_TOKEN` in `.env` (`crucible`). It gives this project its own bridge, so its
+  `stop` touches no other project's.
+- **Never start the omp-era relay** (`omp browser-relay`, or the old `pi-relay.ts` wrapper, now
+  deleted): it never connects under Pi and takes :9224.
+
+The inputs, all derived from configuration, never hardcoded here:
+
+| Input | Value |
+|---|---|
+| URLs to open | the board roadmap `http://127.0.0.1:<port>/p/<CRUCIBLE_PROJECT_KEY>/roadmap` (`<port>` from `[server] port` in `data/crucible.toml`, the key from `.env`); then the two Lavish `url:` lines step 3 printed |
+| Our URL patterns | `http://127.0.0.1:<port>/p/<CRUCIBLE_PROJECT_KEY>/` (and the same on `localhost`); `http://127.0.0.1:4387/session/` |
+| Protected patterns | the production install's board, on the shipped `[server] port` in `src/crucible.toml`, on `127.0.0.1` and `localhost`. Never selected, evaluated or closed. |
 
 ## 2. Orchestrator registration
 
@@ -77,37 +83,14 @@ npx -y lavish-axi .lavish/crucible-workflow-flowchart.html # design authority fo
 ```
 Take the printed `url:` of each session. Do NOT rely on Lavish's own browser open — the workstation default is Zen, not Chrome. If a session was ended from the browser, `lavish-axi` refuses; pass `--reopen` only because bootstrap needs the surfaces back.
 
-## 4. Chrome tabs: create your own, NEVER navigate the user's
+## 4. Chrome tabs: `chrome-ui-relay`'s Open, with the step 1b inputs
 
-```
-export CHROME_DEVTOOLS_AXI_AUTO_CONNECT=1
-npx -y chrome-devtools-axi pages                      # BEFORE: the user's tabs
-npx -y chrome-devtools-axi newpage <board-url>
-npx -y chrome-devtools-axi newpage <storyboard-url>
-npx -y chrome-devtools-axi newpage <flowchart-url>
-npx -y chrome-devtools-axi pages                      # AFTER
-```
-- **The board URL** is `http://127.0.0.1:<port>/p/<CRUCIBLE_PROJECT_KEY>/roadmap`, with `<port>`
-  taken from `[server] port` in `data/crucible.toml` and the key from `.env`. The Lavish URLs are
-  the `url:` lines step 3 printed.
-- **`newpage` creates a tab and never navigates an existing one.** Never `open`, `navigate` or
-  `eval` a navigation against whatever tab is selected: the selected tab may be the user's. The
-  hazard is real. On 2026-09-08 a tab "opened" without a target navigated the user's `claude.ai`
-  tab, twice.
-- **Verify by delta, never by assertion.** AFTER must be BEFORE plus 3, with every BEFORE URL still
-  present. A flat count means a user tab was navigated: stop at once. If the user says stop,
-  STOP.
-- **A `newpage` that times out still made its tab.** A Lavish page is ~400 KB and can exceed the
-  10-second navigation timeout. Confirm the tab in the AFTER list instead of retrying, since a
-  retry opens a duplicate.
-- **Check rendered text, not the load event:** `selectpage <id>`, then
-  `eval "document.body.innerText.length"`. The board renders about 2,000 characters and a Lavish
-  session about 400,000. A `domcontentloaded` read of the board SPA returns ~370 characters and
-  looks EMPTY.
-- **The production board's tab (the other install's port) is the user's.** Never select, eval,
-  reload or close it.
-- **If the user closes your tabs mid-session,** re-run the BEFORE/`newpage`/AFTER sequence for the
-  missing ones only.
+Run `chrome-ui-relay`'s **Open** with the three inputs from step 1b. Keep the (id, URL) record it
+returns in this session's context: shutdown closes from that record and nothing else. Then confirm
+rendered text on our own tabs. The board renders about 2,000 characters and a Lavish session about
+400,000; a `domcontentloaded` read of the board SPA (~370 characters) looks EMPTY.
+
+If the user closes our tabs mid-session, run Open again for the missing URLs only.
 
 ## 5. One storyboard poll — SUPERVISED, not a fire-and-forget bash job
 
@@ -201,25 +184,11 @@ Ending as the agent still allows a plain reopen at the next bootstrap.
 
 ## 3. Chrome tabs
 
-The project's tabs are CLOSED, not merely released, through the same chrome-devtools-axi route that
-opened them:
-
-```
-export CHROME_DEVTOOLS_AXI_AUTO_CONNECT=1
-npx -y chrome-devtools-axi pages                  # BEFORE: pick ours by URL
-npx -y chrome-devtools-axi closepage <id>         # one per tab of ours, highest id first
-npx -y chrome-devtools-axi pages                  # AFTER
-npx -y chrome-devtools-axi stop                   # the bridge on :9224
-```
-- **Select by URL from the BEFORE list, never by remembered id:** only pages on the board port this
-  project DECLARES (from `data/crucible.toml`) or on the Lavish server (:4387). A production-install
-  page is the user's and stays open.
-- **Close the highest id first**, so the ids still to close do not shift.
-- **AFTER must hold every user tab and none of ours.** Anything else this session opened (e.g. a
-  release-checking `npmjs.com/package/@anthill-tec` or `github.com/anthill-tec/crucible/actions`
-  tab) is closed the same way, by exact URL.
-- **If control fails, stop and say so.** Retry ONCE. If it still fails, report the tabs as "left
-  open, yours to close", naming their URLs, and continue the teardown.
+Run `chrome-ui-relay`'s **Close** from the (id, URL) record step 4 of the restore kept, then its
+`stop`, which ends only this project's bridge. When the record is missing (a restarted session) or
+the bridge has restarted, it closes nothing and reports our tabs for the user to close: say so in
+the shutdown report. Anything else this session opened (e.g. a release-checking
+`npmjs.com/package/@anthill-tec` tab) is closed the same way, if it is in the record.
 
 ## 4. Orchestrator registration
 
@@ -233,8 +202,8 @@ Must run while the board is still up.
 ```
 process kill crucible-board-dev-<n>
 ```
-State is in `data/crucible.db`; a stop is safe. Confirm the kill reported the process terminated,
-the declared board port answers nothing, and :9224 has no listener (the bridge stopped in step 3).
+State is in `data/crucible.db`; a stop is safe. Confirm the kill reported the process terminated
+and the declared board port answers nothing.
 
 ## 6. Sandesh notifier — the FINAL action, and it is NOT restarted
 
@@ -252,10 +221,9 @@ both tool calls returned no result, and the address was still `active` at the ne
 
 ## Teardown order (corrected 2026-09-27)
 
-Close the tabs (step 3) BEFORE ending the Lavish sessions and stopping its server (step 2): with
-the server already down, `close-tabs.ts` no longer recognised the Lavish tabs and left both open.
-Then confirm on the AFTER `pages` list that no project board, :4387 or file:// project page is
-left, before stopping the bridge.
+Close the tabs (step 3) BEFORE ending the Lavish sessions and stopping its server (step 2): a
+stopped Lavish server leaves its tabs on an error page that no longer shows the URL recorded for
+them. Then confirm on Close's AFTER `pages` list that no project board or :4387 page is left.
 
 Then the shutdown report names each of the SIX as down/closed/left-open, with the evidence
 (the `pages` counts, the `process` kill lines, the roster state) — and where a step could not complete, says so
