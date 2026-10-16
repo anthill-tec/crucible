@@ -156,13 +156,68 @@ HARD_STOP_CODE = "queue-unavailable"
 def _historical_test_count():
     """How many tests CR-CRU-107's file contributes, DERIVED by parsing it —
     AC7 forbids a frozen literal, and a test added to that file must move this
-    number rather than break this one."""
+    number rather than break this one.
+
+    Every subtest is a case of its own, so a method counts as its subtests:
+    one with no `self.subTest` counts 1, and one whose `self.subTest` sits
+    directly in a `for` over a tuple or list literal counts that literal's
+    length, summed over such loops. Any other `self.subTest` raises, naming
+    the method -- a figure this cannot derive must fail loudly."""
     tree = ast.parse(HISTORICAL_TEST_PATH.read_text())
-    return sum(1 for klass in ast.walk(tree)
+    return sum(_method_case_count(node) for klass in ast.walk(tree)
                if isinstance(klass, ast.ClassDef)
                for node in klass.body
                if isinstance(node, ast.FunctionDef)
                and node.name.startswith("test"))
+
+
+def _is_self_subtest_call(node):
+    return (isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "subTest"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self")
+
+
+def _method_case_count(method):
+    """The cases one test method contributes, under the counting rule above."""
+    subtest_calls = [n for n in ast.walk(method) if _is_self_subtest_call(n)]
+    if not subtest_calls:
+        return 1
+    parents = {child: parent for parent in ast.walk(method)
+               for child in ast.iter_child_nodes(parent)}
+    counted = set()
+    total = 0
+    for loop in ast.walk(method):
+        if not (isinstance(loop, ast.For)
+                and isinstance(loop.iter, (ast.Tuple, ast.List))):
+            continue
+        calls = [item.context_expr for stmt in loop.body
+                 if isinstance(stmt, ast.With) for item in stmt.items
+                 if _is_self_subtest_call(item.context_expr)]
+        if not calls:
+            continue
+        ancestor = parents.get(loop)
+        while ancestor is not None and ancestor is not method:
+            if isinstance(ancestor, (ast.For, ast.AsyncFor, ast.While,
+                                     ast.With, ast.AsyncWith)):
+                raise ValueError(
+                    f"cannot derive the case count of {method.name}: its "
+                    f"subTest loop is nested inside another loop or block")
+            ancestor = parents.get(ancestor)
+        if any(_is_self_subtest_call(n) and n not in calls
+               for stmt in loop.body for n in ast.walk(stmt)):
+            raise ValueError(
+                f"cannot derive the case count of {method.name}: a subTest "
+                f"is nested inside its subTest loop")
+        counted.update(calls)
+        total += len(loop.iter.elts) * len(calls)
+    uncounted = [call for call in subtest_calls if call not in counted]
+    if uncounted:
+        raise ValueError(
+            f"cannot derive the case count of {method.name}: a subTest sits "
+            f"outside a for loop over a tuple or list literal")
+    return total
 
 
 # The fixture's python-owned suite once the copy is planted beside cycle 388's

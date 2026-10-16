@@ -323,6 +323,51 @@ def _narrator(project_dir, agent_id, identity=None):
         _recognise_completion)
 
 
+# The subtest runner's one line stating that it fell back to xmlrunner's own
+# entry point (`subtest_runner.FALLBACK_SIGNAL`), printed before any test runs
+# and ending with the xmlrunner version it found, or `none declared`.
+_FALLBACK_SIGNAL_LINE = re.compile(
+    r"^\[subtest-runner\] subtests-uncounted: .*"
+    r"\(xmlrunner version: (?P<version>.*)\)\s*$")
+
+
+class _FallbackWatch:
+    """Watches the runner's output for the subtest runner's fallback line,
+    passing every line on to the run's narrator (if any). Only lines ahead of
+    the first test verdict are read for it, since the runner states the
+    fallback before any test runs. What it saw rides every envelope the run
+    produces as one `subtests-uncounted` warning."""
+
+    def __init__(self, narrator=None):
+        self._narrator = narrator
+        self._watching = True
+        self.version = None
+
+    def observe(self, line):
+        """Feed one line of the runner's output."""
+        if self._watching:
+            if _recognise_completion(line):
+                self._watching = False
+            else:
+                found = _FALLBACK_SIGNAL_LINE.match(line.rstrip("\r\n"))
+                if found:
+                    self.version = found.group("version")
+                    self._watching = False
+        if self._narrator is not None:
+            self._narrator.observe(line)
+
+    def warnings(self):
+        """`[{code: subtests-uncounted, detail}]` when the runner fell back,
+        else `[]`."""
+        if self.version is None:
+            return []
+        return [{"code": "subtests-uncounted",
+                 "detail": (f"xmlrunner (version: {self.version}) offers no "
+                            f"result class to extend, so the run used "
+                            f"xmlrunner's own entry point and passing "
+                            f"subtests were not counted")}]
+
+
 def _start_run(project_dir, agent_id, tier=None, context=None, release=None):
     """Open the run BEFORE xmlrunner is spawned, through the shared
     `open_run`. Returns `(run_id, warnings)`; a refusal degrades to a
@@ -490,15 +535,27 @@ def _wipe(reports_dir):
                     os.remove(os.path.join(reports_dir, entry))
 
 
-def _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir):
-    """Build the xmlrunner invocation: targeted (dotted paths) or discover.
-    `-v` makes unittest print one verdict line per test, which is what the
-    run's narration counts."""
-    base = [python, "-m", "xmlrunner"]
+def _subtest_runner_path():
+    """The sibling clients/subtest_runner.py: xmlrunner with every subtest
+    counted, run by path in place of `-m xmlrunner`."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "subtest_runner.py")
+
+
+def _runner_args(targets, start_dir, pattern, reports_dir):
+    """The runner's arguments, xmlrunner's own: targeted (dotted paths) or
+    discover. `-v` makes unittest print one verdict line per test, which is
+    what the run's narration counts."""
     if targets:
-        return base + list(targets) + ["-o", reports_dir, "-v"]
-    return base + ["discover", "-s", start_dir, "-p", pattern, "-o", reports_dir,
-                   "-v"]
+        return list(targets) + ["-o", reports_dir, "-v"]
+    return ["discover", "-s", start_dir, "-p", pattern, "-o", reports_dir, "-v"]
+
+
+def _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir):
+    """Build the suite invocation: the project's interpreter running the
+    subtest runner by path, with xmlrunner's arguments."""
+    return [python, _subtest_runner_path(),
+            *_runner_args(targets, start_dir, pattern, reports_dir)]
 
 
 def _parse_junit_dir(reports_dir):
@@ -808,16 +865,20 @@ def _test_run(args, tier, verb, project_dir, identity):
     # The shared check is scoped to `unit` by the tier it is handed, so an
     # untiered targeted run measures and warns about nothing.
     # A signal while the run is open is trapped and the open run disclosed.
+    # The runner's fallback line, once seen, rides every envelope below.
+    watch = _FallbackWatch(narrator)
     try:
         with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
             result = _run_logged(cmd, project_dir, env,
-                                 getattr(args, "log", None), narrator)
+                                 getattr(args, "log", None), watch)
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(verb, _project_key(project_dir),
                                          args.agent, run_id, abandoned,
-                                         preflight_warnings,
+                                         list(preflight_warnings)
+                                         + watch.warnings(),
                                          post_fn=_post)
     print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
+    envelope_warnings = list(preflight_warnings) + watch.warnings()
 
     if not args.agent:
         return result.returncode
@@ -829,14 +890,14 @@ def _test_run(args, tier, verb, project_dir, identity):
         if _axi().ran_nothing(result.returncode, summary["total"]):
             return _axi().emit_ran_nothing(
                 verb, "TEST-*.xml", result.returncode, result.stdout or "",
-                run_id, preflight_warnings, post_fn=_post,
+                run_id, envelope_warnings, post_fn=_post,
                 project_key=_project_key(project_dir), agent_id=args.agent)
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier=tier,
                               context=_run_context(),
                               raw=result.stdout, files=files, run_id=run_id,
                               stack_on_start=stack_on_start, release=release)
         _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
-                         warnings=(list(preflight_warnings)
+                         warnings=(envelope_warnings
                                    + _axi().unit_run_wall_vs_cpu_warnings(
                                        tier, "python", timing)))
         if summary["failed"] > 0:
@@ -854,7 +915,7 @@ def _test_run(args, tier, verb, project_dir, identity):
     _emit_axi(verb, False,
               {"help": _axi().no_report_help(verb, "TEST-*.xml")},
               _axi_context(project_dir, agent_id=args.agent),
-              preflight_warnings
+              envelope_warnings
               + [_axi().no_report_warning(verb, "TEST-*.xml", result.returncode,
                                           result.stdout or "")],
               "[crucible] ERROR: no JUnit XML produced — ingested as compile")
@@ -918,8 +979,8 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     if coverage_on:
         run_cmd = [python, "-m", "coverage", "run", "--source", args.cov_source,
                    *([f"--data-file={data_file}"] if data_file else []),
-                   "-m", "xmlrunner", "discover", "-s", args.start_dir,
-                   "-p", args.pattern, "-o", reports_dir, "-v"]
+                   _subtest_runner_path(),
+                   *_runner_args(None, args.start_dir, args.pattern, reports_dir)]
         # NOTE: no PYTHONSAFEPATH here. A real coverage.py install (CR-CRU-040 §S1)
         # wins over the stray top-level `coverage/` (bun lcov) namespace-dir shadow
         # on its own — a regular package beats a namespace package regardless of cwd
@@ -946,15 +1007,19 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
                                           release=release)
         stack_on_start = not run_warnings
         preflight_warnings += run_warnings
+    # The runner's fallback line, once seen, rides every envelope below.
+    watch = _FallbackWatch(narrator)
     try:
         with _axi().abandon_trap(run_id):
             result = _run_logged(run_cmd, project_dir, env,
-                                 getattr(args, "log", None), narrator)
+                                 getattr(args, "log", None), watch)
     except _axi().RunAbandoned as abandoned:
         return _axi().emit_run_abandoned(verb, _project_key(project_dir), agent,
-                                         run_id, abandoned, preflight_warnings,
+                                         run_id, abandoned,
+                                         preflight_warnings + watch.warnings(),
                                          post_fn=_post)
     print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
+    envelope_warnings = preflight_warnings + watch.warnings()
 
     if not _produced_xml(reports_dir):
         if _is_zero_discovery(result):
@@ -972,7 +1037,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
                       {"help": ["check --start-dir / --pattern; ensure the test dir "
                                 "is a package (has __init__.py)"]},
                       _axi_context(project_dir, agent_id=args.agent),
-                      preflight_warnings + [warning]
+                      envelope_warnings + [warning]
                       + _axi().no_report_left_open_warnings(
                           run_id, "TEST-*.xml", post_fn=_post,
                           project_key=_project_key(project_dir),
@@ -993,7 +1058,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         _emit_axi(verb, False,
                   {"help": _axi().no_report_help(verb, "TEST-*.xml")},
                   _axi_context(project_dir, agent_id=args.agent),
-                  preflight_warnings
+                  envelope_warnings
                   + [_axi().no_report_warning(verb, "TEST-*.xml",
                                               result.returncode,
                                               result.stdout or "")],
@@ -1004,7 +1069,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     if _axi().ran_nothing(result.returncode, summary["total"]):
         return _axi().emit_ran_nothing(
             verb, "TEST-*.xml", result.returncode, result.stdout or "",
-            run_id, preflight_warnings, post_fn=_post,
+            run_id, envelope_warnings, post_fn=_post,
             project_key=_project_key(project_dir), agent_id=args.agent)
     coverage = (_collect_coverage(python, project_dir, env, data_file)
                 if coverage_on else None)
@@ -1021,7 +1086,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     help_steps = (_axi().run_help(verb, ok, summary["failed"], _base_url())
                   if verb != "regression" else None)
     _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
-                     help_steps=help_steps, warnings=preflight_warnings)
+                     help_steps=help_steps, warnings=envelope_warnings)
     return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
 
 

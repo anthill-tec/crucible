@@ -499,10 +499,13 @@ def main():
                 f.write(content)
         sys.exit(0)
     if sub == "run":
-        try:
-            m_idx = args.index("-m")
-        except ValueError:
-            sys.exit(0)
+        if "-m" not in args:
+            rest = args[1:]
+            while rest and rest[0].startswith("--"):
+                rest = rest[2:] if rest[0] == "--source" else rest[1:]
+            r = subprocess.run([sys.executable, *rest])
+            sys.exit(r.returncode)
+        m_idx = args.index("-m")
         module_and_rest = args[m_idx + 1:]
         r = subprocess.run([sys.executable, "-m", *module_and_rest])
         sys.exit(r.returncode)

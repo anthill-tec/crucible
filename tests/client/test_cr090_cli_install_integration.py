@@ -18,7 +18,7 @@ The six guards, each an entry-point observation:
 
 - The exit code plus the WIRING: `cli.main` returns 0 and the target dir it was
   ASKED for is the one that ends up holding both `clients/` and the manifest.
-- AC2 through the entry point: `<target-dir>/clients/` holds EXACTLY the nine
+- AC2 through the entry point: `<target-dir>/clients/` holds EXACTLY the ten
   packaged files, each byte-identical to `manifest.source_clients_dir()`'s
   copy. Bytes, never sizes -- a truncated copy passes a size check.
 - AC3 through the entry point: the manifest ACTUALLY WRITTEN at
@@ -39,7 +39,7 @@ The six guards, each an entry-point observation:
   this one: `cmd_install` publishes only `{name, path}` (plus the `[server]`
   stage's `bun`) per stage row, so `converged` is NOT a field of the printed
   envelope. At the entry point convergence is therefore observable as the
-  ABSENCE OF A REWRITE -- the nine files' mtimes survive the second run and
+  ABSENCE OF A REWRITE -- the ten files' mtimes survive the second run and
   move under `--force`. Backdating to a sentinel mtime first makes that
   independent of filesystem clock resolution. Kept light on purpose: cycle 264
   owns the deep convergence contract; this is only its entry-point echo.
@@ -90,6 +90,7 @@ EXPECTED_FLEET_FILES = frozenset({
     # a fleet whose every verb raises the moment the operator's editable
     # `<install>/crucible.toml` is absent.
     "crucible.toml",
+    "subtest_runner.py",
 })
 
 CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino")
@@ -267,7 +268,7 @@ class _CliInstallCase(unittest.TestCase):
         return code, buffer.getvalue()
 
     def assertFleetLanded(self, stdout):
-        """The nine files are on disk under the REQUESTED target -- asserted
+        """The ten files are on disk under the REQUESTED target -- asserted
         as a precondition wherever a later step would otherwise crash on a
         missing path, so the failure names the defect instead of raising
         FileNotFoundError."""
@@ -280,7 +281,7 @@ class _CliInstallCase(unittest.TestCase):
         landed = set(os.listdir(clients_dir))
         self.assertEqual(
             EXPECTED_FLEET_FILES, landed,
-            f"AC2/AC8 -- <target-dir>/clients/ must hold EXACTLY the nine "
+            f"AC2/AC8 -- <target-dir>/clients/ must hold EXACTLY the ten "
             f"packaged fleet files after `cli.main install`. "
             f"missing={sorted(EXPECTED_FLEET_FILES - landed)} "
             f"unexpected={sorted(landed - EXPECTED_FLEET_FILES)}. "
@@ -344,7 +345,7 @@ class CliMainInstallWiringTest(_CliInstallCase):
 
 
 class CliMainInstallFleetBytesTest(_CliInstallCase):
-    """AC2, through the entry point -- exactly the nine packaged files land
+    """AC2, through the entry point -- exactly the ten packaged files land
     under `<target-dir>/clients/`, byte-identical to their source."""
 
     def test_cli_main_install_lands_exactly_the_packaged_fleet_files(self):
@@ -508,7 +509,7 @@ class CliMainInstallSecondRunTest(_CliInstallCase):
         self.assertEqual(
             before, self.fleet_mtimes(),
             f"AC5/AC8 -- a second `cli.main install` over an unchanged target "
-            f"must CONVERGE: bytes already match, so not one of the nine "
+            f"must CONVERGE: bytes already match, so not one of the ten "
             f"files is rewritten. envelope:\n{second_stdout}")
 
     def test_force_re_copies_every_fleet_file_through_the_entry_point(self):

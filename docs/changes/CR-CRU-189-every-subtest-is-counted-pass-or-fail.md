@@ -1,7 +1,7 @@
 # CR-CRU-189 — every subtest is counted, pass or fail
 
 **Type** fix (patch CR) · **Points** 5 (filed at 3 on 2026-10-14; 5 at gap analysis, 2026-10-16) ·
-**Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-14 (user ruling: a patch
+**Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — merged 2026-10-16 (VERIFY cycle 685 approved; pre-merge-gate 7207/0); filed 2026-10-14 (user ruling: a patch
 CR, next after CR-CRU-188)
 
 ## Problem
@@ -58,7 +58,11 @@ name in every run.
 - **A parent that fails or errors outside its subtests**, in its body or in its `tearDown`, is also a
   case of its own, named as the parent, since that failure belongs to no subtest.
 - **A skip raised inside a subtest** is a pending case named as the subtest, as today.
-- **Nested subtests** are counted as `unittest` reports them: each `subTest` block is a case.
+- **An enclosing subtest is counted like a parent.** A `subTest` block that holds other `subTest`
+  blocks is counted as its inner subtests. It is a case of its own, named as itself, only when it
+  fails or errors outside them. `unittest` reports nothing for an enclosing block once an inner one
+  has failed, and reports it as a pass otherwise, so counting it only on its own failure keeps the
+  total the same either way.
 - **A test under `@expectedFailure`** is reported by `unittest` once, as a whole, and is counted as
   today. It is out of scope.
 
@@ -83,38 +87,39 @@ The run is still filed, and its exit is unchanged.
 
 ## Acceptance criteria
 
-- [ ] **Totals match across outcomes.** Through the real python client against a live in-process
+- [x] **Totals match across outcomes.** Through the real python client against a live in-process
       board, a fixture file holding one test that loops over three `subTest` cases plus one plain
       test reports the same total when all pass and when the loop fails (4: three subtest cases
       plus the plain test), and the board stores that total both times. Checked for `test` and for
       `regression`, and for `regression` with coverage on.
-- [ ] **Names match.** A subtest's case name is the same in the passing run and the failing run.
-- [ ] **The sum holds.** For every run in those cases, `passed + failed + pending` equals `total`.
-- [ ] **Mixed outcomes.** A test looping over three subtests, two passing and one failing, is filed
+- [x] **Names match.** A subtest's case name is the same in the passing run and the failing run.
+- [x] **The sum holds.** For every run in those cases, `passed + failed + pending` equals `total`.
+- [x] **Mixed outcomes.** A test looping over three subtests, two passing and one failing, is filed
       as three cases (two passing, one failing), the same three names as when all pass.
-- [ ] **A parent's own failure is a case.** A test whose subtests pass and whose body then fails is
+- [x] **A parent's own failure is a case.** A test whose subtests pass and whose body then fails is
       filed as its passing subtests plus one failing case named as the parent; the same holds when
       its `tearDown` fails.
-- [ ] **Nested and skipped subtests.** A test with an outer subtest holding two inner subtests (one
-      passing, one failing) is filed with each `subTest` block as a case and the same total when
-      the inner one passes; a skip inside a subtest is one pending case named as the subtest.
-- [ ] **Every verb runs it.** `test`, `unit`, `module`, `integration`, `e2e`, `bdd`, `regression`
+- [x] **Nested and skipped subtests.** A test with an outer subtest holding two inner subtests is
+      filed as its two inner subtests, with the same total and the same names whether both inner
+      subtests pass or one fails, and the outer block is never a case of its own while its body
+      only holds them. A skip inside a subtest is one pending case named as the subtest.
+- [x] **Every verb runs it.** `test`, `unit`, `module`, `integration`, `e2e`, `bdd`, `regression`
       and `pre-merge-gate` each run the suite through the runner module, never `-m xmlrunner`,
       shown by each verb's spawned command line.
-- [ ] **It ships.** The runner module is in the installer's packaged fleet, an install lays it down
+- [x] **It ships.** The runner module is in the installer's packaged fleet, an install lays it down
       beside `toon.py`, and the installed python client runs a subtest fixture with the totals
       above.
-- [ ] **No xmlrunner, same cause.** With no xmlrunner in the project's interpreter, `test` and
+- [x] **No xmlrunner, same cause.** With no xmlrunner in the project's interpreter, `test` and
       `regression` answer as today, and their cause carries Python's own `-m` text,
       `No module named xmlrunner` (unquoted), byte-for-byte.
-- [ ] **An xmlrunner it cannot extend.** With an xmlrunner that imports but has no
+- [x] **An xmlrunner it cannot extend.** With an xmlrunner that imports but has no
       `xmlrunner.result._XMLTestResult`, the run is filed with xmlrunner's own counts and its
       envelope carries `{code: "subtests-uncounted", detail}`, the detail naming the version found.
       The warning is on the envelope of a filed run, a ran-nothing run, a no-report run and an
       interrupted run, through `test` and through `regression`.
-- [ ] **Unchanged where there are no subtests.** A file with no `subTest` reports exactly what it does
+- [x] **Unchanged where there are no subtests.** A file with no `subTest` reports exactly what it does
       today.
-- [ ] **No new CR literals.** No CR-shaped literal is added under `clients/` or in test comments, and
+- [x] **No new CR literals.** No CR-shaped literal is added under `clients/` or in test comments, and
       the citation tripwire's pins are unchanged.
 
 ## How it is worked
@@ -122,10 +127,19 @@ The run is still filed, and its exit is unchanged.
 On a feature branch: RED (the probe as a fixture), GREEN in the runner module and the python
 client, then verify. Existing tests that change with §S1, each edit needing approval and going in its
 own commit:
-- **The exact packaged fleet is pinned in three places:** `tests/client/test_cr090_fleet_stage.py`,
-  `tests/client/test_cr090_cli_install_integration.py` and `tests/clients-python-arduino-crucible.test.ts`.
+- **The exact packaged fleet is pinned in two places:** `tests/client/test_cr090_fleet_stage.py` and
+  `tests/client/test_cr090_cli_install_integration.py`. The tests that read `install.FLEET_FILES`
+  itself follow it with no edit.
 - **Two tests fake `xmlrunner` as a package holding only `__main__.py`:**
   `tests/clients-python-arduino-crucible.test.ts` and `tests/shim-retirement.test.ts`. Under the
-  runner they meet §S3's fallback and gain its warning, so RED decides per test whether the fake
-  gains the result class or the test expects the warning. The full python suite's reported total will rise once, by the
+  runner they meet §S3's fallback, which runs xmlrunner's own entry point, so they keep passing
+  unchanged. Neither asserts on warnings, so §S3's warning needs no edit to them either (user
+  ruling 2026-10-16).
+- **The fake `coverage` in `tests/clients-python-arduino-crucible.test.ts`** replayed only
+  `coverage run … -m <module>`. It learns the script-path form real coverage.py also takes
+  (`coverage run [options] <script> <args>`), which is how the runner is run under coverage.
+- **`tests/client/test_gate_catches_the_python_suite_regression.py`** derives its expected python
+  total from the historical test file's AST, whose methods include a loop over subtests. The
+  derivation counts a literal-loop subtest as its own cases, and raises on any subtest it cannot
+  count, rather than guessing. The full python suite's reported total will rise once, by the
 passing subtests now counted. Model B hears of it in the 0.4.0 release notes.
