@@ -227,6 +227,8 @@ STORE_DIR_NAME = "crucible"
 # what stops it aliasing the OPERATOR's editable file at `<target-dir>`: that
 # aliasing is what let an operator's edit redefine the build's own
 # recommendations, and what made an ordinary purge crash every verb.
+# And `subtest_runner.py`, the runner `python-crucible.py` spawns BY FILE PATH
+# from its own directory in place of `-m xmlrunner`, so every subtest counts.
 FLEET_FILES = (
     "bun-crucible.py",
     "python-crucible.py",
@@ -237,6 +239,7 @@ FLEET_FILES = (
     "toon.py",
     "STATUS-CONTRACT.md",
     manifest.CONFIG_FILENAME,
+    "subtest_runner.py",
 )
 
 # The directory the fleet lands in, under `--target-dir`. `manifest` anchors

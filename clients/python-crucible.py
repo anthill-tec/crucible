@@ -490,15 +490,27 @@ def _wipe(reports_dir):
                     os.remove(os.path.join(reports_dir, entry))
 
 
-def _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir):
-    """Build the xmlrunner invocation: targeted (dotted paths) or discover.
-    `-v` makes unittest print one verdict line per test, which is what the
-    run's narration counts."""
-    base = [python, "-m", "xmlrunner"]
+def _subtest_runner_path():
+    """The sibling clients/subtest_runner.py: xmlrunner with every subtest
+    counted, run by path in place of `-m xmlrunner`."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "subtest_runner.py")
+
+
+def _runner_args(targets, start_dir, pattern, reports_dir):
+    """The runner's arguments, xmlrunner's own: targeted (dotted paths) or
+    discover. `-v` makes unittest print one verdict line per test, which is
+    what the run's narration counts."""
     if targets:
-        return base + list(targets) + ["-o", reports_dir, "-v"]
-    return base + ["discover", "-s", start_dir, "-p", pattern, "-o", reports_dir,
-                   "-v"]
+        return list(targets) + ["-o", reports_dir, "-v"]
+    return ["discover", "-s", start_dir, "-p", pattern, "-o", reports_dir, "-v"]
+
+
+def _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir):
+    """Build the suite invocation: the project's interpreter running the
+    subtest runner by path, with xmlrunner's arguments."""
+    return [python, _subtest_runner_path(),
+            *_runner_args(targets, start_dir, pattern, reports_dir)]
 
 
 def _parse_junit_dir(reports_dir):
@@ -918,8 +930,8 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     if coverage_on:
         run_cmd = [python, "-m", "coverage", "run", "--source", args.cov_source,
                    *([f"--data-file={data_file}"] if data_file else []),
-                   "-m", "xmlrunner", "discover", "-s", args.start_dir,
-                   "-p", args.pattern, "-o", reports_dir, "-v"]
+                   _subtest_runner_path(),
+                   *_runner_args(None, args.start_dir, args.pattern, reports_dir)]
         # NOTE: no PYTHONSAFEPATH here. A real coverage.py install (CR-CRU-040 §S1)
         # wins over the stray top-level `coverage/` (bun lcov) namespace-dir shadow
         # on its own — a regular package beats a namespace package regardless of cwd
