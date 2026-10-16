@@ -67,9 +67,11 @@ This repo declares its own source by adding `source = ["crucible_axi", "clients"
 Before the coverage run, the client erases the earlier data for the data file the run will write,
 suffixed parallel files included, whether or not the project's config is parallel. The data file is
 the run's `--data-file` when it has one (an agent's own reports directory), and otherwise the file
-coverage.py resolves itself (`[run] data_file`, else `COVERAGE_FILE`, else `.coverage` in the
+coverage.py resolves itself (`COVERAGE_FILE`, else `[run] data_file`, else `.coverage` in the
 project root). `regression --coverage` and `pre-merge-gate` both do this, whether or not `--cov-source` is given.
-A failed erase never fails the run. No other step is added to
+A failed erase never fails the run. A failed configuration read or erase prints one stderr line
+naming its cause (the error's type, or the first line coverage.py printed), never the client's own
+probe source. No other step is added to
 the report: coverage.py combines the run's parallel files when `coverage lcov` reports.
 
 Any coverage command the client runs besides the run itself prints no `[crucible] running:` line,
@@ -83,9 +85,10 @@ so that line still names the suite's own command.
       `regression --coverage` and through `pre-merge-gate`. The same holds for a source declared in
       `.coveragerc`, for one declared as `source_pkgs`, and for an `include`.
 - [ ] **An undeclared source measures the project.** With no `--cov-source` and nothing declared,
-      the run passes `--source <absolute project root>`. The project's code and tests are measured,
+      the run passes `--source <absolute project root>`, under a relative `--project-dir` too. The project's code and tests are measured,
       a virtual environment inside the root is not, and neither is the runner installed outside it.
-      The green envelope and a failure envelope both carry `{code: "coverage-source-undeclared",
+      The green envelope and every failure envelope (red, zero-discovery, no-report, ran-nothing and
+      an interrupted run's) carry `{code: "coverage-source-undeclared",
       detail}`, the detail naming `[tool.coverage.run] source` and `--cov-source`, through
       `regression --coverage` and through `pre-merge-gate`. With a declared source, or
       `--cov-source` given, no such warning.
@@ -105,6 +108,11 @@ so that line still names the suite's own command.
 - [ ] **Stale data is not merged.** Two coverage runs in a row, the first leaving suffixed parallel
       files, report only the second run's coverage: at the project root, in an agent's own reports
       directory, and when the second run's config is not parallel.
+- [ ] **The data file is coverage.py's.** The erase follows the run's `--data-file`, else
+      `COVERAGE_FILE`, else `[run] data_file`, else `.coverage`, each relative to the project root,
+      with and without `--cov-source`.
+- [ ] **A failure names its cause.** A configuration read that times out, and an erase that fails,
+      each print one stderr line naming the cause, never the probe's source.
 - [ ] **One data file is unchanged.** A run that writes a single, unsuffixed data file reports the
       same coverage it does today.
 - [ ] **Help is true.** Both verbs' `--cov-source` help says what happens when it is omitted, and that
