@@ -58,7 +58,11 @@ name in every run.
 - **A parent that fails or errors outside its subtests**, in its body or in its `tearDown`, is also a
   case of its own, named as the parent, since that failure belongs to no subtest.
 - **A skip raised inside a subtest** is a pending case named as the subtest, as today.
-- **Nested subtests** are counted as `unittest` reports them: each `subTest` block is a case.
+- **An enclosing subtest is counted like a parent.** A `subTest` block that holds other `subTest`
+  blocks is counted as its inner subtests. It is a case of its own, named as itself, only when it
+  fails or errors outside them. `unittest` reports nothing for an enclosing block once an inner one
+  has failed, and reports it as a pass otherwise, so counting it only on its own failure keeps the
+  total the same either way.
 - **A test under `@expectedFailure`** is reported by `unittest` once, as a whole, and is counted as
   today. It is out of scope.
 
@@ -95,9 +99,10 @@ The run is still filed, and its exit is unchanged.
 - [ ] **A parent's own failure is a case.** A test whose subtests pass and whose body then fails is
       filed as its passing subtests plus one failing case named as the parent; the same holds when
       its `tearDown` fails.
-- [ ] **Nested and skipped subtests.** A test with an outer subtest holding two inner subtests (one
-      passing, one failing) is filed with each `subTest` block as a case and the same total when
-      the inner one passes; a skip inside a subtest is one pending case named as the subtest.
+- [ ] **Nested and skipped subtests.** A test with an outer subtest holding two inner subtests is
+      filed as its two inner subtests, with the same total and the same names whether both inner
+      subtests pass or one fails, and the outer block is never a case of its own while its body
+      only holds them. A skip inside a subtest is one pending case named as the subtest.
 - [ ] **Every verb runs it.** `test`, `unit`, `module`, `integration`, `e2e`, `bdd`, `regression`
       and `pre-merge-gate` each run the suite through the runner module, never `-m xmlrunner`,
       shown by each verb's spawned command line.
@@ -126,6 +131,7 @@ own commit:
   `tests/client/test_cr090_cli_install_integration.py` and `tests/clients-python-arduino-crucible.test.ts`.
 - **Two tests fake `xmlrunner` as a package holding only `__main__.py`:**
   `tests/clients-python-arduino-crucible.test.ts` and `tests/shim-retirement.test.ts`. Under the
-  runner they meet §S3's fallback and gain its warning, so RED decides per test whether the fake
-  gains the result class or the test expects the warning. The full python suite's reported total will rise once, by the
+  runner they meet §S3's fallback, which runs xmlrunner's own entry point, so they keep passing
+  unchanged. Neither asserts on warnings, so §S3's warning needs no edit to them either (user
+  ruling 2026-10-16). The full python suite's reported total will rise once, by the
 passing subtests now counted. Model B hears of it in the 0.4.0 release notes.
