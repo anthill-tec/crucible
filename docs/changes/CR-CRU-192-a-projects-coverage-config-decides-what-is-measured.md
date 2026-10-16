@@ -70,7 +70,8 @@ the run's `--data-file` when it has one (an agent's own reports directory), and 
 coverage.py resolves itself (`COVERAGE_FILE`, else `[run] data_file`, else `.coverage` in the
 project root). `regression --coverage` and `pre-merge-gate` both do this, whether or not `--cov-source` is given.
 A failed erase never fails the run. A failed configuration read or erase prints one stderr line
-naming its cause (the error's type, or the first line coverage.py printed), never the client's own
+naming its cause: the type of the error raised (for example `TimeoutExpired`, or the
+`IsADirectoryError` coverage.py raised), never a bare `Traceback` line and never the client's own
 probe source. No other step is added to
 the report: coverage.py combines the run's parallel files when `coverage lcov` reports.
 
