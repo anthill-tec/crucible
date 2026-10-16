@@ -85,7 +85,13 @@ Take the printed `url:` of each session. Do NOT rely on Lavish's own browser ope
 
 ## 4. Chrome tabs: `chrome-ui-relay`'s Open, with the step 1b inputs
 
-Run `chrome-ui-relay`'s **Open** with the three inputs from step 1b. Keep the (id, URL) record it
+**First, tell the user that Chrome will ask them to accept a remote-debugging connection**, and to
+accept it promptly. Chrome asks on each bridge session's first attach and after every bridge
+restart. A late acceptance shows as `BRIDGE_NOT_READY` ("the attached CDP target appears to have
+gone away"); once the user has accepted, run the step again. Model B's CR-MDB-076 moves this
+warning, and a bounded retry, into `chrome-ui-relay` itself.
+
+Then run `chrome-ui-relay`'s **Open** with the three inputs from step 1b. Keep the (id, URL) record it
 returns in this session's context: shutdown closes from that record and nothing else. Then confirm
 rendered text on our own tabs. The board renders about 2,000 characters and a Lavish session about
 400,000; a `domcontentloaded` read of the board SPA (~370 characters) looks EMPTY.
