@@ -88,3 +88,8 @@ packages = ["crucible_axi"]
 # orchestrator whose clients have nothing to fall back to.
 [tool.hatch.build.targets.wheel.force-include]
 "clients" = "crucible_axi/clients"
+
+# What this repo's own coverage gate measures: the orchestrator package and the
+# client fleet it ships. Declared here so the python client passes no --source.
+[tool.coverage.run]
+source = ["crucible_axi", "clients"]

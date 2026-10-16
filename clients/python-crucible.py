@@ -79,6 +79,7 @@ import argparse
 import contextlib
 import glob
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -796,6 +797,90 @@ def _collect_coverage(python, project_dir, env, data_file=None):
     }
 
 
+# Read in the run's interpreter (the client never imports coverage.py itself):
+# coverage.py's own effective config, from the same files and environment
+# `coverage run` reads, answering whether the project declares what to measure.
+_COVERAGE_SOURCE_PROBE = (
+    "import json\n"
+    "import coverage\n"
+    "cfg = coverage.Coverage().config\n"
+    "declared = (cfg.source, cfg.source_pkgs,\n"
+    "            getattr(cfg, 'source_dirs', None), cfg.run_include)\n"
+    "print(json.dumps(any(bool(v) for v in declared)))\n"
+)
+
+# Erases the data file the run will write and every suffixed parallel file
+# beside it, whether or not the config is parallel. argv[1], when given, is the
+# run's own `--data-file`; otherwise coverage.py resolves the data file.
+_COVERAGE_ERASE_PROBE = (
+    "import sys\n"
+    "import coverage\n"
+    "data_file = sys.argv[1] if len(sys.argv) > 1 else "
+    "coverage.Coverage().config.data_file\n"
+    "coverage.CoverageData(basename=data_file).erase(parallel=True)\n"
+)
+
+_COVERAGE_PROBE_TIMEOUT = 120
+
+_UNDECLARED_SOURCE_DETAIL = (
+    "the project's coverage configuration declares no source, so the project "
+    "root was measured; declare one under [tool.coverage.run] source (or "
+    "source_pkgs / include), or pass --cov-source")
+
+
+def _run_coverage_probe(python, project_dir, env, script, *argv):
+    """Run a coverage.py probe in the run's interpreter, cwd and environment.
+    Silent: it announces no `[crucible] running:` line and prints nothing.
+    Returns `(stdout, cause)`: `cause` is None on success, else one line
+    naming why the probe failed -- the type of the error raised (the last line
+    of the probe's traceback, or the client's own `TimeoutExpired`/`OSError`),
+    never the probe's source."""
+    try:
+        r = subprocess.run([python, "-c", script, *argv], cwd=project_dir,
+                           env=env, capture_output=True, text=True,
+                           timeout=_COVERAGE_PROBE_TIMEOUT)
+    except subprocess.TimeoutExpired as exc:
+        return "", f"TimeoutExpired: no answer within {exc.timeout}s"
+    except OSError as exc:
+        return "", f"{type(exc).__name__}: {exc}"
+    if r.returncode != 0:
+        lines = [line.strip() for line in (r.stderr or "").splitlines()
+                 if line.strip()]
+        return r.stdout, lines[-1] if lines else f"exit {r.returncode}"
+    return r.stdout, None
+
+
+def _coverage_source_declared(python, project_dir, env):
+    """Whether the project's coverage.py configuration declares what to
+    measure (`source`, `source_pkgs`, `source_dirs` or `include`). A config
+    that cannot be read (no coverage.py, a failed read, unreadable output)
+    counts as declared, so the run passes no `--source` and fails, if it
+    must, for its own cause."""
+    stdout, cause = _run_coverage_probe(python, project_dir, env,
+                                        _COVERAGE_SOURCE_PROBE)
+    if cause is not None:
+        print(f"[crucible] coverage config not read ({cause}); passing no "
+              f"--source", file=sys.stderr)
+        return True
+    try:
+        declared = json.loads(stdout.strip())
+    except ValueError:
+        return True
+    return declared if isinstance(declared, bool) else True
+
+
+def _erase_coverage_data(python, project_dir, env, data_file=None):
+    """Erase an earlier run's coverage data for the data file this run writes,
+    suffixed parallel files included, so the report-time combine folds in
+    only this run's data. A failed erase never fails the run."""
+    _stdout, cause = _run_coverage_probe(
+        python, project_dir, env, _COVERAGE_ERASE_PROBE,
+        *([data_file] if data_file else []))
+    if cause is not None:
+        print(f"[crucible] coverage erase skipped ({cause}); earlier data not "
+              f"erased", file=sys.stderr)
+
+
 def cmd_test(args, tier=None, verb="test"):
     """Targeted/discover unittest via xmlrunner → JUnit XML → /api/v2/runs/parsed.
     With --agent the result is ingested (regardless of pass/fail); a bound agent's
@@ -977,7 +1062,17 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     data_file = (os.path.join(reports_dir, ".coverage")
                  if _axi().reports_dir_is_agents_own(args.reports, agent) else None)
     if coverage_on:
-        run_cmd = [python, "-m", "coverage", "run", "--source", args.cov_source,
+        # The project's own coverage config decides the source unless one is
+        # given; with nothing declared the project root is measured, and every
+        # envelope this run produces says so.
+        cov_source = args.cov_source
+        if not cov_source and not _coverage_source_declared(python, project_dir, env):
+            cov_source = os.path.abspath(project_dir)
+            preflight_warnings.append({"code": "coverage-source-undeclared",
+                                       "detail": _UNDECLARED_SOURCE_DETAIL})
+        _erase_coverage_data(python, project_dir, env, data_file)
+        run_cmd = [python, "-m", "coverage", "run",
+                   *(["--source", cov_source] if cov_source else []),
                    *([f"--data-file={data_file}"] if data_file else []),
                    _subtest_runner_path(),
                    *_runner_args(None, args.start_dir, args.pattern, reports_dir)]
@@ -1598,6 +1693,14 @@ def _add_run_release_arg(p):
     return _axi().add_run_release_arg(p)
 
 
+_COV_SOURCE_HELP = (
+    "coverage --source package/dir. Omitted, the project's coverage config "
+    "([tool.coverage.run] source / source_pkgs / include, or .coveragerc) "
+    "decides what is measured; with nothing declared there, the project root "
+    "is measured and the run warns coverage-source-undeclared. Subprocess "
+    "coverage ([run] patch = [\"subprocess\"]) needs coverage.py 7.14 or later.")
+
+
 def _add_regression_tier_args(p):
     """CR-CRU-111 §S1/AC5 — `regression`'s OWN flags. The verb pre-dates the
     shared tier registration and keeps every flag it had; the registrar
@@ -1605,8 +1708,7 @@ def _add_regression_tier_args(p):
     p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     p.add_argument("--coverage", action="store_true",
                    help="Run under coverage.py and post /api/v2/runs/parsed with coverage")
-    p.add_argument("--cov-source", default="crucible_axi,clients",
-                   help="coverage --source package/dir (default: crucible_axi,clients)")
+    p.add_argument("--cov-source", default=None, help=_COV_SOURCE_HELP)
 
 
 # CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried
@@ -1838,8 +1940,7 @@ def main():
              "coverage.py (the only coverage path; coverage is reserved for this gate).",
     )
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
-    pmg.add_argument("--cov-source", default="crucible_axi,clients",
-                     help="coverage --source package/dir (default: crucible_axi,clients)")
+    pmg.add_argument("--cov-source", default=None, help=_COV_SOURCE_HELP)
     pmg.add_argument("--skip-check", action="store_true",
                      help="Bypass the fail-fast py_compile check step")
     _add_gate_cycle_arg(pmg)

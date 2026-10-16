@@ -82,50 +82,30 @@ def _run_main_capturing_cov_source(module, argv, patch_target):
 
 
 class CovSourceDefaultTest(unittest.TestCase):
-    """§S2 -- `--cov-source` must default to this repo's real Python source
-    (`crucible_axi` + `clients`), not the nonexistent `app` package."""
+    """`--cov-source` has no default source: omitted, it is left unset and
+    the project's own coverage configuration decides what is measured."""
 
-    def test_regression_cov_source_default_measures_real_source(self):
+    def test_regression_cov_source_sets_no_default_so_the_projects_config_decides(self):
         module = _load_client_module()
         args = _run_main_capturing_cov_source(
             module, ["regression", "--agent", "cr040-red-probe"], "cmd_regression"
         )
-        self.assertIn(
-            "crucible_axi", args.cov_source,
-            f"regression --cov-source default {args.cov_source!r} must "
-            f"reference crucible_axi",
-        )
-        self.assertIn(
-            "clients", args.cov_source,
-            f"regression --cov-source default {args.cov_source!r} must "
-            f"reference clients",
-        )
-        self.assertNotEqual(
-            args.cov_source, "app",
-            "regression --cov-source must not default to the nonexistent "
-            "'app' package",
+        self.assertIsNone(
+            args.cov_source,
+            f"regression --cov-source must set no default source (the "
+            f"project's coverage config decides); got {args.cov_source!r}",
         )
 
-    def test_pre_merge_gate_cov_source_default_measures_real_source(self):
+    def test_pre_merge_gate_cov_source_sets_no_default_so_the_projects_config_decides(self):
         module = _load_client_module()
         args = _run_main_capturing_cov_source(
             module, ["pre-merge-gate", "--agent", "cr040-red-probe"],
             "cmd_pre_merge_gate",
         )
-        self.assertIn(
-            "crucible_axi", args.cov_source,
-            f"pre-merge-gate --cov-source default {args.cov_source!r} must "
-            f"reference crucible_axi",
-        )
-        self.assertIn(
-            "clients", args.cov_source,
-            f"pre-merge-gate --cov-source default {args.cov_source!r} must "
-            f"reference clients",
-        )
-        self.assertNotEqual(
-            args.cov_source, "app",
-            "pre-merge-gate --cov-source must not default to the "
-            "nonexistent 'app' package",
+        self.assertIsNone(
+            args.cov_source,
+            f"pre-merge-gate --cov-source must set no default source (the "
+            f"project's coverage config decides); got {args.cov_source!r}",
         )
 
 
