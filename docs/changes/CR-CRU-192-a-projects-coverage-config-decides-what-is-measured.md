@@ -53,12 +53,13 @@ parsing its printed output. It reads `[tool.coverage.run]` in `pyproject.toml`, 
   today, for example a missing coverage.py naming `No module named coverage`, and no
   `coverage-source-undeclared` warning is carried.
 
-A given `--cov-source` is passed as `--source`, as today, and the configuration is not read. Both
+A given `--cov-source` is passed as `--source`, as today, and the configuration is not consulted for
+the source (§S2 still resolves the data file). Both
 verbs' help says what happens when it is omitted, and that subprocess coverage needs coverage.py
 7.14 or later.
 
-This repo declares its own source, `crucible_axi` and `clients`, under `[tool.coverage.run]` in
-`pyproject.toml`, so its gate measures exactly what it measures today, the runner shipped in
+This repo declares its own source by adding `source = ["crucible_axi", "clients"]` under
+`[tool.coverage.run]` in its `pyproject.toml`, so its gate measures exactly what it measures today, the runner shipped in
 `clients/` included as Crucible's own code.
 
 ### §S2 — stale coverage data is erased before the run
@@ -67,7 +68,8 @@ Before the coverage run, the client erases the earlier data for the data file th
 suffixed parallel files included, whether or not the project's config is parallel. The data file is
 the run's `--data-file` when it has one (an agent's own reports directory), and otherwise the file
 coverage.py resolves itself (`[run] data_file`, else `COVERAGE_FILE`, else `.coverage` in the
-project root). `regression --coverage` and `pre-merge-gate` both do this. No other step is added to
+project root). `regression --coverage` and `pre-merge-gate` both do this, whether or not `--cov-source` is given.
+A failed erase never fails the run. No other step is added to
 the report: coverage.py combines the run's parallel files when `coverage lcov` reports.
 
 Any coverage command the client runs besides the run itself prints no `[crucible] running:` line,
