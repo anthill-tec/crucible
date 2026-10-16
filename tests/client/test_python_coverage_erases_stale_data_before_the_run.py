@@ -20,6 +20,7 @@ executed, or both.
 
 import os
 import sys
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -51,6 +52,29 @@ CONFIG_DATA_FILE = os.path.join("cfgdata", ".covcfg")
 CONFIG_DATA_FILE_LINE = f'data_file = "{CONFIG_DATA_FILE}"\n'
 EXPLICIT_REPORTS = ("--reports", "test-reports/explicit")
 GIVEN_SOURCE = ("--cov-source", "mypkg")
+
+# The earlier, larger run's extra test: it runs `triple`, which the smaller
+# second run never does, so all four of `mypkg`'s statements are executed.
+TRIPLE_TEST_SOURCE = textwrap.dedent('''\
+    import unittest
+
+    from mypkg.core import triple
+
+    class TripleTest(unittest.TestCase):
+        def test_triple(self):
+            self.assertEqual(triple(2), 6)
+    ''')
+
+# The smaller second run: one test, calling only `double`.
+SMALL_TEST_SOURCE = textwrap.dedent('''\
+    import unittest
+
+    from mypkg.core import double
+
+    class SmallTest(unittest.TestCase):
+        def test_double(self):
+            self.assertEqual(double(3), 6)
+    ''')
 
 
 class _StaleDataCase(unittest.TestCase):
@@ -122,6 +146,45 @@ class OneDataFileIsUnchangedTest(_StaleDataCase):
                     [".coverage"],
                     f"{label}: the run writes one unsuffixed data file; got "
                     f"{sorted(os.listdir(own_dir))!r}")
+
+
+class AnEarlierRunsCombinedDataFileIsNotMergedTest(_StaleDataCase):
+    """A run in an agent's own reports directory leaves its combined,
+    unsuffixed data file behind; a smaller second run in the same directory
+    reports only its own coverage. Both runs are real runs through the real
+    client: the first runs `double` and `triple` (all four of `mypkg`'s
+    statements), the second only `double`. A pin: it holds today."""
+
+    def test_a_smaller_second_run_does_not_report_the_earlier_runs_combined_data_file(self):
+        for label, verb in VERBS:
+            with self.subTest(verb=label):
+                files = base_files()
+                files["pyproject.toml"] = PARALLEL_DECLARED_CONFIG
+                files["tests/test_triple.py"] = TRIPLE_TEST_SOURCE
+                files["small/__init__.py"] = ""
+                files["small/test_small.py"] = SMALL_TEST_SOURCE
+                project_dir, board = make_project(self, files)
+                own_dir = os.path.join(project_dir, "test-reports", AGENT)
+
+                first = drive(project_dir, board, verb)
+                self.assertEqual(
+                    line_counts(ingested_coverage(first.board)),
+                    (CORE_TOTAL, CORE_TOTAL),
+                    f"{label}: fixture -- the earlier, larger run executes "
+                    f"every statement of mypkg; {first.describe()}")
+                self.assertTrue(
+                    os.path.isfile(os.path.join(own_dir, ".coverage")),
+                    f"{label}: fixture -- the earlier run leaves its combined, "
+                    f"unsuffixed data file in the agent's own directory; got "
+                    f"{sorted(os.listdir(own_dir))!r}")
+
+                second = drive(project_dir, board, verb, start_dir="small")
+                run = (second.axi or {}).get("run") or {}
+                self.assertEqual(
+                    (run.get("total"), run.get("failed")), (1, 0),
+                    f"{label}: fixture -- the second run is the smaller one; "
+                    f"{second.describe()}")
+                self._assert_only_this_runs_coverage(label, second)
 
 
 class StaleDataIsErasedWithoutAGivenSourceTest(_StaleDataCase):
