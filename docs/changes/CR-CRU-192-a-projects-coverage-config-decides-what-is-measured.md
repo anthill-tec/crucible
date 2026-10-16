@@ -2,8 +2,8 @@
 
 **Type** fix (patch CR) · **Points** 3 (filed at 3 on 2026-10-16; 5 at gap analysis; 3 after the
 spec pre-review dropped the combine step, the same day) · **Wave** 8 (0.4.0) · **Depends on** — ·
-**Status** PENDING — filed 2026-10-16 (Model B request, user ruling: a patch CR in 0.4.0, next
-after CR-CRU-189)
+**Status** DONE — filed 2026-10-16 (Model B request, user ruling: a patch CR in 0.4.0, next
+after CR-CRU-189); merged 2026-10-17
 
 ## Problem
 
@@ -80,12 +80,12 @@ so that line still names the suite's own command.
 
 ## Acceptance criteria
 
-- [ ] **The project's source is measured.** Through the real python client, with no
+- [x] **The project's source is measured.** Through the real python client, with no
       `--cov-source`, a project whose `pyproject.toml` declares `[tool.coverage.run] source`
       reports coverage of that source only, and the run's command carries no `--source`, through
       `regression --coverage` and through `pre-merge-gate`. The same holds for a source declared in
       `.coveragerc`, for one declared as `source_pkgs`, and for an `include`.
-- [ ] **An undeclared source measures the project.** With no `--cov-source` and nothing declared,
+- [x] **An undeclared source measures the project.** With no `--cov-source` and nothing declared,
       the run passes `--source <absolute project root>`, under a relative `--project-dir` too. The project's code and tests are measured,
       a virtual environment inside the root is not, and neither is the runner installed outside it.
       The green envelope and every failure envelope (red, zero-discovery, no-report, ran-nothing and
@@ -93,34 +93,34 @@ so that line still names the suite's own command.
       detail}`, the detail naming `[tool.coverage.run] source` and `--cov-source`, through
       `regression --coverage` and through `pre-merge-gate`. With a declared source, or
       `--cov-source` given, no such warning.
-- [ ] **An unreadable configuration does not stop the run.** With no coverage.py in the project's
+- [x] **An unreadable configuration does not stop the run.** With no coverage.py in the project's
       interpreter, `regression --coverage` and `pre-merge-gate` report today's cause, naming
       `No module named coverage`, with no `coverage-source-undeclared` warning.
-- [ ] **A given source still wins.** With `--cov-source` given, `regression --coverage` and
+- [x] **A given source still wins.** With `--cov-source` given, `regression --coverage` and
       `pre-merge-gate` pass it as `--source`, as today.
-- [ ] **This repo's gate is unchanged.** This repo's resolved coverage configuration declares exactly
+- [x] **This repo's gate is unchanged.** This repo's resolved coverage configuration declares exactly
       `crucible_axi` and `clients` as its source, and its python `pre-merge-gate` command carries no
       `--source`.
-- [ ] **Subprocess coverage is reported.** Through the real python client, a project configured with
+- [x] **Subprocess coverage is reported.** Through the real python client, a project configured with
       `[run] patch = ["subprocess"]`, whose test runs a measured script as a subprocess, ingests a
       coverage object on the board that includes the script's lines, with no "coverage lcov
       unavailable" warning. Checked through `regression --coverage` and `pre-merge-gate`, with and
       without the run's own reports directory.
-- [ ] **Stale data is not merged.** Two coverage runs in a row, the first leaving suffixed parallel
+- [x] **Stale data is not merged.** Two coverage runs in a row, the first leaving suffixed parallel
       files, report only the second run's coverage: at the project root, in an agent's own reports
       directory, and when the second run's config is not parallel. The same holds when the first run
       left its combined, unsuffixed data file: a smaller second run in the same reports directory
       reports only its own coverage.
-- [ ] **The data file is coverage.py's.** The erase follows the run's `--data-file`, else
+- [x] **The data file is coverage.py's.** The erase follows the run's `--data-file`, else
       `COVERAGE_FILE`, else `[run] data_file`, else `.coverage`, each relative to the project root,
       with and without `--cov-source`.
-- [ ] **A failure names its cause.** A configuration read that times out, and an erase that fails,
+- [x] **A failure names its cause.** A configuration read that times out, and an erase that fails,
       each print one stderr line naming the cause, never the probe's source.
-- [ ] **One data file is unchanged.** A run that writes a single, unsuffixed data file reports the
+- [x] **One data file is unchanged.** A run that writes a single, unsuffixed data file reports the
       same coverage it does today.
-- [ ] **Help is true.** Both verbs' `--cov-source` help says what happens when it is omitted, and that
+- [x] **Help is true.** Both verbs' `--cov-source` help says what happens when it is omitted, and that
       subprocess coverage needs coverage.py 7.14 or later.
-- [ ] **No new CR literals.** No CR-shaped literal is added under `clients/` or in test comments, and
+- [x] **No new CR literals.** No CR-shaped literal is added under `clients/` or in test comments, and
       the citation tripwire's pins are unchanged.
 
 ## Known limit
