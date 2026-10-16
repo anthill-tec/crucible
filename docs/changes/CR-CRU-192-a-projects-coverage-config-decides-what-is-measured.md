@@ -107,7 +107,9 @@ so that line still names the suite's own command.
       without the run's own reports directory.
 - [ ] **Stale data is not merged.** Two coverage runs in a row, the first leaving suffixed parallel
       files, report only the second run's coverage: at the project root, in an agent's own reports
-      directory, and when the second run's config is not parallel.
+      directory, and when the second run's config is not parallel. The same holds when the first run
+      left its combined, unsuffixed data file: a smaller second run in the same reports directory
+      reports only its own coverage.
 - [ ] **The data file is coverage.py's.** The erase follows the run's `--data-file`, else
       `COVERAGE_FILE`, else `[run] data_file`, else `.coverage`, each relative to the project root,
       with and without `--cov-source`.
