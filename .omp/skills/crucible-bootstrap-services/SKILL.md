@@ -50,7 +50,7 @@ chars and looks EMPTY.
 ## 1b. Chrome: through the global `chrome-ui-relay` skill (Model B CR-MDB-061)
 
 Every browser step is the global **`chrome-ui-relay`** skill's (`~/.agents/skills/chrome-ui-relay/SKILL.md`),
-dev-deployed from Model B develop `564f913` (user ruling 2026-10-16: adopt the dev-deployed copy
+dev-deployed from Model B develop `be7bb20` (CR-MDB-061, and CR-MDB-076's wait for Chrome's prompt) (user ruling 2026-10-16: adopt the dev-deployed copy
 ahead of Model B 1.0.0). Read it before step 4 and follow it exactly: its session, its open and
 close procedures, its handling of a bridge that cannot attach, and its rule that every
 `chrome-devtools-axi` envelope is read whole. This skill only supplies its inputs.
@@ -85,11 +85,14 @@ Take the printed `url:` of each session. Do NOT rely on Lavish's own browser ope
 
 ## 4. Chrome tabs: `chrome-ui-relay`'s Open, with the step 1b inputs
 
-**First, tell the user that Chrome will ask them to accept a remote-debugging connection**, and to
-accept it promptly. Chrome asks on each bridge session's first attach and after every bridge
-restart. A late acceptance shows as `BRIDGE_NOT_READY` ("the attached CDP target appears to have
-gone away"); once the user has accepted, run the step again. Model B's CR-MDB-076 moves this
-warning, and a bounded retry, into `chrome-ui-relay` itself.
+**Relay `chrome-ui-relay`'s warning to the user first**, unchanged in substance: Chrome will ask
+them to accept a remote-debugging connection; they accept within about a minute, and again if
+Chrome asks again. The skill gives the same warning before shutdown's calls, except `stop`.
+
+**Every browser call gets a shell timeout of at least 150 seconds**: the skill sets the bridge to
+wait up to 2 minutes for the acceptance, and a shorter shell timeout kills the call first. On
+`BRIDGE_NOT_READY` the skill skips the browser steps and reports the envelope's `error` and `help`
+in full. It never retries; neither does this skill.
 
 Then run `chrome-ui-relay`'s **Open** with the three inputs from step 1b. Keep the (id, URL) record it
 returns in this session's context: shutdown closes from that record and nothing else. Then confirm
