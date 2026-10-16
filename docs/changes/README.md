@@ -176,7 +176,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-189](CR-CRU-189-every-subtest-is-counted-pass-or-fail.md) | every subtest is counted, pass or fail | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-191](CR-CRU-191-the-clients-are-clean-under-pi-lens.md) | the clients are clean under pi-lens | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-190](CR-CRU-190-the-0.4.0-follow-ups-list.md) | the 0.4.0 follow-ups list | fix | PENDING | 184 | 8 (0.4.0) |
-| [CR-CRU-192](CR-CRU-192-a-projects-coverage-config-decides-what-is-measured.md) | a project's coverage config decides what is measured, and parallel data is combined | fix | PENDING | — | 8 (0.4.0) |
+| [CR-CRU-192](CR-CRU-192-a-projects-coverage-config-decides-what-is-measured.md) | a project's coverage config decides what is measured | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-193](CR-CRU-193-a-runs-coverage-is-shown-file-by-file.md) | a run's coverage is shown file by file | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-187](CR-CRU-187-a-release-drafts-its-notes-from-the-board.md) | a release drafts its notes from the board | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-182](CR-CRU-182-a-phone-tap-on-a-history-cycle-line-opens-its-runs.md) | a phone tap on a history cycle line opens its runs, not `→ Runs` | fix | PENDING | — | 8 (0.4.0) |
