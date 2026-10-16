@@ -31,7 +31,10 @@ result class makes the total independent of the outcome:
 When the interpreter has no xmlrunner at all, this prints Python's own ``-m``
 text (``<interpreter>: No module named xmlrunner``) and exits 1. When
 xmlrunner imports but offers no result class to extend, the run goes ahead on
-xmlrunner's own ``__main__`` entry point, exactly as ``python -m xmlrunner``.
+xmlrunner's own ``__main__`` entry point, exactly as ``python -m xmlrunner``,
+after one line on stderr (``FALLBACK_SIGNAL``, ending with the xmlrunner
+version found or ``none declared``) that tells the client passing subtests
+are not counted.
 
 Stdlib-only apart from xmlrunner itself, which is the interpreter's own.
 """
@@ -45,6 +48,12 @@ import sys
 from typing import Any
 
 _XMLRUNNER = "xmlrunner"
+
+# The start of the one line stating the fallback, ahead of any test. The
+# python client recognises the line by it and reads the version from its
+# closing ``(xmlrunner version: <version>)``.
+FALLBACK_SIGNAL = "[subtest-runner] subtests-uncounted: "
+_NO_VERSION = "none declared"
 
 
 def _restore_module_search_path() -> None:
@@ -153,6 +162,27 @@ def _extendable() -> tuple | None:
     return runner_mod, base
 
 
+def _declared_version() -> str:
+    """The ``__version__`` the imported xmlrunner declares, on one line, or
+    ``none declared``."""
+    try:
+        module = importlib.import_module(_XMLRUNNER)
+    except ImportError:
+        return _NO_VERSION
+    version = getattr(module, "__version__", None)
+    text = " ".join(str(version).split()) if version is not None else ""
+    return text or _NO_VERSION
+
+
+def _state_fallback() -> None:
+    """Say, before any test runs, that this run cannot count passing
+    subtests, naming the xmlrunner version found."""
+    print(f"{FALLBACK_SIGNAL}xmlrunner offers no result class to extend, so "
+          f"its own entry point runs and passing subtests are not counted "
+          f"(xmlrunner version: {_declared_version()})",
+          file=sys.stderr, flush=True)
+
+
 def main() -> None:
     """Run the suite xmlrunner's command line names."""
     _restore_module_search_path()
@@ -160,6 +190,7 @@ def main() -> None:
         sys.exit(f"{sys.executable}: No module named {_XMLRUNNER}")
     found = _extendable()
     if found is None:
+        _state_fallback()
         runpy.run_module(_XMLRUNNER, run_name="__main__", alter_sys=True)
         return
     runner_mod, base = found
