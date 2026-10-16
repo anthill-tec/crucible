@@ -1,5 +1,5 @@
 """CR-CRU-090 C1 (§S1, ACs 1, 2 and 6) + C2 (§S1 "Rules", AC5) -- the `fleet`
-stage: the nine packaged fleet files land under `<target-dir>/clients/` BEFORE the
+stage: the ten packaged fleet files land under `<target-dir>/clients/` BEFORE the
 manifest that names them, and land only when they are actually stale.
 
 Why these three assertions, and why they are the whole of this cycle:
@@ -20,7 +20,7 @@ actually makes.
   `[unit]` stays LAST), `fleet` strictly before `manifest`, a runner registered
   under that key, and a real `run_install` reporting a `fleet` stage whose
   `path` is the clients dir.
-- AC2 pins the PAYLOAD as bytes: exactly the nine packaged files, no extras,
+- AC2 pins the PAYLOAD as bytes: exactly the ten packaged files, no extras,
   each byte-identical to its source. Bytes, not sizes -- a truncated or
   rewritten copy is the failure a size check would pass. The five clients load
   `_crucible_axi.py` and `toon.py` BY FILE PATH from their own directory, so
@@ -107,6 +107,7 @@ EXPECTED_FLEET_FILES = frozenset({
     # fleet landed without this file cannot say what it enforces the moment
     # the operator's editable `<install>/crucible.toml` is absent.
     "crucible.toml",
+    "subtest_runner.py",
 })
 
 # The MERGED four-stage pipeline (CR-CRU-090 §S1 `[fleet]` + CR-CRU-070
@@ -323,7 +324,7 @@ class FleetStageOrderContractTest(_ScratchInstallCase):
 
 class FleetStageLandsThePackagedFilesTest(_ScratchInstallCase):
     """AC2 -- after a real `run_install`, `<target-dir>/clients/` holds exactly
-    the nine packaged files, each byte-identical to its source."""
+    the ten packaged files, each byte-identical to its source."""
 
     def setUp(self):
         super().setUp()
@@ -347,10 +348,10 @@ class FleetStageLandsThePackagedFilesTest(_ScratchInstallCase):
         landed = set(os.listdir(self.clients_dir()))
         self.assertEqual(
             landed, set(EXPECTED_FLEET_FILES),
-            f"AC2 -- <target-dir>/clients/ must hold EXACTLY the nine "
+            f"AC2 -- <target-dir>/clients/ must hold EXACTLY the ten "
             f"packaged files (five clients + the two shared modules they load "
-            f"by path + STATUS-CONTRACT.md + the shipped crucible.toml), no "
-            f"extras. "
+            f"by path + STATUS-CONTRACT.md + the shipped crucible.toml + "
+            f"subtest_runner.py), no extras. "
             f"missing={sorted(set(EXPECTED_FLEET_FILES) - landed)} "
             f"unexpected={sorted(landed - set(EXPECTED_FLEET_FILES))}")
 
