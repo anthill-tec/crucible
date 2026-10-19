@@ -23,6 +23,14 @@ analysis, user ruling)
    `test_cr090_fleet_stage.py`, `test_cr090_cli_install_integration.py` and
    `test_gate_catches_the_python_suite_regression.py` report 19 findings (`UP031`, `F541`, `SIM117`,
    `S314`), so every edit to them surfaces lint unrelated to the edit.
+5. **One test leaks `AGENT_ID` into later tests.** Found by CR-CRU-190's VERIFY (2026-10-19).
+   Arduino's `main()` sets `os.environ["AGENT_ID"]` whenever `--agent` is given. A test that
+   calls it in-process (`_drive_register` in
+   `tests/client/test_an_escaping_os_or_value_error_becomes_an_envelope.py`) never restores the
+   environment, and the live-run harness's `scrubbed_env` does not remove `AGENT_ID`. So
+   `test_arduino_test_unfiled_runs_the_suite_and_posts_nothing`, run after that module, exits 2
+   with `agent-identity-required`. The full suite passes only because discovery orders the two
+   modules the other way.
 
 ## Scope
 
@@ -50,6 +58,12 @@ secret anywhere in the tree is still reported.
 
 The three files' findings are fixed in the tests themselves. No assertion's meaning changes.
 
+### §S5 — no test leaks `AGENT_ID`
+
+The leak is fixed at its source: the test that drives a client's `main()` in-process restores the
+environment it changed, and the live-run harness scrubs `AGENT_ID` from the environment it hands a
+client.
+
 ## Acceptance criteria
 
 - [ ] **The floor is 3.14.** `pyproject.toml` declares `requires-python = ">=3.14"` and only the 3.14
@@ -65,12 +79,15 @@ The three files' findings are fixed in the tests themselves. No assertion's mean
       repo's gitleaks configuration extends the default rules and disables none.
 - [ ] **The three test files are clean.** Ruff under pi-lens's configuration reports zero findings
       in each of the three files, and their test counts and outcomes are unchanged.
+- [ ] **No test leaks `AGENT_ID`.** `test_arduino_test_unfiled_runs_the_suite_and_posts_nothing`
+      passes when run in one client run directly after
+      `test_an_escaping_os_or_value_error_becomes_an_envelope`, and fails that way before the fix.
 - [ ] **No new CR literals.** No CR-shaped literal is added in `src/`, `public/`, `clients/` or test
       comments, and the citation tripwire's pins are unchanged.
 
 ## How it is worked
 
-Test edits in §S4 are approved by this spec, and each lands in its own commit. Model B hears of the
+Test edits in §S4 and §S5 are approved by this spec, and each lands in its own commit. Model B hears of the
 3.14 floor in the 0.4.0 release notes.
 
 ## Non-goals
