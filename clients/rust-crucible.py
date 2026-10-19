@@ -3199,7 +3199,7 @@ def main():
         "--min-free-g", type=int, default=80,
         help="Disk-guard floor in GB before the gate (default: 80).",
     )
-    _add_gate_cycle_arg(e2e)
+    _axi().add_filing_cycle_arg(e2e)
     _add_run_release_arg(e2e)
     _add_project_dir_arg(e2e)
     e2e.set_defaults(func=cmd_docker_e2e_gate)
