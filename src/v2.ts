@@ -822,7 +822,18 @@ function handleAgentsList(store: Store, req: Request, url: URL): Response {
   const running = new Set(
     store.listOpenRuns(project).map((run) => `${run.projectKey}\u0000${run.agentId}`),
   );
-  const agents = store.listAgents(project, now).map((agent) => {
+  const listed = store.listAgents(project, now);
+  // The plan lookup — each project's cycle id → the plan holding it, closed
+  // and aborted plans included — built once per read, never once per agent.
+  const planOfCycleByProject = new Map<string, Map<number, Plan>>();
+  for (const projectKey of new Set(listed.map((agent) => agent.projectKey))) {
+    const planOfCycle = new Map<number, Plan>();
+    for (const plan of store.listPlans(projectKey)) {
+      for (const cycle of plan.cycles) planOfCycle.set(cycle.id, plan);
+    }
+    planOfCycleByProject.set(projectKey, planOfCycle);
+  }
+  const agents = listed.map((agent) => {
     const lastRunAt = store.lastRunTimestamp(agent.projectKey, agent.agentId);
     const idle =
       agent.liveness !== "tombstoned" && !running.has(`${agent.projectKey}\u0000${agent.agentId}`);
@@ -832,7 +843,16 @@ function handleAgentsList(store: Store, req: Request, url: URL): Response {
         agent.liveness === "tombstoned"
           ? (lastRunAt ?? agent.lastSeen) - agent.firstSeen
           : now - agent.firstSeen,
-      ...(idle ? { idleLine: idleLine(agent, lastRunAt, now) } : {}),
+      ...(idle
+        ? {
+            idleLine: idleLine(
+              agent,
+              lastRunAt,
+              now,
+              planOfCycleByProject.get(agent.projectKey) ?? new Map<number, Plan>(),
+            ),
+          }
+        : {}),
     };
   });
   return reply(req, url, { ok: true, agents });
@@ -840,19 +860,36 @@ function handleAgentsList(store: Store, req: Request, url: URL): Response {
 
 /**
  * §S3/R1 — idle is the board's word: an agent with no open run reads
- * `idle · <role> · cycle <id> · last run <message>, <age>` (`no cycle bound` in
- * place of the cycle when it holds no binding), composed here at read time
+ * `idle · <role> · <CR> · cycle <n>/<m> · last run <message>, <age>` — `<CR>`
+ * the bound cycle's plan's CR, `n` the cycle's 1-based place in that plan's
+ * cycle order whatever its status, `m` the plan's cycle count; `cycle #<id>`
+ * when `planOfCycle` holds no plan for the cycle; `no cycle bound` in place
+ * of the cycle when it holds no binding — composed here at read time
  * from its binding and its last run event; the message carries the outcome or
  * refusal the ingest routes wrote (§S2). An agent that never ran says when it
  * was last seen instead. Served as an ADDITIVE `idleLine` — absent while a
  * run is open or the agent is tombstoned — so the raw `message` is untouched.
  */
-function idleLine(agent: LiveAgent, lastRunAt: number | null, now: number): string {
+export function idleLine(
+  agent: LiveAgent,
+  lastRunAt: number | null,
+  now: number,
+  planOfCycle: ReadonlyMap<number, Plan>,
+): string {
   const segments = ["idle"];
   if (agent.role !== undefined) segments.push(agent.role);
-  segments.push(
-    agent.boundCycleId !== undefined ? `cycle ${agent.boundCycleId}` : "no cycle bound",
-  );
+  const cycleId = agent.boundCycleId;
+  if (cycleId === undefined) {
+    segments.push("no cycle bound");
+  } else {
+    const plan = planOfCycle.get(cycleId);
+    const place = plan === undefined ? -1 : plan.cycles.findIndex((c) => c.id === cycleId);
+    if (plan === undefined || place < 0) {
+      segments.push(`cycle #${cycleId}`);
+    } else {
+      segments.push(plan.cr, `cycle ${place + 1}/${plan.cycles.length}`);
+    }
+  }
   segments.push(
     lastRunAt !== null
       ? `last run ${agent.message}, ${relativeAge(lastRunAt, now)}`
