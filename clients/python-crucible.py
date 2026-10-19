@@ -1810,7 +1810,8 @@ _CLI_DESCRIPTION = (
     "\n"
     "Tool-specific (unittest / xmlrunner / JUnit-XML / coverage.py), never\n"
     "project-specific: the project path and the interpreter are parameterizable.\n"
-    "Run `<verb> --help` for a verb's own flags."
+    "Run `<verb> --help` for a verb's own flags.\n"
+    "\n" + _axi().BOARD_CONFIGURATION_HELP
 )
 
 

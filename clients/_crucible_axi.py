@@ -477,6 +477,27 @@ def resolve_base_url():
     return shipped_board()
 
 
+#: Where the board's address is read from, in the order `resolve_base_url`
+#: walks it. The transport's connection-failure and timeout messages carry it,
+#: so an operator facing an unreachable board learns which key to correct.
+BOARD_SOURCE = (f"the address is `[{CLIENT_TABLE}] {CLIENT_BOARD_FIELD}` from "
+                "the project's crucible.toml, then the install's, then the "
+                "shipped one")
+
+#: The ONE text every client appends to its top-level `--help` description:
+#: the key the board is read from, the order of the chain, and the rule
+#: `_read_project_config` resolves it by -- the first file that exists and
+#: parses wins, whether or not it holds a `[client]` table.
+BOARD_CONFIGURATION_HELP = (
+    f"Board: every verb posts to `[{CLIENT_TABLE}] {CLIENT_BOARD_FIELD}`, read "
+    "from the project's crucible.toml,\n"
+    "then the install's, then the shipped one. The first file that exists and "
+    "parses wins:\n"
+    f"a project file without `[{CLIENT_TABLE}] {CLIENT_BOARD_FIELD}` uses the "
+    "shipped address, while a\n"
+    "malformed one falls through to the next file.")
+
+
 class GateSkipDeclarationError(ValueError):
     """A `[gate] skip` declaration whose SHAPE cannot be passed to no-mistakes:
     not a list of non-empty strings, or an entry carrying the comma that
@@ -668,7 +689,8 @@ def http_request(base_url, method, path, payload=None, timeout=None):
     # pi-lens-ignore: unreachable-except — URLError follows its subclass HTTPError and precedes the unrelated TimeoutError, so it is reached
     except urllib.error.URLError as e:
         return {"ok": False, "error": f"connection failed: {e.reason} "
-                                      f"(is Crucible running at {base_url}?)"}
+                                      f"(is Crucible running at {base_url}? "
+                                      f"{BOARD_SOURCE})"}
     except TimeoutError:
         # CR-CRU-126 §S3 — the READ-phase timeout, which is the one a SLOW
         # board produces: the connection is accepted, so nothing raises until
@@ -687,7 +709,8 @@ def http_request(base_url, method, path, payload=None, timeout=None):
         # envelope-owning verbs report exactly as they already report an
         # unreachable board.
         return {"ok": False, "error": f"request timed out after {timeout}s "
-                                      f"(is Crucible at {base_url} overloaded?)"}
+                                      f"(is Crucible at {base_url} overloaded? "
+                                      f"{BOARD_SOURCE})"}
     return json.loads(body) if body else {"ok": True}
 
 

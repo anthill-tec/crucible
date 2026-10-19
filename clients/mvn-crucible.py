@@ -2348,7 +2348,8 @@ _CLI_DESCRIPTION = (
     "\n"
     "Tool-specific (Maven / Surefire / Failsafe / JUnit-XML / JaCoCo), never\n"
     "project-specific: the project path and the maven dir are parameterizable,\n"
-    "nothing is hardcoded. Run `<verb> --help` for a verb's own flags."
+    "nothing is hardcoded. Run `<verb> --help` for a verb's own flags.\n"
+    "\n" + _axi().BOARD_CONFIGURATION_HELP
 )
 
 

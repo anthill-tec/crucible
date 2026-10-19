@@ -2835,7 +2835,7 @@ _CLI_DESCRIPTION = (
     "(nextest, check, clippy, llvm-cov) with the result ingested to Crucible.\n\n"
     "Tool-specific (Cargo / Nextest / JUnit-XML / llvm-cov / Clippy), never "
     "project-specific: the project path is parameterizable. Run `<verb> --help` "
-    "for a verb's own flags."
+    "for a verb's own flags.\n\n" + _axi().BOARD_CONFIGURATION_HELP
 )
 
 

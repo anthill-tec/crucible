@@ -1411,7 +1411,9 @@ def main():
     common.add_argument("--project-dir",
                         help="subproject dir with .env + tests/native "
                              "(default: $ARDUINO_CRUCIBLE_PROJECT_DIR or CWD)")
-    p = argparse.ArgumentParser(description="Arduino-firmware Crucible stack script")
+    p = argparse.ArgumentParser(
+        description=("Arduino-firmware Crucible stack script.\n\n"
+                     + _axi().BOARD_CONFIGURATION_HELP))
     # §S14 — subcommand is OPTIONAL: a bare invocation falls through to the
     # no-arg live dashboard, never argparse's required-subcommand error.
     sub = p.add_subparsers(dest="cmd", required=False)

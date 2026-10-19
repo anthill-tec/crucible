@@ -2403,7 +2403,8 @@ _CLI_DESCRIPTION = (
     "POSTed to /api/v2/runs under that codec and parsed server-side, instead of being\n"
     "parsed here and POSTed to /api/v2/runs/parsed.\n"
     "\n"
-    "Run `<verb> --help` for a verb's own flags."
+    "Run `<verb> --help` for a verb's own flags.\n"
+    "\n" + _axi().BOARD_CONFIGURATION_HELP
 )
 
 
