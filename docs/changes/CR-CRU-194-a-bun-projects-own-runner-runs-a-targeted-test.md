@@ -1,8 +1,9 @@
 # CR-CRU-194 — a bun project's own runner runs a targeted test, and no project is anyone's default
 
-**Type** fix · **Points** 5 (provisional, set at filing 2026-10-18; the estimate is revisited at gap
-analysis) · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-18 (Model B
-request, user ruling: its own CR in 0.4.0)
+**Type** fix · **Points** 8 (provisional; 5 at filing 2026-10-18, raised when the test-name filter
+moved in from CR-CRU-190 on 2026-10-19; the estimate is revisited at gap analysis) · **Wave** 8 (0.4.0) · **Depends on** — ·
+**Status** PENDING — filed 2026-10-18 (Model B request, user ruling: its own CR in 0.4.0; the test-name filter joined it from CR-CRU-190, user
+ruling 2026-10-19)
 
 ## Problem
 
@@ -19,6 +20,9 @@ runtime and keep `bun test` for structural gates only.
    `$BUN_CRUCIBLE_PACKAGE_DIR`, then to `<project>/integrations/pi` when that holds a
    `package.json`, then to the project root. `integrations/pi` is Sandesh's layout. The client's
    own help example (`src/tools/send.test.ts`, agent `CR-SAN-013-C1-RED`) is Sandesh's too.
+3. **A targeted run cannot pick one test.** Requested by Model B (Sandesh #1446). An agent
+   iterating on one test can only run its whole file: `test` has no form for `bun test -t`, nor
+   for the same filter through a declared runner.
 
 ## Design (settled with the user, 2026-10-18)
 
@@ -46,10 +50,17 @@ The `integrations/pi` step and every Sandesh-specific example leave the client. 
 that is not a directory holding a `package.json` is refused, naming the value and the file it came
 from.
 
-### §S3 — help and the fleet manifest say so
+### §S3 — a targeted run filters by test name
 
-`test --help` and `--package-dir`'s help state the new resolution, and the examples name no
-project.
+`test` gains `--name <pattern>`. On the `bun test` path it is passed as `-t <pattern>`; through a
+declared script it is passed after `--` as `-t <pattern>`, the flag Bun's runner and Vitest share.
+The run is filed under the same tier and cycle as any other `test` run, and its envelope names the
+filter.
+
+### §S4 — help and the fleet manifest say so
+
+`test --help` and `--package-dir`'s help state the new resolution and the name filter, and the
+examples name no project.
 
 ## Acceptance criteria
 
@@ -67,8 +78,10 @@ project.
       `integrations/pi/package.json` runs from the project root. No help text or example names
       `integrations/pi`, Sandesh or one of its tests.
 - [ ] **A bad package dir is refused,** naming the value and the file that declared it.
+- [ ] **Name filter, both paths.** `test --name <pattern>` runs only the matching test, on the
+      `bun test` path and through a declared Vitest script (a fixture with two tests, one
+      matching), is filed with that count, and its envelope names the filter.
 
 ## Non-goals
 
 - Classifying a runner from a script's body. What runs is still the declaration, by name.
-- A test-name filter for `test`, the known gap where `bun test` takes none.
