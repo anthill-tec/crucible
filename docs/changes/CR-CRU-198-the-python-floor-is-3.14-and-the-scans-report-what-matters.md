@@ -2,7 +2,7 @@
 
 **Type** maintenance · **Points** 8 (5 at filing 2026-10-19; raised at its spec pre-review the same
 day, when the installer, CI and the arduino client joined its scope) · **Wave** 8 (0.4.0) ·
-**Depends on** — · **Status** PENDING — filed 2026-10-19 (split from CR-CRU-190 at its gap
+**Depends on** — · **Status** DONE — merged 2026-10-19; filed 2026-10-19 (split from CR-CRU-190 at its gap
 analysis, user ruling)
 
 ## Problem
@@ -108,39 +108,39 @@ alone, never by an `AGENT_ID` in the environment.
 
 ## Acceptance criteria
 
-- [ ] **The floor is 3.14.** `pyproject.toml` declares `requires-python = ">=3.14"` and exactly the
+- [x] **The floor is 3.14.** `pyproject.toml` declares `requires-python = ">=3.14"` and exactly the
       `Python :: 3` and `Python :: 3.14` classifiers; each of the five clients' PEP 723 headers
       declares `requires-python = ">=3.14"`; the two header-pinning tests expect `>=3.14`; every CI
       job that runs python (`build`, `test-python`, `test-bun`, `publish-testpypi`) sets up python
       `3.14`. No comment reasons from a 3.10 floor. The full python and bun suites pass with the
       `.venv` on python 3.14.
-- [ ] **An upgrade lands on 3.14.** `install.sh`'s two `uv tool install` commands and the README's
+- [x] **An upgrade lands on 3.14.** `install.sh`'s two `uv tool install` commands and the README's
       install and upgrade commands carry `--python 3.14` after the package name. Measured once (in
       VERIFY) against a local package index holding a `>=3.10` and a `>=3.14` release: an existing
       tool environment on python 3.13 is upgraded to the `>=3.14` release, and `install.sh` prints
       that it rebuilds the 3.13 environment on 3.14.
-- [ ] **The suppressions say why.** Both suppressions remain at each of the three sites, and each
+- [x] **The suppressions say why.** Both suppressions remain at each of the three sites, and each
       `# pi-lens-ignore: I001` comment names pi-lens's ruff configuration having no target version as
       the cause. Ruff under pi-lens's own configuration and Pyright 1.1.414 (pi-lens's bundled CLI)
       both stay clean over `clients/` and `crucible_axi/`.
-- [ ] **`_smoke_refusal` is indented truly.** Its body sits one level inside the merged `if`, and the
+- [x] **`_smoke_refusal` is indented truly.** Its body sits one level inside the merged `if`, and the
       rust client's existing tests pass unchanged.
-- [ ] **gitleaks is quiet on identifiers and loud on secrets.** A committed test parses
+- [x] **gitleaks is quiet on identifiers and loud on secrets.** A committed test parses
       `.gitleaks.toml` and asserts it extends the defaults, disables no rule, and scopes its label
       allowlist to `generic-api-key` under `tests/`. Measured once (in VERIFY) with gitleaks 8.30.1
       run as pi-lens runs it (`detect --no-git`, a scoped configuration extending the repo's) over a
       `git archive` export of the tracked tree: zero findings. With planted values reported, all of
       them: in a test file, a GitHub token, a 40-character hex key and a 32-character random
       secret; outside `tests/`, a random hyphenated token and an `api_key` holding a UUID.
-- [ ] **The three test files are clean.** Ruff under pi-lens's configuration reports zero findings
+- [x] **The three test files are clean.** Ruff under pi-lens's configuration reports zero findings
       in each of the three files, and their test counts and outcomes are unchanged.
-- [ ] **Arduino keeps its agent id to its children.** After `main()` runs in-process with
+- [x] **Arduino keeps its agent id to its children.** After `main()` runs in-process with
       `--agent`, `os.environ` holds no `AGENT_ID`; a child process it spawns sees `AGENT_ID`; with
       `AGENT_ID` set in the environment and no `--agent`, a run is not filed.
       `test_arduino_test_unfiled_runs_the_suite_and_posts_nothing` passes when run in one client run
       directly after `test_an_escaping_os_or_value_error_becomes_an_envelope`, and fails that way
       before the fix.
-- [ ] **No new CR literals.** No CR-shaped literal is added in `src/`, `public/` or `clients/`, the
+- [x] **No new CR literals.** No CR-shaped literal is added in `src/`, `public/` or `clients/`, the
       citation tripwire's pins are unchanged, and the citations already on rewritten lines are kept.
 
 ## How it is worked
