@@ -477,6 +477,27 @@ def resolve_base_url():
     return shipped_board()
 
 
+#: Where the board's address is read from, in the order `resolve_base_url`
+#: walks it. The transport's connection-failure and timeout messages carry it,
+#: so an operator facing an unreachable board learns which key to correct.
+BOARD_SOURCE = (f"the address is `[{CLIENT_TABLE}] {CLIENT_BOARD_FIELD}` from "
+                "the project's crucible.toml, then the install's, then the "
+                "shipped one")
+
+#: The ONE text every client appends to its top-level `--help` description:
+#: the key the board is read from, the order of the chain, and the rule
+#: `_read_project_config` resolves it by -- the first file that exists and
+#: parses wins, whether or not it holds a `[client]` table.
+BOARD_CONFIGURATION_HELP = (
+    f"Board: every verb posts to `[{CLIENT_TABLE}] {CLIENT_BOARD_FIELD}`, read "
+    "from the project's crucible.toml,\n"
+    "then the install's, then the shipped one. The first file that exists and "
+    "parses wins:\n"
+    f"a project file without `[{CLIENT_TABLE}] {CLIENT_BOARD_FIELD}` uses the "
+    "shipped address, while a\n"
+    "malformed one falls through to the next file.")
+
+
 class GateSkipDeclarationError(ValueError):
     """A `[gate] skip` declaration whose SHAPE cannot be passed to no-mistakes:
     not a list of non-empty strings, or an entry carrying the comma that
@@ -668,7 +689,8 @@ def http_request(base_url, method, path, payload=None, timeout=None):
     # pi-lens-ignore: unreachable-except — URLError follows its subclass HTTPError and precedes the unrelated TimeoutError, so it is reached
     except urllib.error.URLError as e:
         return {"ok": False, "error": f"connection failed: {e.reason} "
-                                      f"(is Crucible running at {base_url}?)"}
+                                      f"(is Crucible running at {base_url}? "
+                                      f"{BOARD_SOURCE})"}
     except TimeoutError:
         # CR-CRU-126 §S3 — the READ-phase timeout, which is the one a SLOW
         # board produces: the connection is accepted, so nothing raises until
@@ -687,7 +709,8 @@ def http_request(base_url, method, path, payload=None, timeout=None):
         # envelope-owning verbs report exactly as they already report an
         # unreachable board.
         return {"ok": False, "error": f"request timed out after {timeout}s "
-                                      f"(is Crucible at {base_url} overloaded?)"}
+                                      f"(is Crucible at {base_url} overloaded? "
+                                      f"{BOARD_SOURCE})"}
     return json.loads(body) if body else {"ok": True}
 
 
@@ -3953,16 +3976,16 @@ def cmd_cr_close(args, project_dir, ops):
     resp = ops.patch(f"{ops.plans_path(project_dir)}/{plan['planId']}",
                      {"status": "closed", "merge": merge, "agentId": agent_id})
     ok = resp.get("ok", False)
-    legacy = (f"cr-close: ok={ok} plan={plan['planId']} cr={cr_label} "
-              f"commit={args.commit}"
-              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    status_tail = (f"plan={plan['planId']} cr={cr_label} commit={args.commit}"
+                   + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    legacy = f"cr-close: ok={ok} {status_tail}"
     result_fields = {"plan": plan["planId"], "cr": cr_label, "commit": args.commit}
     if accepted is not None:
         result_fields["acceptedFailingGateReason"] = accepted
     result_fields["help"] = HELP_STEPS["cr-close"]
-    ops.emit("cr-close", bool(ok), result_fields,
-             ops.context(project_dir, cr=cr_label), warnings, legacy)
     if not ok:
+        ops.emit("cr-close", False, result_fields,
+                 ops.context(project_dir, cr=cr_label), warnings, legacy)
         return 1
     # §S4c / AC 141 — a SUCCESSFUL close emits a cr-merged milestone marker
     # (label=CR id, the merge commit, env auto-context). Withheld on a failed
@@ -3984,7 +4007,38 @@ def cmd_cr_close(args, project_dir, ops):
     print(f"cr-merged: ok={ms_resp.get('ok', False)} cr={cr_label} commit={args.commit}"
           + (f" error={ms_resp.get('error')}" if ms_resp.get("error") else ""),
           file=sys.stderr)
-    return 0
+    # The one envelope follows the post, so a closed CR whose marker the board
+    # refused (or never answered) reads ok: false with the remedy as help[].
+    recorded = bool(ms_resp.get("ok", False))
+    if not recorded:
+        warnings = list(warnings) + [_cr_merged_not_recorded_warning(
+            cr_label, ms_resp.get("error") or "the board did not answer")]
+        result_fields["help"] = cr_merged_remedy_steps(agent_id, cr_label, args.commit)
+    # The human status line states the same ok as the envelope it rides with.
+    ops.emit("cr-close", recorded, result_fields,
+             ops.context(project_dir, cr=cr_label), warnings,
+             f"cr-close: ok={recorded} {status_tail}")
+    return 0 if recorded else 1
+
+
+CR_MERGED_NOT_RECORDED_CODE = "cr-merged-not-recorded"
+
+
+def _cr_merged_not_recorded_warning(cr, board_error):
+    """The warning `cr-close` carries when the plan closed but its `cr-merged`
+    post failed: the CR is closed, its marker is missing, and why."""
+    return {"code": CR_MERGED_NOT_RECORDED_CODE,
+            "detail": (f"{cr} is closed, but its cr-merged milestone is not on "
+                       f"the board: the post failed ({board_error})")}
+
+
+def cr_merged_remedy_steps(agent_id, cr, commit):
+    """The three steps that record a closed CR's missing `cr-merged` marker:
+    drop the (possibly stale) binding, re-register unbound, post the marker."""
+    return [f"unregister --agent {agent_id}",
+            f"register --agent {agent_id} --role ORCHESTRATOR",
+            (f"milestone --type cr-merged --cr {cr} --label {cr} "
+             f"--commit {commit} --agent {agent_id}")]
 
 
 def cycle_transition(args, project_dir, ops, status):

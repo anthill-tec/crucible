@@ -1,8 +1,8 @@
 # CR-CRU-190 — the 0.4.0 follow-ups list
 
 **Type** fix (patch CR, one list of follow-ups) · **Points** 8 (re-scored at gap analysis
-2026-10-19) · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-184 · **Status** PENDING — filed
-2026-10-14 (user ruling: the open follow-ups are ONE patch CR, not several). Split at gap analysis
+2026-10-19) · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-184 · **Status** DONE — merged
+2026-10-19; filed 2026-10-14 (user ruling: the open follow-ups are ONE patch CR, not several). Split at gap analysis
 2026-10-19 (user ruling): the bun test-name filter moved to CR-CRU-194, the pytest runner to
 CR-CRU-197, and the python floor, the rust indent and the gitleaks configuration to CR-CRU-198; the
 late-signal follow-up was dropped.
@@ -104,36 +104,36 @@ Every client resolves its project dir, from the flag or the environment variable
 
 ## Acceptance criteria
 
-- [ ] **Badge.** Against a real board, an idle agent bound to the second cycle of a five-cycle plan
+- [x] **Badge.** Against a real board, an idle agent bound to the second cycle of a five-cycle plan
       reads `idle · <role> · <CR> · cycle 2/5 · …` in its row (DOM), the same `2/5` the roadmap lane
       shows while that cycle is active, and never the board-wide id. An unbound agent reads
       `no cycle bound`. A unit test of the composer proves `cycle #<id>` for an unresolvable plan.
       The three tests that pin today's idle line are rewritten to the new line, with synthetic CR
       labels in their fixtures.
-- [ ] **Help names the configuration.** For EACH of the five clients (arduino, bun, mvn, python,
+- [x] **Help names the configuration.** For EACH of the five clients (arduino, bun, mvn, python,
       rust), top-level `--help` contains `[client] url`, the project → install → shipped order and
       the fall-through rule, from the one shared text. The transport's connection-failure and timeout
       messages contain `[client] url`.
-- [ ] **Archived analytics are refused.** For an archived project, EACH of the velocity, burndown,
+- [x] **Archived analytics are refused.** For an archived project, EACH of the velocity, burndown,
       forecast and changes routes answers `404` with `error` `project is archived: <key>` and the
       archived help. A malformed key still answers `400` and an unknown key the unknown-project
       `404`. A live project's answers are unchanged.
-- [ ] **A refused `cr-merged` post is reported.** Against a real board: an orchestrator bound to a
+- [x] **A refused `cr-merged` post is reported.** Against a real board: an orchestrator bound to a
       plan's last cycle by a gate run, after `cycle-done` and without re-registering, runs
       `cr-close`. The plan is closed; the command prints ONE envelope, `ok: false`, exit 1, carrying
       the `cr-merged-not-recorded` warning (its detail names the board's error) and the three-step
       `help[]` remedy. Running that remedy records the `cr-merged` milestone. The same holds on the
       accepted-failing-gate path. With a clean binding, `cr-close` is `ok: true`, exit 0, as today.
-- [ ] **Help matches the verb.** For EACH client, every verb that takes a run's `--cycle`
+- [x] **Help matches the verb.** For EACH client, every verb that takes a run's `--cycle`
       (`register`'s `--cycle` and `plan-file`'s `--cycle` excluded) carries the gated wording if and
       only if driving it posts the gated-run identity, measured by driving each verb against a
       recording board.
-- [ ] **A relative project dir is absolute.** For EACH of the five clients, the project-dir
+- [x] **A relative project dir is absolute.** For EACH of the five clients, the project-dir
       resolution returns an absolute path, and binds it, for a relative flag and for a relative
       environment value. A real python `test` run and a python `pre-merge-gate` started from the
       project's parent with a relative `--project-dir` file the same pass and fail counts as with the
       absolute path, and no compile failure.
-- [ ] **No new CR literals.** No CR-shaped literal is added in `src/`, `public/` or `clients/`, the
+- [x] **No new CR literals.** No CR-shaped literal is added in `src/`, `public/` or `clients/`, the
       citation tripwire's pins are unchanged, and the citations already on rewritten lines are kept.
 
 ## Non-goals

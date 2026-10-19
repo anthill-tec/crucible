@@ -125,6 +125,7 @@ def _resolve_project_dir(arg_value):
         )
         root = (r.stdout.strip() if r.returncode == 0 and r.stdout.strip()
                 else os.getcwd())
+    root = os.path.abspath(root)
     _axi().bind_project_dir(root)
     return root
 
@@ -2348,7 +2349,8 @@ _CLI_DESCRIPTION = (
     "\n"
     "Tool-specific (Maven / Surefire / Failsafe / JUnit-XML / JaCoCo), never\n"
     "project-specific: the project path and the maven dir are parameterizable,\n"
-    "nothing is hardcoded. Run `<verb> --help` for a verb's own flags."
+    "nothing is hardcoded. Run `<verb> --help` for a verb's own flags.\n"
+    "\n" + _axi().BOARD_CONFIGURATION_HELP
 )
 
 

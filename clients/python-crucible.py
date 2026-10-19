@@ -116,6 +116,7 @@ def _resolve_project_dir(arg_value):
         )
         root = (r.stdout.strip() if r.returncode == 0 and r.stdout.strip()
                 else os.getcwd())
+    root = os.path.abspath(root)
     _axi().bind_project_dir(root)
     return root
 
@@ -1810,7 +1811,8 @@ _CLI_DESCRIPTION = (
     "\n"
     "Tool-specific (unittest / xmlrunner / JUnit-XML / coverage.py), never\n"
     "project-specific: the project path and the interpreter are parameterizable.\n"
-    "Run `<verb> --help` for a verb's own flags."
+    "Run `<verb> --help` for a verb's own flags.\n"
+    "\n" + _axi().BOARD_CONFIGURATION_HELP
 )
 
 

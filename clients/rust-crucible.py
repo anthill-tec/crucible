@@ -144,6 +144,7 @@ def _resolve_project_dir(arg_value):
         )
         root = (r.stdout.strip() if r.returncode == 0 and r.stdout.strip()
                 else os.getcwd())
+    root = os.path.abspath(root)
     _axi().bind_project_dir(root)
     return root
 
@@ -2835,7 +2836,7 @@ _CLI_DESCRIPTION = (
     "(nextest, check, clippy, llvm-cov) with the result ingested to Crucible.\n\n"
     "Tool-specific (Cargo / Nextest / JUnit-XML / llvm-cov / Clippy), never "
     "project-specific: the project path is parameterizable. Run `<verb> --help` "
-    "for a verb's own flags."
+    "for a verb's own flags.\n\n" + _axi().BOARD_CONFIGURATION_HELP
 )
 
 
@@ -3199,7 +3200,7 @@ def main():
         "--min-free-g", type=int, default=80,
         help="Disk-guard floor in GB before the gate (default: 80).",
     )
-    _add_gate_cycle_arg(e2e)
+    _axi().add_filing_cycle_arg(e2e)
     _add_run_release_arg(e2e)
     _add_project_dir_arg(e2e)
     e2e.set_defaults(func=cmd_docker_e2e_gate)

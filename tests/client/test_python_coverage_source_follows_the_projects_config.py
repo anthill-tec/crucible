@@ -226,18 +226,17 @@ class UndeclaredSourceMeasuresTheProjectTest(_CoverageRunCase):
                 self._assert_one_undeclared_warning(label, result)
 
     def test_an_undeclared_source_under_a_relative_project_dir_is_passed_as_the_absolute_root(self):
-        """Only the `--source` is pinned here. The gate is given
-        `--skip-check`: its py_compile step, and the reports directory the
-        run hands its runner, do not yet resolve a relative project dir, and
-        neither is what this test is about."""
+        """Only the `--source` is pinned here. Both verbs run whole, the
+        gate's py_compile step included: the client makes a relative project
+        dir absolute when it resolves it, so every step, and the reports
+        directory the run hands its runner, sees the same absolute root."""
         for label, verb in VERBS:
             with self.subTest(verb=label):
                 project_dir, board = make_project(self, base_files())
                 self.addCleanup(os.chdir, os.getcwd())
                 os.chdir(os.path.dirname(project_dir))
                 relative = os.path.basename(project_dir)
-                skip_check = ("--skip-check",) if verb[0] == "pre-merge-gate" else ()
-                result = drive(relative, board, verb, extra_argv=skip_check)
+                result = drive(relative, board, verb)
                 line = self._the_coverage_run_line(label, result)
                 sources = source_values(line)
                 self.assertEqual(
