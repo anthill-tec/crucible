@@ -26,9 +26,12 @@ own Python) is present, then installs the primary orchestrator and provisions
 the server:
 
 ```sh
-uv tool install crucible-axi
+uv tool install crucible-axi --python 3.14
 crucible-axi install
 ```
+
+`--python 3.14` follows the package name: it lands the tool on python 3.14, the
+floor crucible-axi requires, rather than on uv's default interpreter.
 
 `crucible-axi install` provisions and then **exits** — it never starts anything.
 It guarantees **Bun** (the server's runtime: detected on `PATH`, otherwise
@@ -63,7 +66,17 @@ work. Note that plain `uv tool upgrade crucible-axi` is *not* sufficient by
 hand: it resolves within the constraint the tool was installed under, so a
 pinned install reports "already current" forever. The installer uses
 `uv tool install --upgrade`, which ignores that pin. Version selection is
-entirely uv's — the installer never pins a `crucible-axi` version.
+entirely uv's — the installer never pins a `crucible-axi` version. To upgrade
+by hand, name the python too:
+
+```sh
+uv tool install --upgrade crucible-axi --python 3.14
+```
+
+uv keeps a tool environment's interpreter across `--upgrade`, so an environment
+on an older python would stay on the newest release that python allows;
+`--python 3.14` makes uv rebuild it on 3.14. The installer says so before it
+rebuilds one, naming the python the environment ran.
 
 Running the server is a separate, explicit step. Start it in the foreground and
 check its health:
