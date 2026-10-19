@@ -186,12 +186,15 @@ describe("CR-CRU-157 AC6–AC8 — AgentRow renders the running message, the ser
       // with the outcome tally, and §S3 additionally serves `idleLine`. The
       // row must show the LATTER, not the former.
       opts.agents[0]!.message = "7 ✓ 0 ✗ · ingested";
-      opts.agents[0]!.idleLine = "idle · GREEN · cycle 9 · last run 7 ✓ 0 ✗ · ingested, just now";
+      opts.agents[0]!.idleLine =
+        "idle · GREEN · lifecycle-fixture · cycle 2/5 · last run 7 ✓ 0 ✗ · ingested, just now";
       await waitForPollTick();
       const paneIdle = document.querySelector('[data-testid="project-pane"]') as HTMLElement;
       const idleText = agentRowMessageText(paneIdle, agentId);
       // POSITIVE — the exact composed line.
-      expect(idleText).toBe("idle · GREEN · cycle 9 · last run 7 ✓ 0 ✗ · ingested, just now");
+      expect(idleText).toBe(
+        "idle · GREEN · lifecycle-fixture · cycle 2/5 · last run 7 ✓ 0 ✗ · ingested, just now",
+      );
       // NEGATIVE bound — not the bare outcome `message` the server ALSO
       // carries (a card that fell back to `message` would read this
       // instead, losing the role/cycle/age context §S3 requires).
@@ -228,7 +231,7 @@ describe("CR-CRU-157 AC6–AC8 — AgentRow renders the running message, the ser
           agentId,
           projectKey,
           message: "12 ✓ 1 ✗ · ingested",
-          idleLine: "idle · VERIFY · cycle 41 · last run 12 ✓ 1 ✗ · ingested, 3m ago",
+          idleLine: "idle · VERIFY · static-fixture · cycle 3/4 · last run 12 ✓ 1 ✗ · ingested, 3m ago",
         }),
       ],
     };
@@ -236,7 +239,7 @@ describe("CR-CRU-157 AC6–AC8 — AgentRow renders the running message, the ser
 
     const pane = document.querySelector('[data-testid="project-pane"]') as HTMLElement;
     const text = agentRowMessageText(pane, agentId);
-    expect(text).toBe("idle · VERIFY · cycle 41 · last run 12 ✓ 1 ✗ · ingested, 3m ago");
+    expect(text).toBe("idle · VERIFY · static-fixture · cycle 3/4 · last run 12 ✓ 1 ✗ · ingested, 3m ago");
     expect(text).not.toBe("12 ✓ 1 ✗ · ingested");
   });
 });

@@ -17,7 +17,10 @@
 //   - its exact text, taken from storyboard F19's own states 5′/5 (the
 //     `· ` middle-dot separator between segments, `, ` between the last-run
 //     outcome and its age):
-//       `idle · <ROLE> · cycle <cycleId> · last run <message>, <age>`
+//       `idle · <ROLE> · <CR> · cycle <n>/<m> · last run <message>, <age>`
+//     where `<CR>` is the bound cycle's plan's CR and `n/m` the bound
+//     cycle's 1-based place in that plan's cycle order over its cycle count
+//     (never the board-wide cycle id),
 //     where `<message>` is exactly the text this CR's §S2 fix just wrote
 //     onto the agent (so a 2936 ✓ 0 ✗ · ingested outcome or an `ingest
 //     refused — …` refusal both carry through unchanged into the idle
@@ -160,7 +163,7 @@ async function startRun(
 const AGE_TAIL = /(just now|\d+[smhd] ago)$/;
 
 describe("CR-CRU-157 §S3/R1 — idle is derived on the server, at GET /api/v2/agents read time", () => {
-  test("an agent whose accepted ingest just closed its run reads a composed idle line — `idle · <role> · cycle <id> · last run <outcome>, <age>` — carrying the SAME outcome text §S2 just wrote onto its message", async () => {
+  test("an agent whose accepted ingest just closed its run reads a composed idle line — `idle · <role> · <CR> · cycle <n>/<m> · last run <outcome>, <age>` — carrying the SAME outcome text §S2 just wrote onto its message", async () => {
     const handle = boot();
     const key = seedProject(handle);
     const { cycleId } = await fileAndActivateCycle(handle, key, "idle-line-bound-outcome");
@@ -182,16 +185,20 @@ describe("CR-CRU-157 §S3/R1 — idle is derived on the server, at GET /api/v2/a
     // The §S2 sibling's own contract: the message this idle line must carry.
     expect(agent!.message).toBe("5 ✓ 0 ✗ · ingested");
     expect(agent!.idleLine).toBeDefined();
-    // POSITIVE — role, the EXACT bound cycle id, the EXACT outcome text, and
-    // a well-formed age tail, in the separators F19's states 5/5′ use.
+    // POSITIVE — role, the bound cycle's plan's CR and its place in that
+    // one-cycle plan, the EXACT outcome text, and a well-formed age tail,
+    // in the separators F19's states 5/5′ use.
     expect(agent!.idleLine).toMatch(
-      new RegExp(`^idle · GREEN · cycle ${cycleId} · last run 5 ✓ 0 ✗ · ingested, `),
+      /^idle · GREEN · idle-line-bound-outcome · cycle 1\/1 · last run 5 ✓ 0 ✗ · ingested, /,
     );
     expect(agent!.idleLine).toMatch(AGE_TAIL);
     // NEGATIVE bound — composing the line must never invent a DIFFERENT
     // cycle id or role than the ones actually stored.
     expect(agent!.idleLine).not.toContain("plan ");
     expect(agent!.idleLine).not.toContain("no cycle bound");
+    // NEGATIVE — the board-wide cycle id is never what the line names.
+    expect(agent!.idleLine).not.toContain(`#${cycleId}`);
+    expect(agent!.idleLine).not.toMatch(new RegExp(`cycle ${cycleId} `));
   });
 
   test("an agent with an OPEN run (its last heartbeat posted mid-run) carries NO idle line — GET /api/v2/agents reads its raw client message, unchanged, exactly as §S3 requires while a run is in flight", async () => {

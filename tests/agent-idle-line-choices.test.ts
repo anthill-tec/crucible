@@ -195,8 +195,10 @@ describe("the idle line's choices", () => {
     await registerBound(handle, key, "green-never-ran", cycleId);
 
     const agent = await agentById(handle, key, "green-never-ran");
-    expect(agent?.idleLine).toBe(`idle · GREEN · cycle ${cycleId} · seen just now`);
+    expect(agent?.idleLine).toBe("idle · GREEN · idle-never-ran · cycle 1/1 · seen just now");
     expect(agent!.idleLine).not.toContain("last run");
+    // Never the board-wide cycle id.
+    expect(agent!.idleLine).not.toContain(`#${cycleId}`);
   });
 
   test("an agent with no declared role omits the role segment — never a placeholder", async () => {
