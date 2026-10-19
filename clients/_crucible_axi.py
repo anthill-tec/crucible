@@ -3976,9 +3976,9 @@ def cmd_cr_close(args, project_dir, ops):
     resp = ops.patch(f"{ops.plans_path(project_dir)}/{plan['planId']}",
                      {"status": "closed", "merge": merge, "agentId": agent_id})
     ok = resp.get("ok", False)
-    legacy = (f"cr-close: ok={ok} plan={plan['planId']} cr={cr_label} "
-              f"commit={args.commit}"
-              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    status_tail = (f"plan={plan['planId']} cr={cr_label} commit={args.commit}"
+                   + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    legacy = f"cr-close: ok={ok} {status_tail}"
     result_fields = {"plan": plan["planId"], "cr": cr_label, "commit": args.commit}
     if accepted is not None:
         result_fields["acceptedFailingGateReason"] = accepted
@@ -4014,8 +4014,10 @@ def cmd_cr_close(args, project_dir, ops):
         warnings = list(warnings) + [_cr_merged_not_recorded_warning(
             cr_label, ms_resp.get("error") or "the board did not answer")]
         result_fields["help"] = cr_merged_remedy_steps(agent_id, cr_label, args.commit)
+    # The human status line states the same ok as the envelope it rides with.
     ops.emit("cr-close", recorded, result_fields,
-             ops.context(project_dir, cr=cr_label), warnings, legacy)
+             ops.context(project_dir, cr=cr_label), warnings,
+             f"cr-close: ok={recorded} {status_tail}")
     return 0 if recorded else 1
 
 
@@ -4035,8 +4037,8 @@ def cr_merged_remedy_steps(agent_id, cr, commit):
     drop the (possibly stale) binding, re-register unbound, post the marker."""
     return [f"unregister --agent {agent_id}",
             f"register --agent {agent_id} --role ORCHESTRATOR",
-            f"milestone --type cr-merged --cr {cr} --label {cr} "
-            f"--commit {commit} --agent {agent_id}"]
+            (f"milestone --type cr-merged --cr {cr} --label {cr} "
+             f"--commit {commit} --agent {agent_id}")]
 
 
 def cycle_transition(args, project_dir, ops, status):
