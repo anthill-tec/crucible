@@ -1,13 +1,13 @@
 # CR-CRU-190 — the 0.4.0 follow-ups list
 
 **Type** fix (patch CR, one list of follow-ups) · **Points** 13 (set at filing, 2026-10-14; items 6–8 added the same day, items 9–11 on
-2026-10-16; the gap analysis splits it if the list outgrows the cap) · **Wave** 8 (0.4.0) · **Depends on**
+2026-10-16, item 12 on 2026-10-19; the gap analysis splits it if the list outgrows the cap) · **Wave** 8 (0.4.0) · **Depends on**
 CR-CRU-184 · **Status** PENDING — filed 2026-10-14 (user ruling: the open follow-ups are ONE patch
 CR, not several; placed after CR-CRU-189)
 
 ## Problem
 
-Eleven follow-ups came out of wave 8's work and Model B's mail. Each is small, and the user ruled that
+Twelve follow-ups came out of wave 8's work and Model B's mail. Each is small, and the user ruled that
 they are worked as one CR.
 
 1. **An agent's badge names its cycle by a board-wide id.** Noticed by the user (2026-10-14). An agent's
@@ -65,6 +65,12 @@ they are worked as one CR.
     101 of the findings are in tracked files (45 test files, a design note and a project skill). The
     rest are in gitignored run output under `test-reports/` and `__pycache__/`. A real secret would
     be lost among them.
+12. **A relative project dir breaks a run.** Found during CR-CRU-192. The bun, mvn, python and rust
+    clients keep a relative `--project-dir` (or its environment variable) exactly as given; only
+    arduino makes it absolute. The reports dir derived from it stays relative while the runner
+    runs with the project dir as its cwd, so the runner writes its reports where the client never
+    looks. No report is found, and the run is ingested as a compile failure. The gate's compile
+    step fails the same way.
 
 ## Steps
 
@@ -136,6 +142,12 @@ UUIDv7) and a test fixture's key or id where it appears as a key or id value. It
 gitignored run output (`test-reports/`, `__pycache__/`). No default rule is disabled, so a real
 secret anywhere in the tree is still reported.
 
+### §S12 — a project dir is absolute from the moment it is resolved
+
+Every client resolves its project dir, from the flag or the environment variable, to an absolute
+path before anything derives from it: the reports dir, the `.env`, the `crucible.toml` and the
+runner's cwd.
+
 ## Acceptance criteria
 
 - [ ] **Badge.** On a board whose plan has five cycles, an idle agent bound to the second shows
@@ -172,6 +184,10 @@ secret anywhere in the tree is still reported.
       whole tree, reports zero findings on the current tree. With a planted fixture holding a real
       token shape (e.g. a GitHub token pattern) in a tracked test file, it reports that one. The
       repo's gitleaks configuration extends the default rules and disables none.
+- [ ] **A relative project dir runs.** For EACH of the five clients, a `test` run and a
+      `pre-merge-gate` started from the project's parent with a relative `--project-dir`, and again
+      with the relative path in the environment variable, file the same pass and fail counts as the
+      same run given the absolute path, and no compile failure.
 - [ ] **No new CR literals.** No CR-shaped literal is added in `src/`, `public/`, `clients/` or test
       comments, and the citation tripwire's pins are unchanged.
 
