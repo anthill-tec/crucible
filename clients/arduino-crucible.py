@@ -41,8 +41,9 @@ more (CR-CRU-139 §S2): it is declared in the project's `crucible.toml`.
 CR-CRU-044 §S5 — the agent identity comes from `--agent` ONLY: no env var supplies
 one, and there is no fallback. A verb that would POST under an agentId without a
 declared identity HARD-STOPS (ok:false, non-zero exit) rather than inventing one.
-$AGENT_ID is set FROM `--agent` for child processes; it is not an identity source,
-and neither is $WORKFLOW_ROLE (that is the track lane, reported as context.track).
+$AGENT_ID is handed FROM `--agent` to the child processes this client spawns, in
+their own environment; it is never exported into this process's environment and
+never read as an identity source, and neither is $WORKFLOW_ROLE (that is the track lane, reported as context.track).
 
 Subcommands:
   register, unregister  Agent lifecycle (TDD roles bind a cycle with --cycle).
@@ -578,6 +579,19 @@ def _make_reports_env(own_dir, want_coverage):
     return env
 
 
+def _child_env(args, env=None):
+    """The environment for a child this client spawns: `env` (else a copy of
+    this process's), with AGENT_ID set to `--agent` when one was given. This
+    process's own environment is never written. None when there is neither a
+    base env nor an `--agent`, so the child simply inherits."""
+    agent = getattr(args, "agent", None)
+    if not agent:
+        return env
+    child = dict(env) if env is not None else os.environ.copy()
+    child["AGENT_ID"] = agent
+    return child
+
+
 def _move_ignored_outputs(native_dir, own_dir, want_coverage):
     """A Makefile that ignored REPORTS_DIR/COVERAGE_DIR wrote to its own fixed
     `reports/`/`coverage/`: move that output into the run's own directory and
@@ -643,7 +657,7 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
     own_dir = _run_reports_dir(args, pd)
-    make_env = _make_reports_env(own_dir, want_coverage)
+    make_env = _child_env(args, _make_reports_env(own_dir, want_coverage))
     narrator, run_id = None, None
     if agent_id:
         narrator = _narrator(pd, agent_id, identity)
@@ -723,7 +737,7 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                   f"{_coverage_dir(native_dir, own_dir)}/lcov.info — ingesting WITHOUT coverage",
                   file=sys.stderr)
 
-    if not args.agent and not os.environ.get("AGENT_ID"):
+    if not args.agent:
         # No ingest requested — just report the run outcome.
         print(f"[crucible] {verb} -> '{key}': {summary['passed']}/{summary['total']} passed, "
               f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
@@ -845,11 +859,11 @@ def _compile_run(args, pd):
     run = subprocess.run(
         [ARDUINO_CLI, "compile", "--fqbn", FQBN,
          "--build-path", os.path.join(pd, "build"), pd],
-        capture_output=True, text=True)
+        capture_output=True, text=True, env=_child_env(args))
     ok = run.returncode == 0
     if not ok:
         errors = re.sub(r"\x1b\[[0-9;]*m", "", (run.stdout + run.stderr).strip())
-        if args.agent or os.environ.get("AGENT_ID"):
+        if args.agent:
             agent_id = _agent_id(args)
             _ingest_compile(pd, key, agent_id, errors,
                             context=_axi().cycle_context(
@@ -1748,8 +1762,6 @@ def main():
     ms.set_defaults(func=cmd_milestone)
 
     args = p.parse_args()
-    if getattr(args, "agent", None):
-        os.environ["AGENT_ID"] = args.agent
     # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
     if getattr(args, "func", None) is None:
         sys.exit(_axi().run_dashboard(
