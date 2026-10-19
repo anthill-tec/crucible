@@ -116,6 +116,7 @@ def _resolve_project_dir(arg_value):
         )
         root = (r.stdout.strip() if r.returncode == 0 and r.stdout.strip()
                 else os.getcwd())
+    root = os.path.abspath(root)
     _axi().bind_project_dir(root)
     return root
 
