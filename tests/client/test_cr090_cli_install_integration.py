@@ -260,11 +260,11 @@ class _CliInstallCase(unittest.TestCase):
         """
         argv = ["install", "--target-dir", self.target, *extra_argv]
         buffer = io.StringIO()
-        with mock.patch.dict(self.install.DEFAULT_STAGE_RUNNERS,
-                             {SERVER_STAGE_NAME: _fast_provision_server_stage,
-                              UNIT_STAGE_NAME: _fast_unit_stage}):
-            with contextlib.redirect_stdout(buffer):
-                code = self.cli.main(argv)
+        with (mock.patch.dict(self.install.DEFAULT_STAGE_RUNNERS,
+                              {SERVER_STAGE_NAME: _fast_provision_server_stage,
+                               UNIT_STAGE_NAME: _fast_unit_stage}),
+              contextlib.redirect_stdout(buffer)):
+            code = self.cli.main(argv)
         return code, buffer.getvalue()
 
     def assertFleetLanded(self, stdout):

@@ -31,7 +31,7 @@ Three guarantees, in order:
        non-empty help output, proving the mechanism is not bun-specific.
     2. PEP 723 SURVIVAL -- the wheel/install pipeline must not strip the
        `# /// script` block off any of the five installed clients; each
-       still declares `requires-python = ">=3.10"` and an EMPTY
+       still declares `requires-python = ">=3.14"` and an EMPTY
        `dependencies = []` (the §S2/§S3 stub-landmine guard).
     3. NEGATIVE CONTROL -- a copy of an installed client with its PEP 723
        `dependencies` corrupted to name a package that cannot exist MUST
@@ -320,7 +320,7 @@ class Cr046UvEnvironmentGateTest(unittest.TestCase):
     def test_installed_clients_carry_intact_pep723_block(self):
         """The wheel + `uv pip install` pipeline must not strip or corrupt
         any of the five clients' `# /// script` blocks: each installed copy
-        must still declare `requires-python = ">=3.10"` and an EMPTY
+        must still declare `requires-python = ">=3.14"` and an EMPTY
         `dependencies = []` (the §S2/§S3 stub-landmine guard, re-asserted
         here against the INSTALLED artifact rather than the source
         checkout that test_cr046_pep723_metadata.py already covers)."""
@@ -335,7 +335,7 @@ class Cr046UvEnvironmentGateTest(unittest.TestCase):
                 Path(client_path).read_text(encoding="utf-8"))
             if parsed is None:
                 offenders[stack] = "no parseable PEP 723 block found"
-            elif parsed.get("requires-python") != ">=3.10":
+            elif parsed.get("requires-python") != ">=3.14":
                 offenders[stack] = (
                     f"requires-python={parsed.get('requires-python')!r}")
             elif parsed.get("dependencies") != []:

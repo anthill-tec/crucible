@@ -105,7 +105,7 @@ jobs:
           fetch-depth: 0          # hatch-vcs needs tags for the dynamic version
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.x"
+          python-version: "3.14" # the floor; quoted, or YAML reads a float
       - name: Build crucible-axi sdist + wheel
         run: |
           python -m pip install --upgrade build twine
@@ -152,6 +152,11 @@ jobs:
       # (measured on run 31677479804). The maintained, pinned action — a
       # release gate must not depend on an unpinned `curl | sh` network script.
       - uses: astral-sh/setup-uv@v7
+      # The bun suite spawns the python client fleet, so this job runs python
+      # too, and runs it on the declared floor rather than the image's python.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
       - name: Install dependencies
         run: bun install --frozen-lockfile
       # CR-CRU-112 §S1 (measured on the 0.2.0 release, run 34303803078) — this
@@ -192,7 +197,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.x"
+          python-version: "3.14"
       # CR-CRU-063 §S1 — tests/client/test_cr046_uv_env_gate.py's setUpClass
       # raises ``RuntimeError: `uv` is not on PATH … Remedy: install uv.``,
       # aborting the whole class (which is why CI discovered 673, not 683).
@@ -396,6 +401,9 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0          # hatch-vcs needs tags to derive the version
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
       - name: Version sanity — reject PEP 440 local segment ('+')
         run: |
           python -m pip install --upgrade build

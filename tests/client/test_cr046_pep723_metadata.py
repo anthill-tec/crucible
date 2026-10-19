@@ -15,7 +15,7 @@ REVISED contract pinned from §S3's revision note:
     `clients/python-crucible.py`, `clients/mvn-crucible.py`,
     `clients/rust-crucible.py`, `clients/arduino-crucible.py`) still carries
     a `# /// script` PEP 723 inline metadata block declaring
-    `requires-python = ">=3.10"`, but its `dependencies` list is now EMPTY
+    `requires-python = ">=3.14"`, but its `dependencies` list is now EMPTY
     (`dependencies = []`) -- the mechanism (PEP 723 + `uv run`) stays wired
     and proven, harmless while empty, and the eventual real-library re-add
     becomes a one-line change per file (the §S2 revisit pin). The block
@@ -50,7 +50,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 
-EXPECTED_REQUIRES_PYTHON = ">=3.10"
+EXPECTED_REQUIRES_PYTHON = ">=3.14"
 MAX_BLOCK_START_LINE = 60
 TOON_STUB_PIN = "toon-format>=0.1,<0.2"
 
@@ -139,7 +139,7 @@ class ClientCarriesPep723MetadataBlockTest(unittest.TestCase):
 
 
 class ClientPep723BlockDeclaresRequiresPythonTest(unittest.TestCase):
-    """§S3 -- the parsed block declares `requires-python = ">=3.10"`."""
+    """§S3 -- the parsed block declares `requires-python = ">=3.14"`."""
 
     def test_bun_crucible_requires_python(self):
         self._assert_requires_python("bun-crucible.py")

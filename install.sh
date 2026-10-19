@@ -100,10 +100,33 @@ fi
 # "Checked 1 package" and leaves the old version in place, which stranded every
 # existing user on a stale CLI (CR-CRU-072). Advancing is `uv tool upgrade`.
 # Version selection stays uv's job: no version specifier appears here.
+#
+# Every install names `--python 3.14`, after the package name: uv keeps an
+# existing tool environment's interpreter across `--upgrade`, so an environment
+# on an older python stays on the newest release that python allows, and a
+# fresh install takes uv's default interpreter, which may be older too. Naming
+# the python makes uv rebuild such an environment and install the release
+# python 3.14 runs.
 
 # The version uv currently has installed, or empty when the tool is absent.
 axi_version() {
   uv tool list 2>/dev/null | awk '$1 == "crucible-axi" { v = $2; sub(/^v/, "", v); print v; exit }'
+}
+
+# The python crucible-axi's own tool environment runs, read from its line of
+# `uv tool list --show-python` (`crucible-axi v0.3.0 [CPython 3.13.13]`), or
+# empty when it cannot be learned. Other tools' lines are never read.
+axi_python() {
+  uv tool list --show-python 2>/dev/null | awk '$1 == "crucible-axi" {
+    if (match($0, /\[[^]]*\]/)) { n = split(substr($0, RSTART + 1, RLENGTH - 2), w, " "); print w[n] }
+    exit
+  }'
+}
+
+# True when the given python version (`3.13.13`) is older than 3.14.
+python_older_than_3_14() {
+  [ -n "$1" ] || return 1
+  printf '%s\n' "$1" | awk -F. '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ { exit !($1 < 3 || ($1 == 3 && $2 < 14)) } { exit 1 }'
 }
 
 axi_before="$(axi_version || true)"
@@ -111,6 +134,12 @@ advanced=0
 
 if [ -n "$axi_before" ]; then
   echo "==> crucible-axi already installed ($axi_before) — asking uv for the latest release"
+  # A notice only: when the environment's python cannot be learned, say
+  # nothing and carry on; the upgrade itself never depends on it.
+  axi_py="$(axi_python || true)"
+  if python_older_than_3_14 "$axi_py"; then
+    echo "==> crucible-axi's tool environment runs python $axi_py; uv is rebuilding it on python 3.14"
+  fi
   # `uv tool install --upgrade`, NOT `uv tool upgrade`: the latter resolves
   # WITHIN the constraint the tool was installed under, so a tool installed as
   # `crucible-axi==X` reports "already current" forever and never advances
@@ -118,7 +147,7 @@ if [ -n "$axi_before" ]; then
   # at 0.1.1; `--upgrade` moved it to 0.1.2). `--upgrade` ignores that pin,
   # which is the only form that advances BOTH a pinned and an unpinned
   # install. Version selection is still entirely uv's: no specifier here.
-  uv tool install --upgrade crucible-axi
+  uv tool install --upgrade crucible-axi --python 3.14
   axi_after="$(axi_version || true)"
   if [ "$axi_after" = "$axi_before" ]; then
     echo "==> crucible-axi already current: $axi_before"
@@ -128,7 +157,7 @@ if [ -n "$axi_before" ]; then
   fi
 else
   echo "==> Installing crucible-axi (PyPI primary orchestrator) via uv"
-  uv tool install crucible-axi
+  uv tool install crucible-axi --python 3.14
   axi_after="$(axi_version || true)"
   echo "==> crucible-axi installed${axi_after:+ ($axi_after)}"
   advanced=1

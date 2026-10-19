@@ -386,7 +386,16 @@ provisioned server move in lockstep; on an already-current machine it reports
   within the constraint the tool was installed under, so a tool installed as
   `crucible-axi==X` reports nothing-to-upgrade forever. The installer uses
   `uv tool install --upgrade`, which ignores that pin. Measured against uv
-  0.11.8.
+  0.11.8. To upgrade by hand, name the python too, after the package name:
+
+  ```sh
+  uv tool install --upgrade crucible-axi --python 3.14
+  ```
+
+  uv keeps a tool environment's interpreter across `--upgrade`, so an
+  environment on an older python would stay on the newest release that python
+  allows; `--python 3.14` makes uv rebuild it on 3.14. The installer says so
+  before it rebuilds one, naming the python the environment ran.
 - The server half follows because the `server` stage counts as converged only
   when the installed server is exactly the new release's pinned version.
 - A systemd `--user` unit is refreshed by the same run, so the daemon is the new
