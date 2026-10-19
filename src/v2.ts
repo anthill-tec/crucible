@@ -5328,6 +5328,21 @@ function requireHeldProject(store: Store, key: string): Response | null {
   return null;
 }
 
+/**
+ * The analytics reads' key check: the held-project check, then an archived
+ * project is refused with the archived 404 the agent and write routes give.
+ * Kept apart from `requireHeldProject` because the plan pointer shares that
+ * helper and keeps answering an archived project.
+ */
+function requireLiveAnalyticsProject(store: Store, key: string): Response | null {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  if (store.isArchived(key)) {
+    return fail(404, `project is archived: ${key}`, { help: hints.archivedProject });
+  }
+  return null;
+}
+
 /** `?release=<label>`, required by the two release-scoped reads. */
 function requireReleaseParam(url: URL): string | { fail: Response } {
   const release = url.searchParams.get("release");
@@ -5353,7 +5368,7 @@ function declaredTarget(store: Store, key: string, release: string): number | un
  * (points per day since its start) + the project-level flow line.
  */
 function handleAnalyticsVelocity(store: Store, key: string, req: Request, url: URL): Response {
-  const missing = requireHeldProject(store, key);
+  const missing = requireLiveAnalyticsProject(store, key);
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
@@ -5374,7 +5389,7 @@ function handleAnalyticsVelocity(store: Store, key: string, req: Request, url: U
 
 /** §S3 — GET …/analytics/burndown?release=: the release's SCRUM burndown. */
 function handleAnalyticsBurndown(store: Store, key: string, req: Request, url: URL): Response {
-  const missing = requireHeldProject(store, key);
+  const missing = requireLiveAnalyticsProject(store, key);
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
@@ -5398,7 +5413,7 @@ function handleAnalyticsBurndown(store: Store, key: string, req: Request, url: U
  * `seed` is TEST-ONLY (DN §7): an integer that makes the draws deterministic.
  */
 function handleAnalyticsForecast(store: Store, key: string, req: Request, url: URL): Response {
-  const missing = requireHeldProject(store, key);
+  const missing = requireLiveAnalyticsProject(store, key);
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
@@ -5431,7 +5446,7 @@ function handleAnalyticsForecast(store: Store, key: string, req: Request, url: U
  * that predate the record).
  */
 function handleAnalyticsChanges(store: Store, key: string, req: Request, url: URL): Response {
-  const missing = requireHeldProject(store, key);
+  const missing = requireLiveAnalyticsProject(store, key);
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
