@@ -145,7 +145,7 @@ THE_TRACKS_FIX = ('        if path.split("?", 1)[0].endswith("/next"):\n'
 # The copied file's own root computation, and what it becomes in the scratch
 # copy so the copy can still find the clients it drives.
 ROOT_LINE = "REPO_ROOT = Path(__file__).resolve().parents[2]"
-ROOT_REPLACEMENT = "REPO_ROOT = Path(%r)" % str(REPO_ROOT)
+ROOT_REPLACEMENT = f"REPO_ROOT = Path({str(REPO_ROOT)!r})"
 
 # WHICH test failed and WITH WHAT, on 2026-09-08 and again here: the proof that
 # the reverted copy fails for the ORIGINAL reason rather than for a proxy.
@@ -239,17 +239,17 @@ class GateCatchesTheHistoricalPythonSuiteRegressionTest(_OUTCOME._OutcomeCase):
         source = HISTORICAL_TEST_PATH.read_text()
         self.assertEqual(
             source.count(ROOT_LINE), 1,
-            "the scratch copy is re-rooted by substituting %r, and that text "
-            "occurs %d times in %s — a substitution matching nothing would "
-            "leave this test asserting against a copy it never changed"
-            % (ROOT_LINE, source.count(ROOT_LINE), HISTORICAL_TEST_PATH))
+            f"the scratch copy is re-rooted by substituting {ROOT_LINE!r}, and "
+            f"that text occurs {source.count(ROOT_LINE)} times in "
+            f"{HISTORICAL_TEST_PATH} — a substitution matching nothing would "
+            "leave this test asserting against a copy it never changed")
         self.assertEqual(
             source.count(THE_TRACKS_FIX), 1,
-            "the fix is the `…/next` branch, spelled %r in %s's board "
-            "stub, and it occurs %d times — the reproduction reverts EXACTLY "
-            "that, so a file no longer carrying it once cannot be reverted here"
-            % (THE_TRACKS_FIX, HISTORICAL_TEST_PATH,
-               source.count(THE_TRACKS_FIX)))
+            f"the fix is the `…/next` branch, spelled {THE_TRACKS_FIX!r} in "
+            f"{HISTORICAL_TEST_PATH}'s board stub, and it occurs "
+            f"{source.count(THE_TRACKS_FIX)} times — the reproduction reverts "
+            "EXACTLY that, so a file no longer carrying it once cannot be "
+            "reverted here")
 
         scratch = source.replace(ROOT_LINE, ROOT_REPLACEMENT)
         if revert_the_fix:
@@ -272,8 +272,8 @@ class GateCatchesTheHistoricalPythonSuiteRegressionTest(_OUTCOME._OutcomeCase):
         reverted fix exists in the tmpdir alone."""
         self.assertEqual(
             HISTORICAL_TEST_PATH.read_text(), source,
-            "%s changed while AC7's reproduction ran — the reverted fix must "
-            "exist ONLY in the scratch copy" % HISTORICAL_TEST_PATH)
+            f"{HISTORICAL_TEST_PATH} changed while AC7's reproduction ran — the "
+            "reverted fix must exist ONLY in the scratch copy")
 
     def python_suite_failures(self):
         """`(test name, text)` for every failure and error in the JUnit XML the
@@ -281,7 +281,8 @@ class GateCatchesTheHistoricalPythonSuiteRegressionTest(_OUTCOME._OutcomeCase):
         failed and WITH WHAT is asserted, not merely that something did."""
         found = []
         for report in sorted(Path(self.tmpdir, "reports").glob("TEST-*.xml")):
-            root = ET.parse(report).getroot()
+            # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
+            root = ET.parse(report).getroot()  # noqa: S314
             for case in root.iter("testcase"):
                 for bad in list(case.findall("failure")) + list(case.findall("error")):
                     found.append((case.get("name") or "",
@@ -297,22 +298,21 @@ class GateCatchesTheHistoricalPythonSuiteRegressionTest(_OUTCOME._OutcomeCase):
         counts = _attributed_counts(envelope, PYTHON_SUITE)
         self.assertIsNotNone(
             counts,
-            "AC7 — no node of the gate's envelope NAMES the python suite `%s`, "
-            "so the gate ran the bun suite alone and the historical escape is "
-            "still open. envelope=%s" % (PYTHON_SUITE, _text(envelope)))
+            f"AC7 — no node of the gate's envelope NAMES the python suite "
+            f"`{PYTHON_SUITE}`, so the gate ran the bun suite alone and the "
+            f"historical escape is still open. envelope={_text(envelope)}")
         self.assertEqual(
             (counts.get("passed"), counts.get("failed"), counts.get("total")),
             (passed, failed, PYTHON_SUITE_TOTAL),
-            "AC7 — the row naming `%s` must carry ITS OWN counts: %d passed, "
-            "%d failed of %d. got=%s envelope=%s"
-            % (PYTHON_SUITE, passed, failed, PYTHON_SUITE_TOTAL, counts,
-               _text(envelope)))
+            f"AC7 — the row naming `{PYTHON_SUITE}` must carry ITS OWN counts: "
+            f"{passed} passed, {failed} failed of {PYTHON_SUITE_TOTAL}. "
+            f"got={counts} envelope={_text(envelope)}")
         bun_counts = _attributed_counts(envelope, BUN_SUITE) or {}
         self.assertEqual(
             bun_counts.get("passed"), _GATE.BUN_SUITE_PASSED,
-            "AC7 — the bun suite's row must keep its own %d passing tests "
-            "beside the python suite's; got=%s envelope=%s"
-            % (_GATE.BUN_SUITE_PASSED, bun_counts, _text(envelope)))
+            f"AC7 — the bun suite's row must keep its own "
+            f"{_GATE.BUN_SUITE_PASSED} passing tests beside the python "
+            f"suite's; got={bun_counts} envelope={_text(envelope)}")
 
     def test_the_gate_fails_and_names_the_python_suite_when_the_tracks_fix_is_reverted(self):
         """AC7's reproduction. With the planted regression in the scratch copy
@@ -328,33 +328,31 @@ class GateCatchesTheHistoricalPythonSuiteRegressionTest(_OUTCOME._OutcomeCase):
             drive.code, 0,
             "AC7 — the historical regression is back in the python suite and "
             "the gate exited 0. That is precisely how the two changes named in "
-            "this file's docstring both shipped green. envelope=%s"
-            % _text(envelope))
+            f"this file's docstring both shipped green. envelope={_text(envelope)}")
         self.assertFalse(
             _ok(envelope),
-            "AC7 — the reverted fix broke the python suite and the gate's "
-            "envelope says ok=%r. envelope=%s"
-            % (envelope.get("ok"), _text(envelope)))
+            f"AC7 — the reverted fix broke the python suite and the gate's "
+            f"envelope says ok={envelope.get('ok')!r}. envelope={_text(envelope)}")
         warnings = _warnings_text(envelope)
         self.assertIn(
             PYTHON_SUITE, warnings,
             "AC7 — the gate failed but never NAMES the python suite that "
             "failed, so a caller cannot tell which suite to look at. "
-            "warnings=%s envelope=%s" % (warnings, _text(envelope)))
+            f"warnings={warnings} envelope={_text(envelope)}")
         self.assertPythonSuiteAttributed(envelope, PYTHON_SUITE_TOTAL - 1, 1)
 
         failures = self.python_suite_failures()
         self.assertEqual(
             [name for name, _ in failures], [BROKEN_TEST],
             "AC7 — the reverted copy must fail for the ORIGINAL reason: "
-            "exactly `%s`, the AC8 test the stripped `…/next` branch breaks. A "
-            "different failure would prove nothing about that escape. got=%s"
-            % (BROKEN_TEST, [name for name, _ in failures]))
+            f"exactly `{BROKEN_TEST}`, the AC8 test the stripped `…/next` branch "
+            f"breaks. A different failure would prove nothing about that escape. "
+            f"got={[name for name, _ in failures]}")
         self.assertIn(
             HARD_STOP_CODE, failures[0][1],
-            "AC7 — `%s` must fail on the failed board read `%s`; a failure "
-            "carrying any other reason is a proxy, not the historical defect. "
-            "got=%s" % (BROKEN_TEST, HARD_STOP_CODE, failures[0][1][-2000:]))
+            f"AC7 — `{BROKEN_TEST}` must fail on the failed board read "
+            f"`{HARD_STOP_CODE}`; a failure carrying any other reason is a "
+            f"proxy, not the historical defect. got={failures[0][1][-2000:]}")
 
     def test_the_gate_passes_and_names_the_python_suite_when_the_tracks_fix_is_in_place(self):
         """AC7's converse, and the half that gives the other one meaning: with
@@ -371,12 +369,11 @@ class GateCatchesTheHistoricalPythonSuiteRegressionTest(_OUTCOME._OutcomeCase):
             "AC7 (converse) — with the `…/next` branch in place the python suite "
             "passes, so the gate must exit 0. A gate that fails here fails "
             "always, and the reproduction beside this test would mean nothing. "
-            "envelope=%s stderr=%s" % (_text(envelope), drive.err[-2000:]))
+            f"envelope={_text(envelope)} stderr={drive.err[-2000:]}")
         self.assertTrue(
             _ok(envelope),
-            "AC7 (converse) — every declared suite passed and the gate's "
-            "envelope says ok=%r. envelope=%s"
-            % (envelope.get("ok"), _text(envelope)))
+            f"AC7 (converse) — every declared suite passed and the gate's "
+            f"envelope says ok={envelope.get('ok')!r}. envelope={_text(envelope)}")
         self.assertPythonSuiteAttributed(envelope, PYTHON_SUITE_TOTAL, 0)
         self.assertEqual(
             self.python_suite_failures(), [],

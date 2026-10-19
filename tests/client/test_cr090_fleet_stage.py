@@ -724,7 +724,7 @@ class UnmanagedDestinationFilesSurviveTest(_FleetConvergenceCase):
             f"{sorted(os.listdir(self.clients_dir()))})")
         self.assertEqual(
             self.unmanaged.read_bytes(), UNMANAGED_CONTENT,
-            f"§S1 -- an unmanaged destination file must keep its own bytes")
+            "§S1 -- an unmanaged destination file must keep its own bytes")
 
     def test_an_unmanaged_file_does_not_defeat_convergence(self):
         """Every packaged file matches, so the stage converges -- the extra file is
@@ -747,8 +747,8 @@ class UnmanagedDestinationFilesSurviveTest(_FleetConvergenceCase):
             f"after a converged run")
         self.assertEqual(
             os.stat(self.unmanaged).st_mtime_ns, PINNED_MTIME_NS,
-            f"§S1 -- an unmanaged file must not even be touched by a "
-            f"converged run")
+            "§S1 -- an unmanaged file must not even be touched by a "
+            "converged run")
 
 
 # --- CR-CRU-090 C3 (§S3, AC3) -- every path the manifest publishes resolves --
