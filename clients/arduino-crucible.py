@@ -43,7 +43,8 @@ one, and there is no fallback. A verb that would POST under an agentId without a
 declared identity HARD-STOPS (ok:false, non-zero exit) rather than inventing one.
 $AGENT_ID is handed FROM `--agent` to the child processes this client spawns, in
 their own environment; it is never exported into this process's environment and
-never read as an identity source, and neither is $WORKFLOW_ROLE (that is the track lane, reported as context.track).
+never read as an identity source, and neither is $WORKFLOW_ROLE (that is the
+track lane, reported as context.track).
 
 Subcommands:
   register, unregister  Agent lifecycle (TDD roles bind a cycle with --cycle).
