@@ -23,8 +23,14 @@ reads as "does not compile".
   project declares, configured by the project's own files (ruff reading `pyproject.toml`, Biome or
   ESLint reading the package's configuration, clippy, and so on).
 - **`check` stays compile and typecheck.** A lint finding never fails `check`.
-- **The findings reach the board** as compile-kind records marked as lint, the route rust's clippy
-  already uses.
+- **The findings reach the board on the compile route** (user ruling, 2026-10-19), the route rust's
+  clippy already uses, as a compile record with an additive marker naming it lint and the tool that
+  produced it, so older clients' compile records are still accepted. Each finding keeps the record's
+  existing `error` or `warning` level: a finding the project's linter configuration treats as
+  blocking is an `error` and fails `lint` and the gate; an advisory one is a `warning`, shown but not
+  blocking. Each finding carries its rule code in the record's existing `code` field.
+- **The Compile view shows lint as its own group** beside the compile diagnostics, rule codes
+  visible. It needs a storyboard frame before RED.
 - **The gate runs it.** `pre-merge-gate` runs `lint` fail-fast after `check`, so Model B's stack
   files name only the client verbs.
 
@@ -33,13 +39,11 @@ reads as "does not compile".
 - **The declaration.** Where a project names its linter and its command, per stack (beside each
   stack's existing target declarations, or in `crucible.toml`), and what happens when none is
   declared (the gate skips lint and says so, or refuses).
-- **Severity.** Which findings fail `lint` and the gate (errors only, or warnings too, and whether
-  that is the project's choice).
+- **Severity mapping per linter.** How each linter's own severities map onto `error` and `warning`
+  (ruff reports every selected rule as a violation; clippy separates warn from deny).
 - **Where findings are decoded.** In each client, or by server codecs as CR-CRU-152 does for the
   other report kinds.
-- **On the board.** How a lint record is marked in the store and the ingest payload (kept
-  additive), and how the Compile tab shows lint beside compile errors. It needs a storyboard frame
-  before RED.
+- **The marker's shape.** The marker's field name and values in the store and the ingest payload.
 - **Rust's clippy verbs.** Whether `lint` replaces, wraps or sits beside `clippy` and
   `workspace-clippy`.
 - **Arduino and maven.** Which linter each runs, if any.
