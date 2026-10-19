@@ -24,7 +24,7 @@ being on `sys.path`; it loads the sibling `clients/toon.py` codec by path the
 same way the clients do.
 """
 
-# pi-lens-ignore: I001 — tomllib is stdlib (3.11+); ruff's default 3.10 target misfiles it as third-party
+# pi-lens-ignore: I001 — pi-lens lints with its own ruff configuration, which sets no target version, so ruff files `tomllib` as third-party whatever the declared floor
 import argparse  # noqa: I001
 import collections
 import contextlib

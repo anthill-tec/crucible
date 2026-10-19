@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # dependencies = []
 # ///
 """Rust + Cargo Crucible CLI — single entry point for orchestrator + rust-{red,
@@ -72,7 +72,7 @@ Examples:
   RUST_CRUCIBLE_PROJECT_DIR=/path/to/other/rust/repo rust-crucible.py register --agent foo --role RED
 """
 
-# pi-lens-ignore: I001 — tomllib is stdlib (3.11+); ruff's default 3.10 target misfiles it as third-party
+# pi-lens-ignore: I001 — pi-lens lints with its own ruff configuration, which sets no target version, so ruff files `tomllib` as third-party whatever the declared floor
 import argparse  # noqa: I001
 import atexit
 import contextlib
@@ -1666,13 +1666,13 @@ def _smoke_refusal(args, verb, project_dir):
     # e2e deliberately reuses the --all-features build across runs (unless --clean).
     if args.all_features and not _disk_guard("smoke-test", project_dir,
                                              getattr(args, "min_free_g", 80)):
-            _emit_axi(verb, False,
-                      {"help": _disk_abort_help(verb,
-                                                getattr(args, "min_free_g", 80))},
-                      _axi_context(project_dir, agent_id=getattr(args, "agent", None)),
-                      [_disk_abort_warning(verb)],
-                      f"{verb}: ok=False — aborted by the disk guard")
-            return 2
+        _emit_axi(verb, False,
+                  {"help": _disk_abort_help(verb,
+                                            getattr(args, "min_free_g", 80))},
+                  _axi_context(project_dir, agent_id=getattr(args, "agent", None)),
+                  [_disk_abort_warning(verb)],
+                  f"{verb}: ok=False — aborted by the disk guard")
+        return 2
     return None
 
 

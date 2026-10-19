@@ -28,7 +28,7 @@ only after they exist. Before this, nothing materialised the directory and
 every published path dangled.
 """
 
-# pi-lens-ignore: I001 — tomllib is stdlib (3.11+); ruff's default 3.10 target misfiles it as third-party
+# pi-lens-ignore: I001 — pi-lens lints with its own ruff configuration, which sets no target version, so ruff files `tomllib` as third-party whatever the declared floor
 from __future__ import annotations  # noqa: I001
 
 import inspect

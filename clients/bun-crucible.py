@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # dependencies = []
 # ///
 """Bun + TypeScript Crucible CLI — single entry point for orchestrator + RED/GREEN/

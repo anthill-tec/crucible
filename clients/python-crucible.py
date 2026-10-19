@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # dependencies = []
 # ///
 """Python + unittest Crucible CLI — single entry point for orchestrator + RED/GREEN/
@@ -770,8 +770,9 @@ def _collect_coverage(python, project_dir, env, data_file=None):
     # dir carrying its own `__init__.py` is a REGULAR package and WOULD shadow the
     # real module while cwd is on sys.path; that is inherent to running
     # `python -m coverage` from a project whose tree contains a `coverage` package,
-    # not specific to this client, and would cost a 3.11 floor (`python -P`) to
-    # defend — deliberately left unguarded.
+    # not specific to this client. `python -P` would defend against it, and the
+    # 3.14 floor makes that flag available, but adopting it is a separate
+    # decision — deliberately left unguarded.
     cov_env = dict(env)
     r = subprocess.run(lcov_cmd,
                        cwd=project_dir, env=cov_env, capture_output=True, text=True)
@@ -1088,7 +1089,8 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         # `coverage/` dir (no `__init__.py`). One carrying its own `__init__.py` is
         # a regular package and WOULD shadow — inherent to running `python -m
         # coverage` from a tree containing a `coverage` package, not specific to
-        # this client, and would cost a 3.11 floor (`python -P`) to defend.
+        # this client. `python -P` would defend against it, and the 3.14 floor
+        # makes that flag available, but adopting it is a separate decision.
         # Deliberately left unguarded.
 
     print(f"[crucible] running: {' '.join(run_cmd)}", file=sys.stderr)
