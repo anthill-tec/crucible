@@ -183,6 +183,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-196](CR-CRU-196-a-go-project-declares-its-tiers-with-build-tags.md) | a Go project declares its tiers with build tags | feature | PENDING | 195 | 8 (0.4.0) |
 | [CR-CRU-197](CR-CRU-197-the-python-client-runs-a-pytest-project.md) | the python client runs a pytest project | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-198](CR-CRU-198-the-python-floor-is-3.14-and-the-scans-report-what-matters.md) | the python floor is 3.14, and the lint and secrets scans report what matters | maintenance | PENDING | — | 8 (0.4.0) |
+| [CR-CRU-199](CR-CRU-199-each-stacks-lint-runs-through-its-client.md) | each stack's lint runs through its client, and its findings reach the board | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-187](CR-CRU-187-a-release-drafts-its-notes-from-the-board.md) | a release drafts its notes from the board | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-182](CR-CRU-182-a-phone-tap-on-a-history-cycle-line-opens-its-runs.md) | a phone tap on a history cycle line opens its runs, not `→ Runs` | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-183](CR-CRU-183-finish-refuses-a-release-with-no-notes.md) | `finish` refuses a release with no notes, and its report skips voided CRs | fix | PENDING | — | 8 (0.4.0) |
