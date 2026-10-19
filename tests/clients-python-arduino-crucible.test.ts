@@ -1017,9 +1017,9 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
   // namespace package, and WILL shadow the real module while cwd is on
   // sys.path — that is inherent to running `python -m coverage` from any
   // project whose tree contains a `coverage` package, is not specific to
-  // this client, and would cost a 3.11 floor (`python -P`) to defend
-  // against a scenario `pyproject.toml`'s `requires-python = ">=3.10"`
-  // does not support today. Deliberately left unguarded.
+  // this client. `python -P` would defend against it, and the 3.14 floor
+  // `pyproject.toml` declares makes that flag available, but adopting it
+  // is a separate decision. Deliberately left unguarded.
   test("CR-CRU-036 C4: a bare `coverage/` directory (no `__init__.py`, bun's real lcov output shape) present in project_dir does NOT shadow coverage.py collection — event.coverage reflects the real lcov output", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
