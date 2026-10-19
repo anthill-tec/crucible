@@ -67,7 +67,7 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 - Projects are otherwise created in the dashboard (crucible-report-python: "there is no
   create endpoint — projects are made in the Crucible dashboard" — outdated w.r.t.
   `/api/projects/add`, but proves dashboard-side creation existed).
-- Example key format: `019c9ff7-222f-7ae5-9121-2ae549e4d97a` (UUIDv7).
+- Example key format: `019c9ff7-222f-7ae5-9121-2ae549e4d97a` (UUIDv7). <!-- gitleaks:allow -->
 
 ### 3.2 `POST /api/agents/heartbeat`
 ```json
