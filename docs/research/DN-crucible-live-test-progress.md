@@ -1,6 +1,6 @@
 # DN — a run reports its progress test by test
 
-**Status** settled with the user 2026-10-20 · **Lands in** CR-CRU-152 (0.4.0) · **Applies to** every
+**Status** settled with the user 2026-10-20 · **Lands in** CR-CRU-200 to CR-CRU-203 (0.4.0) · **Applies to** every
 stack; proven first on bun / TypeScript (bun test, Vitest, Playwright), then rust (nextest), python,
 maven, arduino, go.
 
@@ -122,10 +122,17 @@ excludes nothing it should count.
 
 ## Where it lands (user ruling)
 
-Folded into **CR-CRU-152**, which already moves every stack's report decoding onto the board: the
-stream codecs, the relay route, the stream-as-record path and the declaration land with it. CR-CRU-152 is proven on
-the bun / TypeScript runners first and then on each remaining stack it already covers. Go's stream
-lands with its client (CR-CRU-195).
+In 0.4.0, wave 8, after CR-CRU-152 moves every stack's report decoding onto the board (user ruling:
+split by available number, all in the current wave, the date unchanged):
+
+| CR | Lands | Depends on |
+|---|---|---|
+| CR-CRU-200 | the stream route, the `crucible-events` codec, the client relay, the stream as the record and its completeness check, the board's live view; proven on the python runner Crucible owns | 152 |
+| CR-CRU-201 | bun's one-table declaration (clean break), the `bun-console` codec, the shipped Vitest and Playwright reporters; Playwright's JSON report and codec retire | 200 |
+| CR-CRU-202 | rust streams through nextest's libtest JSON | 200 |
+| CR-CRU-203 | the arduino runner streams; maven's console live view | 200 |
+
+Go's stream lands with its client (CR-CRU-195), which therefore also depends on CR-CRU-200.
 
 ## Open for CR-CRU-152's gap analysis
 

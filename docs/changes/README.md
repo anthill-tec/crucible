@@ -179,11 +179,15 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-192](CR-CRU-192-a-projects-coverage-config-decides-what-is-measured.md) | a project's coverage config decides what is measured | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-193](CR-CRU-193-a-runs-coverage-is-shown-file-by-file.md) | a run's coverage is shown file by file | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-194](CR-CRU-194-a-bun-projects-own-runner-runs-a-targeted-test.md) | a bun project's own runner runs a targeted test, and no project is anyone's default | fix | PENDING | — | 8 (0.4.0) |
-| [CR-CRU-195](CR-CRU-195-a-go-project-reports-to-the-board-through-its-own-client.md) | a Go project reports to the board through its own client | feature | PENDING | 152 | 8 (0.4.0) |
+| [CR-CRU-195](CR-CRU-195-a-go-project-reports-to-the-board-through-its-own-client.md) | a Go project reports to the board through its own client | feature | PENDING | 152, 200 | 8 (0.4.0) |
 | [CR-CRU-196](CR-CRU-196-a-go-project-declares-its-tiers-with-build-tags.md) | a Go project declares its tiers with build tags | feature | PENDING | 195 | 8 (0.4.0) |
 | [CR-CRU-197](CR-CRU-197-the-python-client-runs-a-pytest-project.md) | the python client runs a pytest project | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-198](CR-CRU-198-the-python-floor-is-3.14-and-the-scans-report-what-matters.md) | the python floor is 3.14, and the lint and secrets scans report what matters | maintenance | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-199](CR-CRU-199-each-stacks-lint-runs-through-its-client.md) | each stack's lint runs through its client, and its findings reach the board | feature | PENDING | — | 8 (0.4.0) |
+| [CR-CRU-200](CR-CRU-200-an-open-run-takes-its-test-stream-and-shows-it-live.md) | an open run takes its test stream and shows it live | feature | PENDING | 152 | 8 (0.4.0) |
+| [CR-CRU-201](CR-CRU-201-a-bun-project-streams-its-tests-declared-in-one-table.md) | a bun project streams its tests, declared in one table per script | feature | PENDING | 200 | 8 (0.4.0) |
+| [CR-CRU-202](CR-CRU-202-a-rust-run-streams-its-tests-through-nextest.md) | a rust run streams its tests through nextest | feature | PENDING | 200 | 8 (0.4.0) |
+| [CR-CRU-203](CR-CRU-203-the-arduino-runner-streams-and-maven-shows-its-console-live.md) | the arduino runner streams its tests, and maven shows its console live | feature | PENDING | 200 | 8 (0.4.0) |
 | [CR-CRU-187](CR-CRU-187-a-release-drafts-its-notes-from-the-board.md) | a release drafts its notes from the board | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-182](CR-CRU-182-a-phone-tap-on-a-history-cycle-line-opens-its-runs.md) | a phone tap on a history cycle line opens its runs, not `→ Runs` | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-183](CR-CRU-183-finish-refuses-a-release-with-no-notes.md) | `finish` refuses a release with no notes, and its report skips voided CRs | fix | PENDING | — | 8 (0.4.0) |

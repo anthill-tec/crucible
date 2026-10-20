@@ -1,7 +1,7 @@
 # CR-CRU-195 — a Go project reports to the board through its own client
 
 **Type** feature · **Points** 13 (provisional, set at filing 2026-10-18; the estimate is revisited at
-gap analysis) · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152 · **Status** PENDING — filed
+gap analysis) · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152, CR-CRU-200 · **Status** PENDING — filed
 2026-10-18 (Model B request, user ruling: its own CR in 0.4.0, decoded on the server after
 CR-CRU-152)
 
@@ -82,3 +82,6 @@ manifest-contract tests cover it like the other five.
 - Declared tiers and their gate composition: CR-CRU-196.
 - A skill bundle or stack reference. Skills are Model B's in full (CR-CRU-042).
 - Third-party runners such as gotestsum.
+
+**Live stream (2026-10-20).** A go run streams its tests through `go test -json`, decoded on the
+board, as the stream CR-CRU-200 lands (`DN-crucible-live-test-progress.md`).
