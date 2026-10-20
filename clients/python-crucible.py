@@ -227,13 +227,24 @@ def _resolve_runner(args, project_dir):
     return value
 
 
+# How long the pytest import probe may take before the interpreter is refused.
+_PYTEST_PROBE_TIMEOUT_S = 60
+
+
 def _imports_pytest(python, project_dir):
     """Whether `python` can import pytest. An interpreter that cannot be
-    started at all cannot import it either."""
+    started at all cannot import it either. A probe that does not answer
+    within `_PYTEST_PROBE_TIMEOUT_S` is refused, naming the interpreter."""
     try:
         probe = subprocess.run([python, "-c", f"import {_PYTEST}"],
                                cwd=project_dir, capture_output=True, text=True,
-                               check=False)
+                               check=False, timeout=_PYTEST_PROBE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        raise RunnerRefused(
+            f"the runner is {_PYTEST}, but the interpreter {python} did not "
+            f"answer whether it can import {_PYTEST} within "
+            f"{_PYTEST_PROBE_TIMEOUT_S}s; check that interpreter, or choose "
+            f"another with --python") from None
     except OSError:
         return False
     return probe.returncode == 0
@@ -1235,7 +1246,7 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     return result.returncode or 1
 
 
-def cmd_regression(args, verb="regression"):
+def cmd_regression(args, verb="regression", runner=None, carried_warnings=()):
     """Gated regression run — an opening heartbeat DECLARES the run's identity
     (binding it when `--cycle` is given), and the ingest body is wrapped in the
     anti-ghost silent cleanup (CR-CRU-008 §S4). CR-CRU-056 — the cleanup fires
@@ -1244,20 +1255,24 @@ def cmd_regression(args, verb="regression"):
 
     CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
-    must carry ONE document under the GATE's own verb, not the inner one's."""
+    must carry ONE document under the GATE's own verb, not the inner one's.
+    The gate also hands over the `runner` it already chose, so the interpreter
+    is probed once per gate, and its check step's `carried_warnings`, which
+    ride every envelope this run emits."""
     project_dir = _resolve_project_dir(args.project_dir)
     # The runner is chosen, and refused, before anything reaches the board.
-    runner = _resolve_runner(args, project_dir)
+    if runner is None:
+        runner = _resolve_runner(args, project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
                           "gated regression run starting",
                           open_fn=_open_gate_identity,
                           close_fn=_close_gate_identity) as identity:
-        preflight_warnings = []
+        preflight_warnings = list(carried_warnings)
         if getattr(args, "agent", None):
             # CR-CRU-094 §S3 — the same pre-flight attribution check `cmd_test`
             # makes, before this (far longer) sweep burns its minutes.
-            preflight_warnings = _axi().preflight_cycle_warnings(
+            preflight_warnings += _axi().preflight_cycle_warnings(
                 _get, _project_key(project_dir), args.agent,
                 cycle_id=getattr(args, "cycle", None),
                 context=_run_context(), release=getattr(args, "release", None))
@@ -1474,7 +1489,7 @@ def cmd_check(args):
     _emit_axi("check", state["ok"],
               {"exit": state["exit"], "help": _axi().HELP_STEPS["check"]},
               _axi_context(project_dir, agent_id=args.agent),
-              preflight_warnings, legacy)
+              list(preflight_warnings) + state["warnings"], legacy)
     return 0 if state["ok"] else (state["exit"] or 1)
 
 
@@ -1482,7 +1497,13 @@ def _check_gate(args, project_dir):
     """The py_compile gate itself — CR-CRU-058 §S1: this helper NEVER emits, so
     the two envelope-owning verbs that run it (`check` standalone, and
     `pre-merge-gate`'s fail-fast step 0) each put exactly ONE document on
-    stdout. Returns the measured state — `{exit, ok}` — and its caller emits."""
+    stdout. Returns the measured state — `{exit, ok, warnings}` — and its
+    caller emits, carrying `warnings` into its envelope.
+
+    Only the paths that exist are compiled. With no Python file among them
+    nothing is compiled and the check passes: the compiler is never invoked
+    (an empty argument list is its usage error, not a syntax error), no
+    compile record is filed, and the state carries `check-compiled-nothing`."""
     python = _resolve_python(args.python, project_dir)
     paths = args.paths or ["app", "tests"]
     files = []
@@ -1491,11 +1512,18 @@ def _check_gate(args, project_dir):
         if os.path.isdir(ap):
             for dirpath, _dirs, names in os.walk(ap):
                 files += [os.path.join(dirpath, n) for n in names if n.endswith(".py")]
-        elif ap.endswith(".py"):
+        elif ap.endswith(".py") and os.path.isfile(ap):
             files.append(ap)
+    if not files:
+        detail = (f"nothing to compile: no Python file found under "
+                  f"{', '.join(paths)}; name the paths to compile with --paths")
+        print(f"[crucible] py_compile skipped — {detail}", file=sys.stderr)
+        return {"exit": 0, "ok": True,
+                "warnings": [{"code": "check-compiled-nothing", "detail": detail}]}
     cmd = [python, "-m", "py_compile", *files]
     print(f"[crucible] running: py_compile on {len(files)} file(s)", file=sys.stderr)
-    result = subprocess.run(cmd, cwd=project_dir, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=project_dir, capture_output=True, text=True,
+                            check=False)
     print(f"[crucible] py_compile exit={result.returncode}", file=sys.stderr)
     ok = result.returncode == 0
     if not ok:
@@ -1503,7 +1531,7 @@ def _check_gate(args, project_dir):
         if args.agent:
             _ingest_compile(project_dir, args.agent, result.stderr,
                             cycle_id=getattr(args, "cycle", None))
-    return {"exit": result.returncode, "ok": ok}
+    return {"exit": result.returncode, "ok": ok, "warnings": []}
 
 
 def cmd_pre_merge_gate(args):
@@ -1519,6 +1547,9 @@ def cmd_pre_merge_gate(args):
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
         release=getattr(args, "release", None), context=_run_context())
+    # The check step's warnings (a step that compiled nothing says so) ride
+    # the one envelope this gate emits.
+    check_warnings = []
     if not getattr(args, "skip_check", False):
         check_args = argparse.Namespace(
             paths=None, agent=args.agent, python=args.python, project_dir=args.project_dir,
@@ -1526,6 +1557,7 @@ def cmd_pre_merge_gate(args):
         )
         # The STEP form (no envelope of its own) — this gate owns stdout.
         state = _check_gate(check_args, project_dir)
+        check_warnings = state["warnings"]
         if not state["ok"]:
             print("[crucible] pre-merge gate FAILED at the py_compile check step — "
                   "skipped the regression. Fix syntax first (or --skip-check to bypass).",
@@ -1565,7 +1597,9 @@ def cmd_pre_merge_gate(args):
     return _axi().gate_regression(
         args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK,
         verb="pre-merge-gate", dispatch=None,
-        whole_suite=lambda: cmd_regression(reg_args, verb="pre-merge-gate"),
+        whole_suite=lambda: cmd_regression(reg_args, verb="pre-merge-gate",
+                                           runner=runner,
+                                           carried_warnings=check_warnings),
         context=_axi_context(project_dir, agent_id=args.agent),
         crucible_url=_base_url())
 
