@@ -36,6 +36,8 @@ Measured on pytest 9.1.1, python 3.14:
 - A pytest collection error is filed as a failed test, as a unittest import failure already is.
 - An interpreter without pytest is refused before anything is posted.
 - A run whose subtests went uncounted says so.
+- The check step that finds nothing to compile passes and says so (user ruling at VERIFY, 2026-10-20:
+  the gate's `py_compile` step stopped a project with neither `app/` nor `tests/`).
 
 ## Scope
 
@@ -90,6 +92,12 @@ default, and that the interpreter must have pytest for it; `--tests`' help says 
 under pytest; `--start-dir` and `--pattern` say that under pytest the project's configuration
 decides unless they are given.
 
+### §S4b — a check with nothing to compile passes and says so
+
+`check`, and the gate's check step, compile whichever of their paths exist. When none exists they
+compile nothing, pass, and the envelope carries a `check-compiled-nothing` warning naming the paths
+looked for and `--paths`. A usage error from the compiler is never filed as a syntax error.
+
 ### §S5 — this repo can run it
 
 `pytest` joins the `[dev]` extras that CI installs, with its demanders named. A committed pytest
@@ -131,6 +139,10 @@ interpreter lacks it.
 - [ ] **Help names it.** Every running verb's `--help` names `--runner`, `[python] runner`, the
       `unittest` default and that the interpreter needs pytest; `--tests` names node ids;
       `--start-dir` and `--pattern` name the pytest rule.
+- [ ] **A check with nothing to compile passes.** On a project with neither `app/` nor `tests/`,
+      `check` and `pre-merge-gate` compile nothing, file no compile record, carry
+      `check-compiled-nothing` naming the paths looked for and `--paths`, and the gate goes on to run
+      its suite; the unmodified pytest fixture gates.
 - [ ] **This repo runs it.** `pytest` is in the `[dev]` extras; the fixture project runs only from a
       scratch copy, and none of its files is collected by this repo's python or bun runs.
 
