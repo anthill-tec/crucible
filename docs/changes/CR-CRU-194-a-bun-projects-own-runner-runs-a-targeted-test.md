@@ -82,8 +82,9 @@ the pattern. The envelope's `name` field names the filter.
 ### §S4 — the package dir is declared, never assumed
 
 The `integrations/pi` step leaves the client. A project declares its package dir as
-`[bun] package_dir` in its own `crucible.toml`, read the way `[gate]` is: the project's file only
-here, since an install-wide package dir would make one project everyone's default. The shipped
+`[bun] package_dir` in its own `crucible.toml`, read from the project's file only, never from an
+install-level `crucible.toml`, since an install-wide package dir would make one project everyone's
+default. The shipped
 `crucible.toml` documents the key and declares no value. The order is `--package-dir`,
 `$BUN_CRUCIBLE_PACKAGE_DIR`, the declared value, the project root. A relative value from any of the
 three is resolved against the project root. A flag or variable value that is not a directory, and
