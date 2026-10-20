@@ -14,7 +14,8 @@ the shared TOON-AXI envelope module clients/_crucible_axi.py) — only the toolc
 differs: Cargo/nextest/llvm-cov or bun test → a venv Python interpreter +
 unittest-xml-reporting (xmlrunner) + coverage.py, with py_compile as the syntax gate.
 
-This script is tool-specific (unittest / xmlrunner / JUnit-XML / coverage.py), not
+This script is tool-specific (unittest via xmlrunner by default, or pytest when the
+project's `[python] runner` or --runner chooses it / JUnit-XML / coverage.py), not
 project-specific — the project path and interpreter are parameterizable.
 
 Every AXI verb prints a clients/toon.py-encoded envelope
@@ -60,7 +61,8 @@ Project + Crucible endpoint:
   containing the current directory > CWD. No project is hardcoded.
   Interpreter resolution: --python > $PY_CRUCIBLE_PYTHON > <project-dir>/.venv/bin/python
   (if present) > the interpreter running this script. The venv must have xmlrunner
-  (and, for --coverage, coverage.py) plus any imports the code-under-test needs.
+  under the unittest runner, or pytest under the pytest runner (and, for --coverage,
+  coverage.py) plus any imports the code-under-test needs.
   Posts to the board the project's `crucible.toml` declares (`[client] url`,
   shipped default http://localhost:3849), v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs/parsed, /api/v2/runs/compile,
@@ -2097,12 +2099,15 @@ def cmd_dashboard():
 # project. The docstring stays exactly as it is (AC8 — provenance intact);
 # what the CLI RENDERS states the tool's behaviour and names no backlog.
 _CLI_DESCRIPTION = (
-    "Python + unittest Crucible CLI — one entry point for the orchestrator and for\n"
-    "the RED/GREEN/FIX/VERIFY agent lifecycle, and for running Python test targets\n"
-    "(unittest via xmlrunner → JUnit XML, optional coverage.py) with the result\n"
-    "ingested to Crucible.\n"
+    "Python Crucible CLI — one entry point for the orchestrator and for the\n"
+    "RED/GREEN/FIX/VERIFY agent lifecycle, and for running Python test targets\n"
+    "under unittest (via xmlrunner → JUnit XML, the default) or pytest (its own\n"
+    "JUnit XML) — the project's `[python] runner` in its crucible.toml, or\n"
+    "--runner, chooses — optional coverage.py, with the result ingested to\n"
+    "Crucible.\n"
     "\n"
-    "Tool-specific (unittest / xmlrunner / JUnit-XML / coverage.py), never\n"
+    "Tool-specific (unittest via xmlrunner, or pytest / JUnit-XML / coverage.py),\n"
+    "never "
     "project-specific: the project path and the interpreter are parameterizable.\n"
     "Run `<verb> --help` for a verb's own flags.\n"
     "\n" + _axi().BOARD_CONFIGURATION_HELP
@@ -2203,7 +2208,9 @@ def main():
         # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, which the tier-mirror guard reads as a copy of the tier vocabulary
         dict(regression=tier_verb(  # noqa: C408
             cmd_regression,
-            "Runs full-suite unittest discovery via xmlrunner and ingests it; "
+            "Runs the full suite under the declared runner — unittest discovery "
+            "via xmlrunner by default, or pytest when the project's "
+            "`[python] runner` or --runner chooses it — and ingests it; "
             "--coverage adds coverage.py.",
             (_add_regression_tier_args, _add_gate_cycle_arg,
              _add_run_release_arg, _add_discover_args, _add_python_arg,

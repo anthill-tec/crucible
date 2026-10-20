@@ -33,10 +33,12 @@ Issues = "https://github.com/anthill-tec/crucible/issues"
 #   coverage               — the pre-merge / regression coverage gate
 #                            (CR-CRU-040 §S1); coverage.py is the only
 #                            supported coverage path for this client.
-#   unittest-xml-reporting — the JUnit-XML producer EVERY `test` /
-#                            `regression` / `pre-merge-gate` run shells out to
-#                            (`python -m xmlrunner`, python-crucible.py:442).
-#                            Absent, no TEST-*.xml is produced and the run
+#   unittest-xml-reporting — the JUnit-XML producer of the unittest runner, the
+#                            default: every `test` / `regression` /
+#                            `pre-merge-gate` run under unittest shells out to
+#                            it (`python -m xmlrunner`, python-crucible.py:442);
+#                            a pytest run writes its own JUnit XML instead.
+#                            Absent, a unittest run produces no TEST-*.xml and
 #                            dies with `No module named 'xmlrunner'`. Named
 #                            demanders (CR-CRU-063 §S3, run 31726344668):
 #                            test_cr039_regression_discovery.py:177,
