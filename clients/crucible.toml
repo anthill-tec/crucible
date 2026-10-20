@@ -116,6 +116,28 @@ max = 500
 # runs every step, exactly as before this table existed.
 # A project file declaring nothing here still wins; the install's is not read.
 
+# ── The directory a bun project's package lives in ────────────────────────
+#
+# The bun client runs `bun test`, `tsc` and a project's declared scripts in the
+# project's bun PACKAGE DIR. A project whose package is not at its root
+# declares where it is, in its OWN `crucible.toml`:
+#
+#     [bun]
+#     package_dir = "packages/app"  # <- relative to the project root
+#
+# The order is `--package-dir`, then `$BUN_CRUCIBLE_PACKAGE_DIR`, then this
+# declaration, then the project root, and a relative value from any of the
+# three resolves against the project root. A declared value that is not a
+# directory holding a `package.json` is REFUSED, naming this file, before
+# anything is posted to the board.
+#
+# Read from the PROJECT's file only, never the installed copy: an install-wide
+# package dir would make one project every other project's default.
+
+[bun]
+# The shipped file declares NO package_dir, so a project that declares nothing
+# runs from its own root.
+
 # ── The BOARD this fleet posts to ──────────────────────────────────────────
 #
 # CR-CRU-139 §S2. A connection is configuration too. The board a client posts

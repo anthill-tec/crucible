@@ -87,6 +87,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import xml.etree.ElementTree as ET
 
 DEFAULT_JUNIT = "junit.xml"
@@ -120,18 +121,81 @@ def _resolve_project_dir(arg_value):
     return root
 
 
+_PACKAGE_DIR_FLAG = "--package-dir"
+_PACKAGE_DIR_VARIABLE = "BUN_CRUCIBLE_PACKAGE_DIR"
+_BUN_TABLE = "bun"
+_PACKAGE_DIR_FIELD = "package_dir"
+
+
+class PackageDirRefused(Exception):
+    """A package dir that cannot be run in: a flag or variable value that is
+    not a directory, or a declared value that is not a directory holding a
+    `package.json`. The message names the value and where it came from.
+
+    Deliberately NOT an `OSError`/`ValueError`: the shared dispatch turns
+    those into a failed verb and lets a gate record its outcome on the board,
+    while a refused package dir has run nothing and must post nothing; `main`
+    emits its envelope instead."""
+
+
+def _declared_package_dir(project_dir):
+    """`(value, path)` \u2014 `[bun] package_dir` as the PROJECT's own
+    `crucible.toml` states it, or `(None, path)` when it declares none. Never
+    the install's file: an install-wide package dir would make one project
+    everyone's default. A file that is absent or does not parse declares
+    nothing, exactly as the shared config walk treats it."""
+    path = os.path.join(project_dir, "crucible.toml")
+    try:
+        with open(path, "rb") as fh:
+            parsed = tomllib.load(fh)
+    except (OSError, ValueError):
+        return None, path
+    table = parsed.get(_BUN_TABLE)
+    if not isinstance(table, dict) or _PACKAGE_DIR_FIELD not in table:
+        return None, path
+    return table[_PACKAGE_DIR_FIELD], path
+
+
 def _resolve_package_dir(arg_value, project_dir):
-    """--package-dir > $BUN_CRUCIBLE_PACKAGE_DIR > <project>/integrations/pi (if it has a
-    package.json) > <project>. This is the cwd `bun test` / `tsc` run in."""
+    """--package-dir > $BUN_CRUCIBLE_PACKAGE_DIR > `[bun] package_dir` in the
+    project's own crucible.toml > <project>. This is the cwd `bun test` / `tsc`
+    run in. A relative value from any of the three resolves against the project
+    root, never the working directory.
+
+    Raises `PackageDirRefused` for a flag or variable value that is not a
+    directory, and for a declared value that is not a directory holding a
+    `package.json`."""
     if arg_value:
-        return arg_value if os.path.isabs(arg_value) else os.path.join(project_dir, arg_value)
-    env_value = os.environ.get("BUN_CRUCIBLE_PACKAGE_DIR")
+        return _existing_dir(arg_value, project_dir, f"`{_PACKAGE_DIR_FLAG}`")
+    env_value = os.environ.get(_PACKAGE_DIR_VARIABLE)
     if env_value:
-        return env_value
-    cand = os.path.join(project_dir, "integrations", "pi")
-    if os.path.exists(os.path.join(cand, "package.json")):
-        return cand
-    return project_dir
+        return _existing_dir(env_value, project_dir, f"`${_PACKAGE_DIR_VARIABLE}`")
+    declared, path = _declared_package_dir(project_dir)
+    if declared is None:
+        return project_dir
+    source = f"`[{_BUN_TABLE}] {_PACKAGE_DIR_FIELD}` in {path}"
+    if not isinstance(declared, str) or not declared.strip():
+        raise PackageDirRefused(
+            f"{source} is {declared!r}, which is not a directory path; declare "
+            f"the bun package dir as a string, e.g. `{_PACKAGE_DIR_FIELD} = \"pkg\"`")
+    resolved = os.path.join(project_dir, declared)
+    if not os.path.isfile(os.path.join(resolved, "package.json")):
+        raise PackageDirRefused(
+            f"{source} is {declared!r}, which resolves to {resolved}: not a "
+            "directory holding a package.json. Correct the declared value, or "
+            "remove it to run from the project root.")
+    return resolved
+
+
+def _existing_dir(value, project_dir, source):
+    """`value` resolved against the project root, refused unless it names a
+    directory."""
+    resolved = os.path.join(project_dir, value)
+    if not os.path.isdir(resolved):
+        raise PackageDirRefused(
+            f"{source} is {value!r}, which resolves to {resolved}: not a "
+            "directory. Name the bun package dir to run in.")
+    return resolved
 
 
 def _resolve_bun(arg_value):
@@ -1566,6 +1630,9 @@ def cmd_auto_ingest(args):
 def cmd_check(args):
     """`tsc --noEmit` typecheck gate over the package. With --agent, ingest errors."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # A package dir that cannot be run in is refused before the board is asked
+    # anything.
+    _resolve_package_dir(args.package_dir, project_dir)
     # CR-CRU-094 §S3 — `check` INGESTS on a failing tsc, so it is one of the
     # five ingesting verbs the pre-flight covers. The seam is HERE rather than
     # in `_check_gate`: that helper is also `pre-merge-gate`'s step 0, whose
@@ -1618,6 +1685,9 @@ def cmd_pre_merge_gate(args):
     coverage reserved for the pre-merge gate). fail-fast `check` (tsc) → `regression
     --coverage`. A check failure aborts before the suite."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # A package dir that cannot be run in is refused before the board is asked
+    # anything.
+    _resolve_package_dir(args.package_dir, project_dir)
     # The gate files from its first step on (a failing tsc files a compile
     # result), so an unattributed gate is refused before that step.
     _axi().refuse_unattributed_run(
@@ -2832,11 +2902,32 @@ def main():
     # CR-CRU-044 §S5 — dispatch through the shared `run_verb`, which turns an
     # UNDECLARED agent identity into the ok:false hard-stop envelope + a
     # non-zero exit (POSTing nothing) instead of an unhandled traceback.
-    sys.exit(_axi().run_verb(
-        args.func, args,
-        lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None))),
-        ops_fn=_ops,
-        project_dir_fn=lambda a: _resolve_project_dir(getattr(a, "project_dir", None))))
+    try:
+        code = _axi().run_verb(
+            args.func, args,
+            lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None))),
+            ops_fn=_ops,
+            project_dir_fn=lambda a: _resolve_project_dir(getattr(a, "project_dir", None)))
+    except PackageDirRefused as refusal:
+        code = _emit_package_dir_refused(args, refusal)
+    sys.exit(code)
+
+
+def _emit_package_dir_refused(args, refusal):
+    """The `ok:false` envelope for a package dir that cannot be run in, and
+    the exit code. Nothing was run and nothing was posted; the context is
+    best-effort, since a project without a key must still be told why."""
+    project_dir = _resolve_project_dir(getattr(args, "project_dir", None))
+    agent = getattr(args, "agent", None)
+    context = (_axi_context(project_dir, agent_id=agent)
+               if _read_env(project_dir).get("CRUCIBLE_PROJECT_KEY", "").strip()
+               else {})
+    _emit_axi(args.cmd, False,
+              {"error": str(refusal),
+               "help": ["correct the package dir this error names, then re-run "
+                        "the verb"]},
+              context, [], legacy_line=f"error: package-dir-refused \u2014 {refusal}")
+    return 1
 
 
 if __name__ == "__main__":
