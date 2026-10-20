@@ -624,13 +624,21 @@ def _subtest_runner_path():
                         "subtest_runner.py")
 
 
+# unittest discovery's selection when the caller states none. pytest has no
+# such default here: unstated, the project's own pytest configuration decides.
+_UNITTEST_START_DIR = "tests"
+_UNITTEST_PATTERN = "test_*.py"
+
+
 def _runner_args(targets, start_dir, pattern, reports_dir):
     """The runner's arguments, xmlrunner's own: targeted (dotted paths) or
-    discover. `-v` makes unittest print one verdict line per test, which is
-    what the run's narration counts."""
+    discover, an unstated start dir or pattern taking unittest's defaults.
+    `-v` makes unittest print one verdict line per test, which is what the
+    run's narration counts."""
     if targets:
         return list(targets) + ["-o", reports_dir, "-v"]
-    return ["discover", "-s", start_dir, "-p", pattern, "-o", reports_dir, "-v"]
+    return ["discover", "-s", start_dir or _UNITTEST_START_DIR,
+            "-p", pattern or _UNITTEST_PATTERN, "-o", reports_dir, "-v"]
 
 
 def _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir):
@@ -640,22 +648,33 @@ def _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir):
             *_runner_args(targets, start_dir, pattern, reports_dir)]
 
 
-def _pytest_args(targets, reports_dir):
-    """pytest's arguments: verbose, a JUnit report in the reports dir, and
-    the targets given (none: the project's own pytest configuration decides
-    what runs)."""
-    return ["-v", f"--junitxml={os.path.join(reports_dir, 'TEST-pytest.xml')}",
-            *(targets or [])]
+def _pytest_args(targets, start_dir, pattern, reports_dir):
+    """pytest's arguments: verbose, a JUnit report in the reports dir in the
+    xunit1 family (the one that stamps `file=` on each test case), and what to
+    run. Node ids given, they alone are passed, as unittest's dotted paths
+    are; otherwise a stated start dir is the path pytest is given and a
+    stated pattern its `python_files`, and whatever is unstated is left to the
+    project's own pytest configuration."""
+    args = ["-v", "-o", "junit_family=xunit1",
+            f"--junitxml={os.path.join(reports_dir, 'TEST-pytest.xml')}"]
+    if targets:
+        return args + list(targets)
+    if pattern:
+        args += ["-o", f"python_files={pattern}"]
+    if start_dir:
+        args.append(start_dir)
+    return args
 
 
 def _suite_cmd(python, runner, targets, start_dir, pattern, reports_dir):
     """The suite invocation under the chosen runner."""
     if runner == _PYTEST:
-        return [python, "-m", _PYTEST, *_pytest_args(targets, reports_dir)]
+        return [python, "-m", _PYTEST,
+                *_pytest_args(targets, start_dir, pattern, reports_dir)]
     return _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir)
 
 
-def _parse_junit_dir(reports_dir):
+def _parse_junit_dir(reports_dir, by_classname=False):
     """Parse every TEST-*.xml in reports_dir into (summary, tree, files) with
     per-method leaf names for the /api/v2/runs/parsed path so the Crucible tree
     shows real names.
@@ -674,7 +693,11 @@ def _parse_junit_dir(reports_dir):
     than implying a precision that report cannot give — and then to the suite
     name. The chain never collapses to zero: a constant zero would make a
     shrinking suite look identical to a healthy one. It rides the printed run
-    envelope only, never the ingest payload (CR-CRU-047 §S2)."""
+    envelope only, never the ingest payload (CR-CRU-047 §S2).
+
+    The tree has one node per `<testsuite>`, or with `by_classname` one per
+    distinct `classname` within it: pytest writes a single suite named
+    `pytest`, so its run is grouped by module (or module and class) instead."""
     tree_nodes = []
     total = passed = failed = pending = 0
     duration_ms = 0
@@ -684,9 +707,13 @@ def _parse_junit_dir(reports_dir):
         root = ET.parse(xml_file).getroot()  # noqa: S314
         suites = root.findall(".//testsuite") or [root]
         for suite in suites:
-            children = []
-            suite_fail = False
+            # node name -> {"children": [...], "fail": bool}, in first-seen order.
+            groups = {}
             for tc in suite.findall("testcase"):
+                node_name = suite.get("name", "?")
+                if by_classname:
+                    node_name = tc.get("classname") or node_name
+                group = groups.setdefault(node_name, {"children": [], "fail": False})
                 source = tc.get("file") or tc.get("classname") or suite.get("name")
                 if source:
                     files.add(source.replace("\\", "/"))
@@ -701,7 +728,7 @@ def _parse_junit_dir(reports_dir):
                 if fail:
                     status = "fail"
                     failed += 1
-                    suite_fail = True
+                    group["fail"] = True
                 elif tc.find("skipped") is not None:
                     status = "pending"
                     pending += 1
@@ -710,16 +737,16 @@ def _parse_junit_dir(reports_dir):
                     passed += 1
                 total += 1
                 duration_ms += tc_time
-                children.append({
+                group["children"].append({
                     "name": tc.get("name", "?"),
                     "status": status,
                     "duration_ms": tc_time,
                 })
-            if children:
+            for node_name, group in groups.items():
                 tree_nodes.append({
-                    "name": suite.get("name", "?"),
-                    "status": "fail" if suite_fail else "pass",
-                    "children": children,
+                    "name": node_name,
+                    "status": "fail" if group["fail"] else "pass",
+                    "children": group["children"],
                 })
     summary = {"total": total, "passed": passed, "failed": failed,
                "pending": pending, "duration_ms": duration_ms}
@@ -1070,7 +1097,8 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     _axi().close_narration(narrator)
 
     if _produced_xml(reports_dir):
-        summary, tree, files = _parse_junit_dir(reports_dir)
+        summary, tree, files = _parse_junit_dir(reports_dir,
+                                                by_classname=runner == _PYTEST)
         if _axi().ran_nothing(result.returncode, summary["total"]):
             return _axi().emit_ran_nothing(
                 verb, "TEST-*.xml", result.returncode, result.stdout or "",
@@ -1225,8 +1253,9 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
             # nothing) is a DEFINITIVE `no-tests-discovered` AXI error, NOT a masked
             # compile ingest. The compile path below is reserved for a genuine
             # import/collection failure (its capture carries a traceback).
-            detail = (f"0 tests discovered — start_dir={args.start_dir!r} "
-                      f"pattern={args.pattern!r} matched nothing")
+            detail = (f"0 tests discovered — "
+                      f"start_dir={args.start_dir or _UNITTEST_START_DIR!r} "
+                      f"pattern={args.pattern or _UNITTEST_PATTERN!r} matched nothing")
             warning = {"code": "no-tests-discovered", "detail": detail}
             print(f"[crucible] ERROR: no-tests-discovered — {detail}", file=sys.stderr)
             # Nothing ran, so nothing will ever file the run this verb opened:
@@ -1263,7 +1292,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
                   f"{verb}: ok=False — no JUnit XML, ingested as compile")
         return result.returncode or 1
 
-    summary, tree, files = _parse_junit_dir(reports_dir)
+    summary, tree, files = _parse_junit_dir(reports_dir, by_classname=runner == _PYTEST)
     if _axi().ran_nothing(result.returncode, summary["total"]):
         return _axi().emit_ran_nothing(
             verb, "TEST-*.xml", result.returncode, result.stdout or "",
@@ -1782,10 +1811,10 @@ def _add_runner_arg(p):
 
 
 def _add_discover_args(p):
-    p.add_argument("--start-dir", default="tests",
-                   help="Discovery start dir (default: tests)")
-    p.add_argument("--pattern", default="test_*.py",
-                   help="Discovery filename pattern (default: test_*.py)")
+    p.add_argument("--start-dir",
+                   help=f"Discovery start dir (default: {_UNITTEST_START_DIR})")
+    p.add_argument("--pattern",
+                   help=f"Discovery filename pattern (default: {_UNITTEST_PATTERN})")
     p.add_argument("--reports", help=_REPORTS_HELP)
 
 
@@ -1848,8 +1877,8 @@ def _add_declared_tier_args(p):
                    help="Discovery start dir DECLARING this tier's target. No "
                         "default: with none stated the tier has no declared "
                         "target and the verb refuses.")
-    p.add_argument("--pattern", default="test_*.py",
-                   help="Discovery filename pattern (default: test_*.py)")
+    p.add_argument("--pattern",
+                   help=f"Discovery filename pattern (default: {_UNITTEST_PATTERN})")
     p.add_argument("--reports", help=_REPORTS_HELP)
     _add_python_arg(p)
     _add_runner_arg(p)
