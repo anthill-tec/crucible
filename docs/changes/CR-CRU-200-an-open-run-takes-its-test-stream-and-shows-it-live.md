@@ -29,8 +29,10 @@ not know narrates nothing (a Vitest run, measured).
   current file, every failure as it happens) is kept by the board and pushed over the live feed, and
   the board shows it (a storyboard frame settles where, before RED). It replaces the narration count
   for a streamed run.
-- **§S5 — proven on the runner Crucible owns.** The python client's own runner emits the stream, and
-  the python client declares and relays it; every python run reaches the board as a stream.
+- **§S5 — proven on the runner Crucible owns.** The python client's own unittest runner emits the
+  stream, and the python client declares and relays it; every unittest run reaches the board as a
+  stream. A pytest run (CR-CRU-197) keeps its JUnit record unless this CR's gap analysis settles a
+  pytest source.
 
 ## Acceptance criteria
 
