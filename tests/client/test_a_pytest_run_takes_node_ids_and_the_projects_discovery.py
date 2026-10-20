@@ -142,9 +142,10 @@ class TheProjectsPytestConfigurationDecidesDiscoveryTest(_PytestCase):
 
 
 class WithoutPytestTheUnittestDefaultsStandTest(unittest.TestCase):
-    """A unittest project whose only test the defaults select is
-    `tests/test_counted.py`; every other file holds a failing test a
-    different start dir or pattern would collect."""
+    """A scratch unittest project whose only test the defaults select is
+    the `CountedTest` module setUp writes under the scratch `tests/` dir;
+    every other file holds a failing test a different start dir or
+    pattern would collect."""
 
     def setUp(self):
         self.project = ScratchProject("unittest-discovery-defaults-", from_fixture=False)
