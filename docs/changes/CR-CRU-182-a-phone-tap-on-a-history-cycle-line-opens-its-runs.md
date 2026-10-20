@@ -1,8 +1,9 @@
 # CR-CRU-182 — a phone tap on a history cycle line opens its runs, not `→ Runs`
 
-**Type** fix (patch CR, after the 0.3.0 release) · **Points** 5 (3 at filing; raised at gap analysis
-2026-10-20 when the WebKit pass moved onto the client) · **Wave** 8 (0.4.0) · **Depends on** — ·
-**Status** PENDING — filed 2026-10-10 (user ruling: the 0.3.0 follow-ups are patch CRs in wave 8)
+**Type** fix (patch CR, after the 0.3.0 release) · **Points** 8 (3 at filing; raised at gap analysis
+and its pre-review 2026-10-20 as the phone rule, the touch floor and the client-run WebKit pass came
+in) · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-10 (user ruling: the
+0.3.0 follow-ups are patch CRs in wave 8)
 
 ## Problem
 
@@ -18,60 +19,108 @@ WebKit (CR-CRU-180 cycle 658): touch events went to `.app-cycle-line` at (305,55
 `.app-cycle-to-runs` at (296,547), and the page left Workflow for Runs.
 
 CR-CRU-180 made the e2e step aim away from that gap, so CI is green. A real iPhone user tapping the
-same spot still lands on `→ Runs`. No margin inside a 390 px line is wide enough to put the line's
-empty space outside WebKit's adjustment radius whatever wraps, and F15d's "the Runs badge keeps its
-own 44px target" was never built: the phone band gives `.app-cycle-to-runs` no touch floor.
+same spot still lands on `→ Runs`. No margin inside a phone-width line puts the line's empty space
+outside WebKit's adjustment radius whatever wraps.
 
-`bun run webkit:docker`, the one local WebKit pass, runs Playwright directly, so a WebKit run never
-reaches the board.
+Three further facts (measured 2026-10-20):
+
+- The `→ Runs` pill has no touch floor on any band: DN decision 11's "nested affordances stay
+  separate ≥44px targets" was never built, for History or for Now's cycle line.
+- A failed or skipped history line has `→ Runs` but no toggle; an active line with no runs opens to
+  nothing.
+- `bun run webkit:docker`, the one local WebKit pass, runs Playwright directly, so a WebKit run never
+  reaches the board; and its container survives a never-ready server, SIGINT and SIGTERM
+  (`process.exit` and a signal skip its `finally`).
 
 ## Design (settled with the user, 2026-10-20)
 
-- At the phone band a closed history cycle line carries no `→ Runs`: nothing clickable borders its
-  empty space. The open span ends with `→ Runs` as its own full-width row of at least 44 px.
-  Desktop and tablet keep the line's pill.
-- `bun run webkit:docker` runs the `webkit-iphone` project through the bun client.
+- At the phone band `→ Runs` lives only in a history line's expanded runs, never on the line. Every
+  history line with a runs boundary expands there: done, active, failed and skipped.
+- The phone choice is made in the app by `isPhoneBand()`, as the sub-tabs, roadmap cards and the
+  verified-runs chip already are.
+- The pill gains a ≥44px target on touch media, on every band that shows it.
+- `bun run webkit:docker -- <args>` passes its arguments to `bun-crucible.py e2e`, so a WebKit run is
+  filed like any other.
 
 ## Steps
 
 ### §S1 — the frame
 
-F15d carries the amendment: the phone band's closed and open history line as drawn above. The
-frame is approved before RED, and it governs.
+F15d carries the amendment (closed, expanded, no runs loaded, pruned), and its superseded phone notes
+are marked; F23's card c points to it. The frame is approved before RED, and it governs.
 
-### §S2 — the line keeps its taps
+### §S2 — at the phone band the history line keeps its taps
 
-At the phone band (`width <= 640px`) a history cycle line renders no `→ Runs` badge, whatever its
-state, and a tap anywhere on it toggles its linked runs. The open span renders `→ Runs` as its last
-row, at least 44 px tall and the span's full width, with the same navigation and the same pruned-
-boundary dim state the pill has. Tablet and desktop render the line's pill as today.
+When `isPhoneBand()` holds, a history cycle line renders no `→ Runs`. Every history line for which
+`cycleHasRunsBoundary(cycle)` holds is a toggle, done, active, failed and skipped alike, and a tap
+anywhere on it (its glyph, label, timer and empty space) shows or hides its expanded runs. The
+expanded runs end with `→ Runs` as their own row, at least 44 px tall and their full width, rendered
+whenever `cycleHasRunsBoundary(cycle)` holds, including when no run is in the loaded window (then it
+sits directly under the line). The row is decided by the same predicate at the same place as the
+pill (a third call, never an inline status test), navigates exactly as the pill does, and follows
+the pill's pruned path: dim (`app-pill-dim`, `aria-disabled="true"`, the pruned label and title),
+with the same click behaviour. Crossing the band swaps the pill and the row. Tablet and desktop
+render the line's pill as today.
 
-### §S3 — the WebKit pass goes through the client
+### §S3 — the pill is a touch target
 
-`bun run webkit:docker` starts the pinned container as today, then runs
-`bun-crucible.py e2e -- --project=webkit-iphone` against it, with the run filed on the board when an
-agent is given (the variable the script reads is named in its help). It still tears the container
-down on every exit path and fails loudly, naming the remedy, when Docker is unreachable.
+On `(pointer: coarse)` media the `→ Runs` pill measures at least 44 px in one dimension, wherever it
+renders (History's line on tablet and desktop, Now's cycle line on every band).
+
+### §S4 — the WebKit pass goes through the client
+
+`bun run webkit:docker [-- <args>]` starts the pinned container, waits for it, then runs
+`bun-crucible.py e2e <args> -- --project=webkit-iphone` with the run-server endpoint set, and exits
+with the client's exit code. `--agent`, `--cycle` and `--release` among the arguments file the run;
+without `--agent` the run is unfiled, as `e2e` is. The run also carries `webkit-iphone`'s dependency
+project, which runs on the host's Chromium. On every path that started a container (the run passes,
+it fails, the server never becomes ready, SIGINT, SIGTERM) the container is removed; on a signal the
+client is let finish filing its abandoned run first. Docker unreachable and a failed `docker run`
+still exit non-zero naming the remedy. The script's own `bddgen` step is dropped (the client's
+`test:e2e` runs it).
+
+### §S5 — the design record follows
+
+DN-crucible-responsive-model decision 11 states the phone band's rule, and its WebKit provisioning
+section says the Docker pass runs through the client and is filed.
 
 ## Acceptance criteria
 
-- [ ] The F15d amendment is approved, and the phone band matches it at 390×844.
-- [ ] An e2e scenario on `webkit-iphone`, with the DejaVu fonts installed, taps the midpoint of every
-      empty-space gap of a wrapped history cycle line, including the gap at its right-hand end. Each
-      tap opens the line's linked runs and stays on Workflow; a second tap closes them. The closed
-      line renders no `→ Runs`.
-- [ ] On the phone band, the open span's `→ Runs` row measures at least 44 px tall and the span's
-      full width, and a tap on it navigates to the Runs tab with the boundary in view; a pruned
-      boundary renders it dim and inert, as the pill is.
-- [ ] On tablet and desktop the line still renders its `→ Runs` pill, and clicking it navigates
-      (unchanged).
-- [ ] The CR-CRU-146 phone scenario passes on `chromium-mobile` and `webkit-iphone` with its step's
-      badge-avoiding gap choice removed, so it taps the widest gap again.
-- [ ] `bun run webkit:docker` runs the `webkit-iphone` project through `bun-crucible.py e2e`, files
-      the run on the board when the agent variable is set, and removes the container on success,
-      failure and interrupt.
+- [ ] **The frame.** The F15d amendment is approved before RED. At the end, the user (or VERIFY with
+      screenshots from `webkit-iphone` at 393×659 and `chromium-mobile` at 412×839) confirms the
+      phone band matches its closed, expanded, no-runs and pruned drawings.
+- [ ] **The phone line keeps its taps.** An e2e scenario on `webkit-iphone` (DejaVu installed by the
+      Docker path and by CI) and on `chromium-mobile` renders a history cycle line whose label is
+      asserted to wrap (the scenario fails if it does not), with no `→ Runs` on the closed line. A
+      tap at the midpoint of every horizontal gap wider than 0 px not covered by a child of the line,
+      at its vertical centre (including the gap between the timer and the `▸ N runs` hint), and a tap
+      on the label and on the timer, each shows the expanded runs and stays on Workflow; a second
+      tap, at the same gap re-measured after the line changes, hides them.
+- [ ] **Every boundary expands.** On the phone band a failed and a skipped history cycle line each
+      expands on a tap and shows the `→ Runs` row; an active history line with no runs expands to
+      the row alone (unit tests forcing the band with an inline `--band: phone`).
+- [ ] **The row navigates.** On the phone band the `→ Runs` row measures at least 44 px tall and the
+      expanded runs' full width, and a tap on it shows the Runs tab with the boundary in view (e2e);
+      for a pruned boundary the row renders `app-pill-dim`, `aria-disabled="true"` and the pruned
+      label and title, and a click still shows the Runs tab (unit).
+- [ ] **Bands swap.** With the band switched from phone to tablet the line renders the pill and no
+      row, and back again (unit).
+- [ ] **Tablet and desktop unchanged.** There the history line renders its `→ Runs` pill, and every
+      existing `→ Runs` test passes unchanged.
+- [ ] **The pill is a touch target.** On a `(pointer: coarse)` profile at tablet width the history
+      pill, and on the phone and tablet bands Now's cycle-line pill, each measure at least 44 px in
+      one dimension.
+- [ ] **The CR-CRU-146 step aims at the widest gap.** Its phone step's gap search references no
+      `cycle-to-runs`, and the CR-CRU-146 scenarios pass on `chromium-mobile`, `webkit-iphone` and
+      desktop Chromium.
+- [ ] **WebKit runs through the client.** `bun run webkit:docker -- --agent X` runs the `webkit-iphone`
+      project through `bun-crucible.py e2e`, files the run, and exits with its code. Through a
+      testable seam, the container is removed on a pass, a failure, a server that never becomes
+      ready, SIGINT and SIGTERM (after the client files on a signal), and no container is started
+      when Docker is unreachable.
+- [ ] **The record.** DN decision 11 and the WebKit provisioning section say what §S5 says.
 
 ## Non-goals
 
-- Moving `→ Runs` off the line at tablet or desktop.
+- Moving `→ Runs` off the line at tablet or desktop, or off Now's line on any band.
 - A WebKit pass in the pre-merge gate (e2e stays outside it fleet-wide).
