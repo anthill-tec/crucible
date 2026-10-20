@@ -530,16 +530,22 @@ def _bun_test_report_flags(junit_path, coverage, coverage_dir):
     return flags
 
 
-def _bun_test_cmd(bun, targets, junit_path, coverage, coverage_dir):
+def _bun_test_cmd(bun, targets, junit_path, coverage, coverage_dir, *,
+                  name=None):
     """Build the `bun test` invocation. Targeted (file paths) or whole-suite.
 
     This one IS `bun test` — the runner is this client's own choice, not a
     project's declaration — so it takes the flag contract unconditionally, and
     with it (CR-CRU-137 §S1) the project's own default per-test budget: both
-    shapes, targeted and whole-suite, run on the same declared figure."""
+    shapes, targeted and whole-suite, run on the same declared figure.
+
+    `name` is a test-name pattern, handed to bun unchanged as `-t <name>`;
+    without one the invocation is exactly what it was."""
     cmd = [bun, "test", "--timeout", str(DEFAULT_TEST_TIMEOUT_MS)]
     if targets:
         cmd += list(targets)
+    if name is not None:
+        cmd += ["-t", name]
     return cmd + _bun_test_report_flags(junit_path, coverage, coverage_dir)
 
 
@@ -644,16 +650,20 @@ def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir,
     nothing the target's runner never agreed to accept.
 
     `passthrough` is what the operator typed after `--` on the tier verb. It
-    rides the END of the invocation, behind `--` and after anything the report
-    mechanism appended, so bun forwards it verbatim to the script's last
-    command; with none typed the invocation is exactly what it was without it."""
+    rides the END of the invocation; with none typed the invocation is exactly
+    what it was without it. Under `env:<VAR>` nothing is appended and it
+    follows a `--`, as it always has. Under the flag default it follows the
+    appended report flags with NO `--`: `bun run` already hands everything
+    after the script name to the script's command, and would forward a literal
+    `--` with it, which `bun test` then reads as the start of its file
+    filters."""
     variable = _report_path_variable(mechanism)
-    tail = ["--", *passthrough] if passthrough else []
     if variable:
+        tail = ["--", *passthrough] if passthrough else []
         return [bun, "run", script] + tail, {variable: junit_path}
     return ([bun, "run", script]
             + _bun_test_report_flags(junit_path, coverage, coverage_dir)
-            + tail, {})
+            + list(passthrough), {})
 
 
 def _render_invocation(cmd, report_env=None, passthrough=()):
@@ -1240,6 +1250,31 @@ def _emit_run_abandoned(verb, project_dir, agent_id, run_id, abandoned,
                                      run_id, abandoned, warnings, post_fn=_post)
 
 
+def _emit_filter_ran_nothing(project_dir, agent_id, run_id, pattern,
+                             warnings=()):
+    """The exit of a `test --name` run in which nothing passed and nothing
+    failed: the filter selected no test, so the run ran nothing. Nothing is
+    ingested; the run this verb opened is aborted, and ONE ok:false envelope
+    carries a warning naming the pattern. Returns 1."""
+    reason = f"the name filter {pattern!r} matched no test, so the run ran nothing"
+    closing = []
+    if run_id:
+        closing.append(_axi().abort_run(_post, _project_key(project_dir),
+                                        agent_id, run_id, reason))
+    _emit_axi("test", False,
+              {"name": pattern,
+               "help": ["re-run test --name <pattern> with a pattern that "
+                        "matches a test", "status"]},
+              _axi_context(project_dir, agent_id=agent_id),
+              list(warnings) + closing
+              + [{"code": "name-filter-ran-nothing",
+                  "detail": f"--name {pattern!r} matched no test: nothing "
+                            f"passed and nothing failed, so nothing was filed"}],
+              f"[crucible] ERROR: --name {pattern!r} matched no test "
+              f"\u2014 nothing was filed")
+    return 1
+
+
 def cmd_test(args, tier=None):
     """Targeted/whole-suite `bun test` → junit → ingest.
 
@@ -1274,7 +1309,8 @@ def cmd_test(args, tier=None):
     # server refuses a run-start from an unregistered caller, so the run can
     # only be opened once the identity heartbeat above has landed.
     run_id, run_warnings, preflight_warnings = None, [], []
-    cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None)
+    name = getattr(args, "name", None)
+    cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None, name=name)
     env = os.environ.copy()
     print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
     # Capture output whenever an ingest may be needed: bun's JUnit reporter
@@ -1346,6 +1382,9 @@ def cmd_test(args, tier=None):
                     run_warnings, post_fn=_post,
                     project_key=_project_key(project_dir),
                     agent_id=args.agent)
+            if name is not None and not (summary["passed"] or summary["failed"]):
+                return _emit_filter_ran_nothing(project_dir, args.agent, run_id,
+                                                name, run_warnings)
             # §S2c — the captured run log IS the failure-detail source.
             _marry_failures(tree, getattr(result, "stdout", None))
             resp = _ingest_parsed(project_dir, args.agent, summary, tree,
@@ -1357,7 +1396,7 @@ def cmd_test(args, tier=None):
                              warnings=(run_warnings
                                        + _axi().unit_run_wall_vs_cpu_warnings(
                                            tier, "bun", timing)),
-                             run_id=run_id)
+                             run_id=run_id, name=name)
             # A failing run exits non-zero even when the ingest succeeded —
             # the exit code carries the RUNNER verdict, not the POST's.
             if summary["failed"] > 0:
@@ -2139,7 +2178,7 @@ _HELP_STEPS = {
 
 
 def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=None,
-                     warnings=None, run_id=None):
+                     warnings=None, run_id=None, name=None):
     """Emit the §S1 envelope for an ingest verb
     (test/regression/auto-ingest): run{passed,failed,pending,total,files}.
     `files` (CR-CRU-047 §S2) is the distinct test-FILE count from
@@ -2153,7 +2192,10 @@ def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=
 
     CR-CRU-017 §S4 — a WRAPPED run also names the `runId` its ingest closed (so
     the caller can correlate the stored span) and carries any lifecycle
-    `warnings` the run accumulated; a single-shot run adds neither key."""
+    `warnings` the run accumulated; a single-shot run adds neither key.
+
+    `name` is the test-name filter the run was narrowed by; an unfiltered run
+    adds no key."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
            "total": summary["total"], "files": files}
@@ -2166,6 +2208,8 @@ def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=
     result_fields = {"run": run, "help": help_steps or _HELP_STEPS.get(verb, ["status"])}
     if run_id:
         result_fields["runId"] = run_id
+    if name is not None:
+        result_fields["name"] = name
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
@@ -2538,6 +2582,9 @@ def main():
     t = sub.add_parser("test", help="Targeted/whole-suite `bun test` → junit → ingest.")
     t.add_argument("--tests", nargs="+",
                    help="Test file/path target(s) (e.g. src/tools/send.test.ts). Omit for all.")
+    t.add_argument("--name", metavar="PATTERN",
+                   help="Run only the tests whose name matches this regular "
+                        "expression (passed unchanged as `-t PATTERN`).")
     t.add_argument("--agent", help="If set, ingest the junit result after the run")
     _add_gate_cycle_arg(t)
     _add_run_release_arg(t)
