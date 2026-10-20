@@ -77,7 +77,10 @@ every tier verb.
 the same cycle as any other `test` run. Tests the filter excludes are filed as pending, as the
 runner reports them. A filtered run in which nothing passed and nothing failed is a run that ran
 nothing: it is aborted, the envelope reads `ok: false`, the command exits 1, and its warning names
-the pattern. The envelope's `name` field names the filter.
+the pattern. A declared script with a `crucible.rawReport` is held to the same rule through the JUnit
+report the same run wrote; one that writes only a report decoded on the board, which the client
+cannot count, refuses `--name` before anything is posted, with `ok: false`, exit 1, naming the
+script. The envelope's `name` field names the filter.
 
 ### §S4 — the package dir is declared, never assumed
 
@@ -129,6 +132,10 @@ scratch copy, so Vitest's caches and the client's reports are never written into
       files 1 passed and 1 pending on the `bun test` path, through a declared `bun test` script under
       `flag`, and through the declared Vitest script; the envelope's `name` field names the filter. A
       pattern matching nothing aborts the run: `ok: false`, exit 1, a warning naming the pattern.
+      Through a declared script with a `crucible.rawReport`, a pattern matching nothing aborts the
+      run the same way when the run also wrote a JUnit report; when it writes only the raw report,
+      `--name` is refused before anything is posted to the board (`ok: false`, exit 1, naming the
+      script).
 - [ ] **The package dir is declared.** A project `crucible.toml` declaring `[bun] package_dir` makes
       it the directory `check`, `test`, `regression`, a tier verb, `auto-ingest` and `pre-merge-gate`
       each run in, with no flag or variable set. The flag and the variable still win, in that order.
