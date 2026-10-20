@@ -49,7 +49,8 @@ Project + Crucible endpoint:
   Project path resolution: --project-dir > $BUN_CRUCIBLE_PROJECT_DIR > the git repo
   containing the current directory > CWD. No project is hardcoded.
   Package (bun cwd) resolution: --package-dir > $BUN_CRUCIBLE_PACKAGE_DIR >
-  <project-dir>/integrations/pi (if it has a package.json) > <project-dir>.
+  the project's `[bun] package_dir` in crucible.toml > <project-dir>; a relative
+  value resolves against <project-dir>.
   Bun resolution: --bun > $BUN_CRUCIBLE_BUN > `bun` on PATH.
   Run-lifecycle opt-out (CR-CRU-017 §S4): --no-lifecycle > $BUN_CRUCIBLE_NO_LIFECYCLE.
   Posts to the board the project's `crucible.toml` declares (`[client] url`,
@@ -2392,7 +2393,8 @@ def _add_workflow_agent_arg(p, extra=""):
 def _add_package_dir_arg(p):
     p.add_argument("--package-dir",
                    help="Bun package dir / test cwd (default: $BUN_CRUCIBLE_PACKAGE_DIR, else "
-                        "<project>/integrations/pi if it has package.json, else <project>).")
+                        "the project's `[bun] package_dir` in crucible.toml, else the "
+                        "project root). A relative value resolves against the project root.")
 
 
 def _add_bun_arg(p):
@@ -2660,9 +2662,15 @@ def main():
     _add_project_dir_arg(u)
     u.set_defaults(func=cmd_unregister)
 
-    t = sub.add_parser("test", help="Targeted/whole-suite `bun test` → junit → ingest.")
+    t = sub.add_parser(
+        "test", help="Targeted/whole-suite `bun test` → junit → ingest.",
+        description="Run a targeted test (file/path, optionally filtered by --name) or "
+                    "the whole suite, then ingest the junit result. A project that "
+                    "declares `crucible.testScript` in package.json runs `test` through "
+                    "that script (`bun run <script>`, with the files and the --name "
+                    "filter passed on); without it the run is `bun test`.")
     t.add_argument("--tests", nargs="+",
-                   help="Test file/path target(s) (e.g. src/tools/send.test.ts). Omit for all.")
+                   help="Test file/path target(s) (e.g. src/example.test.ts). Omit for all.")
     t.add_argument("--name", metavar="PATTERN",
                    help="Run only the tests whose name matches this regular "
                         "expression (passed unchanged as `-t PATTERN`).")
