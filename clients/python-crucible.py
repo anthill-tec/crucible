@@ -85,6 +85,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 import xml.etree.ElementTree as ET
 
 DEFAULT_REPORTS = "test-reports"
@@ -157,6 +158,85 @@ def _resolve_python(arg_value, project_dir):
     if os.path.exists(venv_py):
         return venv_py
     return sys.executable or "python3"
+
+
+# The runners a project's tests can run under, and the one that runs when
+# neither the project nor the call chooses.
+_UNITTEST = "unittest"
+_PYTEST = "pytest"
+_RUNNERS = (_UNITTEST, _PYTEST)
+_RUNNER_FLAG = "--runner"
+_PYTHON_TABLE = "python"
+_RUNNER_FIELD = "runner"
+
+
+class RunnerRefused(Exception):
+    """A runner that cannot be run: a value that is neither runner's name, or
+    `pytest` with an interpreter that cannot import it. The message names the
+    value and where it came from, or the interpreter and that it needs pytest.
+
+    Deliberately NOT an `OSError`/`ValueError`: the shared dispatch turns
+    those into a failed verb and lets a gate record its outcome on the board,
+    while a refused runner has run nothing and must post nothing; `main`
+    emits its envelope instead."""
+
+
+def _declared_runner(project_dir):
+    """`(value, path)` \u2014 `[python] runner` as the PROJECT's own
+    `crucible.toml` states it, or `(None, path)` when it declares none. Never
+    the install's file: an install-wide runner would make one project
+    everyone's default. A file that is absent or does not parse declares
+    nothing."""
+    path = os.path.join(project_dir, "crucible.toml")
+    try:
+        with open(path, "rb") as fh:
+            parsed = tomllib.load(fh)
+    except (OSError, ValueError):
+        return None, path
+    table = parsed.get(_PYTHON_TABLE)
+    if not isinstance(table, dict) or _RUNNER_FIELD not in table:
+        return None, path
+    return table[_RUNNER_FIELD], path
+
+
+def _resolve_runner(args, project_dir):
+    """--runner > `[python] runner` in the project's own crucible.toml >
+    unittest. A valid flag wins and the declaration is not consulted.
+
+    Raises `RunnerRefused` for a value that is neither runner's name, and for
+    `pytest` with an interpreter that cannot import it."""
+    flag = getattr(args, "runner", None)
+    if flag is not None:
+        value, source = flag, f"`{_RUNNER_FLAG}`"
+    else:
+        value, path = _declared_runner(project_dir)
+        source = f"`[{_PYTHON_TABLE}] {_RUNNER_FIELD}` in {path}"
+    if value is None:
+        return _UNITTEST
+    if value not in _RUNNERS:
+        raise RunnerRefused(
+            f"{source} is {value!r}, which is not a runner this client runs; "
+            f"choose one of {', '.join(_RUNNERS)}")
+    if value == _PYTEST:
+        python = _resolve_python(getattr(args, "python", None), project_dir)
+        if not _imports_pytest(python, project_dir):
+            raise RunnerRefused(
+                f"the runner is {_PYTEST} (from {source}), but the interpreter "
+                f"{python} cannot import {_PYTEST}; install {_PYTEST} into it, "
+                f"or choose another interpreter with --python")
+    return value
+
+
+def _imports_pytest(python, project_dir):
+    """Whether `python` can import pytest. An interpreter that cannot be
+    started at all cannot import it either."""
+    try:
+        probe = subprocess.run([python, "-c", f"import {_PYTEST}"],
+                               cwd=project_dir, capture_output=True, text=True,
+                               check=False)
+    except OSError:
+        return False
+    return probe.returncode == 0
 
 
 # ── HTTP transport seam (mocked in-process by the client test harnesses) ────
@@ -560,6 +640,21 @@ def _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir):
             *_runner_args(targets, start_dir, pattern, reports_dir)]
 
 
+def _pytest_args(targets, reports_dir):
+    """pytest's arguments: verbose, a JUnit report in the reports dir, and
+    the targets given (none: the project's own pytest configuration decides
+    what runs)."""
+    return ["-v", f"--junitxml={os.path.join(reports_dir, 'TEST-pytest.xml')}",
+            *(targets or [])]
+
+
+def _suite_cmd(python, runner, targets, start_dir, pattern, reports_dir):
+    """The suite invocation under the chosen runner."""
+    if runner == _PYTEST:
+        return [python, "-m", _PYTEST, *_pytest_args(targets, reports_dir)]
+    return _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir)
+
+
 def _parse_junit_dir(reports_dir):
     """Parse every TEST-*.xml in reports_dir into (summary, tree, files) with
     per-method leaf names for the /api/v2/runs/parsed path so the Crucible tree
@@ -906,23 +1001,25 @@ def cmd_test(args, tier=None, verb="test"):
     closing anti-ghost cleanup fires ONLY for an identity this run created.
     Without `--agent` nothing is opened, so nothing is posted."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # The runner is chosen, and refused, before anything reaches the board.
+    runner = _resolve_runner(args, project_dir)
     with _axi().gated_run(project_dir, args.agent,
                           getattr(args, "cycle", None),
                           "gated test run starting",
                           open_fn=_open_gate_identity,
                           close_fn=_close_gate_identity) as identity:
-        return _test_run(args, tier, verb, project_dir, identity)
+        return _test_run(args, tier, verb, project_dir, identity, runner)
 
 
-def _test_run(args, tier, verb, project_dir, identity):
+def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     """`cmd_test`'s run body, inside its gated-identity bracket."""
     python = _resolve_python(args.python, project_dir)
     reports_dir = _reports_dir(project_dir, args.reports, args.agent)
     os.makedirs(reports_dir, exist_ok=True)
     _wipe(reports_dir)
 
-    cmd = _xmlrunner_cmd(python, getattr(args, "tests", None), args.start_dir,
-                         args.pattern, reports_dir)
+    cmd = _suite_cmd(python, runner, getattr(args, "tests", None), args.start_dir,
+                     args.pattern, reports_dir)
     env = os.environ.copy()
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
@@ -1020,6 +1117,8 @@ def cmd_regression(args, verb="regression"):
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
     must carry ONE document under the GATE's own verb, not the inner one's."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # The runner is chosen, and refused, before anything reaches the board.
+    runner = _resolve_runner(args, project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
                           "gated regression run starting",
@@ -1033,10 +1132,11 @@ def cmd_regression(args, verb="regression"):
                 _get, _project_key(project_dir), args.agent,
                 cycle_id=getattr(args, "cycle", None),
                 context=_run_context(), release=getattr(args, "release", None))
-        return _regression_run(args, verb, preflight_warnings, identity)
+        return _regression_run(args, verb, preflight_warnings, identity, runner)
 
 
-def _regression_run(args, verb="regression", preflight_warnings=(), identity=None):
+def _regression_run(args, verb="regression", preflight_warnings=(), identity=None,
+                    runner=_UNITTEST):
     """Full-suite discover via xmlrunner (tier regression). With --coverage: run under
     coverage.py and post /api/v2/runs/parsed with coverage. A bound agent's run is
     server-stamped with its registered cycle. `verb` (CR-CRU-058 §S1) names the
@@ -1057,7 +1157,8 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     _wipe(reports_dir)
     env = os.environ.copy()
 
-    run_cmd = _xmlrunner_cmd(python, None, args.start_dir, args.pattern, reports_dir)
+    run_cmd = _suite_cmd(python, runner, None, args.start_dir, args.pattern,
+                         reports_dir)
     coverage_on = bool(args.coverage)
     # Coverage follows the run: an agent's own directory holds coverage.py's
     # data file too; otherwise it stays where coverage.py puts it (cwd).
@@ -1076,8 +1177,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         run_cmd = [python, "-m", "coverage", "run",
                    *(["--source", cov_source] if cov_source else []),
                    *([f"--data-file={data_file}"] if data_file else []),
-                   _subtest_runner_path(),
-                   *_runner_args(None, args.start_dir, args.pattern, reports_dir)]
+                   *run_cmd[1:]]
         # NOTE: no PYTHONSAFEPATH here. A real coverage.py install (CR-CRU-040 §S1)
         # wins over the stray top-level `coverage/` (bun lcov) namespace-dir shadow
         # on its own — a regular package beats a namespace package regardless of cwd
@@ -1278,6 +1378,9 @@ def cmd_pre_merge_gate(args):
     """ORCHESTRATOR pre-merge gate — the ONLY path that measures coverage. Steps:
     fail-fast `check` (py_compile) → full `regression --coverage`."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # The runner is chosen, and refused, before the check step and before
+    # anything reaches the board.
+    runner = _resolve_runner(args, project_dir)
     # The gate files from its first step on (a failing py_compile files a
     # compile result), so an unattributed gate is refused before that step.
     _axi().refuse_unattributed_run(
@@ -1317,7 +1420,7 @@ def cmd_pre_merge_gate(args):
         start_dir=args.start_dir, pattern=args.pattern, reports=args.reports,
         python=args.python, project_dir=args.project_dir, log=getattr(args, "log", None),
         cycle=getattr(args, "cycle", None),
-        release=getattr(args, "release", None),
+        release=getattr(args, "release", None), runner=runner,
     )
     # CR-CRU-112 §S1/§S2 — the gate's scope is the project's DECLARED suites,
     # composed once for the fleet. This stack's surface enumerates none (the
@@ -1667,6 +1770,17 @@ def _add_python_arg(p):
     )
 
 
+def _add_runner_arg(p):
+    """`--runner` on a RUNNING verb only: a free string the client validates,
+    so a bad value is refused in an envelope rather than by argparse."""
+    p.add_argument(
+        _RUNNER_FLAG,
+        help=f"Runner for this call: {_UNITTEST} or {_PYTEST}. Overrides the "
+             f"project's `[{_PYTHON_TABLE}] {_RUNNER_FIELD}` declaration in its own "
+             f"crucible.toml; with neither, the runner is {_UNITTEST} (the default). "
+             f"With {_PYTEST} the interpreter must be able to import pytest.")
+
+
 def _add_discover_args(p):
     p.add_argument("--start-dir", default="tests",
                    help="Discovery start dir (default: tests)")
@@ -1738,6 +1852,7 @@ def _add_declared_tier_args(p):
                    help="Discovery filename pattern (default: test_*.py)")
     p.add_argument("--reports", help=_REPORTS_HELP)
     _add_python_arg(p)
+    _add_runner_arg(p)
     _add_log_arg(p)
     _add_gate_cycle_arg(p)
     _add_run_release_arg(p)
@@ -1889,6 +2004,7 @@ def main():
     _add_run_release_arg(t)
     _add_discover_args(t)
     _add_python_arg(t)
+    _add_runner_arg(t)
     _add_project_dir_arg(t)
     _add_log_arg(t)
     t.set_defaults(func=cmd_test)
@@ -1912,7 +2028,7 @@ def main():
             "--coverage adds coverage.py.",
             (_add_regression_tier_args, _add_gate_cycle_arg,
              _add_run_release_arg, _add_discover_args, _add_python_arg,
-             _add_log_arg))),
+             _add_runner_arg, _add_log_arg))),
         declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_dir_arg,))
 
@@ -1951,6 +2067,7 @@ def main():
     _add_run_release_arg(pmg)
     _add_discover_args(pmg)
     _add_python_arg(pmg)
+    _add_runner_arg(pmg)
     _add_project_dir_arg(pmg)
     _add_log_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
@@ -2250,11 +2367,32 @@ def main():
     # CR-CRU-044 §S5 — dispatch through the shared `run_verb`, which turns an
     # UNDECLARED agent identity into the ok:false hard-stop envelope + a
     # non-zero exit (POSTing nothing) instead of an unhandled traceback.
-    sys.exit(_axi().run_verb(
-        args.func, args,
-        lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None))),
-        ops_fn=_ops,
-        project_dir_fn=lambda a: _resolve_project_dir(getattr(a, "project_dir", None))))
+    try:
+        code = _axi().run_verb(
+            args.func, args,
+            lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None))),
+            ops_fn=_ops,
+            project_dir_fn=lambda a: _resolve_project_dir(getattr(a, "project_dir", None)))
+    except RunnerRefused as refusal:
+        code = _emit_runner_refused(args, refusal)
+    sys.exit(code)
+
+
+def _emit_runner_refused(args, refusal):
+    """The `ok:false` envelope for a runner that cannot be run, and the exit
+    code. Nothing was run and nothing was posted; the context is best-effort,
+    since a project without a key must still be told why."""
+    project_dir = _resolve_project_dir(getattr(args, "project_dir", None))
+    agent = getattr(args, "agent", None)
+    context = (_axi_context(project_dir, agent_id=agent)
+               if _read_env(project_dir).get("CRUCIBLE_PROJECT_KEY", "").strip()
+               else {})
+    _emit_axi(args.cmd, False,
+              {"error": str(refusal),
+               "help": ["correct the runner or interpreter this error names, "
+                        "then re-run the verb"]},
+              context, [], legacy_line=f"error: runner-refused \u2014 {refusal}")
+    return 1
 
 
 if __name__ == "__main__":
