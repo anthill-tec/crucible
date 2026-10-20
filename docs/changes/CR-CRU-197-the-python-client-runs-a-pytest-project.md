@@ -13,91 +13,130 @@ it as a known client gap.
 
 Measured on pytest 9.1.1, python 3.14:
 
-- `pytest --junitxml=<file>` writes one JUnit file. Its default family (`xunit2`) carries no `file=`
-  attribute; `-o junit_family=xunit1` adds `file=` and `line=`.
-- A collection error (a broken import) stops the run with exit 2 and writes JUnit holding one
-  `<error>` test case for the module. unittest's import failure writes no XML at all, and the client
-  files it as a compile record.
+- `pytest --junitxml=<file>` writes one JUnit file, as one `<testsuite name="pytest">`. Its default
+  family (`xunit2`) carries no `file=`; `-o junit_family=xunit1` adds `file=` and `line=`.
+- A collection error (a broken import) exits 2 and writes one test case for the module with
+  `<error message="collection failure">`. A unittest import failure is written the same way by
+  xmlrunner (`<error type="ImportError">`), and the client files it as one failed test.
 - A run that collects nothing exits 5 and writes JUnit with `tests="0"`.
-- pytest runs unittest subtests, and its console reports them (`2 subtests passed`, `SUBFAILED`), but
-  its JUnit records only the parent test; the subtests are not counted in it.
-- `pytest -v` prints one line per test, `<nodeid> PASSED  [ 25%]`, after `collected N items`.
+- Exit 4 (a usage error, a broken `conftest.py`, a node id or path that does not exist) and exit 3
+  (an internal error, written as one test case named `internal`) are pytest failing as a runner, not
+  test results.
+- pytest runs unittest subtests and its native `subtests` fixture. A failing subtest is written as a
+  failure on its parent test case; passing subtests are not written as test cases. The console says
+  so (`N subtests passed`, `SUBPASSED(...)` lines).
+- `pytest -v` prints `<nodeid> PASSED  [ 25%]` per test, after `collected N items`, or
+  `collected N items / D deselected / S selected`.
+
+## Design (settled with the user, 2026-10-20)
+
+- The runner is a declaration of the project, `[python] runner` in its own `crucible.toml`; a
+  `--runner` flag overrides it per call; no environment variable chooses it.
+- Every running verb follows it: `test`, `regression`, the tier verbs, `pre-merge-gate`.
+- A pytest collection error is filed as a failed test, as a unittest import failure already is.
+- An interpreter without pytest is refused before anything is posted.
+- A run whose subtests went uncounted says so.
 
 ## Scope
 
 ### §S1 — the project declares its runner
 
-A project declares `[python] runner = "pytest"` (or `"unittest"`) in its own `crucible.toml`, read
-from the project's file only. `--runner {unittest,pytest}` on a running verb overrides it for that
-call. With neither, the runner is `unittest`, so nothing changes for today's projects. A declared or
-given value that is neither is refused before anything is posted to the board, with `ok: false`,
-exit 1, naming the value and where it came from. The shipped `crucible.toml` documents the key and
-declares no value.
+`[python] runner = "pytest"` (or `"unittest"`) in the project's own `crucible.toml` chooses the
+runner, read from the project's file only: an install-level `crucible.toml` is never consulted, and a
+file that is absent or does not parse declares nothing. `--runner <name>` on a running verb overrides
+it for that call. With neither, the runner is `unittest`, so nothing changes for today's projects. A
+declared or given value that is neither name is refused, and with `pytest` chosen an interpreter that
+cannot import pytest is refused: both before anything is posted to the board (before the run's
+opening heartbeat, and before the gate's check step), with `ok: false`, exit 1, naming the value and
+its source, or the interpreter and that it needs pytest. `check` and `auto-ingest` take no
+`--runner`. The shipped `crucible.toml` documents the key and declares no value.
 
 ### §S2 — every running verb follows it
 
 `test`, `regression`, every tier verb and `pre-merge-gate` run the chosen runner. With pytest:
 
-- the client runs `pytest -v -o junit_family=xunit1 --junitxml=<reports>/TEST-pytest.xml`, under the
+- the client runs `pytest -v -o junit_family=xunit1 --junitxml=<reports>/TEST-pytest.xml` under the
   same run lifecycle, interrupt trap, temp root, narration and envelopes as the `unittest` path, and
-  ingests the report through the same parse;
-- `--tests` takes pytest node ids (`tests/test_x.py::Cls::test_y`);
+  ingests the report through the same parse; the run's tree groups tests by their `classname`
+  (module, or module and class), not under one `pytest` node;
+- `--tests` takes pytest node ids (`tests/test_x.py::Cls::test_y`), and with `--tests` given no
+  start dir is passed, as on the `unittest` path;
 - `--start-dir` and `--pattern` reach pytest (the path it is given, and `python_files`) only when the
-  caller states them; otherwise the project's own pytest configuration decides discovery;
+  caller states them; otherwise the project's own pytest configuration decides discovery. On the
+  `unittest` path the defaults stay `tests` and `test_*.py`;
+- a tier verb's declaration stays its invocation (`--start-dir`, `--pattern`), as on `unittest`;
 - `--coverage` and the gate run pytest under coverage.py (`coverage run -m pytest`);
-- the narration counts pytest's per-test lines, against the total it states when collection ends.
+- the narration counts pytest's per-test verdict lines (`PASSED`, `FAILED`, `SKIPPED`, `ERROR`,
+  `XFAIL`, `XPASS`; never a `SUB…` line) against the selected total pytest states when collection
+  ends.
 
-### §S3 — a pytest run's outcomes mean what a unittest run's mean
+### §S3 — a pytest run's outcomes
 
-- A collection error is filed as a compile record from the captured output, with the no-report
-  envelope, exactly as a unittest import failure is (user ruling).
-- A run that collects nothing is a run that ran nothing, as on the unittest path.
-- An interpreter without pytest fails the same way an interpreter without `xmlrunner` does, and the
-  envelope's help names the interpreter and that it needs pytest.
-- A run whose output reports subtests carries the existing `subtests-uncounted` warning, since
-  pytest's JUnit does not count them (user ruling).
+- Exit 0, 1 or 2: the JUnit report is the result. A collection error is one failed test, as a
+  unittest import failure is (user ruling).
+- Exit 5, nothing collected: the run ran nothing; it is aborted with the `no-test-reports` warning,
+  and no compile record is filed.
+- Exit 3 or 4: pytest failed as a runner. Whatever JUnit it wrote is not filed as tests; the captured
+  output is filed as a compile record with the no-report envelope, whose warning carries pytest's own
+  `ERROR:` or `INTERNALERROR` line.
+- A run whose output reports passing subtests carries `subtests-uncounted`, with a detail that names
+  pytest and says passing subtests are not counted (user ruling).
+- Printed text names the runner that ran: the exit line, the no-report detail, the `--python` help.
 
 ### §S4 — help says so
 
-Every running verb's `--help` names `--runner`, the `[python] runner` declaration, the default, and
-that the interpreter must have pytest for it. `--tests`' help says it takes node ids under pytest.
+Every running verb's `--help` names `--runner`, the `[python] runner` declaration, the `unittest`
+default, and that the interpreter must have pytest for it; `--tests`' help says it takes node ids
+under pytest; `--start-dir` and `--pattern` say that under pytest the project's configuration
+decides unless they are given.
 
 ### §S5 — this repo can run it
 
-`pytest` joins the `[dev]` extras that CI installs, and a committed pytest fixture project is what
-the tests run.
+`pytest` joins the `[dev]` extras that CI installs, with its demanders named. A committed pytest
+fixture project (its own pytest configuration, with a `python_files` this repo's runs never match)
+is copied to a scratch directory for every run, so nothing it writes lands in the checkout, and it
+never runs as part of this repo's own suites. A test that needs pytest fails, never skips, when the
+interpreter lacks it.
 
 ## Acceptance criteria
 
 - [ ] **Declared, every verb.** With `[python] runner = "pytest"` in the project's `crucible.toml`,
-      `test`, `regression`, a declared tier verb and `pre-merge-gate` each run pytest on the fixture
-      project and file its counts: 1 passed, 1 failed, 1 pending for the fixture's three tests, with
-      `files` counted per file. `pre-merge-gate` and `regression --coverage` file coverage measured
-      by coverage.py.
-- [ ] **The flag overrides.** `--runner unittest` on a pytest-declared project runs unittest, and
-      `--runner pytest` on an undeclared project runs pytest.
-- [ ] **A bad value is refused.** A declared or given runner that is neither `unittest` nor `pytest`
-      is refused before anything is posted: `ok: false`, exit 1, naming the value and its source
-      (`--runner` or `crucible.toml`).
+      `test`, `regression`, a tier verb declared by `--start-dir` and `pre-merge-gate` each run pytest
+      on the fixture and file its counts: 1 passed, 1 failed, 1 pending for its three tests, `files`
+      counted per file, the tree grouped by `classname`. `pre-merge-gate` and `regression --coverage`
+      file coverage measured by coverage.py.
+- [ ] **The flag overrides.** `--runner unittest` on a pytest-declared project runs unittest;
+      `--runner pytest` on an undeclared project runs pytest. An install-level `[python] runner` is
+      ignored.
+- [ ] **Refused before the board.** A runner value that is neither name (from `--runner` or from
+      `crucible.toml`), and `pytest` with an interpreter that cannot import it, are each refused on
+      `test`, `regression` and `pre-merge-gate` with `ok: false` and exit 1, naming the value and its
+      source or the interpreter and pytest, with nothing posted to the board and nothing run.
 - [ ] **Node ids and discovery.** `test --tests <nodeid>` runs exactly that test. With no
       `--start-dir`/`--pattern`, the fixture's own pytest configuration decides what runs; with them,
-      they do.
-- [ ] **Every exit path holds.** On the pytest path: a collection error files a compile record and
-      the no-report envelope, `ok: false`, non-zero exit; a run that collects nothing is aborted with
-      the ran-nothing warning; a SIGTERM leaves the run aborted and one envelope; an interpreter
-      without pytest gives the no-report envelope whose help names the interpreter and pytest.
-- [ ] **Subtests are disclosed.** A pytest run of a test with subtests carries `subtests-uncounted`;
-      a pytest run without subtests does not.
-- [ ] **Narration.** A pytest run's heartbeats count its completed tests against the collected total.
+      they do. Without `--runner pytest`, `--start-dir` still defaults to `tests` and `--pattern` to
+      `test_*.py`.
+- [ ] **Every exit path holds.** On the pytest path: a collection error files one failed test; a run
+      that collects nothing is aborted with `no-test-reports` and files no compile record; a
+      nonexistent node id (exit 4), a broken `conftest.py` (exit 4) and an internal error (exit 3)
+      each file a compile record with the no-report envelope whose warning carries pytest's error
+      line, and file no tests; a SIGTERM leaves the run aborted and one envelope.
+- [ ] **Subtests are disclosed.** A pytest run of a `unittest.subTest` test and of a native
+      `subtests` test each carries `subtests-uncounted` with the pytest detail; a run without
+      subtests does not.
+- [ ] **Narration.** A pytest run's heartbeats count its completed tests (no `SUB…` line counted)
+      against the selected total.
 - [ ] **No change by default.** With no declaration and no flag, every existing python test passes
       unchanged.
 - [ ] **Help names it.** Every running verb's `--help` names `--runner`, `[python] runner`, the
-      `unittest` default and that the interpreter needs pytest; `--tests`' help names node ids.
-- [ ] **This repo runs it.** `pytest` is in the `[dev]` extras, and the CI python job runs the pytest
-      fixture tests.
+      `unittest` default and that the interpreter needs pytest; `--tests` names node ids;
+      `--start-dir` and `--pattern` name the pytest rule.
+- [ ] **This repo runs it.** `pytest` is in the `[dev]` extras; the fixture project runs only from a
+      scratch copy, and none of its files is collected by this repo's python or bun runs.
 
 ## Non-goals
 
-- Counting pytest subtests some other way (its console summary, a reportlog plugin).
-- pytest plugins beyond what the project's own interpreter already has.
-- The live test stream for pytest (CR-CRU-200 streams the python client's own unittest runner).
+- Counting passing pytest subtests some other way (its console summary, a reportlog plugin).
+- A pytest-native tier declaration (markers, `testpaths`).
+- Per-test narration when a project's own pytest configuration lowers verbosity (`addopts = -q`).
+- The live test stream for pytest (CR-CRU-200 streams the unittest runner; it lands after this CR).
