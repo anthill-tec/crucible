@@ -138,7 +138,11 @@ interpreter lacks it.
       unchanged.
 - [ ] **Help names it.** Every running verb's `--help` names `--runner`, `[python] runner`, the
       `unittest` default and that the interpreter needs pytest; `--tests` names node ids;
-      `--start-dir` and `--pattern` name the pytest rule.
+      `--start-dir` and `--pattern` name the pytest rule. The root `--help` description and its
+      `regression` line name both runners and `[python] runner`; a filed fallback text for a run
+      that left no output names the runner that ran.
+- [ ] **One probe per gate.** `pre-merge-gate` with pytest chosen checks the interpreter for pytest
+      once, with a time bound, before its check step.
 - [ ] **A check with nothing to compile passes.** On a project with neither `app/` nor `tests/`,
       `check` and `pre-merge-gate` compile nothing, file no compile record, carry
       `check-compiled-nothing` naming the paths looked for and `--paths`, and the gate goes on to run
