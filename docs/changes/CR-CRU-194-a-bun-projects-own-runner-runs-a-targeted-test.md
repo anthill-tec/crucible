@@ -78,9 +78,9 @@ the same cycle as any other `test` run. Tests the filter excludes are filed as p
 runner reports them. A filtered run in which nothing passed and nothing failed is a run that ran
 nothing: it is aborted, the envelope reads `ok: false`, the command exits 1, and its warning names
 the pattern. A declared script with a `crucible.rawReport` is held to the same rule through the JUnit
-report the same run wrote; one that writes only a report decoded on the board, which the client
-cannot count, refuses `--name` before anything is posted, with `ok: false`, exit 1, naming the
-script. The envelope's `name` field names the filter.
+report the same run wrote, and a filtered run that ran nothing files neither report. A filtered run
+through such a script that wrote no JUnit report cannot be counted: it is aborted the same way, its
+warning naming the script and the missing JUnit report. The envelope's `name` field names the filter.
 
 ### §S4 — the package dir is declared, never assumed
 
@@ -133,9 +133,9 @@ scratch copy, so Vitest's caches and the client's reports are never written into
       `flag`, and through the declared Vitest script; the envelope's `name` field names the filter. A
       pattern matching nothing aborts the run: `ok: false`, exit 1, a warning naming the pattern.
       Through a declared script with a `crucible.rawReport`, a pattern matching nothing aborts the
-      run the same way when the run also wrote a JUnit report; when it writes only the raw report,
-      `--name` is refused before anything is posted to the board (`ok: false`, exit 1, naming the
-      script).
+      run the same way, counted from the JUnit report the run wrote, and no report is posted; a
+      filtered run that wrote no JUnit report is aborted too (`ok: false`, exit 1, naming the script
+      and the missing JUnit report).
 - [ ] **The package dir is declared.** A project `crucible.toml` declaring `[bun] package_dir` makes
       it the directory `check`, `test`, `regression`, a tier verb, `auto-ingest` and `pre-merge-gate`
       each run in, with no flag or variable set. The flag and the variable still win, in that order.
