@@ -1914,11 +1914,21 @@ def _add_runner_arg(p):
              f"With {_PYTEST} the interpreter must be able to import pytest.")
 
 
+# Under pytest the project's own pytest configuration chooses what is
+# collected; a discovery flag only narrows it when the caller states it.
+_PYTEST_DISCOVERY_RULE = (
+    f"Under {_PYTEST} the project's own configuration decides unless this "
+    f"is given.")
+
+_PATTERN_HELP = (f"Discovery filename pattern ({_UNITTEST} default: "
+                 f"{_UNITTEST_PATTERN}). {_PYTEST_DISCOVERY_RULE}")
+
+
 def _add_discover_args(p):
     p.add_argument("--start-dir",
-                   help=f"Discovery start dir (default: {_UNITTEST_START_DIR})")
-    p.add_argument("--pattern",
-                   help=f"Discovery filename pattern (default: {_UNITTEST_PATTERN})")
+                   help=f"Discovery start dir ({_UNITTEST} default: "
+                        f"{_UNITTEST_START_DIR}). {_PYTEST_DISCOVERY_RULE}")
+    p.add_argument("--pattern", help=_PATTERN_HELP)
     p.add_argument("--reports", help=_REPORTS_HELP)
 
 
@@ -1981,8 +1991,7 @@ def _add_declared_tier_args(p):
                    help="Discovery start dir DECLARING this tier's target. No "
                         "default: with none stated the tier has no declared "
                         "target and the verb refuses.")
-    p.add_argument("--pattern",
-                   help=f"Discovery filename pattern (default: {_UNITTEST_PATTERN})")
+    p.add_argument("--pattern", help=_PATTERN_HELP)
     p.add_argument("--reports", help=_REPORTS_HELP)
     _add_python_arg(p)
     _add_runner_arg(p)
@@ -2127,11 +2136,14 @@ def main():
 
     t = sub.add_parser(
         "test",
-        help="Targeted/discover unittest via xmlrunner → parsed ingest. With --agent: ingest.",
+        help="Targeted/discover run under the declared runner (unittest or pytest) "
+             "→ parsed ingest. With --agent: ingest.",
     )
     t.add_argument("--tests", nargs="+",
                    help="Dotted test target(s), e.g. tests.test_mcp_server or "
-                        "tests.test_mcp_server.Cls.test_x. Omit to discover.")
+                        "tests.test_mcp_server.Cls.test_x; under pytest, pytest "
+                        "node ids, e.g. tests/test_x.py::Cls::test_x. Omit to "
+                        "discover.")
     t.add_argument("--agent", help="If set, ingest the result after the run")
     _add_gate_cycle_arg(t)
     _add_run_release_arg(t)
