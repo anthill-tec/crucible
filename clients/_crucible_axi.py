@@ -7100,20 +7100,24 @@ def ran_nothing(exit_code, total):
 
 
 def emit_ran_nothing(verb, artifact, exit_code, output, run_id, warnings=(),
-                     *, post_fn, project_key, agent_id):
+                     *, post_fn, project_key, agent_id, subject=None):
     """The exit of a run `ran_nothing` describes \u2014 the no-report exit, never
     an ingest: the run this client opened is aborted
     (`no_report_left_open_warnings`: `run-aborted`, or `run-left-open` when
     the abort is refused), and ONE ok:false envelope carries the caller's
     `warnings` and the `no_report_warning` naming the runner's exit code and
-    the tail of its `output`. Returns the exit code, never 0."""
+    the tail of its `output`. Returns the exit code, never 0.
+
+    `subject` is what the warning's detail says produced no report, when it
+    is more than the verb (a client that runs one of several runners names
+    the one that ran); unset, it is the verb."""
     closing = no_report_left_open_warnings(
         run_id, artifact, post_fn=post_fn, project_key=project_key,
         agent_id=agent_id)
     emit_axi(verb, False, {"help": no_report_help(verb, artifact)},
              axi_context(project_key, agent_id=agent_id),
              list(warnings) + closing
-             + [no_report_warning(verb, artifact, exit_code, output)],
+             + [no_report_warning(subject or verb, artifact, exit_code, output)],
              f"[crucible] ERROR: the {verb} runner exited {exit_code} and its "
              f"{artifact} holds no results \u2014 nothing was filed")
     return exit_code or 1

@@ -395,14 +395,47 @@ def _recognise_completion(line):
     return _UNITTEST_VERDICT_LINE.search(line.rstrip("\r\n")) is not None
 
 
-def _narrator(project_dir, agent_id, identity=None):
+def _narrator(project_dir, agent_id, identity=None, runner=None):
     """This client's `RunNarrator`: python's recogniser, an unknown total
     (`running N`, then `ran N/N`), and the shared role-optional heartbeat
-    tick (`narration_poster`), observed by a gated `identity` when there is one."""
-    return _axi().RunNarrator(
-        _axi().narration_poster(_post, _project_key(project_dir), agent_id,
-                                identity),
-        _recognise_completion)
+    tick (`narration_poster`), observed by a gated `identity` when there is one.
+    Under pytest the recogniser is pytest's, against the total it selected."""
+    post = _axi().narration_poster(_post, _project_key(project_dir), agent_id,
+                                   identity)
+    if runner == _PYTEST:
+        progress = _PytestProgress()
+        return _axi().RunNarrator(post, progress.recognise,
+                                  total=lambda: progress.selected)
+    return _axi().RunNarrator(post, _recognise_completion)
+
+
+# pytest's `-v` lines: the line ending collection (`collected N items`, maybe
+# `/ D deselected / S selected`, maybe after `collecting ... `), and one verdict
+# line per finished test (`<nodeid> PASSED [ 33%]`). A subtest's `SUB...`
+# verdict and the short summary's `FAILED <nodeid> - ...` are no finished test.
+_PYTEST_COLLECTED_LINE = re.compile(
+    r"^(?:collecting \.\.\. )?collected (\d+) items?\b(.*)$")
+_PYTEST_SELECTED = re.compile(r"/ (\d+) selected\b")
+_PYTEST_VERDICT_LINE = re.compile(
+    r"^\S+::\S+.*\s(?:PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)(?:\s|$)")
+
+
+class _PytestProgress:
+    """pytest's half of the shared narration: reads the selected total from
+    the line ending collection and counts one completion per verdict line."""
+
+    def __init__(self):
+        self.selected = 0
+
+    def recognise(self, line):
+        """True when `line` is one finished test; records the selected total."""
+        text = line.rstrip("\r\n")
+        collected = _PYTEST_COLLECTED_LINE.match(text)
+        if collected:
+            stated = _PYTEST_SELECTED.search(collected.group(2))
+            self.selected = int(stated.group(1) if stated else collected.group(1))
+            return False
+        return _PYTEST_VERDICT_LINE.match(text) is not None
 
 
 # The subtest runner's one line stating that it fell back to xmlrunner's own
@@ -412,23 +445,37 @@ _FALLBACK_SIGNAL_LINE = re.compile(
     r"^\[subtest-runner\] subtests-uncounted: .*"
     r"\(xmlrunner version: (?P<version>.*)\)\s*$")
 
+# pytest's report of a passing subtest: a `SUBPASSED` verdict line, or the
+# closing summary's `N subtests passed`.
+_PYTEST_SUBTESTS_PASSED = re.compile(r"\sSUBPASSED\b|\b[1-9]\d* subtests? passed\b")
+
+_PYTEST_SUBTESTS_DETAIL = ("pytest writes no test case for a passing subtest "
+                           "in its JUnit report, so passing subtests were not "
+                           "counted")
+
 
 class _FallbackWatch:
-    """Watches the runner's output for the subtest runner's fallback line,
-    passing every line on to the run's narrator (if any). Only lines ahead of
-    the first test verdict are read for it, since the runner states the
-    fallback before any test runs. What it saw rides every envelope the run
-    produces as one `subtests-uncounted` warning."""
+    """Watches the runner's output for a sign that passing subtests went
+    uncounted, passing every line on to the run's narrator (if any). Under
+    unittest that is the subtest runner's fallback line, read only ahead of
+    the first test verdict since the runner states it before any test runs;
+    under pytest it is any report of a passing subtest, read through the whole
+    output. What it saw rides every envelope the run produces as one
+    `subtests-uncounted` warning."""
 
-    def __init__(self, narrator=None):
+    def __init__(self, narrator=None, runner=None):
         self._narrator = narrator
+        self._pytest = runner == _PYTEST
         self._watching = True
         self.version = None
 
     def observe(self, line):
         """Feed one line of the runner's output."""
         if self._watching:
-            if _recognise_completion(line):
+            if self._pytest:
+                if _PYTEST_SUBTESTS_PASSED.search(line):
+                    self._watching = False
+            elif _recognise_completion(line):
                 self._watching = False
             else:
                 found = _FALLBACK_SIGNAL_LINE.match(line.rstrip("\r\n"))
@@ -439,8 +486,13 @@ class _FallbackWatch:
             self._narrator.observe(line)
 
     def warnings(self):
-        """`[{code: subtests-uncounted, detail}]` when the runner fell back,
-        else `[]`."""
+        """`[{code: subtests-uncounted, detail}]` when passing subtests went
+        uncounted, else `[]`."""
+        if self._pytest:
+            if self._watching:
+                return []
+            return [{"code": "subtests-uncounted",
+                     "detail": _PYTEST_SUBTESTS_DETAIL}]
         if self.version is None:
             return []
         return [{"code": "subtests-uncounted",
@@ -769,6 +821,52 @@ def _no_xml_errors_text(result):
     return out or "xmlrunner produced no JUnit XML (import/syntax failure, no output captured)"
 
 
+def _runner_label(runner):
+    """The name the printed text gives the runner that ran."""
+    return _PYTEST if runner == _PYTEST else "xmlrunner"
+
+
+# pytest's exit codes for a run it could not carry out as a runner: an
+# internal error (3) and a usage error (4: a node id it cannot find, a
+# conftest it cannot load). Whatever JUnit it wrote then is no test result.
+_PYTEST_RUNNER_FAILURES = (3, 4)
+
+# pytest's own report of why it failed as a runner (under `-v` it may follow
+# the `collecting ... ` it printed on the same line).
+_PYTEST_ERROR_LINE = re.compile(
+    r"^(?:collecting \.\.\. )?"
+    r"(?P<error>(?:ERROR:|INTERNALERROR|ImportError while loading conftest).*)")
+
+
+def _pytest_failed_as_runner(runner, result):
+    """Whether pytest exited as a runner that failed, not with a result."""
+    return runner == _PYTEST and result.returncode in _PYTEST_RUNNER_FAILURES
+
+
+def _pytest_error_line(output):
+    """pytest's own error line in its captured output (the last one), or
+    None when it printed none."""
+    found = [m.group("error").strip()
+             for m in map(_PYTEST_ERROR_LINE.match, (output or "").splitlines())
+             if m]
+    return found[-1] if found else None
+
+
+def _no_report_subject(verb, runner):
+    """What a no-report detail says produced no report: the verb, and under
+    pytest the runner too."""
+    return f"{verb} under {_PYTEST}" if runner == _PYTEST else verb
+
+
+def _no_report_warning(verb, runner, result):
+    """The shared no-report warning for a run that produced no report to
+    file. Under pytest it names pytest and carries pytest's own error line."""
+    cause = _pytest_error_line(result.stdout) if runner == _PYTEST else None
+    return _axi().no_report_warning(_no_report_subject(verb, runner), "TEST-*.xml",
+                                    result.returncode, result.stdout or "",
+                                    cause=cause)
+
+
 def _is_zero_discovery(result):
     """CR-CRU-039 §S2 — distinguish an HONEST empty discovery (the start_dir/pattern
     matched nothing → "Ran 0 tests", no traceback) from a GENUINE import/collection
@@ -1064,7 +1162,7 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     if args.agent:
         # The shared run path: narrate per-test progress, and open the run
         # BEFORE xmlrunner is spawned so the board shows it running.
-        narrator = _narrator(project_dir, args.agent, identity)
+        narrator = _narrator(project_dir, args.agent, identity, runner)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
                                           context=_run_context(),
                                           release=release)
@@ -1077,7 +1175,7 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     # untiered targeted run measures and warns about nothing.
     # A signal while the run is open is trapped and the open run disclosed.
     # The runner's fallback line, once seen, rides every envelope below.
-    watch = _FallbackWatch(narrator)
+    watch = _FallbackWatch(narrator, runner)
     try:
         with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
             result = _run_logged(cmd, project_dir, env,
@@ -1088,7 +1186,8 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
                                          list(preflight_warnings)
                                          + watch.warnings(),
                                          post_fn=_post)
-    print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
+    print(f"[crucible] {_runner_label(runner)} exit={result.returncode}",
+          file=sys.stderr)
     envelope_warnings = list(preflight_warnings) + watch.warnings()
 
     if not args.agent:
@@ -1096,14 +1195,17 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
 
-    if _produced_xml(reports_dir):
+    # A pytest that failed as a runner wrote no result, whatever JUnit it left.
+    if (_produced_xml(reports_dir)
+            and not _pytest_failed_as_runner(runner, result)):
         summary, tree, files = _parse_junit_dir(reports_dir,
                                                 by_classname=runner == _PYTEST)
         if _axi().ran_nothing(result.returncode, summary["total"]):
             return _axi().emit_ran_nothing(
                 verb, "TEST-*.xml", result.returncode, result.stdout or "",
                 run_id, envelope_warnings, post_fn=_post,
-                project_key=_project_key(project_dir), agent_id=args.agent)
+                project_key=_project_key(project_dir), agent_id=args.agent,
+                subject=_no_report_subject(verb, runner))
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier=tier,
                               context=_run_context(),
                               raw=result.stdout, files=files, run_id=run_id,
@@ -1128,8 +1230,7 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
               {"help": _axi().no_report_help(verb, "TEST-*.xml")},
               _axi_context(project_dir, agent_id=args.agent),
               envelope_warnings
-              + [_axi().no_report_warning(verb, "TEST-*.xml", result.returncode,
-                                          result.stdout or "")],
+              + [_no_report_warning(verb, runner, result)],
               "[crucible] ERROR: no JUnit XML produced — ingested as compile")
     return result.returncode or 1
 
@@ -1227,14 +1328,14 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     if agent:
         # The shared run path: narrate per-test progress, and open the run
         # BEFORE the sweep is spawned so the board shows it running.
-        narrator = _narrator(project_dir, agent, identity)
+        narrator = _narrator(project_dir, agent, identity, runner)
         run_id, run_warnings = _start_run(project_dir, agent, tier="regression",
                                           context=_run_context(),
                                           release=release)
         stack_on_start = not run_warnings
         preflight_warnings += run_warnings
     # The runner's fallback line, once seen, rides every envelope below.
-    watch = _FallbackWatch(narrator)
+    watch = _FallbackWatch(narrator, runner)
     try:
         with _axi().abandon_trap(run_id):
             result = _run_logged(run_cmd, project_dir, env,
@@ -1244,10 +1345,13 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
                                          run_id, abandoned,
                                          preflight_warnings + watch.warnings(),
                                          post_fn=_post)
-    print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
+    print(f"[crucible] {_runner_label(runner)} exit={result.returncode}",
+          file=sys.stderr)
     envelope_warnings = preflight_warnings + watch.warnings()
 
-    if not _produced_xml(reports_dir):
+    # A pytest that failed as a runner wrote no result, whatever JUnit it left.
+    if (_pytest_failed_as_runner(runner, result)
+            or not _produced_xml(reports_dir)):
         if _is_zero_discovery(result):
             # §S2 — a discovery that COLLECTED ZERO TESTS (start_dir/pattern matched
             # nothing) is a DEFINITIVE `no-tests-discovered` AXI error, NOT a masked
@@ -1286,9 +1390,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
                   {"help": _axi().no_report_help(verb, "TEST-*.xml")},
                   _axi_context(project_dir, agent_id=args.agent),
                   envelope_warnings
-                  + [_axi().no_report_warning(verb, "TEST-*.xml",
-                                              result.returncode,
-                                              result.stdout or "")],
+                  + [_no_report_warning(verb, runner, result)],
                   f"{verb}: ok=False — no JUnit XML, ingested as compile")
         return result.returncode or 1
 
@@ -1297,7 +1399,8 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         return _axi().emit_ran_nothing(
             verb, "TEST-*.xml", result.returncode, result.stdout or "",
             run_id, envelope_warnings, post_fn=_post,
-            project_key=_project_key(project_dir), agent_id=args.agent)
+            project_key=_project_key(project_dir), agent_id=args.agent,
+            subject=_no_report_subject(verb, runner))
     coverage = (_collect_coverage(python, project_dir, env, data_file)
                 if coverage_on else None)
     # The final count, then `ingesting…`, both ahead of the ingest below.
@@ -1795,7 +1898,8 @@ def _add_python_arg(p):
         "--python",
         help="Interpreter to run tests with (default: $PY_CRUCIBLE_PYTHON, else "
              "<project>/.venv/bin/python if present, else this interpreter). Must have "
-             "xmlrunner (and coverage.py for --coverage).",
+             "xmlrunner, or pytest when pytest is the runner (and coverage.py for "
+             "--coverage).",
     )
 
 
