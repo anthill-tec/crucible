@@ -1263,8 +1263,8 @@ def _emit_filter_ran_nothing(project_dir, agent_id, run_id, pattern,
         closing.append(_axi().abort_run(_post, _project_key(project_dir),
                                         agent_id, run_id, reason))
     fields = {"name": pattern,
-              "help": ["re-run test --name <pattern> with a pattern that "
-                       "matches a test", "status"]}
+              "help": [("re-run test --name <pattern> with a pattern that "
+                        "matches a test"), "status"]}
     if script:
         fields["script"] = script
     _emit_axi("test", False, fields,
@@ -1275,6 +1275,34 @@ def _emit_filter_ran_nothing(project_dir, agent_id, run_id, pattern,
                             f"passed and nothing failed, so nothing was filed"}],
               f"[crucible] ERROR: --name {pattern!r} matched no test "
               f"\u2014 nothing was filed")
+    return 1
+
+
+def _emit_filter_uncounted(project_dir, agent_id, run_id, pattern, script,
+                           junit_path, warnings=()):
+    """The exit of a `test --name` run through a declared script whose report
+    is decoded on the board, when the same run wrote no JUnit report: the
+    filter's outcome cannot be counted, so nothing is ingested, the run this
+    verb opened is aborted, and ONE ok:false envelope carries a warning naming
+    the script and the missing JUnit report. Returns 1."""
+    detail = (f"--name {pattern!r} ran through declared script `{script}`, "
+              f"which wrote no JUnit report at {junit_path}, so the run "
+              f"cannot be counted and nothing was filed")
+    closing = []
+    if run_id:
+        closing.append(_axi().abort_run(
+            _post, _project_key(project_dir), agent_id, run_id,
+            f"the filtered run through `{script}` wrote no JUnit report, "
+            f"so it cannot be counted"))
+    _emit_axi("test", False,
+              {"name": pattern, "script": script,
+               "help": [(f"make `{script}` write its JUnit report to the path "
+                         f"it is handed, then re-run test --name <pattern>"),
+                        "status"]},
+              _axi_context(project_dir, agent_id=agent_id),
+              list(warnings) + closing
+              + [{"code": "name-filter-uncounted", "detail": detail}],
+              f"[crucible] ERROR: {detail}")
     return 1
 
 
@@ -1316,8 +1344,8 @@ def _emit_test_script_refused(project_dir, agent_id, detail):
     nothing is run and nothing is posted to the board; ONE ok:false envelope
     names the declaration. Returns 1."""
     _emit_axi("test", False,
-              {"help": [f"fix {_TEST_SCRIPT_DECLARATION} in package.json so "
-                        f"it names a script with a body, or remove it",
+              {"help": [(f"fix {_TEST_SCRIPT_DECLARATION} in package.json so "
+                         f"it names a script with a body, or remove it"),
                         "status"]},
               _axi_context(project_dir, agent_id=agent_id),
               [{"code": "test-script-refused", "detail": detail}],
@@ -1485,7 +1513,7 @@ def cmd_test(args, tier=None):
         return rc
 
 
-def cmd_regression(args, verb="regression", tier: "str | None" = "regression",
+def cmd_regression(args, verb="regression", tier: str | None = "regression",
                    script=None, passthrough=(), name=None):
     """CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
@@ -1566,7 +1594,7 @@ def cmd_regression(args, verb="regression", tier: "str | None" = "regression",
     narrator = None
     with _axi().gated_run(project_dir, args.agent,
                           getattr(args, "cycle", None),
-                          "gated regression run starting",
+                          f"gated {verb} run starting",
                           open_fn=_open_gate_identity,
                           close_fn=_close_gate_identity) as identity:
         if args.agent:
@@ -1580,8 +1608,11 @@ def cmd_regression(args, verb="regression", tier: "str | None" = "regression",
             # including the agent-quieting env strip.
             for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
+            # A `test` run counts the files it targets; every other run
+            # walks the whole package.
+            targets = getattr(args, "tests", None) if verb == "test" else None
             narrator = _narrator(project_dir, args.agent, identity,
-                                 _prescan_test_total(package_dir, None))
+                                 _prescan_test_total(package_dir, targets))
             if _lifecycle_enabled(args):
                 run_id, run_warnings = _start_run(project_dir, args.agent,
                                                   tier=tier,
@@ -1595,7 +1626,8 @@ def cmd_regression(args, verb="regression", tier: "str | None" = "regression",
         except _axi().RunAbandoned as abandoned:
             return _emit_run_abandoned(verb, project_dir, args.agent,
                                        run_id, abandoned, run_warnings)
-        print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
+        runner = f"declared script `{script}`" if script else "bun test"
+        print(f"[crucible] {runner} exit={result.returncode}", file=sys.stderr)
 
         # An unfiled run (no --agent — reachable only through an
         # optional-agent caller such as a declared tier verb) files nothing,
@@ -1664,8 +1696,14 @@ def cmd_regression(args, verb="regression", tier: "str | None" = "regression",
         # Something WILL be ingested: the final count, then `ingesting…`.
         _axi().close_narration(narrator)
         # A filtered run in which nothing passed and nothing failed ran
-        # nothing: it is aborted, exactly as on `test`'s own path.
-        if name is not None and not raw_report:
+        # nothing: it is aborted, exactly as on `test`'s own path. A run whose
+        # report the board decodes is counted from the JUnit report the same
+        # run wrote; without one it cannot be counted, and is aborted too.
+        if name is not None:
+            if raw_report and not os.path.exists(junit_path):
+                return _emit_filter_uncounted(project_dir, args.agent, run_id,
+                                              name, script, junit_path,
+                                              run_warnings)
             filtered = _parse_junit_file(junit_path)[0]
             if not (filtered["passed"] or filtered["failed"]):
                 return _emit_filter_ran_nothing(project_dir, args.agent, run_id,
@@ -2663,7 +2701,8 @@ def main():
     u.set_defaults(func=cmd_unregister)
 
     t = sub.add_parser(
-        "test", help="Targeted/whole-suite `bun test` → junit → ingest.",
+        "test", help=("Targeted/whole-suite `bun test`, or the declared test "
+                      "script (`crucible.testScript`) → junit → ingest."),
         description="Run a targeted test (file/path, optionally filtered by --name) or "
                     "the whole suite, then ingest the junit result. A project that "
                     "declares `crucible.testScript` in package.json runs `test` through "
@@ -3060,8 +3099,8 @@ def _emit_package_dir_refused(args, refusal):
                else {})
     _emit_axi(args.cmd, False,
               {"error": str(refusal),
-               "help": ["correct the package dir this error names, then re-run "
-                        "the verb"]},
+               "help": [("correct the package dir this error names, then "
+                         "re-run the verb")]},
               context, [], legacy_line=f"error: package-dir-refused \u2014 {refusal}")
     return 1
 
