@@ -827,11 +827,16 @@ def _produced_xml(reports_dir):
     )
 
 
-def _no_xml_errors_text(result):
+def _no_xml_errors_text(result, runner=_UNITTEST):
     """The REAL captured runner output for the no-XML compile fallback — never the
     empty string /api/v2/runs/compile 400s on."""
     out = (result.stdout or "").strip() if hasattr(result, "stdout") else ""
-    return out or "xmlrunner produced no JUnit XML (import/syntax failure, no output captured)"
+    if out:
+        return out
+    if runner == _PYTEST:
+        return (f"{_PYTEST} produced no JUnit XML "
+                f"(collection/usage failure, no output captured)")
+    return "xmlrunner produced no JUnit XML (import/syntax failure, no output captured)"
 
 
 def _runner_label(runner):
@@ -1234,7 +1239,7 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     # output as compile so the RED is still reported rather than silently lost.
     # CR-CRU-111 AC13a — a COMPILE ingest is a build event and carries NO test
     # tier, whatever verb reached it.
-    _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result),
+    _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result, runner),
                     run_id=run_id, release=release)
     # CR-CRU-064 §S2 — the compile ingest above is UNCHANGED; the envelope is
     # additive, so a starved toolchain stops returning an exit code with empty
@@ -1397,7 +1402,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         # `regression` tier: an earned verb name does not make a compile event a
         # test tier, so no tier goes on this body.
         _axi().close_narration(narrator)
-        _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result),
+        _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result, runner),
                         run_id=run_id, release=release)
         # CR-CRU-064 §S2/AC6 — emitted under the `verb` PARAMETER, never the
         # literal "regression": `pre-merge-gate` runs this body as its
