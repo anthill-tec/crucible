@@ -138,6 +138,27 @@ max = 500
 # The shipped file declares NO package_dir, so a project that declares nothing
 # runs from its own root.
 
+# ── The runner a python project's tests run under ─────────────────────────
+#
+# The python client runs a project's tests under `unittest` unless the project
+# declares otherwise, in its OWN `crucible.toml`:
+#
+#     [python]
+#     runner = "pytest"  # <- or "unittest", the default
+#
+# `--runner <name>` on a running verb (`test`, `regression`, a tier verb,
+# `pre-merge-gate`) overrides the declaration for that one call. A value that
+# is neither name is REFUSED, naming its source, and so is `pytest` with an
+# interpreter that cannot import it: both before anything is posted to the
+# board. A project file that is absent or does not parse declares nothing.
+#
+# Read from the PROJECT's file only, never the installed copy: an install-wide
+# runner would make one project every other project's default.
+
+[python]
+# The shipped file declares NO runner, so a project that declares nothing runs
+# under unittest, exactly as before this table existed.
+
 # ── The BOARD this fleet posts to ──────────────────────────────────────────
 #
 # CR-CRU-139 §S2. A connection is configuration too. The board a client posts
