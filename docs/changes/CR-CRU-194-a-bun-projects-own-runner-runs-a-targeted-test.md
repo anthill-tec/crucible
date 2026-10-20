@@ -2,7 +2,7 @@
 
 **Type** fix · **Points** 8 (5 at filing 2026-10-18, raised when the test-name filter moved in from
 CR-CRU-190 on 2026-10-19; confirmed at gap analysis and its pre-review) · **Wave** 8 (0.4.0) ·
-**Depends on** — · **Status** PENDING — filed 2026-10-18 (Model B request, user ruling: its own CR in
+**Depends on** — · **Status** DONE — merged 2026-10-20 (gate 7493/0) · filed 2026-10-18 (Model B request, user ruling: its own CR in
 0.4.0; the test-name filter joined it from CR-CRU-190, user ruling 2026-10-19)
 
 ## Problem
@@ -113,22 +113,22 @@ scratch copy, so Vitest's caches and the client's reports are never written into
 
 ## Acceptance criteria
 
-- [ ] **A declared targeted run uses the project's runner.** In the Vitest fixture, with
+- [x] **A declared targeted run uses the project's runner.** In the Vitest fixture, with
       `crucible.testScript` declared, `test --tests <file>` spawns `bun run <script>` with the file,
       and ingests the counts Vitest reported through the declared env mechanism (a fixture file with
       one passing and one failing test files 1 passed, 1 failed); a fixture test proves the runtime
       is Bun; the envelope's `script` field names the script. A whole-suite `test` runs through the
       script too.
-- [ ] **No declaration, no change.** Without `crucible.testScript`, `test --tests <file>` spawns the
+- [x] **No declaration, no change.** Without `crucible.testScript`, `test --tests <file>` spawns the
       same `bun test --timeout <default> <file>` invocation, with the same report flags, as before,
       and the existing `_bun_test_cmd` callers keep working.
-- [ ] **A bad declaration is refused.** A `crucible.testScript` that is not a string, names a script
+- [x] **A bad declaration is refused.** A `crucible.testScript` that is not a string, names a script
       the table does not hold, or names one with an empty body, is refused before anything is posted
       to the board: `ok: false`, exit 1, naming the script and `package.json`.
-- [ ] **Passthrough reaches the script.** Under the `flag` mechanism, `unit -- -t <pattern>` on a
+- [x] **Passthrough reaches the script.** Under the `flag` mechanism, `unit -- -t <pattern>` on a
       declared `bun test` script runs only the matching test, and `test --name <pattern>` through a
       declared `bun test` script does the same; under `env:<VAR>` the invocation is unchanged.
-- [ ] **Name filter, every path.** `test --name <pattern>` on a two-test fixture with one match
+- [x] **Name filter, every path.** `test --name <pattern>` on a two-test fixture with one match
       files 1 passed and 1 pending on the `bun test` path, through a declared `bun test` script under
       `flag`, and through the declared Vitest script; the envelope's `name` field names the filter. A
       pattern matching nothing aborts the run: `ok: false`, exit 1, a warning naming the pattern.
@@ -136,20 +136,20 @@ scratch copy, so Vitest's caches and the client's reports are never written into
       run the same way, counted from the JUnit report the run wrote, and no report is posted; a
       filtered run that wrote no JUnit report is aborted too (`ok: false`, exit 1, naming the script
       and the missing JUnit report).
-- [ ] **The package dir is declared.** A project `crucible.toml` declaring `[bun] package_dir` makes
+- [x] **The package dir is declared.** A project `crucible.toml` declaring `[bun] package_dir` makes
       it the directory `check`, `test`, `regression`, a tier verb, `auto-ingest` and `pre-merge-gate`
       each run in, with no flag or variable set. The flag and the variable still win, in that order.
       A relative value from each of the three resolves against the project root.
-- [ ] **No project is anyone's default.** With nothing declared, a project holding
+- [x] **No project is anyone's default.** With nothing declared, a project holding
       `integrations/pi/package.json` runs from the project root. No printed help text or example
       names `integrations/pi`, Sandesh or one of its tests or agents.
-- [ ] **A bad package dir is refused** before anything is posted to the board, with `ok: false` and
+- [x] **A bad package dir is refused** before anything is posted to the board, with `ok: false` and
       exit 1, naming the value and its source: a flag or variable value that is not a directory, and
       a declared value that is not a directory holding a `package.json`.
-- [ ] **The fixture stays out of this repo's suite.** `bun test` from the repo root, this repo's
+- [x] **The fixture stays out of this repo's suite.** `bun test` from the repo root, this repo's
       `test:unit`, `test:integration` and `test:regression` scripts, the bun client's `regression`,
       and CI's `bun test --timeout 30000` collect none of the Vitest fixture's test files.
-- [ ] **No new CR literals.** No CR-shaped literal is added in `src/`, `public/` or `clients/`, the
+- [x] **No new CR literals.** No CR-shaped literal is added in `src/`, `public/` or `clients/`, the
       citation tripwire's pins are unchanged, and the citations already on rewritten lines are kept.
 
 ## How it is worked
