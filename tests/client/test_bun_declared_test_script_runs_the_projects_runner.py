@@ -43,6 +43,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 from tests.client.live_run_harness import (
     CLIENTS,
@@ -505,8 +506,8 @@ class DeclaredBunTestScriptFiltersByNameTest(_BoardCase):
 class _FakeBunCase(_BoardCase):
     """A scratch project whose `bun` is a recording fake."""
 
-    SCRIPTS = {}
-    CRUCIBLE = None
+    SCRIPTS: ClassVar[dict] = {}
+    CRUCIBLE: ClassVar[dict | None] = None
 
     def setUp(self):
         self.project = new_scratch("declared-test-script-argv-")
@@ -552,8 +553,8 @@ class DeclaredScriptUnderFlagArgvTest(_FakeBunCase):
     """Under `flag` the report flags are appended, and the files and the filter
     follow them with no `--`."""
 
-    SCRIPTS = {BUN_SCRIPT: "bun test"}
-    CRUCIBLE = {"testScript": BUN_SCRIPT}
+    SCRIPTS: ClassVar[dict] = {BUN_SCRIPT: "bun test"}
+    CRUCIBLE: ClassVar[dict | None] = {"testScript": BUN_SCRIPT}
 
     def test_a_targeted_filtered_run_is_the_script_its_report_flags_the_file_and_the_filter(self):
         pattern = "^alpha (one|two) match$"
@@ -589,9 +590,9 @@ class DeclaredScriptUnderEnvArgvTest(_FakeBunCase):
     `--`, exactly as a tier verb's passthrough does, and the report path rides
     the declared variable."""
 
-    SCRIPTS = {VITEST_SCRIPT: "bun --bun vitest run"}
-    CRUCIBLE = {"testScript": VITEST_SCRIPT,
-                "reportPath": {VITEST_SCRIPT: f"env:{ENV_JUNIT_VAR}"}}
+    SCRIPTS: ClassVar[dict] = {VITEST_SCRIPT: "bun --bun vitest run"}
+    CRUCIBLE: ClassVar[dict | None] = {"testScript": VITEST_SCRIPT,
+                                       "reportPath": {VITEST_SCRIPT: f"env:{ENV_JUNIT_VAR}"}}
 
     def test_a_targeted_filtered_run_passes_the_file_and_filter_after_dashdash(self):
         result = self.drive("--tests", "a.vitest.ts", "--name", MATCHING_PATTERN)
@@ -620,11 +621,11 @@ class DeclaredScriptWithARawReportTest(_FakeBunCase):
     route, as a tier verb files it."""
 
     RAW_SCRIPT = "test:raw"
-    SCRIPTS = {RAW_SCRIPT: "some-runner"}
-    CRUCIBLE = {"testScript": RAW_SCRIPT,
-                "reportPath": {RAW_SCRIPT: f"env:{RAW_JUNIT_VAR}"},
-                "rawReport": {RAW_SCRIPT: {"codec": "stub", "file": "stub.json",
-                                           "path": f"env:{RAW_JSON_VAR}"}}}
+    SCRIPTS: ClassVar[dict] = {RAW_SCRIPT: "some-runner"}
+    CRUCIBLE: ClassVar[dict | None] = {"testScript": RAW_SCRIPT,
+                                       "reportPath": {RAW_SCRIPT: f"env:{RAW_JUNIT_VAR}"},
+                                       "rawReport": {RAW_SCRIPT: {"codec": "stub", "file": "stub.json",
+                                                                  "path": f"env:{RAW_JSON_VAR}"}}}
 
     def test_the_raw_report_is_posted_for_the_board_to_decode(self):
         result = self.drive("--tests", "some.spec")
@@ -651,9 +652,9 @@ class StarvedDeclaredScriptNamesItselfTest(_FakeBunCase):
     reports one: naming the script, the command and the path."""
 
     QUIET = "test:quiet"
-    SCRIPTS = {QUIET: "some-runner"}
-    CRUCIBLE = {"testScript": QUIET,
-                "reportPath": {QUIET: f"env:{ENV_JUNIT_VAR}"}}
+    SCRIPTS: ClassVar[dict] = {QUIET: "some-runner"}
+    CRUCIBLE: ClassVar[dict | None] = {"testScript": QUIET,
+                                       "reportPath": {QUIET: f"env:{ENV_JUNIT_VAR}"}}
 
     def test_a_starved_script_is_named_with_its_command_and_report_path(self):
         result = self.drive("--tests", "a.spec", FAKE_BUN_WRITE="none")
@@ -693,16 +694,16 @@ class _RefusedDeclarationCase(_FakeBunCase):
 
 
 class ADeclarationThatIsNotAStringIsRefusedTest(_RefusedDeclarationCase):
-    SCRIPTS = {"test:listed": "bun test"}
-    CRUCIBLE = {"testScript": ["test:listed"]}
+    SCRIPTS: ClassVar[dict] = {"test:listed": "bun test"}
+    CRUCIBLE: ClassVar[dict | None] = {"testScript": ["test:listed"]}
 
     def test_a_non_string_declaration_is_refused_before_anything_is_posted(self):
         self.assert_refused(self.drive("--tests", "pair.test.ts"), "test:listed")
 
 
 class ADeclarationNamingNoScriptIsRefusedTest(_RefusedDeclarationCase):
-    SCRIPTS = {"test:unit": "bun test"}
-    CRUCIBLE = {"testScript": "test:absent"}
+    SCRIPTS: ClassVar[dict] = {"test:unit": "bun test"}
+    CRUCIBLE: ClassVar[dict | None] = {"testScript": "test:absent"}
 
     def test_a_declaration_naming_no_script_is_refused_before_anything_is_posted(self):
         self.assert_refused(self.drive("--tests", "pair.test.ts"), "test:absent")
@@ -712,8 +713,8 @@ class ADeclarationNamingNoScriptIsRefusedTest(_RefusedDeclarationCase):
 
 
 class ADeclarationNamingAnEmptyScriptIsRefusedTest(_RefusedDeclarationCase):
-    SCRIPTS = {"test:empty": ""}
-    CRUCIBLE = {"testScript": "test:empty"}
+    SCRIPTS: ClassVar[dict] = {"test:empty": ""}
+    CRUCIBLE: ClassVar[dict | None] = {"testScript": "test:empty"}
 
     def test_a_declaration_naming_an_empty_script_is_refused_before_anything_is_posted(self):
         self.assert_refused(self.drive("--tests", "pair.test.ts"), "test:empty")

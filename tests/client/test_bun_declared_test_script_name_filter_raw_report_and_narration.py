@@ -46,6 +46,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 from tests.client.live_run_harness import (
     CLIENTS,
@@ -153,8 +154,8 @@ class _DeclaredScriptCase(unittest.TestCase):
     """A scratch project declaring `SCRIPTS`/`CRUCIBLE`, a recording fake
     `bun`, and a recording board named by the project's own config."""
 
-    SCRIPTS = {}
-    CRUCIBLE = None
+    SCRIPTS: ClassVar[dict] = {}
+    CRUCIBLE: ClassVar[dict | None] = None
 
     def setUp(self):
         self.project = new_scratch("declared-script-filter-narration-")
@@ -211,11 +212,11 @@ class FilteredRunThroughARawReportScriptTest(_DeclaredScriptCase):
     board, beside the JUnit report the same run writes."""
 
     RAW_SCRIPT = "test:decoded"
-    SCRIPTS = {RAW_SCRIPT: "some-runner"}
-    CRUCIBLE = {"testScript": RAW_SCRIPT,
-                "reportPath": {RAW_SCRIPT: f"env:{JUNIT_VAR}"},
-                "rawReport": {RAW_SCRIPT: {"codec": "stub", "file": "stub.json",
-                                           "path": f"env:{RAW_VAR}"}}}
+    SCRIPTS: ClassVar[dict] = {RAW_SCRIPT: "some-runner"}
+    CRUCIBLE: ClassVar[dict | None] = {"testScript": RAW_SCRIPT,
+                                       "reportPath": {RAW_SCRIPT: f"env:{JUNIT_VAR}"},
+                                       "rawReport": {RAW_SCRIPT: {"codec": "stub", "file": "stub.json",
+                                                                  "path": f"env:{RAW_VAR}"}}}
 
     def assert_ran_through_the_script_with_both_report_variables(self, result):
         calls = self.bun_calls()
@@ -314,9 +315,9 @@ class DeclaredScriptRunNarratesItselfAsATestRunTest(_DeclaredScriptCase):
     # A script name that does not itself carry the word `test`, so only the
     # verb can put it in the run's narration.
     SCRIPT = "spec:vitest"
-    SCRIPTS = {SCRIPT: "bun --bun vitest run"}
-    CRUCIBLE = {"testScript": SCRIPT,
-                "reportPath": {SCRIPT: f"env:{JUNIT_VAR}"}}
+    SCRIPTS: ClassVar[dict] = {SCRIPT: "bun --bun vitest run"}
+    CRUCIBLE: ClassVar[dict | None] = {"testScript": SCRIPT,
+                                       "reportPath": {SCRIPT: f"env:{JUNIT_VAR}"}}
 
     def opening_heartbeat_message(self, result):
         beats = [b for p, b in self.board.posts() if p == HEARTBEAT]
