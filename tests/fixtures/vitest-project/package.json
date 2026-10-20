@@ -1,0 +1,14 @@
+{
+  "name": "crucible-vitest-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:vitest": "bun --bun vitest run"
+  },
+  "crucible": {
+    "testScript": "test:vitest",
+    "reportPath": {
+      "test:vitest": "env:FIXTURE_JUNIT_PATH"
+    }
+  }
+}
