@@ -2,7 +2,7 @@
 
 **Type** feature · **Points** 8 (5 at filing; raised at gap analysis 2026-10-20 when the runner became
 a project declaration every running verb follows) · **Wave** 8 (0.4.0) · **Depends on** — ·
-**Status** PENDING — filed 2026-10-19 (split from CR-CRU-190 at its gap analysis, user ruling)
+**Status** DONE — merged 2026-10-20 (gate 7697/0) · filed 2026-10-19 (split from CR-CRU-190 at its gap analysis, user ruling)
 
 ## Problem
 
@@ -108,46 +108,46 @@ interpreter lacks it.
 
 ## Acceptance criteria
 
-- [ ] **Declared, every verb.** With `[python] runner = "pytest"` in the project's `crucible.toml`,
+- [x] **Declared, every verb.** With `[python] runner = "pytest"` in the project's `crucible.toml`,
       `test`, `regression`, a tier verb declared by `--start-dir` and `pre-merge-gate` each run pytest
       on the fixture and file its counts: 1 passed, 1 failed, 1 pending for its three tests, `files`
       counted per file, the tree grouped by `classname`. `pre-merge-gate` and `regression --coverage`
       file coverage measured by coverage.py.
-- [ ] **The flag overrides.** `--runner unittest` on a pytest-declared project runs unittest;
+- [x] **The flag overrides.** `--runner unittest` on a pytest-declared project runs unittest;
       `--runner pytest` on an undeclared project runs pytest. An install-level `[python] runner` is
       ignored.
-- [ ] **Refused before the board.** A runner value that is neither name (from `--runner` or from
+- [x] **Refused before the board.** A runner value that is neither name (from `--runner` or from
       `crucible.toml`), and `pytest` with an interpreter that cannot import it, are each refused on
       `test`, `regression` and `pre-merge-gate` with `ok: false` and exit 1, naming the value and its
       source or the interpreter and pytest, with nothing posted to the board and nothing run.
-- [ ] **Node ids and discovery.** `test --tests <nodeid>` runs exactly that test. With no
+- [x] **Node ids and discovery.** `test --tests <nodeid>` runs exactly that test. With no
       `--start-dir`/`--pattern`, the fixture's own pytest configuration decides what runs; with them,
       they do. Without `--runner pytest`, `--start-dir` still defaults to `tests` and `--pattern` to
       `test_*.py`.
-- [ ] **Every exit path holds.** On the pytest path: a collection error files one failed test; a run
+- [x] **Every exit path holds.** On the pytest path: a collection error files one failed test; a run
       that collects nothing is aborted with `no-test-reports` and files no compile record; a
       nonexistent node id (exit 4), a broken `conftest.py` (exit 4) and an internal error (exit 3)
       each file a compile record with the no-report envelope whose warning carries pytest's error
       line, and file no tests; a SIGTERM leaves the run aborted and one envelope.
-- [ ] **Subtests are disclosed.** A pytest run of a `unittest.subTest` test and of a native
+- [x] **Subtests are disclosed.** A pytest run of a `unittest.subTest` test and of a native
       `subtests` test each carries `subtests-uncounted` with the pytest detail; a run without
       subtests does not.
-- [ ] **Narration.** A pytest run's heartbeats count its completed tests (no `SUB…` line counted)
+- [x] **Narration.** A pytest run's heartbeats count its completed tests (no `SUB…` line counted)
       against the selected total.
-- [ ] **No change by default.** With no declaration and no flag, every existing python test passes
+- [x] **No change by default.** With no declaration and no flag, every existing python test passes
       unchanged.
-- [ ] **Help names it.** Every running verb's `--help` names `--runner`, `[python] runner`, the
+- [x] **Help names it.** Every running verb's `--help` names `--runner`, `[python] runner`, the
       `unittest` default and that the interpreter needs pytest; `--tests` names node ids;
       `--start-dir` and `--pattern` name the pytest rule. The root `--help` description and its
       `regression` line name both runners and `[python] runner`; a filed fallback text for a run
       that left no output names the runner that ran.
-- [ ] **One probe per gate.** `pre-merge-gate` with pytest chosen checks the interpreter for pytest
+- [x] **One probe per gate.** `pre-merge-gate` with pytest chosen checks the interpreter for pytest
       once, with a time bound, before its check step.
-- [ ] **A check with nothing to compile passes.** On a project with neither `app/` nor `tests/`,
+- [x] **A check with nothing to compile passes.** On a project with neither `app/` nor `tests/`,
       `check` and `pre-merge-gate` compile nothing, file no compile record, carry
       `check-compiled-nothing` naming the paths looked for and `--paths`, and the gate goes on to run
       its suite; the unmodified pytest fixture gates.
-- [ ] **This repo runs it.** `pytest` is in the `[dev]` extras; the fixture project runs only from a
+- [x] **This repo runs it.** `pytest` is in the `[dev]` extras; the fixture project runs only from a
       scratch copy, and none of its files is collected by this repo's python or bun runs.
 
 ## Non-goals
