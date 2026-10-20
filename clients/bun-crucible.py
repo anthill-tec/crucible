@@ -1251,7 +1251,7 @@ def _emit_run_abandoned(verb, project_dir, agent_id, run_id, abandoned,
 
 
 def _emit_filter_ran_nothing(project_dir, agent_id, run_id, pattern,
-                             warnings=()):
+                             warnings=(), script=None):
     """The exit of a `test --name` run in which nothing passed and nothing
     failed: the filter selected no test, so the run ran nothing. Nothing is
     ingested; the run this verb opened is aborted, and ONE ok:false envelope
@@ -1261,10 +1261,12 @@ def _emit_filter_ran_nothing(project_dir, agent_id, run_id, pattern,
     if run_id:
         closing.append(_axi().abort_run(_post, _project_key(project_dir),
                                         agent_id, run_id, reason))
-    _emit_axi("test", False,
-              {"name": pattern,
-               "help": ["re-run test --name <pattern> with a pattern that "
-                        "matches a test", "status"]},
+    fields = {"name": pattern,
+              "help": ["re-run test --name <pattern> with a pattern that "
+                       "matches a test", "status"]}
+    if script:
+        fields["script"] = script
+    _emit_axi("test", False, fields,
               _axi_context(project_dir, agent_id=agent_id),
               list(warnings) + closing
               + [{"code": "name-filter-ran-nothing",
@@ -1272,6 +1274,53 @@ def _emit_filter_ran_nothing(project_dir, agent_id, run_id, pattern,
                             f"passed and nothing failed, so nothing was filed"}],
               f"[crucible] ERROR: --name {pattern!r} matched no test "
               f"\u2014 nothing was filed")
+    return 1
+
+
+_TEST_SCRIPT_DECLARATION = "crucible.testScript"
+
+
+def _declared_test_script(package_dir):
+    """The script a project declares every `test` run goes through, read from
+    `crucible.testScript` in the same `package.json` its script table lives in.
+
+    Returns `(script, refusal)`: `(None, None)` when nothing is declared (the
+    run is this client's own `bun test`), `(name, None)` for a declaration
+    naming a script with a body, and `(None, detail)` for one that cannot be
+    honoured -- not a string, naming no script of the table, or naming one
+    whose body is empty."""
+    manifest = _package_manifest(package_dir)
+    crucible = manifest.get("crucible") or {}
+    if not isinstance(crucible, dict) or "testScript" not in crucible:
+        return None, None
+    declared = crucible["testScript"]
+    where = os.path.join(package_dir, "package.json")
+    if not isinstance(declared, str):
+        return None, (f"{_TEST_SCRIPT_DECLARATION} {declared!r} in {where} "
+                      f"is not a string naming a script")
+    scripts = manifest.get("scripts") or {}
+    if declared not in scripts:
+        return None, (f"{_TEST_SCRIPT_DECLARATION} names script "
+                      f"`{declared}`, which the scripts table of {where} "
+                      f"does not hold")
+    body = scripts[declared]
+    if not isinstance(body, str) or not body.strip():
+        return None, (f"{_TEST_SCRIPT_DECLARATION} names script "
+                      f"`{declared}`, whose body in {where} is empty")
+    return declared, None
+
+
+def _emit_test_script_refused(project_dir, agent_id, detail):
+    """The exit of a `test` whose declared test script cannot be honoured:
+    nothing is run and nothing is posted to the board; ONE ok:false envelope
+    names the declaration. Returns 1."""
+    _emit_axi("test", False,
+              {"help": [f"fix {_TEST_SCRIPT_DECLARATION} in package.json so "
+                        f"it names a script with a body, or remove it",
+                        "status"]},
+              _axi_context(project_dir, agent_id=agent_id),
+              [{"code": "test-script-refused", "detail": detail}],
+              f"[crucible] ERROR: {detail}")
     return 1
 
 
@@ -1288,6 +1337,19 @@ def cmd_test(args, tier=None):
     since the run row is what the board's tier column reads first."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    name = getattr(args, "name", None)
+    # A project that declares its own test script runs every `test` through
+    # it, exactly as a tier verb runs a declared script: the files and the
+    # filter ride the script's passthrough. A declaration that cannot be
+    # honoured is refused before anything reaches the board.
+    script, refusal = _declared_test_script(package_dir)
+    if refusal:
+        return _emit_test_script_refused(project_dir, args.agent, refusal)
+    if script:
+        passthrough = list(args.tests or []) + (
+            ["-t", name] if name is not None else [])
+        return cmd_regression(args, verb="test", tier=tier, script=script,
+                              passthrough=passthrough, name=name)
     bun = _resolve_bun(args.bun)
     reports_dir = _reports_dir(package_dir, args.reports, args.agent)
     os.makedirs(reports_dir, exist_ok=True)
@@ -1309,7 +1371,6 @@ def cmd_test(args, tier=None):
     # server refuses a run-start from an unregistered caller, so the run can
     # only be opened once the identity heartbeat above has landed.
     run_id, run_warnings, preflight_warnings = None, [], []
-    name = getattr(args, "name", None)
     cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None, name=name)
     env = os.environ.copy()
     print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
@@ -1423,8 +1484,8 @@ def cmd_test(args, tier=None):
         return rc
 
 
-def cmd_regression(args, verb="regression", tier="regression", script=None,
-                   passthrough=()):
+def cmd_regression(args, verb="regression", tier: "str | None" = "regression",
+                   script=None, passthrough=(), name=None):
     """CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
     carries ONE document under the GATE's own verb, not the inner one's.
@@ -1436,7 +1497,12 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
     detected for `unit` rides `unit` and never this body's own name.
 
     `passthrough` — what was typed after `--` on a declared tier verb — rides
-    only a declared `script`; this verb's own `bun test` takes none."""
+    only a declared `script`; this verb's own `bun test` takes none.
+
+    A `test` run through the project's declared test script runs this body
+    under `verb="test"`: its files and `-t <name>` filter are the passthrough,
+    `name` is that filter (a filtered run that ran nothing is aborted, as on
+    `test`'s own path), and its envelope names the script it went through."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     bun = _resolve_bun(args.bun)
@@ -1449,7 +1515,10 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
     raw_report = _declared_raw_report(package_dir, script, reports_dir)
     _wipe(reports_dir, *([raw_report["path"]] if raw_report else []))
     junit_path = _junit_path(reports_dir)
-    coverage_on = bool(args.coverage)
+    coverage_on = bool(getattr(args, "coverage", False))
+    # Only a `test` run names its script in the envelope: a tier verb's
+    # envelope is unchanged.
+    named_script = script if verb == "test" else None
     # Coverage follows the run: an agent's own directory holds its lcov too;
     # otherwise bun keeps writing it to the package's `coverage/`.
     per_agent = _axi().reports_dir_is_agents_own(args.reports, agent)
@@ -1565,9 +1634,11 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
                            f"{ingest_path} — re-run `{invocation}` in "
                            f"{package_dir} and make `{script}` write its "
                            f"{ingest_name} to that path")
-            _emit_axi(verb, False,
-                      {"help": _axi().no_report_help(verb, ingest_name,
-                                                     remedy=starved)},
+            starved_fields = {"help": _axi().no_report_help(verb, ingest_name,
+                                                            remedy=starved)}
+            if named_script:
+                starved_fields["script"] = named_script
+            _emit_axi(verb, False, starved_fields,
                       _axi_context(project_dir, agent_id=args.agent),
                       warnings + [_axi().no_report_warning(
                           verb, ingest_name, result.returncode,
@@ -1591,6 +1662,14 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
 
         # Something WILL be ingested: the final count, then `ingesting…`.
         _axi().close_narration(narrator)
+        # A filtered run in which nothing passed and nothing failed ran
+        # nothing: it is aborted, exactly as on `test`'s own path.
+        if name is not None and not raw_report:
+            filtered = _parse_junit_file(junit_path)[0]
+            if not (filtered["passed"] or filtered["failed"]):
+                return _emit_filter_ran_nothing(project_dir, args.agent, run_id,
+                                                name, run_warnings,
+                                                script=named_script)
         if raw_report:
             # CR-CRU-015 §S2 — the board decodes. The client reads the JUnit
             # XML the same run wrote for its distinct-FILE count ONLY (the
@@ -1632,10 +1711,10 @@ def cmd_regression(args, verb="regression", tier="regression", script=None,
         # (unrecorded / red / green); the plain `regression` verb keeps its
         # canned _HELP_STEPS entry, unchanged.
         help_steps = (_axi().run_help(verb, ok, summary["failed"], _base_url())
-                      if verb != "regression" else None)
+                      if verb not in ("regression", "test") else None)
         _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
                          help_steps=help_steps, warnings=run_warnings,
-                         run_id=run_id)
+                         run_id=run_id, name=name, script=named_script)
         return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
 
 
@@ -2178,7 +2257,7 @@ _HELP_STEPS = {
 
 
 def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=None,
-                     warnings=None, run_id=None, name=None):
+                     warnings=None, run_id=None, name=None, script=None):
     """Emit the §S1 envelope for an ingest verb
     (test/regression/auto-ingest): run{passed,failed,pending,total,files}.
     `files` (CR-CRU-047 §S2) is the distinct test-FILE count from
@@ -2210,6 +2289,8 @@ def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=
         result_fields["runId"] = run_id
     if name is not None:
         result_fields["name"] = name
+    if script:
+        result_fields["script"] = script
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
