@@ -81,6 +81,14 @@ Two mechanics that are defects if missed, both stated here so nobody rediscovers
 - **Readiness is an HTTP 200, not a TCP connect.** Docker's port proxy accepts connections the moment the
   container starts, then RESETS them until `run-server` is listening (~2s measured). A launcher that treats
   a successful connect as ready dies with a WebSocket `ECONNRESET` on its first real run.
+- **The Docker pass runs through the client and is filed.** `bun run webkit:docker [-- <args>]` starts the
+  pinned container, waits for it, then runs `bun-crucible.py e2e <args> -- --project=webkit-iphone` with the
+  endpoint set, and exits with the client's exit code. `--agent`, `--cycle` and `--release` among the
+  arguments make the client file the run on the board like any other e2e run; without `--agent` the run is
+  unfiled, as a bare `e2e` is. The run also carries `webkit-iphone`'s dependency project on the host's
+  Chromium. The container is removed on every path that started it (a pass, a failure, a server that never
+  becomes ready, SIGINT, SIGTERM); on a signal the client is forwarded it and let finish filing its
+  abandoned run first.
 
 **RETIRED 2026-09-24 — the `hostmachine` design this section first specified.** It re-addressed every base
 URL to `hostmachine` via `--add-host=hostmachine:host-gateway`, which needed the e2e server bound beyond
