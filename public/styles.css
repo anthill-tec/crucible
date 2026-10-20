@@ -1114,6 +1114,24 @@ body {
   cursor: not-allowed;
 }
 .app-pill-dim:hover { color: var(--ink-faint); }
+/* At the phone band the Runs affordance is the last row of a history line's
+   expanded runs: the full width of those runs and a 44px touch target. */
+.app-cycle-to-runs-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+.app-cycle-to-runs-row:hover { color: var(--ink); }
+.app-cycle-to-runs-row.app-pill-dim { border-style: dashed; }
 /* CR-CRU-025 §S2 — the "⚑ Cycle" nav badge (inverse of "→ Runs"): never
    wraps, never shrinks (CR-023 660px pane floor) so it holds its size while
    the marker label ellipsizes. */

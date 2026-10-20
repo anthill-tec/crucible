@@ -6037,7 +6037,10 @@
     // gate conflated the two and lied — a cycle earns the pruned verdict only
     // AFTER a click's anchor-fetch comes back empty (state.anchorFeedback),
     // never at static render time.
-    const CycleToRunsBadge = (cycleId) => {
+    // The pill and the phone band's row are one control in two shapes: `tag`,
+    // `testid`, `baseClass` and `content` vary; the navigation and the pruned
+    // dim below are shared.
+    const CycleToRunsControl = (cycleId, tag, testid, baseClass, content) => {
       const live = cycleId !== undefined && cycleId !== null;
       // §S3 (VERIFY 1B) — a cycle earns the DIM/pruned state ONLY after its
       // own click's anchor-fetch confirmed the boundary is truly gone
@@ -6061,12 +6064,10 @@
       //   dims that exact detached node so its own click reflects the pruned
       //   outcome immediately.
       const pruned = live && state.prunedCycles.includes(cycleId);
-      return span(
+      return tag(
         {
-          "data-testid": "cycle-to-runs",
-          class: pruned
-            ? "app-pill app-cycle-to-runs app-pill-dim"
-            : "app-pill app-cycle-to-runs",
+          "data-testid": testid,
+          class: pruned ? `${baseClass} app-pill-dim` : baseClass,
           "aria-disabled": pruned ? "true" : "false",
           title: pruned ? PRUNED_PILL_REASON : "Jump to this cycle's Runs boundary",
           ...(pruned ? { "aria-label": PRUNED_PILL_REASON } : {}),
@@ -6082,9 +6083,24 @@
             revealDeclaredMarker(cycleId, 0, false, ev.currentTarget);
           },
         },
-        "→ Runs",
+        content,
       );
     };
+
+    const CycleToRunsBadge = (cycleId) =>
+      CycleToRunsControl(cycleId, span, "cycle-to-runs", "app-pill app-cycle-to-runs", "→ Runs");
+
+    // At the phone band `→ Runs` leaves the history line and ends the line's
+    // expanded runs as a row of its own, a full-width touch target that
+    // navigates and dims exactly as the pill does.
+    const CycleToRunsRow = (cycleId) =>
+      CycleToRunsControl(
+        cycleId,
+        div,
+        "cycle-to-runs-row",
+        "app-cycle-to-runs-row",
+        span({ class: "app-pill" }, "→ Runs"),
+      );
 
     // CR-CRU-025 §S2 — the inverse of `revealDeclaredMarker`: after the
     // one-rule tab swap to Workflow, the target cycle row re-renders
@@ -6673,8 +6689,13 @@
     // CR-CRU-020 §S2.1 — history cycle rows own a DISTINCT toggle level for
     // their linked runs (collapsed by default); done + active rows are the
     // expandable ones. Inferred cycles carry no id — key on cr + label.
+    // At the phone band every line with a runs boundary expands (failed and
+    // skipped too), since the Runs pill is never on the line there.
     const LensCycleRow = (cycle, crName) => {
-      const expandable = cycle.status === "done" || cycle.status === "active";
+      const phone = isPhoneBand();
+      const expandable = phone
+        ? cycleHasRunsBoundary(cycle)
+        : cycle.status === "done" || cycle.status === "active";
       const key = lensKey("cycle", cycle.id ?? `${crName}:${cycle.label}`);
       // §S3 — history rows show the SAME sealed `doneAt − activatedAt`
       // timer as the active section (null when timestamps predate C4).
@@ -6709,8 +6730,9 @@
           // CR-CRU-025 §S1/§S0 / CR-CRU-120 §S2 — the Runs-boundary badge, a
           // SEPARATE node from the existing `cycle-toggle` drill-down glyph,
           // on every row whose cycle could have runs. The SAME shared
-          // predicate as `CycleRow`, called identically.
-          ...(cycleHasRunsBoundary(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
+          // predicate as `CycleRow`, called identically. At the phone band
+          // the pill moves into the expanded runs as their last row.
+          ...(cycleHasRunsBoundary(cycle) ? (phone ? [] : [" ", CycleToRunsBadge(cycle.id)]) : []),
           // CR-CRU-021 §S6 #8 — collapsed rows hint at their linked runs.
           expandable
             ? () =>
@@ -6729,13 +6751,17 @@
         expandable
           ? () => {
               if (!lensOpen(key)) return "";
+              // The phone band's Runs row ends the expanded runs, decided by
+              // the same shared predicate as the pill on the line.
+              const toRunsRow = phone && cycleHasRunsBoundary(cycle) ? CycleToRunsRow(cycle.id) : null;
               return cycle.status === "done"
                 ? div(
                     { "data-testid": "cycle-span-closed", class: "app-cycle-span-closed" },
                     cycle.runs.map(LinkedRunRow),
+                    toRunsRow,
                   )
-                : cycle.runs.length > 0
-                  ? div({ class: "app-cycle-runs" }, cycle.runs.map(LinkedRunRow))
+                : cycle.runs.length > 0 || toRunsRow !== null
+                  ? div({ class: "app-cycle-runs" }, cycle.runs.map(LinkedRunRow), toRunsRow)
                   : "";
             }
           : null,
