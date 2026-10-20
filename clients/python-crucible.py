@@ -2578,10 +2578,10 @@ def _emit_runner_refused(args, refusal):
     context = (_axi_context(project_dir, agent_id=agent)
                if _read_env(project_dir).get("CRUCIBLE_PROJECT_KEY", "").strip()
                else {})
+    hint = "correct the runner or interpreter this error names, then re-run the verb"
     _emit_axi(args.cmd, False,
               {"error": str(refusal),
-               "help": ["correct the runner or interpreter this error names, "
-                        "then re-run the verb"]},
+               "help": [hint]},
               context, [], legacy_line=f"error: runner-refused \u2014 {refusal}")
     return 1
 
