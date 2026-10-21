@@ -65,7 +65,8 @@ render the line's pill as today.
 ### §S3 — the pill is a touch target
 
 On `(pointer: coarse)` media the `→ Runs` pill is at least 44 px tall, as `button.app-chip` and the
-other touch floors are, and still reads as a pill, wider than it is tall, wherever it renders (History's line on tablet and desktop, Now's cycle line on every band).
+other touch floors are, and still reads as a pill: its horizontal padding on each side is at least
+half its height, wherever it renders (History's line on tablet and desktop, Now's cycle line on every band).
 
 ### §S4 — the WebKit pass goes through the client
 
@@ -110,7 +111,7 @@ section says the Docker pass runs through the client and is filed.
       existing `→ Runs` test passes unchanged.
 - [ ] **The pill is a touch target.** On a `(pointer: coarse)` profile at tablet width the history
       pill, and on the phone and tablet bands Now's cycle-line pill, each measure at least 44 px
-      tall and wider than they are tall.
+      tall, with horizontal padding on each side of at least half that height.
 - [ ] **The CR-CRU-146 step aims at the widest gap.** Its phone step's gap search references no
       `cycle-to-runs`, and the CR-CRU-146 scenarios pass on `chromium-mobile`, `webkit-iphone` and
       desktop Chromium.
