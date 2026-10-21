@@ -1107,7 +1107,9 @@ body {
 .app-cycle-to-runs:hover { color: var(--ink); }
 /* The `→ Runs` pill is a touch target: on touch media it is at least 44px
    tall, the floor `button.app-chip` carries (DN decision 4). It stays an
-   inline item of its line, its label centred and on one line. */
+   inline item of its line, its label centred and on one line, and still
+   reads as a pill: its horizontal padding on each side is half the 44px
+   floor, so the rounded ends never close into a near-round blob. */
 @media (pointer: coarse) {
   .app-cycle-to-runs {
     display: inline-flex;
@@ -1115,6 +1117,7 @@ body {
     justify-content: center;
     box-sizing: border-box;
     min-height: 44px;
+    padding-inline: 22px;
   }
 }
 /* CR-CRU-032 §S3 (VERIFY 1B) — a `→ Runs` pill whose boundary was
