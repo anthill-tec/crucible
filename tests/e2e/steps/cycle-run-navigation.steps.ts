@@ -71,10 +71,13 @@ async function measureEmptySpaceCursor(page: Page, cycleId: number): Promise<str
 // every inter-child gap, and the trailing edge are all candidates — at the
 // line's vertical centre. Viewport coordinates, as `elementFromPoint` and
 // `page.mouse`/`page.touchscreen` take them.
-// The search names no child of the line: at the phone band the line carries
-// no nested navigation affordance at all (it ends the expanded runs instead),
-// so every gap of the line is the line's own toggle on every engine, and the
-// widest one is simply the roomiest point to aim a tap at.
+// The search names no child of the line. Only at the phone band does the line
+// carry no nested navigation affordance (`→ Runs` ends the expanded runs
+// instead), so every gap of the line is the line's own toggle on every engine
+// and the widest one is simply the roomiest point to aim a tap at. On desktop
+// and tablet the `→ Runs` pill is still on the line, as one more child the
+// search steps around like any other; the mouse clicks aimed there are not
+// adjusted for it.
 async function findWidestGap(page: Page, cycleId: number): Promise<{ x: number; y: number }> {
   const line = cycleLine(page, cycleId);
   await expect(line).toBeVisible();
