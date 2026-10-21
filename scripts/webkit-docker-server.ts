@@ -65,7 +65,10 @@ async function waitForServer(port: number, timeoutMs: number): Promise<boolean> 
 function spawnClient(argv: string[], env: Record<string, string | undefined>): ClientChild {
   const [command, ...args] = argv;
   if (command === undefined) throw new Error("the client argv is empty");
-  const child = spawn(command, args, { cwd: REPO_ROOT, env, stdio: "inherit" });
+  // `detached`: the client leads its OWN process group, so a terminal Ctrl-C
+  // (sent to the launcher's foreground group) never reaches it directly: it
+  // gets the signal once, by runWebkitPass's forward, and files undisturbed.
+  const child = spawn(command, args, { cwd: REPO_ROOT, env, stdio: "inherit", detached: true });
   const { promise, resolve } = Promise.withResolvers<number>();
   child.on("error", (error) => {
     process.stderr.write(`webkit-iphone: the client could not start: ${String(error)}\n`);
