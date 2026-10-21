@@ -14,8 +14,11 @@
 # Subcommands:
 #   set-version <X.Y.Z>  Format-preservingly rewrite + commit package.json.
 #   checkpoint           gh workflow run release.yml --ref <branch>.
-#   finish <X.Y.Z>       Align + commit the manifest, preflight guards, then git
-#                        flow finish + push. NOTE: the alignment write/commit is
+#   finish <X.Y.Z>       Preflight guards in this order: ceremony identity,
+#                        release notes (CHANGELOG.md at HEAD carries a dated
+#                        section for X.Y.Z), then align + commit the manifest
+#                        and check it, then the tag-prefix check; then git flow
+#                        finish + push. NOTE: the alignment write/commit is
 #                        real even under --dry-run (it must precede the merge);
 #                        only the git-flow finish and the push are gated.
 #   status               Print current branch + tag-derived version.
@@ -97,12 +100,16 @@ Subcommands:
                     branch. Allowed only on release/* or hotfix/* branches.
                     Runs: gh workflow run release.yml --ref <branch>
 
-  finish <X.Y.Z>    Align package.json to X.Y.Z (committing it, so it lands on
-                    the merge — no separate set-version run is needed), run the
-                    preflight guards (ceremony identity, manifest version, tag
-                    prefix), then finish the git-flow release/hotfix and push
-                    master + develop + tags. Allowed only on release/* or
-                    hotfix/*.
+  finish <X.Y.Z>    Run the preflight guards in this order: ceremony identity
+                    (--agent or $CRUCIBLE_AGENT), release notes (CHANGELOG.md
+                    at HEAD must carry a non-empty '## [X.Y.Z] - YYYY-MM-DD'
+                    section) — both refuse before anything is written — then
+                    align package.json to X.Y.Z (committing it, so it lands on
+                    the merge; real even under --dry-run, and no separate
+                    set-version run is needed) and check it, then the tag
+                    prefix check (gitflow.prefix.versiontag). Then finish the
+                    git-flow release/hotfix and push master + develop + tags.
+                    Allowed only on release/* or hotfix/*.
 
   status            Print the current branch and the derived version
                     (git describe --tags). Tags are bare SemVer (X.Y.Z).
