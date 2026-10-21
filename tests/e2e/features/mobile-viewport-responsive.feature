@@ -289,3 +289,20 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     Then the page matches the coarse-pointer media query
     And Now's → Runs pill for that cycle is at least 44px tall
 
+  # The touch floor must not cost the pill its shape: on this coarse-pointer
+  # profile Now's pill is at least 44px tall with horizontal padding on each
+  # side of at least half that height, so it still reads as a pill. The page
+  # is first proven to match
+  # `(pointer: coarse)`, so the shape is measured where the floor applies.
+  Scenario: at the phone band on a coarse pointer Now's active cycle line carries a → Runs pill that is at least 44px tall with horizontal padding on each side of at least half that height
+    Given a project named "MOB Now Pill Shape Project" is registered
+    And an orchestrator "mob-orch-nowshape" is registered on that project
+    And a release "0.173.637" is proposed for that project
+    And a cycle plan is filed for cr "MOB-NOWSHAPE" with a cycle labelled "c1 now pill shape"
+    And cycle 1 of that plan is activated
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    And I select the "Now" sub-tab
+    Then the page matches the coarse-pointer media query
+    And Now's → Runs pill for that cycle is at least 44px tall with horizontal padding on each side of at least half that height
+
