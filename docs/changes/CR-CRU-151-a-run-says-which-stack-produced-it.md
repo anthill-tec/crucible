@@ -1,6 +1,6 @@
 # CR-CRU-151 — a run says which stack produced it, and the board keeps it
 
-**Type** fix · **Points** 7 (scored 5 at gap analysis 2026-10-21; raised at its pre-review when the
+**Type** fix · **Points** 8 (scored 5 at gap analysis 2026-10-21; raised at its pre-review when the
 start's tier joined the stack) · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-112 · **Status** PENDING —
 filed 2026-09-24
 
