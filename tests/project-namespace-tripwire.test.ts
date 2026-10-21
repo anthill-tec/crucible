@@ -2581,10 +2581,48 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // are its final figures and not a mid-cycle reading. It clears the CASCADE
 // with it: tests/help-surface-order-independence.test.ts collects THIS file in
 // its child `bun test`, fired for the right reason, and gets no change.
+//
+// UPDATED 2026-10-21 by the every-ingest-states-its-stack branch's VERIFY FIX
+// round (cycle 733). `clients` moves 884 -> 883 (-1). MEASURED with this
+// file's own machinery on the feature branch AFTER the branch's last content
+// edit: the recorded head 884 against a measured 883, and `src` (830) and
+// `public` (514) re-measure at their recorded heads.
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE
+// against the merge-base with `develop` (ed27682), attributes the one move.
+// It is a REMOVAL, and every classified file the branch touches is listed:
+//
+//   clients -1:
+//     clients/python-crucible.py -1: the one citation on the comment in
+//       `_ingest_parsed` that explained the retired rule (add the stack to
+//       the ingest only when no start was accepted) is gone. Every ingest
+//       now states its stack through the shared `post_ingest`, so the rule
+//       left the code and its citation left with it.
+//     clients/_crucible_axi.py, bun-crucible.py, mvn-crucible.py,
+//       rust-crucible.py and arduino-crucible.py: the branch edits all five,
+//       and no changed line carries a citation, so none moves.
+//
+//   src 0: src/v2.ts changes and adds or removes no citation, so `src` (830)
+//     re-measures at its recorded head.
+//
+//   public 0: the branch changes no file under `public/`, so `public` (514)
+//     could not have moved.
+//
+// A NET LOSS of one, and stated as one. It is not lineage shed from living
+// code: the citation sat on a rule the branch retires, and it retired with
+// the rule it explained. `clients` (883) is still far above its 601 floor, so
+// the directional half holds.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the branch's last content edit, so
+// these are its final figures and not a mid-cycle reading. It clears the
+// CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
+// file in its child `bun test`, fired for the right reason, and gets no
+// change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 830 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 514 },
-  clients: { exts: [".py"], develop: 601, head: 884 },
+  clients: { exts: [".py"], develop: 601, head: 883 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
