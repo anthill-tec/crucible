@@ -310,6 +310,38 @@ guard_agent_identity() {
     error "no Crucible identity for the release report — pass --agent <agentId> or set \$CRUCIBLE_AGENT. There is no fallback and no default (CR-CRU-057), and a release reported without one records nothing." "$EXIT_ERROR"
 }
 
+# Guard (d): the release's notes must be COMMITTED and DATED before anything is
+# written. The tag and the workflow's create-release both see CHANGELOG.md as
+# committed, so it is read at HEAD — never the working tree or the index — and
+# through the one extractor (release-notes.sh, beside this script; located
+# relative to this file rather than the repo root). The first line beginning
+# `## [X.Y.Z]` is the heading the extractor reads, so that is the one whose
+# date is checked; a refusal commits nothing, under --dry-run too.
+guard_release_notes() {
+    local want="$1"
+    local script_dir extractor changelog heading rest
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+    extractor="$script_dir/release-notes.sh"
+    local refusal="no committed, dated release notes for $want — CHANGELOG.md at HEAD must carry a '## [$want] - YYYY-MM-DD' heading with notes under it. Write the notes AND commit them on the release branch before finish (RELEASING.md step 3)."
+
+    if ! changelog="$(git show HEAD:CHANGELOG.md 2>/dev/null)"; then
+        error "$refusal" "$EXIT_ERROR"
+    fi
+
+    heading="$(printf '%s\n' "$changelog" | awk -v tag="$want" '
+        { gsub(/\r/, "") }
+        index($0, "## [" tag "]") == 1 { print; exit }
+    ')"
+    rest="${heading#"## [$want]"}"
+    if [ -z "$heading" ] || ! printf '%s\n' "$rest" | grep -Eq '^ - [0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'; then
+        error "$refusal" "$EXIT_ERROR"
+    fi
+
+    if ! printf '%s\n' "$changelog" | bash "$extractor" "$want" - >/dev/null; then
+        error "$refusal" "$EXIT_ERROR"
+    fi
+}
+
 # ============================================================================
 # Subcommand implementations
 # ============================================================================
@@ -919,6 +951,10 @@ cmd_finish() {
     # the operator learns while the tag does not yet exist. Everything after
     # this point either publishes or is a local, revertible commit.
     guard_agent_identity
+
+    # The notes guard runs next, still before anything is written: a release
+    # whose notes are not committed and dated is refused while it costs nothing.
+    guard_release_notes "$VERSION"
 
     # CR-CRU-061 §S7 — align the manifest to the finish version OURSELVES, so a
     # release is ONE command. This write + commit is REAL even under --dry-run:
