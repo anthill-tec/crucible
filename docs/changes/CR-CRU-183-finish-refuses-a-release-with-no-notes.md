@@ -2,8 +2,8 @@
 
 **Type** fix (patch CR, after the 0.3.0 release) · **Points** 8 (3 at filing; raised at gap analysis
 and its pre-review 2026-10-21 for the shared notes extractor and the `queue --format json` read) ·
-**Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-10 (user ruling: the 0.3.0
-follow-ups are patch CRs in wave 8)
+**Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — filed 2026-10-10 (user ruling: the 0.3.0
+follow-ups are patch CRs in wave 8); merged 2026-10-21 (plan 204, cycles 722–728, gate 7864/0)
 
 ## Problem
 
@@ -84,39 +84,39 @@ same order.
 
 ## Acceptance criteria
 
-- [ ] **The extractor.** On fixture changelogs, `scripts/release-notes.sh X.Y.Z FILE` prints exactly
+- [x] **The extractor.** On fixture changelogs, `scripts/release-notes.sh X.Y.Z FILE` prints exactly
       the version's body (no heading, no next section, no link-reference lines; CRLF read as LF) and
       exits 0; for no heading, an empty section, a whitespace-only or link-references-only section,
       a missing file, and a `9.9.90` heading asked for `9.9.9`, its stdout holds no non-whitespace
       character and it exits 1; with no version or extra arguments it exits 2. Reading `-` takes
       standard input. The script is committed with mode 100755.
-- [ ] **The workflow uses it.** The `create-release` step calls `scripts/release-notes.sh "$TAG"`
+- [x] **The workflow uses it.** The `create-release` step calls `scripts/release-notes.sh "$TAG"`
       inside an `if` and carries no section `awk`. Its run body, executed with a stubbed `gh` (as
       `cr009-release-bundle.test.ts` executes the publish-npm body), creates the release from the
       notes when the section exists, and falls back to `--generate-notes` with its warning when it
       does not.
-- [ ] **No notes, no release.** In a scratch release repo with a stale `package.json` version whose
+- [x] **No notes, no release.** In a scratch release repo with a stale `package.json` version whose
       committed `CHANGELOG.md` lacks the version's section, `finish 9.9.9` and
       `finish 9.9.9 --dry-run` each exit 1; stderr names `CHANGELOG.md`, `## [9.9.9] - ` and
       `RELEASING.md`; the release branch has no new commit; `master` and the tags are unchanged. The
       same on a `hotfix/9.9.9` branch, and with no `CHANGELOG.md` at all.
-- [ ] **Only committed, dated notes count.** The same refusal holds for an undated `## [9.9.9]`
+- [x] **Only committed, dated notes count.** The same refusal holds for an undated `## [9.9.9]`
       heading, for a dated section whose body is empty, whitespace or link references only, and for
       a dated section that exists only uncommitted (staged, or untracked).
-- [ ] **With notes, unchanged.** With the dated section committed, `finish 9.9.9` proceeds exactly as
+- [x] **With notes, unchanged.** With the dated section committed, `finish 9.9.9` proceeds exactly as
       today. The release tests that run `finish` (`release-driver`, `release-reporting`,
       `release-reporting-live`) pass, with each scratch world given a committed `CHANGELOG.md`
       section for the version it finishes (test edits authorised by this criterion, in their own
       commit); each refusal test of an existing guard still asserts that guard's own message.
-- [ ] **`queue --format json`.** In every client, `queue --format json` prints one JSON object
+- [x] **`queue --format json`.** In every client, `queue --format json` prints one JSON object
       carrying the same rows and fields as the text envelope, `lifecycle` included; the verb census
       and the fleet parity tests pass.
-- [ ] **Voided work is not queued work.** With queue rows for a VOID CR whose title contains a comma,
+- [x] **Voided work is not queued work.** With queue rows for a VOID CR whose title contains a comma,
       a SUPERSEDED CR and a PENDING CR, none of which has landed, `finish`'s report and
       `backfill-releases`' report name only the PENDING CR as never landed; and a VOID CR that a
       stored release record names (voided before the release record was written) is not reported as
       evicted.
-- [ ] **The runbook.** `RELEASING.md`'s guard table lists the three guards in order with failures and
+- [x] **The runbook.** `RELEASING.md`'s guard table lists the three guards in order with failures and
       remedies; step 3 says `finish` refuses without committed, dated notes; no text says the first
       preflight asserts the manifest; `release.sh --help` names the notes guard.
 
