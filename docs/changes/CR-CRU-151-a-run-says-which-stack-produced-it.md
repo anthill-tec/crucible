@@ -1,7 +1,8 @@
 # CR-CRU-151 — a run says which stack produced it, and the board keeps it
 
-**Type** fix · **Points** 5 (scored at gap analysis 2026-10-21) · **Wave** 8 (0.4.0) · **Depends on**
-CR-CRU-112 · **Status** PENDING — filed 2026-09-24
+**Type** fix · **Points** 7 (scored 5 at gap analysis 2026-10-21; raised at its pre-review when the
+start's tier joined the stack) · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-112 · **Status** PENDING —
+filed 2026-09-24
 
 ## Problem
 
@@ -33,70 +34,109 @@ on a scratch in-memory server, through the real routes:
 | `/runs/parsed` with no stack | absent | absent |
 | `/runs/compile` with `stack: rust` | `rust` | **absent** |
 | `/runs/start` with `stack: mvn`, closed by `/runs/parsed` with `stack: mvn` | `mvn` | **absent** |
+| `/runs/start` with `stack: bun`, closed by `/runs/parsed` with `stack: python` | `python` (accepted) | absent |
+| `/runs/start` with `tier: integration`, closed by an ingest stating no tier | tier `unit` | — |
+| an aborted run started with `stack: bun` | `bun` | **absent** |
 
-Three losses:
+Four losses:
 
-1. **The close drops the start's stack.** A run's start stores its stack on the `runs` row, but the
-   ingest that closes the run (`resolveRunClose`) carries only the lifecycle onto the event; the event's
-   stack comes from the ingest body alone.
-2. **The clients state it only on the start.** All five clients send `stack` on `/runs/start` (the
-   shared `open_run`) and on no ingest — except python, which adds it to the ingest only when no start
-   was accepted ("exactly once", CR-CRU-112 AC5). So every run that opened a start loses its stack,
-   and the other clients' single-shot ingests (no start, or a refused one; `auto-ingest`; a compile
-   ingest without a run) never state it.
-3. **The list read never returns it.** The events list (`eventBrief`) has no `stack` key, even for
-   an event that stored one.
+1. **The close drops what the start declared.** A run's start stores its stack and tier on the
+   `runs` row, but the ingest that closes the run (`resolveRunClose`) carries only the lifecycle onto
+   the event; the event's stack and tier come from the ingest body alone (an absent tier is stored as
+   `unit`). A closing ingest may even state a different stack, and it is stored.
+2. **The clients state the stack only on the start.** All five clients send `stack` on `/runs/start`
+   (the shared `open_run`) and on no ingest — except python, which adds it to the ingest only when no
+   start was accepted ("exactly once", CR-CRU-112 AC5). So every run that opened a start loses its
+   stack, and the other clients' single-shot ingests never state it.
+3. **The brief never returns it.** `eventBrief` has no `stack` key, so every read it serves omits it:
+   the events list (plain, cycle-anchored and release-anchored), `/api/v2/status`' `lastTest` and
+   `lastCompile`, and each project's `lastEvent`. Only the detail read returns it.
+4. **An empty stack is stored as `""`, and a non-string one is dropped silently.**
 
 **Why it matters:** without the stack, nothing downstream can be stack-aware, whether that is
-rendering, per-stack codec routing (CR-CRU-152) or a filer asking "which of my stacks is red".
+rendering, per-stack codec routing (CR-CRU-152) or a filer asking "which of my stacks is red". A run
+started at one tier and stored at another misfiles it.
 
 ## Design (settled with the user, 2026-10-21)
 
 - Every ingest states its stack, through the shared ingest path; the start still states it too.
-- The board carries a start's stack onto the event that closes the run.
-- A run cannot change stack: a closing ingest whose stack differs from its start's is refused.
-- The stack comes back on both reads, list and detail.
+- The board carries a start's stack and tier onto the event that closes the run.
+- A run cannot change stack or tier: a closing ingest whose stack or tier differs from its start's is
+  refused, and the refusal writes nothing — no event, no agent-card message.
+- A stack is a non-empty string or absent.
+- The stack comes back on every read the event brief serves, and on the detail read.
 
 ## Scope
 
 ### §S1 — every client states its stack on every ingest
 
-The shared ingest path (`post_ingest` in `clients/_crucible_axi.py`) takes the client's stack and puts
-it on every ingest body it sends (`/runs`, `/runs/parsed`, `/runs/compile`), whether or not a start
-was accepted; every caller in the five clients (`bun`, `python`, `mvn`, `rust`, `arduino`) passes its
-own. `/runs/start` keeps stating it through `open_run`. Python's "only when no start" rule is
-retired.
+The shared ingest path (`post_ingest` in `clients/_crucible_axi.py`) takes the client's stack as a
+required keyword and puts it on every ingest body it sends (`/runs`, `/runs/parsed`, `/runs/compile`),
+whether or not a start was accepted; every call site in the five clients (17 today: arduino 3, bun 3,
+mvn 3, python 2, rust 6) passes its own `_STACK`. `/runs/start` keeps stating it through `open_run`.
+Python's "only when no start" rule is retired. The value is the client's own stack name (`bun`,
+`python`, `mvn`, `rust`, `arduino`); a gate that runs another stack's suite hands it to that stack's
+client, which states its own.
 
-### §S2 — the board keeps it and returns it
+### §S2 — the board keeps the stack and tier, and returns the stack
 
-A stack sent with an ingest reaches the stored event. An ingest that closes a run and states no stack
-takes the stack its start declared. A closing ingest whose stack differs from its start's is refused
-(400) before anything is stored, naming both, and the run stays open. Every event read returns the
-stored stack — the list (`GET /api/v2/events?project=…`, and its cycle-anchored form) and the detail
-(`GET /api/v2/events/<id>`). Absent means absent: an event that was never told its stack has no
-`stack` key, never null, never defaulted.
+- **Shape.** On `/runs/start` and on every ingest route, a `stack` that is present must be a
+  non-empty string; anything else is refused (400) before anything is stored.
+- **Carried across the close.** An ingest that closes a run takes the start's stack when it states
+  none, and the start's tier when it states none. A start that stated no stack takes the ingest's.
+  With neither stating a tier, the event is `unit` as today.
+- **No change mid-run.** A closing ingest whose stack, or tier, differs from its start's is refused
+  (400) naming both values. The check sits in the run-close resolution (`resolveRunClose`), which
+  already runs before any write: nothing is stored, the agent row is not touched, and the run stays
+  open on the board. (A client whose ingest is refused aborts its run; that is the client's existing
+  behaviour.) An abort states no stack or tier and is unaffected.
+- **Returned.** `eventBrief` returns the stored `stack` when present, so every read it serves carries
+  it: the events list (plain, `cycleId`- and `release`-anchored), `/api/v2/status`' `lastTest` and
+  `lastCompile`, and each project's `lastEvent`. The detail read (`GET /api/v2/events/<id>`) already
+  does. Absent means absent: an event never told its stack has no `stack` key, never null, never
+  defaulted.
 
 ## Acceptance criteria
 
-- [ ] **Every caller.** Every call of the shared ingest path in each of the five clients passes the
-      client's own stack, and the path puts it on the body; a census over the clients' sources pins
-      the caller count, so a new caller without a stack fails it.
-- [ ] **Every client, every route.** For EACH of the five clients and EACH ingest route it uses, an
-      ingested event read back through `GET /api/v2/events/<id>` and through the events list carries
-      that client's stack.
-- [ ] **The start's stack survives the close.** A run started with a stack and closed by an ingest
-      (on each of `/runs`, `/runs/parsed`, `/runs/compile`) that states none carries the start's stack
-      on its event, on both reads.
-- [ ] **No change of stack.** A closing ingest stating a different stack from its start's is refused
-      with 400 naming both; nothing is stored, and the run is still open. The same stack on both is
-      accepted.
-- [ ] **Absent means absent.** An event ingested with no stack and no started stack reads back with
-      no `stack` key on either read: never null-filled, never defaulted.
+- [ ] **Every caller states it.** `post_ingest` refuses a call without `stack` (a required keyword)
+      and puts the given stack on the body for each ingest route; a census over the five clients'
+      sources finds every `post_ingest` call site and asserts each passes `stack=_STACK` (zero call
+      sites without it — no pinned count).
+- [ ] **Every client, every route — client side.** For each of the 13 client × route cells (arduino:
+      `/runs/compile`, `/runs/parsed`; bun: `/runs/parsed`, `/runs`, `/runs/compile`; mvn: `/runs`,
+      `/runs/parsed`, `/runs/compile`; python: `/runs/parsed`, `/runs/compile`; rust: `/runs/compile`,
+      `/runs/parsed`, `/runs`), driven through the client with a recording `_post`, the ingest body
+      carries that client's stack — with a start accepted and without one.
+- [ ] **Every route, every read — server side.** For each ingest route, an event ingested with a
+      stack reads it back on the detail read and on every brief-served read (the events list, its
+      `cycleId` and `release` forms, `/api/v2/status`' last test or compile, the project's
+      `lastEvent`); an aborted run's event carries its start's stack on the list too.
+- [ ] **The start survives the close.** A run started with a stack and a tier and closed (on each of
+      `/runs`, `/runs/parsed`, `/runs/compile`) by an ingest stating neither carries the start's stack
+      and tier on its event; a start without a stack closed by an ingest stating one carries the
+      ingest's.
+- [ ] **No change mid-run.** A closing ingest whose stack, or tier, differs from its start's gets 400
+      naming both, at the HTTP route: no event is stored, the agent row's message and last-seen are
+      unchanged, and the run is still open. The same values on both are accepted (regression guard:
+      passes today).
+- [ ] **A stack is a word.** `stack: ""` and a non-string `stack` are refused with 400 on
+      `/runs/start` and on each ingest route, storing nothing.
+- [ ] **Absent means absent** (regression guard: passes today). An event ingested with no stack and
+      no started stack has no `stack` key on any read.
+- [ ] **The amended tests.** Two tests that pin the old behaviour are amended in their own commit,
+      authorised by this criterion: `test_one_gate_invocation_ingests_each_suite_under_its_own_stack`
+      (`tests/client/test_gate_multi_suite_coverage.py`) counts one python RUN (distinct runs, not
+      bodies, since the start and the ingest now both carry the stack); `NoLifecycleOptOutIsSingleShotTest`
+      (`tests/client/test_cr017_client_lifecycle.py`) requires `stack` in the single-shot body's key
+      set. Nothing else in either file changes.
 - [ ] **The record.** The gap analysis records where the stack was being lost, with the measurement,
       before RED (above).
 
 ## Non-goals
 
-- Backfilling stack onto stored events. Nothing recorded it, and inventing it would be a guess.
+- Backfilling stack or tier onto stored events. Nothing recorded them; inventing them would be a
+  guess.
 - Stack-aware rendering. That needs the stack first; it is its own concern.
 - Validating the stack's value against a list of known stacks.
+- A stack on gate, milestone or lifecycle events, and the PRD's tool version. PRD §4.4's "every event"
+  and its field table's `java`/`ts` values are stale: the stack is the client's own name.
