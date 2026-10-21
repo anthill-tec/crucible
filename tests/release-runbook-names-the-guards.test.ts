@@ -22,9 +22,13 @@
 // order of its `guard_*` / `align_manifest_version` calls), so the docs are
 // compared with the code, not with a hand-written list that could rot.
 //
-// Assertions match stable TOKENS (identity, notes / CHANGELOG.md, manifest /
-// package.json, tag prefix / versiontag), never whole sentences, so a reworded
-// but correct runbook still passes.
+// Assertions match stable TOKENS, never whole sentences, so a reworded but
+// correct runbook still passes. But a guard must be NAMED, not merely
+// MENTIONED: a guard table row is identified by its guard cell alone, and a
+// --help / header clause by the guard's own name (identity, notes, manifest /
+// align package.json, tag prefix), never by an incidental keyword such as
+// CHANGELOG.md, --agent, $CRUCIBLE_AGENT or versiontag, which a row or clause
+// can still carry after it has stopped naming its guard.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -36,14 +40,22 @@ const RELEASING_MD = join(REPO_ROOT, "RELEASING.md");
 
 type Category = "identity" | "notes" | "manifest" | "tagprefix";
 
-// Stable tokens per guard — each category has its own, non-overlapping
-// vocabulary, so a reworded but correct doc still classifies.
-const CATEGORY_TOKENS: Record<Category, RegExp> = {
-  identity: /identity|--agent|CRUCIBLE_AGENT/i,
-  notes: /\bnotes\b|CHANGELOG\.md/i,
-  manifest: /manifest|package\.json/i,
-  tagprefix: /tag[- ]prefix|versiontag/i,
+// Each guard's NAME: the words that say which guard a row or clause is.
+// Deliberately excludes the incidental vocabulary a guard's failure or remedy
+// mentions (CHANGELOG.md, --agent, $CRUCIBLE_AGENT, gitflow.prefix.versiontag):
+// mentioning the changelog does not name the notes guard. Matched against
+// whitespace-collapsed text, so a name wrapped across lines still counts.
+const GUARD_NAMES: Record<Category, RegExp> = {
+  identity: /\bidentity\b/i,
+  notes: /\bnotes\b/i,
+  manifest: /\bmanifest\b|\balign\s+package\.json\b/i,
+  tagprefix: /\btag[- ]prefix\b/i,
 };
+
+/** `text` with every run of whitespace collapsed to one space. */
+function flatten(text: string): string {
+  return text.replace(/\s+/g, " ");
+}
 const ALL_CATEGORIES: Category[] = ["identity", "notes", "manifest", "tagprefix"];
 
 // What each call in `cmd_finish` is a guard FOR. The alignment is the manifest
@@ -113,18 +125,22 @@ function guardTableRows(section: string): string[][] {
   return [];
 }
 
-/** A table row's guard, read from its guard cell (falling back to the failure cell). */
-function rowCategory(row: string[]): Category | undefined {
-  for (const cell of [row[0] ?? "", row[1] ?? ""]) {
-    const hits = ALL_CATEGORIES.filter((c) => CATEGORY_TOKENS[c].test(cell));
-    if (hits.length === 1) return hits[0];
-  }
-  return undefined;
+/** The guards a cell NAMES. */
+function namedIn(cell: string): Category[] {
+  const flat = flatten(cell);
+  return ALL_CATEGORIES.filter((c) => GUARD_NAMES[c].test(flat));
 }
 
-/** The categories in `text`, ordered by their FIRST mention; absent ones are omitted. */
+/** A table row's guard: the ONE guard its guard cell names, never inferred from the failure or remedy cells. */
+function rowCategory(row: string[]): Category | undefined {
+  const hits = namedIn(row[0] ?? "");
+  return hits.length === 1 ? hits[0] : undefined;
+}
+
+/** The guards `text` NAMES, ordered by their first naming; unnamed ones are omitted. */
 function orderOfFirstMention(text: string): Category[] {
-  return ALL_CATEGORIES.map((c) => ({ c, at: text.search(CATEGORY_TOKENS[c]) }))
+  const flat = flatten(text);
+  return ALL_CATEGORIES.map((c) => ({ c, at: flat.search(GUARD_NAMES[c]) }))
     .filter((x) => x.at >= 0)
     .sort((a, b) => a.at - b.at)
     .map((x) => x.c);
@@ -210,6 +226,11 @@ describe("release runbook: finish's guard table", () => {
     }
   });
 
+  test("each row's guard cell names exactly its own guard, so the notes row's guard cell names the notes guard", () => {
+    const rows = guardTableRows(runbookStep(readReleasing(), /\bFinish\b/));
+    expect(rows.map((r) => namedIn(r[0] ?? ""))).toEqual([["identity"], ["notes"], ["manifest"], ["tagprefix"]]);
+  });
+
   test("the notes row's remedy is writing and committing the dated CHANGELOG.md section", () => {
     const rows = guardTableRows(runbookStep(readReleasing(), /\bFinish\b/));
     const notesRows = rows.filter((r) => rowCategory(r) === "notes");
@@ -257,8 +278,11 @@ describe("release.sh --help: the finish entry", () => {
   test("--help exits 0 and its finish entry names the notes guard", () => {
     const { stdout, exitCode } = runHelp();
     expect(exitCode).toBe(0);
-    const entry = helpFinishEntry(stdout);
-    expect(entry).toMatch(CATEGORY_TOKENS.notes);
+    expect(namedIn(helpFinishEntry(stdout))).toContain("notes");
+  });
+
+  test("--help's finish entry names every guard by name, not merely by a keyword it mentions", () => {
+    expect(namedIn(helpFinishEntry(runHelp().stdout))).toEqual(["identity", "notes", "manifest", "tagprefix"]);
   });
 
   test("--help's finish entry lists identity before notes before the manifest alignment before the tag prefix", () => {
