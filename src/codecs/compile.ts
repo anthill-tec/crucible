@@ -1,6 +1,7 @@
 // CR-CRU-002 §S2 — Compile codecs: parseCompile / detectFormat.
-// Parses compiler error output (rustc / javac / python / tsc) into a CompileReport.
-// Never rejects: unrecognized input falls back to format "raw".
+// Parses compiler error output (rustc / javac / python / tsc / gcc) into a CompileReport.
+// Never rejects: unrecognized input falls back to format "raw"; so does a gcc report
+// holding no error diagnostic, so a failed build is never shown as clean.
 
 export interface CompileDiagnostic {
   file?: string;
@@ -30,6 +31,9 @@ const HINT_ALIASES: Record<string, string> = {
   ts: "tsc",
   typescript: "tsc",
   tsc: "tsc",
+  gcc: "gcc",
+  "g++": "gcc",
+  arduino: "gcc",
 };
 
 const RUSTC_HEAD = /^(error|warning)(?:\[(E\d+)\])?:\s*(.*)$/;
@@ -40,6 +44,14 @@ const JAVAC_LINE = /^\[(ERROR|WARNING)\]\s+(.+?):\[(\d+),(\d+)\]\s+(.*)$/;
 const PYTHON_FRAME = /^\s*File "([^"]+)", line (\d+)/;
 const PYTHON_FINAL = /^\w*(?:Error|Exception)\b.*$/;
 const TSC_LINE = /^(.+?)\((\d+),(\d+)\):\s+(error|warning)\s+(TS\d+):\s+(.*)$/;
+// GCC: FILE never starts with `[` and never contains `: ` (it may contain spaces).
+const GCC_DIAGNOSTIC = /^(?!\[)((?:(?!: ).)+?):(\d+):(\d+): (fatal error|error|warning): (.*)$/;
+const GCC_FLAG = /^(.*) \[(-[^\]]*)\]$/;
+// Sourced link error, older (`FILE:LINE: …`) and newer (`FILE:LINE:(SECTION+OFFSET): …`) linkers.
+// SECTION holds neither `(` nor `)`, so a long line with an unclosed `(` decodes in linear time.
+const GCC_LINK_SOURCED = /^(?!\[)((?:(?!: ).)+?):(\d+):(?:\([^()]*\):)? (undefined reference to .*)$/;
+// Object-only link error: `…: OBJECT:(SECTION+OFFSET): undefined reference to …`.
+const GCC_LINK_OBJECT = /^.*?: [^:\s][^:]*:\([^()]*\): (undefined reference to .*)$/;
 
 export function detectFormat(errors: string, hint?: string): string {
   if (hint !== undefined) {
@@ -53,6 +65,7 @@ export function detectFormat(errors: string, hint?: string): string {
   if (lines.some((line) => JAVAC_LINE.test(line))) return "javac";
   if (lines.some((line) => PYTHON_FRAME.test(line))) return "python";
   if (lines.some((line) => TSC_LINE.test(line))) return "tsc";
+  if (lines.some((line) => GCC_DIAGNOSTIC.test(line) || GCC_LINK_SOURCED.test(line))) return "gcc";
   return "raw";
 }
 
@@ -133,11 +146,60 @@ function parseTsc(lines: string[]): CompileDiagnostic[] {
   return diagnostics;
 }
 
+function parseGcc(lines: string[]): CompileDiagnostic[] {
+  const sourced = lines.some((line) => GCC_LINK_SOURCED.test(line));
+  const diagnostics: CompileDiagnostic[] = [];
+  for (const line of lines) {
+    const compiler = line.match(GCC_DIAGNOSTIC);
+    if (compiler) {
+      const diagnostic: CompileDiagnostic = {
+        file: compiler[1] ?? "",
+        line: Number(compiler[2]),
+        col: Number(compiler[3]),
+        level: compiler[4] === "warning" ? "warning" : "error",
+        message: compiler[5] ?? "",
+      };
+      const flag = diagnostic.message.match(GCC_FLAG);
+      if (flag) {
+        diagnostic.message = flag[1] ?? "";
+        diagnostic.code = flag[2] ?? "";
+      }
+      diagnostics.push(diagnostic);
+      continue;
+    }
+    const link = line.match(GCC_LINK_SOURCED);
+    if (link) {
+      diagnostics.push({
+        file: link[1] ?? "",
+        line: Number(link[2]),
+        level: "error",
+        message: link[3] ?? "",
+      });
+      continue;
+    }
+    // An object-only link line is context beside a sourced one, else an error of its own.
+    const object = sourced ? null : line.match(GCC_LINK_OBJECT);
+    if (object) diagnostics.push({ level: "error", message: object[1] ?? "" });
+  }
+  return diagnostics;
+}
+
 /** Counts from conventional markers for unstructured ("raw") input. */
 function rawCounts(errors: string): { errorCount: number; warningCount: number } {
   return {
     errorCount: (errors.match(/\berror\b/gi) ?? []).length,
     warningCount: (errors.match(/\bwarning\b/gi) ?? []).length,
+  };
+}
+
+function rawReport(errors: string): CompileReport {
+  const counts = rawCounts(errors);
+  return {
+    format: "raw",
+    errorCount: counts.errorCount,
+    warningCount: counts.warningCount,
+    diagnostics: [],
+    raw: errors,
   };
 }
 
@@ -160,16 +222,13 @@ export function parseCompile(errors: string, formatHint?: string): CompileReport
       case "tsc":
         diagnostics = parseTsc(lines);
         break;
-      default: {
-        const counts = rawCounts(errors);
-        return {
-          format: "raw",
-          errorCount: counts.errorCount,
-          warningCount: counts.warningCount,
-          diagnostics: [],
-          raw: errors,
-        };
-      }
+      case "gcc":
+        diagnostics = parseGcc(lines);
+        // A gcc report with no error diagnostic is never shown as clean.
+        if (!diagnostics.some((d) => d.level === "error")) return rawReport(errors);
+        break;
+      default:
+        return rawReport(errors);
     }
 
     return {

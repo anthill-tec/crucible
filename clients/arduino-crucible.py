@@ -385,8 +385,12 @@ def _collect_lcov(path):
 
 
 def _ingest_compile(project_dir, key, agent_id, errors, context=None):
-    """Ingest an arduino-cli compile failure to /api/v2/runs/compile (with run context)."""
-    payload = {"projectKey": key, "agentId": agent_id, "errors": errors}
+    """Ingest an arduino-cli compile failure to /api/v2/runs/compile (with run context).
+
+    arduino-cli's build output is GCC's diagnostics, so the payload names its
+    format `gcc` rather than leaving the board to guess."""
+    payload = {"projectKey": key, "agentId": agent_id, "format": "gcc",
+               "errors": errors}
     ctx = context if context is not None else _run_context()
     if ctx:
         payload["context"] = ctx

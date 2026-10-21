@@ -2,7 +2,7 @@
 
 **Type** feature · **Points** 5 (3 at gap analysis 2026-10-21; raised at its pre-review for the
 fallback rule, the newer linker's shape and the no-column render) · **Wave** 8 (0.4.0) ·
-**Depends on** — · **Status** PENDING — filed 2026-09-24
+**Depends on** — · **Status** DONE — filed 2026-09-24; merged 2026-10-21 (plan 206, cycles 734–738, gate 8047/0)
 
 ## Problem
 
@@ -90,7 +90,7 @@ A diagnostic renders `file:line:col`, `file:line` or `file` as its fields allow,
 
 ## Acceptance criteria
 
-- [ ] **The real failures decode** (hinted `gcc`, and in the client's stdout-then-stderr order — the
+- [x] **The real failures decode** (hinted `gcc`, and in the client's stdout-then-stderr order — the
       `Used platform` table first). Each fixture decodes to exactly:
       - `avr-uno-warnings-all.txt` — `gcc`, 2 errors / 2 warnings: `/sketch/pump/valve.cpp` 5:21 error
         `'HIGHT' was not declared in this scope`; `/sketch/pump/pump.ino` 5:10 error `'sensr' was not
@@ -107,28 +107,32 @@ A diagnostic renders `file:line:col`, `file:line` or `file` as its fields allow,
       - `platform-not-installed.txt` — `raw`, no diagnostics, word-scan counts.
       No context, note, excerpt, caret, fix-it, trailer, table or build-status line is a diagnostic;
       a diagnostic without a code or column has no such key.
-- [ ] **Object-only link errors.** An input holding only object-only `undefined reference` lines
+- [x] **Object-only link errors.** An input holding only object-only `undefined reference` lines
       decodes to one error per line with no file or line.
-- [ ] **Never clean when it failed.** Any `gcc` input with no error diagnostic (warnings only, or
+- [x] **Never clean when it failed.** Any `gcc` input with no error diagnostic (warnings only, or
       nothing recognised) falls back to `raw`, hinted or not.
-- [ ] **Detected and hinted.** Each of the first five fixtures is detected as `gcc` with no hint, and
+- [x] **Detected and hinted.** Each of the first five fixtures is detected as `gcc` with no hint, and
       selected by each of the hints `gcc`, `g++` and `arduino`.
-- [ ] **Nothing else moves** (regression guard: passes today). With no hint, the existing rustc,
+- [x] **Nothing else moves** (regression guard: passes today). With no hint, the existing rustc,
       javac, python and tsc inputs keep their formats, and these stay `raw`: tsc `--pretty` output
       (`src/a.ts:1:7 - error TS2322: …`), an unhinted rustc link failure (`= note: … main.c:(.text+0x5):
       undefined reference to \`foo'`), a maven-prefixed `[ERROR] /p/A.scala:10:5: error: …` and a cargo
       build-script `warning: x@0.1.0: src/c/a.c:1:1: warning: …`. Every existing compile-codec test
       passes untouched.
-- [ ] **The client names it.** `arduino-crucible.py`'s compile ingest sends `"format": "gcc"`, asserted
+- [x] **The client names it.** `arduino-crucible.py`'s compile ingest sends `"format": "gcc"`, asserted
       on the request.
-- [ ] **The pane.** A compile diagnostic with no column renders `file:line`, one with neither renders
+- [x] **The pane.** A compile diagnostic with no column renders `file:line`, one with neither renders
       `file`, and none renders `undefined`.
-- [ ] **Raw stays raw** (regression guard: passes today). Unknown input still falls back to `raw` and
+- [x] **Raw stays raw** (regression guard: passes today). Unknown input still falls back to `raw` and
       is never rejected (PRD §4.5).
-- [ ] **The record.** The codec header and the PRD's four lists name `gcc`.
+- [x] **The record.** The codec header and the PRD's four lists name `gcc`.
 
 ## Non-goals
 
 - Native host test builds (`make junit`) failing to compile: the arduino client ingests no compile
   report for them today.
 - Updating installed clients outside a release.
+- *Recorded at merge:* an unprefixed object-only link line from older binutils
+  (`main.o:(.text+0x5): undefined reference to …`) is not decoded — it falls back to `raw`, and an
+  arduino build's `collect2` line still counts it as failed; and CRLF input decodes as `raw`, as for
+  the other codecs (the client reads text mode, so it never sends CRLF).

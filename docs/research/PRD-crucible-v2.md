@@ -134,7 +134,7 @@ One ingest call = one immutable event on the project's timeline.
 | `tree` | suite→test nodes (`name`, `status: pass|fail|pending`, `duration_ms`); failed leaves additionally carry `failure: {message, type?, trace?}` (v2 — v1 stored no failure detail; codecs preserve the tool's assertion message + stack trace for the UI run drill-in) | test events |
 | `tier` | `"unit"` \| `"module"` \| `"integration"` \| `"e2e"` \| `"regression"` \| `"bdd"` | v2 — sent by upgraded clients so the UI represents them differently: unit/module/integration share tools per stack; e2e is a different approach; `bdd` only on frontend projects. Legacy default `unit`. |
 | `stack` | `"rust"` \| `"java"` \| `"python"` \| `"ts"` \| `"arduino"` \| … | v2 — which stack produced the run |
-| `codec` | `"junit"` \| `"playwright"` \| `"rustc"` \| `"javac"` \| `"python"` \| `"tsc"` \| … | v2 — which codec normalized it; drives stack-aware rendering (the set follows the supported stacks, §4.4) |
+| `codec` | `"junit"` \| `"playwright"` \| `"rustc"` \| `"javac"` \| `"python"` \| `"tsc"` \| `"gcc"` \| … | v2 — which codec normalized it; drives stack-aware rendering (the set follows the supported stacks, §4.4) |
 | `coverage` | `{lines, functions, branches?}` each `{total, covered, percent}` | only on fully-green runs — server discards otherwise (v1 safety net) |
 | `compile` | `{format, errorCount, warningCount, errors: [{file?, line?, col?, code?, message, level}], raw}` | compile events |
 | `name` | string? | optional run label |
@@ -215,7 +215,7 @@ requirements verbatim. Highlights that are easy to get wrong:
   `source` are tolerated but ignored**.
 - `/api/ingest` `dataPath` accepts a file OR a directory (all `TEST-*.xml` inside).
 - Coverage arriving with `summary.failed > 0` is discarded server-side.
-- `/api/ingest/compile` `format` is optional (`rustc|java|python|typescript`, absent ⇒
+- `/api/ingest/compile` `format` is optional (`rustc|java|python|typescript|gcc`, absent ⇒
   auto-detect, fall back to raw).
 - Every mutating response is `{ok:true,…}`; every error carries an actionable `error`
   string (clients print it).
@@ -241,6 +241,8 @@ registry** translating each tool's native output into one **canonical RunSchema*
 - Codecs at parity: `junit` (with exactly the client parsers' semantics — failure/error →
   fail, skipped → pending, `time`s → duration_ms, `testsuites` or bare `testsuite` root,
   file-or-directory `dataPath`, inline `data`), `rustc`, `javac`, `python`, `tsc`.
+- Compile codecs added since: `gcc` (GCC/g++ diagnostics and link errors, as the arduino stack's
+  `arduino-cli compile` reports them).
 - New codecs: `playwright` (JSON reporter — feature → scenario → step, browser, trace
   links). Adding a stack = adding a codec; no core changes.
 - **Codecs follow the supported stacks' reporting strategies** (corrected 2026-09-24, codec audit).
@@ -259,8 +261,9 @@ registry** translating each tool's native output into one **canonical RunSchema*
 ### 4.5 Compile ingest
 - Structured parsers per format: `rustc` (`error[EXXXX]` + `--> file:line:col`), java/
   maven (`[ERROR] /File.java:[line,col] msg`), `python` (traceback / SyntaxError),
-  `typescript` (`file.ts(line,col): error TSxxxx`). Unknown/absent format → best-effort
-  detect → raw fallback (never reject).
+  `typescript` (`file.ts(line,col): error TSxxxx`), `gcc` (`file:line:col: error|warning: msg`
+  and `undefined reference to …` link errors; a report with no error falls back to raw).
+  Unknown/absent format → best-effort detect → raw fallback (never reject).
 - Records a `kind:"compile"` event; response `summary.failed` = errors, `.pending` =
   warnings (v1 client convention).
 
