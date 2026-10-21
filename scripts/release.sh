@@ -331,20 +331,29 @@ guard_release_notes() {
     extractor="$script_dir/release-notes.sh"
     local refusal="no committed, dated release notes for $want — CHANGELOG.md at HEAD must carry a '## [$want] - YYYY-MM-DD' heading with notes under it. Write the notes AND commit them on the release branch before finish (RELEASING.md step 3)."
 
+    # A missing extractor is its own refusal: blaming the notes would send the
+    # operator to fix a CHANGELOG.md that is already right.
+    if [ ! -f "$extractor" ] || [ ! -r "$extractor" ]; then
+        error "the release-notes extractor release-notes.sh is missing — it was not found beside release.sh, and finish reads the notes only through it. Restore scripts/release-notes.sh before finish." "$EXIT_ERROR"
+    fi
+
+    # The changelog is fed to each reader as a here-string, never through a
+    # pipe: a reader that stops at its first match would otherwise leave the
+    # writer to die of SIGPIPE under pipefail once the file outgrows the pipe.
     if ! changelog="$(git show HEAD:CHANGELOG.md 2>/dev/null)"; then
         error "$refusal" "$EXIT_ERROR"
     fi
 
-    heading="$(printf '%s\n' "$changelog" | awk -v tag="$want" '
+    heading="$(awk -v tag="$want" '
         { gsub(/\r/, "") }
         index($0, "## [" tag "]") == 1 { print; exit }
-    ')"
+    ' <<<"$changelog")"
     rest="${heading#"## [$want]"}"
     if [ -z "$heading" ] || ! printf '%s\n' "$rest" | grep -Eq '^ - [0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'; then
         error "$refusal" "$EXIT_ERROR"
     fi
 
-    if ! printf '%s\n' "$changelog" | bash "$extractor" "$want" - >/dev/null; then
+    if ! bash "$extractor" "$want" - <<<"$changelog" >/dev/null; then
         error "$refusal" "$EXIT_ERROR"
     fi
 }
