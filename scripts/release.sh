@@ -567,51 +567,79 @@ release_crs() {
 }
 
 # CR-CRU-081 §S2 — the project's registered CR QUEUE and its `cr-merged` landing
-# markers, read through the client's `queue` verb (one call, both sources). The
-# queue is what says which CR ids the project ever filed; the two landing
-# sources together say which of them Crucible knows the landing of.
+# markers, read through the client's `queue` verb (one call, both sources) as
+# ONE JSON object under `--format json`. The queue is what says which CR ids
+# the project ever filed; the two landing sources together say which of them
+# Crucible knows the landing of.
 #
 # Tolerant exactly as `plan_merge_map` is: an unreachable or failing client
 # yields NO output, so the ceremony reports what it can rather than failing on
 # its own reporting — a published release must never be blocked by a gap in the
 # report about it.
 queue_read() {
-    python3 "$(repo_root)/clients/python-crucible.py" queue 2>/dev/null || true
+    python3 "$(repo_root)/clients/python-crucible.py" queue --format json 2>/dev/null || true
 }
 
-# The CR ids the queue holds, one per line, from a `queue` envelope on stdin.
+# The ONE parser of the `queue` JSON object on stdin, in the style of
+# `plan_merge_map`: the object is parsed as JSON, never split on commas (a
+# quoted title holding a comma would shift every field after it). `$1` names
+# which ids to print, one per line:
+#
+#   queued   — every queue row's CR id, except a row whose `lifecycle` is VOID
+#              or SUPERSEDED: that work is not happening, or happens under its
+#              successor, so it is not queued work;
+#   merged   — the CR ids `crMerged` lists;
+#   named    — the CR ids of live rows whose derived `status` is
+#              `COMPLETED_UNTRACKED` (see `release_named_crs`).
+#
+# Empty or non-JSON input, or an object without the expected keys, yields NO
+# lines — the same tolerance every reader here keeps.
+queue_json_crs() {
+    python3 -c '
+import json, re, sys
+mode = sys.argv[1]
+try:
+    doc = json.load(sys.stdin)
+except ValueError:
+    doc = None
+if not isinstance(doc, dict):
+    doc = {}
+def is_cr(value):
+    return isinstance(value, str) and re.fullmatch(r"CR-[A-Z]+-[0-9]+", value) is not None
+if mode == "merged":
+    ids = doc.get("crMerged")
+    for cr in ids if isinstance(ids, list) else []:
+        if is_cr(cr):
+            print(cr)
+    sys.exit(0)
+rows = doc.get("queue")
+for row in rows if isinstance(rows, list) else []:
+    if not isinstance(row, dict) or not is_cr(row.get("cr")):
+        continue
+    if row.get("lifecycle") in ("VOID", "SUPERSEDED"):
+        continue
+    if mode == "named" and row.get("status") != "COMPLETED_UNTRACKED":
+        continue
+    print(row["cr"])
+' "$1" 2>/dev/null \
+        | sort -u || true
+}
+
+# The CR ids the queue holds as live work, one per line, from a `queue` JSON
+# object on stdin — VOID and SUPERSEDED rows excluded.
 queued_crs() {
-    awk '
-        /^[[:space:]]*queue\[[0-9]+\]\{/ {
-            header = $0
-            sub(/^[^{]*\{/, "", header)
-            sub(/\}.*$/, "", header)
-            cols = split(header, name, ",")
-            for (i = 1; i <= cols; i++) col[name[i]] = i
-            next
-        }
-        cols > 0 {
-            row = $0
-            gsub(/"/, "", row)
-            if (split(row, v, ",") < cols) next
-            cr = v[col["cr"]]
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", cr)
-            if (cr ~ /^CR-[A-Z]+-[0-9]+$/) print cr
-        }' | sort -u || true
+    queue_json_crs queued
 }
 
 # The CR ids a `cr-merged` milestone covers — the SECOND landing source — from
-# the same envelope, one per line.
+# the same JSON object, one per line.
 cr_merged_crs() {
-    awk -F': ' '/^[[:space:]]*crMerged\[[0-9]+\]:/ {
-            gsub(/,/, "\n", $2)
-            print $2
-        }' | tr -d ' ' | grep -E '^CR-[A-Z]+-[0-9]+$' | sort -u || true
+    queue_json_crs merged
 }
 
 # CR-CRU-129 §S4 — the CR ids some STORED release record NAMES while Crucible
-# holds no plan that is evidence of work, from the same `queue` envelope, one
-# per line. This is a DIRECT read of stored release membership: the board
+# holds no plan that is evidence of work, from the same `queue` JSON object,
+# one per line. This is a DIRECT read of stored release membership: the board
 # derives `COMPLETED_UNTRACKED` from `listReleases(...).crs` itself (src/store.ts,
 # `statusFor` — "no plan at all, or only abandoned ones, and some release's
 # `crs` names it"), so the ceremony asks the store what it holds rather than
@@ -631,28 +659,15 @@ cr_merged_crs() {
 # why the never-landed line claims only "no stored release record names them as
 # shipped-without-one" rather than "no release record names them".
 #
-# Tolerant like every other reader here: no envelope, no ids, and the caller
+# A row whose `lifecycle` is VOID or SUPERSEDED is never in here either, even
+# when a release names it: that work is not happening, or happens under its
+# successor, so it is neither evicted nor never-landed — `queued_crs` drops it
+# too, and the report names it in no list.
+#
+# Tolerant like every other reader here: no JSON object, no ids, and the caller
 # reports the class it can still tell.
 release_named_crs() {
-    awk '
-        /^[[:space:]]*queue\[[0-9]+\]\{/ {
-            header = $0
-            sub(/^[^{]*\{/, "", header)
-            sub(/\}.*$/, "", header)
-            cols = split(header, name, ",")
-            for (i = 1; i <= cols; i++) col[name[i]] = i
-            next
-        }
-        cols > 0 {
-            row = $0
-            gsub(/"/, "", row)
-            if (split(row, v, ",") < cols) next
-            cr = v[col["cr"]]
-            status = v[col["status"]]
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", cr)
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", status)
-            if (cr ~ /^CR-[A-Z]+-[0-9]+$/ && status == "COMPLETED_UNTRACKED") print cr
-        }' | sort -u || true
+    queue_json_crs named
 }
 
 # CR-CRU-081 §S2 — name and COUNT the CRs ancestry could not place, in the TWO
@@ -678,7 +693,7 @@ release_named_crs() {
 #       because nothing was ever recorded; it is simply queued work.
 #
 # The evidence for 2a is `release_named_crs`: a DIRECT read of what the stored
-# release records name, taken from the same `queue` envelope this function
+# release records name, taken from the same `queue` JSON object this function
 # already fetches. It answers on EVERY path, which the previous evidence did
 # not — that was the set of ids a replay had been refused, populated only by a
 # 409, and `cmd_finish` replays only the NEW label against a guard scoped per
