@@ -272,3 +272,20 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     Then the "Runs" tab is selected
     And the declared marker for that cycle sits inside the viewport and blinks
 
+  # The `→ Runs` pill is a touch target on touch media. At the phone band it
+  # stays on Now's cycle line (only History's line gives it up for the
+  # expanded runs' row), so on this coarse-pointer profile Now's pill must
+  # be at least 44px tall. The page is first proven to match
+  # `(pointer: coarse)`, so the floor is measured where it applies.
+  Scenario: at the phone band on a coarse pointer Now's active cycle line carries a → Runs pill that is at least 44px tall
+    Given a project named "MOB Now Pill Project" is registered
+    And an orchestrator "mob-orch-nowpill" is registered on that project
+    And a release "0.173.637" is proposed for that project
+    And a cycle plan is filed for cr "MOB-NOWPILL" with a cycle labelled "c1 now pill"
+    And cycle 1 of that plan is activated
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    And I select the "Now" sub-tab
+    Then the page matches the coarse-pointer media query
+    And Now's → Runs pill for that cycle is at least 44px tall
+
