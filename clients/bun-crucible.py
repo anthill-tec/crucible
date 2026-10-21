@@ -1011,7 +1011,7 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     # pre-lifecycle one and the server stores no lifecycle fields at all.
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
                               release=release)
     cov_line = ""
     if coverage:
@@ -1059,7 +1059,8 @@ def _ingest_raw(project_dir, agent_id, raw_report, tier=None, context=None,
     # route shares; absent, the server stores no lifecycle fields.
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs", payload, release=release)
+    resp = _axi().post_ingest(_post, "/api/v2/runs", payload, stack=_STACK,
+                              release=release)
     run = resp.get("run") or {}
     print(
         f"ingest {raw_report['codec']}: ok={resp.get('ok')} "
@@ -1135,7 +1136,7 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=Non
     # the run this client opened, so the span is measured instead of abandoned.
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload,
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload, stack=_STACK,
                               release=release)
     # CR-CRU-058 §S3 — the human ingest line is interactive-only (stderr); it
     # used to land on stdout AHEAD of the caller's envelope (`check`'s failure
