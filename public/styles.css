@@ -1105,6 +1105,18 @@ body {
   color: var(--ink-dim);
 }
 .app-cycle-to-runs:hover { color: var(--ink); }
+/* The `→ Runs` pill is a touch target: on touch media it is at least 44px
+   tall, the floor `button.app-chip` carries (DN decision 4). It stays an
+   inline item of its line, its label centred and on one line. */
+@media (pointer: coarse) {
+  .app-cycle-to-runs {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    min-height: 44px;
+  }
+}
 /* CR-CRU-032 §S3 (VERIFY 1B) — a `→ Runs` pill whose boundary was
    server-confirmed pruned by its own anchor-fetch renders permanently dim:
    faded ink + not-allowed cursor, so it never reads as a normal live jump. */
