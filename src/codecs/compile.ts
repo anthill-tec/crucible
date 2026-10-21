@@ -48,9 +48,10 @@ const TSC_LINE = /^(.+?)\((\d+),(\d+)\):\s+(error|warning)\s+(TS\d+):\s+(.*)$/;
 const GCC_DIAGNOSTIC = /^(?!\[)((?:(?!: ).)+?):(\d+):(\d+): (fatal error|error|warning): (.*)$/;
 const GCC_FLAG = /^(.*) \[(-[^\]]*)\]$/;
 // Sourced link error, older (`FILE:LINE: …`) and newer (`FILE:LINE:(SECTION+OFFSET): …`) linkers.
-const GCC_LINK_SOURCED = /^(?!\[)((?:(?!: ).)+?):(\d+):(?:\([^)]*\):)? (undefined reference to .*)$/;
+// SECTION holds neither `(` nor `)`, so a long line with an unclosed `(` decodes in linear time.
+const GCC_LINK_SOURCED = /^(?!\[)((?:(?!: ).)+?):(\d+):(?:\([^()]*\):)? (undefined reference to .*)$/;
 // Object-only link error: `…: OBJECT:(SECTION+OFFSET): undefined reference to …`.
-const GCC_LINK_OBJECT = /^.*?: [^:\s][^:]*:\([^)]*\): (undefined reference to .*)$/;
+const GCC_LINK_OBJECT = /^.*?: [^:\s][^:]*:\([^()]*\): (undefined reference to .*)$/;
 
 export function detectFormat(errors: string, hint?: string): string {
   if (hint !== undefined) {
