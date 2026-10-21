@@ -3276,9 +3276,9 @@ BEFORE_ITS_DEPENDENCY = "before-its-dependency"
 
 
 def add_queue_view_args(parser):
-    """\u00a7S0 \u2014 the `queue` verb's `--fields`/`--full` flags,
-    registered here so the five clients cannot drift into five flag
-    surfaces."""
+    """\u00a7S0 \u2014 the `queue` verb's `--fields`/`--full` flags and its
+    `--format {toon,json}` (through `add_status_format_arg`), registered here
+    so the five clients cannot drift into five flag surfaces."""
     parser.add_argument(
         "--fields",
         help="Comma-separated EXTRA columns to add to the default "
@@ -3288,6 +3288,7 @@ def add_queue_view_args(parser):
         "--full", action="store_true",
         help="Print every column: the default set, the place-in-plan "
              "columns and `warning`.")
+    add_status_format_arg(parser)
 
 
 def queue_late_dependencies(rows):
@@ -3408,11 +3409,12 @@ def cmd_queue(args, project_dir, ops):
                        f"{milestones.get('error')}"),
         })
 
-    ops.emit("queue", True,
-             {"queue": rows, "crMerged": merged, "count": len(rows),
-              "help": ["status"]},
-             ops.context(project_dir), warnings,
-             f"queue: ok=True entries={len(rows)} crMerged={len(merged)}")
+    _status_emitter(args, ops)(
+        "queue", True,
+        {"queue": rows, "crMerged": merged, "count": len(rows),
+         "help": ["status"]},
+        ops.context(project_dir), warnings,
+        f"queue: ok=True entries={len(rows)} crMerged={len(merged)}")
     return 0
 
 
@@ -3617,8 +3619,8 @@ def status_namespace(**extra_fields):
 
 
 def add_status_format_arg(parser):
-    """§S8 — the `--format {toon,json}` flag of `status`, its alias `plans`
-    and `landings` (§S9), registered here so the five clients cannot drift
+    """§S8 — the `--format {toon,json}` flag of `status`, its alias `plans`,
+    `landings` (§S9) and `queue`, registered here so the five clients cannot drift
     into five flag surfaces. The no-argument dashboard is not offered it
     (`status_namespace` carries no `format`)."""
     parser.add_argument(
@@ -3628,7 +3630,8 @@ def add_status_format_arg(parser):
 
 
 def _status_emitter(args, ops):
-    """§S8 — the envelope writer `cmd_status` and `cmd_landings` use: the
+    """§S8 — the envelope writer `cmd_status`, `cmd_landings` and
+    `cmd_queue` use: the
     client's own `ops.emit`
     for TOON (today's path, untouched), the shared `emit_axi` in JSON mode for
     `--format json`. A Namespace without `format` (the dashboard's) is TOON."""

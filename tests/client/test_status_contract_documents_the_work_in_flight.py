@@ -52,13 +52,13 @@ class StatusContractDocumentsTheWorkInFlightTest(unittest.TestCase):
 
     # ── version ──────────────────────────────────────────────────────────
 
-    def test_version_line_is_3_0_0(self):
+    def test_version_line_is_3_1_0(self):
         text = self._read()
         self.assertIn(
-            "**Version: 3.0.0**", text,
-            "AC8 requires the contract doc's version to be 3.0.0 (a "
-            "BREAKING change to the rows a consumer gets); the old "
-            "2.0.0 line must be gone")
+            "**Version: 3.1.0**", text,
+            "the contract doc's version must be 3.1.0 (an additive bump: "
+            "`queue` accepts `--format json`); the old 3.0.0 and 2.0.0 "
+            "lines must be gone")
         self.assertNotIn(
             "**Version: 2.0.0**", text,
             "the OLD 2.0.0 version line must not survive alongside 3.0.0")

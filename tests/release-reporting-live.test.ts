@@ -145,6 +145,13 @@ interface EventsResponse {
  */
 const GIT_STUB = `#!/bin/sh
 printf 'git %s\\n' "$*" >> "$RSH_LOG"
+case "$*" in
+  # \`show HEAD:CHANGELOG.md\` — the release notes as committed at HEAD, which
+  # \`finish\` reads before it writes anything. The world's CHANGELOG.md models
+  # HEAD's copy (this stub's tree is always clean).
+  *show*HEAD:CHANGELOG.md*)
+    cat "$RSH_ROOT/CHANGELOG.md"; exit $? ;;
+esac
 case "$1" in
   rev-parse)
     case "$*" in
@@ -258,6 +265,13 @@ describe("the release ceremony reports through the REAL client to a LIVE server 
     const log = join(root, "argv.log");
     writeFileSync(log, "");
     writeFileSync(join(root, "package.json"), `{\n  "name": "crucible",\n  "version": "${VERSION}"\n}\n`);
+    // The version's dated, non-empty release notes, which the stub `git show
+    // HEAD:CHANGELOG.md` serves as committed — so the ceremony's notes check
+    // passes and every finish reaches the reporting it is about.
+    writeFileSync(
+      join(root, "CHANGELOG.md"),
+      `# Changelog\n\n## [${VERSION}] - 2026-10-21\n\n### Fixed\n\n- The release this world finishes.\n`,
+    );
     writeFileSync(join(root, ".env"), `CRUCIBLE_PROJECT_KEY=${projectKey}\n`);
     symlinkSync(join(REPO_ROOT, "clients"), join(root, "clients"));
     writeFileSync(join(bin, "git"), GIT_STUB);

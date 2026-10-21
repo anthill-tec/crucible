@@ -37,9 +37,9 @@ scripts/release.sh finish     X.Y.Z      # preflight guards -> git flow finish -
 **On `set-version`.** It no longer decides what npm publishes — `publish-npm` sets
 `package.json`'s version from the tag, so a stale committed value cannot affect or fail a
 release. It is **kept** for two narrower reasons: it keeps the committed manifest honest
-for local builds and `npm pack` rehearsals, and `finish`'s first preflight still asserts
-the committed manifest equals the finish version. So run it before `finish` (or that
-preflight refuses), but understand it as housekeeping, not as the step that sets the
+for local builds and `npm pack` rehearsals, and it is the same write path `finish` uses:
+`finish` aligns the committed manifest to the finish version itself, then checks it. So
+running it before `finish` is optional, and it is housekeeping, not the step that sets the
 released version.
 
 The push to `master` is what starts CI:
@@ -87,7 +87,8 @@ version that can disagree with the tag.
 
 That leaves `scripts/release.sh set-version` **redundant as a version authority**. It is
 deliberately kept, not retired, for exactly two jobs — keeping the committed manifest
-honest for local builds/`npm pack`, and satisfying `finish`'s manifest preflight — and it
+honest for local builds/`npm pack`, and sharing the one manifest write path `finish` aligns
+through — and it
 must not be presented as the step that decides the released version. See
 [Release at a glance](#release-at-a-glance).
 
@@ -302,7 +303,7 @@ git flow release start X.Y.Z      # or: git flow hotfix start X.Y.Z
 
 Then, on that branch:
 
-**1. Align the committed manifest** (housekeeping, and `finish`'s first preflight).
+**1. Align the committed manifest** (housekeeping; optional, since `finish` aligns it too).
 
 ```bash
 scripts/release.sh set-version X.Y.Z
@@ -311,7 +312,8 @@ scripts/release.sh set-version X.Y.Z
 Format-preservingly rewrites `package.json`'s `version` and commits it. Neither published
 version comes from here — the Python version is hatch-vcs tag-derived, and the npm version
 is set from the tag by `publish-npm`. This keeps the committed manifest consistent with the
-tag you are about to cut (and gets `finish`'s manifest preflight out of the way).
+tag you are about to cut. `finish` runs the same alignment itself and then checks the result,
+so skipping this step does not fail a release.
 
 **2. Rehearse** (see above) — push the branch; each push rehearses. `scripts/release.sh checkpoint`
 only re-runs a rehearsal.
@@ -324,6 +326,13 @@ operator has to act (a store migration, a retired setting). On the release branc
 `## [Unreleased]` gathered under the new version's heading (or write the section from the
 release's CRs), add its compare link at the foot of the file, and commit. A push rehearses it
 like any other commit.
+
+`finish` refuses a release whose notes are not committed and dated. It reads `CHANGELOG.md`
+at `HEAD` — not the working tree or the index — so the `## [X.Y.Z] - YYYY-MM-DD` heading,
+with a non-empty section under it, must be committed on the release branch before you run
+it. It reads that section through `scripts/release-notes.sh`, the same extractor that gives
+`create-release` its release body, so the notes `finish` accepts are the notes the GitHub
+Release shows.
 
 The notes have one source and three readers:
 
@@ -339,14 +348,19 @@ The notes have one source and three readers:
 scripts/release.sh finish X.Y.Z
 ```
 
-Two preflight guards run first, and either one aborts before any merge happens:
+Its preflight guards run in this order, and any one of them aborts before any merge happens.
+The identity and notes guards refuse before anything is written. Then `finish` aligns
+`package.json` to `X.Y.Z` and commits it — a real commit, even under `--dry-run`, because it
+has to land on the merge — and checks the result, followed by the tag-prefix check:
 
 | Guard | Failure | Remedy |
 |-------|---------|--------|
-| Committed manifest | `package.json` version != `X.Y.Z` | `scripts/release.sh set-version X.Y.Z` |
+| Ceremony identity | neither `--agent <id>` nor `$CRUCIBLE_AGENT` names the release's Crucible identity | pass `--agent <id>` (or set `$CRUCIBLE_AGENT`) |
+| Release notes | `CHANGELOG.md` at `HEAD` has no non-empty, dated section for `X.Y.Z` | write the `## [X.Y.Z] - YYYY-MM-DD` section of `CHANGELOG.md` on the release branch and commit it (step 3) |
+| Manifest alignment + check | `package.json` still is not `X.Y.Z` after the alignment: it has no `version` key to rewrite | add a `"version"` key to `package.json` and re-run `finish` |
 | Tag prefix | `gitflow.prefix.versiontag` is unset, or set to a non-empty prefix | `git config gitflow.prefix.versiontag ""` |
 
-The manifest guard is now a *consistency* check, not a correctness one: even if it were
+The manifest check is now a *consistency* check, not a correctness one: even if it were
 bypassed, `publish-npm` would still publish at the tag's version.
 
 Only then does it run `git flow <release\|hotfix> finish -m "Release X.Y.Z" X.Y.Z` (the

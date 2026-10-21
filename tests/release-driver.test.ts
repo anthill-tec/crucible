@@ -103,12 +103,32 @@ function packageJsonText(version: string): string {
 
 const PYPROJECT_TOML_TEXT = ['[project]', 'name = "demo-pkg"', 'dynamic = ["version"]', ''].join("\n");
 
-/** Initializes a scratch repo with a committed package.json (+ pyproject.toml) at `version`. */
+/** The version every `finish` in this file finishes. */
+const FINISH_VERSION = "9.9.9";
+
+/** A changelog holding the finish version's dated, non-empty release notes —
+ *  `finish` reads the notes as committed at HEAD before it writes anything, so
+ *  every scratch world commits them and the tests below reach the code they
+ *  test. */
+const CHANGELOG_TEXT = [
+  "# Changelog",
+  "",
+  `## [${FINISH_VERSION}] - 2026-10-21`,
+  "",
+  "### Fixed",
+  "",
+  "- The scratch release this test finishes.",
+  "",
+].join("\n");
+
+/** Initializes a scratch repo with a committed package.json (+ pyproject.toml
+ *  + CHANGELOG.md carrying the finish version's notes) at `version`. */
 function initCommittedScratchRepo(branch: string, version: string): { dir: string; originalPackageJson: string } {
   const dir = initEmptyScratchRepo(branch);
   const originalPackageJson = packageJsonText(version);
   writeFileSync(join(dir, "package.json"), originalPackageJson);
   writeFileSync(join(dir, "pyproject.toml"), PYPROJECT_TOML_TEXT);
+  writeFileSync(join(dir, "CHANGELOG.md"), CHANGELOG_TEXT);
   git(["add", "-A"], dir);
   git(["commit", "-q", "-m", "initial"], dir);
   return { dir, originalPackageJson };
@@ -195,6 +215,8 @@ describe("scripts/release.sh (CR-CRU-041 §S3 + §S5)", () => {
     track(dir);
     const res = runRelease(dir, ["finish", "9.9.9"]);
     expect(res.exitCode).toBe(2);
+    // The branch guard's OWN refusal, so no other guard's could satisfy this.
+    expect(res.stderr).toContain("must be run on a release/* or hotfix/* branch");
   });
 
   // -- set-version behaviour on an allowed branch --
@@ -353,12 +375,16 @@ describe("scripts/release.sh (CR-CRU-041 §S3 + §S5)", () => {
     // fatal in this genuine failure mode.
     const unalignable = track(initEmptyScratchRepo("release/9.9.9"));
     writeFileSync(join(unalignable, "package.json"), '{\n    "name": "demo-pkg",\n    "private": true\n}');
+    writeFileSync(join(unalignable, "CHANGELOG.md"), CHANGELOG_TEXT);
     git(["add", "-A"], unalignable);
     git(["commit", "-q", "-m", "initial"], unalignable);
     setVersionTagPrefix(unalignable, "");
 
     const resUnalignable = runRelease(unalignable, ["finish", "9.9.9", "--dry-run"]);
     expect(resUnalignable.exitCode).not.toBe(0);
+    // The manifest guard's OWN refusal, so no other guard's could satisfy this.
+    expect(resUnalignable.stderr).toContain("could not be aligned to the finish version '9.9.9'");
+    expect(resUnalignable.stderr).toContain('no "version" key');
     expect(resUnalignable.combined).not.toContain("git flow");
     expect(resUnalignable.combined).not.toContain("git push");
 

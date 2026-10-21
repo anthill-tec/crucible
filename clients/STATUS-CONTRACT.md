@@ -1,6 +1,6 @@
 # Crucible `status` envelope contract
 
-**Version: 3.0.0**
+**Version: 3.1.0**
 
 This is the stable, versioned contract for the `status` (alias `plans`) read verb
 emitted by every `*-crucible.py` client in this directory. It is committed WITH the
@@ -137,6 +137,10 @@ A hook that receives `ok:true` together with a `status-unavailable` warning rend
 - Any other value is refused by argument parsing.
 - The no-argument dashboard does not take the flag; it always writes TOON.
 
+`queue` accepts the same flag in all five clients: `--format json` writes its
+envelope (`queue`, `crMerged`, `count`, `help`, `context`, `warnings`) as one
+unwrapped JSON object, with `--fields`/`--full` selecting the same columns as in TOON.
+
 A work-in-flight read with `--format json`:
 
 ```json
@@ -252,6 +256,7 @@ the VERSION above on any change to the envelope shape, the row schema, the termi
 states, or the tolerant-degrade shape. Additive `--fields` columns do not change the
 base contract and do not require a version bump.
 
+- **3.1.0** — additive: `queue` accepts `--format json`.
 - **3.0.0 (CR-CRU-150)** — a BREAKING change to the rows a consumer gets: `plans[]`
   is now the open plans only (the work in flight, read with `GET …/plans?status=open`),
   no longer every plan the project has filed, and `count` counts those rows. Added:

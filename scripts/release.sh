@@ -14,8 +14,11 @@
 # Subcommands:
 #   set-version <X.Y.Z>  Format-preservingly rewrite + commit package.json.
 #   checkpoint           gh workflow run release.yml --ref <branch>.
-#   finish <X.Y.Z>       Align + commit the manifest, preflight guards, then git
-#                        flow finish + push. NOTE: the alignment write/commit is
+#   finish <X.Y.Z>       Preflight guards in this order: ceremony identity,
+#                        release notes (CHANGELOG.md at HEAD carries a dated
+#                        section for X.Y.Z), then align + commit the manifest
+#                        and check it, then the tag-prefix check; then git flow
+#                        finish + push. NOTE: the alignment write/commit is
 #                        real even under --dry-run (it must precede the merge);
 #                        only the git-flow finish and the push are gated.
 #   status               Print current branch + tag-derived version.
@@ -97,12 +100,16 @@ Subcommands:
                     branch. Allowed only on release/* or hotfix/* branches.
                     Runs: gh workflow run release.yml --ref <branch>
 
-  finish <X.Y.Z>    Align package.json to X.Y.Z (committing it, so it lands on
-                    the merge — no separate set-version run is needed), run the
-                    preflight guards (ceremony identity, manifest version, tag
-                    prefix), then finish the git-flow release/hotfix and push
-                    master + develop + tags. Allowed only on release/* or
-                    hotfix/*.
+  finish <X.Y.Z>    Run the preflight guards in this order: ceremony identity
+                    (--agent or $CRUCIBLE_AGENT), release notes (CHANGELOG.md
+                    at HEAD must carry a non-empty '## [X.Y.Z] - YYYY-MM-DD'
+                    section) — both refuse before anything is written — then
+                    align package.json to X.Y.Z (committing it, so it lands on
+                    the merge; real even under --dry-run, and no separate
+                    set-version run is needed) and check it, then the tag
+                    prefix check (gitflow.prefix.versiontag). Then finish the
+                    git-flow release/hotfix and push master + develop + tags.
+                    Allowed only on release/* or hotfix/*.
 
   status            Print the current branch and the derived version
                     (git describe --tags). Tags are bare SemVer (X.Y.Z).
@@ -308,6 +315,47 @@ guard_agent_identity() {
         return 0
     fi
     error "no Crucible identity for the release report — pass --agent <agentId> or set \$CRUCIBLE_AGENT. There is no fallback and no default (CR-CRU-057), and a release reported without one records nothing." "$EXIT_ERROR"
+}
+
+# Guard (d): the release's notes must be COMMITTED and DATED before anything is
+# written. The tag and the workflow's create-release both see CHANGELOG.md as
+# committed, so it is read at HEAD — never the working tree or the index — and
+# through the one extractor (release-notes.sh, beside this script; located
+# relative to this file rather than the repo root). The first line beginning
+# `## [X.Y.Z]` is the heading the extractor reads, so that is the one whose
+# date is checked; a refusal commits nothing, under --dry-run too.
+guard_release_notes() {
+    local want="$1"
+    local script_dir extractor changelog heading rest
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+    extractor="$script_dir/release-notes.sh"
+    local refusal="no committed, dated release notes for $want — CHANGELOG.md at HEAD must carry a '## [$want] - YYYY-MM-DD' heading with notes under it. Write the notes AND commit them on the release branch before finish (RELEASING.md step 3)."
+
+    # A missing extractor is its own refusal: blaming the notes would send the
+    # operator to fix a CHANGELOG.md that is already right.
+    if [ ! -f "$extractor" ] || [ ! -r "$extractor" ]; then
+        error "the release-notes extractor release-notes.sh is missing — it was not found beside release.sh, and finish reads the notes only through it. Restore scripts/release-notes.sh before finish." "$EXIT_ERROR"
+    fi
+
+    # The changelog is fed to each reader as a here-string, never through a
+    # pipe: a reader that stops at its first match would otherwise leave the
+    # writer to die of SIGPIPE under pipefail once the file outgrows the pipe.
+    if ! changelog="$(git show HEAD:CHANGELOG.md 2>/dev/null)"; then
+        error "$refusal" "$EXIT_ERROR"
+    fi
+
+    heading="$(awk -v tag="$want" '
+        { gsub(/\r/, "") }
+        index($0, "## [" tag "]") == 1 { print; exit }
+    ' <<<"$changelog")"
+    rest="${heading#"## [$want]"}"
+    if [ -z "$heading" ] || ! printf '%s\n' "$rest" | grep -Eq '^ - [0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'; then
+        error "$refusal" "$EXIT_ERROR"
+    fi
+
+    if ! bash "$extractor" "$want" - <<<"$changelog" >/dev/null; then
+        error "$refusal" "$EXIT_ERROR"
+    fi
 }
 
 # ============================================================================
@@ -535,51 +583,79 @@ release_crs() {
 }
 
 # CR-CRU-081 §S2 — the project's registered CR QUEUE and its `cr-merged` landing
-# markers, read through the client's `queue` verb (one call, both sources). The
-# queue is what says which CR ids the project ever filed; the two landing
-# sources together say which of them Crucible knows the landing of.
+# markers, read through the client's `queue` verb (one call, both sources) as
+# ONE JSON object under `--format json`. The queue is what says which CR ids
+# the project ever filed; the two landing sources together say which of them
+# Crucible knows the landing of.
 #
 # Tolerant exactly as `plan_merge_map` is: an unreachable or failing client
 # yields NO output, so the ceremony reports what it can rather than failing on
 # its own reporting — a published release must never be blocked by a gap in the
 # report about it.
 queue_read() {
-    python3 "$(repo_root)/clients/python-crucible.py" queue 2>/dev/null || true
+    python3 "$(repo_root)/clients/python-crucible.py" queue --format json 2>/dev/null || true
 }
 
-# The CR ids the queue holds, one per line, from a `queue` envelope on stdin.
+# The ONE parser of the `queue` JSON object on stdin, in the style of
+# `plan_merge_map`: the object is parsed as JSON, never split on commas (a
+# quoted title holding a comma would shift every field after it). `$1` names
+# which ids to print, one per line:
+#
+#   queued   — every queue row's CR id, except a row whose `lifecycle` is VOID
+#              or SUPERSEDED: that work is not happening, or happens under its
+#              successor, so it is not queued work;
+#   merged   — the CR ids `crMerged` lists;
+#   named    — the CR ids of live rows whose derived `status` is
+#              `COMPLETED_UNTRACKED` (see `release_named_crs`).
+#
+# Empty or non-JSON input, or an object without the expected keys, yields NO
+# lines — the same tolerance every reader here keeps.
+queue_json_crs() {
+    python3 -c '
+import json, re, sys
+mode = sys.argv[1]
+try:
+    doc = json.load(sys.stdin)
+except ValueError:
+    doc = None
+if not isinstance(doc, dict):
+    doc = {}
+def is_cr(value):
+    return isinstance(value, str) and re.fullmatch(r"CR-[A-Z]+-[0-9]+", value) is not None
+if mode == "merged":
+    ids = doc.get("crMerged")
+    for cr in ids if isinstance(ids, list) else []:
+        if is_cr(cr):
+            print(cr)
+    sys.exit(0)
+rows = doc.get("queue")
+for row in rows if isinstance(rows, list) else []:
+    if not isinstance(row, dict) or not is_cr(row.get("cr")):
+        continue
+    if row.get("lifecycle") in ("VOID", "SUPERSEDED"):
+        continue
+    if mode == "named" and row.get("status") != "COMPLETED_UNTRACKED":
+        continue
+    print(row["cr"])
+' "$1" 2>/dev/null \
+        | sort -u || true
+}
+
+# The CR ids the queue holds as live work, one per line, from a `queue` JSON
+# object on stdin — VOID and SUPERSEDED rows excluded.
 queued_crs() {
-    awk '
-        /^[[:space:]]*queue\[[0-9]+\]\{/ {
-            header = $0
-            sub(/^[^{]*\{/, "", header)
-            sub(/\}.*$/, "", header)
-            cols = split(header, name, ",")
-            for (i = 1; i <= cols; i++) col[name[i]] = i
-            next
-        }
-        cols > 0 {
-            row = $0
-            gsub(/"/, "", row)
-            if (split(row, v, ",") < cols) next
-            cr = v[col["cr"]]
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", cr)
-            if (cr ~ /^CR-[A-Z]+-[0-9]+$/) print cr
-        }' | sort -u || true
+    queue_json_crs queued
 }
 
 # The CR ids a `cr-merged` milestone covers — the SECOND landing source — from
-# the same envelope, one per line.
+# the same JSON object, one per line.
 cr_merged_crs() {
-    awk -F': ' '/^[[:space:]]*crMerged\[[0-9]+\]:/ {
-            gsub(/,/, "\n", $2)
-            print $2
-        }' | tr -d ' ' | grep -E '^CR-[A-Z]+-[0-9]+$' | sort -u || true
+    queue_json_crs merged
 }
 
 # CR-CRU-129 §S4 — the CR ids some STORED release record NAMES while Crucible
-# holds no plan that is evidence of work, from the same `queue` envelope, one
-# per line. This is a DIRECT read of stored release membership: the board
+# holds no plan that is evidence of work, from the same `queue` JSON object,
+# one per line. This is a DIRECT read of stored release membership: the board
 # derives `COMPLETED_UNTRACKED` from `listReleases(...).crs` itself (src/store.ts,
 # `statusFor` — "no plan at all, or only abandoned ones, and some release's
 # `crs` names it"), so the ceremony asks the store what it holds rather than
@@ -599,28 +675,15 @@ cr_merged_crs() {
 # why the never-landed line claims only "no stored release record names them as
 # shipped-without-one" rather than "no release record names them".
 #
-# Tolerant like every other reader here: no envelope, no ids, and the caller
+# A row whose `lifecycle` is VOID or SUPERSEDED is never in here either, even
+# when a release names it: that work is not happening, or happens under its
+# successor, so it is neither evicted nor never-landed — `queued_crs` drops it
+# too, and the report names it in no list.
+#
+# Tolerant like every other reader here: no JSON object, no ids, and the caller
 # reports the class it can still tell.
 release_named_crs() {
-    awk '
-        /^[[:space:]]*queue\[[0-9]+\]\{/ {
-            header = $0
-            sub(/^[^{]*\{/, "", header)
-            sub(/\}.*$/, "", header)
-            cols = split(header, name, ",")
-            for (i = 1; i <= cols; i++) col[name[i]] = i
-            next
-        }
-        cols > 0 {
-            row = $0
-            gsub(/"/, "", row)
-            if (split(row, v, ",") < cols) next
-            cr = v[col["cr"]]
-            status = v[col["status"]]
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", cr)
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", status)
-            if (cr ~ /^CR-[A-Z]+-[0-9]+$/ && status == "COMPLETED_UNTRACKED") print cr
-        }' | sort -u || true
+    queue_json_crs named
 }
 
 # CR-CRU-081 §S2 — name and COUNT the CRs ancestry could not place, in the TWO
@@ -646,7 +709,7 @@ release_named_crs() {
 #       because nothing was ever recorded; it is simply queued work.
 #
 # The evidence for 2a is `release_named_crs`: a DIRECT read of what the stored
-# release records name, taken from the same `queue` envelope this function
+# release records name, taken from the same `queue` JSON object this function
 # already fetches. It answers on EVERY path, which the previous evidence did
 # not — that was the set of ids a replay had been refused, populated only by a
 # 409, and `cmd_finish` replays only the NEW label against a guard scoped per
@@ -919,6 +982,10 @@ cmd_finish() {
     # the operator learns while the tag does not yet exist. Everything after
     # this point either publishes or is a local, revertible commit.
     guard_agent_identity
+
+    # The notes guard runs next, still before anything is written: a release
+    # whose notes are not committed and dated is refused while it costs nothing.
+    guard_release_notes "$VERSION"
 
     # CR-CRU-061 §S7 — align the manifest to the finish version OURSELVES, so a
     # release is ONE command. This write + commit is REAL even under --dry-run:
