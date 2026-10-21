@@ -2,7 +2,7 @@
 
 **Type** fix (patch CR, after the 0.3.0 release) · **Points** 8 (3 at filing; raised at gap analysis
 and its pre-review 2026-10-20 as the phone rule, the touch floor and the client-run WebKit pass came
-in) · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-10 (user ruling: the
+in) · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — merged 2026-10-21 (gate 7742/0) · filed 2026-10-10 (user ruling: the
 0.3.0 follow-ups are patch CRs in wave 8)
 
 ## Problem
@@ -88,40 +88,40 @@ section says the Docker pass runs through the client and is filed.
 
 ## Acceptance criteria
 
-- [ ] **The frame.** The F15d amendment is approved before RED. At the end, the user (or VERIFY with
+- [x] **The frame.** The F15d amendment is approved before RED. At the end, the user (or VERIFY with
       screenshots from `webkit-iphone` at 393×659 and `chromium-mobile` at 412×839) confirms the
       phone band matches its closed, expanded, no-runs and pruned drawings.
-- [ ] **The phone line keeps its taps.** An e2e scenario on `webkit-iphone` (DejaVu installed by the
+- [x] **The phone line keeps its taps.** An e2e scenario on `webkit-iphone` (DejaVu installed by the
       Docker path and by CI) and on `chromium-mobile` renders a history cycle line whose label is
       asserted to wrap (the scenario fails if it does not), with no `→ Runs` on the closed line. A
       tap at the midpoint of every horizontal gap wider than 0 px not covered by a child of the line,
       at its vertical centre (including the gap between the timer and the `▸ N runs` hint), and a tap
       on the label and on the timer, each shows the expanded runs and stays on Workflow; a second
       tap, at the same gap re-measured after the line changes, hides them.
-- [ ] **Every boundary expands.** On the phone band a failed and a skipped history cycle line each
+- [x] **Every boundary expands.** On the phone band a failed and a skipped history cycle line each
       expands on a tap and shows the `→ Runs` row; an active history line with no runs expands to
       the row alone (unit tests forcing the band with an inline `--band: phone`).
-- [ ] **The row navigates.** On the phone band the `→ Runs` row measures at least 44 px tall and the
+- [x] **The row navigates.** On the phone band the `→ Runs` row measures at least 44 px tall and the
       expanded runs' full width, and a tap on it shows the Runs tab with the boundary in view (e2e);
       for a pruned boundary the row renders `app-pill-dim`, `aria-disabled="true"` and the pruned
       label and title, and a click still shows the Runs tab (unit).
-- [ ] **Bands swap.** With the band switched from phone to tablet the line renders the pill and no
+- [x] **Bands swap.** With the band switched from phone to tablet the line renders the pill and no
       row, and back again (unit).
-- [ ] **Tablet and desktop unchanged.** There the history line renders its `→ Runs` pill, and every
+- [x] **Tablet and desktop unchanged.** There the history line renders its `→ Runs` pill, and every
       existing `→ Runs` test passes unchanged.
-- [ ] **The pill is a touch target.** On a `(pointer: coarse)` profile at tablet width the history
+- [x] **The pill is a touch target.** On a `(pointer: coarse)` profile at tablet width the history
       pill, and on the phone and tablet bands Now's cycle-line pill, each measure at least 44 px
       tall, with horizontal padding on each side of at least half that height.
-- [ ] **The CR-CRU-146 step aims at the widest gap.** Its phone step's gap search references no
+- [x] **The CR-CRU-146 step aims at the widest gap.** Its phone step's gap search references no
       `cycle-to-runs`, and the CR-CRU-146 scenarios pass on `chromium-mobile`, `webkit-iphone` and
       desktop Chromium.
-- [ ] **WebKit runs through the client.** `bun run webkit:docker -- --agent X` runs the `webkit-iphone`
+- [x] **WebKit runs through the client.** `bun run webkit:docker -- --agent X` runs the `webkit-iphone`
       project through `bun-crucible.py e2e`, files the run, and exits with its code. Through a
       testable seam, the container is removed on a pass, a failure, a server that never becomes
       ready, SIGINT and SIGTERM (after the client files on a signal), and no container is started
       when Docker is unreachable; the client is spawned in its own process group, so a signal reaches
       it only by the forward.
-- [ ] **The record.** DN decision 11 and the WebKit provisioning section say what §S5 says.
+- [x] **The record.** DN decision 11 and the WebKit provisioning section say what §S5 says.
 
 ## Non-goals
 
