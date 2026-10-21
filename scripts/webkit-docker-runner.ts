@@ -28,6 +28,7 @@
 //   fixture cannot resolve. Playwright's own tethering replaces it:
 //   PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback> (EXPOSE_NETWORK below), which
 //   routes the remote browser's loopback requests back through the client.
+import type { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "./test-targets";
@@ -136,4 +137,129 @@ export function dockerRunArgs(opts: { image: string; port: number; playwrightVer
     "apt-get update -qq && apt-get install -y -qq --no-install-recommends fonts-dejavu-core >/dev/null && " +
       `npx -y playwright@${opts.playwrightVersion} run-server --port ${String(opts.port)} --host 0.0.0.0`,
   ];
+}
+
+/** The bun Crucible client the pass runs, so a WebKit run is filed like any
+ *  other e2e run. */
+export const CLIENT_SCRIPT = join(REPO_ROOT, "clients", "bun-crucible.py");
+
+/** The Playwright project the Docker pass exists for. */
+export const WEBKIT_PROJECT = "webkit-iphone";
+
+/** How long run-server may take to listen: the container installs CI's font
+ *  first (see dockerRunArgs), so allow for the package download. */
+export const SERVER_READY_TIMEOUT_MS = 120_000;
+
+export interface DockerResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+export interface ClientChild {
+  exited: Promise<number>;
+  kill: (signal?: NodeJS.Signals | number) => void;
+}
+
+/** Every side effect of the pass, injected so it is testable without a
+ *  Docker daemon, a browser or a real client run. */
+export interface WebkitPassDeps {
+  docker: (args: string[]) => DockerResult;
+  waitForServer: (port: number, timeoutMs: number) => Promise<boolean>;
+  spawn: (argv: string[], env: Record<string, string | undefined>) => ClientChild;
+  signals: EventEmitter;
+  stderr: (text: string) => void;
+}
+
+const TRAPPED_SIGNALS = ["SIGINT", "SIGTERM"] as const;
+type TrappedSignal = (typeof TRAPPED_SIGNALS)[number];
+
+/** The shell convention for a run ended by a signal: 128 + its number. */
+const SIGNAL_EXIT_CODE: Record<TrappedSignal, number> = { SIGINT: 130, SIGTERM: 143 };
+
+/** The client's argv: `bun-crucible.py e2e <passArgs> -- --project=webkit-iphone`.
+ *  `--agent`, `--cycle` and `--release` among `passArgs` file the run; with
+ *  none it is unfiled, as a bare `e2e` is. */
+export function clientArgv(passArgs: string[]): string[] {
+  return ["python3", CLIENT_SCRIPT, "e2e", ...passArgs, "--", `--project=${WEBKIT_PROJECT}`];
+}
+
+/** One local WebKit pass: start the pinned run-server container, wait for it,
+ *  run the webkit-iphone project through the bun Crucible client with the
+ *  run-server endpoint set, and resolve with the client's exit code. It never
+ *  exits the process itself, so every path that started a container removes
+ *  it: a pass, a failure, a server that never becomes ready, SIGINT and
+ *  SIGTERM (on a signal the client is forwarded it and let finish filing its
+ *  abandoned run first). */
+export async function runWebkitPass(passArgs: string[], deps: WebkitPassDeps): Promise<number> {
+  if (deps.docker(["info"]).status !== 0) {
+    deps.stderr(
+      "\nwebkit-iphone needs the local Docker Playwright Server, and Docker is not reachable.\n" +
+        "Remedy: start Docker (`sudo systemctl start docker` or Docker Desktop), then re-run\n" +
+        "`bun run webkit:docker`.\n\n",
+    );
+    return 1;
+  }
+
+  const version = exactPlaywrightVersion(pinnedPlaywrightRange());
+  const image = dockerImageTag(version);
+  const port = RUN_SERVER_PORT;
+
+  deps.stderr(`[webkit-docker] starting ${image} (run-server on :${String(port)})\n`);
+  const started = deps.docker(dockerRunArgs({ image, port, playwrightVersion: version }));
+  if (started.status !== 0) {
+    deps.stderr(
+      `\nwebkit-iphone: \`docker run\` failed to start the pinned ${image} container.\n` +
+        `stderr: ${started.stderr}\n` +
+        "Remedy: check the image tag still exists, or a stale " +
+        `\`${CONTAINER_NAME}\` container is already running (\`docker ps -a\`).\n\n`,
+    );
+    return 1;
+  }
+  const containerId = started.stdout.trim();
+
+  let received: TrappedSignal | undefined;
+  let client: ClientChild | undefined;
+  const { promise: signalled, resolve: resolveSignalled } = Promise.withResolvers<TrappedSignal>();
+  const handlers = TRAPPED_SIGNALS.map((signal) => {
+    const handler = (): void => {
+      received ??= signal;
+      client?.kill(signal);
+      resolveSignalled(signal);
+    };
+    deps.signals.on(signal, handler);
+    return { signal, handler };
+  });
+
+  try {
+    const ready = await Promise.race([deps.waitForServer(port, SERVER_READY_TIMEOUT_MS), signalled]);
+    if (received !== undefined) {
+      deps.stderr(`[webkit-docker] ${received} before run-server was ready; no run started\n`);
+      return SIGNAL_EXIT_CODE[received];
+    }
+    if (ready !== true) {
+      const logs = deps.docker(["logs", CONTAINER_NAME]);
+      deps.stderr(
+        `\nwebkit-iphone: the Docker Playwright Server never became reachable on 127.0.0.1:${String(port)}.\n` +
+          `Container logs:\n${logs.stdout}${logs.stderr}\n` +
+          "Remedy: re-run `bun run webkit:docker`; if it keeps failing, run the container " +
+          "by hand and read its logs directly.\n\n",
+      );
+      return 1;
+    }
+
+    deps.stderr(`[webkit-docker] ready, running the ${WEBKIT_PROJECT} project through the client\n`);
+    client = deps.spawn(clientArgv(passArgs), {
+      ...process.env,
+      PW_TEST_CONNECT_WS_ENDPOINT: runServerWsEndpoint(port),
+      PW_TEST_CONNECT_EXPOSE_NETWORK: EXPOSE_NETWORK,
+    });
+    // A signal forwarded to the client lets it file its abandoned run; the
+    // pass waits for that exit before the container goes.
+    return await client.exited;
+  } finally {
+    for (const { signal, handler } of handlers) deps.signals.off(signal, handler);
+    deps.stderr(`[webkit-docker] stopping ${containerId || CONTAINER_NAME}\n`);
+    deps.docker(["rm", "-f", CONTAINER_NAME]);
+  }
 }

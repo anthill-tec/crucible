@@ -217,3 +217,92 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     When I tap the roadmap release band
     Then the analytics pane shows the verified-runs chip reading "verified · 2 runs ↗"
 
+  # The phone band's history cycle line keeps every tap. Its `→ Runs` pill is
+  # not on the line here — WebKit, like Safari under a real finger, moves a
+  # tap's click onto a clickable node near the touch, so a pill beside a
+  # narrow gap steals the tap — and `→ Runs` instead ends the expanded runs as
+  # a row of its own. The label is long enough to wrap under the phone width,
+  # which is when the line's empty space narrows to thin gaps; the scenario
+  # fails if it does not wrap. Every gap wider than 0 px, the label and the
+  # timer are each tapped open and tapped closed, each point proven by
+  # elementFromPoint before its tap.
+  Scenario: at the phone band a history cycle line whose label wraps carries no → Runs, and a tap in each of its gaps, on its label and on its timer opens its runs on Workflow and a second tap closes them
+    Given a project named "MOB Line Taps Project" is registered
+    And an orchestrator "mob-orch-taps" is registered on that project
+    And a release "0.173.637" is proposed for that project
+    And a cycle plan is filed for cr "MOB-TAPS" with a cycle labelled "c1 a phone history cycle line whose label is long enough to wrap onto a second line"
+    And cycle 1 of that plan is activated
+    And a fail(2/5) run linked to that cycle is ingested for agent "mob-taps-red"
+    And a pass(5/5) run linked to that cycle is ingested for agent "mob-taps-green"
+    And cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "mobtaps1"
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    And I select the "History" sub-tab
+    And I expand the cr group for "MOB-TAPS"
+    Then the history cycle line for that cycle wraps its label onto more than one line
+    And the closed history cycle line for that cycle shows no → Runs
+    And tapping the history cycle line for that cycle in each of its gaps, on its label and on its timer opens its runs on Workflow and a second tap closes them
+
+  # The `→ Runs` row that ends a phone history line's expanded runs is a
+  # full-width touch target, and it navigates as the pill does: to the Runs
+  # tab, with the cycle's declared boundary scrolled into view and blinking.
+  # The filler runs sit above the boundary in the newest-first feed, so the
+  # boundary is in view only because the tap scrolled it there.
+  Scenario: at the phone band a history cycle line's expanded runs end with a → Runs row at least 44px tall and their full width, and a tap on it shows the Runs tab with the boundary in view
+    Given a project named "MOB Runs Row Project" is registered
+    And an orchestrator "mob-orch-row" is registered on that project
+    And a release "0.173.637" is proposed for that project
+    And a cycle plan is filed for cr "MOB-ROW" with a cycle labelled "c1 phone row"
+    And cycle 1 of that plan is activated
+    And a fail(2/5) run linked to that cycle is ingested for agent "mob-row-red"
+    And a pass(5/5) run linked to that cycle is ingested for agent "mob-row-green"
+    And cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "mobrow01"
+    And 20 filler passing runs are ingested on that project
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    And I select the "History" sub-tab
+    And I expand the cr group for "MOB-ROW"
+    Then the closed history cycle line for that cycle shows no → Runs
+    When I tap the label of the history cycle line for that cycle
+    Then the expanded runs for that cycle end with the → Runs row
+    And the → Runs row for that cycle measures at least 44px tall and the expanded runs' full width
+    When I tap the → Runs row for that cycle
+    Then the "Runs" tab is selected
+    And the declared marker for that cycle sits inside the viewport and blinks
+
+  # The `→ Runs` pill is a touch target on touch media. At the phone band it
+  # stays on Now's cycle line (only History's line gives it up for the
+  # expanded runs' row), so on this coarse-pointer profile Now's pill must
+  # be at least 44px tall. The page is first proven to match
+  # `(pointer: coarse)`, so the floor is measured where it applies.
+  Scenario: at the phone band on a coarse pointer Now's active cycle line carries a → Runs pill that is at least 44px tall
+    Given a project named "MOB Now Pill Project" is registered
+    And an orchestrator "mob-orch-nowpill" is registered on that project
+    And a release "0.173.637" is proposed for that project
+    And a cycle plan is filed for cr "MOB-NOWPILL" with a cycle labelled "c1 now pill"
+    And cycle 1 of that plan is activated
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    And I select the "Now" sub-tab
+    Then the page matches the coarse-pointer media query
+    And Now's → Runs pill for that cycle is at least 44px tall
+
+  # The touch floor must not cost the pill its shape: on this coarse-pointer
+  # profile Now's pill is at least 44px tall with horizontal padding on each
+  # side of at least half that height, so it still reads as a pill. The page
+  # is first proven to match
+  # `(pointer: coarse)`, so the shape is measured where the floor applies.
+  Scenario: at the phone band on a coarse pointer Now's active cycle line carries a → Runs pill that is at least 44px tall with horizontal padding on each side of at least half that height
+    Given a project named "MOB Now Pill Shape Project" is registered
+    And an orchestrator "mob-orch-nowshape" is registered on that project
+    And a release "0.173.637" is proposed for that project
+    And a cycle plan is filed for cr "MOB-NOWSHAPE" with a cycle labelled "c1 now pill shape"
+    And cycle 1 of that plan is activated
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    And I select the "Now" sub-tab
+    Then the page matches the coarse-pointer media query
+    And Now's → Runs pill for that cycle is at least 44px tall with horizontal padding on each side of at least half that height
+
