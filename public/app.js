@@ -1191,7 +1191,7 @@
               .map((d) =>
                 div(
                   { "data-testid": "diag-line", class: "app-diag-line" },
-                  `${d.file}:${d.line} — ${d.message}`,
+                  L.diagnosticLine(d, false),
                 ),
               ),
           )
@@ -8445,7 +8445,7 @@
                         "data-testid": "diag-line",
                         class: `app-diag-line app-diag-${diag.level}`,
                       },
-                      `${file}:${diag.line}:${diag.col} — ${diag.message}`,
+                      L.diagnosticLine(diag, true),
                     ),
                   ),
                 ),

@@ -1747,10 +1747,30 @@ export function focusedReleaseView(gate, releases, entries) {
   };
 }
 
+/**
+ * One rendered compile-diagnostic line, carrying its location only as far as
+ * the diagnostic has it: `file:line:col`, `file:line`, `file`, or (no file)
+ * no location at all, so the line is the message alone. The column is shown
+ * only when `withCol` is set: the drill-in shows it, the card preview omits it.
+ */
+export function diagnosticLine(diag, withCol) {
+  const has = (v) => v !== undefined && v !== null && v !== "";
+  let loc = "";
+  if (has(diag.file)) {
+    loc = String(diag.file);
+    if (has(diag.line)) {
+      loc += `:${diag.line}`;
+      if (withCol && has(diag.col)) loc += `:${diag.col}`;
+    }
+  }
+  return loc === "" ? `${diag.message}` : `${loc} \u2014 ${diag.message}`;
+}
+
 // Bridge for the nomodule app shell (app.js consumes window.CrucibleLogic).
 if (typeof window !== "undefined") {
   window.CrucibleLogic = {
     filterEvents,
+    diagnosticLine,
     relativeTime,
     formatReleaseDate,
     clockTime,
