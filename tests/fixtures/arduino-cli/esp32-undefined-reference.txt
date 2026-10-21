@@ -1,0 +1,8 @@
+/home/user/.arduino15/packages/esp32/tools/esp-x32/2601/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/ld: /sketch/build-e/sketch/lnk.ino.cpp.o:(.literal._Z5setupv+0x0): undefined reference to `_Z6pumpOnv'
+/home/user/.arduino15/packages/esp32/tools/esp-x32/2601/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/ld: /sketch/build-e/sketch/lnk.ino.cpp.o: in function `_Z5setupv':
+/sketch/lnk/lnk.ino:2:(.text._Z5setupv+0x3): undefined reference to `_Z6pumpOnv'
+collect2: error: ld returned 1 exit status
+
+Used platform Version Path
+esp32:esp32   3.3.10  /home/user/.arduino15/packages/esp32/hardware/esp32/3.3.10
+Error during build: exit status 1
