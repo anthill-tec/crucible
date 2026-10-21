@@ -125,6 +125,9 @@ A hook that receives `ok:true` together with a `status-unavailable` warning rend
 ## `--format {toon,json}` — JSON for programs
 
 `status` and its alias `plans` accept `--format {toon,json}` in all five clients.
+`queue` accepts the same flag in all five clients: `--format json` writes its
+envelope (`queue`, `crMerged`, `count`, `help`, `context`, `warnings`) as one
+unwrapped JSON object, with `--fields`/`--full` selecting the same columns as in TOON.
 
 - `--format toon` is the default, and is the TOON-AXI envelope documented above.
 - `--format json` writes the SAME envelope as ONE JSON object on stdout: every key the

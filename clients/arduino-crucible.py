@@ -1610,7 +1610,8 @@ def main():
     # ── CR-CRU-081 §S2 — the landing-record READ verb (no --agent) ──
     qv = sub.add_parser("queue", parents=[common],
                         help="Read the registered CR queue (GET …/queue) plus the "
-                             "cr-merged milestone ids as a TOON-AXI table. Read-only.")
+                             "cr-merged milestone ids as a TOON-AXI table. Read-only; "
+                             "--format json writes one JSON object.")
     _axi().add_queue_view_args(qv)
     qv.set_defaults(func=cmd_queue)
 
