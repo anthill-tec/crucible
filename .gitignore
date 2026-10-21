@@ -40,3 +40,5 @@ uv.lock
 # commit it.
 .lean-ctx/
 /crucible.db
+# pi-lens runs Vitest (a dev dependency) on edited test files and leaves its JSON report here.
+.vitest/
