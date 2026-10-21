@@ -106,6 +106,13 @@ function writeExecutable(path: string, script: string): void {
  */
 const GIT_STUB = `#!/bin/sh
 printf 'git %s\\n' "$*" >> "$CR074_LOG"
+case "$*" in
+  # \`show HEAD:CHANGELOG.md\` — the release notes as committed at HEAD, which
+  # \`finish\` reads before it writes anything. The world's CHANGELOG.md models
+  # HEAD's copy (this stub's tree is always clean).
+  *show*HEAD:CHANGELOG.md*)
+    cat "$CR074_ROOT/CHANGELOG.md"; exit $? ;;
+esac
 case "$1" in
   rev-parse)
     case "$*" in
@@ -214,6 +221,13 @@ function makeWorld(): World {
   // The single manual manifest the ceremony aligns; already at VERSION so the
   // format-preserving rewrite is a genuine no-op (stub `git diff` reports none).
   writeFileSync(join(root, "package.json"), `{\n  "name": "crucible",\n  "version": "${VERSION}"\n}\n`);
+  // The version's dated, non-empty release notes, which the stub `git show
+  // HEAD:CHANGELOG.md` serves as committed — so the ceremony's notes check
+  // passes and every test reaches the reporting it is about.
+  writeFileSync(
+    join(root, "CHANGELOG.md"),
+    `# Changelog\n\n## [${VERSION}] - 2026-10-21\n\n### Fixed\n\n- The release this world finishes.\n`,
+  );
 
   writeExecutable(join(bin, "git"), GIT_STUB);
   // A curl recorder that refuses to reach the network — proves the ceremony
@@ -544,6 +558,9 @@ describe("CR-CRU-080 §S2/AC2 — a ceremony with no identity refuses at preflig
 
     // Preflight refusal — not a warning after the fact.
     expect(r.exitCode).not.toBe(0);
+    // The identity guard's OWN refusal, so no other guard's could satisfy this.
+    expect(r.stderr).toContain("no Crucible identity");
+    expect(r.stderr).toContain("CRUCIBLE_AGENT");
     // No tag exists: git-flow finish is the command that cuts it, and nothing
     // created one directly either.
     expect(r.log.some(isFlowFinishLine)).toBe(false);
@@ -554,6 +571,9 @@ describe("CR-CRU-080 §S2/AC2 — a ceremony with no identity refuses at preflig
 
   test("the refusal never reaches the reporting step, so nothing is posted anonymously", () => {
     const r = world.run({ agent: null });
+    // The identity guard's OWN refusal, so no other guard's could satisfy this.
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain("no Crucible identity");
     // Zero client invocations at all — not merely zero SUCCESSFUL reports.
     expect(r.log.filter((l) => l.startsWith("client ")).length).toBe(0);
     expect(r.log.filter(isReleaseReportLine).length).toBe(0);
