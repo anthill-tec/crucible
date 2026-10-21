@@ -1,0 +1,7 @@
+/tmp/ccChsaYG.ltrans0.ltrans.o: In function `setup':
+/sketch/lnk/lnk.ino:2: undefined reference to `pumpOn()'
+collect2: error: ld returned 1 exit status
+
+Used platform Version Path
+arduino:avr   1.8.8   /home/user/.arduino15/packages/arduino/hardware/avr/1.8.8
+Error during build: exit status 1

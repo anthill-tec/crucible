@@ -1,0 +1,16 @@
+/sketch/pump/valve.cpp: In function 'void openValve(int)':
+/sketch/pump/valve.cpp:5:21: error: 'HIGHT' was not declared in this scope
+   digitalWrite(pin, HIGHT);
+                     ^~~~~
+/sketch/pump/valve.cpp:5:21: note: suggested alternative: 'HIGH'
+   digitalWrite(pin, HIGHT);
+                     ^~~~~
+                     HIGH
+/sketch/pump/pump.ino: In function 'int readSensor()':
+/sketch/pump/pump.ino:5:10: error: 'sensr' was not declared in this scope
+   return sensr + 1;
+          ^~~~~
+
+Used platform       Version Path
+arduino:renesas_uno 1.6.0   /home/user/.arduino15/packages/arduino/hardware/renesas_uno/1.6.0
+Error during build: exit status 1
