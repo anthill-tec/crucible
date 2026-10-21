@@ -448,3 +448,91 @@ describe("gcc codec — the record names it", () => {
     expect(section("### 4.5 ", "### 4.6 ")).toMatch(GCC);
   });
 });
+
+describe("gcc codec — a long line decodes in bounded time", () => {
+  // A single long line holding `(` with no closing `)` must not make the
+  // codec's line regexes backtrack without bound. The budget is generous: a
+  // linear decode of these inputs takes milliseconds. The per-test timeout is
+  // long enough that the budget assertion, not the runner, reports the cost.
+  const BUDGET_MS = 2_000;
+  const PER_TEST_TIMEOUT_MS = 120_000;
+
+  function timedDecode(input: string, hint?: string): { report: ReturnType<typeof parseCompile>; elapsedMs: number } {
+    const start = performance.now();
+    const report = parseCompile(input, hint);
+    return { report, elapsedMs: performance.now() - start };
+  }
+
+  test(
+    "an unhinted ~200 KB line repeating ':1:(' decodes to raw within the time budget",
+    () => {
+      const input = ":1:(".repeat(50 * 1024);
+      expect(input.length).toBe(200 * 1024);
+      const { report, elapsedMs } = timedDecode(input);
+      expect(report.format).toBe("raw");
+      expect(report.diagnostics).toEqual([]);
+      expect(report.raw).toBe(input);
+      expect(elapsedMs).toBeLessThan(BUDGET_MS);
+    },
+    PER_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a ~1 MB line repeating 'a: b:(' hinted gcc decodes to raw within the time budget",
+    () => {
+      const input = "a: b:(".repeat(Math.floor((1024 * 1024) / 6));
+      expect(input.length).toBeGreaterThan(1_000_000);
+      const { report, elapsedMs } = timedDecode(input, "gcc");
+      expect(report.format).toBe("raw");
+      expect(report.diagnostics).toEqual([]);
+      expect(report.raw).toBe(input);
+      expect(elapsedMs).toBeLessThan(BUDGET_MS);
+    },
+    PER_TEST_TIMEOUT_MS,
+  );
+});
+
+describe("gcc codec — detection order and link-line file rule (regression guard: passes today)", () => {
+  test("regression guard: unhinted rustc output carrying a cc-rs gcc warning line stays rustc", () => {
+    const input = [
+      "error[E0425]: cannot find value `x` in this scope",
+      "  --> src/main.rs:3:5",
+      "  cargo:warning=src/a.c:1:1: warning: unused variable 'y' [-Wunused-variable]",
+    ].join("\n");
+    expect(detectFormat(input)).toBe("rustc");
+    const report = parseCompile(input);
+    expect(report.format).toBe("rustc");
+    expect(report.diagnostics).toStrictEqual([
+      {
+        code: "E0425",
+        message: "cannot find value `x` in this scope",
+        level: "error",
+        file: "src/main.rs",
+        line: 3,
+        col: 5,
+      },
+    ]);
+    expect(report.errorCount).toBe(1);
+    expect(report.warningCount).toBe(0);
+  });
+
+  test("regression guard: an unhinted maven-prefixed undefined-reference line stays raw (a link FILE never starts with '[')", () => {
+    const input = "[ERROR] /p/A.c:10: undefined reference to `x'";
+    expect(detectFormat(input)).toBe("raw");
+    const report = parseCompile(input);
+    expect(report.format).toBe("raw");
+    expect(report.diagnostics).toEqual([]);
+    expect(report.errorCount).toBe(1);
+    expect(report.warningCount).toBe(0);
+  });
+
+  test("regression guard: an unhinted cargo build-script undefined-reference line stays raw (a link FILE never contains ': ')", () => {
+    const input = "warning: x@0.1.0: src/c/a.c:1: undefined reference to `x'";
+    expect(detectFormat(input)).toBe("raw");
+    const report = parseCompile(input);
+    expect(report.format).toBe("raw");
+    expect(report.diagnostics).toEqual([]);
+    expect(report.errorCount).toBe(0);
+    expect(report.warningCount).toBe(1);
+  });
+});
