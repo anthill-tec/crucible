@@ -4810,7 +4810,8 @@ function handlePlansRoute(
  * shares one all-scalar shape (TOON's uniform-table form applies).
  * CR-CRU-007 §S1 (additive) — optional `context` passthrough (verbatim when
  * stored, key ABSENT when not) + compile-event `errors`/`warnings` counts
- * (test-event briefs carry neither key).
+ * (test-event briefs carry neither key). The event's stored `stack` rides
+ * along when it has one (key ABSENT otherwise).
  */
 function eventBrief(event: RunEvent) {
   const compile = event.kind === "compile" ? (event.compile as CompileReport | undefined) : undefined;
@@ -4849,6 +4850,9 @@ function eventBrief(event: RunEvent) {
     // The release a run verifies, top-level beside `cycleId`; key ABSENT on
     // every event filed under none.
     ...(event.release !== undefined ? { release: event.release } : {}),
+    // The stack the run was made on, as stored; key ABSENT on every event
+    // never told one.
+    ...(event.stack !== undefined ? { stack: event.stack } : {}),
     // CR-CRU-057 §S1 (additive) — the stamped declared role and its
     // provenance; both keys ABSENT on events that carry no stored role, so
     // history renders unclassified rather than guessed.
