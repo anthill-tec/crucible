@@ -65,7 +65,7 @@ render the line's pill as today.
 ### §S3 — the pill is a touch target
 
 On `(pointer: coarse)` media the `→ Runs` pill is at least 44 px tall, as `button.app-chip` and the
-other touch floors are, wherever it renders (History's line on tablet and desktop, Now's cycle line on every band).
+other touch floors are, and still reads as a pill, wider than it is tall, wherever it renders (History's line on tablet and desktop, Now's cycle line on every band).
 
 ### §S4 — the WebKit pass goes through the client
 
@@ -73,9 +73,10 @@ other touch floors are, wherever it renders (History's line on tablet and deskto
 `bun-crucible.py e2e <args> -- --project=webkit-iphone` with the run-server endpoint set, and exits
 with the client's exit code. `--agent`, `--cycle` and `--release` among the arguments file the run;
 without `--agent` the run is unfiled, as `e2e` is. The run also carries `webkit-iphone`'s dependency
-project, which runs on the host's Chromium. On every path that started a container (the run passes,
+project, which in Docker mode runs in the container's Chromium too. On every path that started a container (the run passes,
 it fails, the server never becomes ready, SIGINT, SIGTERM) the container is removed; on a signal the
-client is let finish filing its abandoned run first. Docker unreachable and a failed `docker run`
+client is let finish filing its abandoned run first. The client runs in its own process group, so a
+signal reaches it once, by the script's forward, never also from the terminal. Docker unreachable and a failed `docker run`
 still exit non-zero naming the remedy. The script's own `bddgen` step is dropped (the client's
 `test:e2e` runs it).
 
@@ -109,7 +110,7 @@ section says the Docker pass runs through the client and is filed.
       existing `→ Runs` test passes unchanged.
 - [ ] **The pill is a touch target.** On a `(pointer: coarse)` profile at tablet width the history
       pill, and on the phone and tablet bands Now's cycle-line pill, each measure at least 44 px
-      tall.
+      tall and wider than they are tall.
 - [ ] **The CR-CRU-146 step aims at the widest gap.** Its phone step's gap search references no
       `cycle-to-runs`, and the CR-CRU-146 scenarios pass on `chromium-mobile`, `webkit-iphone` and
       desktop Chromium.
@@ -117,7 +118,8 @@ section says the Docker pass runs through the client and is filed.
       project through `bun-crucible.py e2e`, files the run, and exits with its code. Through a
       testable seam, the container is removed on a pass, a failure, a server that never becomes
       ready, SIGINT and SIGTERM (after the client files on a signal), and no container is started
-      when Docker is unreachable.
+      when Docker is unreachable; the client is spawned in its own process group, so a signal reaches
+      it only by the forward.
 - [ ] **The record.** DN decision 11 and the WebKit provisioning section say what §S5 says.
 
 ## Non-goals
