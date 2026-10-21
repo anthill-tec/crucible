@@ -935,6 +935,16 @@ function runMeta(body: V2Body): Pick<RecordEventMeta, "tier" | "stack" | "contex
 }
 
 /**
+ * A `stack` a run start or ingest states must be a non-empty string; anything
+ * else is refused (400) before anything is stored. Absent is fine.
+ */
+function refuseBadStack(body: V2Body, outcome = "run NOT stored"): Response | null {
+  if (body.stack === undefined) return null;
+  if (typeof body.stack === "string" && body.stack.length > 0) return null;
+  return fail(400, `stack must be a non-empty string when present — ${outcome}`);
+}
+
+/**
  * CR-CRU-024 §S7 — validate a run ingest's `context.cycleId` against stored
  * plan state (Crucible is the source of truth, not the client). Returns:
  *  - `{ fail }` when the id matches NO cycle in any of the project's plans —
@@ -1220,6 +1230,8 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
   if (body === null) return fail(400, "malformed JSON body");
   const pk = requireProject(store, body.projectKey);
   if ("fail" in pk) return pk.fail;
+  const badStack = refuseBadStack(body, "run NOT started");
+  if (badStack !== null) return badStack;
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
@@ -1269,7 +1281,8 @@ async function handleRunAbort(store: Store, runId: string, req: Request): Promis
   if (typeof reason !== "string" || reason.trim().length === 0) {
     return fail(400, "reason must be a non-empty string — run NOT aborted");
   }
-  const close = resolveRunClose(store, pk.key, caller.agentId, { ...body, runId }, "run NOT aborted");
+  // Only the runId is passed: an abort states no stack or tier to compare.
+  const close = resolveRunClose(store, pk.key, caller.agentId, { runId }, "run NOT aborted");
   if (close.fail !== undefined) return close.fail;
   if (store.abortOpenRun(runId, reason) === null) {
     return fail(409, `run ${runId} settled before it could be aborted — run NOT aborted`);
@@ -1286,7 +1299,10 @@ async function handleRunAbort(store: Store, runId: string, req: Request): Promis
  *  - never issued / another project's / another agent's → 400, nothing stored;
  *  - already ended or aborted → 409, nothing stored (the CR's end/end and
  *    end-after-abort races);
- *  - open → the lifecycle stamp for the ONE event about to be written.
+ *  - open → the lifecycle stamp for the ONE event about to be written, plus
+ *    the stack and tier the start stated (`started`), which the event carries
+ *    when the ingest states none; an ingest stating a different one is refused
+ *    (400), nothing stored and the run left open.
  *
  * `outcome` ends every refusal — what did NOT happen on the calling route
  * (the ingest routes store nothing; `handleRunAbort` aborts nothing).
@@ -1301,6 +1317,7 @@ function resolveRunClose(
   fail?: Response;
   runId?: string;
   lifecycle?: { startedAt: number; runtimeMs: number };
+  started?: Pick<RecordEventMeta, "stack" | "tier">;
 } {
   if (body.runId === undefined || body.runId === null) return {};
   if (typeof body.runId !== "string" || body.runId.length === 0) {
@@ -1332,8 +1349,28 @@ function resolveRunClose(
       ),
     };
   }
+  const stated = runMeta(body);
+  for (const field of ["stack", "tier"] as const) {
+    const started = run[field];
+    const ingested = stated[field];
+    if (started !== undefined && ingested !== undefined && started !== ingested) {
+      return {
+        fail: fail(
+          400,
+          `the run started with ${field} '${started}' and this ingest states '${ingested}' — a run cannot change its ${field}; ${outcome}`,
+        ),
+      };
+    }
+  }
   const endedAt = Date.now();
-  return { runId, lifecycle: { startedAt: run.startedAt, runtimeMs: endedAt - run.startedAt } };
+  return {
+    runId,
+    lifecycle: { startedAt: run.startedAt, runtimeMs: endedAt - run.startedAt },
+    started: {
+      ...(run.stack !== undefined ? { stack: run.stack } : {}),
+      ...(run.tier !== undefined ? { tier: run.tier } : {}),
+    },
+  };
 }
 
 async function handleRuns(store: Store, req: Request): Promise<Response> {
@@ -1345,6 +1382,9 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   const codecName = typeof body.codec === "string" ? body.codec : "junit";
   const codec = codecs.get(codecName);
   if (codec === undefined) return fail(400, `unknown codec: ${codecName}`);
+
+  const badStack = refuseBadStack(body);
+  if (badStack !== null) return badStack;
 
   const parsed = await parseRunBody(codec, body, codecName);
   if ("error" in parsed) return fail(400, parsed.error);
@@ -1371,6 +1411,8 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
 
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: codecName,
+    // The ingest's stack/tier when stated, else the start's.
+    ...close.started,
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
     // CR-CRU-057 §S1 — the declared role off the same seam read.
@@ -1396,6 +1438,9 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   if (body === null) return fail(400, "malformed JSON body");
   const pk = requireProject(store, body.projectKey);
   if ("fail" in pk) return pk.fail;
+
+  const badStack = refuseBadStack(body);
+  if (badStack !== null) return badStack;
 
   if (typeof body.summary !== "object" || body.summary === null) {
     return fail(400, "summary is required");
@@ -1441,6 +1486,7 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: "parsed",
     ...(typeof body.name === "string" ? { name: body.name } : {}),
+    ...close.started,
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
     // CR-CRU-057 §S1 — the declared role off the same seam read.
@@ -1467,6 +1513,9 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   if (body === null) return fail(400, "malformed JSON body");
   const pk = requireProject(store, body.projectKey);
   if ("fail" in pk) return pk.fail;
+
+  const badStack = refuseBadStack(body);
+  if (badStack !== null) return badStack;
 
   if (typeof body.errors !== "string" || body.errors.length === 0) {
     return fail(400, "errors must be a non-empty string");
@@ -1497,6 +1546,7 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   if (close.fail !== undefined) return close.fail;
   const event = store.recordCompileEvent(pk.key, agentId, report, {
     codec: report.format,
+    ...close.started,
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
     ...(attach.role !== undefined ? { role: attach.role } : {}),
@@ -4760,7 +4810,8 @@ function handlePlansRoute(
  * shares one all-scalar shape (TOON's uniform-table form applies).
  * CR-CRU-007 §S1 (additive) — optional `context` passthrough (verbatim when
  * stored, key ABSENT when not) + compile-event `errors`/`warnings` counts
- * (test-event briefs carry neither key).
+ * (test-event briefs carry neither key). The event's stored `stack` rides
+ * along when it has one (key ABSENT otherwise).
  */
 function eventBrief(event: RunEvent) {
   const compile = event.kind === "compile" ? (event.compile as CompileReport | undefined) : undefined;
@@ -4799,6 +4850,9 @@ function eventBrief(event: RunEvent) {
     // The release a run verifies, top-level beside `cycleId`; key ABSENT on
     // every event filed under none.
     ...(event.release !== undefined ? { release: event.release } : {}),
+    // The stack the run was made on, as stored; key ABSENT on every event
+    // never told one.
+    ...(event.stack !== undefined ? { stack: event.stack } : {}),
     // CR-CRU-057 §S1 (additive) — the stamped declared role and its
     // provenance; both keys ABSENT on events that carry no stored role, so
     // history renders unclassified rather than guessed.

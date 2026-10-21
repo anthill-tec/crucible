@@ -906,7 +906,7 @@ def _is_zero_discovery(result):
 
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
                    context=None, raw=None, files=None, run_id=None,
-                   stack_on_start=False, release=None):
+                   release=None):
     """POST the client-parsed run (per-method leaf names) to /api/v2/runs/parsed.
     Returns the parsed response dict (the caller emits the §S1 envelope).
 
@@ -914,20 +914,13 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     argument: it is appended to the human-readable count line and is never
     added to `payload`/`summary`, which go on the wire (CR-CRU-047 §S2).
     `run_id` is the OPEN run this ingest closes; absent, the single-shot body.
-    `stack_on_start` says the board ACCEPTED this run's start, whose body
-    already carried the stack."""
+    The stack rides on the body through the shared `post_ingest`."""
     payload = {
         "projectKey": _project_key(project_dir),
         "agentId": agent_id,
         "summary": summary,
         "tree": tree,
     }
-    # CR-CRU-112 AC5 — the run says which STACK produced it, exactly once: on
-    # the `/api/v2/runs/start` the board accepted (as the fleet's other clients
-    # do), or here when no start carried it and this ingest is the ONE place a
-    # python run can.
-    if not stack_on_start:
-        payload["stack"] = _STACK
     if coverage:
         payload["coverage"] = coverage
     if tier:
@@ -938,7 +931,7 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
         payload["raw"] = raw
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
                               release=release)
     cov_line = ""
     if coverage:
@@ -976,7 +969,7 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=Non
         payload["context"] = context
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload,
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload, stack=_STACK,
                               release=release)
     print(f"ingest compile (python): ok={resp.get('ok')}"
           + (f" error={resp['error']}" if resp.get("error") else ""),
@@ -1176,7 +1169,6 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
         context=_run_context(), release=release)
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
     narrator, run_id = None, None
-    stack_on_start = False
     if args.agent:
         # The shared run path: narrate per-test progress, and open the run
         # BEFORE xmlrunner is spawned so the board shows it running.
@@ -1184,7 +1176,6 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
                                           context=_run_context(),
                                           release=release)
-        stack_on_start = not run_warnings
         preflight_warnings = list(preflight_warnings) + run_warnings
     # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: the day
     # this project declares a `unit` start-dir, that cell runs THIS body and a
@@ -1227,7 +1218,7 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier=tier,
                               context=_run_context(),
                               raw=result.stdout, files=files, run_id=run_id,
-                              stack_on_start=stack_on_start, release=release)
+                              release=release)
         _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
                          warnings=(envelope_warnings
                                    + _axi().unit_run_wall_vs_cpu_warnings(
@@ -1346,7 +1337,6 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
 
     print(f"[crucible] running: {' '.join(run_cmd)}", file=sys.stderr)
     narrator, run_id = None, None
-    stack_on_start = False
     if agent:
         # The shared run path: narrate per-test progress, and open the run
         # BEFORE the sweep is spawned so the board shows it running.
@@ -1354,7 +1344,6 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         run_id, run_warnings = _start_run(project_dir, agent, tier="regression",
                                           context=_run_context(),
                                           release=release)
-        stack_on_start = not run_warnings
         preflight_warnings += run_warnings
     # The runner's fallback line, once seen, rides every envelope below.
     watch = _FallbackWatch(narrator, runner)
@@ -1429,8 +1418,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     _axi().close_narration(narrator)
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                           tier="regression", context=_run_context(), files=files,
-                          run_id=run_id, stack_on_start=stack_on_start,
-                          release=release)
+                          run_id=run_id, release=release)
     ok = bool(resp.get("ok")) and summary["failed"] == 0
     # §S2 — a GATE run's next step is derived from the run state it reached
     # (unrecorded / red / green); the plain `regression` verb keeps its canned

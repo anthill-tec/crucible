@@ -744,12 +744,37 @@ class EachSuiteIngestsThroughItsOwnStacksClientTest(_GateFixtureCase):
             "at all today, so nothing this repo ingests has ever been "
             "attributable to the python suite. stacks=%r ingests=%s"
             % (stacks, _text(ingests)))
-        python_runs = [p for p in ingests if p.get("stack") == PYTHON_STACK]
+        # A run's start and the ingest that closes it both state the stack, so
+        # bodies are not runs: count distinct python RUNS. A start opens one; an
+        # ingest with a runId is that run (one per runId); an ingest without one
+        # closes the agent's open python start, or is a single-shot run of its
+        # own when no start is open.
+        python_runs = 0
+        open_starts = set()
+        seen_run_ids = set()
+        for path, payload in drive.calls:
+            if (path not in TEST_INGEST_ENDPOINTS
+                    or payload.get("stack") != PYTHON_STACK):
+                continue
+            agent = payload.get("agentId")
+            if path == _MODALITY.RUN_START:
+                python_runs += 1
+                open_starts.add(agent)
+                continue
+            closed_a_start = agent in open_starts
+            open_starts.discard(agent)
+            run_id = payload.get("runId")
+            if run_id:
+                if run_id not in seen_run_ids and not closed_a_start:
+                    python_runs += 1
+                seen_run_ids.add(run_id)
+            elif not closed_a_start:
+                python_runs += 1
         self.assertEqual(
-            len(python_runs), 1,
+            python_runs, 1,
             "AC5 — exactly one run of this gate belongs to the python suite; "
-            "%d carry that stack. ingests=%s"
-            % (len(python_runs), _text(ingests)))
+            "%d distinct runs carry that stack. ingests=%s"
+            % (python_runs, _text(ingests)))
 
     def test_the_python_suite_is_run_by_invoking_the_python_client(self):
         """AC5's dispatch half, and §S1's 'no client learns another language's

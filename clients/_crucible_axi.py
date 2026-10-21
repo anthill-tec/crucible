@@ -5954,7 +5954,7 @@ def take_refused_ingest_warnings():
     return taken
 
 
-def post_ingest(post_fn, path, payload, *, release=None):
+def post_ingest(post_fn, path, payload, *, stack, release=None):
     """§S5/AC7 — send a run to the board through the client's own `_post` seam
     and REMEMBER what went out, so `emit_axi` can state the tier of the run it
     ingested without any client deciding that answer for itself.
@@ -5967,8 +5967,14 @@ def post_ingest(post_fn, path, payload, *, release=None):
     none, which §S2/AC3 made the honest answer.
 
     §S1 — `release` (the verb's `--release`) rides as the body's own
-    TOP-LEVEL `release`, on every ingest of a release run and on none other."""
+    TOP-LEVEL `release`, on every ingest of a release run and on none other.
+
+    `stack` (the calling client's own stack, required) rides as the body's
+    TOP-LEVEL `stack` on EVERY ingest sent here — raw, parsed or compile,
+    with or without a runId, whether or not the board accepted a start for
+    the run — so no ingest leaves the board to guess its stack."""
     global _ingested_run_tier, _ingested_compile
+    payload = {**(payload or {}), "stack": stack}
     if release:
         payload = {**(payload or {}), "release": release}
     if path in RUN_INGEST_PATHS:

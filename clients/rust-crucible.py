@@ -919,7 +919,7 @@ def cmd_auto_ingest(args):
     }
     if filing_context:
         payload["context"] = filing_context
-    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload, stack=_STACK)
     # CR-CRU-058 §S1/§S3 — this branch used to end in TWO unguarded stdout
     # prints and no emitter at all: the last path in the fleet putting a
     # `[crucible] …` human line on the machine channel, and the only outcome of
@@ -1090,7 +1090,7 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
 
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
                               release=release)
     ok = bool(resp.get("ok"))
     cov_line = ""
@@ -1154,7 +1154,8 @@ def _ingest_junit_axi(project_dir, agent_id, junit_path, tier=None, context=None
         payload["context"] = context
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs", payload, release=release)
+    resp = _axi().post_ingest(_post, "/api/v2/runs", payload, stack=_STACK,
+                              release=release)
     s = resp.get("run", {}) or {}
     print(
         f"ingest junit: ok={resp.get('ok')} "
@@ -1184,7 +1185,7 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check", run_i
         payload["context"] = context
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload,
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload, stack=_STACK,
                               release=release)
     print(
         f"ingest compile ({kind}): ok={resp.get('ok')} "
@@ -1802,7 +1803,8 @@ def _smoke_run(args, verb, project_dir, identity=None):
             payload["runId"] = run_id
         # The final count, then `ingesting…`, both ahead of the ingest below.
         _axi().close_narration(narrator)
-        resp = _axi().post_ingest(_post, "/api/v2/runs", payload, release=release)
+        resp = _axi().post_ingest(_post, "/api/v2/runs", payload, stack=_STACK,
+                                  release=release)
         s = resp.get("run", {})
         # The `run:` block is parsed CLIENT-side: the ingest response carries no
         # counts when the server could not be reached, and an envelope that
@@ -2010,7 +2012,7 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
 
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
+    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
                               release=release)
     ok = bool(resp.get("ok"))
     cov_line = ""

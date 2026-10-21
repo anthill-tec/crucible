@@ -477,7 +477,11 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
     # `--no-lifecycle` makes NO run-start call, sends NO runId, and adds NOTHING
     # to the single-shot body — is untouched: the key set is re-recorded against
     # today's single-shot ingest, not loosened.
-    SINGLE_SHOT_KEYS = {"projectKey", "agentId", "summary", "tree", "raw"}
+    #
+    # `stack` JOINED it: every ingest states the stack of the client that
+    # produced it, a single-shot one included, so the body names `bun`.
+    SINGLE_SHOT_KEYS = {"projectKey", "agentId", "stack", "summary", "tree",
+                        "raw"}
 
     def test_no_lifecycle_flag_makes_no_start_call_and_sends_no_run_id(self):
         server = _FakeCrucible()
@@ -498,6 +502,9 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
             set(payload), self.SINGLE_SHOT_KEYS,
             f"--no-lifecycle must be BYTE-IDENTICAL to today's single-shot "
             f"ingest — no added and no dropped field; got keys={sorted(payload)!r}")
+        self.assertEqual(
+            payload.get("stack"), "bun",
+            "the single-shot body must name the stack that produced it")
         self.assertEqual(server.events[0].get("runtime_ms"), None,
                          "a single-shot event carries no lifecycle fields")
 

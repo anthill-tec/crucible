@@ -1,8 +1,8 @@
 # CR-CRU-151 — a run says which stack produced it, and the board keeps it
 
 **Type** fix · **Points** 8 (scored 5 at gap analysis 2026-10-21; raised at its pre-review when the
-start's tier joined the stack) · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-112 · **Status** PENDING —
-filed 2026-09-24
+start's tier joined the stack) · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-112 · **Status** DONE —
+filed 2026-09-24; merged 2026-10-21 (plan 205, cycles 729–733, gate 7958/0)
 
 ## Problem
 
@@ -98,38 +98,40 @@ client, which states its own.
 
 ## Acceptance criteria
 
-- [ ] **Every caller states it.** `post_ingest` refuses a call without `stack` (a required keyword)
+- [x] **Every caller states it.** `post_ingest` refuses a call without `stack` (a required keyword)
       and puts the given stack on the body for each ingest route; a census over the five clients'
       sources finds every `post_ingest` call site and asserts each passes `stack=_STACK` (zero call
       sites without it — no pinned count).
-- [ ] **Every client, every route — client side.** For each of the 13 client × route cells (arduino:
+- [x] **Every client, every route — client side.** For each of the 13 client × route cells (arduino:
       `/runs/compile`, `/runs/parsed`; bun: `/runs/parsed`, `/runs`, `/runs/compile`; mvn: `/runs`,
       `/runs/parsed`, `/runs/compile`; python: `/runs/parsed`, `/runs/compile`; rust: `/runs/compile`,
       `/runs/parsed`, `/runs`), driven through the client with a recording `_post`, the ingest body
       carries that client's stack — with a start accepted and without one.
-- [ ] **Every route, every read — server side.** For each ingest route, an event ingested with a
+      *At merge:* arduino's `/runs/compile` cell is single-shot only — no run is open when it
+      compiles, so it has no start-accepted case.
+- [x] **Every route, every read — server side.** For each ingest route, an event ingested with a
       stack reads it back on the detail read and on every brief-served read (the events list, its
       `cycleId` and `release` forms, `/api/v2/status`' last test or compile, the project's
       `lastEvent`); an aborted run's event carries its start's stack on the list too.
-- [ ] **The start survives the close.** A run started with a stack and a tier and closed (on each of
+- [x] **The start survives the close.** A run started with a stack and a tier and closed (on each of
       `/runs`, `/runs/parsed`, `/runs/compile`) by an ingest stating neither carries the start's stack
       and tier on its event; a start without a stack closed by an ingest stating one carries the
       ingest's.
-- [ ] **No change mid-run.** A closing ingest whose stack, or tier, differs from its start's gets 400
+- [x] **No change mid-run.** A closing ingest whose stack, or tier, differs from its start's gets 400
       naming both, at the HTTP route: no event is stored, the agent row's message and last-seen are
       unchanged, and the run is still open. The same values on both are accepted (regression guard:
       passes today).
-- [ ] **A stack is a word.** `stack: ""` and a non-string `stack` are refused with 400 on
+- [x] **A stack is a word.** `stack: ""` and a non-string `stack` are refused with 400 on
       `/runs/start` and on each ingest route, storing nothing.
-- [ ] **Absent means absent** (regression guard: passes today). An event ingested with no stack and
+- [x] **Absent means absent** (regression guard: passes today). An event ingested with no stack and
       no started stack has no `stack` key on any read.
-- [ ] **The amended tests.** Two tests that pin the old behaviour are amended in their own commit,
+- [x] **The amended tests.** Two tests that pin the old behaviour are amended in their own commit,
       authorised by this criterion: `test_one_gate_invocation_ingests_each_suite_under_its_own_stack`
       (`tests/client/test_gate_multi_suite_coverage.py`) counts one python RUN (distinct runs, not
       bodies, since the start and the ingest now both carry the stack); `NoLifecycleOptOutIsSingleShotTest`
       (`tests/client/test_cr017_client_lifecycle.py`) requires `stack` in the single-shot body's key
       set. Nothing else in either file changes.
-- [ ] **The record.** The gap analysis records where the stack was being lost, with the measurement,
+- [x] **The record.** The gap analysis records where the stack was being lost, with the measurement,
       before RED (above).
 
 ## Non-goals
