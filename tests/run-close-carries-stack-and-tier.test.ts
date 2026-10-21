@@ -319,6 +319,43 @@ describe("an ingest that closes a run cannot change its stack or tier", () => {
   }
 });
 
+// ── An abort states nothing ─────────────────────────────────────────────────
+
+describe("an abort closes a run under the stack and tier its start stated", () => {
+  test("a run started with stack and tier, aborted by a body that also states a different stack and tier, is aborted 200 and its event keeps the start's stack and tier", async () => {
+    const handle = boot();
+    const key = seedProject(handle);
+    const agentId = "aborter-states-stack";
+    await register(handle, key, agentId);
+    const runId = await startRun(handle, key, agentId, { stack: "bun", tier: "integration" });
+
+    const res = await postJson(handle, `/api/v2/runs/${runId}/abort`, {
+      projectKey: key,
+      agentId,
+      reason: "the suite was interrupted",
+      stack: "mvn",
+      tier: "e2e",
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.status).toBe("aborted");
+
+    // The events list: one aborted brief, carrying the start's stack and tier.
+    const list = await getJson(handle, `/api/v2/events?project=${key}`);
+    const aborted = (list.events as EventDetail[]).filter((e) => e.status === "aborted");
+    expect(aborted.length).toBe(1);
+    expect(aborted[0]!.stack).toBe("bun");
+    expect(aborted[0]!.tier).toBe("integration");
+    expect(await openRunIds(handle, key)).not.toContain(runId);
+
+    // The event detail of that same aborted event says the same.
+    const event = await eventDetail(handle, aborted[0]!.id);
+    expect(event.id).toBe(aborted[0]!.id);
+    expect(event.stack).toBe("bun");
+    expect(event.tier).toBe("integration");
+  });
+});
+
 // ── A stack is a word ───────────────────────────────────────────────────────
 
 const NOT_A_WORD: ReadonlyArray<{ label: string; value: unknown }> = [
