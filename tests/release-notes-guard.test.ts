@@ -65,6 +65,41 @@ const CHANGELOG_WITHOUT_SECTION = `# Changelog\n\n${EARLIER_SECTION}`;
 /** The same changelog with the version's dated notes added on top. */
 const CHANGELOG_WITH_DATED_SECTION = `# Changelog\n\n${DATED_SECTION}\n${EARLIER_SECTION}`;
 
+/** A size well past a pipe's buffer (64 KB on Linux): a reader that stops
+ *  early leaves a writer of this much text blocked, then broken (SIGPIPE). */
+const LARGE_BYTES = 512 * 1024;
+/** Just past one pipe buffer, a notes section bigger than the buffer. */
+const OVER_ONE_PIPE_BUFFER = 96 * 1024;
+
+/** Older dated sections (0.x.y, never 9.9.9) totalling at least `minBytes`. */
+function olderSections(minBytes: number): string {
+  const parts: string[] = [];
+  let size = 0;
+  for (let i = 1; size < minBytes; i++) {
+    const part =
+      `## [0.${Math.floor(i / 100)}.${i % 100}] - 2020-01-01\n\n### Fixed\n\n` +
+      `- Older release ${i}: a long-past fix, kept for the history of the project.\n\n`;
+    parts.push(part);
+    size += part.length;
+  }
+  return parts.join("");
+}
+
+/** Notes lines (no headings) totalling at least `minBytes`. */
+function manyNotes(minBytes: number): string {
+  const lines: string[] = [];
+  let size = 0;
+  for (let i = 1; size < minBytes; i++) {
+    const line = `- Change ${i} of the release being finished, described at some length.\n`;
+    lines.push(line);
+    size += line.length;
+  }
+  return lines.join("");
+}
+
+/** The refusal's own words, present only when the notes guard refused. */
+const NOTES_REFUSAL = "no committed, dated release notes";
+
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
@@ -106,7 +141,8 @@ interface World {
   snapshot(): Snapshot;
   /** Every argv the `git-flow` stub received, one per line. */
   flowCalls(): string[];
-  finish(extraArgs: string[], opts?: { agent?: string | null }): RunResult;
+  /** `script` runs another copy of release.sh (default: this repository's). */
+  finish(extraArgs: string[], opts?: { agent?: string | null; script?: string }): RunResult;
 }
 
 interface WorldSpec {
@@ -176,7 +212,8 @@ describe("finish refuses a release whose notes are not committed and dated", () 
           CRUCIBLE_AGENT: agent ?? undefined,
         };
         if (agent === null) delete env.CRUCIBLE_AGENT;
-        const res = Bun.spawnSync({ cmd: [RELEASE_SH, "finish", VERSION, ...extraArgs], cwd: dir, env });
+        const script = opts.script ?? RELEASE_SH;
+        const res = Bun.spawnSync({ cmd: [script, "finish", VERSION, ...extraArgs], cwd: dir, env });
         return { stdout: res.stdout.toString(), stderr: res.stderr.toString(), exitCode: res.exitCode };
       },
     };
@@ -348,4 +385,120 @@ describe("finish refuses a release whose notes are not committed and dated", () 
       expect(identified.stderr).not.toContain("no Crucible identity");
     },
   );
+
+  // -- a changelog larger than a pipe buffer is read whole --------------------
+
+  describe("a committed CHANGELOG.md larger than a pipe buffer", () => {
+    /** An accepted dry run: exit 0, the plan printed, only the alignment committed. */
+    function expectAcceptedDryRun(world: World, before: Snapshot, changelog: string, res: RunResult): void {
+      expect({ exitCode: res.exitCode, refused: res.stderr.includes(NOTES_REFUSAL) }).toEqual({
+        exitCode: 0,
+        refused: false,
+      });
+      expect(res.stdout).toContain(`git flow release finish -m "Release ${VERSION}" ${VERSION}`);
+      expect(res.stdout).toContain("git push origin master develop --tags");
+      // The dry run executed no git-flow finish.
+      expect(world.flowCalls()).toEqual([]);
+      // The one real write a dry run makes: the manifest aligned and committed
+      // on top of the starting HEAD; the committed notes are untouched.
+      const pkg = JSON.parse(readFileSync(join(world.dir, "package.json"), "utf8")) as { version: string };
+      expect(pkg.version).toBe(VERSION);
+      expect(git(["rev-parse", "HEAD~1"], world.dir).trim()).toBe(before.head);
+      expect(git(["show", "HEAD:CHANGELOG.md"], world.dir)).toBe(changelog);
+      expect(world.snapshot().tags).toBe("");
+    }
+
+    test("a --dry-run finish accepts dated notes for 9.9.9 at the top of a changelog with over 256 KB of older sections below, and prints its plan", () => {
+      const changelog = `# Changelog\n\n${DATED_SECTION}\n${olderSections(LARGE_BYTES)}`;
+      expect(changelog.length).toBeGreaterThan(256 * 1024);
+      const world = makeWorld({ committedChangelog: changelog });
+      const before = world.snapshot();
+
+      const res = world.finish(["--dry-run"]);
+      expectAcceptedDryRun(world, before, changelog, res);
+    });
+
+    test("a --dry-run finish accepts a dated 9.9.9 section that itself holds over 64 KB of notes, followed by older sections, and prints its plan", () => {
+      const notes = manyNotes(OVER_ONE_PIPE_BUFFER);
+      expect(notes.length).toBeGreaterThan(64 * 1024);
+      const changelog =
+        `# Changelog\n\n## [${VERSION}] - 2026-10-21\n\n### Fixed\n\n${notes}\n` + olderSections(LARGE_BYTES);
+      const world = makeWorld({ committedChangelog: changelog });
+      const before = world.snapshot();
+
+      const res = world.finish(["--dry-run"]);
+      expectAcceptedDryRun(world, before, changelog, res);
+    });
+
+    test.each(MODES)(
+      "%s with a large committed CHANGELOG.md that has no 9.9.9 section gets the usual notes refusal",
+      (_mode, args) => {
+        const changelog = `# Changelog\n\n${olderSections(LARGE_BYTES)}`;
+        const world = makeWorld({ committedChangelog: changelog });
+        const before = world.snapshot();
+
+        const res = world.finish(args);
+        expectNotesRefusal(world, before, res);
+        expect(res.stderr).toContain(NOTES_REFUSAL);
+      },
+    );
+
+    test.each(MODES)(
+      "%s refuses an undated `## [9.9.9]` heading at the top of a large changelog with the usual notes refusal, not a silent death",
+      (_mode, args) => {
+        const changelog =
+          `# Changelog\n\n## [${VERSION}]\n\n### Fixed\n\n- The release being finished.\n\n` + olderSections(LARGE_BYTES);
+        const world = makeWorld({ committedChangelog: changelog });
+        const before = world.snapshot();
+
+        const res = world.finish(args);
+        expectNotesRefusal(world, before, res);
+        expect(res.stderr).toContain(NOTES_REFUSAL);
+      },
+    );
+  });
+
+  // -- the extractor beside release.sh is missing -----------------------------
+
+  describe("a release.sh whose notes extractor is missing", () => {
+    /** A copy of release.sh alone in a scratch `scripts/` dir, no release-notes.sh beside it. */
+    function loneReleaseScript(): string {
+      const root = mkdtempSync(join(tmpdir(), "release-notes-guard-lone-"));
+      scratch.push(root);
+      mkdirSync(join(root, "scripts"));
+      const script = join(root, "scripts", "release.sh");
+      writeFileSync(script, readFileSync(RELEASE_SH));
+      chmodSync(script, 0o755);
+      return script;
+    }
+
+    test.each(MODES)(
+      "%s with valid committed notes says the extractor release-notes.sh is missing, not that the notes are missing, and commits nothing",
+      (_mode, args) => {
+        const world = makeWorld({ committedChangelog: CHANGELOG_WITH_DATED_SECTION });
+        const before = world.snapshot();
+        const script = loneReleaseScript();
+
+        const res = world.finish(args, { script });
+        // Scratch paths redacted, so no failure message prints the temp dir.
+        const stderr = res.stderr.replaceAll(tmpdir(), "<tmp>");
+        expect(res.exitCode).toBe(1);
+        expect(stderr).toContain("release-notes.sh");
+        expect(stderr).toMatch(/missing|not found/i);
+        expect(stderr).not.toContain(NOTES_REFUSAL);
+        // Refused before anything: no plan, no alignment commit, no git-flow run.
+        expect(res.stdout).not.toContain("git flow");
+        expect(res.stdout).not.toContain("git push");
+        expect(world.snapshot()).toEqual(before);
+        expect(world.flowCalls()).toEqual([]);
+
+        // Contrast: these notes ARE valid, the real release.sh, with its
+        // extractor beside it, accepts them, so the refusal above is about the
+        // missing extractor alone.
+        const withExtractor = world.finish(["--dry-run"]);
+        expect(withExtractor.exitCode).toBe(0);
+        expect(withExtractor.stderr).not.toContain(NOTES_REFUSAL);
+      },
+    );
+  });
 });
