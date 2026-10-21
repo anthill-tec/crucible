@@ -85,8 +85,8 @@ Two mechanics that are defects if missed, both stated here so nobody rediscovers
   pinned container, waits for it, then runs `bun-crucible.py e2e <args> -- --project=webkit-iphone` with the
   endpoint set, and exits with the client's exit code. `--agent`, `--cycle` and `--release` among the
   arguments make the client file the run on the board like any other e2e run; without `--agent` the run is
-  unfiled, as a bare `e2e` is. The run also carries `webkit-iphone`'s dependency project on the host's
-  Chromium. The container is removed on every path that started it (a pass, a failure, a server that never
+  unfiled, as a bare `e2e` is. The run also carries `webkit-iphone`'s dependency project, which in Docker
+  mode runs in the container's Chromium too, the same remote browser server the WebKit project connects to. The container is removed on every path that started it (a pass, a failure, a server that never
   becomes ready, SIGINT, SIGTERM); on a signal the client is forwarded it and let finish filing its
   abandoned run first.
 
