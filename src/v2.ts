@@ -1206,7 +1206,8 @@ function evidenceResponse(
 
 /**
  * An ingest's answer. `files` (the run's distinct-file count) joins the `run`
- * block when the route computed one; it is never stored.
+ * block when the route computed one; it is never stored. `coverage` joins it
+ * when the route answers the coverage the run kept.
  */
 function runResponse(
   event: RunEvent,
@@ -1214,13 +1215,21 @@ function runResponse(
   help?: string[],
   warnings?: IngestWarning[],
   files?: number,
+  coverage?: Coverage,
 ): Response {
   return evidenceResponse(
     {
       ok: true,
       changed: true,
       event: event.id,
-      run: files !== undefined ? { ...summary, files } : summary,
+      run:
+        files !== undefined || coverage !== undefined
+          ? {
+              ...summary,
+              ...(files !== undefined ? { files } : {}),
+              ...(coverage !== undefined ? { coverage } : {}),
+            }
+          : summary,
       verdict: runVerdict(summary),
       ...attachEcho(event),
       ...(warnings !== undefined ? { warnings } : {}),
@@ -1440,8 +1449,12 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
   }
   // §S3 — a RED ingest carries the transition hint; §S7 adds the stale note.
+  // Decoded coverage the store discarded (a failing run) says so in help too,
+  // as on the parsed route.
+  const dropped = run.coverage !== undefined && event.coverage === undefined;
   const help = [
     ...(run.summary.failed > 0 ? hints.afterRed : []),
+    ...(dropped ? hints.coverageDropped : []),
     ...(attach.staleHelp ?? []),
   ];
   return runResponse(
@@ -1450,6 +1463,7 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     help.length > 0 ? help : undefined,
     warnings.length > 0 ? warnings : undefined,
     files,
+    event.coverage,
   );
 }
 

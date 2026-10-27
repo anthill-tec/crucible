@@ -1,6 +1,8 @@
 // CR-CRU-002 §S3 — codec registry. Ingest paths look up a codec by name so
 // adding a codec never touches core.
-import type { RunSchema, SuiteNode } from "../types.ts";
+import type { Coverage, RunSchema, SuiteNode } from "../types.ts";
+import { coverageCodecs, decodeCoverage } from "./coverage.ts";
+import type { CoverageCodec } from "./coverage.ts";
 import { parseJunit, parseJunitPath, readJunitRawOutput } from "./junit.ts";
 import { parsePlaywright, parsePlaywrightPath } from "./playwright.ts";
 
@@ -55,6 +57,54 @@ export const codecs: Map<string, Codec> = new Map<string, Codec>([
   ],
 ]);
 
+/** The names this board decodes, for health: test and coverage codecs, sorted. */
+export function codecNames(): { test: string[]; coverage: string[] } {
+  return { test: [...codecs.keys()].sort(), coverage: [...coverageCodecs.keys()].sort() };
+}
+
+interface CoverageBlock {
+  name: string;
+  codec: CoverageCodec;
+  texts: unknown[];
+}
+
+/**
+ * A body's `coverage` block, `{codec, data}` with `data` one text or a
+ * non-empty list of them: absent, valid, or refused (the run is NOT stored).
+ */
+function readCoverageBlock(value: unknown): { block?: CoverageBlock } | { error: string } {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== "object") {
+    return { error: "coverage must be {codec, data} — run NOT stored" };
+  }
+  const { codec: name, data } = value as { codec?: unknown; data?: unknown };
+  if (typeof name !== "string") return { error: "coverage.codec is required — run NOT stored" };
+  const codec = coverageCodecs.get(name);
+  if (codec === undefined) return { error: `unknown coverage codec: ${name} — run NOT stored` };
+  if (typeof data === "string") return { block: { name, codec, texts: [data] } };
+  if (Array.isArray(data) && data.length > 0) return { block: { name, codec, texts: data } };
+  return {
+    error: "coverage.data must be a coverage text or a non-empty list of them — run NOT stored",
+  };
+}
+
+/** The block's texts summed as one coverage; one undecodable text drops it, with a warning. */
+function decodeCoverageBlock(block: CoverageBlock, warnings: IngestWarning[]): Coverage | undefined {
+  try {
+    const texts = block.texts.map((text, index) => {
+      if (typeof text !== "string") throw new Error(`coverage text ${index} is not a text`);
+      return text;
+    });
+    return decodeCoverage(block.codec, texts);
+  } catch (cause) {
+    warnings.push({
+      code: "coverage-dropped",
+      detail: `${block.name} coverage dropped: ${errorText(cause)}`,
+    });
+    return undefined;
+  }
+}
+
 function errorText(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
@@ -99,10 +149,12 @@ function joinRaw(bodyRaw: unknown, reportRaws: Array<string | undefined>): strin
  */
 export async function parseRunBody(
   codec: Codec,
-  body: { data?: unknown; dataPath?: unknown; raw?: unknown },
+  body: { data?: unknown; dataPath?: unknown; raw?: unknown; coverage?: unknown },
   codecName: string,
   stack?: string,
 ): Promise<{ run: RunSchema; warnings: IngestWarning[]; files: number } | { error: string }> {
+  const coverageBlock = readCoverageBlock(body.coverage);
+  if ("error" in coverageBlock) return coverageBlock;
   const warnings: IngestWarning[] = [];
   const skip = (report: string, error: string): void => {
     warnings.push({ code: "report-skipped", detail: `report ${report} skipped: ${error}` });
@@ -145,10 +197,12 @@ export async function parseRunBody(
   const merged = mergeRuns(decoded);
   const raw = joinRaw(body.raw, decoded.map((report) => report.raw));
   if (raw !== undefined && codec.readRaw !== undefined) codec.readRaw(merged.tree, raw, options);
+  const coverage =
+    coverageBlock.block !== undefined ? decodeCoverageBlock(coverageBlock.block, warnings) : merged.coverage;
   const run: RunSchema = {
     summary: merged.summary,
     tree: merged.tree,
-    ...(merged.coverage !== undefined ? { coverage: merged.coverage } : {}),
+    ...(coverage !== undefined ? { coverage } : {}),
     ...(raw !== undefined ? { raw } : {}),
   };
   const files = new Set(decoded.flatMap((report) => report.files ?? []));

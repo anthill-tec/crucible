@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { SHIPPED_DATA_FILE, limitDisclosures, serverConfigPath } from "./limits.ts";
 import { Store, defaultRetention, RETENTION_DISPOSABLE_KINDS } from "./store.ts";
 import { handleV2 } from "./v2.ts";
+import { codecNames } from "./codecs/index.ts";
 
 const pkg = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -371,6 +372,9 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
     // CR-CRU-139 §S1 — the second thing this boot resolved, at the SAME single
     // site, so the listener cannot drift between the two health routes either.
     listener: { ...listenerResolution },
+    // The names this board decodes, read off the codec registries, so a client
+    // can tell a board that predates server-side decoding before it sends.
+    codecs: codecNames(),
   });
 
   const server = Bun.serve({
