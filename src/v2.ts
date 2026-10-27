@@ -3,6 +3,7 @@
 // response carries `changed: true|false` (§S5). Shares the ONE store instance
 // with the v1 shim — src/server.ts wires handleV2 into its dispatcher.
 import { codecs, parseRunBody } from "./codecs/index.ts";
+import type { IngestWarning } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
@@ -1203,7 +1204,12 @@ function evidenceResponse(
   return json({ ...body, help: [...(options.help ?? []), ...hints.readEvidence] }, options.status);
 }
 
-function runResponse(event: RunEvent, summary: RunSummary, help?: string[]): Response {
+function runResponse(
+  event: RunEvent,
+  summary: RunSummary,
+  help?: string[],
+  warnings?: IngestWarning[],
+): Response {
   return evidenceResponse(
     {
       ok: true,
@@ -1212,6 +1218,7 @@ function runResponse(event: RunEvent, summary: RunSummary, help?: string[]): Res
       run: summary,
       verdict: runVerdict(summary),
       ...attachEcho(event),
+      ...(warnings !== undefined ? { warnings } : {}),
     },
     { help },
   );
@@ -1386,9 +1393,11 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   const badStack = refuseBadStack(body);
   if (badStack !== null) return badStack;
 
-  const parsed = await parseRunBody(codec, body, codecName);
+  // The run's effective stack (the ingest's, else its start's) is told to the
+  // codec before it decodes.
+  const parsed = await parseRunBody(codec, body, codecName, effectiveStack(store, body));
   if ("error" in parsed) return fail(400, parsed.error);
-  const { run } = parsed;
+  const { run, warnings } = parsed;
 
   // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
   // BEFORE any touchAgent/record — no agent row is created or resurrected);
@@ -1430,7 +1439,24 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     ...(run.summary.failed > 0 ? hints.afterRed : []),
     ...(attach.staleHelp ?? []),
   ];
-  return runResponse(event, run.summary, help.length > 0 ? help : undefined);
+  return runResponse(
+    event,
+    run.summary,
+    help.length > 0 ? help : undefined,
+    warnings.length > 0 ? warnings : undefined,
+  );
+}
+
+/**
+ * The stack a run ingest decodes under: the one it states, else the one the
+ * run it closes was started with. A read only: the close itself is resolved
+ * (and refused) later, before anything is written.
+ */
+function effectiveStack(store: Store, body: V2Body): string | undefined {
+  const stated = runMeta(body).stack;
+  if (stated !== undefined) return stated;
+  if (typeof body.runId !== "string" || body.runId.length === 0) return undefined;
+  return store.getRun(body.runId)?.stack;
 }
 
 async function handleRunsParsed(store: Store, req: Request): Promise<Response> {

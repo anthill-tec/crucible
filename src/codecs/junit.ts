@@ -213,7 +213,15 @@ export function parseJunit(xml: string): RunSchema {
   return result;
 }
 
-export async function parseJunitPath(path: string): Promise<RunSchema> {
+/**
+ * A report file, or a directory of `TEST-*.xml` read in file-name order and
+ * merged into one run. A malformed file in a directory is skipped and named
+ * (by its file name) to `onSkip`; when no file decodes the read is refused.
+ */
+export async function parseJunitPath(
+  path: string,
+  onSkip?: (report: string, error: string) => void,
+): Promise<RunSchema> {
   if (statSync(path).isFile()) {
     return parseJunit(readFileSync(path, "utf-8"));
   }
@@ -224,13 +232,29 @@ export async function parseJunitPath(path: string): Promise<RunSchema> {
     throw new Error(`no TEST-*.xml files found in ${path}`);
   }
   const tree: SuiteNode[] = [];
+  const rawParts: string[] = [];
+  const skipped: string[] = [];
+  let decodedCount = 0;
   for (const file of files) {
     const full = join(path, file);
+    let report: RunSchema;
     try {
-      tree.push(...parseJunit(readFileSync(full, "utf-8")).tree);
+      report = parseJunit(readFileSync(full, "utf-8"));
     } catch (err) {
-      console.warn(`skipping malformed JUnit file ${full}: ${String(err)}`);
+      const error = err instanceof Error ? err.message : String(err);
+      skipped.push(`${file}: ${error}`);
+      if (onSkip !== undefined) onSkip(file, error);
+      else console.warn(`skipping malformed JUnit file ${full}: ${error}`);
+      continue;
     }
+    decodedCount += 1;
+    tree.push(...report.tree);
+    if (report.raw !== undefined) rawParts.push(report.raw);
   }
-  return { summary: summarize(tree), tree };
+  if (decodedCount === 0) {
+    throw new Error(`no TEST-*.xml file in ${path} could be decoded (${skipped.join("; ")})`);
+  }
+  const result: RunSchema = { summary: summarize(tree), tree };
+  if (rawParts.length > 0) result.raw = rawParts.join("\n");
+  return result;
 }
