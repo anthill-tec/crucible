@@ -134,7 +134,7 @@ split by available number, all in the current wave, the date unchanged):
 
 Go's stream lands with its client (CR-CRU-195), which therefore also depends on CR-CRU-200.
 
-## Open for CR-CRU-152's gap analysis
+## Open for CR-CRU-200's gap analysis
 
 - The board's live view: where the open run's progress and early failures show (a storyboard frame
   before RED).

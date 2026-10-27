@@ -18,7 +18,7 @@ board decodes (Playwright's JSON, kept for the Gherkin steps JUnit drops).
   `crucible.rawReport` are refused, naming the table that replaces them. An undeclared script keeps
   today's default: `bun test`, the `flag` JUnit report, the bun console view.
 - **§S2 — `bun test` shows its console live.** A `bun-console` board codec decodes bun's console
-  result lines; the client relays them to the open run; the JUnit report stays the record.
+  result lines, reusing CR-CRU-152's `src/codecs/bun-console.ts`; the client relays them to the open run; the JUnit report stays the record.
 - **§S3 — Vitest and Playwright stream the Crucible shape.** Reporters for both ship in the client
   install and emit the Crucible event shape; the client hands their location to the runner through a
   variable Crucible fixes, so a project's config names no machine path and runs unchanged without a

@@ -177,7 +177,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-191](CR-CRU-191-the-clients-are-clean-under-pi-lens.md) | the clients are clean under pi-lens | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-190](CR-CRU-190-the-0.4.0-follow-ups-list.md) | the 0.4.0 follow-ups list | fix | PENDING | 184 | 8 (0.4.0) |
 | [CR-CRU-192](CR-CRU-192-a-projects-coverage-config-decides-what-is-measured.md) | a project's coverage config decides what is measured | fix | PENDING | — | 8 (0.4.0) |
-| [CR-CRU-193](CR-CRU-193-a-runs-coverage-is-shown-file-by-file.md) | a run's coverage is shown file by file | feature | PENDING | — | 8 (0.4.0) |
+| [CR-CRU-193](CR-CRU-193-a-runs-coverage-is-shown-file-by-file.md) | a run's coverage is shown file by file | feature | PENDING | 152 | 8 (0.4.0) |
 | [CR-CRU-194](CR-CRU-194-a-bun-projects-own-runner-runs-a-targeted-test.md) | a bun project's own runner runs a targeted test, and no project is anyone's default | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-195](CR-CRU-195-a-go-project-reports-to-the-board-through-its-own-client.md) | a Go project reports to the board through its own client | feature | PENDING | 152, 200 | 8 (0.4.0) |
 | [CR-CRU-196](CR-CRU-196-a-go-project-declares-its-tiers-with-build-tags.md) | a Go project declares its tiers with build tags | feature | PENDING | 195 | 8 (0.4.0) |

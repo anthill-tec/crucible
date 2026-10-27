@@ -238,9 +238,9 @@ the BDD/Playwright runtime was never fully realized. v2 replaces "parsers" with 
 registry** translating each tool's native output into one **canonical RunSchema**
 (summary + suite/case tree + coverage + compile diagnostics, tool-agnostic):
 
-- Codecs at parity: `junit` (with exactly the client parsers' semantics — failure/error →
-  fail, skipped → pending, `time`s → duration_ms, `testsuites` or bare `testsuite` root,
-  file-or-directory `dataPath`, inline `data`), `rustc`, `javac`, `python`, `tsc`.
+- `junit` reads every supported stack's report by one rule (CR-CRU-152): failure/error → fail, skipped
+  → pending, `time` → rounded ms, any nesting, a list of reports or a `dataPath` directory; a pytest
+  report is grouped by class and bun's console detail read, under their stacks. Also `rustc`, `javac`, `python`, `tsc`.
 - Compile codecs added since: `gcc` (GCC/g++ diagnostics and link errors, as the arduino stack's
   `arduino-cli compile` reports them).
 - New codecs: `playwright` (JSON reporter — feature → scenario → step, browser, trace
@@ -253,10 +253,10 @@ registry** translating each tool's native output into one **canonical RunSchema*
   JUnit). A codec is added when a supported stack's report needs one. Measured gaps against this
   section are filed as CR-CRU-151 (stack stamp), CR-CRU-152 (per-stack reports decoded on the server)
   and CR-CRU-153 (the arduino stack's g++ compile output).
-- Every event is stamped with `stack` + `codec` (+ tool version) so the UI renders
-  stack-aware views (§4.11) and BDD becomes first-class for frontend projects.
-- Parsed path: accept summary/tree/coverage as-is (validate shape, don't recompute).
-- Both paths record a `kind:"test"` event and return `{ok, summary}`.
+- Every event is stamped with `stack` + `codec` so the UI renders stack-aware views (§4.11); a tool
+  version is not stamped. Coverage codecs: `lcov` and `jacoco`, rounded as the clients' Python `round`.
+- Parsed path (`/runs/parsed`): the route older clients post to — summary/tree/coverage taken as-is.
+- Both paths record a `kind:"test"` event and answer `{ok, run}`; `/runs` adds `files` and `coverage`.
 
 ### 4.5 Compile ingest
 - Structured parsers per format: `rustc` (`error[EXXXX]` + `--> file:line:col`), java/
