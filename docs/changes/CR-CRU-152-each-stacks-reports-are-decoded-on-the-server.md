@@ -2,7 +2,7 @@
 
 **Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-151, CR-CRU-205 (every gate is red
 until it lands) · **Status**
-PENDING — filed 2026-09-24; designed at gap analysis 2026-10-27 (split: the bounds are CR-CRU-207; the
+DONE — merged 2026-10-27 (plan 208, cycles 741–746, gate 8387/0); filed 2026-09-24; designed at gap analysis 2026-10-27 (split: the bounds are CR-CRU-207; the
 clients' side is CR-CRU-204 for bun and python, CR-CRU-206 for maven, rust and arduino)
 
 ## Problem
@@ -153,54 +153,61 @@ projects post to it until they are upgraded.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — a real report per stack.** `tests/fixtures/reports/<stack>/` holds, for bun, python
+- [x] **AC1 — a real report per stack.** `tests/fixtures/reports/<stack>/` holds, for bun, python
       (the subtest runner's xmlrunner reports, and a pytest report), mvn (surefire and failsafe),
       rust and arduino, the test report(s) and coverage report(s) that stack's runner wrote on a
       real run with at least one passing, one failing and one skipped case; bun's captured console
       output; several report files for mvn, python and arduino, and the JaCoCo CSV the maven client
       selects. Paths are neutral; a README names the tool versions.
-- [ ] **AC2 — figures exact.** Beside each fixture, `expected.json` holds that stack's client parse
+- [x] **AC2 — figures exact.** Beside each fixture, `expected.json` holds that stack's client parse
       of it at this CR's base (summary, coverage). Each fixture decoded through `POST /api/v2/runs`
       stores the same `total`, `passed`, `failed`, `pending`, every case's status, and the same
       coverage object, percents included.
-- [ ] **AC3 — the unified tree.** Each fixture's stored tree follows §S2: node per suite holding
+- [x] **AC3 — the unified tree.** Each fixture's stored tree follows §S2: node per suite holding
       cases, empty suites absent, `?` for a missing or empty name, failure text present and cut as
       stated, durations rounded. A case for each deliberate change asserts the new reading.
-- [ ] **AC4 — bun's console.** Every bun console-matching case the bun client's tests pin today
+- [x] **AC4 — bun's console.** Every bun console-matching case the bun client's tests pin today
       (the CR-CRU-087 and CR-CRU-088 cases and the console cases in
       `tests/clients-bun-crucible.test.ts`, including the plain wire form, a timeout detail printed
       after its result line, and an unresolvable echo) holds through the server, from `raw`, in
       `src/codecs/bun-console.ts`.
-- [ ] **AC5 — pytest grouping.** The pytest fixture under stack `python` decodes to one node per
+- [x] **AC5 — pytest grouping.** The pytest fixture under stack `python` decodes to one node per
       `classname` in first-seen order, a case with none in `pytest`; under another stack, or an
       xmlrunner report, it is grouped by suite.
-- [ ] **AC6 — the stack rule.** A run with no `stack`, and one with an unknown stack, decode with
+- [x] **AC6 — the stack rule.** A run with no `stack`, and one with an unknown stack, decode with
       no stack-specific rule; a run whose ingest omits `stack` uses its start's, at decode time.
-- [ ] **AC7 — a list of reports.** Several texts decode to one run, in order, counts summed; one
+- [x] **AC7 — a list of reports.** Several texts decode to one run, in order, counts summed; one
       malformed text among good ones is skipped with a `report-skipped` warning whose detail names
       its list index and the decode error, and the rest stored;
       all malformed is 400 with nothing stored; `data: []` is 400. `dataPath` reads by the same
       rules.
-- [ ] **AC8 — coverage.** `lcov` and `jacoco` each yield AC2's coverage; an unknown coverage codec
+- [x] **AC8 — coverage.** `lcov` and `jacoco` each yield AC2's coverage; an unknown coverage codec
       is 400 with nothing stored; an undecodable coverage text stores the run without coverage with a
       `coverage-dropped` warning; a failing run with coverage stores none and carries the
       `coverageDropped` hint; two coverage texts sum into one object; an empty coverage list is 400;
       a total of 0 gives percent 0; and over every (covered, total) pair with
       total below 1500 the percent equals Python's `round(covered / total * 100, 1)` (a generated
       oracle table).
-- [ ] **AC9 — raw.** The body's `raw` and the reports' wrapper- and suite-level output are stored
+- [x] **AC9 — raw.** The body's `raw` and the reports' wrapper- and suite-level output are stored
       as §S1 states (asserted string: trimmed parts, empty parts dropped, an absent or empty body
       `raw` adding no separator, joined by `"\n"`); bun's console match reads it.
-- [ ] **AC10 — the response.** The `run` block carries the five counts with `files` by §S2's chain
+- [x] **AC10 — the response.** The `run` block carries the five counts with `files` by §S2's chain
       (asserted on cases carrying `file`, only `classname`, an empty `classname`, and neither, and
       across two reports sharing a file), and on a run that kept coverage each axis as `{total,
       covered, percent}`; nothing named `files` is stored; a `playwright` run carries its spec-file
       count; both health routes carry `codecs: {test: ["junit", "playwright"], coverage: ["jacoco",
       "lcov"]}`.
-- [ ] **AC11 — older clients keep working.** A `/api/v2/runs/parsed` ingest stores and reads back
+- [x] **AC11 — older clients keep working.** A `/api/v2/runs/parsed` ingest stores and reads back
       as at this CR's base; the existing tests that pin it pass unchanged.
-- [ ] **AC12 — the documents.** PRD §4.4, the DN, CR-CRU-193 and its index row, and CR-CRU-201 say
+- [x] **AC12 — the documents.** PRD §4.4, the DN, CR-CRU-193 and its index row, and CR-CRU-201 say
       what §S6 states.
+
+- *Recorded at merge:* the rust fixture holds no skipped case — nextest 0.9.130 writes no testcase for
+  an `#[ignore]`d test (its README says so); AC1's skipped case is met by the other five fixtures. Three
+  nits stand: `parseJunitPath` keeps a `console.warn` fallback its one caller never reaches, and
+  `parseRunBody` a coverage fallback no test codec feeds; `bun-console.ts`'s `\s` and lcov's integer
+  reading differ from Python's on characters real output does not carry; `Codec.readRaw` amends the
+  tree in place.
 
 ## Non-goals
 
