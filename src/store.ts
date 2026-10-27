@@ -1543,6 +1543,37 @@ function invalidCompileReport(report: unknown): string | null {
   return null;
 }
 
+/**
+ * A run's raw output as it is stored: whole when it holds at most `limit`
+ * Unicode code points, otherwise its first `floor(limit/2)` code points, the
+ * marker `"\n" + "\u2026 <k> characters cut \u2026" + "\n"` naming the `k`
+ * code points removed, then its last `ceil(limit/2)` code points. Counted in
+ * code points, never UTF-16 units, so an astral character is kept or cut
+ * whole; the marker does not count against the limit.
+ */
+function capRawOutput(text: string, limit: number): string {
+  // Each code point is one or two UTF-16 units, so a text no longer than the
+  // limit in units is within it in code points.
+  if (text.length <= limit) return text;
+  let count = 0;
+  for (let i = 0; i < text.length; i += unitsAt(text, i)) count++;
+  if (count <= limit) return text;
+  const head = Math.floor(limit / 2);
+  const tail = Math.ceil(limit / 2);
+  const cut = count - head - tail;
+  let headEnd = 0;
+  for (let seen = 0; seen < head; seen++) headEnd += unitsAt(text, headEnd);
+  let tailStart = headEnd;
+  for (let seen = 0; seen < cut; seen++) tailStart += unitsAt(text, tailStart);
+  return `${text.slice(0, headEnd)}\n\u2026 ${cut} characters cut \u2026\n${text.slice(tailStart)}`;
+}
+
+/** The UTF-16 units of the code point at `index`: two for a whole surrogate pair, else one. */
+function unitsAt(text: string, index: number): number {
+  const cp = text.codePointAt(index);
+  return cp !== undefined && cp > 0xffff ? 2 : 1;
+}
+
 /** A run's detail in the shape `writeRunDetailRows` files it from. */
 interface RunDetailSource {
   id: string;
@@ -5980,7 +6011,15 @@ export class Store {
           // the run declared none.
           event.release ?? null,
         );
-      writeRunDetailRows(this.db, event);
+      // The run's raw output is capped here, the one place both run routes
+      // store it, after any codec has read the whole text; the limit is
+      // resolved live, so an operator's edit holds on the next ingest.
+      writeRunDetailRows(
+        this.db,
+        event.raw === undefined
+          ? event
+          : { ...event, raw: capRawOutput(event.raw, resolveLimit("raw_output_chars")) },
+      );
     })();
     this.enforceRetention(event.projectKey);
     this.emit("events", event.projectKey);
