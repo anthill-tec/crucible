@@ -17,12 +17,12 @@
 # `<cwd>/data/crucible.db`, else the XDG data dir). Add a `value = …` line to
 # a limit's table THERE; a value set here would be overwritten on upgrade.
 #
-# ── Why only the SERVER's three limits are here ───────────────────────────
+# ── Why only the SERVER's five limits are here ────────────────────────────
 #
 # A limit is owned by the process that ENFORCES it, and the server and the
 # clients are not necessarily on the same machine — they are separate
 # packages, installable on different hosts at independently resolved versions.
-# So this distribution documents the three limits this distribution enforces
+# So this distribution documents the five limits this distribution enforces
 # and nothing else. The three CLIENT limits (`truncate_field_chars`,
 # `error_detail_chars`, `roadmap_list_rows`) ship in the `crucible-axi`
 # distribution and are read from a PROJECT directory; a table for one of them
@@ -32,7 +32,10 @@
 # Every `recommended` below is the value this server ran at before the limits
 # became configuration, so an install with no operator file behaves EXACTLY as
 # it did before — the whole safety argument for a configuration change of this
-# reach. `min`/`max` are a SUPPORTABILITY judgement, so each states its
+# reach. The ONE exception is `raw_output_chars`: it had no earlier value, the
+# server stored a run's captured output WHOLE, so a server with no operator
+# file now caps that output at its recommendation where it stored all of it.
+# `min`/`max` are a SUPPORTABILITY judgement, so each states its
 # reasoning: a bound nobody can justify is the same defect as a default nobody
 # chose.
 
@@ -126,3 +129,23 @@ recommended = 5000
 min = 10
 # A million rows for one project is where disk, not usefulness, binds.
 max = 1000000
+
+[limits.ingest_body_bytes]
+description = "Bytes of request body the server reads on an ingest route; a larger body is drained and refused with a JSON 413 naming this limit. Raise it when a project's reports and captured output legitimately exceed it; lower it to refuse oversized ingests sooner."
+# 128 MiB — Bun's default body limit, the one the server ran at before, so an
+# install with no operator file accepts exactly the bodies it accepted before.
+recommended = 134217728
+# A mebibyte: beneath it an ordinary suite's results no longer fit one ingest.
+min = 1048576
+# A gibibyte. Past it one ingest is a memory hazard to the board, not a run.
+max = 1073741824
+
+[limits.raw_output_chars]
+description = "Characters of captured runner output a run stores; longer output keeps its first and last halves around a line naming how much was cut. Raise it to keep more of long logs; lower it to save store space."
+# No earlier value: raw output was stored whole. Two million characters keeps
+# the head and tail of any run's console an operator would read.
+recommended = 2000000
+# Ten thousand characters still holds a failing run's summary.
+min = 10000
+# Fifty million characters for one run is where disk, not usefulness, binds.
+max = 50000000

@@ -124,17 +124,25 @@ who reads the install output therefore knows which file to edit without
 guessing.
 
 When the board runs on another machine, that file lives on THAT machine — these
-three limits cannot be set from a project checkout, and an install here writes
+five limits cannot be set from a project checkout, and an install here writes
 nothing for a board over there. The distribution's own copy,
 `src/crucible.toml`, is package data replaced wholesale on upgrade and is
 **not** the file you edit.
 
+Every recommendation below is the value the server ran at before its limits
+became configuration, except `raw_output_chars`: a run's captured output used
+to be stored whole, so a server with no operator file now caps it at
+`2000000` characters. `GET /api/health` advertises the `ingest_body_bytes`
+it runs at under `limits`, so a client can refuse an oversized body before
+sending it.
 
 | Limit | Description | Recommended | Min | Max |
 |---|---|---|---|---|
 | `run_abandon_ms` | Milliseconds an OPEN run may live before the sweep settles it as `abandoned`. Raise it when a legitimate suite runs longer than the deadline; lower it to clear ghost runs off the board sooner. | `1800000` (30 minutes) | `60000` (1 minute) | `86400000` (24 hours) |
 | `project_inactive_ms` | Milliseconds of silence after which a project with no live agent reads INACTIVE on the board's project list. Raise it to keep occasional projects visible; lower it to retire finished ones from the default view sooner. | `3600000` (1 hour) | `300000` (5 minutes) | `2592000000` (30 days) |
 | `retention` | Events kept per project for projects that declare no `retention` of their own. NOTE the documented exception: with NO crucible.toml at all there is NO cap and the boot banner names the uncapped projects — this number applies only once the table exists. | `5000` | `10` | `1000000` |
+| `ingest_body_bytes` | Bytes of request body the server reads on an ingest route; a larger body is drained and refused with a JSON 413 naming this limit. Raise it when a project's reports and captured output legitimately exceed it; lower it to refuse oversized ingests sooner. | `134217728` (128 MiB, Bun's default the server ran at before) | `1048576` (1 MiB) | `1073741824` (1 GiB) |
+| `raw_output_chars` | Characters of captured runner output a run stores; longer output keeps its first and last halves around a line naming how much was cut. Raise it to keep more of long logs; lower it to save store space. | `2000000` | `10000` | `50000000` |
 
 ### The project's limits — in the project directory
 

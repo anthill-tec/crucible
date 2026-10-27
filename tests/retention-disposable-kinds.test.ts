@@ -853,6 +853,20 @@ const RESOLUTION_SITES: Record<string, ResolutionSite> = {
     callee: "resolve_limit",
     seam: `resolve_limit("roadmap_list_rows")`,
   },
+  ingest_body_bytes: {
+    file: "src/v2.ts",
+    fn: "ingestBodyBytes",
+    language: "ts",
+    callee: "resolveLimit",
+    seam: `resolveLimit("ingest_body_bytes")`,
+  },
+  raw_output_chars: {
+    file: "src/store.ts",
+    fn: "rawOutputChars",
+    language: "ts",
+    callee: "resolveLimit",
+    seam: `resolveLimit("raw_output_chars")`,
+  },
 };
 
 function sourceOf(file: string): string {
@@ -1029,7 +1043,7 @@ describe("§S3 — no numeric literal stands in for a configured limit, in eithe
     // deleted before this CR and whose FALLBACK this CR moved. Asserted as a
     // count, so a seventh limit declared later fails here rather than shipping
     // with no coverage at all.
-    expect(declared.length).toBe(6);
+    expect(declared.length).toBe(8);
     // Ownership: no limit is declared by both distributions, or "one source
     // per enforcer" would already be two copies.
     expect(new Set(declared).size).toBe(declared.length);

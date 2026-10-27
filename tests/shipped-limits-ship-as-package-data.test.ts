@@ -5,8 +5,8 @@
 //
 // `SHIPPED` (a table then in src/limits.ts) is a TypeScript literal and
 // `_SHIPPED_LIMITS` (a table then in clients/_crucible_axi.py) is a Python
-// literal, so the six limit
-// declarations exist in FOUR places: those two source tables, `data/crucible
+// literal, so the limit declarations — six then, eight now —
+// existed in FOUR places: those two source tables, `data/crucible
 // .toml` and the repo-root `crucible.toml` template. That is a drift farm, and
 // it means the last resort is still a NUMBER IN A RESOLVER — which §S1c
 // forbids in as many words: "the last resort is a DATA FILE in the
@@ -236,13 +236,13 @@ describe("CR-CRU-131 §S1c — no limit DECLARATION is a literal in source", () 
     expect(
       DECLARED_LIMITS.length,
       "the declared set must carry both stacks' limits, or the scan is scoped to half the tree",
-    ).toBe(6);
+    ).toBe(8);
 
     // ── THE CONTROL, first. ───────────────────────────────────────────────
     // A scan that reports nothing proves nothing until it has been shown to
     // report something. The declarations LEGITIMATELY live in a `crucible.toml`
     // — that is the whole move — so the matchers are run over the checkout's
-    // own data file(s) and must find every one of the six there. A matcher
+    // own data file(s) and must find every one of the eight there. A matcher
     // that had been quietly broken (a typo'd name, a regex that never
     // compiled) fails HERE rather than passing green over `src/`.
     const dataFiles = CANDIDATE_DATA_FILES.filter((rel) => existsSync(join(REPO_ROOT, rel)));
@@ -515,7 +515,7 @@ describe("CR-CRU-131 §S1c — the server's shipped defaults TRAVEL in its distr
     }
   });
 
-  test("VERSION SKEW: a server distribution whose data file declares a limit this side does not enforce still resolves all three it owns, and still refuses the foreign one", () => {
+  test("VERSION SKEW: a server distribution whose data file declares a limit this side does not enforce still resolves all five it owns, and still refuses the foreign one", () => {
     const root = requireStage();
     const files = stagedDataFiles(root);
     expect(files).not.toEqual([]);

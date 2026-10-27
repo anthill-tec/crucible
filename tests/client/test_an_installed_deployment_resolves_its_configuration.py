@@ -24,7 +24,7 @@ unreadable-configuration warning names EVERY candidate in precedence order.
 
 `TheInstallerLaysDownTheServersOperatorFileTest` (§S2) -- the server's operator
 file, laid down beside the server's own database at `store_dir()/crucible.toml`:
-it exists, parses, is commented, carries EXACTLY the three server limits and
+it exists, parses, is commented, carries EXACTLY the five server limits and
 none of the client three; `crucible-clients.json` declares it under its own key
 distinct from the client `config` and both declared paths exist; an
 operator-EDITED copy survives a reinstall and survives a purge while an
@@ -172,7 +172,8 @@ SHIPPED_SERVER_DATA = REPO_ROOT / "src" / CONFIG_NAME
 FLEET_CONFIG_MANIFEST_KEY = "shipped_config"
 
 CLIENT_LIMITS = ("truncate_field_chars", "error_detail_chars", "roadmap_list_rows")
-SERVER_LIMITS = ("run_abandon_ms", "project_inactive_ms", "retention")
+SERVER_LIMITS = ("run_abandon_ms", "project_inactive_ms", "retention",
+                 "ingest_body_bytes", "raw_output_chars")
 
 #: `$HOME`, `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME` and `$BUN_INSTALL` -- the four
 #: the sandbox pins, and the four a fresh container has NONE of.
@@ -972,7 +973,7 @@ class TheInstallerLaysDownTheServersOperatorFileTest(_InstalledDeploymentCase):
             "`value = …` beside the four documented fields, never by "
             "overwriting `recommended` in place")
 
-    def test_the_server_file_carries_exactly_the_three_server_limits(self):
+    def test_the_server_file_carries_exactly_the_five_server_limits(self):
         """OWNERSHIP, in the documentation as well as in the code: the two
         shipped templates are disjoint BY DESIGN (version skew across two
         independently installable packages), and a client limit in the server's
@@ -983,7 +984,7 @@ class TheInstallerLaysDownTheServersOperatorFileTest(_InstalledDeploymentCase):
         self.assertEqual(
             sorted(SERVER_LIMITS), sorted(tables),
             "the file laid down beside the server's database must carry "
-            "EXACTLY the three limits the SERVER enforces; it carries %r"
+            "EXACTLY the five limits the SERVER enforces; it carries %r"
             % (sorted(tables),))
         for name in CLIENT_LIMITS:
             self.assertNotIn(

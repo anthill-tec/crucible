@@ -147,9 +147,10 @@ const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: 
   // shared `healthPayload` site: the boot's second resolution, disclosed beside
   // its first so the two health routes cannot drift about either. `codecs`
   // follows it: the names of the test and coverage codecs the board decodes.
+  // `limits` closes it: the ingest body bound a client checks before sending.
   {
     path: () => "/api/v2/health",
-    keys: ["ok", "status", "version", "uptime_s", "counts", "store", "listener", "codecs"],
+    keys: ["ok", "status", "version", "uptime_s", "counts", "store", "listener", "codecs", "limits"],
   },
   { path: () => "/api/v2/projects", keys: ["ok", "projects"] },
   { path: () => "/api/v2/plans", keys: ["ok", "plans"] },

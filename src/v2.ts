@@ -225,6 +225,61 @@ async function readBody(req: Request): Promise<V2Body | null> {
 }
 
 /**
+ * The largest ingest body the server reads, in bytes: `ingest_body_bytes`,
+ * resolved from the server's own `crucible.toml` at the point of use. Read per
+ * request, not cached, so an operator's edit holds on the next ingest without a
+ * restart.
+ */
+function ingestBodyBytes(): number {
+  return resolveLimit("ingest_body_bytes");
+}
+
+/**
+ * The body of an ingest route — `/runs`, `/runs/parsed`, `/runs/compile` —
+ * read under `ingest_body_bytes`, resolved live on every request. A body past
+ * it, known by its `Content-Length` or counted as it is read when it arrives
+ * with none, is read to its end and discarded: answering before the client
+ * finishes writing would leave it writing into a socket the board has closed,
+ * and it would see a broken pipe instead of this refusal. The refusal is a
+ * JSON 413 naming the limit and its value. A body within it parses exactly as
+ * `readBody` parses any other.
+ */
+async function readIngestBody(req: Request): Promise<V2Body | null | Response> {
+  const limit = ingestBodyBytes();
+  const refusal = (): Response =>
+    fail(413, `request body exceeds ingest_body_bytes (${limit} bytes)`);
+  if (req.body === null) return readBody(req);
+  const reader = req.body.getReader();
+  const declared = Number(req.headers.get("content-length") ?? Number.NaN);
+  if (Number.isFinite(declared) && declared > limit) {
+    await drain(reader);
+    return refusal();
+  }
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      chunks.length = 0;
+      await drain(reader);
+      return refusal();
+    }
+    chunks.push(value);
+  }
+  return readBody(new Request(req.url, { method: "POST", body: new Blob(chunks) }));
+}
+
+/** Read a body stream to its end, keeping nothing. */
+async function drain(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+  for (;;) {
+    const { done } = await reader.read();
+    if (done) return;
+  }
+}
+
+/**
  * §S1 — projectKey validation: UUID shape (400) then existence (404 + help).
  * CR-CRU-012 §S1b — an ARCHIVED project also 404s (help[] names the archived
  * state); the rejected call must never mutate, so registration/ingest can
@@ -1395,7 +1450,8 @@ function resolveRunClose(
 }
 
 async function handleRuns(store: Store, req: Request): Promise<Response> {
-  const body = await readBody(req);
+  const body = await readIngestBody(req);
+  if (body instanceof Response) return body;
   if (body === null) return fail(400, "malformed JSON body");
   const pk = requireProject(store, body.projectKey);
   if ("fail" in pk) return pk.fail;
@@ -1480,7 +1536,8 @@ function effectiveStack(store: Store, body: V2Body): string | undefined {
 }
 
 async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
-  const body = await readBody(req);
+  const body = await readIngestBody(req);
+  if (body instanceof Response) return body;
   if (body === null) return fail(400, "malformed JSON body");
   const pk = requireProject(store, body.projectKey);
   if ("fail" in pk) return pk.fail;
@@ -1555,7 +1612,8 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
 }
 
 async function handleRunsCompile(store: Store, req: Request): Promise<Response> {
-  const body = await readBody(req);
+  const body = await readIngestBody(req);
+  if (body instanceof Response) return body;
   if (body === null) return fail(400, "malformed JSON body");
   const pk = requireProject(store, body.projectKey);
   if ("fail" in pk) return pk.fail;

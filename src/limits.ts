@@ -13,7 +13,7 @@
 // A limit belongs to the process that ENFORCES it, because the two processes
 // are not necessarily on the same machine: the server resolves its own
 // database and may be installed anywhere, while a client resolves a PROJECT
-// DIRECTORY and then posts over HTTP. So the server's three limits live in a
+// DIRECTORY and then posts over HTTP. So the server's five limits live in a
 // `crucible.toml` beside its own database, found by the SAME rule that finds
 // the database ({@link resolveStore}), and the clients' three display limits
 // live in the project directory's `crucible.toml`, loaded by the mirror of
@@ -44,7 +44,7 @@
 
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
-import { resolveStore, type ResolveDbPathOpts } from "./server.ts";
+import { resolveStore, type ResolveDbPathOpts } from "./store-path.ts";
 
 /**
  * §S1b — one limit as an operator meets it: four fields of documentation and,
@@ -68,13 +68,17 @@ export interface LimitDeclaration {
  * the retired constants, which would carry an accident of the old source into
  * the file an operator reads.
  *
- * THREE, not four: `TOON_MAX_BYTES` is deliberately absent because CR-CRU-132
- * deletes the feature it bounds (CR-CRU-131 Risk).
+ * Five: the three the server always enforced, then `ingest_body_bytes` (the
+ * largest ingest body it reads) and `raw_output_chars` (the most captured
+ * runner output a run stores). `TOON_MAX_BYTES` is deliberately absent because
+ * CR-CRU-132 deletes the feature it bounds (CR-CRU-131 Risk).
  */
 export const SERVER_LIMIT_NAMES: readonly string[] = [
   "run_abandon_ms",
   "project_inactive_ms",
   "retention",
+  "ingest_body_bytes",
+  "raw_output_chars",
 ];
 
 /**
@@ -86,7 +90,7 @@ export const SERVER_LIMIT_NAMES: readonly string[] = [
  * operator reads can then disagree with the numbers the code falls back to
  * with nothing saying so.
  *
- * It documents the three limits THIS distribution enforces and no others: the
+ * It documents the five limits THIS distribution enforces and no others: the
  * clients are a separate package on a possibly different host at an
  * independently resolved version, and a table for a limit this side does not
  * enforce is ignored rather than adopted.
@@ -323,7 +327,7 @@ export function limitDisclosures(): string[] {
  *
  * An OUT-OF-RANGE `value` is a different fact: the operator configured
  * something ILLEGAL. That is refused, falls back to `recommended`, and is
- * disclosed — exactly like the other two. The other two have no such split.
+ * disclosed — exactly like the other four. The other four have no such split.
  */
 export function configuredRetention(): number | undefined {
   const { tables, file } = readServerConfig();

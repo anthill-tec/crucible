@@ -560,9 +560,9 @@ from it.
 
 **A limit is owned by the process that ENFORCES it**, because the server and the clients
 are not necessarily on the same machine: a client resolves a project directory and posts
-over HTTP, while the server may be installed anywhere. So the server's three (run-abandon
-deadline, project-inactive window, retention) live in a `crucible.toml` beside the
-server's own configuration, and the clients' three (field truncation,
+over HTTP, while the server may be installed anywhere. So the server's five (run-abandon
+deadline, project-inactive window, retention, `ingest_body_bytes`, `raw_output_chars`) live
+in a `crucible.toml` beside the server's own configuration, and the clients' three (field truncation,
 error-detail truncation, roadmap list length) live in a `crucible.toml` in the PROJECT
 directory beside the `.env` the clients already read. Neither process reads the other's
 file. One schema, one loader shape, two locations — one source per enforcer, not one file

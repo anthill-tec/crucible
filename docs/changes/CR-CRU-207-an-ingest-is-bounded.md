@@ -1,6 +1,6 @@
 # CR-CRU-207 — an ingest is bounded: its body size and the output a run keeps
 
-**Type** feature · **Points** 5 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152 · **Status** PENDING — filed
+**Type** feature · **Points** 5 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152 · **Status** DONE — merged 2026-10-28 (plan 209, cycles 747–751, gate 8445/0); filed
 2026-10-27 (split from CR-CRU-152 at its gap analysis, user ruling)
 
 ## Problem
@@ -31,8 +31,8 @@ what an ingest carries or what a run stores.
 
 | Limit | description | recommended | min | max |
 |---|---|---|---|---|
-| `ingest_body_bytes` | the largest ingest body the server reads | 134217728 (128 MiB, Bun's default the server ran at before) | 1048576 | 1073741824 |
-| `raw_output_chars` | the most captured runner output a run stores | 2000000 | 10000 | 50000000 |
+| `ingest_body_bytes` | Bytes of request body the server reads on an ingest route; a larger body is drained and refused with a JSON 413 naming this limit. Raise it when a project's reports and captured output legitimately exceed it; lower it to refuse oversized ingests sooner. | 134217728 (128 MiB, Bun's default the server ran at before) | 1048576 | 1073741824 |
+| `raw_output_chars` | Characters of captured runner output a run stores; longer output keeps its first and last halves around a line naming how much was cut. Raise it to keep more of long logs; lower it to save store space. | 2000000 | 10000 | 50000000 |
 
 `raw_output_chars` had no earlier value: a server with no operator file now caps raw output where it
 stored all of it, and the file's header says so. Everything that counts the server's limits counts
@@ -43,7 +43,7 @@ five: the comments in `src/limits.ts` and `src/crucible.toml`, the RUNBOOK's pro
 ### §S2 — the board refuses an oversized body with JSON
 
 `Bun.serve`'s own `maxRequestBodySize` is fixed at boot to twice `ingest_body_bytes`' declared
-`max` (2 GiB), a value the server module exports and passes to `Bun.serve`, so a value an operator sets live, up to that `max`, is always enforced by the
+`max` (2 GiB), computed by a function the server module exports and calls when it starts, so a value an operator sets live, up to that `max`, is always enforced by the
 handler rather than by Bun. On `POST /api/v2/runs`, `/api/v2/runs/parsed` and
 `/api/v2/runs/compile`, a body whose length passes `ingest_body_bytes` (read live, as every limit
 is) — by its `Content-Length`, or by counting as it reads a body sent without one — is read to its
@@ -71,21 +71,26 @@ the same cap.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the limits are declared.** Both limits resolve through `src/limits.ts` with §S1's
+- [x] **AC1 — the limits are declared.** Both limits resolve through `src/limits.ts` with §S1's
       values, appear in `src/crucible.toml`, PRD §4.13 and the RUNBOOK (the existing guard that every limit is
       documented passes), and an operator file can set each within its range.
-- [ ] **AC2 — a JSON 413, on a real socket.** On each of the three ingest routes, a body over
+- [x] **AC2 — a JSON 413, on a real socket.** On each of the three ingest routes, a body over
       `ingest_body_bytes` (set small in the test), sent by Python's `urllib` over a real socket and
       larger than the socket buffers, receives a 413 whose JSON body names `ingest_body_bytes`;
       the same for a body sent chunked, with no `Content-Length`; nothing is stored; a body at the
-      limit is accepted. The `maxRequestBodySize` the server passes to `Bun.serve` is 2 GiB, so with
+      limit is accepted. The `maxRequestBodySize` the server passes to `Bun.serve`, computed by its exported function, is 2 GiB, so with
       no operator file (the recommended 128 MiB) the board's own JSON 413 answers before Bun's empty
       one could (user ruling 2026-10-27: asserted on the value, no 128 MiB transfer in the suite).
-- [ ] **AC3 — health.** Both health routes carry `limits.ingest_body_bytes` with the resolved value.
-- [ ] **AC4 — the cap.** A raw text over a small `raw_output_chars` is stored exactly as §S4 states
+- [x] **AC3 — health.** Both health routes carry `limits.ingest_body_bytes` with the resolved value.
+- [x] **AC4 — the cap.** A raw text over a small `raw_output_chars` is stored exactly as §S4 states
       (asserted string, odd and even limits, a text with a surrogate pair at the cut); a text at the
       limit is stored whole; the codec saw the whole text (a bun console detail beyond the cap still
       marries).
+
+- *Recorded at merge:* two test names still describe the shape before the FIX cycle — the 413 test's
+  "the server module exports MAX_REQUEST_BODY_SIZE…" (now the function `maxRequestBodySize()`), and
+  `tests/retention-disposable-kinds.test.ts`'s "six" (now eight). The FIX cycle moved `resolveStore` into
+  `src/store-path.ts` so no module imports `src/server.ts`.
 
 ## Non-goals
 
