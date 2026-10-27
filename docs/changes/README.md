@@ -201,6 +201,10 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 ## Deferred — post-0.2.0
 
+- 2026-10-27 — **the Now pane's run chips cannot tell repeated runs apart** (user-raised, a fix CR for a
+  release after 0.4.0). A VERIFY agent that runs one module three times shows three identical
+  `14/14` chips, which read as a duplicated run though each is its own run id. Show each chip's time,
+  or fold identical repeats into a count (`14/14 ×3`). To be filed at the next planning review.
 - 2026-09-18 — *resolved:* the `test-targets.ts` wait-blindness became **CR-CRU-144**; the BDD
   run-identity gap became a §S3 AC and shipped in CR-CRU-015 (cycle C3). Both entries deleted per
   the register's own rule — memory holds only what the repo does not yet track.
