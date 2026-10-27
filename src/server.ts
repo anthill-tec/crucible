@@ -8,7 +8,13 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SHIPPED_DATA_FILE, limitDisclosures, resolveLimit, serverConfigPath } from "./limits.ts";
+import {
+  SHIPPED_DATA_FILE,
+  limitDisclosures,
+  resolveLimit,
+  serverConfigPath,
+  shippedLimits,
+} from "./limits.ts";
 import { Store, defaultRetention, RETENTION_DISPOSABLE_KINDS } from "./store.ts";
 import { handleV2 } from "./v2.ts";
 import { codecNames } from "./codecs/index.ts";
@@ -16,6 +22,14 @@ import { codecNames } from "./codecs/index.ts";
 const pkg = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 ) as { version: string };
+
+/**
+ * Bun's own request-body bound, fixed at boot to twice `ingest_body_bytes`'
+ * declared `max`. Every value an operator can set live sits beneath it, so an
+ * oversized ingest is always refused by the board's own JSON 413
+ * (`readIngestBody` in src/v2.ts), never by Bun's empty one.
+ */
+export const MAX_REQUEST_BODY_SIZE: number = 2 * shippedLimits().ingest_body_bytes!.max;
 
 export interface StartServerOpts {
   port?: number;
@@ -392,6 +406,7 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
     // §S3 — SSE connections are long-lived and quiet between 15s keep-alives;
     // Bun's default 10s idleTimeout would reset them mid-stream.
     idleTimeout: 0,
+    maxRequestBodySize: MAX_REQUEST_BODY_SIZE,
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
       // CR-CRU-008 §S4 — the v1 shim is RETIRED: no legacy /api/* routes
