@@ -43,7 +43,7 @@ five: the comments in `src/limits.ts` and `src/crucible.toml`, the RUNBOOK's pro
 ### §S2 — the board refuses an oversized body with JSON
 
 `Bun.serve`'s own `maxRequestBodySize` is fixed at boot to twice `ingest_body_bytes`' declared
-`max` (2 GiB), a value the server module exports and passes to `Bun.serve`, so a value an operator sets live, up to that `max`, is always enforced by the
+`max` (2 GiB), computed by a function the server module exports and calls when it starts, so a value an operator sets live, up to that `max`, is always enforced by the
 handler rather than by Bun. On `POST /api/v2/runs`, `/api/v2/runs/parsed` and
 `/api/v2/runs/compile`, a body whose length passes `ingest_body_bytes` (read live, as every limit
 is) — by its `Content-Length`, or by counting as it reads a body sent without one — is read to its
@@ -78,7 +78,7 @@ the same cap.
       `ingest_body_bytes` (set small in the test), sent by Python's `urllib` over a real socket and
       larger than the socket buffers, receives a 413 whose JSON body names `ingest_body_bytes`;
       the same for a body sent chunked, with no `Content-Length`; nothing is stored; a body at the
-      limit is accepted. The `maxRequestBodySize` the server passes to `Bun.serve` is 2 GiB, so with
+      limit is accepted. The `maxRequestBodySize` the server passes to `Bun.serve`, computed by its exported function, is 2 GiB, so with
       no operator file (the recommended 128 MiB) the board's own JSON 413 answers before Bun's empty
       one could (user ruling 2026-10-27: asserted on the value, no 128 MiB transfer in the suite).
 - [ ] **AC3 — health.** Both health routes carry `limits.ingest_body_bytes` with the resolved value.
