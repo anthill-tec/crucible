@@ -40,16 +40,19 @@ first and:
   `coverage: {codec, data}` when the run measured coverage, `raw` (the captured runner output), and
   `stack`, `tier`, `context`, `runId`, `release` as today.
 
-It returns the response; a 413 is reported naming `ingest_body_bytes`. The shared count
-`junit_testcase_count` returns both counts of the Design. CR-CRU-206 moves the other three clients
-onto the same function.
+It returns the response; a 413 is reported naming `ingest_body_bytes`. Health that carries `codecs`
+but no `limits` is read as no limit advertised: the client sends, and a 413 is still reported. The
+second count of the Design is a new shared function, `junit_non_skipped_count`;
+`junit_testcase_count` keeps its return type, so the maven and rust clients that call it are
+untouched until CR-CRU-206. CR-CRU-206 moves the other three clients onto the same ingest.
 
 ### §S2 — every report-ingesting verb of the bun and python clients uses it
 
 - **bun** (`bun-crucible.py`): `test`, `unit`, `module`, `integration`, `e2e`, `regression`, `bdd`,
   `auto-ingest`, and the suites `pre-merge-gate` runs. `codec: "junit"`; coverage `lcov`. A target
   declaring `crucible.rawReport` sends its declared codec's report as `data`, inline (not
-  `dataPath`).
+  `dataPath`), and its coverage when measured; the `raw-report-carries-no-coverage` warning
+  retires.
 - **python** (`python-crucible.py`): the same verbs. `codec: "junit"`; coverage `lcov` after
   `coverage lcov`. A pytest run is invoked with its JUnit suite name pinned to `pytest`, so the
   board's grouping rule (CR-CRU-152 §S2) holds.
@@ -66,7 +69,8 @@ commit:
 
 - bun- or python-only: `tests/clients-bun-crucible.test.ts`'s console cases,
   `tests/client/test_cr087_*`, `test_cr088_*`, `test_cr040_*`;
-- shared by all five clients, owned here for every client (CR-CRU-206 then extends them):
+- shared by all five clients: this CR changes their bun and python cases, and their maven, rust and
+  arduino cases keep passing on `/api/v2/runs/parsed` until CR-CRU-206 changes them:
   `test_client_tier_stamping.py`, `test_cr017_client_lifecycle.py`, `test_cr051_files_count_parity.py`,
   `test_a_runner_that_ran_nothing_is_a_failure.py`, `test_a_run_without_agent_files_nothing.py`,
   `test_suite_run_verbs_gain_a_cycle_flag.py`, `test_verification_runs_declare_their_release.py`,
@@ -87,12 +91,13 @@ advertised limit) or cannot reach the board carries no figures and says why.
       sends `dataPath`. A census test enumerates the verbs per client and asserts the route and the
       call site.
 - [ ] **AC2 — coverage as its report.** A coverage run of each client sends `coverage: {codec:
-      "lcov", data}`.
+      "lcov", data}`, a bun `rawReport` target's included, and no `raw-report-carries-no-coverage`
+      warning remains; the coverage line on stderr reads the response's coverage.
 - [ ] **AC3 — the same figures.** Each of CR-CRU-152's bun and python fixtures, ingested by this
       CR's client, stores the counts, statuses and coverage of its `expected.json`.
 - [ ] **AC4 — no parser left.** Neither client module defines a JUnit, lcov or console parse or a
-      classname grouping; a source scan asserts it, exempting only `junit_testcase_count` and
-      `_raw_report_result_count`.
+      classname grouping; a source scan asserts it, exempting only `junit_testcase_count`,
+      `junit_non_skipped_count` and `_raw_report_result_count`.
 - [ ] **AC5 — local decisions.** "Ran nothing", bun's filter check and the exit code come from the
       runner's exit code and the two counts only, asserted per client on a run that ran nothing, a
       bun filter that matched nothing (`bun test -t <no match>` writes skipped testcases), and a run
@@ -103,13 +108,18 @@ advertised limit) or cannot reach the board carries no figures and says why.
 - [ ] **AC7 — no board, no figures.** With the board unreachable at the ingest, each client's
       envelope carries no figures and says the run was not filed, and `pre-merge-gate` reports that
       suite unreported and is not green.
-- [ ] **AC8 — an older board.** Against a board whose health carries no `codecs`, each client
-      refuses to ingest, naming the board's version and CR-CRU-152, and sends nothing.
+- [ ] **AC8 — an older board.** Against a board whose health carries no `codecs`, or whose `codecs`
+      lack one the run needs, each client refuses to ingest, naming the board's version and
+      CR-CRU-152, and sends nothing; against health with `codecs` but no `limits`, it sends.
+      `junit_testcase_count` still returns an `int`, and the maven and rust clients' "ran nothing"
+      holds unchanged.
 - [ ] **AC9 — too large.** A body over the advertised `ingest_body_bytes` is refused by the client
       before sending, naming the limit; a 413 from the board is reported naming it; in both the run
       is not filed.
 - [ ] **AC10 — raw.** Each verb of §S2 but `auto-ingest` sends its captured runner output as `raw`.
-- [ ] **AC11 — this repo's own runs.** A run of this repo's bun suite and of its python suite
+- [ ] **AC11 — pytest's suite name.** A pytest run through the python client invokes pytest with its
+      JUnit suite name pinned to `pytest`.
+- [ ] **AC12 — this repo's own runs.** A run of this repo's bun suite and of its python suite
       through their clients stores `codec: "junit"` with the counts the runner printed.
 
 ## Non-goals
