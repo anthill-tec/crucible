@@ -2,7 +2,8 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { RunSchema, RunSummary, SuiteNode, TestLeaf } from "../types.ts";
+import type { RunSummary, SuiteNode, TestLeaf } from "../types.ts";
+import type { DecodedRun } from "./index.ts";
 
 interface XmlElement {
   name: string;
@@ -115,33 +116,86 @@ function toDurationMs(time: string | undefined): number {
   return Number.isFinite(seconds) ? Math.round(seconds * 1000) : 0;
 }
 
+/** A failure's message is cut to this many characters. */
+const MESSAGE_LIMIT = 1000;
+/** A failure's trace is cut to this many characters. */
+const TRACE_LIMIT = 8000;
+
+/** The value when it holds more than whitespace, else undefined. */
+function nonBlank(value: string | undefined): string | undefined {
+  return value !== undefined && value.trim().length > 0 ? value : undefined;
+}
+
+/** A suite or case name; a missing or blank one is `?`. */
+function nameOf(el: XmlElement): string {
+  return nonBlank(el.attrs["name"]) ?? "?";
+}
+
+/**
+ * A failure's text: the message is the non-empty `message` attribute, else
+ * the first non-empty line of the text; the trace is the text; the type is
+ * the `type` attribute. Each part is present only when non-empty.
+ */
+function toFailure(failureEl: XmlElement): NonNullable<TestLeaf["failure"]> {
+  const trace = failureEl.text.trim();
+  const firstLine = trace.split("\n").find((line) => line.trim().length > 0)?.trim();
+  const message = nonBlank(failureEl.attrs["message"]) ?? firstLine;
+  const type = nonBlank(failureEl.attrs["type"]);
+  return {
+    ...(message !== undefined ? { message: message.slice(0, MESSAGE_LIMIT) } : {}),
+    ...(type !== undefined ? { type } : {}),
+    ...(trace.length > 0 ? { trace: trace.slice(0, TRACE_LIMIT) } : {}),
+  };
+}
+
 function toLeaf(testcase: XmlElement): TestLeaf {
   const failureEl = testcase.children.find((c) => c.name === "failure" || c.name === "error");
   const skipped = testcase.children.some((c) => c.name === "skipped");
   const leaf: TestLeaf = {
-    name: testcase.attrs["name"] ?? "",
+    name: nameOf(testcase),
     status: failureEl !== undefined ? "fail" : skipped ? "pending" : "pass",
     duration_ms: toDurationMs(testcase.attrs["time"]),
   };
-  if (failureEl !== undefined) {
-    const trace = failureEl.text.trim();
-    const firstLine = trace.split("\n").find((line) => line.trim().length > 0);
-    leaf.failure = {
-      message: failureEl.attrs["message"] ?? firstLine?.trim() ?? "test failed",
-      ...(failureEl.attrs["type"] !== undefined ? { type: failureEl.attrs["type"] } : {}),
-      ...(trace.length > 0 ? { trace } : {}),
-    };
-  }
+  if (failureEl !== undefined) leaf.failure = toFailure(failureEl);
   return leaf;
 }
 
-function toSuite(testsuite: XmlElement): SuiteNode {
-  const children = testsuite.children.filter((c) => c.name === "testcase").map(toLeaf);
+function toNode(name: string, cases: XmlElement[]): SuiteNode {
+  const children = cases.map(toLeaf);
   return {
-    name: testsuite.attrs["name"] ?? "",
+    name,
     status: children.some((c) => c.status === "fail") ? "fail" : "pass",
     children,
   };
+}
+
+function casesOf(testsuite: XmlElement): XmlElement[] {
+  return testsuite.children.filter((c) => c.name === "testcase");
+}
+
+/**
+ * The file a case is counted under: its non-empty `file`, else its non-empty
+ * `classname`, else its suite's name, with `\` read as `/`.
+ */
+function fileOf(testcase: XmlElement, suiteName: string): string {
+  const file =
+    nonBlank(testcase.attrs["file"]) ?? nonBlank(testcase.attrs["classname"]) ?? suiteName;
+  return file.replace(/\\/g, "/");
+}
+
+/**
+ * pytest's report grouped by class: one node per non-empty `classname` in
+ * first-seen order; a case with none joins the node `pytest`.
+ */
+function groupByClassname(cases: XmlElement[]): SuiteNode[] {
+  const groups = new Map<string, XmlElement[]>();
+  for (const testcase of cases) {
+    const key = nonBlank(testcase.attrs["classname"]) ?? "pytest";
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [testcase]);
+    else group.push(testcase);
+  }
+  return [...groups].map(([name, grouped]) => toNode(name, grouped));
 }
 
 function summarize(tree: SuiteNode[]): RunSummary {
@@ -160,17 +214,12 @@ function summarize(tree: SuiteNode[]): RunSummary {
 
 /**
  * CR-CRU-003 — recursive `.//testsuite` semantics (bun `--reporter=junit`
- * nests suites): a suite node's children are its DIRECT testcases; nested
- * <testsuite> elements become their own tree nodes; empty wrapper suites
- * that only hold nested suites are skipped.
+ * nests suites): every <testsuite> holding testcases directly, at any depth,
+ * in document order; a suite holding none is not collected.
  */
-function collectSuites(testsuite: XmlElement, out: SuiteNode[]): void {
-  const nested = testsuite.children.filter((c) => c.name === "testsuite");
-  const hasDirectCases = testsuite.children.some((c) => c.name === "testcase");
-  if (hasDirectCases || nested.length === 0) {
-    out.push(toSuite(testsuite));
-  }
-  for (const inner of nested) {
+function collectSuites(testsuite: XmlElement, out: XmlElement[]): void {
+  if (casesOf(testsuite).length > 0) out.push(testsuite);
+  for (const inner of testsuite.children.filter((c) => c.name === "testsuite")) {
     collectSuites(inner, out);
   }
 }
@@ -192,7 +241,12 @@ function collectRawOutput(el: XmlElement, out: string[]): void {
   }
 }
 
-export function parseJunit(xml: string): RunSchema {
+/**
+ * One JUnit reading for every stack: a node per suite holding testcases, the
+ * distinct files its cases name, and — when `stack` is `python` and the
+ * report's only suite is named `pytest` — its cases grouped by classname.
+ */
+export function parseJunit(xml: string, stack?: string): DecodedRun {
   const root = parseXml(xml);
   let suites: XmlElement[];
   if (root.name === "testsuites") {
@@ -202,13 +256,22 @@ export function parseJunit(xml: string): RunSchema {
   } else {
     throw new Error(`malformed JUnit XML: unexpected root element <${root.name}>`);
   }
-  const tree: SuiteNode[] = [];
+  const holders: XmlElement[] = [];
   for (const suite of suites) {
-    collectSuites(suite, tree);
+    collectSuites(suite, holders);
   }
+  const files = new Set<string>();
+  for (const holder of holders) {
+    const suiteName = nameOf(holder);
+    for (const testcase of casesOf(holder)) files.add(fileOf(testcase, suiteName));
+  }
+  const isPytest = stack === "python" && suites.length === 1 && suites[0]!.attrs["name"] === "pytest";
+  const tree = isPytest
+    ? groupByClassname(holders.flatMap(casesOf))
+    : holders.map((holder) => toNode(nameOf(holder), casesOf(holder)));
   const rawParts: string[] = [];
   collectRawOutput(root, rawParts);
-  const result: RunSchema = { summary: summarize(tree), tree };
+  const result: DecodedRun = { summary: summarize(tree), tree, files: [...files] };
   if (rawParts.length > 0) result.raw = rawParts.join("\n");
   return result;
 }
@@ -217,13 +280,15 @@ export function parseJunit(xml: string): RunSchema {
  * A report file, or a directory of `TEST-*.xml` read in file-name order and
  * merged into one run. A malformed file in a directory is skipped and named
  * (by its file name) to `onSkip`; when no file decodes the read is refused.
+ * Each file is read under the run's `stack`.
  */
 export async function parseJunitPath(
   path: string,
   onSkip?: (report: string, error: string) => void,
-): Promise<RunSchema> {
+  stack?: string,
+): Promise<DecodedRun> {
   if (statSync(path).isFile()) {
-    return parseJunit(readFileSync(path, "utf-8"));
+    return parseJunit(readFileSync(path, "utf-8"), stack);
   }
   const files = readdirSync(path)
     .filter((f) => f.startsWith("TEST-") && f.endsWith(".xml"))
@@ -233,13 +298,14 @@ export async function parseJunitPath(
   }
   const tree: SuiteNode[] = [];
   const rawParts: string[] = [];
+  const caseFiles = new Set<string>();
   const skipped: string[] = [];
   let decodedCount = 0;
   for (const file of files) {
     const full = join(path, file);
-    let report: RunSchema;
+    let report: DecodedRun;
     try {
-      report = parseJunit(readFileSync(full, "utf-8"));
+      report = parseJunit(readFileSync(full, "utf-8"), stack);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       skipped.push(`${file}: ${error}`);
@@ -249,12 +315,13 @@ export async function parseJunitPath(
     }
     decodedCount += 1;
     tree.push(...report.tree);
+    for (const caseFile of report.files ?? []) caseFiles.add(caseFile);
     if (report.raw !== undefined) rawParts.push(report.raw);
   }
   if (decodedCount === 0) {
     throw new Error(`no TEST-*.xml file in ${path} could be decoded (${skipped.join("; ")})`);
   }
-  const result: RunSchema = { summary: summarize(tree), tree };
+  const result: DecodedRun = { summary: summarize(tree), tree, files: [...caseFiles] };
   if (rawParts.length > 0) result.raw = rawParts.join("\n");
   return result;
 }

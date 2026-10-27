@@ -14,9 +14,17 @@ export interface DecodeOptions {
   onSkip?: (report: string, error: string) => void;
 }
 
+/**
+ * A run as a codec decodes it: the run, plus the distinct files its cases
+ * name. The files are counted in an ingest's response and never stored.
+ */
+export interface DecodedRun extends RunSchema {
+  files?: string[];
+}
+
 export interface Codec {
-  parse(data: string, options?: DecodeOptions): RunSchema | Promise<RunSchema>;
-  parsePath?(path: string, options?: DecodeOptions): RunSchema | Promise<RunSchema>;
+  parse(data: string, options?: DecodeOptions): DecodedRun | Promise<DecodedRun>;
+  parsePath?(path: string, options?: DecodeOptions): DecodedRun | Promise<DecodedRun>;
 }
 
 /** One `warnings[]` entry of an ingest response, the shape the client envelopes use. */
@@ -29,8 +37,9 @@ export const codecs: Map<string, Codec> = new Map<string, Codec>([
   [
     "junit",
     {
-      parse: (data: string) => parseJunit(data),
-      parsePath: (path: string, options?: DecodeOptions) => parseJunitPath(path, options?.onSkip),
+      parse: (data: string, options?: DecodeOptions) => parseJunit(data, options?.stack),
+      parsePath: (path: string, options?: DecodeOptions) =>
+        parseJunitPath(path, options?.onSkip, options?.stack),
     },
   ],
   [
@@ -80,20 +89,22 @@ function joinRaw(bodyRaw: unknown, reportRaws: Array<string | undefined>): strin
  * A report that cannot be decoded is skipped and named in `warnings`; when no
  * report decodes, or the list is empty, the run is refused. Parse and
  * filesystem failures surface as an error string so callers keep the JSON
- * {ok:false, error} contract instead of leaking a plain-text 500.
+ * {ok:false, error} contract instead of leaking a plain-text 500. `files` is
+ * the count of distinct files the decoded reports name, across all of them;
+ * it is answered, never stored.
  */
 export async function parseRunBody(
   codec: Codec,
   body: { data?: unknown; dataPath?: unknown; raw?: unknown },
   codecName: string,
   stack?: string,
-): Promise<{ run: RunSchema; warnings: IngestWarning[] } | { error: string }> {
+): Promise<{ run: RunSchema; warnings: IngestWarning[]; files: number } | { error: string }> {
   const warnings: IngestWarning[] = [];
   const skip = (report: string, error: string): void => {
     warnings.push({ code: "report-skipped", detail: `report ${report} skipped: ${error}` });
   };
   const options: DecodeOptions = { ...(stack !== undefined ? { stack } : {}), onSkip: skip };
-  const decoded: RunSchema[] = [];
+  const decoded: DecodedRun[] = [];
   try {
     if (typeof body.data === "string") {
       decoded.push(await codec.parse(body.data, options));
@@ -135,5 +146,6 @@ export async function parseRunBody(
     ...(merged.coverage !== undefined ? { coverage: merged.coverage } : {}),
     ...(raw !== undefined ? { raw } : {}),
   };
-  return { run, warnings };
+  const files = new Set(decoded.flatMap((report) => report.files ?? []));
+  return { run, warnings, files: files.size };
 }

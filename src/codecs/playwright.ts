@@ -9,7 +9,8 @@
 // only callers are the `codecs` map's "playwright" entry.
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { RunSchema, RunSummary, SuiteNode, TestLeaf } from "../types.ts";
+import type { RunSummary, SuiteNode, TestLeaf } from "../types.ts";
+import type { DecodedRun } from "./index.ts";
 
 interface PwError {
   message?: string;
@@ -35,6 +36,7 @@ interface PwTest {
 
 interface PwSpec {
   title: string;
+  file?: string;
   tests?: PwTest[];
 }
 
@@ -91,12 +93,13 @@ function specToNodes(featureTitle: string, spec: PwSpec): SuiteNode[] {
   return tests.map((test) => scenarioNode(name, test));
 }
 
-function collectScenarios(suite: PwSuite, out: SuiteNode[]): void {
+function collectScenarios(suite: PwSuite, out: SuiteNode[], files: Set<string>): void {
   for (const spec of suite.specs ?? []) {
     out.push(...specToNodes(suite.title, spec));
+    if (spec.file !== undefined && spec.file.length > 0) files.add(spec.file);
   }
   for (const inner of suite.suites ?? []) {
-    collectScenarios(inner, out);
+    collectScenarios(inner, out, files);
   }
 }
 
@@ -114,19 +117,21 @@ function summarize(tree: SuiteNode[]): RunSummary {
   return summary;
 }
 
-export function parsePlaywright(data: string): RunSchema {
+/** The run, and the distinct spec files its specs name. */
+export function parsePlaywright(data: string): DecodedRun {
   const report = JSON.parse(data) as PwReport;
   if (report === null || typeof report !== "object" || !Array.isArray(report.suites)) {
     throw new Error("malformed Playwright JSON report: missing suites array");
   }
   const tree: SuiteNode[] = [];
+  const files = new Set<string>();
   for (const suite of report.suites) {
-    collectScenarios(suite, tree);
+    collectScenarios(suite, tree, files);
   }
-  return { summary: summarize(tree), tree };
+  return { summary: summarize(tree), tree, files: [...files] };
 }
 
-export function parsePlaywrightPath(path: string): RunSchema {
+export function parsePlaywrightPath(path: string): DecodedRun {
   if (statSync(path).isFile()) {
     return parsePlaywright(readFileSync(path, "utf-8"));
   }

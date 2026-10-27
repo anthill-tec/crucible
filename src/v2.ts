@@ -1204,18 +1204,23 @@ function evidenceResponse(
   return json({ ...body, help: [...(options.help ?? []), ...hints.readEvidence] }, options.status);
 }
 
+/**
+ * An ingest's answer. `files` (the run's distinct-file count) joins the `run`
+ * block when the route computed one; it is never stored.
+ */
 function runResponse(
   event: RunEvent,
   summary: RunSummary,
   help?: string[],
   warnings?: IngestWarning[],
+  files?: number,
 ): Response {
   return evidenceResponse(
     {
       ok: true,
       changed: true,
       event: event.id,
-      run: summary,
+      run: files !== undefined ? { ...summary, files } : summary,
       verdict: runVerdict(summary),
       ...attachEcho(event),
       ...(warnings !== undefined ? { warnings } : {}),
@@ -1397,7 +1402,7 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   // codec before it decodes.
   const parsed = await parseRunBody(codec, body, codecName, effectiveStack(store, body));
   if ("error" in parsed) return fail(400, parsed.error);
-  const { run, warnings } = parsed;
+  const { run, warnings, files } = parsed;
 
   // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
   // BEFORE any touchAgent/record — no agent row is created or resurrected);
@@ -1444,6 +1449,7 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     run.summary,
     help.length > 0 ? help : undefined,
     warnings.length > 0 ? warnings : undefined,
+    files,
   );
 }
 
