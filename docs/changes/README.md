@@ -196,11 +196,15 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-152](CR-CRU-152-each-stacks-reports-are-decoded-on-the-server.md) | each stack's reports are decoded on the server | feature | PENDING | 151, 205 | 8 (0.4.0) |
 | [CR-CRU-205](CR-CRU-205-a-waiting-client-is-recognised-by-its-system-call.md) | a waiting client is recognised by its system call, not a kernel function name | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-207](CR-CRU-207-an-ingest-is-bounded.md) | an ingest is bounded: its body size and the output a run keeps | feature | PENDING | 152 | 8 (0.4.0) |
+| [CR-CRU-208](CR-CRU-208-a-runner-that-failed-is-never-filed-as-green.md) | a runner that failed is never filed as green | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-204](CR-CRU-204-the-bun-and-python-clients-send-their-reports.md) | the bun and python clients send their runners' reports and parse nothing | feature | PENDING | 152, 207 | 8 (0.4.0) |
 | [CR-CRU-206](CR-CRU-206-the-maven-rust-and-arduino-clients-send-their-reports.md) | the maven, rust and arduino clients send their runners' reports and parse nothing | feature | PENDING | 204 | 8 (0.4.0) |
 
 ## Deferred — post-0.2.0
 
+- 2026-10-28 — **pre-existing pyright findings** in `tests/client/test_client_limits_resolve_from_configuration.py`
+  (an `assertIn` container typed `Any | None`, around lines 751/754; pi-lens reports 53). They predate
+  CR-CRU-207 (`git diff develop` showed its only change there was the limit list). A test-hygiene cleanup.
 - 2026-10-27 — **for CR-CRU-204's and CR-CRU-206's gap analyses** (found building CR-CRU-152's real
   fixtures). (a) A bun test file that fails to load leaves no testcase in bun's JUnit report, so a run
   ingested from the report undercounts (42 failed where bun counted 43); once the clients parse
