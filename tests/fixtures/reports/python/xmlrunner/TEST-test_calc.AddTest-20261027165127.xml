@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="test_calc.AddTest-20261027165127" tests="3" file="test_calc.py" time="0.001" timestamp="2026-10-27T16:51:27" failures="1" errors="0" skipped="1">
+	<testcase classname="test_calc.AddTest" name="test_adds_two_numbers" time="0.000" timestamp="2026-10-27T16:51:27" file="tests/test_calc.py" line="7"/>
+	<testcase classname="test_calc.AddTest" name="test_adds_with_a_wrong_expectation" time="0.001" timestamp="2026-10-27T16:51:27" file="tests/test_calc.py" line="10">
+		<failure type="AssertionError" message="4 != 5"><![CDATA[Traceback (most recent call last):
+  File "/project/tests/test_calc.py", line 11, in test_adds_with_a_wrong_expectation
+    self.assertEqual(add(2, 2), 5)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+AssertionError: 4 != 5
+]]></failure>
+	</testcase>
+	<testcase classname="test_calc.AddTest" name="test_adds_floats" time="0.000" timestamp="2026-10-27T16:51:27" file="tests/test_calc.py" line="13">
+		<skipped type="skip" message="not ready yet"/>
+	</testcase>
+</testsuite>

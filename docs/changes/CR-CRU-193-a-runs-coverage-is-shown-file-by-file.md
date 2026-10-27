@@ -1,7 +1,7 @@
 # CR-CRU-193 — a run's coverage is shown file by file
 
 **Type** feature · **Points** 8 (provisional, set at filing 2026-10-16; the estimate is revisited
-at gap analysis) · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-16
+at gap analysis) · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152 · **Status** PENDING — filed 2026-10-16
 (Model B request, user ruling: its own CR in 0.4.0; design is settled with the user before its gap
 analysis)
 
@@ -22,8 +22,8 @@ shows it, so a project sees which files are uncovered.
 
 - **Which stacks:** the python client only (Model B's ask), or every stack whose coverage is lcov
   (bun, rust, python) plus mvn's JaCoCo.
-- **Where it is decoded:** in each client, as today's totals are, or on the server, the direction
-  CR-CRU-152 takes for the other report kinds. This decides whether the CR follows CR-CRU-152.
+- **Where it is decoded:** *settled 2026-10-27 (user ruling):* on the server, in CR-CRU-152's `lcov` and
+  `jacoco` coverage codecs; this CR follows CR-CRU-152.
 - **Where the board shows it:** the Coverage tab, a run's detail, or both. It needs a storyboard
   frame before RED.
 - **Store and payload:** the schema change and the shape of the coverage object in the ingest,

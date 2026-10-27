@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="test_wordy.WordyTest-20261027165127" tests="1" file="test_wordy.py" time="0.000" timestamp="2026-10-27T16:51:27" failures="1" errors="0" skipped="0">
+	<testcase classname="test_wordy.WordyTest" name="test_shouts_the_wrong_thing" time="0.000" timestamp="2026-10-27T16:51:27" file="tests/test_wordy.py" line="7">
+		<failure type="AssertionError" message="'HI!' != 'hi'&#10;- HI!&#10;+ hi&#10; : shouting changes the case"><![CDATA[Traceback (most recent call last):
+  File "/project/tests/test_wordy.py", line 8, in test_shouts_the_wrong_thing
+    self.assertEqual(shout("hi"), "hi", "shouting changes the case")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'HI!' != 'hi'
+- HI!
++ hi
+ : shouting changes the case
+]]></failure>
+	</testcase>
+</testsuite>

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="7" failures="2" errors="0" uuid="fe4f8cee-7c6f-41b5-bbcd-d5e8aad847dd" timestamp="2026-10-27T16:54:03.183+05:30" time="0.006">
+    <testsuite name="scratch_calc::parity" tests="3" disabled="0" errors="0" failures="1">
+        <testcase name="even_is_even" classname="scratch_calc::parity" timestamp="2026-10-27T16:54:03.183+05:30" time="0.003">
+        </testcase>
+        <testcase name="odd_is_reported_wrongly" classname="scratch_calc::parity" timestamp="2026-10-27T16:54:03.183+05:30" time="0.003">
+            <failure message="thread &apos;odd_is_reported_wrongly&apos; (626758) panicked at tests/parity.rs:10:5" type="test failure with exit code 101">thread &apos;odd_is_reported_wrongly&apos; (626758) panicked at tests/parity.rs:10:5:
+assertion `left == right` failed
+  left: &quot;odd&quot;
+ right: &quot;even&quot;
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</failure>
+            <system-out>
+running 1 test
+test odd_is_reported_wrongly ... FAILED
+
+failures:
+
+failures:
+    odd_is_reported_wrongly
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err>
+thread &apos;odd_is_reported_wrongly&apos; (626758) panicked at tests/parity.rs:10:5:
+assertion `left == right` failed
+  left: &quot;odd&quot;
+ right: &quot;even&quot;
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+</system-err>
+        </testcase>
+        <testcase name="slow_parity_sweep" classname="scratch_calc::parity" timestamp="2026-10-27T16:54:03.183+05:30" time="0.006">
+        </testcase>
+    </testsuite>
+    <testsuite name="scratch_calc" tests="3" disabled="0" errors="0" failures="1">
+        <testcase name="tests::adds_two_numbers" classname="scratch_calc" timestamp="2026-10-27T16:54:03.183+05:30" time="0.003">
+        </testcase>
+        <testcase name="tests::divides_by_zero_and_panics" classname="scratch_calc" timestamp="2026-10-27T16:54:03.183+05:30" time="0.003">
+        </testcase>
+        <testcase name="tests::adds_with_a_wrong_expectation" classname="scratch_calc" timestamp="2026-10-27T16:54:03.183+05:30" time="0.003">
+            <failure message="thread &apos;tests::adds_with_a_wrong_expectation&apos; (626759) panicked at src/lib.rs:35:9" type="test failure with exit code 101">thread &apos;tests::adds_with_a_wrong_expectation&apos; (626759) panicked at src/lib.rs:35:9:
+assertion `left == right` failed: two and two
+  left: 4
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</failure>
+            <system-out>
+running 1 test
+test tests::adds_with_a_wrong_expectation ... FAILED
+
+failures:
+
+failures:
+    tests::adds_with_a_wrong_expectation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err>
+thread &apos;tests::adds_with_a_wrong_expectation&apos; (626759) panicked at src/lib.rs:35:9:
+assertion `left == right` failed: two and two
+  left: 4
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+</system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="scratch_calc::divide" tests="1" disabled="0" errors="0" failures="0">
+        <testcase name="divides_evenly" classname="scratch_calc::divide" timestamp="2026-10-27T16:54:03.183+05:30" time="0.003">
+        </testcase>
+    </testsuite>
+</testsuites>

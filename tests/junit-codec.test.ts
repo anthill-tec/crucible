@@ -145,7 +145,7 @@ describe("parseJunit — failure message fallback + entity decoding (AC3)", () =
     expect(result.tree[0].children[0].failure?.trace).toBe('A & B "quoted" line1\nline2');
   });
 
-  test("failure with no message attr and no text falls back to 'test failed'", () => {
+  test("failure with no message attr and no text stores no message", () => {
     const xml = [
       '<testsuite name="Suite3d" tests="1">',
       '<testcase name="no-message-case" time="0.01"><failure/></testcase>',
@@ -153,7 +153,8 @@ describe("parseJunit — failure message fallback + entity decoding (AC3)", () =
     ].join("\n");
 
     const result: RunSchema = parseJunit(xml);
-    expect(result.tree[0].children[0].failure?.message).toBe("test failed");
+    expect(result.tree[0].children[0].status).toBe("fail");
+    expect(result.tree[0].children[0].failure?.message).toBeUndefined();
   });
 });
 

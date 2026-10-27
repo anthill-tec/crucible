@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="test_ring_uno" tests="4" failures="0" skipped="1" time="0.000015">
+    <testcase name="test_pops_what_was_pushed" classname="test_ring_uno" file="test/test_ring.cpp" line="29" time="0.000000"/>
+    <testcase name="test_refuses_a_push_when_full" classname="test_ring_uno" file="test/test_ring.cpp" line="30" time="0.000000"/>
+    <testcase name="test_holds_four_bytes" classname="test_ring_uno" file="test/test_ring.cpp" line="31" time="0.000000"/>
+    <testcase name="test_wraps_around_twice" classname="test_ring_uno" file="test/test_ring.cpp" line="32" time="0.000015">
+      <skipped message="needs a wider buffer"/>
+    </testcase>
+  </testsuite>
+</testsuites>
