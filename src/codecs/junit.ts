@@ -3,6 +3,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { RunSummary, SuiteNode, TestLeaf } from "../types.ts";
+import { parseBunConsoleFailures } from "./bun-console.ts";
 import type { DecodedRun } from "./index.ts";
 
 interface XmlElement {
@@ -274,6 +275,25 @@ export function parseJunit(xml: string, stack?: string): DecodedRun {
   const result: DecodedRun = { summary: summarize(tree), tree, files: [...files] };
   if (rawParts.length > 0) result.raw = rawParts.join("\n");
   return result;
+}
+
+/**
+ * The run's raw output read into its failing cases. Under stack `bun` only, a
+ * failing case whose failure carries no message takes its message and trace
+ * from bun's console in `raw`, by its name; a case the console does not
+ * explain keeps its type-only failure. Under any other stack, or none, the
+ * tree is left as it is.
+ */
+export function readJunitRawOutput(tree: SuiteNode[], raw: string, stack?: string): void {
+  if (stack !== "bun" || raw.length === 0) return;
+  const details = parseBunConsoleFailures(raw);
+  for (const suite of tree) {
+    for (const leaf of suite.children) {
+      if (leaf.status !== "fail" || leaf.failure?.message !== undefined) continue;
+      const detail = Object.hasOwn(details, leaf.name) ? details[leaf.name] : undefined;
+      if (detail !== undefined) leaf.failure = { ...leaf.failure, ...detail };
+    }
+  }
 }
 
 /**

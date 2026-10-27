@@ -1,7 +1,7 @@
 // CR-CRU-002 §S3 — codec registry. Ingest paths look up a codec by name so
 // adding a codec never touches core.
-import type { RunSchema } from "../types.ts";
-import { parseJunit, parseJunitPath } from "./junit.ts";
+import type { RunSchema, SuiteNode } from "../types.ts";
+import { parseJunit, parseJunitPath, readJunitRawOutput } from "./junit.ts";
 import { parsePlaywright, parsePlaywrightPath } from "./playwright.ts";
 
 /**
@@ -25,6 +25,8 @@ export interface DecodedRun extends RunSchema {
 export interface Codec {
   parse(data: string, options?: DecodeOptions): DecodedRun | Promise<DecodedRun>;
   parsePath?(path: string, options?: DecodeOptions): DecodedRun | Promise<DecodedRun>;
+  /** Reads the run's whole raw output into its decoded tree, before anything caps it. */
+  readRaw?(tree: SuiteNode[], raw: string, options?: DecodeOptions): void;
 }
 
 /** One `warnings[]` entry of an ingest response, the shape the client envelopes use. */
@@ -40,6 +42,8 @@ export const codecs: Map<string, Codec> = new Map<string, Codec>([
       parse: (data: string, options?: DecodeOptions) => parseJunit(data, options?.stack),
       parsePath: (path: string, options?: DecodeOptions) =>
         parseJunitPath(path, options?.onSkip, options?.stack),
+      readRaw: (tree: SuiteNode[], raw: string, options?: DecodeOptions) =>
+        readJunitRawOutput(tree, raw, options?.stack),
     },
   ],
   [
@@ -140,6 +144,7 @@ export async function parseRunBody(
   }
   const merged = mergeRuns(decoded);
   const raw = joinRaw(body.raw, decoded.map((report) => report.raw));
+  if (raw !== undefined && codec.readRaw !== undefined) codec.readRaw(merged.tree, raw, options);
   const run: RunSchema = {
     summary: merged.summary,
     tree: merged.tree,
