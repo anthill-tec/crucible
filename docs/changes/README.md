@@ -184,7 +184,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-197](CR-CRU-197-the-python-client-runs-a-pytest-project.md) | the python client runs a pytest project | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-198](CR-CRU-198-the-python-floor-is-3.14-and-the-scans-report-what-matters.md) | the python floor is 3.14, and the lint and secrets scans report what matters | maintenance | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-199](CR-CRU-199-each-stacks-lint-runs-through-its-client.md) | each stack's lint runs through its client, and its findings reach the board | feature | PENDING | — | 8 (0.4.0) |
-| [CR-CRU-200](CR-CRU-200-an-open-run-takes-its-test-stream-and-shows-it-live.md) | an open run takes its test stream and shows it live | feature | PENDING | 152 | 8 (0.4.0) |
+| [CR-CRU-200](CR-CRU-200-an-open-run-takes-its-test-stream-and-shows-it-live.md) | an open run takes its test stream and shows it live | feature | PENDING | 152, 206 | 8 (0.4.0) |
 | [CR-CRU-201](CR-CRU-201-a-bun-project-streams-its-tests-declared-in-one-table.md) | a bun project streams its tests, declared in one table per script | feature | PENDING | 200 | 8 (0.4.0) |
 | [CR-CRU-202](CR-CRU-202-a-rust-run-streams-its-tests-through-nextest.md) | a rust run streams its tests through nextest | feature | PENDING | 200 | 8 (0.4.0) |
 | [CR-CRU-203](CR-CRU-203-the-arduino-runner-streams-and-maven-shows-its-console-live.md) | the arduino runner streams its tests, and maven shows its console live | feature | PENDING | 200 | 8 (0.4.0) |

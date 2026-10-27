@@ -1,6 +1,6 @@
 # CR-CRU-200 — an open run takes its test stream and shows it live
 
-**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152 · **Status**
+**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152, CR-CRU-206 (every stack's reports decoded on the board) · **Status**
 PENDING — filed 2026-10-20 (user ruling: live progress designed after CR-CRU-194, split from
 CR-CRU-152; design in `DN-crucible-live-test-progress.md`)
 
