@@ -199,7 +199,7 @@ for (const route of ROUTES) {
       const stored = await storedRaw(s, route, text);
 
       expectStoredExactly(stored, "H".repeat(5000) + "\n… 6 characters cut …\n" + "T".repeat(5001));
-      expect(stored!).not.toContain("a");
+      expect(stored!.replace(marker(6), "")).not.toContain("a");
       expect(stored!).not.toContain("f");
     });
 
@@ -211,7 +211,7 @@ for (const route of ROUTES) {
       const stored = await storedRaw(s, route, text);
 
       expectStoredExactly(stored, "H".repeat(5000) + "\n… 10 characters cut …\n" + "T".repeat(5000));
-      expect(stored!).not.toMatch(/[0-9]{2}/);
+      expect(stored!.replace(marker(10), "")).not.toMatch(/[0-9]{2}/);
     });
 
     test("a text exactly at an odd limit is stored whole, with no marker", async () => {
