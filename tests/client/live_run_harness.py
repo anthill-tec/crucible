@@ -15,6 +15,7 @@ import http.server
 import importlib.util
 import json
 import os
+import platform
 import shutil
 import signal
 import stat
@@ -960,21 +961,56 @@ def kill_pid_if_alive(pid):
         os.kill(pid, signal.SIGKILL)
 
 
+# The system-call numbers of `wait4` and `waitid`, by `platform.machine()`.
+_WAIT_SYSCALLS_BY_MACHINE = {
+    "x86_64": (61, 247),
+    "aarch64": (260, 95),
+}
+
+
 def wait_until_waiting_on_a_child(pid, timeout=10):
-    """Poll until process `pid`'s main thread is blocked waiting on a child
-    (Linux's `/proc/<pid>/wchan` reads `do_wait`), and return whether it got
-    there. Where `/proc/<pid>/wchan` is not readable, the state cannot be
-    observed: a short fixed pause stands in for it, and True is returned."""
-    path = f"/proc/{pid}/wchan"
-    if not os.path.exists(path):
-        time.sleep(1)
-        return True
+    """Poll until process `pid`'s main thread is blocked waiting on a child,
+    and return whether it got there within `timeout` seconds.
+
+    A wait is recognised by the system call the process is blocked in: the
+    first field of `/proc/<pid>/syscall` is the call's number, and the
+    process is waiting once it is the `wait4` or `waitid` number for the
+    machine's architecture (`platform.machine()`, looked up on every call):
+
+        platform.machine()   wait4   waitid
+        x86_64                  61      247
+        aarch64                260       95
+
+    While the first field is not a number (`running`) or is `-1`, the
+    process is not waiting yet and polling continues; at the timeout False
+    is returned.
+
+    Where the state cannot be observed -- `/proc/<pid>/syscall` is absent or
+    cannot be read (`PermissionError` or another `OSError`), or the
+    architecture is not in the table -- a short fixed pause stands in for
+    it, and True is returned."""
+    wait_syscalls = _WAIT_SYSCALLS_BY_MACHINE.get(platform.machine())
+    path = f"/proc/{pid}/syscall"
+    if wait_syscalls is None or not os.path.exists(path):
+        return _unobservable_wait_fallback()
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _read(path).strip() == "do_wait":
+        try:
+            with open(path) as f:
+                fields = f.read().split()
+        except OSError:
+            return _unobservable_wait_fallback()
+        if fields and fields[0].isdigit() and int(fields[0]) in wait_syscalls:
             return True
         time.sleep(0.02)
     return False
+
+
+def _unobservable_wait_fallback():
+    """The stand-in for a wait that cannot be observed: a short fixed pause,
+    then True."""
+    time.sleep(1)
+    return True
 
 
 def read_tmpdir_capture(path):
