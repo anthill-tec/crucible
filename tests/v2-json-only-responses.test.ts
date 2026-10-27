@@ -145,10 +145,11 @@ const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: 
   { path: () => "/api/v2", keys: ["ok", "service", "version", "projects", "help"] },
   // CR-CRU-139 §S1 — `listener` is emitted LAST, after `store`, at the one
   // shared `healthPayload` site: the boot's second resolution, disclosed beside
-  // its first so the two health routes cannot drift about either.
+  // its first so the two health routes cannot drift about either. `codecs`
+  // follows it: the names of the test and coverage codecs the board decodes.
   {
     path: () => "/api/v2/health",
-    keys: ["ok", "status", "version", "uptime_s", "counts", "store", "listener"],
+    keys: ["ok", "status", "version", "uptime_s", "counts", "store", "listener", "codecs"],
   },
   { path: () => "/api/v2/projects", keys: ["ok", "projects"] },
   { path: () => "/api/v2/plans", keys: ["ok", "plans"] },
