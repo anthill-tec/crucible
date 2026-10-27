@@ -481,7 +481,7 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
     # `stack` JOINED it: every ingest states the stack of the client that
     # produced it, a single-shot one included, so the body names `bun`.
     SINGLE_SHOT_KEYS = {"projectKey", "agentId", "stack", "summary", "tree",
-                        "raw"}
+                        "raw", "runnerExit"}
 
     def test_no_lifecycle_flag_makes_no_start_call_and_sends_no_run_id(self):
         server = _FakeCrucible()
