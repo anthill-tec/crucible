@@ -255,6 +255,7 @@ describe("POST /api/v2/runs — a runner that exited non-zero over a clean repor
   test("runnerExit 1 over a passing report counts the case: total and failed one higher in the answer, the stored run and the events list", async () => {
     const handle = boot();
     const key = await ready(handle, "runs-counts");
+    const before = await briefs(handle, key);
     const res = await ingestJunit(handle, key, "runs-counts", { runnerExit: 1 });
     expect(res.status).toBe(200);
 
@@ -268,12 +269,12 @@ describe("POST /api/v2/runs — a runner that exited non-zero over a clean repor
     expect(event.summary?.passed).toBe(2);
     expect(event.summary?.failed).toBe(1);
 
-    const list = await briefs(handle, key);
-    expect(list.length).toBe(1);
-    expect(list[0]!.id).toBe(res.body.event as string);
-    expect(list[0]!.total).toBe(3);
-    expect(list[0]!.passed).toBe(2);
-    expect(list[0]!.failed).toBe(1);
+    const added = (await briefs(handle, key)).filter((b) => !before.some((p) => p.id === b.id));
+    expect(added.length).toBe(1);
+    expect(added[0]!.id).toBe(res.body.event as string);
+    expect(added[0]!.total).toBe(3);
+    expect(added[0]!.passed).toBe(2);
+    expect(added[0]!.failed).toBe(1);
   });
 
   test("runnerExit 1 over a passing report answers the RED verdict and the afterRed hint", async () => {
@@ -293,6 +294,7 @@ describe("POST /api/v2/runs — a runner that exited non-zero over a clean repor
   test("runnerExit 1 over a passing report with lcov coverage discards the coverage and carries the coverageDropped hint", async () => {
     const handle = boot();
     const key = await ready(handle, "runs-cov");
+    const before = await briefs(handle, key);
     const res = await ingestJunit(handle, key, "runs-cov", {
       runnerExit: 1,
       coverage: { codec: "lcov", data: LCOV_ALL_HIT },
@@ -303,9 +305,10 @@ describe("POST /api/v2/runs — a runner that exited non-zero over a clean repor
 
     const event = await storedEvent(handle, res.body.event as string);
     expect(event.coverage).toBeUndefined();
-    const list = await briefs(handle, key);
-    expect(list.length).toBe(1);
-    expect(list[0]!.hasCoverage).toBe(false);
+    const added = (await briefs(handle, key)).filter((b) => !before.some((p) => p.id === b.id));
+    expect(added.length).toBe(1);
+    expect(added[0]!.id).toBe(res.body.event as string);
+    expect(added[0]!.hasCoverage).toBe(false);
   });
 
   test("runnerExit 137 (a SIGKILLed runner) names its own code in the case and its message", async () => {
@@ -399,12 +402,13 @@ describe("POST /api/v2/runs — a runnerExit that is not a non-negative integer 
     test(`runnerExit ${label} is refused with 400 naming runnerExit and nothing is stored`, async () => {
       const handle = boot();
       const key = await ready(handle, "runs-bad");
+      const before = await briefs(handle, key);
       const res = await ingestJunit(handle, key, "runs-bad", { runnerExit: value });
       expect(res.status).toBe(400);
       expect(res.body.ok).toBe(false);
       expect(res.body.error).toBe(REFUSAL);
       expect(res.body.event).toBeUndefined();
-      expect(await briefs(handle, key)).toEqual([]);
+      expect(await briefs(handle, key)).toEqual(before);
     });
   }
 });
@@ -430,6 +434,7 @@ describe("POST /api/v2/runs/parsed — a runner that exited non-zero over a clea
   test("runnerExit 1 over a clean summary counts the case: total and failed one higher in the answer, the stored run and the events list", async () => {
     const handle = boot();
     const key = await ready(handle, "parsed-counts");
+    const before = await briefs(handle, key);
     const res = await ingestParsed(handle, key, "parsed-counts", { runnerExit: 1 });
     expect(res.status).toBe(200);
 
@@ -443,11 +448,11 @@ describe("POST /api/v2/runs/parsed — a runner that exited non-zero over a clea
     expect(event.summary?.passed).toBe(3);
     expect(event.summary?.failed).toBe(1);
 
-    const list = await briefs(handle, key);
-    expect(list.length).toBe(1);
-    expect(list[0]!.id).toBe(res.body.event as string);
-    expect(list[0]!.total).toBe(4);
-    expect(list[0]!.failed).toBe(1);
+    const added = (await briefs(handle, key)).filter((b) => !before.some((p) => p.id === b.id));
+    expect(added.length).toBe(1);
+    expect(added[0]!.id).toBe(res.body.event as string);
+    expect(added[0]!.total).toBe(4);
+    expect(added[0]!.failed).toBe(1);
   });
 
   test("runnerExit 1 over a clean summary answers the RED verdict and the afterRed hint", async () => {
@@ -466,6 +471,7 @@ describe("POST /api/v2/runs/parsed — a runner that exited non-zero over a clea
   test("runnerExit 1 over a clean summary with coverage discards the coverage and carries the coverageDropped hint", async () => {
     const handle = boot();
     const key = await ready(handle, "parsed-cov");
+    const before = await briefs(handle, key);
     const res = await ingestParsed(handle, key, "parsed-cov", {
       runnerExit: 1,
       coverage: PARSED_COVERAGE,
@@ -475,9 +481,10 @@ describe("POST /api/v2/runs/parsed — a runner that exited non-zero over a clea
 
     const event = await storedEvent(handle, res.body.event as string);
     expect(event.coverage).toBeUndefined();
-    const list = await briefs(handle, key);
-    expect(list.length).toBe(1);
-    expect(list[0]!.hasCoverage).toBe(false);
+    const added = (await briefs(handle, key)).filter((b) => !before.some((p) => p.id === b.id));
+    expect(added.length).toBe(1);
+    expect(added[0]!.id).toBe(res.body.event as string);
+    expect(added[0]!.hasCoverage).toBe(false);
   });
 
   test("runnerExit 2 names its own code in the case and its message", async () => {
@@ -558,12 +565,13 @@ describe("POST /api/v2/runs/parsed — a runnerExit that is not a non-negative i
     test(`runnerExit ${label} is refused with 400 naming runnerExit and nothing is stored`, async () => {
       const handle = boot();
       const key = await ready(handle, "parsed-bad");
+      const before = await briefs(handle, key);
       const res = await ingestParsed(handle, key, "parsed-bad", { runnerExit: value });
       expect(res.status).toBe(400);
       expect(res.body.ok).toBe(false);
       expect(res.body.error).toBe(REFUSAL);
       expect(res.body.event).toBeUndefined();
-      expect(await briefs(handle, key)).toEqual([]);
+      expect(await briefs(handle, key)).toEqual(before);
     });
   }
 });
