@@ -32,6 +32,9 @@ report alone in every client, so no client may treat it as green either.
   holds results and no failure is never filed or returned as green, in all five clients. The run is
   filed with one failing case naming the runner's exit code, and the verb exits non-zero with a
   warning, so the gate cannot pass on it.
+- **No exceptions** (user ruling 2026-10-28): a runner that fails after its tests passed — a maven
+  build whose coverage check or enforcer fails, exiting 1 with a clean surefire report — is a failed
+  run too.
 
 ## Steps
 
