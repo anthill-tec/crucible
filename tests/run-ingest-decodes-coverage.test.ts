@@ -356,6 +356,7 @@ describe("POST /api/v2/runs — lcov coverage", () => {
   test("an lcov text with no SF: record stores the run without coverage and warns coverage-dropped naming lcov", async () => {
     const handle = boot();
     const key = await ready(handle, "lcov-undecodable");
+    const before = (await briefs(handle, key)).map((b) => b.id);
     const res = await ingest(handle, key, "lcov-undecodable", {
       coverage: { codec: "lcov", data: LCOV_NO_SOURCE_FILE },
     });
@@ -380,7 +381,10 @@ describe("POST /api/v2/runs — lcov coverage", () => {
     expect(event.summary?.passed).toBe(2);
     expect(event.coverage).toBeUndefined();
     const list = await briefs(handle, key);
-    expect(list.map((b) => b.id)).toEqual([res.body.event as string]);
+    expect(list.map((b) => b.id).filter((id) => !before.includes(id))).toEqual([
+      res.body.event as string,
+    ]);
+    expect(list.length).toBe(before.length + 1);
     expect(list[0]!.hasCoverage).toBe(false);
   });
 });
@@ -468,34 +472,37 @@ describe("POST /api/v2/runs — a refused coverage block stores nothing", () => 
   test("an unknown coverage codec is refused with 400 and no run is stored", async () => {
     const handle = boot();
     const key = await ready(handle, "cov-unknown");
+    const before = await briefs(handle, key);
     const res = await ingest(handle, key, "cov-unknown", {
       coverage: { codec: "cobertura", data: LCOV_TWO_RECORDS },
     });
     expect(res.status).toBe(400);
     expect(res.body.ok).toBe(false);
-    expect(await briefs(handle, key)).toEqual([]);
+    expect(await briefs(handle, key)).toEqual(before);
   });
 
   test("a test codec's name is not a coverage codec — junit as coverage is refused with 400, nothing stored", async () => {
     const handle = boot();
     const key = await ready(handle, "cov-junit");
+    const before = await briefs(handle, key);
     const res = await ingest(handle, key, "cov-junit", {
       coverage: { codec: "junit", data: PASSING_REPORT },
     });
     expect(res.status).toBe(400);
     expect(res.body.ok).toBe(false);
-    expect(await briefs(handle, key)).toEqual([]);
+    expect(await briefs(handle, key)).toEqual(before);
   });
 
   test("an empty coverage list is refused with 400 and no run is stored", async () => {
     const handle = boot();
     const key = await ready(handle, "cov-empty");
+    const before = await briefs(handle, key);
     const res = await ingest(handle, key, "cov-empty", {
       coverage: { codec: "lcov", data: [] },
     });
     expect(res.status).toBe(400);
     expect(res.body.ok).toBe(false);
-    expect(await briefs(handle, key)).toEqual([]);
+    expect(await briefs(handle, key)).toEqual(before);
   });
 });
 
