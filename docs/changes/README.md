@@ -194,6 +194,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-151](CR-CRU-151-a-run-says-which-stack-produced-it.md) | a run says which stack produced it, and the board keeps it | fix | PENDING | 112 | 8 (0.4.0) |
 | [CR-CRU-153](CR-CRU-153-the-arduino-stacks-compile-errors-are-decoded.md) | the arduino stack's compile errors are decoded | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-152](CR-CRU-152-each-stacks-reports-are-decoded-on-the-server.md) | each stack's reports are decoded on the server | feature | PENDING | 151 | 8 (0.4.0) |
+| [CR-CRU-205](CR-CRU-205-a-waiting-client-is-recognised-by-its-system-call.md) | a waiting client is recognised by its system call, not a kernel function name | fix | PENDING | — | 8 (0.4.0) |
 
 ## Deferred — post-0.2.0
 
