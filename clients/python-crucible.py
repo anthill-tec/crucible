@@ -904,9 +904,23 @@ def _is_zero_discovery(result):
     return "Ran 0 tests" in out
 
 
+def _filed_summary(resp, summary):
+    """The counts of the run as the BOARD filed it — the ingest response's
+    `run`, which includes any case the board added — else `summary`, this
+    client's own parse, when the response carries none."""
+    run = resp.get("run") if isinstance(resp, dict) else None
+    if isinstance(run, dict) and all(
+            isinstance(run.get(k), int) for k in ("total", "passed", "failed")):
+        pending = run.get("pending")
+        return {"passed": run["passed"], "failed": run["failed"],
+                "pending": pending if isinstance(pending, int) else 0,
+                "total": run["total"]}
+    return summary
+
+
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
                    context=None, raw=None, files=None, run_id=None,
-                   release=None):
+                   release=None, runner_exit=None):
     """POST the client-parsed run (per-method leaf names) to /api/v2/runs/parsed.
     Returns the parsed response dict (the caller emits the §S1 envelope).
 
@@ -931,6 +945,10 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
         payload["raw"] = raw
     if run_id:
         payload["runId"] = run_id
+    # The runner's exit, so the board files a runner that failed over a clean
+    # report as failed. Absent (`auto-ingest`, which runs no runner): unsent.
+    if runner_exit is not None:
+        payload["runnerExit"] = runner_exit
     resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
                               release=release)
     cov_line = ""
@@ -1215,17 +1233,20 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
                 run_id, envelope_warnings, post_fn=_post,
                 project_key=_project_key(project_dir), agent_id=args.agent,
                 subject=_no_report_subject(verb, runner))
+        runner_exit = _axi().runner_exit_code(result.returncode)
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier=tier,
                               context=_run_context(),
                               raw=result.stdout, files=files, run_id=run_id,
-                              release=release)
-        _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
+                              release=release, runner_exit=runner_exit)
+        # The envelope states the run as the board filed it.
+        filed = _filed_summary(resp, summary)
+        _emit_ingest_axi(verb, resp, filed, files, project_dir, args.agent,
                          warnings=(envelope_warnings
                                    + _axi().unit_run_wall_vs_cpu_warnings(
                                        tier, "python", timing)))
-        if summary["failed"] > 0:
-            return 1
-        return 0 if resp.get("ok") else 1
+        # The exit carries the runner's verdict and the filed run's, and a
+        # refused ingest is never green.
+        return _axi().verb_exit(runner_exit, {**resp, "run": filed})
     # No XML at all → a hard collection/syntax failure. Ingest the CAPTURED runner
     # output as compile so the RED is still reported rather than silently lost.
     # CR-CRU-111 AC13a — a COMPILE ingest is a build event and carries NO test
@@ -1416,10 +1437,15 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
                 if coverage_on else None)
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
+    runner_exit = _axi().runner_exit_code(result.returncode)
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                           tier="regression", context=_run_context(), files=files,
-                          run_id=run_id, release=release)
-    ok = bool(resp.get("ok")) and summary["failed"] == 0
+                          run_id=run_id, release=release,
+                          runner_exit=runner_exit)
+    # The envelope states the run as the board filed it.
+    summary = _filed_summary(resp, summary)
+    exit_code = _axi().verb_exit(runner_exit, {**resp, "run": summary})
+    ok = exit_code == 0
     # §S2 — a GATE run's next step is derived from the run state it reached
     # (unrecorded / red / green); the plain `regression` verb keeps its canned
     # HELP_STEPS entry, unchanged.
@@ -1427,7 +1453,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
                   if verb != "regression" else None)
     _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
                      help_steps=help_steps, warnings=envelope_warnings)
-    return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
+    return exit_code
 
 
 def cmd_auto_ingest(args):

@@ -302,6 +302,20 @@ def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
     _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
 
 
+def _filed_summary(resp, summary):
+    """The counts of the run as the BOARD filed it \u2014 the ingest response's
+    `run`, which includes any case the board added \u2014 else `summary`, this
+    client's own parse, when the response carries none."""
+    run = resp.get("run") if isinstance(resp, dict) else None
+    if isinstance(run, dict) and all(
+            isinstance(run.get(k), int) for k in ("total", "passed", "failed")):
+        pending = run.get("pending")
+        return {"passed": run["passed"], "failed": run["failed"],
+                "pending": pending if isinstance(pending, int) else 0,
+                "total": run["total"]}
+    return summary
+
+
 # ── JUnit parsing ────────────────────────────────────────────────────────────
 
 
@@ -742,13 +756,15 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                   f"{_coverage_dir(native_dir, own_dir)}/lcov.info — ingesting WITHOUT coverage",
                   file=sys.stderr)
 
+    runner_exit = _axi().runner_exit_code(run.returncode)
     if not args.agent:
-        # No ingest requested — just report the run outcome.
+        # No ingest requested — just report the run outcome: non-zero when
+        # the runner exited non-zero or its report records a failure.
         print(f"[crucible] {verb} -> '{key}': {summary['passed']}/{summary['total']} passed, "
               f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
               f"{files} files",
               file=sys.stderr)
-        return 1 if summary["failed"] else 0
+        return _axi().verb_exit(runner_exit, {"ok": True, "run": summary})
 
     # §S5 — past this point the run IS ingested under an agentId, so the
     # identity must be DECLARED (hard stop when it is not).
@@ -775,17 +791,23 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     # The runId of the OPEN run this ingest closes; absent, the single-shot body.
     if run_id:
         payload["runId"] = run_id
+    # The runner's exit (`make`'s), so the board files a runner that failed
+    # over a clean report as failed.
+    payload["runnerExit"] = runner_exit
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
     resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
                               release=release)
+    # The run as the board filed it, which includes any case it added.
+    summary = _filed_summary(resp, summary)
     print(f"[crucible] {verb} -> '{key}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
           f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
     # CR-CRU-058 §S2 — a GATE run's next step is derived from the run state it
     # reached (unrecorded / red / green); the plain test verbs keep their canned
     # HELP_STEPS entry, unchanged.
-    ok = bool(resp.get("ok")) and summary["failed"] == 0
+    exit_code = _axi().verb_exit(runner_exit, {**resp, "run": summary})
+    ok = exit_code == 0
     help_steps = (_axi().run_help(verb, ok, summary["failed"], _base_url())
                   if verb == "pre-merge-gate" else None)
     _emit_ingest_summary_axi(verb, resp, summary, files, pd, agent_id,
@@ -793,9 +815,7 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                              warnings=(preflight_warnings
                                        + _axi().unit_run_wall_vs_cpu_warnings(
                                            tier, "arduino", timing)))
-    if summary["failed"]:
-        return 1
-    return 0 if resp.get("ok") else 1
+    return exit_code
 
 
 def cmd_test(args):
