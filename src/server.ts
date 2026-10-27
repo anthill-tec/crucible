@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SHIPPED_DATA_FILE, limitDisclosures, serverConfigPath } from "./limits.ts";
+import { SHIPPED_DATA_FILE, limitDisclosures, resolveLimit, serverConfigPath } from "./limits.ts";
 import { Store, defaultRetention, RETENTION_DISPOSABLE_KINDS } from "./store.ts";
 import { handleV2 } from "./v2.ts";
 import { codecNames } from "./codecs/index.ts";
@@ -375,6 +375,9 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
     // The names this board decodes, read off the codec registries, so a client
     // can tell a board that predates server-side decoding before it sends.
     codecs: codecNames(),
+    // The ingest body bound, resolved per request like every limit, so a client
+    // can refuse a body the board would refuse before it sends a byte of it.
+    limits: { ingest_body_bytes: resolveLimit("ingest_body_bytes") },
   });
 
   const server = Bun.serve({

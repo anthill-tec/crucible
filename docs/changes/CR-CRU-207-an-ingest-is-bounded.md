@@ -31,8 +31,8 @@ what an ingest carries or what a run stores.
 
 | Limit | description | recommended | min | max |
 |---|---|---|---|---|
-| `ingest_body_bytes` | the largest ingest body the server reads | 134217728 (128 MiB, Bun's default the server ran at before) | 1048576 | 1073741824 |
-| `raw_output_chars` | the most captured runner output a run stores | 2000000 | 10000 | 50000000 |
+| `ingest_body_bytes` | Bytes of request body the server reads on an ingest route; a larger body is drained and refused with a JSON 413 naming this limit. Raise it when a project's reports and captured output legitimately exceed it; lower it to refuse oversized ingests sooner. | 134217728 (128 MiB, Bun's default the server ran at before) | 1048576 | 1073741824 |
+| `raw_output_chars` | Characters of captured runner output a run stores; longer output keeps its first and last halves around a line naming how much was cut. Raise it to keep more of long logs; lower it to save store space. | 2000000 | 10000 | 50000000 |
 
 `raw_output_chars` had no earlier value: a server with no operator file now caps raw output where it
 stored all of it, and the file's header says so. Everything that counts the server's limits counts
