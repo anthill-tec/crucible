@@ -70,7 +70,7 @@ from unittest import mock
 CONFIG_NAME = "crucible.toml"
 DOCUMENTED_FIELDS = ("description", "recommended", "min", "max")
 
-#: The three limits the SERVER enforces -- read from a `crucible.toml` beside
+#: The five limits the SERVER enforces -- read from a `crucible.toml` beside
 #: its own DATABASE, never from one in a project directory. Named here so the
 #: ownership NEGATIVE can be asserted on the laid-down file.
 SERVER_LIMITS = ("run_abandon_ms", "project_inactive_ms", "retention",

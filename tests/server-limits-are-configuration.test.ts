@@ -5,11 +5,15 @@
 // never a constant compiled into source. It was earned — `DEFAULT_RETENTION =
 // 100` was a number one author chose, reachable by nobody, and it evicted
 // every release this project had ever shipped (PRD §4.7). CR-CRU-129 removed
-// that one. This file covers the three the SERVER still enforces:
+// that one. This file covers the three the SERVER enforced first:
 //
 //   run_abandon_ms       `runAbandonAfterMs()` in src/store.ts  — the sweep
 //   project_inactive_ms  `projectInactiveMs()` in src/v2.ts     — the read
 //   retention            `defaultRetention()` in src/store.ts   — the cap
+//
+// The server enforces five: the other two, `ingest_body_bytes` and
+// `raw_output_chars`, are proved in
+// tests/ingest-limits-are-server-configuration.test.ts.
 //
 // The client's three (`truncate_field_chars`, `error_detail_chars`,
 // `roadmap_list_rows`) are NOT here and must not be: a limit is owned by the

@@ -2,7 +2,7 @@
 the PROJECT's `crucible.toml` at the point of use.
 
 The rule (PRD §4.13, user ruling 2026-09-14): a limit is configuration, never a
-constant compiled into source. Three of the six live on this side of the wire,
+constant compiled into source. Three of the eight live on this side of the wire,
 and all five clients reach them on every call:
 
     truncate_field_chars   TRUNCATE_LIMIT -> used by `truncate_field`
@@ -12,8 +12,8 @@ and all five clients reach them on every call:
 (the constants as they stood at RED; their readers are in
 clients/_crucible_axi.py)
 
-The server's three (`run_abandon_ms`, `project_inactive_ms`, `retention`) are
-NOT here and must not be. A limit is owned by the process that ENFORCES it: a
+The server's five (`run_abandon_ms`, `project_inactive_ms`, `retention`,
+`ingest_body_bytes`, `raw_output_chars`) are NOT here and must not be. A limit is owned by the process that ENFORCES it: a
 client resolves a PROJECT DIRECTORY and its `.env` and then posts over HTTP,
 while the server resolves its own database and may be installed on another
 machine entirely. Neither process reads the other's file. The server's half
@@ -185,7 +185,7 @@ DECLARED_FIELDS = ("description", "recommended", "min", "max")
 #: is checking would assert nothing.
 CLIENT_LIMITS = ("truncate_field_chars", "error_detail_chars", "roadmap_list_rows")
 
-#: The three the SERVER enforces. Here only so the ownership NEGATIVE can name
+#: The five the SERVER enforces. Here only so the ownership NEGATIVE can name
 #: one; a client must never resolve any of them.
 SERVER_LIMITS = ("run_abandon_ms", "project_inactive_ms", "retention",
                  "ingest_body_bytes", "raw_output_chars")

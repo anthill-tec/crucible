@@ -24,7 +24,7 @@ unreadable-configuration warning names EVERY candidate in precedence order.
 
 `TheInstallerLaysDownTheServersOperatorFileTest` (§S2) -- the server's operator
 file, laid down beside the server's own database at `store_dir()/crucible.toml`:
-it exists, parses, is commented, carries EXACTLY the three server limits and
+it exists, parses, is commented, carries EXACTLY the five server limits and
 none of the client three; `crucible-clients.json` declares it under its own key
 distinct from the client `config` and both declared paths exist; an
 operator-EDITED copy survives a reinstall and survives a purge while an

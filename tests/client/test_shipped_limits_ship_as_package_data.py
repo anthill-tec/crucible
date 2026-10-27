@@ -78,7 +78,7 @@ _COUNTER = itertools.count()
 #: limit an operator cannot act on.
 DOCUMENTED_FIELDS = ("description", "recommended", "min", "max")
 
-#: The three limits the SERVER enforces. Here only so the skew case can name
+#: The five limits the SERVER enforces. Here only so the skew case can name
 #: one the client must keep refusing.
 SERVER_LIMITS = ("run_abandon_ms", "project_inactive_ms", "retention",
                  "ingest_body_bytes", "raw_output_chars")

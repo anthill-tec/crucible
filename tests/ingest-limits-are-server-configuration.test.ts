@@ -1,7 +1,14 @@
 // An ingest is bounded by two SERVER limits, declared like every other one:
 //
-//   ingest_body_bytes  the largest ingest body the server reads
-//   raw_output_chars   the most captured runner output a run stores
+//   ingest_body_bytes  Bytes of request body the server reads on an ingest
+//                      route; a larger body is drained and refused with a
+//                      JSON 413 naming this limit. Raise it when a project's
+//                      reports and captured output legitimately exceed it;
+//                      lower it to refuse oversized ingests sooner.
+//   raw_output_chars   Characters of captured runner output a run stores;
+//                      longer output keeps its first and last halves around a
+//                      line naming how much was cut. Raise it to keep more of
+//                      long logs; lower it to save store space.
 //
 // Both are configuration (PRD §4.13): a `[limits.<name>]` table in the
 // distribution's own `src/crucible.toml`, resolved through `resolveLimit`
