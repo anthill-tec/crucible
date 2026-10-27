@@ -35,16 +35,24 @@ what an ingest carries or what a run stores.
 | `raw_output_chars` | the most captured runner output a run stores | 2000000 | 10000 | 50000000 |
 
 `raw_output_chars` had no earlier value: a server with no operator file now caps raw output where it
-stored all of it, and the file's header says so. Every comment that counts the server's limits
-("three") counts five.
+stored all of it, and the file's header says so. Everything that counts the server's limits counts
+five: the comments in `src/limits.ts` and `src/crucible.toml`, the RUNBOOK's prose, the limit list
+`tests/server-limits-are-configuration.test.ts` pins, and the "all three it owns" test title in
+`tests/shipped-limits-ship-as-package-data.test.ts`.
 
 ### §S2 — the board refuses an oversized body with JSON
 
-`Bun.serve`'s own `maxRequestBodySize` is set above `ingest_body_bytes` (twice it, at least 1 GiB).
-On `POST /api/v2/runs`, `/api/v2/runs/parsed` and `/api/v2/runs/compile`, a body whose length passes
-`ingest_body_bytes` is read to its end and discarded, counting as it reads, and answered with 413
-and `{ok: false, error}` naming `ingest_body_bytes` and its value; nothing is stored. Every other
-route keeps Bun's own limit.
+`Bun.serve`'s own `maxRequestBodySize` is fixed at boot to twice `ingest_body_bytes`' declared
+`max` (2 GiB), so a value an operator sets live, up to that `max`, is always enforced by the
+handler rather than by Bun. On `POST /api/v2/runs`, `/api/v2/runs/parsed` and
+`/api/v2/runs/compile`, a body whose length passes `ingest_body_bytes` (read live, as every limit
+is) is read to its end and discarded, counting as it reads, and answered with 413 and
+`{ok: false, error}` naming `ingest_body_bytes` and its value; nothing is stored.
+
+**Deliberate:** every other route's body limit is Bun's raised one (2 GiB) where it was 128 MiB; those
+routes carry small JSON bodies from registered callers, and bounding them is a non-goal. A stored
+run's names and tree are bounded only by `ingest_body_bytes` (failure text is cut by CR-CRU-152);
+capping names is a non-goal.
 
 ### §S3 — health advertises the limit
 
@@ -53,9 +61,9 @@ Both health routes carry `limits: {ingest_body_bytes: <n>}`, so a client can ref
 ### §S4 — the stored raw output is capped
 
 A run's raw output (CR-CRU-152 §S1) longer than `raw_output_chars` Unicode code points is stored as
-its first `floor(n/2)` code points, a line `… <k> characters cut …`, and its last `ceil(n/2)` code
-points, where `n` is the limit and `k` the number cut; the marker line does not count against `n`,
-and no code point is split. A codec reads the whole text before the cap. The parsed route applies
+its first `floor(n/2)` code points, then `"\n… <k> characters cut …\n"`, then its last `ceil(n/2)`
+code points, where `n` is the limit and `k` the number cut; the marker and its two newlines do not
+count against `n`, and no code point is split. A codec reads the whole text before the cap. The parsed route applies
 the same cap.
 
 ## Acceptance criteria
@@ -66,7 +74,9 @@ the same cap.
 - [ ] **AC2 — a JSON 413, on a real socket.** On each of the three ingest routes, a body over
       `ingest_body_bytes` (set small in the test), sent by Python's `urllib` over a real socket and
       larger than the socket buffers, receives a 413 whose JSON body names `ingest_body_bytes`;
-      nothing is stored; a body at the limit is accepted.
+      nothing is stored; a body at the limit is accepted. With no operator file (the recommended
+      128 MiB, Bun's former default), a body just over 128 MiB on `POST /api/v2/runs` gets the JSON
+      413, not an empty one; the server's `maxRequestBodySize` is 2 GiB.
 - [ ] **AC3 — health.** Both health routes carry `limits.ingest_body_bytes` with the resolved value.
 - [ ] **AC4 — the cap.** A raw text over a small `raw_output_chars` is stored exactly as §S4 states
       (asserted string, odd and even limits, a text with a surrogate pair at the cut); a text at the
@@ -76,4 +86,4 @@ the same cap.
 ## Non-goals
 
 - What a client does with the advertised limit: CR-CRU-204 and CR-CRU-206.
-- Bounding the read routes.
+- Bounding the read routes or the other write routes, or capping a stored test name.

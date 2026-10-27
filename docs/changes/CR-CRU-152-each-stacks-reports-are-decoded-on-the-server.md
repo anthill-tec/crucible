@@ -1,6 +1,7 @@
 # CR-CRU-152 — each stack's reports are decoded on the server
 
-**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-151, CR-CRU-205 · **Status**
+**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-151, CR-CRU-205 (every gate is red
+until it lands) · **Status**
 PENDING — filed 2026-09-24; designed at gap analysis 2026-10-27 (split: the bounds are CR-CRU-207; the
 clients' side is CR-CRU-204 for bun and python, CR-CRU-206 for maven, rust and arduino)
 
@@ -65,15 +66,17 @@ Beside today's `codec`, `data` / `dataPath`, `tier`, `context`, `runId`, `stack`
   and merged into one run. An empty list is refused with 400, nothing stored. A text that cannot be
   decoded is skipped and named in the response's `warnings[]`; when no text decodes, the run is
   refused with 400 and nothing is stored.
-- **`coverage`** — optional `{ "codec": "<name>", "data": <text or non-empty list of texts> }`,
+- **`coverage`** — optional `{ "codec": "<name>", "data": <text or non-empty list of texts> }` (an
+  empty list is refused with 400, nothing stored),
   decoded by the named coverage codec (§S3). An unknown coverage codec is refused with 400, nothing
   stored. A coverage text the codec cannot decode drops the coverage, stores the run and warns. A
   failing run's coverage is discarded as it is on the parsed route, with the same `coverageDropped`
   hint.
-- **`raw`** — optional captured runner output. It is stored as the run's raw output: the body's
-  `raw`, then each report's suite-level `<system-out>`/`<system-err>` text in report order, joined by
-  `"\n"` (testcase-level output is not collected, as today). A codec reads it (§S2). CR-CRU-207 caps
-  what is stored.
+- **`raw`** — optional captured runner output. It is stored as the run's raw output: the parts are
+  the body's `raw`, then each report's `<testsuites>`- and `<testsuite>`-level `<system-out>` /
+  `<system-err>` text in report order (testcase-level output is not collected, as today); each part
+  is trimmed, empty parts are dropped, and the rest are joined by `"\n"`. A codec reads it (§S2).
+  CR-CRU-207 caps what is stored.
 - **`warnings[]`** — each entry `{code, detail}`, the shape the client envelopes use:
   `report-skipped` (detail names the list index and the decode error) and `coverage-dropped`
   (detail names the coverage codec and the error).
@@ -101,7 +104,7 @@ Beside today's `codec`, `data` / `dataPath`, `tier`, `context`, `runId`, `stack`
   message and trace from bun's console output in `raw`, by the rules the bun client applies today.
   The reading lives in its own module (`src/codecs/bun-console.ts`), which CR-CRU-201's live view
   reuses. A case the console does not explain keeps its type-only failure.
-- **Durations:** a case's `time` in milliseconds, rounded. (Deliberate: the clients truncated;
+- **Durations:** a case's `time` in milliseconds, `Math.round(seconds * 1000)`. (Deliberate: the clients truncated;
   arduino sent 0.)
 - **The stack:** the ingest's `stack`, else the stack its run's start stated. With none, or an
   unknown one, the report is read with no stack-specific rule.
@@ -174,17 +177,20 @@ projects post to it until they are upgraded.
 - [ ] **AC6 — the stack rule.** A run with no `stack`, and one with an unknown stack, decode with
       no stack-specific rule; a run whose ingest omits `stack` uses its start's, at decode time.
 - [ ] **AC7 — a list of reports.** Several texts decode to one run, in order, counts summed; one
-      malformed text among good ones is skipped with a `report-skipped` warning and the rest stored;
+      malformed text among good ones is skipped with a `report-skipped` warning whose detail names
+      its list index and the decode error, and the rest stored;
       all malformed is 400 with nothing stored; `data: []` is 400. `dataPath` reads by the same
       rules.
 - [ ] **AC8 — coverage.** `lcov` and `jacoco` each yield AC2's coverage; an unknown coverage codec
       is 400 with nothing stored; an undecodable coverage text stores the run without coverage with a
       `coverage-dropped` warning; a failing run with coverage stores none and carries the
-      `coverageDropped` hint; a total of 0 gives percent 0; and over every (covered, total) pair with
+      `coverageDropped` hint; two coverage texts sum into one object; an empty coverage list is 400;
+      a total of 0 gives percent 0; and over every (covered, total) pair with
       total below 1500 the percent equals Python's `round(covered / total * 100, 1)` (a generated
       oracle table).
-- [ ] **AC9 — raw.** The body's `raw` and the reports' suite-level output are stored in §S1's order
-      joined by `"\n"`; bun's console match reads it.
+- [ ] **AC9 — raw.** The body's `raw` and the reports' wrapper- and suite-level output are stored
+      as §S1 states (asserted string: trimmed parts, empty parts dropped, an absent or empty body
+      `raw` adding no separator, joined by `"\n"`); bun's console match reads it.
 - [ ] **AC10 — the response.** The `run` block carries the five counts with `files` by §S2's chain
       (asserted on cases carrying `file`, only `classname`, an empty `classname`, and neither, and
       across two reports sharing a file), and on a run that kept coverage each axis as `{total,

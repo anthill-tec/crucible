@@ -39,10 +39,13 @@ Every verb but `auto-ingest` sends its captured runner output as `raw`. No verb 
 ### §S2 — the client parsers go
 
 Each client's JUnit parse and coverage summation (maven's JaCoCo CSV, rust's and arduino's lcov) are
-deleted, and arduino's no-`--agent` count line reads the two testcase counts and the runner's exit
-code. The client tests that pinned them are retired or re-pointed at the board, each such change in
-its own commit: the maven-, rust- and arduino-only test files, and the three clients' cases in the
-shared files CR-CRU-204 owns.
+deleted. arduino's no-`--agent` run, which files nothing, prints `ran <n> testcases (<m> not
+skipped); runner exit <rc>` from the two counts and exits with the runner's exit code (it printed
+passed/total, failed, pending and files and exited 1 on a failure). The maven and rust callers of
+`junit_testcase_count` read `junit_non_skipped_count` where CR-CRU-204's rules need it. The client
+tests that pinned the parsers are retired or re-pointed at the board, each such change in its own
+commit: the maven-, rust- and arduino-only test files, and these three clients' cases in the shared
+files CR-CRU-204 left on `/api/v2/runs/parsed`.
 
 ### §S3 — the envelope's figures and warnings come from the board
 
@@ -60,8 +63,9 @@ As CR-CRU-204 §S4.
       this CR's client, stores the counts, statuses and coverage of its `expected.json`.
 - [ ] **AC4 — no parser left.** No client module defines a JUnit, lcov or JaCoCo parse; CR-CRU-204's
       source scan covers all five clients.
-- [ ] **AC5 — local decisions.** "Ran nothing" and the exit code (and arduino's no-`--agent` line)
-      come from the runner's exit code and the two counts only, asserted per client.
+- [ ] **AC5 — local decisions.** "Ran nothing" and the exit code come from the runner's exit code and
+      the two counts only, asserted per client; arduino's no-`--agent` run prints §S2's line and
+      exits with the runner's exit code.
 - [ ] **AC6 — envelope, warnings, no board, older board, too large.** CR-CRU-204's AC6–AC9 hold for
       each of the three clients.
 - [ ] **AC7 — raw.** Each verb of §S1 but `auto-ingest` sends its captured runner output as `raw`.
