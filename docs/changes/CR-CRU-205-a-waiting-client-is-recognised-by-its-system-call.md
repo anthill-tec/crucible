@@ -1,7 +1,7 @@
 # CR-CRU-205 — a waiting client is recognised by its system call, not a kernel function name
 
-**Type** fix · **Points** 1 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed
-2026-10-27 (user ruling: its own CR, ahead of CR-CRU-152)
+**Type** fix · **Points** 1 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — filed
+2026-10-27 (user ruling: its own CR, ahead of CR-CRU-152); merged 2026-10-27 (plan 207, cycles 739–740, gate 8054/0)
 
 ## Problem
 
@@ -51,17 +51,17 @@ system-call test and the table.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the test runs again.** `tests.client.test_an_interrupted_runners_tree_is_taken_down_with_it`
+- [x] **AC1 — the test runs again.** `tests.client.test_an_interrupted_runners_tree_is_taken_down_with_it`
       is 14 passed, 0 failed through the python client on this machine (13/1 before the fix), on
       three consecutive runs.
-- [ ] **AC2 — the helper tells a wait from other blocking.** Direct tests of the helper, each on a
+- [x] **AC2 — the helper tells a wait from other blocking.** Direct tests of the helper, each on a
       child process it starts: a child blocked in `Popen.wait()` gives True; a child blocked in
       `os.waitid` gives True; a child sleeping in `time.sleep` gives False within a short timeout;
       an unreadable syscall file (injected, not pid 1) gives the fallback's True after its pause and
       raises nothing; an architecture outside the table gives the fallback.
-- [ ] **AC3 — no kernel function name.** The helper neither reads `/proc/<pid>/wchan` nor compares
+- [x] **AC3 — no kernel function name.** The helper neither reads `/proc/<pid>/wchan` nor compares
       against any kernel function name; its docstring describes the system-call test and the table.
-- [ ] **AC4 — the gate.** `python3 clients/bun-crucible.py pre-merge-gate --agent vidushi --cycle
+- [x] **AC4 — the gate.** `python3 clients/bun-crucible.py pre-merge-gate --agent vidushi --cycle
       <the plan's last cycle>` is green, the python suite included.
 
 ## Non-goals
