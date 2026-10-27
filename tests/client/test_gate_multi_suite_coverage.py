@@ -393,9 +393,17 @@ class _StubBoard:
                     payload = {"_raw": raw.decode("utf-8", "replace")}
                 with board._lock:
                     board.requests.append((self.command, self.path, payload))
+                return payload
 
-            def _answer(self):
-                body = json.dumps(_BOARD_OK).encode()
+            def _answer(self, payload=None):
+                # An ingest is answered with the counts it was sent, as the
+                # board answers a run it stored.
+                answer = dict(_BOARD_OK)
+                summary = (payload or {}).get("summary")
+                if isinstance(summary, dict):
+                    answer["run"] = {key: summary.get(key, 0) for key in
+                                     ("total", "passed", "failed", "pending")}
+                body = json.dumps(answer).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -403,8 +411,7 @@ class _StubBoard:
                 self.wfile.write(body)
 
             def do_GET(self):
-                self._record()
-                self._answer()
+                self._answer(self._record())
 
             do_POST = do_GET
             do_PATCH = do_GET
