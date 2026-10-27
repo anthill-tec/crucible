@@ -236,7 +236,7 @@ describe("CR-CRU-131 §S1c — no limit DECLARATION is a literal in source", () 
     expect(
       DECLARED_LIMITS.length,
       "the declared set must carry both stacks' limits, or the scan is scoped to half the tree",
-    ).toBe(6);
+    ).toBe(8);
 
     // ── THE CONTROL, first. ───────────────────────────────────────────────
     // A scan that reports nothing proves nothing until it has been shown to
