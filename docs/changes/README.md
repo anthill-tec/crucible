@@ -201,6 +201,12 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 ## Deferred — post-0.2.0
 
+- 2026-10-27 — **for CR-CRU-204's and CR-CRU-206's gap analyses** (found building CR-CRU-152's real
+  fixtures). (a) A bun test file that fails to load leaves no testcase in bun's JUnit report, so a run
+  ingested from the report undercounts (42 failed where bun counted 43); once the clients parse
+  nothing, the board's figures are the only figures. (b) nextest 0.9.130 writes no testcase for an
+  `#[ignore]`d test, so the rust client's comment that it emits `<skipped/>` is wrong at that version.
+  (c) surefire 3.5.4 ignored `-Dsurefire.reportsDirectory`, and failsafe also writes under `target/`.
 - 2026-10-27 — **the Now pane's run chips cannot tell repeated runs apart** (user-raised, a fix CR for a
   release after 0.4.0). A VERIFY agent that runs one module three times shows three identical
   `14/14` chips, which read as a duplicated run though each is its own run id. Show each chip's time,
