@@ -7108,6 +7108,31 @@ def ran_nothing(exit_code, total):
     return bool(exit_code) and total == 0
 
 
+def runner_exit_code(returncode):
+    """(PURE) The exit a shell reports for a `subprocess` return code: a
+    runner killed by a signal (a negative return code) is `128 + <signal>`,
+    so SIGKILL is `137`; every ordinary exit is returned unchanged. This is
+    the value a client sends as `runnerExit`."""
+    return 128 - returncode if returncode < 0 else returncode
+
+
+def verb_exit(runner_exit, response):
+    """(PURE) The exit of a verb that ran a test runner and filed its run:
+    1 when the runner exited non-zero, when the ingest `response` is not `ok`
+    (refused, unreachable, too large), or when the run it filed
+    (`response["run"]`) records a failure; 0 only when none of the three
+    holds. Pending cases alone never make it non-zero."""
+    if runner_exit:
+        return 1
+    if not (response or {}).get("ok"):
+        return 1
+    run = response.get("run")
+    failed = run.get("failed") if isinstance(run, dict) else None
+    if isinstance(failed, int) and failed > 0:
+        return 1
+    return 0
+
+
 def emit_ran_nothing(verb, artifact, exit_code, output, run_id, warnings=(),
                      *, post_fn, project_key, agent_id, subject=None):
     """The exit of a run `ran_nothing` describes \u2014 the no-report exit, never
