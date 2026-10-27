@@ -1,6 +1,6 @@
 # CR-CRU-206 — the maven, rust and arduino clients send their runners' reports and parse nothing
 
-**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-204 · **Status** PENDING — filed
+**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-204, CR-CRU-208 · **Status** PENDING — filed
 2026-10-27 (split from CR-CRU-152 at its gap analysis, user ruling; bun and python are CR-CRU-204)
 
 ## Problem
@@ -34,7 +34,8 @@ every coverage run; the board discards it on a red one.
   `bdd`, `auto-ingest`, and the suites `pre-merge-gate` runs. `codec: "junit"` with every
   `TEST-*.xml` the native harness wrote; coverage `lcov`.
 
-Every verb but `auto-ingest` sends its captured runner output as `raw`. No verb sends `dataPath`.
+Every verb but `auto-ingest` sends its captured runner output as `raw` and the runner's exit as
+`runnerExit` (CR-CRU-208). No verb sends `dataPath`.
 
 ### §S2 — the client parsers go
 
@@ -63,8 +64,9 @@ As CR-CRU-204 §S4.
       this CR's client, stores the counts, statuses and coverage of its `expected.json`.
 - [ ] **AC4 — no parser left.** No client module defines a JUnit, lcov or JaCoCo parse; CR-CRU-204's
       source scan covers all five clients.
-- [ ] **AC5 — local decisions.** "Ran nothing" and the exit code come from the runner's exit code and
-      the two counts only, asserted per client; arduino's no-`--agent` run prints §S2's line and
+- [ ] **AC5 — local decisions.** "Ran nothing" comes from the runner's exit code and the two counts
+      only, and the verb's exit from CR-CRU-208's `verb_exit` over the runner's exit and the board's
+      response, asserted per client; arduino's no-`--agent` run prints §S2's line and
       exits with the runner's exit code.
 - [ ] **AC6 — envelope, warnings, no board, older board, too large.** CR-CRU-204's AC6–AC9 hold for
       each of the three clients.

@@ -1,6 +1,6 @@
 # CR-CRU-204 — the bun and python clients send their runners' reports and parse nothing
 
-**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152, CR-CRU-207 · **Status**
+**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152, CR-CRU-207, CR-CRU-208 · **Status**
 PENDING — filed 2026-10-27 (split from CR-CRU-152 at its gap analysis, user ruling; maven, rust and
 arduino are CR-CRU-206)
 
@@ -38,7 +38,7 @@ first and:
   health's `limits.ingest_body_bytes`, and sends nothing;
 - otherwise sends `POST /api/v2/runs` with `codec`, `data` (each report file's text, in path order),
   `coverage: {codec, data}` when the run measured coverage, `raw` (the captured runner output), and
-  `stack`, `tier`, `context`, `runId`, `release` as today.
+  `stack`, `tier`, `context`, `runId`, `release` and `runnerExit` (CR-CRU-208) as today.
 
 It returns the response; a 413 is reported naming `ingest_body_bytes`. Health that carries `codecs`
 but no `limits` is read as no limit advertised: the client sends, and a 413 is still reported. The
@@ -61,7 +61,9 @@ Every verb but `auto-ingest`, which runs nothing, sends its captured runner outp
 
 ### §S3 — the client parsers go
 
-The bun client's JUnit parse, lcov summation and console-to-leaf matching, and the python client's
+The bun client's JUnit parse, lcov summation, console-to-leaf matching and load-error reading
+(CR-CRU-208 §S3 — it moves into the board's `src/codecs/bun-console.ts`, so a file bun names under
+`# Unhandled error between tests` still becomes a failing case), and the python client's
 JUnit parse, classname grouping and lcov summation are deleted; their cases live in CR-CRU-152's
 server tests. The client tests that pinned them, or that stub an ingest response with no `run`
 block, are retired, re-pointed at the board or given a `run` block, each such test change in its own
@@ -98,8 +100,9 @@ advertised limit) or cannot reach the board carries no figures and says why.
 - [ ] **AC4 — no parser left.** Neither client module defines a JUnit, lcov or console parse or a
       classname grouping; a source scan asserts it, exempting only `junit_testcase_count`,
       `junit_non_skipped_count` and `_raw_report_result_count`.
-- [ ] **AC5 — local decisions.** "Ran nothing", bun's filter check and the exit code come from the
-      runner's exit code and the two counts only, asserted per client on a run that ran nothing, a
+- [ ] **AC5 — local decisions.** "Ran nothing" and bun's filter check come from the runner's exit
+      code and the two counts only, and the verb's exit from CR-CRU-208's `verb_exit` over the runner's
+      exit and the board's response, asserted per client on a run that ran nothing, a
       bun filter that matched nothing (`bun test -t <no match>` writes skipped testcases), and a run
       with a failure.
 - [ ] **AC6 — the envelope reads the response.** Each client's envelope `run:` block equals the
