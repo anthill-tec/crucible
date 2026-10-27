@@ -44,7 +44,7 @@
 
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
-import { resolveStore, type ResolveDbPathOpts } from "./server.ts";
+import { resolveStore, type ResolveDbPathOpts } from "./store-path.ts";
 
 /**
  * §S1b — one limit as an operator meets it: four fields of documentation and,

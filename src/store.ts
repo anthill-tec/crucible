@@ -1026,6 +1026,16 @@ function runAbandonAfterMs(): number {
   return resolveLimit("run_abandon_ms");
 }
 
+/**
+ * The most captured runner output a run stores, in characters:
+ * `raw_output_chars`, resolved from the server's own `crucible.toml` at the
+ * point of use. Read per ingest, not cached, so an operator's edit holds on the
+ * next ingest without a restart.
+ */
+function rawOutputChars(): number {
+  return resolveLimit("raw_output_chars");
+}
+
 /** CR-CRU-002 §S4 — project keys are UUIDs; ingest routes validate against this. */
 export const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -6018,7 +6028,7 @@ export class Store {
         this.db,
         event.raw === undefined
           ? event
-          : { ...event, raw: capRawOutput(event.raw, resolveLimit("raw_output_chars")) },
+          : { ...event, raw: capRawOutput(event.raw, rawOutputChars()) },
       );
     })();
     this.enforceRetention(event.projectKey);

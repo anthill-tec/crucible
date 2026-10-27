@@ -225,7 +225,17 @@ async function readBody(req: Request): Promise<V2Body | null> {
 }
 
 /**
- * The body of an ingest route \u2014 `/runs`, `/runs/parsed`, `/runs/compile` \u2014
+ * The largest ingest body the server reads, in bytes: `ingest_body_bytes`,
+ * resolved from the server's own `crucible.toml` at the point of use. Read per
+ * request, not cached, so an operator's edit holds on the next ingest without a
+ * restart.
+ */
+function ingestBodyBytes(): number {
+  return resolveLimit("ingest_body_bytes");
+}
+
+/**
+ * The body of an ingest route — `/runs`, `/runs/parsed`, `/runs/compile` —
  * read under `ingest_body_bytes`, resolved live on every request. A body past
  * it, known by its `Content-Length` or counted as it is read when it arrives
  * with none, is read to its end and discarded: answering before the client
@@ -235,7 +245,7 @@ async function readBody(req: Request): Promise<V2Body | null> {
  * `readBody` parses any other.
  */
 async function readIngestBody(req: Request): Promise<V2Body | null | Response> {
-  const limit = resolveLimit("ingest_body_bytes");
+  const limit = ingestBodyBytes();
   const refusal = (): Response =>
     fail(413, `request body exceeds ingest_body_bytes (${limit} bytes)`);
   if (req.body === null) return readBody(req);
