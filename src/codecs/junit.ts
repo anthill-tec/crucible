@@ -133,14 +133,14 @@ function nameOf(el: XmlElement): string {
 }
 
 /**
- * A failure's text: the message is the non-empty `message` attribute, else
- * the first non-empty line of the text; the trace is the text; the type is
+ * A failure's text: the message is the non-empty `message` attribute,
+ * trimmed, else the first non-empty line of the text; the trace is the text; the type is
  * the `type` attribute. Each part is present only when non-empty.
  */
 function toFailure(failureEl: XmlElement): NonNullable<TestLeaf["failure"]> {
   const trace = failureEl.text.trim();
   const firstLine = trace.split("\n").find((line) => line.trim().length > 0)?.trim();
-  const message = nonBlank(failureEl.attrs["message"]) ?? firstLine;
+  const message = nonBlank(failureEl.attrs["message"])?.trim() ?? firstLine;
   const type = nonBlank(failureEl.attrs["type"]);
   return {
     ...(message !== undefined ? { message: message.slice(0, MESSAGE_LIMIT) } : {}),
