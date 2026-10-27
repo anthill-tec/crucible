@@ -187,7 +187,8 @@ CLIENT_LIMITS = ("truncate_field_chars", "error_detail_chars", "roadmap_list_row
 
 #: The three the SERVER enforces. Here only so the ownership NEGATIVE can name
 #: one; a client must never resolve any of them.
-SERVER_LIMITS = ("run_abandon_ms", "project_inactive_ms", "retention")
+SERVER_LIMITS = ("run_abandon_ms", "project_inactive_ms", "retention",
+                 "ingest_body_bytes", "raw_output_chars")
 
 #: The env vars that are NOT limits and stay untouched by this CR -- bootstrap
 #: and identity, answerable before any file can be found (PRD §4.13).

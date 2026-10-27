@@ -515,7 +515,7 @@ describe("CR-CRU-131 §S1c — the server's shipped defaults TRAVEL in its distr
     }
   });
 
-  test("VERSION SKEW: a server distribution whose data file declares a limit this side does not enforce still resolves all three it owns, and still refuses the foreign one", () => {
+  test("VERSION SKEW: a server distribution whose data file declares a limit this side does not enforce still resolves all five it owns, and still refuses the foreign one", () => {
     const root = requireStage();
     const files = stagedDataFiles(root);
     expect(files).not.toEqual([]);

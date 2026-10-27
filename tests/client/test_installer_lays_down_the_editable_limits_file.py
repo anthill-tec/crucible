@@ -73,7 +73,8 @@ DOCUMENTED_FIELDS = ("description", "recommended", "min", "max")
 #: The three limits the SERVER enforces -- read from a `crucible.toml` beside
 #: its own DATABASE, never from one in a project directory. Named here so the
 #: ownership NEGATIVE can be asserted on the laid-down file.
-SERVER_LIMITS = ("run_abandon_ms", "project_inactive_ms", "retention")
+SERVER_LIMITS = ("run_abandon_ms", "project_inactive_ms", "retention",
+                 "ingest_body_bytes", "raw_output_chars")
 
 
 def _stub_stage(name):

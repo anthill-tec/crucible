@@ -118,7 +118,7 @@ import { retentionDisclosure } from "../src/server.ts";
 const DECLARED_FIELDS = ["description", "recommended", "min", "max"] as const;
 
 /**
- * The three limits the SERVER enforces, by their OWN names — not
+ * The five limits the SERVER enforces, by their OWN names — not
  * transliterations of the retired constants (`DEFAULT_RUN_ABANDON_MS`,
  * `DEFAULT_PROJECT_INACTIVE_MS`), which would carry an accident of the old
  * source into the file an operator reads.
@@ -129,9 +129,16 @@ const DECLARED_FIELDS = ["description", "recommended", "min", "max"] as const;
  * derived from the thing it is checking would assert nothing.
  *
  * `TOON_MAX_BYTES` is deliberately absent — CR-CRU-132 deletes the feature it
- * bounds, so the server's count is THREE, not four (CR-CRU-131 Risk).
+ * bounds (CR-CRU-131 Risk). The ingest body and a run's stored output joined
+ * them, so the server's count is FIVE.
  */
-const SERVER_LIMITS = ["run_abandon_ms", "project_inactive_ms", "retention"] as const;
+const SERVER_LIMITS = [
+  "run_abandon_ms",
+  "project_inactive_ms",
+  "retention",
+  "ingest_body_bytes",
+  "raw_output_chars",
+] as const;
 
 /** The limits a CLIENT enforces. Here only so the ownership NEGATIVE can name
  *  one; the server must never resolve any of them. */

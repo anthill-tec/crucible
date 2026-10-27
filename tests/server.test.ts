@@ -36,8 +36,9 @@ describe("startServer — production boot + /api/health", () => {
     // gets an answer from the same payload that already names its store. So it
     // is 7 keys now, not 6. `codecs` { test, coverage } names what the board
     // decodes, so a client can tell an older board before it sends: 8 keys.
+    // `limits` { ingest_body_bytes } advertises the body bound: 9 keys.
     expect(Object.keys(raw as object).sort()).toEqual(
-      ["codecs", "counts", "listener", "ok", "status", "store", "uptime_s", "version"].sort(),
+      ["codecs", "counts", "limits", "listener", "ok", "status", "store", "uptime_s", "version"].sort(),
     );
     expect(body.ok).toBe(true);
     expect(body.status).toBe("healthy");
