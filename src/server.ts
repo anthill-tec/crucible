@@ -24,12 +24,26 @@ const pkg = JSON.parse(
 ) as { version: string };
 
 /**
- * Bun's own request-body bound, fixed at boot to twice `ingest_body_bytes`'
- * declared `max`. Every value an operator can set live sits beneath it, so an
- * oversized ingest is always refused by the board's own JSON 413
- * (`readIngestBody` in src/v2.ts), never by Bun's empty one.
+ * Bun's own request-body bound: twice `ingest_body_bytes`' declared `max`.
+ * Every value an operator can set live sits beneath it, so an oversized ingest
+ * is always refused by the board's own JSON 413 (`readIngestBody` in
+ * src/v2.ts), never by Bun's empty one.
  */
-export const MAX_REQUEST_BODY_SIZE: number = 2 * shippedLimits().ingest_body_bytes!.max;
+function maxRequestBodySize(): number {
+  return 2 * shippedLimits().ingest_body_bytes!.max;
+}
+
+/**
+ * The same bound, exported for readers. Never computed while this module
+ * loads: `src/limits.ts` and this module import each other, so whichever of
+ * them loads first meets the other half-initialised. The value is filled in
+ * once the whole module graph has finished loading, and `startServer`
+ * computes it afresh from `maxRequestBodySize` rather than reading this.
+ */
+export let MAX_REQUEST_BODY_SIZE = 0;
+queueMicrotask(() => {
+  MAX_REQUEST_BODY_SIZE = maxRequestBodySize();
+});
 
 export interface StartServerOpts {
   port?: number;
@@ -406,7 +420,7 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
     // §S3 — SSE connections are long-lived and quiet between 15s keep-alives;
     // Bun's default 10s idleTimeout would reset them mid-stream.
     idleTimeout: 0,
-    maxRequestBodySize: MAX_REQUEST_BODY_SIZE,
+    maxRequestBodySize: maxRequestBodySize(),
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
       // CR-CRU-008 §S4 — the v1 shim is RETIRED: no legacy /api/* routes
