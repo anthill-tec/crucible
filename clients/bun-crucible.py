@@ -1020,20 +1020,6 @@ def _add_load_error_cases(tree, summary, log_text):
     return added_files
 
 
-def _filed_summary(resp, summary=None):
-    """The counts of the run as the BOARD filed it — the ingest response's
-    `run`, which includes any case the board added — else `summary` (the
-    client's own, on the parsed route; `None` where the board decoded)."""
-    run = resp.get("run") if isinstance(resp, dict) else None
-    if isinstance(run, dict) and all(
-            isinstance(run.get(k), int) for k in ("total", "passed", "failed")):
-        pending = run.get("pending")
-        return {"passed": run["passed"], "failed": run["failed"],
-                "pending": pending if isinstance(pending, int) else 0,
-                "total": run["total"]}
-    return summary
-
-
 def _parse_lcov(lcov_path):
     """Sum LF/LH/FNF/FNH from an lcov file into a Crucible coverage object, or None."""
     if not os.path.exists(lcov_path):
@@ -1580,7 +1566,7 @@ def cmd_test(args, tier=None):
                                   raw=getattr(result, "stdout", None),
                                   run_id=run_id, release=release,
                                   runner_exit=runner_exit)
-            filed = _filed_summary(resp, summary)
+            filed = _axi().filed_summary(resp, summary)
             _emit_ingest_axi("test", resp, filed, files, project_dir, args.agent,
                              warnings=(run_warnings
                                        + _axi().unit_run_wall_vs_cpu_warnings(
@@ -1848,7 +1834,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
                                   run_id=run_id, release=release,
                                   runner_exit=runner_exit)
             # The envelope states the run as the board filed it.
-            summary = _filed_summary(resp, summary)
+            summary = _axi().filed_summary(resp, summary)
         exit_code = _axi().verb_exit(runner_exit, {**resp, "run": summary})
         ok = exit_code == 0
         # §S2 — a GATE run's next step is derived from the run state it reached

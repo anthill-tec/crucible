@@ -904,20 +904,6 @@ def _is_zero_discovery(result):
     return "Ran 0 tests" in out
 
 
-def _filed_summary(resp, summary):
-    """The counts of the run as the BOARD filed it — the ingest response's
-    `run`, which includes any case the board added — else `summary`, this
-    client's own parse, when the response carries none."""
-    run = resp.get("run") if isinstance(resp, dict) else None
-    if isinstance(run, dict) and all(
-            isinstance(run.get(k), int) for k in ("total", "passed", "failed")):
-        pending = run.get("pending")
-        return {"passed": run["passed"], "failed": run["failed"],
-                "pending": pending if isinstance(pending, int) else 0,
-                "total": run["total"]}
-    return summary
-
-
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
                    context=None, raw=None, files=None, run_id=None,
                    release=None, runner_exit=None):
@@ -1239,7 +1225,7 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
                               raw=result.stdout, files=files, run_id=run_id,
                               release=release, runner_exit=runner_exit)
         # The envelope states the run as the board filed it.
-        filed = _filed_summary(resp, summary)
+        filed = _axi().filed_summary(resp, summary)
         _emit_ingest_axi(verb, resp, filed, files, project_dir, args.agent,
                          warnings=(envelope_warnings
                                    + _axi().unit_run_wall_vs_cpu_warnings(
@@ -1443,7 +1429,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
                           run_id=run_id, release=release,
                           runner_exit=runner_exit)
     # The envelope states the run as the board filed it.
-    summary = _filed_summary(resp, summary)
+    summary = _axi().filed_summary(resp, summary)
     exit_code = _axi().verb_exit(runner_exit, {**resp, "run": summary})
     ok = exit_code == 0
     # §S2 — a GATE run's next step is derived from the run state it reached

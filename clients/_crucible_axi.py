@@ -7133,6 +7133,21 @@ def verb_exit(runner_exit, response):
     return 0
 
 
+def filed_summary(resp, summary=None):
+    """(PURE) The counts of the run as the BOARD filed it \u2014 the ingest
+    response's `run`, which includes any case the board added \u2014 else
+    `summary`: the client's own parse on a parsed route, `None` where the
+    board decoded the report and the response carries no counts."""
+    run = resp.get("run") if isinstance(resp, dict) else None
+    if isinstance(run, dict) and all(
+            isinstance(run.get(k), int) for k in ("total", "passed", "failed")):
+        pending = run.get("pending")
+        return {"passed": run["passed"], "failed": run["failed"],
+                "pending": pending if isinstance(pending, int) else 0,
+                "total": run["total"]}
+    return summary
+
+
 def emit_ran_nothing(verb, artifact, exit_code, output, run_id, warnings=(),
                      *, post_fn, project_key, agent_id, subject=None):
     """The exit of a run `ran_nothing` describes \u2014 the no-report exit, never

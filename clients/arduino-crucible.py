@@ -302,20 +302,6 @@ def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
     _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
 
 
-def _filed_summary(resp, summary):
-    """The counts of the run as the BOARD filed it \u2014 the ingest response's
-    `run`, which includes any case the board added \u2014 else `summary`, this
-    client's own parse, when the response carries none."""
-    run = resp.get("run") if isinstance(resp, dict) else None
-    if isinstance(run, dict) and all(
-            isinstance(run.get(k), int) for k in ("total", "passed", "failed")):
-        pending = run.get("pending")
-        return {"passed": run["passed"], "failed": run["failed"],
-                "pending": pending if isinstance(pending, int) else 0,
-                "total": run["total"]}
-    return summary
-
-
 # ── JUnit parsing ────────────────────────────────────────────────────────────
 
 
@@ -799,7 +785,7 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
                               release=release)
     # The run as the board filed it, which includes any case it added.
-    summary = _filed_summary(resp, summary)
+    summary = _axi().filed_summary(resp, summary)
     print(f"[crucible] {verb} -> '{key}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
           f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
