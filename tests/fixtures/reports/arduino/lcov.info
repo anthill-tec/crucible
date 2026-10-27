@@ -1,0 +1,71 @@
+TN:GCOVR_report
+SF:/project/src/debounce.cpp
+VER:11d199437240d45cedf63170036473bf
+FN:3,debounce_init(Debouncer*, unsigned int)
+FNDA:4,debounce_init(Debouncer*, unsigned int)
+FN:10,debounce_update(Debouncer*, bool, unsigned int)
+FNDA:6,debounce_update(Debouncer*, bool, unsigned int)
+FNF:2
+FNH:2
+BRDA:11,2,0,3
+BRDA:11,2,1,3
+BRDA:15,4,0,2
+BRDA:15,4,1,4
+BRF:4
+BRH:4
+DA:3,4,f9e6993619796ac16ae260f491c62026
+DA:4,4,616d24806f7a6f4254d855c7073cbd11
+DA:5,4,935f24ec784a71c2e1165537e89322f7
+DA:6,4,80c2a533a17a83dda86cd86a76736407
+DA:7,4,f4cee37f5b3c8b2e650dcf5b651d1a42
+DA:8,4,cbb184dd8e05c9709e5dcaedaa0495cf
+DA:10,6,ad8e06bf70c40638d25095a3036c2dbd
+DA:11,6,9fef51a506f47aaf967e16c705dda916
+DA:12,3,1cde80ac107de3dbc403e5bdce17a5dd
+DA:13,3,b62b4920c699e8628d6362d5b55c6d66
+DA:15,6,5c0bcf67df49bb6465c5c704e9652b96
+DA:16,2,4c13d4980c521e4d941b4878842a558f
+DA:18,6,12dbabed52f622723517302431bc4c6d
+LH:13
+LF:13
+end_of_record
+SF:/project/src/ring.cpp
+VER:9a2fa423d10d118210207026b47fcfd3
+FN:3,ring_init(Ring*)
+FNDA:4,ring_init(Ring*)
+FN:8,ring_push(Ring*, unsigned char)
+FNDA:16,ring_push(Ring*, unsigned char)
+FN:17,ring_pop(Ring*, unsigned char*)
+FNDA:2,ring_pop(Ring*, unsigned char*)
+FN:27,ring_capacity()
+FNDA:16,ring_capacity()
+FNF:4
+FNH:4
+BRDA:9,2,0,2
+BRDA:9,2,1,14
+BRDA:18,2,0,-
+BRDA:18,2,1,2
+BRF:4
+BRH:3
+DA:3,4,0241969cace935d5465331107c2ad5e5
+DA:4,4,d4a388ae7b320779024176e10b85f61c
+DA:5,4,26d3a88cab8996647054067a286b2ef2
+DA:6,4,cbb184dd8e05c9709e5dcaedaa0495cf
+DA:8,16,35c4ba9e703a6afc204a32ff541ecb8c
+DA:9,16,47db1a1814187feb5aec5ae59fd2c5ba
+DA:10,2,7ab6f5cea0ab1b947f1568290187849d
+DA:12,14,892b1278e73ed841eabd8e02a6d50e65
+DA:13,14,7d51a21c09e2dac966d74036fe1572ad
+DA:14,14,58e701aeb376894a422ebe052167543c
+DA:17,2,2688bb7987fc3a437e1b539f7102a4cf
+DA:18,2,ab082e83830211ab40b2e0110d25386c
+DA:19,0,7ab6f5cea0ab1b947f1568290187849d
+DA:21,2,c55284e3123500a974a660e76f46d076
+DA:22,2,53fd915f8501dbdd63a6a1f62d094dc2
+DA:23,2,0339db3e737489151557814c909d8290
+DA:24,2,58e701aeb376894a422ebe052167543c
+DA:27,16,738f3b183070d8b2185c0aa9832d1fc0
+DA:28,16,d1d8ce3c834025c1845e647d28242f6e
+LH:18
+LF:19
+end_of_record

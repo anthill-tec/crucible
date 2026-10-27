@@ -1,0 +1,130 @@
+{
+  "stack": "mvn",
+  "reports": [
+    "app/target/surefire-reports/TEST-com.acme.app.GreeterTest.xml",
+    "core/target/surefire-reports/TEST-com.acme.core.CalcTest.xml",
+    "core/target/surefire-reports/TEST-com.acme.core.GeneratedTest.xml",
+    "core/target/surefire-reports/TEST-com.acme.core.ParityTest.xml",
+    "app/target/failsafe-reports/TEST-com.acme.app.GreeterIT.xml"
+  ],
+  "coverage": {
+    "codec": "jacoco",
+    "reports": [
+      "app/target/site/jacoco/jacoco.csv",
+      "core/target/site/jacoco/jacoco.csv"
+    ]
+  },
+  "client": {
+    "summary": {
+      "total": 11,
+      "passed": 6,
+      "failed": 3,
+      "pending": 2,
+      "duration_ms": 101
+    },
+    "tree": [
+      {
+        "name": "com.acme.app.GreeterTest",
+        "status": "pass",
+        "children": [
+          {
+            "name": "greetsByName",
+            "status": "pass",
+            "duration_ms": 23
+          },
+          {
+            "name": "greetsOnlyOnTuesdays",
+            "status": "pending",
+            "duration_ms": 0
+          }
+        ]
+      },
+      {
+        "name": "com.acme.core.CalcTest",
+        "status": "fail",
+        "children": [
+          {
+            "name": "addsTwoNumbers",
+            "status": "pass",
+            "duration_ms": 2
+          },
+          {
+            "name": "addsWithAWrongExpectation",
+            "status": "fail",
+            "duration_ms": 5
+          },
+          {
+            "name": "addsLargeNumbers",
+            "status": "pending",
+            "duration_ms": 0
+          },
+          {
+            "name": "dividesByZeroAndErrors",
+            "status": "fail",
+            "duration_ms": 2
+          },
+          {
+            "name": "clampsBelowTheRange",
+            "status": "pass",
+            "duration_ms": 1
+          }
+        ]
+      },
+      {
+        "name": "com.acme.core.GeneratedTest",
+        "status": "pass",
+        "children": []
+      },
+      {
+        "name": "com.acme.core.ParityTest",
+        "status": "pass",
+        "children": [
+          {
+            "name": "parityOf(int, String)[1]",
+            "status": "pass",
+            "duration_ms": 41
+          },
+          {
+            "name": "parityOf(int, String)[2]",
+            "status": "pass",
+            "duration_ms": 2
+          }
+        ]
+      },
+      {
+        "name": "com.acme.app.GreeterIT",
+        "status": "fail",
+        "children": [
+          {
+            "name": "saysFarewellPolitely",
+            "status": "fail",
+            "duration_ms": 24
+          },
+          {
+            "name": "greetsAStranger",
+            "status": "pass",
+            "duration_ms": 1
+          }
+        ]
+      }
+    ],
+    "files": 5,
+    "coverage": {
+      "lines": {
+        "total": 15,
+        "covered": 11,
+        "percent": 73.3
+      },
+      "functions": {
+        "total": 7,
+        "covered": 7,
+        "percent": 100.0
+      },
+      "branches": {
+        "total": 12,
+        "covered": 7,
+        "percent": 58.3
+      }
+    }
+  }
+}

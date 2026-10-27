@@ -1,0 +1,89 @@
+{
+  "stack": "rust",
+  "reports": [
+    "junit.xml"
+  ],
+  "coverage": {
+    "codec": "lcov",
+    "reports": [
+      "lcov.info"
+    ]
+  },
+  "client": {
+    "summary": {
+      "total": 7,
+      "passed": 5,
+      "failed": 2,
+      "pending": 0,
+      "duration_ms": 24
+    },
+    "tree": [
+      {
+        "name": "scratch_calc::parity",
+        "status": "fail",
+        "children": [
+          {
+            "name": "even_is_even",
+            "status": "pass",
+            "duration_ms": 3
+          },
+          {
+            "name": "odd_is_reported_wrongly",
+            "status": "fail",
+            "duration_ms": 3
+          },
+          {
+            "name": "slow_parity_sweep",
+            "status": "pass",
+            "duration_ms": 6
+          }
+        ]
+      },
+      {
+        "name": "scratch_calc",
+        "status": "fail",
+        "children": [
+          {
+            "name": "tests::adds_two_numbers",
+            "status": "pass",
+            "duration_ms": 3
+          },
+          {
+            "name": "tests::divides_by_zero_and_panics",
+            "status": "pass",
+            "duration_ms": 3
+          },
+          {
+            "name": "tests::adds_with_a_wrong_expectation",
+            "status": "fail",
+            "duration_ms": 3
+          }
+        ]
+      },
+      {
+        "name": "scratch_calc::divide",
+        "status": "pass",
+        "children": [
+          {
+            "name": "divides_evenly",
+            "status": "pass",
+            "duration_ms": 3
+          }
+        ]
+      }
+    ],
+    "files": 3,
+    "coverage": {
+      "lines": {
+        "total": 29,
+        "covered": 21,
+        "percent": 72.4
+      },
+      "functions": {
+        "total": 8,
+        "covered": 6,
+        "percent": 75.0
+      }
+    }
+  }
+}
