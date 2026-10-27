@@ -70,7 +70,8 @@ As CR-CRU-204 §S4.
       exits with the runner's exit code.
 - [ ] **AC6 — envelope, warnings, no board, older board, too large.** CR-CRU-204's AC6–AC9 hold for
       each of the three clients.
-- [ ] **AC7 — raw.** Each verb of §S1 but `auto-ingest` sends its captured runner output as `raw`.
+- [ ] **AC7 — raw and the runner's exit.** Each verb of §S1 but `auto-ingest` sends its captured runner
+      output as `raw` and the runner's exit as `runnerExit`.
 
 ## Non-goals
 

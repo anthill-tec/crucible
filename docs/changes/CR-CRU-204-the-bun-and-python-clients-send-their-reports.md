@@ -17,8 +17,8 @@ semantics live twice and the stored run says `codec: "parsed"`.
 ## Design (user rulings, 2026-10-27)
 
 - **The clients parse nothing** but the runner's exit code and two counts over the JUnit reports —
-  the `<testcase>` elements, and those carrying no `<skipped>` — which decide "ran nothing", bun's
-  filter check and the exit code before any ingest. A bun `rawReport` target keeps its Playwright
+  the `<testcase>` elements, and those carrying no `<skipped>` — which decide "ran nothing" and bun's
+  filter check before any ingest; the verb's exit is CR-CRU-208's `verb_exit`. A bun `rawReport` target keeps its Playwright
   result count (`_raw_report_result_count`) until CR-CRU-201 retires that report. Every figure the
   client reports or stores comes from the board's response. With no board there are no figures: the
   run reports it could not file, and a gate counting it is not green.
@@ -119,7 +119,12 @@ advertised limit) or cannot reach the board carries no figures and says why.
 - [ ] **AC9 — too large.** A body over the advertised `ingest_body_bytes` is refused by the client
       before sending, naming the limit; a 413 from the board is reported naming it; in both the run
       is not filed.
-- [ ] **AC10 — raw.** Each verb of §S2 but `auto-ingest` sends its captured runner output as `raw`.
+- [ ] **AC10 — raw and the runner's exit.** Each verb of §S2 but `auto-ingest` sends its captured runner
+      output as `raw` and the runner's exit as `runnerExit`.
+- [ ] **AC13 — bun's load errors, read on the board.** A bun run with files that failed to load (CR-CRU-208
+      §S3's shapes), ingested through `/runs` with its JUnit and console, is stored with one failing case
+      per such file, read by `src/codecs/bun-console.ts` before the board's runner rule, and no
+      `runner / exit` case beside them.
 - [ ] **AC11 — pytest's suite name.** A pytest run through the python client invokes pytest with its
       JUnit suite name pinned to `pytest`.
 - [ ] **AC12 — this repo's own runs.** A run of this repo's bun suite and of its python suite
@@ -127,7 +132,8 @@ advertised limit) or cannot reach the board carries no figures and says why.
 
 ## Non-goals
 
-- The board's side: CR-CRU-152 and CR-CRU-207.
+- The board's side: CR-CRU-152 and CR-CRU-207 — except moving bun's load-error reading onto the board
+  (AC13), which this CR carries with the client's deletion of it.
 - The maven, rust and arduino clients: CR-CRU-206.
 - Retiring `/api/v2/runs/parsed`: installed clients elsewhere still post to it.
 - A run's live test stream: CR-CRU-200 to CR-CRU-203.

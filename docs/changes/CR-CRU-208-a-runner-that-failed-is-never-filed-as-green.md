@@ -1,7 +1,7 @@
 # CR-CRU-208 — a runner that failed is never filed as green
 
-**Type** fix · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-28
-(user ruling: an urgent fix CR, sequenced straight after CR-CRU-207; re-scoped at its pre-review)
+**Type** fix · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-28
+(user ruling: an urgent fix CR, sequenced straight after CR-CRU-207; re-scoped at its two pre-reviews)
 
 ## Problem
 
@@ -47,31 +47,43 @@ at all before it ingests.
 
 ### §S1 — the board adds the case
 
-`POST /api/v2/runs` and `/api/v2/runs/parsed` accept an optional integer `runnerExit`. When it is
-non-zero and the run records no failed case, the board adds the case of the Design to the run before
-it is stored; the response's counts include it, and a failing run's coverage is discarded as for any
-failing run. A missing `runnerExit` changes nothing (older clients). A run killed by a signal is sent
-as `128 + <signal>` (so `exit 137` for SIGKILL), as a shell reports it.
+`POST /api/v2/runs` and `/api/v2/runs/parsed` accept an optional `runnerExit`. When present it must be
+an integer ≥ 0, else the ingest is refused with 400 `runnerExit must be a non-negative integer — run NOT
+stored`, before anything is written (beside the stack check). When it is non-zero and the run records
+no failure (`summary.failed` is 0 — on `/runs` after the codec, bun's console reading included, has
+run), the board appends a failing suite `runner` holding the Design's case and adds 1 to the run's
+`summary.total` and `summary.failed`, before the run is stored and before its hints are computed — so
+its verdict, its stored counts, its coverage discard (with the `coverageDropped` hint) and the
+`afterRed` hint all follow, and the response's `run` counts include it. A missing `runnerExit` changes
+nothing (older clients). A run killed by a signal is sent as `128 + <signal>` (so `exit 137` for
+SIGKILL), as a shell reports it.
 
 ### §S2 — every client sends `runnerExit` and exits on it
 
 `_crucible_axi.py` gains `runner_exit_code(returncode)` (a negative `subprocess` return code — a
-signal — becomes `128 + <signal>`) and `verb_exit(runner_exit, filed_run)` (non-zero when the runner
-exited non-zero or the filed run has a failure). In each of the five clients, every verb that runs a
-test runner sends `runnerExit` on its ingest and returns `verb_exit(…)`:
+signal — becomes `128 + <signal>`) and `verb_exit(runner_exit, response)` — non-zero when the runner
+exited non-zero, or the ingest response is not `ok` (refused, unreachable, 413), or the response's
+`run.failed` is above 0. "The runner" is the process whose report the verb files, the one the client
+prints as `exit=`. In each of the five clients, every verb that runs a test runner sends `runnerExit`
+on its ingest, builds its envelope's `run:` counts from the ingest response's `run` (on every route,
+so the board's added case shows in the envelope and in the gate's totals), and returns `verb_exit(…)`.
+The bodies, each reached through the verbs named:
 
 - **bun:** `cmd_test` and `cmd_regression` (with them `test`, `regression`, the declared tier verbs,
   `test` with a script, the Playwright raw-report route, and the suites `pre-merge-gate` runs);
-- **python:** `cmd_test` (with the declared tier verbs) and `cmd_regression` (`regression`,
-  `pre-merge-gate`);
+- **python:** `_test_run` (through `cmd_test`: `test` and the declared tier verbs) and
+  `_regression_run` (through `cmd_regression`: `regression`, `pre-merge-gate`);
 - **mvn:** `_surefire_tier_run` (`unit`, `module`, declared profiles), `_failsafe_tier_run`
   (`integration`, `e2e`), `cmd_regression` (`regression`, `pre-merge-gate`) and `_test_run` (`test`),
   on both the parsed and the junit-directory routes;
-- **rust:** `cmd_test` (`test`, `unit`, `integration`, `e2e`), `_smoke_test` (`smoke-test`,
+- **rust:** `_test_run` (through `cmd_test`: `test`, `unit`, `integration`, `e2e`, and the declared
+  nextest profiles `module`/`bdd`), `_smoke_test` (`smoke-test`,
   `docker-e2e-gate`), `_workspace_regression_run` (`workspace-regression`, `regression`,
   `pre-merge-gate`) and `_regression_ingest_run` (`regression-ingest`);
 - **arduino:** `_run_native_tests` (`test`, `unit`, `regression`, declared make targets,
-  `pre-merge-gate`); its no-`--agent` run exits with the runner's code.
+  `pre-merge-gate`); its no-`--agent` run, which files nothing, exits `verb_exit` over the runner's exit
+  and its local summary (non-zero when the runner did or the report records a failure) until
+  CR-CRU-206 removes its parse.
 
 A run with no report keeps filing what it files today, and exits non-zero when the runner did.
 `auto-ingest` runs no runner: it sends no `runnerExit` and is exempt. `ran_nothing` and bun's filter
@@ -84,7 +96,8 @@ one or more `# Unhandled error between tests` blocks, and adds one failing case 
 tree it files: in the suite for that file (a new suite named by the path when the report has none),
 case `?`, message = the first block's `error:` line, trace = every block for that file. This covers a
 file that fails to load, one that throws at import, and one that rejects at import (bun counts the
-last as an error, not a `fail`).
+last as an error, not a `fail`). This reading runs before the board's runner rule, so a load-error
+case makes the run failed and no `runner / exit` case is added beside it.
 
 ## Acceptance criteria
 
@@ -92,13 +105,18 @@ last as an error, not a `fail`).
       (scratch projects: a passing file, a file importing a missing module, a file throwing at
       import, a file rejecting at import; in both console forms, `NO_COLOR=1` and `FORCE_COLOR=1`)
       file one failing case per failing file as §S3 states, beside the passing case, and the verb
-      exits non-zero; a run where every file fails to load (bun writes no report) exits non-zero.
+      exits non-zero; a file with two error blocks gets one case (the first `error:` line, every block
+      in its trace); a file whose tests ran and then rejected at import gets its case in its existing
+      suite; a run where every file fails to load (bun writes no report) exits non-zero.
 - [ ] **AC2 — the board adds the case.** On `/runs` and `/runs/parsed`: `runnerExit` non-zero with no
-      failed case → the run is stored and answered with the `runner / exit <n>` case, failed, and any
-      coverage discarded with the `coverageDropped` hint; `runnerExit` non-zero with a failed case,
-      `runnerExit: 0` and no `runnerExit` → unchanged.
+      failure → the run is stored and answered with the `runner / exit <n>` case, `summary.total` and
+      `summary.failed` each one higher, verdict `RED — 1 failing of <total>`, the `afterRed` hint, and
+      any coverage discarded with the `coverageDropped` hint; `runnerExit` non-zero with a failure,
+      `runnerExit: 0` and no `runnerExit` → unchanged; `runnerExit` of `"1"`, `1.5`, `true`, `null` or
+      `-1` → 400 naming `runnerExit`, nothing stored.
 - [ ] **AC3 — the shared functions.** `runner_exit_code` maps 0, 1, 100 unchanged and `-9` → 137;
-      `verb_exit` is non-zero exactly when the runner exit is non-zero or the filed run has a failure.
+      `verb_exit` is non-zero exactly when the runner exit is non-zero, the response is not `ok`, or
+      its `run.failed` is above 0 (a runner exiting 0 with a refused ingest exits non-zero).
 - [ ] **AC4 — every verb, every client.** A census built from each client's subcommand parser
       classifies every subcommand as applying the rule (naming its body function), exempt with a
       reason (`auto-ingest`, non-test verbs), or not ingesting; each applying body sends `runnerExit`
@@ -109,11 +127,13 @@ last as an error, not a `fail`).
       `workspace-regression` and `regression-ingest`, a report recording a failure makes the verb exit
       non-zero (today: 0); a runner exiting non-zero with no report makes every client's test verb
       exit non-zero (today: maven and bun return the compile ingest's 0); arduino without `--agent`
-      exits with the runner's code.
+      exits non-zero when the runner did or its report records a failure (a `make` exiting 0 over a
+      failing report exits non-zero).
 - [ ] **AC6 — the gate.** `pre-merge-gate` over a suite whose runner exits non-zero with a
       passing-only report, and the rust gate over a failing test, are not green.
 - [ ] **AC7 — nothing else changes.** A run whose runner exits 0 and whose filed run has no failure is
-      filed and exits exactly as before. Existing tests that pinned an exit this CR changes (a fake
+      filed and exits exactly as before; a run that ran nothing (`ran_nothing`, bun's filter check)
+      sends no ingest and exits as today. Existing tests that pinned an exit this CR changes (a fake
       runner exiting non-zero with a clean report, a failing report exiting 0) are amended, each in its
       own commit, and listed in the close-out.
 
@@ -122,3 +142,5 @@ last as an error, not a `fail`).
 - The clients decoding nothing (CR-CRU-204, CR-CRU-206): they carry this CR's rules — the clients keep
   sending `runnerExit`, and the bun load-error reading moves onto the board's console module.
 - Load-error shapes of runners other than bun beyond the exit rule.
+- A new client against a board that predates this CR: the board ignores `runnerExit`, so the stored run
+  reads green while the client exits red (CR-CRU-204's health check refuses such a board later).
