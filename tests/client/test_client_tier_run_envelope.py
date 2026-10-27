@@ -764,14 +764,16 @@ class MvnIngestedTierEnvelopeTest(_EnvelopeTierProbe, _MODALITY._MvnModalityCase
         where = "mvn unit / failing suite"
         self.write_failing_report()
         os.environ["FAKE_MVN_EXIT_CODE"] = "1"
-        drive = self.drive(self.mvn_argv(TIER_VERB_DRIVEN["mvn"]))
+        drive = self.drive(self.mvn_argv(TIER_VERB_DRIVEN["mvn"]),
+                           response=_FAILED_RESPONSE)
         self.assertReachedFailingSuite(drive, where)
         self.assertEnvelopeStatesIngestedTier(drive, where)
 
     def test_a_zero_discovery_run_states_what_it_ingested(self):
         where = "mvn unit / zero-discovery"
         self.write_zero_report()
-        drive = self.drive(self.mvn_argv(TIER_VERB_DRIVEN["mvn"]))
+        drive = self.drive(self.mvn_argv(TIER_VERB_DRIVEN["mvn"]),
+                           response=_EMPTY_RESPONSE)
         self.assertReachedZeroDiscovery(drive, where)
         self.assertEnvelopeStatesIngestedTier(drive, where)
 

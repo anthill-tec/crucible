@@ -355,14 +355,18 @@ class RustEnvelopeLessVerbContractTest(_EnvelopeContractMixin, unittest.TestCase
         self.assertEqual(run.get("files"), 1, f"run={run!r}")
 
     def test_smoke_test_emits_envelope_with_run_block(self):
-        """§S1 names only the two regression verbs for `files`; smoke-test's
-        own run: block is asserted for passed/failed/pending/total only."""
+        """§S1 names only the two regression verbs for `files`. smoke-test's
+        run is decoded by the board, and this drive's board is unreachable:
+        there are no counts to state, so its run: block carries no figures,
+        and a run that reached no board never exits green."""
         emits, axi, result = self._drive("smoke-test")
         self._assert_full_envelope("rust", "smoke-test", emits, axi, result,
                                    required_fields=("run",))
-        run = axi.get("run", {})
-        self.assertEqual(run.get("passed"), 1, f"run={run!r}")
-        self.assertEqual(run.get("failed"), 0, f"run={run!r}")
+        run = axi.get("run") or {}
+        for key in ("passed", "failed", "total"):
+            self.assertIsNone(run.get(key), f"run={run!r}")
+        self.assertNotEqual(result.returncode, 0,
+                            f"exit={result.returncode} run={run!r}")
 
 
 # ── mvn's 7 toolchain-local verbs (pre-merge-gate gets its own class) ──────
