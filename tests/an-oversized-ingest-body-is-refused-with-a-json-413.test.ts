@@ -366,7 +366,7 @@ for (const { route, payload } of ROUTES) {
 describe("Bun's own body limit is raised above every ingest_body_bytes an operator can set", () => {
   test("the server module exports MAX_REQUEST_BODY_SIZE as 2 GiB — twice ingest_body_bytes' declared max", () => {
     const d = bodyLimit();
-    const exported = (serverModule as Record<string, unknown>).MAX_REQUEST_BODY_SIZE;
+    const exported = (serverModule as Record<string, unknown> as { maxRequestBodySize: () => number }).maxRequestBodySize();
     expect(exported).toBe(2 * d.max);
     expect(exported).toBe(2 * 1024 * 1024 * 1024);
     // With no operator file the board runs at the recommendation, so its own
@@ -383,7 +383,7 @@ describe("Bun's own body limit is raised above every ingest_body_bytes an operat
       const options = serve.mock.calls[0]![0] as { maxRequestBodySize?: unknown };
       expect(options.maxRequestBodySize).toBe(2 * bodyLimit().max);
       expect(options.maxRequestBodySize).toBe(
-        (serverModule as Record<string, unknown>).MAX_REQUEST_BODY_SIZE,
+        (serverModule as Record<string, unknown> as { maxRequestBodySize: () => number }).maxRequestBodySize(),
       );
     } finally {
       serve.mockRestore();
