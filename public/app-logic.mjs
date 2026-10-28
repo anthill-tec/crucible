@@ -401,13 +401,34 @@ export function agentRole(agent) {
     : null;
 }
 
+/**
+ * The one place that decides how a project's last run reads and which tone it
+ * carries, so the status line's words and its colour can never disagree.
+ * Each kind is worded as itself: a compile result by its error count (warnings
+ * are never shown), an aborted test run as aborted, and a test run — or a
+ * brief that names no kind — by its ratio. `tone` is "pass", "fail" or null
+ * (no run yet, or an aborted run: neither pass nor fail).
+ */
+export function projectStatus(project) {
+  const last = project.lastEvent;
+  if (last === null || last === undefined) return { text: "no runs yet", tone: null };
+  const rel = relativeTime(last.timestamp, Date.now());
+  if (last.kind === "compile") {
+    const errors = last.errors ?? 0;
+    if (errors === 0) return { text: `✓ compiled · ${rel}`, tone: "pass" };
+    const noun = errors === 1 ? "error" : "errors";
+    return { text: `✗ ${errors} ${noun} · ${rel}`, tone: "fail" };
+  }
+  if (last.status === "aborted") return { text: `⊘ aborted · ${rel}`, tone: null };
+  if (last.failed > 0) {
+    return { text: `✗ ${last.failed} failed of ${last.total} · ${rel}`, tone: "fail" };
+  }
+  return { text: `✓ green · ${last.passed}/${last.total} · ${rel}`, tone: "pass" };
+}
+
 /** Project rollup card sub-label. */
 export function projectRollupLabel(project) {
-  const last = project.lastEvent;
-  if (last === null || last === undefined) return "no runs yet";
-  const rel = relativeTime(last.timestamp, Date.now());
-  if (last.failed > 0) return `✗ ${last.failed} failed of ${last.total} · ${rel}`;
-  return `✓ green · ${last.passed}/${last.total} · ${rel}`;
+  return projectStatus(project).text;
 }
 
 /**
@@ -1792,6 +1813,7 @@ if (typeof window !== "undefined") {
     bareDependencyId,
     DEPENDENCY_ANNOTATION_CAP,
     projectRollupLabel,
+    projectStatus,
     projectActivity,
     orderProjects,
     emptyStates,

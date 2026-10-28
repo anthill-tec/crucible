@@ -2947,15 +2947,12 @@
 
     // §S5.2 (f) — the latest-run status line carries the universal status
     // palette (pass-green when passing / fail-red when failing), never only
-    // neutral dim ink.
+    // neutral dim ink. Its tone comes from the same decision as its words: a
+    // compile result with errors is a failure, a clean one a pass, and an
+    // aborted run is neither.
     const ProjectStatusLine = (project) => {
-      const last = project.lastEvent;
-      const statusCls =
-        last === null || last === undefined
-          ? ""
-          : last.failed > 0
-            ? " app-ratio-fail"
-            : " app-ratio-pass";
+      const { tone } = L.projectStatus(project);
+      const statusCls = tone === null ? "" : ` app-ratio-${tone}`;
       return div(
         {
           "data-testid": "project-status-line",

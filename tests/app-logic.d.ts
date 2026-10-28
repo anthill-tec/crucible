@@ -58,9 +58,12 @@ declare module "../public/app-logic.mjs" {
 
   export interface ProjectRollupLike {
     lastEvent?: {
+      kind?: string;
+      status?: string;
       total: number;
       passed: number;
       failed: number;
+      errors?: number;
       timestamp: number;
     } | null;
   }

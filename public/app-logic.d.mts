@@ -96,11 +96,19 @@ export interface OrderableProjectLike {
 
 export interface ProjectRollupLike {
   lastEvent?: {
+    kind?: string;
+    status?: string;
     total: number;
     passed: number;
     failed: number;
+    errors?: number;
     timestamp: number;
   } | null;
+}
+
+export interface ProjectStatus {
+  text: string;
+  tone: "pass" | "fail" | null;
 }
 
 // CR-CRU-007 §S2 — RED→GREEN transition markers (= Cycles), pure pairing.
@@ -382,6 +390,8 @@ export declare function livenessGlyph(agent: CrucibleAgentLike): LivenessGlyphRe
 export declare function routeParse(pathname: string): RouteState;
 
 export declare function workspaceTabs(project: WorkspaceProjectLike): WorkspaceTab[];
+
+export declare function projectStatus(project: ProjectRollupLike): ProjectStatus;
 
 export declare function projectRollupLabel(project: ProjectRollupLike): string;
 
