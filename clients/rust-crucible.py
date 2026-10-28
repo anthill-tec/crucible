@@ -41,6 +41,9 @@ Subcommands:
   pre-merge-gate        Full pre-merge: cargo clean → docker-up → workspace-
                         regression --all-features → docker-down → ingest.
                         ORCHESTRATOR one-shot for CRs that touch e2e features.
+  regression            The regression tier: cargo nextest run --workspace,
+                        coverage-free; --coverage runs the workspace-regression
+                        llvm-cov pass instead.
 
 Project + Crucible endpoint:
   Reads CRUCIBLE_PROJECT_KEY from <project-dir>/.env.
@@ -2840,10 +2843,12 @@ _REGRESSION_COVERAGE_ONLY_FLAGS = {
 
 
 def _add_regression_tier_args(p):
-    """§S1/AC5 — `regression`'s own flags: the `workspace-regression` surface
-    plus the `--coverage` switch, minus the project-dir flag the shared
-    registration already applies to all six. The coverage-only flags default
-    to None so a given one is detectable without `--coverage`."""
+    """§S1/AC5 — `regression`'s own flags: the `workspace-regression` flags,
+    the coverage-only ones (`--lcov-output`, `--ignore-run-fail`,
+    `--keep-target`) applying only with the `--coverage` switch, minus the
+    project-dir flag the shared registration already applies to all six. The
+    coverage-only flags default to None so a given one is detectable without
+    `--coverage`."""
     p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator's)")
     p.add_argument("--all-features", action="store_true",
                    help="Pass --all-features (recommended for the canonical pre-merge gate)")
@@ -3527,8 +3532,9 @@ def main():
                  (_add_e2e_tier_args,)),
              regression=tier_verb(
                  cmd_regression,
-                 "Runs the workspace coverage regression "
-                 "(`cargo llvm-cov nextest --workspace`) and ingests it.",
+                 "Runs the workspace regression (`cargo nextest run "
+                 "--workspace`), coverage-free unless --coverage adds "
+                 "llvm-cov, and ingests it.",
                  (_add_regression_tier_args,))),
         declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_dir_arg,))

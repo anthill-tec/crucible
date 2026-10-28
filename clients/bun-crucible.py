@@ -2862,7 +2862,8 @@ def main():
 
     pmg = sub.add_parser("pre-merge-gate",
                          help="ORCHESTRATOR pre-merge: fail-fast tsc check → regression WITH "
-                              "coverage (the only coverage path).")
+                              "coverage (always measured here; regression --coverage "
+                              "measures it too).")
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     pmg.add_argument("--skip-check", action="store_true", help="Bypass the fail-fast tsc check")
     _add_gate_cycle_arg(pmg)

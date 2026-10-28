@@ -2008,7 +2008,9 @@ _COV_SOURCE_HELP = (
     "([tool.coverage.run] source / source_pkgs / include, or .coveragerc) "
     "decides what is measured; with nothing declared there, the project root "
     "is measured and the run warns coverage-source-undeclared. Subprocess "
-    "coverage ([run] patch = [\"subprocess\"]) needs coverage.py 7.14 or later.")
+    "coverage ([run] patch = [\"subprocess\"]) needs coverage.py 7.14 or later. "
+    "On regression it applies only with --coverage; pre-merge-gate always "
+    "measures coverage, so there it always applies.")
 
 
 def _add_regression_tier_args(p):
@@ -2256,7 +2258,7 @@ def main():
     pmg = sub.add_parser(
         "pre-merge-gate",
         help="ORCHESTRATOR pre-merge: fail-fast py_compile check → regression WITH "
-             "coverage.py (the only coverage path; coverage is reserved for this gate).",
+             "coverage.py (always measured here; regression --coverage measures it too).",
     )
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     pmg.add_argument("--cov-source", default=None, help=_COV_SOURCE_HELP)

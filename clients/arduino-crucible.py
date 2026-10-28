@@ -1709,7 +1709,7 @@ def main():
     cpl.set_defaults(func=cmd_compile)
 
     pmg = sub.add_parser("pre-merge-gate", parents=[common],
-                         help="fail-fast compile -> regression --coverage (§S3)")
+                         help="fail-fast compile -> regression --coverage")
     pmg.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     pmg.add_argument("--skip-check", action="store_true",
                      help="skip the fail-fast arduino-cli compile step")
