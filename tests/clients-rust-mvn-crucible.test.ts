@@ -1508,7 +1508,7 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
 
     const res = await runScript(
       MVN_SCRIPT_PATH,
-      ["regression", "--agent", "mvn-regression-agent", "--project-dir", dir],
+      ["regression", "--coverage", "--agent", "mvn-regression-agent", "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
 

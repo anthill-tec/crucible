@@ -423,14 +423,17 @@ class MvnRegressionAndPreMergeGateRefuseAnUnfiledRunBeforeItStartsTest(unittest.
 
 class RustRegressionFamilyRefusesAnUnfiledRunBeforeItStartsTest(unittest.TestCase):
     """PIN (user ruling 2026-10-08), table-driven — every rust evidence verb
-    (`regression` the tier cell == `cmd_workspace_regression`,
+    (`regression` the tier cell, the whole-workspace run that is
+    coverage-free unless `--coverage` asks for llvm-cov;
     `workspace-regression`, `smoke-test`, `regression-ingest`, and
     `pre-merge-gate`) keeps `--agent required=True`: run without it, each is
     refused before the runner starts, posts nothing, and exits non-zero
-    naming `--agent`."""
+    naming `--agent`. `regression` is driven with `--min-free-g` alone:
+    `--keep-target` applies only with `--coverage`, so pairing it with a
+    coverage-free run is a refused combination."""
 
     VERBS = (
-        ("regression", ("--min-free-g", "0", "--keep-target")),
+        ("regression", ("--min-free-g", "0")),
         ("workspace-regression", ("--min-free-g", "0", "--keep-target")),
         ("smoke-test", ()),
         ("regression-ingest", ("--crates", "fake-crate")),

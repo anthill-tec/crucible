@@ -5,7 +5,8 @@
 # ///
 """Maven + Quarkus Crucible CLI — single entry point for orchestrator + the
 java RED/GREEN/FIX/VERIFY agent lifecycle ops AND for running Maven test tiers
-(surefire unit, module reactor, failsafe e2e, full regression with JaCoCo).
+(surefire unit, module reactor, failsafe e2e, full regression — JaCoCo
+coverage opt-in with --coverage).
 Replaces inline python / loose curl so each invocation has a stable command
 signature (one-time permission approval per signature, not per run).
 
@@ -22,9 +23,10 @@ The four test tiers (the differentiation this script encodes):
   e2e         Failsafe integration tests (`*IT.java` / @QuarkusIntegrationTest),
               optionally `-Dnative`. `mvn clean verify` (or `failsafe:integration-
               test` against a prebuilt package). No coverage.
-  regression  Full reactor suite WITH JaCoCo coverage — the orchestrator
-              pre-merge gate. `mvn clean verify` → parse surefire + failsafe +
-              jacoco.csv → /api/v2/runs/parsed. Coverage published ONLY here.
+  regression  Full reactor suite, coverage-free unless --coverage adds JaCoCo.
+              `mvn clean verify` → parse surefire + failsafe (+ jacoco.csv with
+              --coverage) → /api/v2/runs/parsed. pre-merge-gate always runs it
+              with coverage.
 
 Subcommands:
   register, unregister  Agent lifecycle (heartbeat / remove).
@@ -36,8 +38,9 @@ Subcommands:
   e2e                   mvn clean verify [-Dnative] [-pl m]  (or, with
                         --failsafe-only, mvn failsafe:integration-test). Ingests
                         failsafe (and surefire) results. No coverage. Optional docker.
-  regression            mvn clean verify (whole reactor) → surefire + failsafe +
-                        jacoco coverage → /api/v2/runs/parsed. ORCHESTRATOR gate.
+  regression            mvn clean verify (whole reactor) → surefire + failsafe
+                        (+ jacoco coverage only with --coverage) →
+                        /api/v2/runs/parsed.
   auto-ingest           Ingest EXISTING surefire/failsafe reports without running
                         maven (when the caller already ran mvn). Compile fallback.
   docker-up/docker-down docker compose up -d --wait / down -v (compose + services
@@ -50,7 +53,8 @@ Project + Crucible endpoint:
   Maven dir (where mvnw + target live; e.g. a `backend` subdir):
     --maven-dir > $MVN_CRUCIBLE_MAVEN_DIR > CRUCIBLE_MAVEN_DIR in .env > project dir.
   Optional .env keys: CRUCIBLE_MAVEN_DIR, CRUCIBLE_COMPOSE_FILE,
-    CRUCIBLE_DOCKER_SERVICES, CRUCIBLE_BIND_MOUNT_PATHS, CRUCIBLE_COVERAGE_PROFILE.
+    CRUCIBLE_DOCKER_SERVICES, CRUCIBLE_BIND_MOUNT_PATHS, CRUCIBLE_COVERAGE_PROFILE
+    (read only with regression --coverage, and by pre-merge-gate).
   Posts to the board the project's `crucible.toml` declares (`[client] url`,
   shipped default http://localhost:3849), v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs (codec junit),
@@ -1416,6 +1420,10 @@ def cmd_regression(args, verb="regression"):
     CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
     must carry ONE document under the GATE's own verb, not the inner one's."""
+    # A coverage-only flag on a coverage-free run is refused first, before the
+    # project, the board, a lock, docker or maven is touched.
+    _axi().refuse_coverage_only_flags(
+        args, {"coverage_profile": "--coverage-profile"})
     project_dir = _resolve_project_dir(args.project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
@@ -1435,9 +1443,10 @@ def cmd_regression(args, verb="regression"):
 
 def _regression_run(args, identity=None, verb="regression",
                     preflight_warnings=()):
-    """REGRESSION tier — full reactor suite WITH JaCoCo coverage. Orchestrator
-    pre-merge gate. Parses surefire + failsafe + jacoco.csv → /api/v2/runs/parsed.
-    Coverage is published ONLY here, and ONLY when zero failures.
+    """REGRESSION tier — full reactor suite, coverage-free unless `--coverage`
+    adds JaCoCo (the pre-merge gate always asks for it). Parses surefire +
+    failsafe (+ jacoco.csv with coverage) → /api/v2/runs/parsed. Coverage is
+    published only by a coverage run, and ONLY when zero failures.
 
     `identity` is the caller's `GatedRunIdentity` (CR-CRU-056): the narration
     ticks report through it, so a tick that re-creates a pruned row hands this
@@ -1452,10 +1461,16 @@ def _regression_run(args, identity=None, verb="regression",
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
-    # Coverage profile: --coverage-profile or CRUCIBLE_COVERAGE_PROFILE in .env.
-    cov_profile = args.coverage_profile or _read_env(project_dir).get("CRUCIBLE_COVERAGE_PROFILE")
-    if cov_profile:
-        common = common + ["-P", cov_profile]
+    # Coverage is opt-in: without `--coverage` no coverage profile is applied
+    # and no JaCoCo is collected. With it, the profile is --coverage-profile,
+    # else CRUCIBLE_COVERAGE_PROFILE in .env, else none (the build's own
+    # JaCoCo, if any, is collected).
+    with_coverage = getattr(args, "coverage", False)
+    if with_coverage:
+        cov_profile = (args.coverage_profile
+                       or _read_env(project_dir).get("CRUCIBLE_COVERAGE_PROFILE"))
+        if cov_profile:
+            common = common + ["-P", cov_profile]
 
     cmd = _mvn_base(maven_dir) + ["clean", args.goal] + common
     reports_dir = _run_reports_dir(args, project_dir)
@@ -1518,12 +1533,12 @@ def _regression_run(args, identity=None, verb="regression",
     summary, tree, files = _parse_junit(dirs)
 
     coverage = None
-    if summary["failed"] == 0:
+    if with_coverage and summary["failed"] == 0:
         coverage = _collect_jacoco(maven_dir)
         if coverage is None:
             print("[regression] WARN: no jacoco.csv found — ingesting WITHOUT coverage. "
                   "Check the quarkus-jacoco extension / --coverage-profile.", file=sys.stderr)
-    else:
+    elif with_coverage:
         print(f"[regression] {summary['failed']} failure(s) — NOT publishing coverage "
               "(JaCoCo from a failing run is incomplete).", file=sys.stderr)
 
@@ -1928,7 +1943,7 @@ def _gate_regression_args(args):
         project_dir=args.project_dir, maven_dir=args.maven_dir, agent=args.agent,
         module=None, also_make=False, update_snapshots=False, native=False,
         profile=None, system_prop=None, goal=args.goal,
-        coverage_profile=args.coverage_profile, log=None,
+        coverage=True, coverage_profile=args.coverage_profile, log=None,
         cycle=getattr(args, "cycle", None),
         release=getattr(args, "release", None))
 
@@ -2381,7 +2396,10 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
 def _add_regression_tier_args(p):
     p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator's)")
     p.add_argument("--goal", default="verify", help="Maven goal (default: verify; use test for libs without IT)")
-    p.add_argument("--coverage-profile", help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE)")
+    p.add_argument("--coverage-profile",
+                   help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE). "
+                        "Applies only with --coverage.")
+    _axi().add_regression_coverage_arg(p, "JaCoCo")
     _add_gate_cycle_arg(p)
     _add_run_release_arg(p)
 
@@ -2394,8 +2412,8 @@ def _add_regression_tier_args(p):
 _CLI_DESCRIPTION = (
     "Maven + Quarkus Crucible CLI — one entry point for the orchestrator and for the\n"
     "java RED/GREEN/FIX/VERIFY agent lifecycle, and for running Maven test tiers\n"
-    "(surefire unit, module reactor, failsafe e2e, full regression with JaCoCo) with\n"
-    "the result ingested to Crucible.\n"
+    "(surefire unit, module reactor, failsafe e2e, full regression) with the result\n"
+    "ingested to Crucible. Regression coverage is opt-in: --coverage adds JaCoCo.\n"
     "\n"
     "Tool-specific (Maven / Surefire / Failsafe / JUnit-XML / JaCoCo), never\n"
     "project-specific: the project path and the maven dir are parameterizable,\n"
@@ -2498,8 +2516,8 @@ def main():
                   _add_mvn_flags, _add_log_arg, _add_reports_arg)),
              regression=tier_verb(
                  cmd_regression,
-                 "Runs the full reactor `mvn clean verify` with JaCoCo "
-                 "coverage, parsed.",
+                 "Runs the full reactor `mvn clean verify`, parsed; "
+                 "coverage-free unless --coverage adds JaCoCo.",
                  (_add_regression_tier_args, _add_mvn_flags, _add_log_arg,
                   _add_reports_arg))),
         declares=_TIER_DECLARATION_SURFACE,
@@ -2562,7 +2580,9 @@ def main():
     pmg.add_argument("--goal", default="verify",
                      help="Maven goal (default: verify; use test for libs without IT)")
     pmg.add_argument("--coverage-profile",
-                     help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE)")
+                     help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE). "
+                          "The gate always measures coverage, so it always applies here; "
+                          "on regression it applies only with --coverage.")
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)

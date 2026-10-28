@@ -1264,6 +1264,9 @@ def cmd_regression(args, verb="regression", runner=None, carried_warnings=()):
     The gate also hands over the `runner` it already chose, so the interpreter
     is probed once per gate, and its check step's `carried_warnings`, which
     ride every envelope this run emits."""
+    # A coverage-only flag on a coverage-free run is refused first, before the
+    # project, the board, a lock or the interpreter is touched.
+    _axi().refuse_coverage_only_flags(args, {"cov_source": "--cov-source"})
     project_dir = _resolve_project_dir(args.project_dir)
     # The runner is chosen, and refused, before anything reaches the board.
     if runner is None:
@@ -2005,7 +2008,9 @@ _COV_SOURCE_HELP = (
     "([tool.coverage.run] source / source_pkgs / include, or .coveragerc) "
     "decides what is measured; with nothing declared there, the project root "
     "is measured and the run warns coverage-source-undeclared. Subprocess "
-    "coverage ([run] patch = [\"subprocess\"]) needs coverage.py 7.14 or later.")
+    "coverage ([run] patch = [\"subprocess\"]) needs coverage.py 7.14 or later. "
+    "On regression it applies only with --coverage; pre-merge-gate always "
+    "measures coverage, so there it always applies.")
 
 
 def _add_regression_tier_args(p):
@@ -2013,8 +2018,7 @@ def _add_regression_tier_args(p):
     shared tier registration and keeps every flag it had; the registrar
     supplies the name, the help and the tier binding, this supplies the rest."""
     p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
-    p.add_argument("--coverage", action="store_true",
-                   help="Run under coverage.py and post /api/v2/runs/parsed with coverage")
+    _axi().add_regression_coverage_arg(p, "coverage.py")
     p.add_argument("--cov-source", default=None, help=_COV_SOURCE_HELP)
 
 
@@ -2254,7 +2258,7 @@ def main():
     pmg = sub.add_parser(
         "pre-merge-gate",
         help="ORCHESTRATOR pre-merge: fail-fast py_compile check → regression WITH "
-             "coverage.py (the only coverage path; coverage is reserved for this gate).",
+             "coverage.py (always measured here; regression --coverage measures it too).",
     )
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     pmg.add_argument("--cov-source", default=None, help=_COV_SOURCE_HELP)
