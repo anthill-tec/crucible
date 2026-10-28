@@ -882,6 +882,17 @@ def _claim_output(written_path, own_dir, name):
     return claimed
 
 
+def _written_since(path, started):
+    """Whether the file at `path` exists and was last written at or after
+    `started`, a `time.time()` taken before the run's tool began. The
+    comparison is to the whole second, so a report the run itself wrote is
+    never refused on a filesystem that stores mtimes coarsely."""
+    try:
+        return os.path.getmtime(path) >= int(started)
+    except OSError:
+        return False
+
+
 def cmd_auto_ingest(args):
     """Detect: junit XML present → ingest tests. Absent → cargo check stderr → ingest compile."""
     project_dir = _resolve_project_dir(args.project_dir)
@@ -1996,6 +2007,10 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
         # §S1 — the release run's note, as `_smoke_test` carries it.
         if release:
             run_warnings = [_axi().release_run_note(release)] + run_warnings
+    # When the runner begins: a junit at the profile's path that is older than
+    # this was written by some other run, however young it is, and is never
+    # read as this run's.
+    run_started = time.time()
     try:
         with _axi().abandon_trap(run_id):
             result = _run_logged(cmd, project_dir, env, None, narrator,
@@ -2009,12 +2024,17 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
     print(f"[crucible] {runner_name} exit={result.returncode}", file=sys.stderr)
     runner_exit = _axi().runner_exit_code(result.returncode)
 
-    junit_path = _claim_output(f"{project_dir}/target/nextest/{args.profile}/junit.xml",
-                               own_dir, _OWN_JUNIT_FILE)
+    # Only a junit this run's tool wrote is claimed; another run's report is
+    # left where it lies, for the run that wrote it, and this run takes the
+    # no-report path.
+    junit_written = f"{project_dir}/target/nextest/{args.profile}/junit.xml"
+    own_junit = _written_since(junit_written, run_started)
+    junit_path = (_claim_output(junit_written, own_dir, _OWN_JUNIT_FILE)
+                  if own_junit else junit_written)
     lcov_path = (_claim_output(f"{project_dir}/{args.lcov_output}",
                                own_dir, _OWN_LCOV_FILE)
                  if coverage else None)
-    if not os.path.exists(junit_path):
+    if not own_junit or not os.path.exists(junit_path):
         _emit_axi(verb, False,
                   {"help": _axi().no_report_help(verb, "junit.xml")},
                   _axi_context(project_dir, agent_id=args.agent),
@@ -2025,7 +2045,8 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
                       run_id, "junit.xml", post_fn=_post,
                       project_key=_project_key(project_dir),
                       agent_id=args.agent),
-                  f"[crucible] ERROR: no junit.xml at {junit_path}")
+                  f"[crucible] ERROR: no junit.xml written by this run at "
+                  f"{junit_path}")
         return 1
     if _axi().ran_nothing(result.returncode,
                           _axi().junit_testcase_count([junit_path])):
