@@ -1,6 +1,6 @@
 # CR-CRU-214 — no test writes to the live board
 
-**Type** fix · **Points** 2 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-28
+**Type** fix · **Points** 2 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — merged 2026-10-28 (plan 213, cycles 771–774, gate 8959/0: bun 4176/0, python 4783/0); filed 2026-10-28
 (found 2026-10-28 behind CR-CRU-213; user ruling: a patch CR into 0.4.0, sequenced next; settled at gap
 analysis and the spec pre-review)
 
@@ -63,7 +63,7 @@ The package-level isolation, and the guard (AC1; AC3 at the gate).
 
 ## Acceptance criteria
 
-- [ ] **AC1** In the client suite's process, each of the five `<STACK>_CRUCIBLE_PROJECT_DIR` variables
+- [x] **AC1** In the client suite's process, each of the five `<STACK>_CRUCIBLE_PROJECT_DIR` variables
   names one existing directory holding no `.env` and no `crucible.toml`; and each client's resolution with
   no `--project-dir` — `_resolve_project_dir(None)` in the python, bun, mvn and rust clients,
   `_project_dir(args)` with no `--project-dir` in arduino — answers that directory, not the repo root (for
@@ -71,16 +71,26 @@ The package-level isolation, and the guard (AC1; AC3 at the gate).
   (`addCleanup(module.bind_project_dir, None)`, as tests already do). It fails on today's tree, where the
   variables are unset and resolution answers the repo root — its RED run is the proof that the guard
   catches its own absence.
-- [ ] **AC2** The `--cov-source` default is read from the `--cov-source` action of the `regression` and
+- [x] **AC2** The `--cov-source` default is read from the `--cov-source` action of the `regression` and
   `pre-merge-gate` subparsers on the root parser captured through `_root_parser`'s seam, and is unset for
   both; `run_verb` and the two handlers receive no call (asserted with a mock); the `cr040-red-probe`
   identity no longer appears in the file.
-- [ ] **AC3 (checked at the pre-merge gate)** The gate's run writes no test identity into the project the
+- [x] **AC3 (checked at the pre-merge gate)** The gate's run writes no test identity into the project the
   repo's `.env` names: `GET /api/v2/events?project=<key>` and `GET /api/v2/projects/<key>/milestones`, read
   from the gate's start, hold no record carrying `cr040-red-probe` or any other agent-id literal used in
   `tests/client`; their `pre-merge-gate` milestones are exactly the gate's own, under the runner's
   `--agent`; and no agent registers in that window other than the runner and agents already active before
   it started.
+
+- *Recorded at merge.* AC3 checked over the gate's window: the live project held only the gate's own two
+  runs and its milestone — none of the 112 agent-id literals in `tests/client`, no registration. Rulings:
+  arduino's resolver exits on the isolation directory (no `.env`), which counts as answering it; the
+  isolation reuses an inherited marker (`CRUCIBLE_CLIENT_SUITE_ISOLATION_DIR`), only its creator removes
+  the directory; §S2 was a test-only cycle, its fail-first shown by a mutant run without `--agent` (by
+  design, so a failing mutant never reaches the board). VERIFY's V1: the package is imported — and the
+  isolation applied — under `-s tests/client -t .`, dotted `tests.client.<module>` targets and `-s tests`,
+  not under `-s tests/client` without `-t .`, where the guard fails closed; stated in the package
+  docstring (`a2728f4`). Deferred: the python client has no top-level-directory flag for discovery.
 
 ## Non-goals
 
