@@ -96,11 +96,19 @@ export interface OrderableProjectLike {
 
 export interface ProjectRollupLike {
   lastEvent?: {
+    kind?: string;
+    status?: string;
     total: number;
     passed: number;
     failed: number;
+    errors?: number;
     timestamp: number;
   } | null;
+}
+
+export interface ProjectStatus {
+  text: string;
+  tone: "pass" | "fail" | null;
 }
 
 // CR-CRU-007 §S2 — RED→GREEN transition markers (= Cycles), pure pairing.
@@ -383,6 +391,8 @@ export declare function routeParse(pathname: string): RouteState;
 
 export declare function workspaceTabs(project: WorkspaceProjectLike): WorkspaceTab[];
 
+export declare function projectStatus(project: ProjectRollupLike): ProjectStatus;
+
 export declare function projectRollupLabel(project: ProjectRollupLike): string;
 
 export declare function projectActivity(
@@ -398,6 +408,9 @@ export declare function emptyStates(state: EmptyStateInput): EmptyStateResult | 
 export declare function pairTransitions<T extends TransitionEventLike>(
   events: T[],
 ): Array<TransitionMarker<T>>;
+
+/** A run is a test run; every other event kind is never drawn or counted as one. */
+export declare function isTestRun(e: { kind: string }): boolean;
 
 // CR-CRU-011 C4 — §S0b timeline plan integration + §S3 history lens (pure).
 export interface LensRunLike {

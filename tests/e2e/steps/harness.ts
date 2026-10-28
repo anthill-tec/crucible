@@ -512,17 +512,30 @@ export interface CompileIngestResponse {
   warnings: number;
 }
 
+/**
+ * POST /api/v2/runs/compile. The optional `context` (e.g. `{ cycleId }`) is
+ * sent only when given — the route carries an unbound poster's context
+ * verbatim, so a compile result can be stamped with the cycle it belongs to.
+ * Omitted, the body is exactly what every existing caller has always sent.
+ */
 export async function ingestCompile(
   request: APIRequestContext,
   projectKey: string,
   agentId: string,
   errors: string,
   format = "rustc",
+  context?: Record<string, unknown>,
 ): Promise<CompileIngestResponse> {
   // CR-CRU-060 §S3/§S4 — the id arrives from the caller; guarantee it here.
   await ensureRegistered(request, projectKey, agentId);
   const res = await request.post("/api/v2/runs/compile", {
-    data: { projectKey, agentId, errors, format },
+    data: {
+      projectKey,
+      agentId,
+      errors,
+      format,
+      ...(context !== undefined ? { context } : {}),
+    },
   });
   expect(res.ok()).toBe(true);
   return (await res.json()) as CompileIngestResponse;

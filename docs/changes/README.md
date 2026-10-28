@@ -208,6 +208,10 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 ## Deferred — post-0.2.0
 
+- 2026-10-28 — **the e2e ingest counts Gherkin steps, not tests** (CR-CRU-213's VERIFY, V4): the bun
+  client's `e2e` run of the Playwright/bddgen suite files 1404 cases where Playwright reports 121 tests,
+  so the board's e2e figures do not match the runner's own summary. A candidate fix in the playwright
+  decoding (or the client's report choice).
 - 2026-10-28 — **mvn `auto-ingest` with no report on disk prints no envelope** (found by CR-CRU-210's
   RED census): it exits 1 after falling back to a compile capture, with nothing machine-readable on
   stdout. Every other path of every client emits one envelope. A candidate patch CR.

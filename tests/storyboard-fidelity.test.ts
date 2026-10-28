@@ -1434,3 +1434,83 @@ describe("§S5 fidelity #5d — F8 pane status palette (pass-green / fail-red, n
     expect(greenToken!.className).toContain("app-ratio-pass");
   });
 });
+
+// The status line words a compile result and an aborted run as themselves, and
+// colours them by what they are: a compile result with errors is a failure even
+// though it carries `failed: 0`, a clean compile is a pass, and an aborted run
+// is neither. The `lastEvent` briefs carry the board's own brief shape
+// (`eventBrief`, src/v2.ts).
+describe("project card status line \u2014 a compile result and an aborted run carry their own palette", () => {
+  async function mountStatusLine(key: string, lastEvent: Record<string, unknown>): Promise<Element> {
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: `Status Line ${key}`, lastEvent })],
+    });
+    const line = document.querySelector('[data-testid="project-status-line"]');
+    expect(line).not.toBeNull();
+    return line!;
+  }
+
+  test("a compile result with one error reads '\u2717 1 error' in the fail-red class, never the pass-green one", async () => {
+    const line = await mountStatusLine("status-compile-errors-1", {
+      kind: "compile",
+      total: 0,
+      passed: 0,
+      failed: 0,
+      errors: 1,
+      warnings: 0,
+      timestamp: Date.now(),
+    });
+
+    expect((line.textContent ?? "").trim()).toBe("\u2717 1 error \u00b7 just now");
+    expect(line.className).toContain("app-ratio-fail");
+    expect(line.className).not.toContain("app-ratio-pass");
+  });
+
+  test("a compile result with no errors reads '\u2713 compiled' in the pass-green class, never the fail-red one", async () => {
+    const line = await mountStatusLine("status-compile-clean-1", {
+      kind: "compile",
+      total: 0,
+      passed: 0,
+      failed: 0,
+      errors: 0,
+      warnings: 3,
+      timestamp: Date.now(),
+    });
+
+    expect((line.textContent ?? "").trim()).toBe("\u2713 compiled \u00b7 just now");
+    expect(line.className).toContain("app-ratio-pass");
+    expect(line.className).not.toContain("app-ratio-fail");
+  });
+
+  test("an aborted run reads '\u2298 aborted' and carries neither the pass-green nor the fail-red class", async () => {
+    const line = await mountStatusLine("status-aborted-1", {
+      kind: "test",
+      status: "aborted",
+      total: 0,
+      passed: 0,
+      failed: 0,
+      timestamp: Date.now(),
+    });
+
+    expect((line.textContent ?? "").trim()).toBe("\u2298 aborted \u00b7 just now");
+    expect(line.className).not.toContain("app-ratio-pass");
+    expect(line.className).not.toContain("app-ratio-fail");
+    // Still the status line itself, not a bare element stripped of its styling.
+    expect(line.className).toContain("app-status-line");
+  });
+
+  test("a test run brief that names its kind keeps the pass-green class and today's green wording", async () => {
+    const line = await mountStatusLine("status-test-kind-1", {
+      kind: "test",
+      total: 5,
+      passed: 5,
+      failed: 0,
+      timestamp: Date.now(),
+    });
+
+    expect((line.textContent ?? "").trim()).toBe("\u2713 green \u00b7 5/5 \u00b7 just now");
+    expect(line.className).toContain("app-ratio-pass");
+    expect(line.className).not.toContain("app-ratio-fail");
+  });
+});

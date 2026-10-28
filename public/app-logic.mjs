@@ -401,13 +401,34 @@ export function agentRole(agent) {
     : null;
 }
 
+/**
+ * The one place that decides how a project's last run reads and which tone it
+ * carries, so the status line's words and its colour can never disagree.
+ * Each kind is worded as itself: a compile result by its error count (warnings
+ * are never shown), an aborted test run as aborted, and a test run — or a
+ * brief that names no kind — by its ratio. `tone` is "pass", "fail" or null
+ * (no run yet, or an aborted run: neither pass nor fail).
+ */
+export function projectStatus(project) {
+  const last = project.lastEvent;
+  if (last === null || last === undefined) return { text: "no runs yet", tone: null };
+  const rel = relativeTime(last.timestamp, Date.now());
+  if (last.kind === "compile") {
+    const errors = last.errors ?? 0;
+    if (errors === 0) return { text: `✓ compiled · ${rel}`, tone: "pass" };
+    const noun = errors === 1 ? "error" : "errors";
+    return { text: `✗ ${errors} ${noun} · ${rel}`, tone: "fail" };
+  }
+  if (last.status === "aborted") return { text: `⊘ aborted · ${rel}`, tone: null };
+  if (last.failed > 0) {
+    return { text: `✗ ${last.failed} failed of ${last.total} · ${rel}`, tone: "fail" };
+  }
+  return { text: `✓ green · ${last.passed}/${last.total} · ${rel}`, tone: "pass" };
+}
+
 /** Project rollup card sub-label. */
 export function projectRollupLabel(project) {
-  const last = project.lastEvent;
-  if (last === null || last === undefined) return "no runs yet";
-  const rel = relativeTime(last.timestamp, Date.now());
-  if (last.failed > 0) return `✗ ${last.failed} failed of ${last.total} · ${rel}`;
-  return `✓ green · ${last.passed}/${last.total} · ${rel}`;
+  return projectStatus(project).text;
 }
 
 /**
@@ -464,7 +485,7 @@ export function pairTransitions(events) {
   const stemRaw = (agentId) => String(agentId).replace(/-(RED|GREEN|FIX)$/i, "");
   const stemKey = (agentId) => stemRaw(agentId).toLowerCase();
   const sorted = events
-    .filter((e) => e.kind === "test")
+    .filter(isTestRun)
     .slice()
     .sort((a, b) => a.timestamp - b.timestamp);
   const markers = [];
@@ -837,6 +858,14 @@ export function timelineRows(events, plans) {
 }
 
 /**
+ * A run is a test run: milestones, gates, registrations and compile results
+ * are events but never runs, so they are never drawn or counted as one.
+ */
+export function isTestRun(e) {
+  return e.kind === "test";
+}
+
+/**
  * §S3 — the history lens tree (pure): Wave → [Track] → CR → Cycle.
  * Declared-plan first — where a plan exists the tree IS the plan; inferred
  * fallback (context.wave + agent stem + context.cycle) where none does;
@@ -844,7 +873,7 @@ export function timelineRows(events, plans) {
  */
 export function workflowLens({ plans, events }) {
   const index = planCycleIndex(plans);
-  const runs = (events ?? []).filter((e) => e.kind === "test");
+  const runs = (events ?? []).filter(isTestRun);
 
   // CR-CRU-013 §S6 — wave labels a qualifying no-mistakes gate has sealed:
   // a `passed` OR `checks-passed` gate event flips the wave to `gated`;
@@ -1792,12 +1821,14 @@ if (typeof window !== "undefined") {
     bareDependencyId,
     DEPENDENCY_ANNOTATION_CAP,
     projectRollupLabel,
+    projectStatus,
     projectActivity,
     orderProjects,
     emptyStates,
     pairTransitions,
     planCycleIndex,
     timelineRows,
+    isTestRun,
     workflowLens,
     gateDecisionSummaryText,
     waveLatestSealedGate,

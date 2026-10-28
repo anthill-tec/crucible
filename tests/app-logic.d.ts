@@ -58,11 +58,19 @@ declare module "../public/app-logic.mjs" {
 
   export interface ProjectRollupLike {
     lastEvent?: {
+      kind?: string;
+      status?: string;
       total: number;
       passed: number;
       failed: number;
+      errors?: number;
       timestamp: number;
     } | null;
+  }
+
+  export interface ProjectStatus {
+    text: string;
+    tone: "pass" | "fail" | null;
   }
 
   export interface EmptyStateInput {
@@ -87,7 +95,12 @@ declare module "../public/app-logic.mjs" {
 
   export function workspaceTabs(project: WorkspaceProjectLike): WorkspaceTab[];
 
+  export function projectStatus(project: ProjectRollupLike): ProjectStatus;
+
   export function projectRollupLabel(project: ProjectRollupLike): string;
 
   export function emptyStates(state: EmptyStateInput): EmptyStateResult | null;
+
+  /** A run is a test run; every other event kind is never drawn or counted as one. */
+  export function isTestRun(e: { kind: string }): boolean;
 }

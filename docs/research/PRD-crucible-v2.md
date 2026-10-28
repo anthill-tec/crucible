@@ -224,8 +224,8 @@ requirements verbatim. Highlights that are easy to get wrong:
 - `POST /api/projects/add` — v1 fields + optional `type` (§3.1); key optional in v2
   (server generates UUIDv7 and returns it) for dashboard-driven creation.
 - Dashboard can create, rename, and re-type projects.
-- `GET /api/projects` returns `{ok, projects:[…]}` with per-project rollups (agent count,
-  last event, latest green coverage) so the dashboard renders from one call.
+- `GET /api/projects` returns `{ok, projects:[…]}` with per-project rollups (agent count, last run —
+  the newest test run or compile result, latest green coverage) so the dashboard renders from one call.
 
 ### 4.3 Agent lifecycle
 - Heartbeat upserts the agent, bumps `lastSeen`, applies §3.2 identity semantics.

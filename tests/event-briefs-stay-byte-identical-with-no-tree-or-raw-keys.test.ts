@@ -1,5 +1,6 @@
 // The four brief-answered reads — the recent feed, a cycle's runs,
-// `/status`, and the projects list's newest event — must stay byte-identical
+// `/status`, and the projects list's last event (the newest test run or
+// compile result) — must stay byte-identical
 // once a read stops hydrating each run's tree/raw. This file pins that
 // contract as LITERAL JSON: every expected brief below is a hard-coded
 // object, written out field by field from the fixture's own deterministic
@@ -382,7 +383,7 @@ describe("/api/v2/status's briefs are byte-identical and carry no tree/raw key",
 });
 
 describe("the projects list's lastEvent brief is byte-identical and carries no tree/raw key", () => {
-  test("a project whose newest event is a milestone, behind an earlier tree+raw+coverage test run, answers the milestone's literal brief", async () => {
+  test("a project whose newest event is a milestone, behind an earlier tree+raw+coverage test run, answers the test run's literal brief", async () => {
     boot();
     const store = handle!.store;
     const key = "projects-list-project";
@@ -408,21 +409,22 @@ describe("the projects list's lastEvent brief is byte-identical and carries no t
     const projects = body.projects as Array<Record<string, unknown>>;
     const project = projects.find((p) => p.key === key)!;
 
+    // The milestone is the project's newest event, but a milestone is not a
+    // run: the last event is the newest test run, briefed byte-for-byte.
     expect(project.lastEvent).toEqual({
-      id: "evt-1735689617000-2",
+      id: "evt-1735689616000-1",
       projectKey: "projects-list-project",
-      agentId: "milestone-agent",
-      kind: "milestone",
+      agentId: "test-agent",
+      kind: "test",
       tier: "unit",
-      timestamp: 1_735_689_617_000,
-      total: 0,
-      passed: 0,
+      timestamp: 1_735_689_616_000,
+      total: 3,
+      passed: 3,
       failed: 0,
       pending: 0,
-      duration_ms: 0,
-      hasCoverage: false,
-      type: "narrative-milestone",
-      label: "Wave complete",
+      duration_ms: 12,
+      hasCoverage: true,
+      coverageLines: 50,
     });
     expectNoDetailKeys(project.lastEvent as Record<string, unknown>);
   });
