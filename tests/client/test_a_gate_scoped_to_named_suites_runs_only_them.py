@@ -495,6 +495,99 @@ class AScopedArduinoGateRunsTheWholeSuiteTest(_AScopedOwnStackGate):
 # The abstract scenario is no test of its own: only its three stacks run.
 del _AScopedOwnStackGate
 
+# ── a bound agent: its registered cycle resolves the gate ───────────────────
+
+class AScopedGateOfABoundAgentNeedsNoCycleFlagTest(_OnTheBoard):
+    """An agent registered bound to the ACTIVE cycle runs `pre-merge-gate
+    --suites <target>` with no `--cycle`: its binding is the cycle the gate
+    belongs to, so the gate is not refused, runs, and posts a `scoped`
+    milestone under that cycle's CR. Its own project on the board, so its
+    active cycle is no other scenario's."""
+
+    CLIENT = "mvn"
+    CR = "scoped-gate-bound-agent"
+    AGENT = "scoped-gate-bound-agent-verifier"
+    TARGET = "unit"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        board = cls.board()
+        project = board.http("/api/v2/projects", {"name": cls.CR})
+        assert project.get("ok"), f"project creation failed: {project!r}"
+        cls.key = project["project"]["key"]
+        orchestrator = f"{cls.CR}-orchestrator"
+        reg = board.http("/api/v2/agents/register",
+                         {"projectKey": cls.key, "agentId": orchestrator,
+                          "role": "ORCHESTRATOR"})
+        assert reg.get("ok"), f"orchestrator registration failed: {reg!r}"
+        filed = board.http(f"/api/v2/projects/{cls.key}/plans",
+                           {"cr": cls.CR, "cycles": [{"label": "solo"}],
+                            "agentId": orchestrator})
+        assert filed.get("ok"), f"plan-file failed: {filed!r}"
+        plan_id, cls.cycle_id = filed["planId"], filed["cycles"][0]["id"]
+        moved = _call(board.base,
+                      f"/api/v2/projects/{cls.key}/plans/{plan_id}/cycles/"
+                      f"{cls.cycle_id}",
+                      {"status": "active", "agentId": orchestrator},
+                      method="PATCH")
+        assert moved.get("ok"), f"cycle active failed: {moved!r}"
+        cls.project_dir = _make_project_dir(cls.CLIENT)
+        cls.bin_dir = _recording_bin_dir(cls.CLIENT)
+        (cls.project_dir / ".env").write_text(f"CRUCIBLE_PROJECT_KEY={cls.key}\n")
+        _declare_own_stack_suites(cls.CLIENT, cls.project_dir)
+        project_flag = ["--project-dir", str(cls.project_dir)]
+        cls.registered = drive_verb(
+            CLIENT_FILES[cls.CLIENT],
+            ["register", "--agent", cls.AGENT, "--role", "VERIFY",
+             "--cycle", str(cls.cycle_id)] + project_flag,
+            cls.project_dir, cls.bin_dir, timeout=TIMEOUT, board=board.base)
+        cls.result = drive_verb(
+            CLIENT_FILES[cls.CLIENT],
+            [GATE_VERB, "--agent", cls.AGENT, SUITES_FLAG, cls.TARGET]
+            + project_flag,
+            cls.project_dir, cls.bin_dir, timeout=TIMEOUT, board=board.base)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.project_dir, ignore_errors=True)
+        shutil.rmtree(cls.bin_dir, ignore_errors=True)
+        super().tearDownClass()
+
+    def test_the_agent_registered_bound_to_the_active_cycle(self):
+        self.assertEqual(self.registered.returncode, 0,
+                         f"the bound registration succeeded; "
+                         f"{_transcript(self.registered)}")
+
+    def test_the_scoped_gate_is_not_refused_and_passes(self):
+        envelope = _gate_envelope(self.result.stdout) or {}
+        self.assertNotIn(
+            "error", envelope,
+            f"a bound agent's scoped gate needs no --cycle, so it is not "
+            f"refused; envelope={envelope!r}; {_transcript(self.result)}")
+        self.assertEqual(
+            (self.result.returncode, envelope.get("ok"), envelope.get("scope")),
+            (0, True, "scoped"),
+            f"the scoped gate ran and passed; {_transcript(self.result)}")
+
+    def test_the_gate_posts_a_scoped_milestone_under_the_bound_cycle(self):
+        read = self.board().http(
+            f"/api/v2/projects/{self.key}/milestones?type={GATE_VERB}")
+        self.assertTrue(read.get("ok"), f"milestones read failed: {read!r}")
+        mine = [m for m in read.get("milestones") or []
+                if m.get("label") == self.CR]
+        self.assertEqual(len(mine), 1,
+                         f"the gate posts one `{GATE_VERB}` milestone under "
+                         f"the bound cycle's CR; got {mine!r}; "
+                         f"{_transcript(self.result)}")
+        record = mine[0] if mine else {}
+        self.assertEqual(
+            (record.get("outcome"), record.get("scope"),
+             (record.get("context") or {}).get("cycleId")),
+            ("pass", "scoped", self.cycle_id),
+            f"a passing scoped milestone under the cycle the agent is bound "
+            f"to; record={record!r}")
+
 # ── help: one shared declaration ────────────────────────────────────────────
 
 class EveryGateListsTheSuitesFlagWithOneHelpTest(unittest.TestCase):

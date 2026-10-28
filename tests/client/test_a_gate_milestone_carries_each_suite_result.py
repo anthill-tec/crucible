@@ -52,6 +52,15 @@ from tests.client.real_board import RealBoard
 from tests.client.test_an_unattributed_run_is_refused_while_a_cycle_is_active import (
     _call,
 )
+from tests.client.test_client_fleet_envelope_census import (
+    _FAKE_TOOLS,
+    _make_project_dir,
+    drive_verb,
+)
+from tests.client.test_every_verb_that_files_a_run_is_refused_while_a_cycle_is_active import (
+    _LOG_SNIPPET,
+    INVOCATION_LOG,
+)
 
 TOON = load_toon()
 AXI = load_client("_crucible_axi.py")
@@ -548,6 +557,90 @@ class AGateStoppedAtItsFirstStepTest(_GateScenario):
         self.assertNotIn("suites", record,
                          f"a gate stopped at its first step composed no suites; "
                          f"record={record!r}")
+
+
+# A fake `docker` that brings the stack "up" and then is gone: the gate's
+# teardown (`docker compose down`, run after the composition returned) can no
+# longer start it, so the teardown raises an OSError out of the gate.
+_VANISHING_DOCKER = r'''
+import os
+import sys
+
+if sys.argv[1:2] == ["compose"] and "up" in sys.argv[2:]:
+    os.remove(os.path.abspath(__file__))
+sys.exit(0)
+'''
+
+
+class AGateThatFailsAfterItsCompositionTest(_GateScenario):
+    """A maven gate whose composition FINISHED — its whole-suite run filed, so
+    every declared target had a result — and that then failed in the step
+    after it: its `docker compose down` teardown could not start `docker`.
+    That OSError escapes the gate, and a failure that escapes the gate, even
+    after the composition, posts a `fail` milestone with no `suites`.
+
+    The drive's PATH holds only its own fakes, so the vanished `docker` can
+    never resolve to a real one further along the PATH."""
+
+    NAME = "fails-after-composition"
+
+    @classmethod
+    def setUpClass(cls):
+        super(_GateScenario, cls).setUpClass()
+        if _BOARD is None:
+            raise AssertionError("the module's real board was never booted")
+        cls.board = _BOARD
+        cls.agent = f"gate-suites-{cls.NAME}"
+        cls.cr = f"gate-suites-{cls.NAME}-plan"
+        cls.orchestrator = f"gate-suites-{cls.NAME}-orchestrator"
+        cls.project = str(_make_project_dir("mvn"))
+        cls.bin_dir = new_scratch("gate-suites-mvn-bin-")
+        for name, body in (("mvn", _FAKE_TOOLS["mvn"].split("\n", 1)[1]),
+                           ("docker", _VANISHING_DOCKER)):
+            _executable(os.path.join(cls.bin_dir, name), _LOG_SNIPPET + body)
+        Path(cls.project, ".env").write_text(
+            f"CRUCIBLE_PROJECT_KEY={cls.board.key}\n")
+        profiles = "".join(f"<profile><id>{t}</id></profile>"
+                           for t in ("unit", "integration", "e2e"))
+        Path(cls.project, "pom.xml").write_text(
+            f"<project><profiles>{profiles}</profiles></project>")
+        cls.plan_id, cls.cycle_id = cls._plan()
+        cls.result = drive_verb(
+            CLIENTS / "mvn-crucible.py",
+            [GATE_MILESTONE, "--agent", cls.agent, "--project-dir", cls.project,
+             "--cycle", str(cls.cycle_id)],
+            Path(cls.project), Path(cls.bin_dir), timeout=TIMEOUT,
+            extra_env={"PATH": cls.bin_dir}, board=cls.board.base)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.bin_dir, ignore_errors=True)
+        super().tearDownClass()
+
+    def test_the_composition_ran_before_the_teardown_failed(self):
+        """The control: the whole-suite run ran and was filed, and the
+        teardown never started, so the failure came after the composition."""
+        log = Path(self.bin_dir, INVOCATION_LOG)
+        ran = log.read_text().splitlines() if log.exists() else []
+        self.assertEqual(
+            [line.split(" ", 1)[0] for line in ran], ["docker", "mvn"],
+            f"the stack came up and the suite ran, and nothing ran after it; "
+            f"invocations={ran!r}; {_diagnostics(self.result)}")
+        self.assertEqual(len(self.stored_runs()), 1,
+                         f"the whole-suite run was filed; "
+                         f"{_diagnostics(self.result)}")
+        self.assertNotEqual(self.result.returncode, 0,
+                            f"the escaped teardown failure fails the gate; "
+                            f"{_diagnostics(self.result)}")
+
+    def test_a_failure_escaping_after_the_composition_records_no_suites(self):
+        record = self.milestone()
+        self.assertEqual(record.get("outcome"), "fail",
+                         f"a gate a failure escaped did not pass; "
+                         f"record={record!r}")
+        self.assertNotIn("suites", record,
+                         f"a failure that escapes the gate, even after the "
+                         f"composition, posts no `suites`; record={record!r}")
 
 
 if __name__ == "__main__":
