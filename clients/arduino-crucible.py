@@ -715,13 +715,32 @@ def _ignored_contract_warning(variable, native_dir, fixed, moved_to):
                       f"run writes there directly."}
 
 
-def _ignored_narrowing_warnings(args, cases):
+#: The extensions of a native test source, whose stem a case's `classname`
+#: must name before the case is judged against `--tests`.
+_TEST_SOURCE_EXTENSIONS = (".c", ".cpp", ".ino")
+
+
+def _test_source_stems(native_dir):
+    """The stems of every test source (`.c`, `.cpp`, `.ino`) in the directory
+    tree under `native_dir`."""
+    stems = set()
+    for _root, _dirs, files in os.walk(native_dir):
+        for filename in files:
+            stem, extension = os.path.splitext(filename)
+            if extension in _TEST_SOURCE_EXTENSIONS:
+                stems.add(stem)
+    return stems
+
+
+def _ignored_narrowing_warnings(args, cases, native_dir):
     """Judge the cases a narrowed run produced against the flags it was given,
     and return one warning per narrowing variable the Makefile ignored, each
     also printed to stderr so a run that emits no envelope still shows it.
 
-    TESTS (from `--tests`) was ignored when a case's file stem is known and is
-    not among the stems; a case with no readable file stem is not judged.
+    TESTS (from `--tests`) was ignored when a case's file stem names a test
+    source (`<stem>.c`, `.cpp` or `.ino`) under `native_dir` and is not among
+    the stems. A case with no readable file stem, or whose stem names no test
+    source there (a constant `classname` such as `native`), is not judged.
     TEST_NAME (from `--name`) was ignored when a case's name and file stem
     contain no element's part before `*` — Unity's `-f` also matches the
     source file's path, so a whole file run because its stem matched is
@@ -729,9 +748,11 @@ def _ignored_narrowing_warnings(args, cases):
     warnings = []
     stems = getattr(args, "tests", None)
     if stems:
+        sources = _test_source_stems(native_dir)
         unasked = []
         for _name, stem in cases:
-            if stem is not None and stem not in stems and stem not in unasked:
+            if (stem is not None and stem in sources and stem not in stems
+                    and stem not in unasked):
                 unasked.append(stem)
         if unasked:
             print(f"[crucible] WARN: the Makefile ignored TESTS ({' '.join(stems)}): "
@@ -860,7 +881,7 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
         tree.extend(t)
     # A Makefile that ignored TESTS or TEST_NAME is named, before the
     # ran-nothing check so the warning rides every envelope this run emits.
-    preflight_warnings += _ignored_narrowing_warnings(args, cases)
+    preflight_warnings += _ignored_narrowing_warnings(args, cases, native_dir)
     # A narrowed run whose reports hold zero cases ran nothing whatever
     # `make`'s exit: Unity with a `-f` that matches nothing exits 0.
     if (_axi().ran_nothing(run.returncode, summary["total"])
@@ -1578,11 +1599,14 @@ _CLI_DESCRIPTION = (
     "Run `<verb> --help` for a verb's own flags.\n"
     "\n"
     "The make contract: the variables a native run hands the Makefile under --dir.\n"
-    "REPORTS_DIR   the run's own reports directory: write the JUnit TEST-*.xml\n"
-    "              there. A Makefile that ignores it writes to its own reports/;\n"
-    "              the client moves that output in and warns.\n"
-    "COVERAGE_DIR  on a coverage run, the directory to write lcov.info to; ignored,\n"
-    "              it is moved in and warned about the same way.\n"
+    "REPORTS_DIR   set only when the run has its own reports directory (--agent\n"
+    "              or --reports): write the JUnit TEST-*.xml there. Unset, the\n"
+    "              Makefile's own default applies. A Makefile that ignores it\n"
+    "              writes to its own reports/; the client moves that output in\n"
+    "              and warns.\n"
+    "COVERAGE_DIR  set only on a coverage run with its own reports directory: the\n"
+    "              directory to write lcov.info to; ignored, it is moved in and\n"
+    "              warned about the same way.\n"
     "TESTS         the space-separated test-file stems given to --tests: build and\n"
     "              run only those test binaries. Declare it with `TESTS ?=`, so the\n"
     "              value from the environment wins over the Makefile's default (a\n"
@@ -1595,12 +1619,16 @@ _CLI_DESCRIPTION = (
     "TESTS and TEST_NAME are never inherited from the shell: the client sets each\n"
     "from its own flag or removes it. For example:\n"
     "\n"
+    "    REPORTS_DIR ?= reports\n"
+    "    COVERAGE_DIR ?= coverage\n"
     "    TESTS ?= $(basename $(notdir $(wildcard test_*.c)))\n"
-    "    ./build/$$t $(if $(TEST_NAME),-f \"$(TEST_NAME)\")\n"
+    "    for t in $(TESTS); do ./build/$$t $(if $(TEST_NAME),-f \"$(TEST_NAME)\"); done\n"
     "\n"
     "One JUnit report per test file, named TEST-<stem>.xml, is recommended; a\n"
     "combined report also works, as the client reads each case's classname.\n"
-    "A Makefile that ignores TESTS or TEST_NAME is named in a warning.\n"
+    "A Makefile that ignores TESTS or TEST_NAME is named in a warning. A case's\n"
+    "classname is judged against --tests only when it names a test source\n"
+    "(<stem>.c, .cpp or .ino) under --dir; any other classname is not judged.\n"
     "\n" + _axi().BOARD_CONFIGURATION_HELP
 )
 
