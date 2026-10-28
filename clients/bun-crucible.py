@@ -2572,8 +2572,7 @@ def _add_regression_tier_args(p):
     shared tier registration and keeps every flag it had; the registrar
     supplies the name, the help and the tier binding, this supplies the rest."""
     p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
-    p.add_argument("--coverage", action="store_true",
-                   help="Run with bun lcov coverage and post /api/v2/runs/parsed with coverage")
+    _axi().add_regression_coverage_arg(p, "lcov")
 
 
 # CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried

@@ -1459,6 +1459,20 @@ RUN_RELEASE_HELP = (
     "a cycle, and then nothing is run or stored. Omit it for a cycle's runs.")
 
 
+# The ONE `--coverage` sentence for every client's `regression`: coverage is
+# opt-in, and a run without the switch measures and files none. Each client
+# follows it with its own coverage tool, in a sentence of its own.
+REGRESSION_COVERAGE_HELP = (
+    "Measure coverage and file it with the run. Without it the whole suite "
+    "runs coverage-free, and no coverage is measured or filed.")
+REGRESSION_COVERAGE_LCOV_HELP = (
+    REGRESSION_COVERAGE_HELP + " With it, the run's lcov coverage is posted "
+    "to /api/v2/runs/parsed with its results.")
+REGRESSION_COVERAGE_PY_HELP = (
+    REGRESSION_COVERAGE_HELP + " With it, the run is under coverage.py and "
+    "its coverage is posted to /api/v2/runs/parsed with its results.")
+
+
 # CR-CRU-121 §S2 — the ONE `--release` help text for `plan-file`, so all five
 # clients document the flag identically. OPTIONAL, because a CR can be born
 # mid-release and be placed on the roadmap later.
@@ -2584,6 +2598,53 @@ def emit_narrowing_refused_hard_stop(verb, refusal, context=None):
     return 1
 
 
+COVERAGE_FLAG_REFUSED_CODE = "coverage-flag-refused"
+
+
+class CoverageFlagRefused(Exception):
+    """Raised when a coverage-only flag is given to a run that measures no
+    coverage (no `--coverage`); `detail` names the flag and `help[]` the two
+    ways out \u2014 add `--coverage`, or drop the flag."""
+
+    def __init__(self, detail, help_steps):
+        self.detail = detail
+        self.help = list(help_steps)
+        super().__init__(detail)
+
+
+def refuse_coverage_only_flags(args, flags):
+    """Refuse a coverage-only flag given without `--coverage`.
+
+    `flags` maps each coverage-only flag's argparse dest to the flag as typed
+    (e.g. `{"cov_source": "--cov-source"}`). A flag counts as GIVEN when its
+    value is not None \u2014 every coverage-only flag defaults to None, so its
+    absence is detectable. Called as a run's first act, before any board
+    request, lock or runner; with `--coverage` set it does nothing."""
+    if getattr(args, "coverage", False):
+        return
+    given = [flag for dest, flag in flags.items()
+             if getattr(args, dest, None) is not None]
+    if not given:
+        return
+    named = ", ".join(given)
+    raise CoverageFlagRefused(
+        f"{named} applies only with --coverage, and this run measures no "
+        f"coverage; nothing was run",
+        [f"add --coverage to measure coverage with {named}",
+         f"or drop {named} for a coverage-free run"])
+
+
+def emit_coverage_flag_refused_hard_stop(verb, refusal, context=None):
+    """Emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for a coverage-only flag given without `--coverage`, and return
+    the non-zero exit code. Nothing is run, nothing is posted from this path."""
+    emit_axi(verb or "unknown", False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {COVERAGE_FLAG_REFUSED_CODE} \u2014 {refusal.detail}")
+    return 1
+
+
 def _hard_stop_context(args, project_key_fn, agent_id=None):
     """The best-effort `context` a hard-stopped verb's envelope carries.
 
@@ -2664,6 +2725,11 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
             _hard_stop_context(args, project_key_fn))
     except NarrowingRefused as refusal:
         return emit_narrowing_refused_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
+    except CoverageFlagRefused as refusal:
+        return emit_coverage_flag_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
             _hard_stop_context(args, project_key_fn,
                                getattr(args, "agent", None)))
@@ -8487,6 +8553,38 @@ def add_run_release_arg(p):
     the whole fleet, with its OWN help (`RUN_RELEASE_HELP`) \u2014 a gate names
     the release it gates, a run is filed under one."""
     p.add_argument("--release", help=RUN_RELEASE_HELP)
+
+
+def _add_lcov_coverage_arg(p):
+    p.add_argument("--coverage", action="store_true",
+                   help=REGRESSION_COVERAGE_LCOV_HELP)
+
+
+def _add_coverage_py_coverage_arg(p):
+    p.add_argument("--coverage", action="store_true",
+                   help=REGRESSION_COVERAGE_PY_HELP)
+
+
+# Each coverage tool's `--coverage` declaration. A help text is a module
+# constant, never assembled from a parameter, so every flag's help reads
+# whole from source.
+_REGRESSION_COVERAGE_DECLARERS = {
+    "lcov": _add_lcov_coverage_arg,
+    "coverage.py": _add_coverage_py_coverage_arg,
+}
+
+
+def add_regression_coverage_arg(p, tool):
+    """Declare `--coverage` on a client's `regression`: the one switch that
+    makes the run measure coverage. Every client states the same sentence
+    (`REGRESSION_COVERAGE_HELP`), then names its own stack's coverage `tool`
+    (`lcov` or `coverage.py`) in a sentence of its own."""
+    declare = _REGRESSION_COVERAGE_DECLARERS.get(tool)
+    if declare is None:
+        raise ValueError(
+            f"no --coverage declaration for coverage tool {tool!r}; known: "
+            f"{', '.join(sorted(_REGRESSION_COVERAGE_DECLARERS))}")
+    declare(p)
 
 
 def add_gate_respond_verb(sub, func, *, parents=(), add_args=()):
