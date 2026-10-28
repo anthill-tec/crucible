@@ -18,6 +18,8 @@ import { startServer } from "../src/server.ts";
 import type { ServerHandle } from "../src/server.ts";
 
 const CALLER = "orchestrator-1";
+/** The label every gate milestone in this file is posted under. */
+const LABEL = "CR-XYZ-001";
 
 interface MilestoneRecord {
   id: string;
@@ -89,7 +91,7 @@ function gateMilestone(key: string, extra: Record<string, unknown> = {}): Record
     projectKey: key,
     agentId: CALLER,
     type: "pre-merge-gate",
-    label: "CR-XYZ-001",
+    label: LABEL,
     ...redVerdict(),
     ...extra,
   };
@@ -207,7 +209,7 @@ describe("a pre-merge-gate milestone keeps the gate's scope and suites", () => {
     expect(read.totalCount).toBe(1);
     const record = read.milestones[0]!;
     expect(record.type).toBe("pre-merge-gate");
-    expect(record.label).toBe("CR-XYZ-001");
+    expect(record.label).toBe(LABEL);
     expect(record.outcome).toBe("fail");
     expect(record.passed).toBe(8634);
     expect(record.failed).toBe(1);
