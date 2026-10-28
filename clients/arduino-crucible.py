@@ -305,9 +305,14 @@ def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
 # ── JUnit parsing ────────────────────────────────────────────────────────────
 
 
-def _parse_junit(path):
+def _parse_junit(path, cases=None):
     """JUnit (the native harness shape) -> (summary, tree, files) for
     /api/v2/runs/parsed.
+
+    `cases`, when given, is a list each testcase is appended to, in report
+    order, as `(name, file stem)` — the stem read from the case's own
+    `classname` or `file`, None when it carries neither (the suite name is
+    never taken for a file stem). The return value is the same either way.
 
     CR-CRU-051 §S1 — `files` is the DISTINCT-SOURCE count for THIS report,
     mirroring `bun-crucible.py::_parse_junit_file` (the reference). RESOLVED
@@ -331,6 +336,9 @@ def _parse_junit(path):
             source = tc.get("file") or tc.get("classname") or suite.get("name")
             if source:
                 files.add(source.replace("\\", "/"))
+            if cases is not None:
+                cases.append((tc.get("name", "?"),
+                              _file_stem(tc.get("classname") or tc.get("file"))))
             bad = tc.find("failure") is not None or tc.find("error") is not None
             total += 1
             # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase is PENDING, never
@@ -357,6 +365,15 @@ def _parse_junit(path):
     # `summary` IS the /api/v2/runs/parsed payload's summary field verbatim, and
     # CR-CRU-047 §S2 keeps this count out of the wire.
     return summary, tree, len(files)
+
+
+def _file_stem(source):
+    """A case's file stem: the basename of its `classname`/`file` without its
+    extension, or None when there is none to read."""
+    if not source:
+        return None
+    stem = os.path.splitext(os.path.basename(source.replace("\\", "/")))[0]
+    return stem or None
 
 
 def _collect_lcov(path):
@@ -516,7 +533,11 @@ def _run_native_tests(args, verb, tier, want_coverage, target="junit"):
     even a failed/raising run tears that identity down via the v2 silent
     unregister, and never touches the retired /api/agents/remove shim.
     CR-CRU-056 — the cleanup fires ONLY for an identity this run created; a
-    caller who registered BEFORE the run keeps its registration and binding."""
+    caller who registered BEFORE the run keeps its registration and binding.
+
+    Ill-formed narrowing input is refused first, before the registration
+    heartbeat and run start, so a refused run reaches the board not at all."""
+    _refuse_ill_formed_narrowing(args)
     pd = _project_dir(args)
     preflight_warnings = []
     # Open under the SAME id the run will ingest under. The body
@@ -564,20 +585,78 @@ def _coverage_dir(native_dir, own_dir):
     return os.path.join(own_dir or native_dir, "coverage")
 
 
-def _make_reports_env(own_dir, want_coverage):
-    """The documented `make` contract: REPORTS_DIR (and, on a coverage run,
+# A test-file stem: no path, no extension.
+_STEM_RE = re.compile(r"[A-Za-z0-9_-]+")
+# One comma-separated test-name fragment, optionally ending in `*`.
+_NAME_ELEMENT_RE = re.compile(r"[A-Za-z0-9_]+\*?")
+_STEM_HINT = ("give a stem, not a path or file name: `--tests test_motor "
+              "test_pid`, each matching [A-Za-z0-9_-]+")
+_NAME_HINT = ("`--name` takes comma-separated test-name fragments: "
+              "`--name stall,limit`, each matching [A-Za-z0-9_]+ with an "
+              "optional trailing *")
+_TESTS_HELP = ("run only these test files, by stem (test_motor), resolved "
+               "against the Makefile under --dir; handed to `make` as TESTS "
+               "(see the make contract in --help)")
+_NAME_HELP = ("run only the tests whose name or file contains one of these "
+              "comma-separated fragments; handed to `make` as TEST_NAME "
+              "(Unity's -f; see the make contract in --help)")
+
+
+def _add_narrowing_args(p):
+    """The two flags that narrow a native run: `--tests` (the files) and
+    `--name` (Unity's name filter). Only `test` and `unit` take them."""
+    p.add_argument("--tests", nargs="+", help=_TESTS_HELP)
+    p.add_argument("--name", help=_NAME_HELP)
+
+
+def _refuse_ill_formed_narrowing(args):
+    """Raise the typed `narrowing-refused` hard stop for a stem outside
+    [A-Za-z0-9_-]+ (a path or an extension), an empty `--name`, or a `--name`
+    element outside [A-Za-z0-9_]+ with an optional trailing `*`. A verb
+    without the flags is never refused here."""
+    for stem in getattr(args, "tests", None) or ():
+        if not _STEM_RE.fullmatch(stem):
+            raise _axi().NarrowingRefused(
+                f"--tests {stem!r} is not a test-file stem; nothing ran and "
+                f"nothing was filed", [_STEM_HINT])
+    name = getattr(args, "name", None)
+    if name is None:
+        return
+    for element in name.split(","):
+        if not _NAME_ELEMENT_RE.fullmatch(element):
+            raise _axi().NarrowingRefused(
+                f"--name {name!r} holds the fragment {element!r}, which is not "
+                f"a test-name fragment; nothing ran and nothing was filed",
+                [_NAME_HINT])
+
+
+def _make_reports_env(own_dir, want_coverage, args=None):
+    """The environment every native `make` run gets. The client owns TESTS
+    and TEST_NAME: both are removed, then set only from this run's own
+    `--tests` (the stems, space-separated) and `--name` (verbatim), so a
+    variable exported in the shell never narrows a run.
+
+    The documented `make` contract: REPORTS_DIR (and, on a coverage run,
     COVERAGE_DIR) point at the run's own directory, overriding any ambient
     value. That directory is created and its previous TEST-*.xml / lcov.info
-    cleared first. None without an own directory: `make` then runs with the
-    inherited environment, as before."""
+    cleared first. Without an own directory neither is set and `make` keeps
+    its own `reports/` and `coverage/`, as before."""
+    env = os.environ.copy()
+    env.pop("TESTS", None)
+    env.pop("TEST_NAME", None)
+    tests = getattr(args, "tests", None)
+    if tests:
+        env["TESTS"] = " ".join(tests)
+    name = getattr(args, "name", None)
+    if name is not None:
+        env["TEST_NAME"] = name
     if own_dir is None:
-        return None
+        return env
     os.makedirs(own_dir, exist_ok=True)
     stale = glob.glob(os.path.join(own_dir, "TEST-*.xml"))
     stale += glob.glob(os.path.join(_coverage_dir(None, own_dir), "lcov.info"))
     for path in stale:
         os.remove(path)
-    env = os.environ.copy()
     env["REPORTS_DIR"] = own_dir
     if want_coverage:
         env["COVERAGE_DIR"] = _coverage_dir(None, own_dir)
@@ -636,6 +715,77 @@ def _ignored_contract_warning(variable, native_dir, fixed, moved_to):
                       f"run writes there directly."}
 
 
+#: The extensions of a native test source, whose stem a case's `classname`
+#: must name before the case is judged against `--tests`.
+_TEST_SOURCE_EXTENSIONS = (".c", ".cpp", ".ino")
+
+
+def _test_source_stems(native_dir):
+    """The stems of every test source (`.c`, `.cpp`, `.ino`) in the directory
+    tree under `native_dir`."""
+    stems = set()
+    for _root, _dirs, files in os.walk(native_dir):
+        for filename in files:
+            stem, extension = os.path.splitext(filename)
+            if extension in _TEST_SOURCE_EXTENSIONS:
+                stems.add(stem)
+    return stems
+
+
+def _ignored_narrowing_warnings(args, cases, native_dir):
+    """Judge the cases a narrowed run produced against the flags it was given,
+    and return one warning per narrowing variable the Makefile ignored, each
+    also printed to stderr so a run that emits no envelope still shows it.
+
+    TESTS (from `--tests`) was ignored when a case's file stem names a test
+    source (`<stem>.c`, `.cpp` or `.ino`) under `native_dir` and is not among
+    the stems. A case with no readable file stem, or whose stem names no test
+    source there (a constant `classname` such as `native`), is not judged.
+    TEST_NAME (from `--name`) was ignored when a case's name and file stem
+    contain no element's part before `*` — Unity's `-f` also matches the
+    source file's path, so a whole file run because its stem matched is
+    honoured; an element that is just `*` matches every case."""
+    warnings = []
+    stems = getattr(args, "tests", None)
+    if stems:
+        sources = _test_source_stems(native_dir)
+        unasked = []
+        for _name, stem in cases:
+            if (stem is not None and stem in sources and stem not in stems
+                    and stem not in unasked):
+                unasked.append(stem)
+        if unasked:
+            print(f"[crucible] WARN: the Makefile ignored TESTS ({' '.join(stems)}): "
+                  f"it ran cases of {', '.join(unasked)}", file=sys.stderr)
+            warnings.append({
+                "code": "makefile-ignored-tests",
+                "detail": f"the Makefile ignored TESTS={' '.join(stems)!r}: it ran "
+                          f"cases of {', '.join(unasked)}, which were not asked "
+                          f"for. Honour TESTS in the Makefile (`TESTS ?=`) so a "
+                          f"narrowed run builds only those test files."})
+    name = getattr(args, "name", None)
+    if name is not None:
+        elements = name.split(",")
+        prefixes = [element.split("*", 1)[0] for element in elements]
+        unmatched = next(
+            (case for case, stem in cases
+             if not any(prefix in case or (stem is not None and prefix in stem)
+                        for prefix in prefixes)),
+            None)
+        if unmatched is not None:
+            print(f"[crucible] WARN: the Makefile ignored TEST_NAME "
+                  f"({', '.join(elements)}): it ran {unmatched}, which matches "
+                  f"none of them", file=sys.stderr)
+            warnings.append({
+                "code": "makefile-ignored-test-name",
+                "detail": f"the Makefile ignored TEST_NAME={name!r}: it ran "
+                          f"{unmatched}, whose name and file stem contain none "
+                          f"of {', '.join(elements)}. Hand TEST_NAME to the "
+                          f"Unity runner as -f \"$(TEST_NAME)\" so a narrowed "
+                          f"run runs only the matching tests."})
+    return warnings
+
+
 def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                            preflight_warnings=(), target="junit", identity=None):
     """CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight
@@ -662,7 +812,8 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
     own_dir = _run_reports_dir(args, pd)
-    make_env = _child_env(args, _make_reports_env(own_dir, want_coverage))
+    make_env = _child_env(args, _make_reports_env(own_dir, want_coverage, args))
+    narrowed = bool(getattr(args, "tests", None)) or getattr(args, "name", None) is not None
     narrator, run_id = None, None
     if agent_id:
         narrator = _narrator(pd, agent_id, identity)
@@ -713,8 +864,9 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
     tree = []
     files = 0
+    cases = []
     for junit in reports:
-        s, t, f = _parse_junit(junit)
+        s, t, f = _parse_junit(junit, cases)
         # CR-CRU-050 §S1 — `pending` MUST be carried forward here too; without
         # it the per-file parse fix is silently undone by the aggregation and
         # the envelope still reports pending=0.
@@ -727,7 +879,13 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
         # harness that repeated a source across reports would over-count.
         files += f
         tree.extend(t)
-    if _axi().ran_nothing(run.returncode, summary["total"]):
+    # A Makefile that ignored TESTS or TEST_NAME is named, before the
+    # ran-nothing check so the warning rides every envelope this run emits.
+    preflight_warnings += _ignored_narrowing_warnings(args, cases, native_dir)
+    # A narrowed run whose reports hold zero cases ran nothing whatever
+    # `make`'s exit: Unity with a `-f` that matches nothing exits 0.
+    if (_axi().ran_nothing(run.returncode, summary["total"])
+            or (narrowed and summary["total"] == 0)):
         return _axi().emit_ran_nothing(
             verb, "TEST-*.xml", run.returncode, run.stdout or "", run_id,
             preflight_warnings, post_fn=_post, project_key=_project_key(pd),
@@ -1431,6 +1589,50 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
 )
 
 
+# The ROOT help's description, printed as written (RawDescriptionHelpFormatter)
+# so the make contract keeps one variable per line and its Makefile snippet
+# keeps its shape.
+_CLI_DESCRIPTION = (
+    "Arduino-firmware Crucible stack script: runs a project's native host tests\n"
+    "through its own Makefile (`make junit`) and ingests the JUnit result to\n"
+    "Crucible; `check` compiles the sketch with arduino-cli.\n"
+    "Run `<verb> --help` for a verb's own flags.\n"
+    "\n"
+    "The make contract: the variables a native run hands the Makefile under --dir.\n"
+    "REPORTS_DIR   set only when the run has its own reports directory (--agent\n"
+    "              or --reports): write the JUnit TEST-*.xml there. Unset, the\n"
+    "              Makefile's own default applies. A Makefile that ignores it\n"
+    "              writes to its own reports/; the client moves that output in\n"
+    "              and warns.\n"
+    "COVERAGE_DIR  set only on a coverage run with its own reports directory: the\n"
+    "              directory to write lcov.info to; ignored, it is moved in and\n"
+    "              warned about the same way.\n"
+    "TESTS         the space-separated test-file stems given to --tests: build and\n"
+    "              run only those test binaries. Declare it with `TESTS ?=`, so the\n"
+    "              value from the environment wins over the Makefile's default (a\n"
+    "              plain `TESTS =` would override it).\n"
+    "TEST_NAME     the comma-separated names given to --name: hand it to each test\n"
+    "              binary, quoted, as Unity's -f, which runs the tests whose name\n"
+    "              or file contains one of them. The binaries must be built with\n"
+    "              UNITY_USE_COMMAND_LINE_ARGS and from a runner that parses its\n"
+    "              options (the Unity runner generator's cmdline_args option).\n"
+    "TESTS and TEST_NAME are never inherited from the shell: the client sets each\n"
+    "from its own flag or removes it. For example:\n"
+    "\n"
+    "    REPORTS_DIR ?= reports\n"
+    "    COVERAGE_DIR ?= coverage\n"
+    "    TESTS ?= $(basename $(notdir $(wildcard test_*.c)))\n"
+    "    for t in $(TESTS); do ./build/$$t $(if $(TEST_NAME),-f \"$(TEST_NAME)\"); done\n"
+    "\n"
+    "One JUnit report per test file, named TEST-<stem>.xml, is recommended; a\n"
+    "combined report also works, as the client reads each case's classname.\n"
+    "A Makefile that ignores TESTS or TEST_NAME is named in a warning. A case's\n"
+    "classname is judged against --tests only when it names a test source\n"
+    "(<stem>.c, .cpp or .ino) under --dir; any other classname is not judged.\n"
+    "\n" + _axi().BOARD_CONFIGURATION_HELP
+)
+
+
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--agent",
@@ -1443,8 +1645,8 @@ def main():
                         help="subproject dir with .env + tests/native "
                              "(default: $ARDUINO_CRUCIBLE_PROJECT_DIR or CWD)")
     p = argparse.ArgumentParser(
-        description=("Arduino-firmware Crucible stack script.\n\n"
-                     + _axi().BOARD_CONFIGURATION_HELP))
+        description=_CLI_DESCRIPTION,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     # §S14 — subcommand is OPTIONAL: a bare invocation falls through to the
     # no-arg live dashboard, never argparse's required-subcommand error.
     sub = p.add_subparsers(dest="cmd", required=False)
@@ -1456,6 +1658,7 @@ def main():
     _add_run_release_arg(t)
     _add_reports_arg(t)
     _add_log_arg(t)
+    _add_narrowing_args(t)
     t.set_defaults(func=cmd_test)
 
     # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
@@ -1476,7 +1679,8 @@ def main():
                  "Runs the native host tests (`make junit`) under --dir -> "
                  "/api/v2/runs/parsed.",
                  (_add_native_dir_arg, _add_gate_cycle_arg,
-                  _add_run_release_arg, _add_reports_arg, _add_log_arg)),
+                  _add_run_release_arg, _add_reports_arg, _add_log_arg,
+                  _add_narrowing_args)),
              regression=tier_verb(
                  cmd_regression,
                  "Runs the full native suite under --dir -> "
