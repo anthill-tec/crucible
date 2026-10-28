@@ -1416,6 +1416,10 @@ def cmd_regression(args, verb="regression"):
     CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
     must carry ONE document under the GATE's own verb, not the inner one's."""
+    # A coverage-only flag on a coverage-free run is refused first, before the
+    # project, the board, a lock, docker or maven is touched.
+    _axi().refuse_coverage_only_flags(
+        args, {"coverage_profile": "--coverage-profile"})
     project_dir = _resolve_project_dir(args.project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
@@ -1452,10 +1456,16 @@ def _regression_run(args, identity=None, verb="regression",
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
-    # Coverage profile: --coverage-profile or CRUCIBLE_COVERAGE_PROFILE in .env.
-    cov_profile = args.coverage_profile or _read_env(project_dir).get("CRUCIBLE_COVERAGE_PROFILE")
-    if cov_profile:
-        common = common + ["-P", cov_profile]
+    # Coverage is opt-in: without `--coverage` no coverage profile is applied
+    # and no JaCoCo is collected. With it, the profile is --coverage-profile,
+    # else CRUCIBLE_COVERAGE_PROFILE in .env, else none (the build's own
+    # JaCoCo, if any, is collected).
+    with_coverage = getattr(args, "coverage", False)
+    if with_coverage:
+        cov_profile = (args.coverage_profile
+                       or _read_env(project_dir).get("CRUCIBLE_COVERAGE_PROFILE"))
+        if cov_profile:
+            common = common + ["-P", cov_profile]
 
     cmd = _mvn_base(maven_dir) + ["clean", args.goal] + common
     reports_dir = _run_reports_dir(args, project_dir)
@@ -1518,12 +1528,12 @@ def _regression_run(args, identity=None, verb="regression",
     summary, tree, files = _parse_junit(dirs)
 
     coverage = None
-    if summary["failed"] == 0:
+    if with_coverage and summary["failed"] == 0:
         coverage = _collect_jacoco(maven_dir)
         if coverage is None:
             print("[regression] WARN: no jacoco.csv found — ingesting WITHOUT coverage. "
                   "Check the quarkus-jacoco extension / --coverage-profile.", file=sys.stderr)
-    else:
+    elif with_coverage:
         print(f"[regression] {summary['failed']} failure(s) — NOT publishing coverage "
               "(JaCoCo from a failing run is incomplete).", file=sys.stderr)
 
@@ -1928,7 +1938,7 @@ def _gate_regression_args(args):
         project_dir=args.project_dir, maven_dir=args.maven_dir, agent=args.agent,
         module=None, also_make=False, update_snapshots=False, native=False,
         profile=None, system_prop=None, goal=args.goal,
-        coverage_profile=args.coverage_profile, log=None,
+        coverage=True, coverage_profile=args.coverage_profile, log=None,
         cycle=getattr(args, "cycle", None),
         release=getattr(args, "release", None))
 
@@ -2382,6 +2392,7 @@ def _add_regression_tier_args(p):
     p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator's)")
     p.add_argument("--goal", default="verify", help="Maven goal (default: verify; use test for libs without IT)")
     p.add_argument("--coverage-profile", help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE)")
+    _axi().add_regression_coverage_arg(p, "JaCoCo")
     _add_gate_cycle_arg(p)
     _add_run_release_arg(p)
 
