@@ -858,6 +858,14 @@ export function timelineRows(events, plans) {
 }
 
 /**
+ * A run is a test run: milestones, gates, registrations and compile results
+ * are events but never runs, so they are never drawn or counted as one.
+ */
+export function isTestRun(e) {
+  return e.kind === "test";
+}
+
+/**
  * §S3 — the history lens tree (pure): Wave → [Track] → CR → Cycle.
  * Declared-plan first — where a plan exists the tree IS the plan; inferred
  * fallback (context.wave + agent stem + context.cycle) where none does;
@@ -865,7 +873,7 @@ export function timelineRows(events, plans) {
  */
 export function workflowLens({ plans, events }) {
   const index = planCycleIndex(plans);
-  const runs = (events ?? []).filter((e) => e.kind === "test");
+  const runs = (events ?? []).filter(isTestRun);
 
   // CR-CRU-013 §S6 — wave labels a qualifying no-mistakes gate has sealed:
   // a `passed` OR `checks-passed` gate event flips the wave to `gated`;
@@ -1820,6 +1828,7 @@ if (typeof window !== "undefined") {
     pairTransitions,
     planCycleIndex,
     timelineRows,
+    isTestRun,
     workflowLens,
     gateDecisionSummaryText,
     waveLatestSealedGate,

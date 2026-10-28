@@ -409,6 +409,9 @@ export declare function pairTransitions<T extends TransitionEventLike>(
   events: T[],
 ): Array<TransitionMarker<T>>;
 
+/** A run is a test run; every other event kind is never drawn or counted as one. */
+export declare function isTestRun(e: { kind: string }): boolean;
+
 // CR-CRU-011 C4 — §S0b timeline plan integration + §S3 history lens (pure).
 export interface LensRunLike {
   id: string;
