@@ -3892,10 +3892,10 @@ def cmd_cycle_add(args, project_dir, ops):
 
 # The flag that closes a CR over a gate that was not green, and its help.
 ACCEPT_FAILING_GATE_HELP = (
-    "Close the CR even though its last pre-merge-gate did not pass (or it has "
-    "none): REASON is required, is stored on the plan, and is shown on the "
+    "Close the CR even though its gate result is not green (or it has none): "
+    "REASON is required, is stored on the plan, and is shown on the "
     "cr-merged milestone and in History. Without it a red or missing gate "
-    "refuses the close.")
+    "result refuses the close.")
 ACCEPT_FAILING_GATE_UNUSED_CODE = "accept-failing-gate-unused"
 
 
@@ -3906,50 +3906,200 @@ def add_cr_close_gate_arg(p):
                    help=ACCEPT_FAILING_GATE_HELP)
 
 
-def latest_gate_milestone(ops, project_key, cr):
-    """`(record, error)`: the CR's most recent `pre-merge-gate` milestone (None
-    when it has none), or the board's error when the read was not answered."""
+def _milestone_order(milestone):
+    """Time order for a CR's gate milestones: timestamp, ties broken by id (a
+    numeric id before a textual one, so mixed ids still compare)."""
+    ident = milestone.get("id")
+    tie = (0, ident, "") if isinstance(ident, (int, float)) else (1, 0, str(ident))
+    return (milestone.get("timestamp") or 0, tie)
+
+
+def gate_milestones(ops, project_key, cr):
+    """`(records, error)`: every `pre-merge-gate` milestone of the CR, oldest
+    first (empty when it has none), or the board's error when the read was not
+    answered."""
     resp = ops.get(f"/api/v2/projects/{project_key}/milestones"
                    f"?type={GATE_MILESTONE_TYPE}")
     if not resp.get("ok"):
-        return None, resp.get("error") or "the board did not answer"
+        return [], resp.get("error") or "the board did not answer"
     mine = [m for m in resp.get("milestones") or []
             if isinstance(m, dict) and m.get("label") == cr]
-    if not mine:
-        return None, None
-    return max(mine, key=lambda m: m.get("timestamp") or 0), None
+    return sorted(mine, key=_milestone_order), None
 
 
-def _gate_refusal_text(cr, gate):
-    """The refusal's `(error, help)` for a CR whose last gate was not a pass,
-    or that has no gate result at all."""
+def _recorded_suite_entries(gate):
+    """The well-formed suite entries a gate milestone carries (none for a gate
+    that recorded no suites)."""
+    suites = gate.get("suites")
+    if not isinstance(suites, list):
+        return []
+    return [e for e in suites if isinstance(e, dict) and e.get("target")]
+
+
+def _is_full_gate(gate):
+    """A full gate: one that says so, or one that records neither a scope nor
+    suites (the shape posted before gates recorded them). A gate with suites
+    and no scope is never one."""
+    scope = gate.get("scope")
+    if scope is not None:
+        return scope == "full"
+    return gate.get("suites") is None
+
+
+class GateVerdict:
+    """What a CR's gate history says about closing it.
+
+    `base` is the latest full gate (None when there is none). `green` is the
+    verdict. On a red per-suite verdict `red` maps each suite still red to the
+    entry that counted for it, and `stopped` is a later gate that failed
+    before composing any suite and that no later gate ran past."""
+
+    __slots__ = ("base", "green", "red", "stopped")
+
+    def __init__(self, base, green, red=None, stopped=None):
+        self.base = base
+        self.green = green
+        self.red = red or {}
+        self.stopped = stopped
+
+
+def judge_gate_history(gates):
+    """The verdict over a CR's gate milestones, oldest first.
+
+    The base is the latest full gate; with none, nothing is green. A base with
+    no suites, or that failed while none of its entries did, is judged by its
+    own outcome. Otherwise each suite the base ran counts its latest result
+    from any gate at or after the base (an entry for a target the base never
+    ran is ignored), and a later gate that failed with no suites (stopped
+    before composing any) keeps the verdict red until a later gate runs past
+    that point. Green when every counted result passes."""
+    base_at = None
+    for index, gate in enumerate(gates):
+        if _is_full_gate(gate):
+            base_at = index
+    if base_at is None:
+        return GateVerdict(None, False)
+    base = gates[base_at]
+    entries = _recorded_suite_entries(base)
+    own_outcome_only = not entries or (
+        base.get("outcome") != GATE_OUTCOME_PASS
+        and not any(e.get("outcome") != GATE_OUTCOME_PASS for e in entries))
+    if own_outcome_only:
+        return GateVerdict(base, base.get("outcome") == GATE_OUTCOME_PASS)
+    latest = {e["target"]: e for e in entries}
+    stopped = None
+    for gate in gates[base_at + 1:]:
+        later = _recorded_suite_entries(gate)
+        if not later and gate.get("suites") is None:
+            if gate.get("outcome") != GATE_OUTCOME_PASS:
+                stopped = gate
+            else:
+                stopped = None
+            continue
+        stopped = None
+        for entry in later:
+            if entry["target"] in latest:
+                latest[entry["target"]] = entry
+    red = {target: entry for target, entry in latest.items()
+           if entry.get("outcome") != GATE_OUTCOME_PASS}
+    return GateVerdict(base, not red and stopped is None, red, stopped)
+
+
+def _gate_cycle(gate):
+    cycle = (gate.get("context") or {}).get("cycleId") if gate else None
+    return cycle if cycle is not None else "<id>"
+
+
+def _gate_refusal_text(cr, verdict, declared):
+    """The refusal's `(error, help)` for a CR whose gate result is not green,
+    or that has no full gate result at all. `declared` is a zero-argument
+    callable answering the gated targets the project declares now, asked only
+    when suites are still red: a scoped re-run is offered when every red suite
+    is still declared, a full gate otherwise."""
     accept = (f"or close over it deliberately: cr-close --commit <sha> --cr {cr} "
               f'--accept-failing-gate "<reason>"')
+    gate = verdict.base
     if gate is None:
-        return (f"cr-close refused: {cr} has no recorded pre-merge-gate result, "
-                f"so nothing says its suite is green; nothing was closed",
-                [f"run pre-merge-gate --agent <agentId> --cycle <id> for {cr}, "
-                 f"then re-run cr-close", accept])
-    cycle = (gate.get("context") or {}).get("cycleId")
+        return (f"cr-close refused: {cr} has no recorded full pre-merge-gate "
+                f"result (a scoped gate counts only after a full one), so "
+                f"nothing says its suite is green; nothing was closed",
+                [f"run a full gate: pre-merge-gate --agent <agentId> --cycle "
+                 f"<id> for {cr}, then re-run cr-close", accept])
+    cycle = _gate_cycle(gate)
+    if verdict.red:
+        described = []
+        for target, entry in verdict.red.items():
+            failing = entry.get("failingTests") or []
+            named = (f"; failing: {', '.join(str(t) for t in failing)}"
+                     if failing else "")
+            described.append(
+                f"`{target}` ({entry.get('outcome')}, {entry.get('failed')} "
+                f"failed, {entry.get('passed')} passed{named})")
+        error = (f"cr-close refused: {cr}'s gate result is red \u2014 still red: "
+                 f"{'; '.join(described)}; nothing was closed")
+        red = list(verdict.red)
+        if all(target in declared() for target in red):
+            rerun = (f"fix the red suite(s), re-run them: pre-merge-gate "
+                     f"--suites {','.join(red)} --agent <agentId> --cycle "
+                     f"{cycle}, then cr-close")
+        else:
+            rerun = (f"a red suite is no longer declared, so re-run a full "
+                     f"gate: pre-merge-gate --agent <agentId> --cycle {cycle}, "
+                     f"then cr-close")
+        return error, [rerun, accept]
+    if verdict.stopped is not None:
+        stopped = verdict.stopped
+        return (f"cr-close refused: {cr}'s latest pre-merge-gate (milestone "
+                f"{stopped.get('id')}, cycle {_gate_cycle(stopped)}) failed "
+                f"before it ran any suite, so its gate result is red; nothing "
+                f"was closed",
+                [f"fix what stopped it, re-run pre-merge-gate --agent <agentId> "
+                 f"--cycle {_gate_cycle(stopped)}, then cr-close", accept])
     failing = gate.get("failingTests") or []
     named = f"; failing: {', '.join(str(t) for t in failing)}" if failing else ""
-    return (f"cr-close refused: the last pre-merge-gate for {cr} (milestone "
-            f"{gate.get('id')}, cycle {cycle}) did not pass: outcome "
+    return (f"cr-close refused: the latest full pre-merge-gate for {cr} "
+            f"(milestone {gate.get('id')}, cycle {cycle}) did not pass: outcome "
             f"{gate.get('outcome')}, {gate.get('failed')} failed, "
             f"{gate.get('passed')} passed{named}; nothing was closed",
             [f"fix the {gate.get('failed')} failing test(s), re-run pre-merge-gate "
-             f"--agent <agentId> --cycle {cycle if cycle is not None else '<id>'}, "
-             f"then cr-close", accept])
+             f"--agent <agentId> --cycle {cycle}, then cr-close", accept])
 
 
-def gate_close_verdict(args, cr, project_dir, ops):
-    """Decide whether `cr-close` may close `cr`, from its most recent
-    `pre-merge-gate` milestone. Returns `(accepted_reason, warnings, refused)`:
-    `refused` is the exit code of an already-emitted refusal (nothing closed),
-    else None and the close proceeds. A green gate closes as before; a red or
-    missing one closes only with `--accept-failing-gate <reason>`, whose reason
-    is returned to be recorded. A reason given over a GREEN gate overrides
-    nothing, so it is not recorded and a warning says so."""
+class _UnsetFlagsView:
+    """A verb's arguments as the declaration readers see them: a flag this
+    verb does not take reads as unset, so a declaration resolves from the
+    project directory and its configuration exactly as a gate given no such
+    flag resolves it."""
+
+    def __init__(self, args):
+        self._args = args
+
+    def __getattr__(self, name):
+        return getattr(self._args, name, None)
+
+
+def _declared_gated_targets(args, surface, stack):
+    """The gated targets the project declares, read through the same
+    enumeration the gate composes over; empty when the client has no
+    declaration surface it can enumerate."""
+    if surface is None:
+        return frozenset()
+    return frozenset(suite.target for suite in
+                     declared_gate_suites(_UnsetFlagsView(args), surface, stack)
+                     if suite.gated)
+
+
+def gate_close_verdict(args, cr, project_dir, ops, *, surface=None, stack=None):
+    """Decide whether `cr-close` may close `cr`, from its gate result: the
+    verdict `judge_gate_history` reads from every one of its `pre-merge-gate`
+    milestones. Returns `(accepted_reason, warnings, refused)`: `refused` is
+    the exit code of an already-emitted refusal (nothing closed), else None and
+    the close proceeds. A green result closes as before; a red or missing one
+    closes only with `--accept-failing-gate <reason>`, whose reason is
+    returned to be recorded. A reason given over a GREEN result overrides
+    nothing, so it is not recorded and a warning says so. `surface`/`stack`
+    name the client's declaration, read to decide whether the refusal offers
+    a scoped re-run of the red suites."""
     reason = getattr(args, "accept_failing_gate", None)
     context = ops.context(project_dir, cr=cr)
     if reason is not None and not reason.strip():
@@ -3959,7 +4109,7 @@ def gate_close_verdict(args, cr, project_dir, ops):
                   "help": ['cr-close --commit <sha> --accept-failing-gate "<reason>"']},
                  context, [], f"[crucible] ERROR: {error}")
         return None, [], 1
-    gate, read_error = latest_gate_milestone(ops, ops.project_key(project_dir), cr)
+    gates, read_error = gate_milestones(ops, ops.project_key(project_dir), cr)
     if read_error is not None:
         error = (f"cr-close refused: could not read {cr}'s pre-merge-gate result "
                  f"({read_error}); nothing was closed")
@@ -3969,17 +4119,19 @@ def gate_close_verdict(args, cr, project_dir, ops):
                             f"then re-run cr-close"]},
                  context, [], f"[crucible] ERROR: {error}")
         return None, [], 1
-    green = gate is not None and gate.get("outcome") == GATE_OUTCOME_PASS
-    if green:
+    verdict = judge_gate_history(gates)
+    if verdict.green:
         if reason is None:
             return None, [], None
         return None, [{"code": ACCEPT_FAILING_GATE_UNUSED_CODE,
-                       "detail": (f"{cr}'s last pre-merge-gate passed, so there was "
+                       "detail": (f"{cr}'s gate result is green, so there was "
                                   f"no failing gate to accept; the reason was not "
                                   f"recorded")}], None
     if reason is not None:
         return reason, [], None
-    error, help_steps = _gate_refusal_text(cr, gate)
+    error, help_steps = _gate_refusal_text(
+        cr, verdict, lambda: _declared_gated_targets(args, surface, stack))
+    gate = verdict.base
     fields = {"commit": args.commit, "cr": cr, "error": error}
     if gate is not None:
         fields["gate"] = {key: gate.get(key) for key in
@@ -3990,7 +4142,7 @@ def gate_close_verdict(args, cr, project_dir, ops):
     return None, [], 1
 
 
-def cmd_cr_close(args, project_dir, ops):
+def cmd_cr_close(args, project_dir, ops, *, surface=None, stack=None):
     """§S4c — PATCH the resolved OPEN plan closed, then post the `cr-merged`
     milestone.
 
@@ -4025,7 +4177,8 @@ def cmd_cr_close(args, project_dir, ops):
         return 1
     plan = open_plans[0]
     cr_label = plan.get("cr")
-    accepted, warnings, refused = gate_close_verdict(args, cr_label, project_dir, ops)
+    accepted, warnings, refused = gate_close_verdict(
+        args, cr_label, project_dir, ops, surface=surface, stack=stack)
     if refused is not None:
         return refused
     merge = {"commit": args.commit}

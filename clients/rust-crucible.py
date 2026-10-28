@@ -2391,7 +2391,8 @@ def cmd_cr_close(args):
     """§S4c — close the resolved OPEN plan and post the cr-merged milestone,
     requiring a live registered caller. CR-CRU-054 §S2 — delegates to the
     shared implementation."""
-    return _axi().cmd_cr_close(args, _resolve_project_dir(args.project_dir), _ops())
+    return _axi().cmd_cr_close(args, _resolve_project_dir(args.project_dir), _ops(),
+                               surface=_TIER_DECLARATION_SURFACE, stack=_STACK)
 
 
 def _resolve_plan_or_emit(verb, project_dir, cr, result_fields, open_only):
