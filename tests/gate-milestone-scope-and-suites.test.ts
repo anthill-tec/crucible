@@ -296,3 +296,99 @@ describe("health states that the board records a gate's scope and suites", () =>
     });
   }
 });
+
+// The well-formed rule's remaining cases: an empty `suites` and a `null` for
+// either field are ill-formed; `suites` may come without `scope`; an entry's
+// `failingTests` keeps only its non-empty members and an entry keeps only its
+// own keys; and a verdict that is not well-formed drops `scope` and `suites`
+// with today's gate fields.
+describe("the well-formed rule's remaining cases for a gate's scope and suites", () => {
+  test("an empty suites list is refused and no milestone is recorded", async () => {
+    const base = boot();
+    const key = await createProject(base, "gate-suites-empty");
+    await expectRefusedAndNothingRecorded(base, key, gateMilestone(key, { scope: "full", suites: [] }));
+  });
+
+  test("a null scope is refused and no milestone is recorded", async () => {
+    const base = boot();
+    const key = await createProject(base, "gate-scope-null");
+    await expectRefusedAndNothingRecorded(base, key, gateMilestone(key, { scope: null, suites: wellFormedSuites() }));
+  });
+
+  test("a null suites is refused and no milestone is recorded", async () => {
+    const base = boot();
+    const key = await createProject(base, "gate-suites-null");
+    await expectRefusedAndNothingRecorded(base, key, gateMilestone(key, { scope: "full", suites: null }));
+  });
+
+  test("suites posted without scope are stored and read back with suites and no scope", async () => {
+    const base = boot();
+    const key = await createProject(base, "gate-suites-without-scope");
+    const suites = wellFormedSuites();
+
+    const res = await postJson(base, "/api/v2/milestones", gateMilestone(key, { suites }));
+    expect(res.status).toBe(201);
+
+    const read = await preMergeGateMilestones(base, key);
+    expect(read.totalCount).toBe(1);
+    const record = read.milestones[0]!;
+    expect(record.outcome).toBe("fail");
+    expect(record.suites).toEqual(suites);
+    expect("scope" in record).toBe(false);
+  });
+
+  test("an entry's failingTests keeps only its non-empty names", async () => {
+    const base = boot();
+    const key = await createProject(base, "gate-suites-empty-failing-name");
+    const suites = [
+      { target: "python", outcome: "fail", passed: 4522, failed: 1, failingTests: ["", "python::test_setup_defect"] },
+    ];
+
+    const res = await postJson(base, "/api/v2/milestones", gateMilestone(key, { scope: "full", suites }));
+    expect(res.status).toBe(201);
+
+    const read = await preMergeGateMilestones(base, key);
+    expect(read.totalCount).toBe(1);
+    expect(read.milestones[0]!.suites).toEqual([
+      { target: "python", outcome: "fail", passed: 4522, failed: 1, failingTests: ["python::test_setup_defect"] },
+    ]);
+  });
+
+  test("an entry with an unknown key is stored without that key", async () => {
+    const base = boot();
+    const key = await createProject(base, "gate-suites-unknown-key");
+    const suites = [{ target: "bun", outcome: "pass", passed: 4111, failed: 0, coveredBy: "bun" }];
+
+    const res = await postJson(base, "/api/v2/milestones", gateMilestone(key, { scope: "full", suites }));
+    expect(res.status).toBe(201);
+
+    const read = await preMergeGateMilestones(base, key);
+    expect(read.totalCount).toBe(1);
+    const entry = (read.milestones[0]!.suites as Record<string, unknown>[])[0]!;
+    expect(entry).toEqual({ target: "bun", outcome: "pass", passed: 4111, failed: 0 });
+    expect("coveredBy" in entry).toBe(false);
+  });
+
+  test("scope and suites beside a verdict that is not well-formed are recorded as today: the milestone without the gate fields, scope or suites", async () => {
+    const base = boot();
+    const key = await createProject(base, "gate-scope-suites-ill-formed-verdict");
+
+    const res = await postJson(
+      base,
+      "/api/v2/milestones",
+      gateMilestone(key, { outcome: "maybe", scope: "full", suites: wellFormedSuites() }),
+    );
+    expect(res.status).toBe(201);
+
+    const read = await preMergeGateMilestones(base, key);
+    expect(read.totalCount).toBe(1);
+    const record = read.milestones[0]!;
+    expect(record.type).toBe("pre-merge-gate");
+    expect("outcome" in record).toBe(false);
+    expect("passed" in record).toBe(false);
+    expect("failed" in record).toBe(false);
+    expect("failingTests" in record).toBe(false);
+    expect("scope" in record).toBe(false);
+    expect("suites" in record).toBe(false);
+  });
+});
