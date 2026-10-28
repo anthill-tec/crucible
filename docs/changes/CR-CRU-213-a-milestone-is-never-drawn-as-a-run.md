@@ -60,6 +60,22 @@ An aborted run is stored as `kind: "test"` with no counts (`abortRun`, `src/stor
 - **Docs.** PRD §4.2's "last event" reads "last run — the newest test run or compile result";
   `src/hints.ts`'s projects line follows. No storyboard frame depicts the compile or aborted wording.
 
+## Steps
+
+### §S1 — the board's last run is the newest test run or compile result
+
+The bounded `newestRun` read and the projects read's `lastEvent`; `newestEvent` kept for activity; PRD
+§4.2 and `src/hints.ts` follow (AC5).
+
+### §S2 — the status line words each kind as itself
+
+`projectRollupLabel` and `ProjectStatusLine`'s colour, and the formatter's types (AC3, AC4's status line,
+AC6).
+
+### §S3 — the active line and the cue count only test runs
+
+`linkedRunsFor` keeps test runs; an aborted chip reads `aborted` (AC1, AC2, AC4's chip).
+
 ## Acceptance criteria
 
 The UI criteria are proved by BDD Playwright scenarios in the e2e suite (`tests/e2e/features/`, steps in
