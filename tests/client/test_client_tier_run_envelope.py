@@ -188,6 +188,7 @@ Fallback:
     python3 tests/client/test_client_tier_run_envelope.py
 """
 
+import copy
 import importlib.util
 import os
 import re
@@ -428,6 +429,35 @@ class _EnvelopeTierProbe:
     Deriving the expectation rather than freezing it is what makes the check a
     test of AGREEMENT: a client that hardcoded `tier: "unit"` on every envelope
     would pass a frozen expectation on one path and fail here on four."""
+
+    def drive(self, argv, response=None):
+        """The harness's drive, with a stub board that answers an ingest with
+        the counts it was sent, as the board answers a run it stored. A
+        `response` the test hands in is answered as given."""
+        if response is not None:
+            return super().drive(argv, response)  # type: ignore[misc]
+        harness = _MODALITY._HARNESS
+        calls = []
+
+        def fake_post(path, payload):
+            calls.append((path, copy.deepcopy(payload)))
+            answer = copy.deepcopy(harness._OK_RESPONSE)
+            summary = (payload or {}).get("summary")
+            if isinstance(summary, dict):
+                answer["run"] = {key: summary.get(key, 0) for key in
+                                 ("total", "passed", "failed", "pending")}
+            return answer
+
+        module = self.module  # type: ignore[attr-defined]
+        with mock.patch.object(module, "_post", side_effect=fake_post,
+                               create=True), \
+                mock.patch.object(module, "_get", return_value=None,
+                                  create=True), \
+                mock.patch.object(module, "_patch", return_value={"ok": True},
+                                  create=True):
+            code, out, err = harness._run_main(
+                module, self.CLIENT, argv)  # type: ignore[attr-defined]
+        return harness._Drive(code, out, err, calls)
 
     def _ingested_test_bodies(self, drive):
         return [payload for path, payload in drive.calls
@@ -734,14 +764,16 @@ class MvnIngestedTierEnvelopeTest(_EnvelopeTierProbe, _MODALITY._MvnModalityCase
         where = "mvn unit / failing suite"
         self.write_failing_report()
         os.environ["FAKE_MVN_EXIT_CODE"] = "1"
-        drive = self.drive(self.mvn_argv(TIER_VERB_DRIVEN["mvn"]))
+        drive = self.drive(self.mvn_argv(TIER_VERB_DRIVEN["mvn"]),
+                           response=_FAILED_RESPONSE)
         self.assertReachedFailingSuite(drive, where)
         self.assertEnvelopeStatesIngestedTier(drive, where)
 
     def test_a_zero_discovery_run_states_what_it_ingested(self):
         where = "mvn unit / zero-discovery"
         self.write_zero_report()
-        drive = self.drive(self.mvn_argv(TIER_VERB_DRIVEN["mvn"]))
+        drive = self.drive(self.mvn_argv(TIER_VERB_DRIVEN["mvn"]),
+                           response=_EMPTY_RESPONSE)
         self.assertReachedZeroDiscovery(drive, where)
         self.assertEnvelopeStatesIngestedTier(drive, where)
 

@@ -385,10 +385,17 @@ def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
     next step for the run it just made (`_axi().run_help`) instead of the canned
     per-verb `HELP_STEPS` entry, and `warnings` the structured condition behind
     a run whose evidence never reached the board; both unset keeps today's
-    behaviour exactly."""
-    run = {"passed": summary["passed"], "failed": summary["failed"],
-           "pending": summary.get("pending", 0),
-           "total": summary["total"], "files": files}
+    behaviour exactly.
+
+    `summary` None (a run the board decoded, with no counts in its response —
+    no board reached): the envelope carries no figures."""
+    if summary is None:
+        run = {"passed": None, "failed": None, "pending": None,
+               "total": None, "files": files}
+    else:
+        run = {"passed": summary["passed"], "failed": summary["failed"],
+               "pending": summary.get("pending", 0),
+               "total": summary["total"], "files": files}
     context = _axi_context(project_dir, agent_id=agent,
                            cycle_id=_axi().echoed_cycle_id(resp))
     result_fields = {"run": run,
@@ -778,7 +785,7 @@ def _collect_jacoco(maven_dir):
 # Ingest helpers
 # --------------------------------------------------------------------------- #
 def _ingest_junit_dir(project_dir, agent, report_dir, tier=None, context=None,
-                      run_id=None, release=None):
+                      run_id=None, release=None, runner_exit=None):
     """Fast path: hand a single reports DIR to Crucible's built-in JUnit parser
     (the v2 junit codec reads a file OR a directory of TEST-*.xml). Returns the
     parsed response dict (the caller emits the §S1 envelope)."""
@@ -796,6 +803,10 @@ def _ingest_junit_dir(project_dir, agent, report_dir, tier=None, context=None,
     # The runId of the OPEN run this ingest closes; absent, the single-shot body.
     if run_id:
         payload["runId"] = run_id
+    # The runner's exit, so the board files a runner that failed over a clean
+    # report as failed. Absent (`auto-ingest`, which runs no runner): unsent.
+    if runner_exit is not None:
+        payload["runnerExit"] = runner_exit
     resp = _axi().post_ingest(_post, "/api/v2/runs", payload, stack=_STACK,
                               release=release)
     s = resp.get("run", {})
@@ -807,7 +818,8 @@ def _ingest_junit_dir(project_dir, agent, report_dir, tier=None, context=None,
 
 
 def _ingest_parsed(project_dir, agent, summary, tree, coverage=None, tier=None,
-                   context=None, raw=None, files=None, run_id=None, release=None):
+                   context=None, raw=None, files=None, run_id=None, release=None,
+                   runner_exit=None):
     """POST a client-parsed run to /api/v2/runs/parsed. Returns the response dict.
 
     CR-CRU-051 §S2 — `files` (the distinct-source count) is a PRINT-ONLY
@@ -832,6 +844,9 @@ def _ingest_parsed(project_dir, agent, summary, tree, coverage=None, tier=None,
         payload["raw"] = raw
     if run_id:
         payload["runId"] = run_id
+    # The runner's exit, as `_ingest_junit_dir` sends it.
+    if runner_exit is not None:
+        payload["runnerExit"] = runner_exit
     resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
                               release=release)
     cov = ""
@@ -870,7 +885,7 @@ def _ingest_compile(project_dir, agent, output, context=None, run_id=None,
 
 
 def _smart_ingest(project_dir, agent, dirs, tier=None, context=None,
-                  pooled=False, run_id=None, release=None):
+                  pooled=False, run_id=None, release=None, runner_exit=None):
     """One reports dir with XML → fast junit-dir path. Many → parse + parsed.
     None → return None so the caller can run the compile fallback.
 
@@ -880,10 +895,12 @@ def _smart_ingest(project_dir, agent, dirs, tier=None, context=None,
 
     CR-CRU-058 §S1 — returns the INGEST STATE (`{resp, summary, files}`) rather
     than a bare bool, so the caller can emit a `run:` block. Those counts are
-    parsed CLIENT-side on BOTH paths: the ingest response carries none when the
-    server could not be reached, and an envelope reporting a real run as empty
-    would be a false negative. Falsy exactly where the old `False` was (None),
-    so every existing truthiness call site reads unchanged."""
+    the run as the BOARD filed it (the ingest response's `run`, which includes
+    any case the board added for `runner_exit`). Where the response carries
+    none, the parsed path falls back to this client's own parse; the junit-dir
+    path, whose reports only the board decoded, has no counts (`summary` is
+    None). Falsy exactly where the old `False` was (None), so every existing
+    truthiness call site reads unchanged."""
     existing = _dirs_with_xml(dirs)
     if not existing:
         return None
@@ -893,16 +910,19 @@ def _smart_ingest(project_dir, agent, dirs, tier=None, context=None,
     if len(existing) == 1 and not many_sources:
         resp = _ingest_junit_dir(project_dir, agent, existing[0], tier=tier,
                                  context=context, run_id=run_id,
-                                 release=release)
-        # The junit-dir path ingests the DIR (the server parses it), so the
-        # envelope's own counts come from a client-side parse of the same
-        # reports — for the envelope only, never on the wire (CR-CRU-051 §S2).
-        summary, _tree, files = _parse_junit(existing)
+                                 release=release, runner_exit=runner_exit)
+        # The junit-dir path ingests the DIR (the server parses it): the
+        # counts are the board's, and only the `files` count comes from a
+        # client-side parse of the same reports — for the envelope only,
+        # never on the wire (CR-CRU-051 §S2).
+        _summary, _tree, files = _parse_junit(existing)
+        summary = _axi().filed_summary(resp)
     else:
         summary, tree, files = _parse_junit(existing)
         resp = _ingest_parsed(project_dir, agent, summary, tree, tier=tier,
                               context=context, files=files, run_id=run_id,
-                              release=release)
+                              release=release, runner_exit=runner_exit)
+        summary = _axi().filed_summary(resp, summary)
     return {"resp": resp, "summary": summary, "files": files}
 
 
@@ -992,6 +1012,7 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
     print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
+    runner_exit = _axi().runner_exit_code(result.returncode)
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
     pinned_warnings = run_warnings + _claim_pinned_reports(
@@ -1012,9 +1033,13 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
     # own directory, so it keeps the many-source parsed ingest it always had.
     ingested = _smart_ingest(project_dir, args.agent, dirs, tier=label, context=ctx,
                              pooled=label == "module" and reports_dir is not None,
-                             run_id=run_id, release=release)
+                             run_id=run_id, release=release,
+                             runner_exit=runner_exit)
     if ingested:
-        rc = 0
+        # The exit carries the runner's verdict and the filed run's, and a
+        # refused ingest is never green.
+        rc = _axi().verb_exit(runner_exit, {**ingested["resp"],
+                                            "run": ingested["summary"]})
         # CR-CRU-058 §S1 — the tier verbs reached only a plain-print ingest
         # helper before this: the run they measured now rides a real envelope,
         # emitted HERE (the verb), never inside the shared ingest helpers.
@@ -1028,6 +1053,9 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
                                              release=release)
         _emit_compile_fallback_axi(label, rc, build_output, project_dir,
                                    args.agent, run_warnings)
+        # No report: a runner that exited non-zero exits non-zero whatever
+        # the compile ingest answered.
+        rc = _axi().verb_exit(runner_exit, {"ok": rc == 0})
     return rc
 
 
@@ -1043,10 +1071,11 @@ def _emit_tier_run_axi(verb, ingested, project_dir, agent, warnings=()):
     established."""
     resp = ingested["resp"]
     summary = ingested["summary"]
-    ok = bool(resp.get("ok")) and summary["failed"] == 0
+    failed = (summary or {}).get("failed") or 0
+    ok = bool(resp.get("ok")) and failed == 0
     _emit_ingest_summary_axi(verb, resp, summary, ingested["files"],
                              project_dir, agent,
-                             help_steps=_axi().run_help(verb, ok, summary["failed"],
+                             help_steps=_axi().run_help(verb, ok, failed,
                                                         _base_url()),
                              warnings=(list(warnings)
                                        + ([] if resp.get("ok")
@@ -1213,6 +1242,7 @@ def _failsafe_tier_run(args, goals, label, project_dir, identity):
     print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
+    runner_exit = _axi().runner_exit_code(result.returncode)
     _axi().close_narration(narrator)
     pinned_warnings = run_warnings + _claim_pinned_reports(
         maven_dir, module, ("failsafe", "surefire"), reports_dir)
@@ -1224,7 +1254,8 @@ def _failsafe_tier_run(args, goals, label, project_dir, identity):
                                              release=release)
         _emit_compile_fallback_axi(label, rc, build_output, project_dir,
                                    args.agent, run_warnings)
-        return rc
+        # No report: the runner's exit decides, never the compile ingest's 0.
+        return _axi().verb_exit(runner_exit, {"ok": rc == 0})
     _warn_if_stale(dirs)
     if _ran_nothing(result, dirs):
         return _axi().emit_ran_nothing(
@@ -1237,11 +1268,15 @@ def _failsafe_tier_run(args, goals, label, project_dir, identity):
     # PARAMETER, never a literal this body asserts about a run it did not name.
     resp = _ingest_parsed(project_dir, args.agent, summary, tree,
                           tier=label, files=files, run_id=run_id,
-                          release=release)
+                          release=release, runner_exit=runner_exit)
+    # The envelope states the run as the board filed it.
+    summary = _axi().filed_summary(resp, summary)
     # CR-CRU-058 §S1 — the run this body measured rides a real envelope.
     _emit_tier_run_axi(label, {"resp": resp, "summary": summary, "files": files},
                        project_dir, args.agent, warnings=pinned_warnings)
-    return 0 if summary["failed"] == 0 else 1
+    # The exit carries the runner's verdict and the filed run's, and a
+    # refused ingest is never green.
+    return _axi().verb_exit(runner_exit, {**resp, "run": summary})
 
 
 def cmd_integration(args):
@@ -1455,6 +1490,7 @@ def _regression_run(args, identity=None, verb="regression",
                                          preflight_warnings,
                                          post_fn=_post)
     print(f"[regression] mvn exit={result.returncode}", file=sys.stderr)
+    runner_exit = _axi().runner_exit_code(result.returncode)
     _axi().close_narration(narrator)
 
     preflight_warnings += _claim_pinned_reports(maven_dir, None, ("surefire", "failsafe"),
@@ -1469,7 +1505,8 @@ def _regression_run(args, identity=None, verb="regression",
                                              release=release)
         _emit_compile_fallback_axi(verb, rc, build_output, project_dir,
                                    args.agent, preflight_warnings)
-        return rc
+        # No report: the runner's exit decides, never the compile ingest's 0.
+        return _axi().verb_exit(runner_exit, {"ok": rc == 0})
 
     _warn_if_stale(dirs)
     if _ran_nothing(result, dirs):
@@ -1493,8 +1530,12 @@ def _regression_run(args, identity=None, verb="regression",
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                           tier="regression", context=_run_context(),
                           raw=getattr(result, "stdout", None), files=files,
-                          run_id=run_id, release=release)
-    ok = bool(resp.get("ok")) and summary["failed"] == 0
+                          run_id=run_id, release=release,
+                          runner_exit=runner_exit)
+    # The envelope states the run as the board filed it.
+    summary = _axi().filed_summary(resp, summary)
+    exit_code = _axi().verb_exit(runner_exit, {**resp, "run": summary})
+    ok = exit_code == 0
     # §S2 — a GATE run's next step is derived from the run state it reached
     # (unrecorded / red / green); the plain `regression` verb keeps its canned
     # HELP_STEPS entry, unchanged.
@@ -1502,7 +1543,7 @@ def _regression_run(args, identity=None, verb="regression",
                   if verb != "regression" else None)
     _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, args.agent,
                              help_steps=help_steps, warnings=preflight_warnings)
-    return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
+    return exit_code
 
 
 def cmd_test(args, tier=None):
@@ -1573,6 +1614,7 @@ def _test_run(args, tier, project_dir, identity):
     print(f"[test] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
+    runner_exit = _axi().runner_exit_code(result.returncode)
     _axi().close_narration(narrator)
     preflight_warnings = list(preflight_warnings) + _claim_pinned_reports(
         maven_dir, getattr(args, "module", None), ("surefire",), reports_dir)
@@ -1582,7 +1624,8 @@ def _test_run(args, tier, project_dir, identity):
         # No reports → tests didn't compile. Ingest the build output as compile.
         rc, _ = _compile_fallback(maven_dir, project_dir, args.agent, common,
                                   run_id=run_id, release=release)
-        return rc
+        # The runner's exit decides, never the compile ingest's 0.
+        return _axi().verb_exit(runner_exit, {"ok": rc == 0})
     _warn_if_stale(dirs)
     if _axi().ran_nothing(result.returncode, _axi().junit_testcase_count(
             sorted(glob.glob(os.path.join(dirs[0], "TEST-*.xml"))))):
@@ -1593,13 +1636,13 @@ def _test_run(args, tier, project_dir, identity):
             project_key=_project_key(project_dir), agent_id=args.agent)
     ctx = _run_context()
     resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier=tier, context=ctx,
-                             run_id=run_id, release=release)
+                             run_id=run_id, release=release,
+                             runner_exit=runner_exit)
     _emit_ingest_axi_resp("test", resp, project_dir, args.agent,
                           preflight_warnings)
-    failed = (resp.get("run") or {}).get("failed") or 0
-    if failed and failed > 0:
-        return 1
-    return 0 if resp.get("ok") else 1
+    # The exit carries the runner's verdict and the filed run's, and a
+    # refused ingest is never green.
+    return _axi().verb_exit(runner_exit, resp)
 
 
 def cmd_check(args):

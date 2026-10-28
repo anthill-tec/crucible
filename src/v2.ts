@@ -112,6 +112,8 @@ interface V2Body {
   tier?: unknown;
   stack?: unknown;
   context?: unknown;
+  // the exit code of the runner that produced a run ingest
+  runnerExit?: unknown;
   // CR-CRU-011 §S0 — cycle-plan routes
   cr?: unknown;
   // CR-CRU-021 §S6.11 — optional CR title captured at plan filing
@@ -1001,6 +1003,47 @@ function refuseBadStack(body: V2Body, outcome = "run NOT stored"): Response | nu
 }
 
 /**
+ * A `runnerExit` a run ingest states must be an integer ≥ 0; anything else is
+ * refused (400) before anything is stored. Absent is fine.
+ */
+function refuseBadRunnerExit(body: V2Body): Response | null {
+  const exit = body.runnerExit;
+  if (exit === undefined) return null;
+  if (typeof exit === "number" && Number.isInteger(exit) && exit >= 0) return null;
+  return fail(400, "runnerExit must be a non-negative integer — run NOT stored");
+}
+
+/**
+ * A runner that exited non-zero over a run that records no failure is never
+ * filed as green: the run gains a failing suite `runner` holding one failing
+ * case `exit <n>`, counted in its total and failed. A zero or absent exit, or
+ * a run that already records a failure, leaves the run exactly as posted.
+ * Applied before the run is stored and before its hints are computed, so the
+ * verdict, the stored counts, the coverage discard and the hints all follow.
+ */
+function fileRunnerExit(run: RunSchema, runnerExit: unknown): RunSchema {
+  if (typeof runnerExit !== "number" || runnerExit === 0) return run;
+  if (run.summary.failed > 0) return run;
+  const runner: SuiteNode = {
+    name: "runner",
+    status: "fail",
+    children: [
+      {
+        name: `exit ${runnerExit}`,
+        status: "fail",
+        duration_ms: 0,
+        failure: { message: `the runner exited ${runnerExit} but its report records no failure` },
+      },
+    ],
+  };
+  return {
+    ...run,
+    summary: { ...run.summary, total: run.summary.total + 1, failed: run.summary.failed + 1 },
+    tree: [...run.tree, runner],
+  };
+}
+
+/**
  * CR-CRU-024 §S7 — validate a run ingest's `context.cycleId` against stored
  * plan state (Crucible is the source of truth, not the client). Returns:
  *  - `{ fail }` when the id matches NO cycle in any of the project's plans —
@@ -1462,12 +1505,15 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
 
   const badStack = refuseBadStack(body);
   if (badStack !== null) return badStack;
+  const badExit = refuseBadRunnerExit(body);
+  if (badExit !== null) return badExit;
 
   // The run's effective stack (the ingest's, else its start's) is told to the
   // codec before it decodes.
   const parsed = await parseRunBody(codec, body, codecName, effectiveStack(store, body));
   if ("error" in parsed) return fail(400, parsed.error);
-  const { run, warnings, files } = parsed;
+  const { warnings, files } = parsed;
+  const run = fileRunnerExit(parsed.run, body.runnerExit);
 
   // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
   // BEFORE any touchAgent/record — no agent row is created or resurrected);
@@ -1544,6 +1590,8 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
 
   const badStack = refuseBadStack(body);
   if (badStack !== null) return badStack;
+  const badExit = refuseBadRunnerExit(body);
+  if (badExit !== null) return badExit;
 
   if (typeof body.summary !== "object" || body.summary === null) {
     return fail(400, "summary is required");
@@ -1556,16 +1604,19 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   const treeRefusal = invalidSuiteTreeNode(body.tree);
   if (treeRefusal !== null) return fail(400, `${treeRefusal} — run NOT stored`);
 
-  const summary = body.summary as RunSummary;
   const hasCoverage = typeof body.coverage === "object" && body.coverage !== null;
-  const run: RunSchema = {
-    summary,
-    tree: body.tree as SuiteNode[],
-    // §S4 (CR-CRU-001) discard-on-fail is applied by the store; pass coverage through.
-    ...(hasCoverage ? { coverage: body.coverage as Coverage } : {}),
-    // CR-CRU-038 §S2b — run-level raw output; retained even on a failing ingest.
-    ...(typeof body.raw === "string" ? { raw: body.raw } : {}),
-  };
+  const run = fileRunnerExit(
+    {
+      summary: body.summary as RunSummary,
+      tree: body.tree as SuiteNode[],
+      // §S4 (CR-CRU-001) discard-on-fail is applied by the store; pass coverage through.
+      ...(hasCoverage ? { coverage: body.coverage as Coverage } : {}),
+      // CR-CRU-038 §S2b — run-level raw output; retained even on a failing ingest.
+      ...(typeof body.raw === "string" ? { raw: body.raw } : {}),
+    },
+    body.runnerExit,
+  );
+  const summary = run.summary;
 
   // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
   // BEFORE any touchAgent/record — no agent row is created or resurrected);

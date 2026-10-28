@@ -520,10 +520,14 @@ def _parse_junit(junit_path):
 def _run_block(summary, files=None):
     """The §S1 `run:` result field an ingest/regression envelope carries. `files`
     (CR-CRU-051) is included ONLY where §S1 names it — the two regression
-    verbs — never fabricated for the verbs that have no such count."""
+    verbs — never fabricated for the verbs that have no such count.
+
+    `summary` None — a run the board decoded, whose ingest response carries no
+    counts (no board reached): the block carries no figures."""
+    summary = summary or {}
     run = {
-        "passed": summary["passed"], "failed": summary["failed"],
-        "pending": summary["pending"], "total": summary["total"],
+        "passed": summary.get("passed"), "failed": summary.get("failed"),
+        "pending": summary.get("pending"), "total": summary.get("total"),
     }
     if files is not None:
         run["files"] = len(files)
@@ -1031,6 +1035,7 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
                                          run_id, abandoned, preflight_warnings,
                                          post_fn=_post)
     print(f"[crucible] llvm-cov nextest exit={result.returncode}", file=sys.stderr)
+    runner_exit = _axi().runner_exit_code(result.returncode)
 
     junit_path = _claim_output(f"{project_dir}/target/nextest/ci/junit.xml",
                                own_dir, _OWN_JUNIT_FILE)
@@ -1059,10 +1064,6 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
     # smoke path. It rides the printed/enveloped line only — never
     # `summary`/`payload` (CR-CRU-047 §S2).
     summary, tree_nodes, files = _parse_junit(junit_path)
-    passed = summary["passed"]
-    failed = summary["failed"]
-    pending = summary["pending"]
-    total = summary["total"]
 
     coverage = _parse_lcov(lcov_path)
 
@@ -1075,6 +1076,9 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
     if coverage:
         payload["coverage"] = coverage
     payload["tier"] = "regression"
+    # The runner's exit, so the board files a runner that failed over a clean
+    # report as failed.
+    payload["runnerExit"] = runner_exit
     context = _run_context()
     if context:
         payload["context"] = context
@@ -1092,6 +1096,12 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
     _axi().close_narration(narrator)
     resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
                               release=release)
+    # The envelope states the run as the board filed it.
+    filed = _axi().filed_summary(resp, summary)
+    failed = filed["failed"]
+    # The exit carries the runner's verdict and the filed run's, and a refused
+    # ingest is never green.
+    exit_code = _axi().verb_exit(runner_exit, {**resp, "run": filed})
     ok = bool(resp.get("ok"))
     cov_line = ""
     if coverage:
@@ -1100,8 +1110,9 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
             f"funcs={coverage['functions']['percent']}%"
         )
     result_fields = {
-        "run": _run_block(summary, files),
-        "help": _axi().run_help("regression-ingest", ok, failed, _base_url()),
+        "run": _run_block(filed, files),
+        "help": _axi().run_help("regression-ingest", exit_code == 0, failed,
+                                _base_url()),
     }
     if coverage:
         result_fields["coverage"] = {
@@ -1118,9 +1129,10 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
               else preflight_warnings + [_axi().ingest_failed_warning(
                   "regression-ingest", _base_url())],
               f"regression: ok={resp.get('ok')} "
-              f"passed={passed} failed={failed} pending={pending} total={total} "
+              f"passed={filed['passed']} failed={failed} "
+              f"pending={filed['pending']} total={filed['total']} "
               f"files={len(files)}{cov_line}")
-    return 0 if resp.get("ok") else 1
+    return exit_code
 
 
 def _resolve_junit_path(project_dir, profile=None):
@@ -1137,7 +1149,7 @@ def _resolve_junit_path(project_dir, profile=None):
 
 
 def _ingest_junit_axi(project_dir, agent_id, junit_path, tier=None, context=None,
-                      run_id=None, release=None):
+                      run_id=None, release=None, runner_exit=None):
     """Ingest a junit XML to /api/v2/runs (server-side codec=junit parse) and return
     the parsed response dict (the caller emits the §S1 envelope). The human-readable
     ingest line is interactive-only (stderr) — stdout is the machine channel.
@@ -1154,6 +1166,10 @@ def _ingest_junit_axi(project_dir, agent_id, junit_path, tier=None, context=None
         payload["context"] = context
     if run_id:
         payload["runId"] = run_id
+    # The runner's exit, so the board files a runner that failed over a clean
+    # report as failed. Absent (`auto-ingest`, which runs no runner): unsent.
+    if runner_exit is not None:
+        payload["runnerExit"] = runner_exit
     resp = _axi().post_ingest(_post, "/api/v2/runs", payload, stack=_STACK,
                               release=release)
     s = resp.get("run", {}) or {}
@@ -1286,6 +1302,7 @@ def _test_run(args, tier, select, profile, project_dir, identity):
                                          post_fn=_post)
     print(f"[crucible] cargo nextest exit={result.returncode}", file=sys.stderr)
     if args.agent:
+        runner_exit = _axi().runner_exit_code(result.returncode)
         # The final count, then `ingesting…`, both ahead of either ingest below.
         _axi().close_narration(narrator)
         # Test may have failed; ingest result regardless (junit captures fail state).
@@ -1302,15 +1319,14 @@ def _test_run(args, tier, select, profile, project_dir, identity):
                     agent_id=args.agent)
             resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier=tier,
                                      context=_run_context(), run_id=run_id,
-                                     release=release)
+                                     release=release, runner_exit=runner_exit)
             _emit_ingest_axi(verb, resp, project_dir, args.agent,
                              list(preflight_warnings)
                              + _axi().unit_run_wall_vs_cpu_warnings(
                                  tier, "rust", timing))
-            s = resp.get("run", {}) or {}
-            if (s.get("failed") or 0) > 0:
-                return 1
-            return 0 if resp.get("ok") else 1
+            # The exit carries the runner's verdict and the filed run's, and
+            # a refused ingest is never green.
+            return _axi().verb_exit(runner_exit, resp)
         # If tests didn't even compile, capture cargo check stderr → ingest compile
         # and emit an ok:false test envelope (no junit run to report).
         check_cmd = ["cargo", "check"] + crate_selection + ["--tests"]
@@ -1758,6 +1774,7 @@ def _smoke_run(args, verb, project_dir, identity=None):
                                              run_warnings,
                                              post_fn=_post)
         print(f"[smoke-test] cargo nextest exit={result.returncode}", file=sys.stderr)
+        runner_exit = _axi().runner_exit_code(result.returncode)
 
         # Ingest JUnit regardless of exit code (failed tests still report).
         ci_junit = f"{project_dir}/target/nextest/{args.profile}/junit.xml"
@@ -1795,6 +1812,9 @@ def _smoke_run(args, verb, project_dir, identity=None):
             # the verb the caller drove and the profile it ran under, never
             # assumed from a path.
             "tier": tier,
+            # The runner's exit, so the board files a runner that failed over
+            # a clean report as failed.
+            "runnerExit": runner_exit,
         }
         if context:
             payload["context"] = context
@@ -1805,17 +1825,21 @@ def _smoke_run(args, verb, project_dir, identity=None):
         _axi().close_narration(narrator)
         resp = _axi().post_ingest(_post, "/api/v2/runs", payload, stack=_STACK,
                                   release=release)
-        s = resp.get("run", {})
-        # The `run:` block is parsed CLIENT-side: the ingest response carries no
-        # counts when the server could not be reached, and an envelope that
-        # reported a real run as empty would be a false negative. §S1 names
-        # `files` for the two REGRESSION verbs only — it is not fabricated here.
-        summary, _tree, _files = _parse_junit(junit_path)
-        smoke_rc = 0 if (resp.get("ok") and s.get("failed", 0) == 0) else 1
-        ok = bool(resp.get("ok")) and summary["failed"] == 0
+        s = resp.get("run", {}) or {}
+        # The `run:` block is the run as the BOARD filed it (its response's
+        # `run`, with any case it added): the board decoded the report, so a
+        # response with no counts (no board reached) leaves the block with no
+        # figures. The `files` count is named for the two REGRESSION verbs
+        # only, so it is not fabricated here.
+        summary = _axi().filed_summary(resp)
+        # The exit carries the runner's verdict and the filed run's, and a
+        # refused ingest is never green.
+        smoke_rc = _axi().verb_exit(runner_exit, resp)
+        ok = smoke_rc == 0
         result_fields = {
             "run": _run_block(summary),
-            "help": _axi().run_help(verb, ok, summary["failed"], _base_url()),
+            "help": _axi().run_help(verb, ok, (summary or {}).get("failed") or 0,
+                                    _base_url()),
         }
         err = resp.get("error")
         if err is not None:
@@ -1950,6 +1974,7 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
                                          run_warnings,
                                          post_fn=_post)
     print(f"[crucible] llvm-cov nextest exit={result.returncode}", file=sys.stderr)
+    runner_exit = _axi().runner_exit_code(result.returncode)
 
     junit_path = _claim_output(f"{project_dir}/target/nextest/{args.profile}/junit.xml",
                                own_dir, _OWN_JUNIT_FILE)
@@ -1982,10 +2007,6 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
     # `_regression_ingest_run`. It rides the printed/enveloped line only —
     # never `summary`/`payload` (CR-CRU-047 §S2).
     summary, tree_nodes, files = _parse_junit(junit_path)
-    passed = summary["passed"]
-    failed = summary["failed"]
-    pending = summary["pending"]
-    total = summary["total"]
 
     coverage = _parse_lcov(lcov_path)
 
@@ -2003,6 +2024,9 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
     # the tier of the RUN, never by the enclosing verb's name, so a gate verb
     # that drives this body ingests a regression too.
     payload["tier"] = "regression"
+    # The runner's exit, so the board files a runner that failed over a clean
+    # report as failed.
+    payload["runnerExit"] = runner_exit
     context = _run_context()
     if context:
         payload["context"] = context
@@ -2014,12 +2038,19 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
     _axi().close_narration(narrator)
     resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
                               release=release)
-    ok = bool(resp.get("ok"))
+    # The envelope states the run as the board filed it.
+    filed = _axi().filed_summary(resp, summary)
+    failed = filed["failed"]
+    # The exit carries the runner's verdict and the filed run's, and a refused
+    # ingest is never green.
+    exit_code = _axi().verb_exit(runner_exit, {**resp, "run": filed})
+    ok = exit_code == 0
+    ingest_ok = bool(resp.get("ok"))
     cov_line = ""
     if coverage:
         cov_line = f" lines={coverage['lines']['percent']}% funcs={coverage['functions']['percent']}%"
     result_fields = {
-        "run": _run_block(summary, files),
+        "run": _run_block(filed, files),
         "help": _axi().run_help(verb, ok, failed, _base_url()),
     }
     if coverage:
@@ -2030,15 +2061,16 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
-    _emit_axi(verb, ok, result_fields,
+    _emit_axi(verb, ingest_ok, result_fields,
               _axi_context(project_dir, agent_id=args.agent,
                            cycle_id=_axi().echoed_cycle_id(resp)),
-              run_warnings + ([] if ok
+              run_warnings + ([] if ingest_ok
                               else [_axi().ingest_failed_warning(verb, _base_url())]),
               f"workspace regression: ok={resp.get('ok')} "
-              f"passed={passed} failed={failed} pending={pending} total={total} "
+              f"passed={filed['passed']} failed={failed} "
+              f"pending={filed['pending']} total={filed['total']} "
               f"files={len(files)}{cov_line}")
-    return 0 if resp.get("ok") else 1
+    return exit_code
 
 
 def _clean_stale_bind_mounts(project_dir):

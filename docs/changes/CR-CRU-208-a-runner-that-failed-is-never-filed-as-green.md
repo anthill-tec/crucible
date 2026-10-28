@@ -1,6 +1,6 @@
 # CR-CRU-208 — a runner that failed is never filed as green
 
-**Type** fix · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-28
+**Type** fix · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — merged 2026-10-28 (plan 210, cycles 752–759, gate bun 4111/0 + python 4523/0 on the fix cycle); filed 2026-10-28
 (user ruling: an urgent fix CR, sequenced straight after CR-CRU-207; re-scoped at its two pre-reviews)
 
 ## Problem
@@ -77,7 +77,7 @@ The bodies, each reached through the verbs named:
   (`integration`, `e2e`), `cmd_regression` (`regression`, `pre-merge-gate`) and `_test_run` (`test`),
   on both the parsed and the junit-directory routes;
 - **rust:** `_test_run` (through `cmd_test`: `test`, `unit`, `integration`, `e2e`, and the declared
-  nextest profiles `module`/`bdd`), `_smoke_test` (`smoke-test`,
+  nextest profiles `module`/`bdd`), `_smoke_run` (`smoke-test`,
   `docker-e2e-gate`), `_workspace_regression_run` (`workspace-regression`, `regression`,
   `pre-merge-gate`) and `_regression_ingest_run` (`regression-ingest`);
 - **arduino:** `_run_native_tests` (`test`, `unit`, `regression`, declared make targets,
@@ -101,41 +101,53 @@ case makes the run failed and no `runner / exit` case is added beside it.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — bun's load errors are filed.** Real bun runs through `bun-crucible.py test --agent`
+- [x] **AC1 — bun's load errors are filed.** Real bun runs through `bun-crucible.py test --agent`
       (scratch projects: a passing file, a file importing a missing module, a file throwing at
       import, a file rejecting at import; in both console forms, `NO_COLOR=1` and `FORCE_COLOR=1`)
       file one failing case per failing file as §S3 states, beside the passing case, and the verb
       exits non-zero; a file with two error blocks gets one case (the first `error:` line, every block
       in its trace); a file whose tests ran and then rejected at import gets its case in its existing
       suite; a run where every file fails to load (bun writes no report) exits non-zero.
-- [ ] **AC2 — the board adds the case.** On `/runs` and `/runs/parsed`: `runnerExit` non-zero with no
+- [x] **AC2 — the board adds the case.** On `/runs` and `/runs/parsed`: `runnerExit` non-zero with no
       failure → the run is stored and answered with the `runner / exit <n>` case, `summary.total` and
       `summary.failed` each one higher, verdict `RED — 1 failing of <total>`, the `afterRed` hint, and
       any coverage discarded with the `coverageDropped` hint; `runnerExit` non-zero with a failure,
       `runnerExit: 0` and no `runnerExit` → unchanged; `runnerExit` of `"1"`, `1.5`, `true`, `null` or
       `-1` → 400 naming `runnerExit`, nothing stored.
-- [ ] **AC3 — the shared functions.** `runner_exit_code` maps 0, 1, 100 unchanged and `-9` → 137;
+- [x] **AC3 — the shared functions.** `runner_exit_code` maps 0, 1, 100 unchanged and `-9` → 137;
       `verb_exit` is non-zero exactly when the runner exit is non-zero, the response is not `ok`, or
       its `run.failed` is above 0 (a runner exiting 0 with a refused ingest exits non-zero).
-- [ ] **AC4 — every verb, every client.** A census built from each client's subcommand parser
+- [x] **AC4 — every verb, every client.** A census built from each client's subcommand parser
       classifies every subcommand as applying the rule (naming its body function), exempt with a
       reason (`auto-ingest`, non-test verbs), or not ingesting; each applying body sends `runnerExit`
       and returns `verb_exit`. For one verb per client and per ingest route (parsed, junit-directory
       or `dataPath`, raw report), a fake runner exiting 1 with a passing-only report files a run with
       the `exit 1` case, the envelope's `run.failed`/`total` include it, and the verb exits non-zero.
-- [ ] **AC5 — failures exit non-zero everywhere.** For maven `unit`/`module` and rust
+- [x] **AC5 — failures exit non-zero everywhere.** For maven `unit`/`module` and rust
       `workspace-regression` and `regression-ingest`, a report recording a failure makes the verb exit
       non-zero (today: 0); a runner exiting non-zero with no report makes every client's test verb
       exit non-zero (today: maven and bun return the compile ingest's 0); arduino without `--agent`
       exits non-zero when the runner did or its report records a failure (a `make` exiting 0 over a
       failing report exits non-zero).
-- [ ] **AC6 — the gate.** `pre-merge-gate` over a suite whose runner exits non-zero with a
+- [x] **AC6 — the gate.** `pre-merge-gate` over a suite whose runner exits non-zero with a
       passing-only report, and the rust gate over a failing test, are not green.
-- [ ] **AC7 — nothing else changes.** A run whose runner exits 0 and whose filed run has no failure is
+- [x] **AC7 — nothing else changes.** A run whose runner exits 0 and whose filed run has no failure is
       filed and exits exactly as before; a run that ran nothing (`ran_nothing`, bun's filter check)
       sends no ingest and exits as today. Existing tests that pinned an exit this CR changes (a fake
       runner exiting non-zero with a clean report, a failing report exiting 0) are amended, each in its
       own commit, and listed in the close-out.
+
+- *Recorded at merge:* the rust smoke body is `_smoke_run` (both `smoke-test` and `docker-e2e-gate` reach
+  it; `_smoke_test` wraps it for the latter). A board-decoded route with no counts in the response shows a
+  `run` block with null figures. Rulings: a load-error case's message is bun's error text without
+  `error:`, its suite `fail`; a bun file header is a `<path>:` line ending in a JS/TS module extension (a
+  test that logs such a line would still read as one); `verb_exit` returns 1; `filed_summary` is shared.
+  Approved test amendments: `19665c6`, `eabe85e`, `33df75c`, `cd240b3`, `ca7b96f` (two files: the maven
+  tier-envelope tests and the rust smoke no-board test), `9865601`. Nits: envelope `ok` means the ingest
+  was accepted, fleet-wide (rust `_smoke_run` excepted); the new test code adds 19 ruff findings of kinds
+  the clients already carry; arduino without `--agent` still reads a report directory it never wipes
+  (until CR-CRU-206). The gate's python half went red on a test-setup defect (a fixture passing retired
+  variables) and was re-run alone on the fix cycle (user ruling).
 
 ## Non-goals
 

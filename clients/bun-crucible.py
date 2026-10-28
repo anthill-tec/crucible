@@ -949,6 +949,80 @@ def _marry_failures(tree, log_text):
                 leaf.setdefault("failure", {}).update(detail)
 
 
+# bun's console marker for an error it caught outside any test — a file that
+# failed to load, threw at import, or rejected at import or after its tests.
+_UNHANDLED_MARKER = "# Unhandled error between tests"
+# A `<path>:` file header bun prints, flush left, before each file's results:
+# a path naming a JavaScript/TypeScript module — the only kind of file bun
+# runs as a test file. A test's own flush-left console line (`results:`)
+# names no such file, so it is never read as a header.
+_FILE_HEADER = re.compile(r"^(?P<path>[^\s#-]\S*\.[cm]?[jt]sx?):$")
+_BLOCK_RULE = re.compile(r"^-{10,}$")
+
+
+def _parse_load_errors(log_text):
+    """The files bun named under `# Unhandled error between tests`, read from
+    its captured console in either wire form (plain or ANSI): an ordered
+    `{path: [block, ...]}`, each block the stripped lines between its two
+    rules. A block printed before any file header is attributed to no file."""
+    errors = {}
+    current = None   # the file whose header was read last
+    block = None     # the lines of the block being read, or None
+    opened = False   # the block's opening rule is behind us
+    for line in (log_text or "").splitlines():
+        plain = _strip_ansi(line).rstrip()
+        if block is not None:
+            if _BLOCK_RULE.match(plain.strip()):
+                if not opened:
+                    opened = True
+                    continue
+                if current is not None:
+                    errors.setdefault(current, []).append(block)
+                block, opened = None, False
+                continue
+            if opened:
+                block.append(plain)
+            continue
+        if plain.strip() == _UNHANDLED_MARKER:
+            block, opened = [], False
+            continue
+        header = _FILE_HEADER.match(plain)
+        if header and not plain.startswith("error:"):
+            current = header.group("path")
+    return errors
+
+
+def _add_load_error_cases(tree, summary, log_text):
+    """Add one failing case `?` per file bun named under `# Unhandled error
+    between tests` to `tree`, in that file's suite (a new suite named by the
+    path when the report holds none): message the first block's `error:` line
+    without its label, trace every block for that file. `summary` is counted
+    up to match. Returns the number of files that had no suite before."""
+    added_files = 0
+    for path, blocks in _parse_load_errors(log_text).items():
+        message = ""
+        for text in blocks[0]:
+            if text.startswith("error:"):
+                message = text[len("error:"):].strip()
+                break
+        trace = "\n\n".join("\n".join(b).strip() for b in blocks).strip()
+        failure = {"message": (message or "unhandled error between tests")[:1000]}
+        if trace:
+            failure["trace"] = trace[:8000]
+        case = {"name": "?", "status": "fail", "duration_ms": 0,
+                "failure": failure}
+        suite = next((s for s in tree if s.get("name") == path), None)
+        if suite is None:
+            tree.append({"name": path, "status": "fail", "children": [case]})
+            added_files += 1
+        else:
+            suite.setdefault("children", []).append(case)
+            suite["status"] = "fail"
+        summary["total"] += 1
+        summary["failed"] += 1
+    return added_files
+
+
 def _parse_lcov(lcov_path):
     """Sum LF/LH/FNF/FNH from an lcov file into a Crucible coverage object, or None."""
     if not os.path.exists(lcov_path):
@@ -985,7 +1059,8 @@ def _run_context():
 
 
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
-                   context=None, raw=None, run_id=None, release=None):
+                   context=None, raw=None, run_id=None, release=None,
+                   runner_exit=None):
     payload = {
         "projectKey": _project_key(project_dir),
         "agentId": agent_id,
@@ -1011,6 +1086,10 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     # pre-lifecycle one and the server stores no lifecycle fields at all.
     if run_id:
         payload["runId"] = run_id
+    # The runner's exit, so the board files a runner that failed over a clean
+    # report as failed. Absent (`auto-ingest`, which runs no runner): unsent.
+    if runner_exit is not None:
+        payload["runnerExit"] = runner_exit
     resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
                               release=release)
     cov_line = ""
@@ -1030,7 +1109,7 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
 
 
 def _ingest_raw(project_dir, agent_id, raw_report, tier=None, context=None,
-                run_id=None, release=None):
+                run_id=None, release=None, runner_exit=None):
     """CR-CRU-015 §S2 — POST the RAW report and let the BOARD decode it, at
     `/api/v2/runs`, whose `codec` names the decoder the server resolves from its
     own registry (`mvn-crucible.py`'s `_ingest_junit_dir` already ingests this
@@ -1059,6 +1138,8 @@ def _ingest_raw(project_dir, agent_id, raw_report, tier=None, context=None,
     # route shares; absent, the server stores no lifecycle fields.
     if run_id:
         payload["runId"] = run_id
+    if runner_exit is not None:
+        payload["runnerExit"] = runner_exit
     resp = _axi().post_ingest(_post, "/api/v2/runs", payload, stack=_STACK,
                               release=release)
     run = resp.get("run") or {}
@@ -1110,15 +1191,10 @@ def _decoded_summary(resp):
     """CR-CRU-015 §S2 — the counts the SERVER decoded, in the shape the ingest
     envelope reports. On the raw route the client never parsed the report, so
     what the run envelope states is what the board actually stored — a refused
-    ingest carries no `run` and reports zeros beside its own `error`."""
-    run = resp.get("run") or {}
-
-    def count(key):
-        value = run.get(key)
-        return value if isinstance(value, int) else 0
-
-    return {"passed": count("passed"), "failed": count("failed"),
-            "pending": count("pending"), "total": count("total")}
+    or unreachable ingest carries no `run`, so its counts are null beside its
+    own `error`: no figures, never a made-up 0."""
+    return (_axi().filed_summary(resp)
+            or {"passed": None, "failed": None, "pending": None, "total": None})
 
 
 def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None,
@@ -1463,6 +1539,7 @@ def cmd_test(args, tier=None):
             return result.returncode
         # The final count, then `ingesting…`, both ahead of the ingest below.
         _axi().close_narration(narrator)
+        runner_exit = _axi().runner_exit_code(result.returncode)
 
         if os.path.exists(junit_path):
             summary, tree, files = _parse_junit_file(junit_path)
@@ -1478,21 +1555,24 @@ def cmd_test(args, tier=None):
                                                 name, run_warnings)
             # §S2c — the captured run log IS the failure-detail source.
             _marry_failures(tree, getattr(result, "stdout", None))
+            # Every file bun could not load is a failing case of its own.
+            files += _add_load_error_cases(tree, summary,
+                                           getattr(result, "stdout", None))
             resp = _ingest_parsed(project_dir, args.agent, summary, tree,
                                   tier=tier,
                                   context=_run_context(),
                                   raw=getattr(result, "stdout", None),
-                                  run_id=run_id, release=release)
-            _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
+                                  run_id=run_id, release=release,
+                                  runner_exit=runner_exit)
+            filed = _axi().filed_summary(resp, summary)
+            _emit_ingest_axi("test", resp, filed, files, project_dir, args.agent,
                              warnings=(run_warnings
                                        + _axi().unit_run_wall_vs_cpu_warnings(
                                            tier, "bun", timing)),
                              run_id=run_id, name=name)
-            # A failing run exits non-zero even when the ingest succeeded —
-            # the exit code carries the RUNNER verdict, not the POST's.
-            if summary["failed"] > 0:
-                return 1
-            return 0 if resp.get("ok") else 1
+            # The exit carries the runner's verdict and the filed run's, and
+            # a refused ingest is never green.
+            return _axi().verb_exit(runner_exit, {**resp, "run": filed})
         # No XML → a hard collection/compile failure. Ingest as a FAILING compile:
         # one synthetic tsc-format diagnostic (so errorCount=1 and the card reads
         # red — never a misleading clean '0 errors') + the captured output as raw.
@@ -1503,15 +1583,15 @@ def cmd_test(args, tier=None):
                              synthetic + ("\n\n" + tail if tail else ""),
                              run_id=run_id, release=release)
         # CR-CRU-064 §S3 — the synthetic TS0000 ingest above is UNCHANGED
-        # (errorCount=1, red card); the envelope is additive and the exit code
-        # is still the ingest's own (AC5).
+        # (errorCount=1, red card); the envelope is additive. A runner that
+        # exited non-zero exits non-zero whatever the compile ingest answered.
         _emit_axi("test", False,
                   {"help": _axi().no_report_help("test", "junit.xml")},
                   _axi_context(project_dir, agent_id=args.agent),
                   run_warnings + [_axi().no_report_warning("test", "junit.xml",
                                                            result.returncode, tail)],
                   "[crucible] ERROR: no JUnit XML produced — ingested as compile")
-        return rc
+        return _axi().verb_exit(runner_exit, {"ok": rc == 0})
 
 
 def cmd_regression(args, verb="regression", tier: str | None = "regression",
@@ -1694,6 +1774,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
                 post_fn=_post, project_key=_project_key(project_dir),
                 agent_id=args.agent)
 
+        runner_exit = _axi().runner_exit_code(result.returncode)
         # Something WILL be ingested: the final count, then `ingesting…`.
         _axi().close_narration(narrator)
         # A filtered run in which nothing passed and nothing failed ran
@@ -1731,11 +1812,14 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
                     _raw_route_coverage_warning(raw_report["codec"], script))
             resp = _ingest_raw(project_dir, args.agent, raw_report, tier=tier,
                                context=_run_context(), run_id=run_id,
-                               release=release)
+                               release=release, runner_exit=runner_exit)
             summary = _decoded_summary(resp)
         else:
             summary, tree, files = _parse_junit_file(junit_path)
             _marry_failures(tree, getattr(result, "stdout", None))
+            # Every file bun could not load is a failing case of its own.
+            files += _add_load_error_cases(tree, summary,
+                                           getattr(result, "stdout", None))
             coverage = None
             if coverage_on:
                 lcov_path = os.path.join(coverage_dir, "lcov.info")
@@ -1745,8 +1829,12 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
                           f"{lcov_path}", file=sys.stderr)
             resp = _ingest_parsed(project_dir, args.agent, summary, tree,
                                   coverage, tier=tier, context=_run_context(),
-                                  run_id=run_id, release=release)
-        ok = bool(resp.get("ok")) and summary["failed"] == 0
+                                  run_id=run_id, release=release,
+                                  runner_exit=runner_exit)
+            # The envelope states the run as the board filed it.
+            summary = _axi().filed_summary(resp, summary)
+        exit_code = _axi().verb_exit(runner_exit, {**resp, "run": summary})
+        ok = exit_code == 0
         # §S2 — a GATE run's next step is derived from the run state it reached
         # (unrecorded / red / green); the plain `regression` verb keeps its
         # canned _HELP_STEPS entry, unchanged.
@@ -1755,7 +1843,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
                          help_steps=help_steps, warnings=run_warnings,
                          run_id=run_id, name=name, script=named_script)
-        return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
+        return exit_code
 
 
 def cmd_auto_ingest(args):
