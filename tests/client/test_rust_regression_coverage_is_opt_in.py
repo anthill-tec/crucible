@@ -519,6 +519,16 @@ class RustRegressionWithoutCoverageKeepsTheDiskGuardTest(_RustProject,
                          f"a run refused before it starts posts nothing; "
                          f"{_diagnostics(result)}")
 
+    def test_run_without_all_features_below_the_floor_is_not_guarded(self):
+        result = self.drive("--min-free-g", "50",
+                            agent="rust-regression-disk-unguarded")
+        self.assertEqual(
+            self.launches(), [_plain_nextest()],
+            f"a coverage-free run without --all-features is not disk-heavy, "
+            f"so free space below the floor still runs plain nextest; "
+            f"{_diagnostics(result)}")
+        self.assert_coverage_free_regression_filed(self.board, result)
+
     def test_all_features_run_with_the_floor_below_free_space_runs_plain_nextest(self):
         result = self.drive("--all-features", "--min-free-g", "10",
                             agent="rust-regression-disk-proceeds")
