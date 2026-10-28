@@ -139,15 +139,17 @@ async function getText(path: string): Promise<string> {
   return res.text();
 }
 
-/** The events list's brief of a project's newest event — the same brief the
+/** The events list's brief of one of a project's events — the same brief the
  *  projects list draws its `lastEvent` with — or null. */
-async function newestBrief(key: string): Promise<unknown> {
-  const body = JSON.parse(await getText(`/api/v2/events?project=${key}&limit=1`)) as {
+async function briefOf(key: string, id: string): Promise<unknown> {
+  const body = JSON.parse(
+    await getText(`/api/v2/events?project=${key}&limit=${Number.MAX_SAFE_INTEGER}`),
+  ) as {
     events: Array<Record<string, unknown>>;
   };
-  const first = body.events[0];
-  if (first === undefined) return null;
-  const { decisionSummary: _ignored, ...brief } = first;
+  const found = body.events.find((e) => e.id === id);
+  if (found === undefined) return null;
+  const { decisionSummary: _ignored, ...brief } = found;
   return brief;
 }
 
@@ -161,6 +163,10 @@ async function wholeHistoryProjects(archived: boolean): Promise<unknown[]> {
     const agents = store.listAgents(p.key);
     const events: RunEvent[] = store.listEvents(p.key, Number.MAX_SAFE_INTEGER);
     const last = events[0];
+    // The last RUN: the newest events-table row that is not a registration
+    // (`lifecycle`): a test run or a compile result. Milestones and gates
+    // live in their own tables and are never a run.
+    const lastRun = events.find((e) => e.kind === "test" || e.kind === "compile");
     const greenCovered = events.find((e) => e.coverage !== undefined);
     const byDay = new Map<string, number>();
     for (const r of store.listRollups(p.key)) {
@@ -185,7 +191,7 @@ async function wholeHistoryProjects(archived: boolean): Promise<unknown[]> {
       ...p,
       agentsOnline: agents.filter((a) => a.liveness !== "tombstoned").length,
       agentsTotal: agents.length,
-      lastEvent: last !== undefined ? await newestBrief(p.key) : null,
+      lastEvent: lastRun !== undefined ? await briefOf(p.key, lastRun.id) : null,
       latestGreenCoverage: greenCovered?.coverage ?? null,
       ...(greenCovered !== undefined ? { latestCoverageEventId: greenCovered.id } : {}),
       ...(coverageTrend.length > 0 ? { coverageTrend } : {}),
@@ -253,7 +259,7 @@ describe("the projects list is built from bounded reads", () => {
     const byKey = new Map(
       (live.projects as Array<Record<string, unknown>>).map((p) => [p.key as string, p]),
     );
-    expect((byKey.get(ALPHA)!.lastEvent as { kind: string }).kind).toBe("gate");
+    expect((byKey.get(ALPHA)!.lastEvent as { kind: string }).kind).toBe("test");
     expect((byKey.get(ALPHA)!.coverageTrend as unknown[]).length).toBe(7);
     expect((byKey.get(BETA)!.coverageTrend as unknown[]).length).toBe(4);
     expect(byKey.get(GAMMA)!.lastEvent).toBeNull();
