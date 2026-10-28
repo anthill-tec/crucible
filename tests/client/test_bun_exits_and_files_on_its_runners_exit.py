@@ -374,8 +374,7 @@ class RawRouteWithNoBoardShowsNoFiguresTest(_FakeRunnerProject, unittest.TestCas
         shutil.rmtree(self.project, ignore_errors=True)
 
     def test_a_declared_raw_report_target_with_no_board_shows_null_counts_and_exits_non_zero(self):
-        result = self.drive("e2e", "raw-route-no-board", FAKE_EXIT="0",
-                            CRUCIBLE_URL="", CRUCIBLE_BASE="")
+        result = self.drive("e2e", "raw-route-no-board", FAKE_EXIT="0")
         self.assertIn("ingest playwright: ok=False", result.stderr,
                       f"fixture guard: the run went the raw route and its "
                       f"ingest reached no board; {_diagnostics(result)}")
