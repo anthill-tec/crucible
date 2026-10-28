@@ -969,6 +969,11 @@ def cmd_pre_merge_gate(args):
     `regression --coverage`. On compile failure the compile-failure event is
     posted and regression is SKIPPED (non-zero exit); on compile success the
     regression run posts the tier:'regression' event with coverage attached."""
+    # A gate scoped to named suites that cannot run as asked is refused before
+    # anything else.
+    _axi().refuse_unrunnable_scoped_gate(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK, get=_get,
+        project_key=lambda: _project_key(_project_dir(args)))
     pd = _project_dir(args)
     # The gate files from its first step on (a failing compile files a compile
     # result), so an unattributed gate is refused before that step.
@@ -1506,6 +1511,7 @@ def main():
                      help="skip the fail-fast arduino-cli compile step")
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
+    _axi().add_gate_suites_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     r = sub.add_parser("register", parents=[common],

@@ -1434,6 +1434,19 @@ GATE_RELEASE_HELP = (
     "release: a gate naming one is exempt from pruning until that release "
     "records, and is retired the moment it does.")
 
+# The ONE `--suites` help text for `pre-merge-gate`, so all five clients
+# document the flag identically.
+GATE_SUITES_HELP = (
+    "Scope this gate to the named declared suites: their targets, separated "
+    "by commas, no spaces. The gate runs its first step as every gate "
+    "does, then only those suites; naming a target this client runs itself "
+    "runs its whole suite, which covers every one of its own targets. The "
+    "outcome is recorded as a scoped gate. Refused before anything runs for "
+    "an undeclared or excluded target, an empty, padded or repeated item, "
+    "beside --release, with no cycle (no --cycle and no binding), on a "
+    "board that does not record a gate's scope and suites, and on a project "
+    "that declares no suites. Omit it for a full gate.")
+
 # §S1 — the ONE `--release` help text for the TEST-RUN verbs, so all five
 # clients document the flag identically. Not the gate's text: a gate NAMES the
 # release it gates (its `version`), while a test run is FILED under one.
@@ -2513,6 +2526,35 @@ def emit_unattributed_run_refused_hard_stop(verb, refusal, context=None,
     return 1
 
 
+# A gate scoped to named suites that cannot run as asked. Raised by
+# `refuse_unrunnable_scoped_gate` as the gate's first act, converted by
+# `run_verb` before the outcome milestone, so a refusal runs nothing, files
+# nothing and posts no milestone.
+
+SCOPED_GATE_REFUSED_CODE = "scoped-gate-refused"
+
+
+class ScopedGateRefused(Exception):
+    """Raised when `pre-merge-gate --suites` cannot run as asked; `detail`
+    names the cause and `help[]` the next moves."""
+
+    def __init__(self, detail, help_steps):
+        self.detail = detail
+        self.help = list(help_steps)
+        super().__init__(detail)
+
+
+def emit_scoped_gate_refused_hard_stop(verb, refusal, context=None):
+    """Emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for a refused scoped gate, and return the non-zero exit code.
+    Nothing is run, nothing is filed from this path."""
+    emit_axi(verb or GATE_VERB, False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {SCOPED_GATE_REFUSED_CODE} \u2014 {refusal.detail}")
+    return 1
+
+
 def _hard_stop_context(args, project_key_fn, agent_id=None):
     """The best-effort `context` a hard-stopped verb's envelope carries.
 
@@ -2591,6 +2633,11 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
         return emit_release_run_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
             _hard_stop_context(args, project_key_fn))
+    except ScopedGateRefused as refusal:
+        return emit_scoped_gate_refused_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
     except UnattributedRunRefused as refusal:
         return emit_unattributed_run_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
@@ -6586,7 +6633,7 @@ def _adopt_suite_warnings(gate_warnings, envelope):
 
 
 def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
-                    crucible_url, warnings=()):
+                    crucible_url, warnings=(), named=None):
     """§S2 — the ADDITIVE composition: this stack's OWN whole-suite regression,
     plus one dispatched run for every declared suite another stack owns, in ONE
     envelope naming them all.
@@ -6610,9 +6657,21 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     never pooled into one total. A run that FAILED, that could not be RUN at
     all, that could not be dispatched, or that reported no counts makes the
     gate NOT ok and is NAMED in `warnings[]`: "a gate that ran a subset reports
-    as a gate that ran a subset"."""
+    as a gate that ran a subset".
+
+    `named` scopes the gate to those declared targets (`--suites`): only they
+    run. Naming an own-stack target runs the whole-suite run, which covers
+    every own-stack target, so all of them are recorded; naming only
+    dispatched targets skips it. Excluded targets are not listed."""
     rows, gate_warnings = [], list(warnings)
     ok, worst = True, 0
+    scope = GATE_SCOPE_FULL if named is None else GATE_SCOPE_SCOPED
+    run_whole = True
+    if named is not None:
+        run_whole = any(suite.gated and suite.stack == stack
+                        and suite.target in named for suite in suites)
+        suites = tuple(suite for suite in suites if suite.gated and (
+            suite.target in named or (run_whole and suite.stack == stack)))
     # What each gated suite did, in declaration order, for the outcome
     # milestone: its target, outcome, counts and the events its run filed.
     results = []
@@ -6621,21 +6680,24 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     # this run, so its outcome has to be known before they are named.
     covered = tuple(suite.target for suite in suites
                     if suite.gated and suite.stack == stack)
-    code, out, error = _captured_suite_run(whole_suite)
-    envelope = _suite_envelope(out)
-    whole_counts = _suite_counts(envelope)
-    _adopt_suite_warnings(gate_warnings, envelope)
     totals = {"passed": 0, "failed": 0, "pending": 0, "total": 0}
-    totals.update(whole_counts or {})
-    whole_ok, warning_code, detail = _run_outcome(code, whole_counts, error)
-    if not whole_ok:
-        gate_warnings.append(
-            _whole_suite_warning(warning_code, stack, covered, detail))
-        ok, worst = False, worst or (code or 0)
-    whole_outcome = GATE_OUTCOME_PASS if whole_ok else GATE_OUTCOME_FAIL
-    whole_events = filed_run_events()
+    whole_counts, whole_outcome, whole_events = None, None, []
+    if run_whole:
+        code, out, error = _captured_suite_run(whole_suite)
+        envelope = _suite_envelope(out)
+        whole_counts = _suite_counts(envelope)
+        _adopt_suite_warnings(gate_warnings, envelope)
+        totals.update(whole_counts or {})
+        whole_ok, warning_code, detail = _run_outcome(code, whole_counts,
+                                                      error)
+        if not whole_ok:
+            gate_warnings.append(
+                _whole_suite_warning(warning_code, stack, covered, detail))
+            ok, worst = False, worst or (code or 0)
+        whole_outcome = GATE_OUTCOME_PASS if whole_ok else GATE_OUTCOME_FAIL
+        whole_events = filed_run_events()
     events = list(whole_events)
-    if not covered:
+    if run_whole and not covered:
         # The whole-suite run covered no declared target, and it still ran:
         # it is represented under the stack's own whole-suite label.
         results.append(_gate_suite_result(whole_suite_label(stack),
@@ -6710,7 +6772,7 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     global _gate_suite_results
     _gate_suite_results = results
     emit_axi(verb, ok,
-             {"run": totals, "suites": rows, "events": events,
+             {"run": totals, "suites": rows, "events": events, "scope": scope,
               "help": run_help(verb, ok, totals["failed"], crucible_url)},
              context, gate_warnings,
              f"{verb}: ok={ok} suites={len(rows)} passed={totals['passed']} "
@@ -6739,6 +6801,120 @@ def _gate_suite_result(target, outcome, counts, events):
             "events": list(events)}
 
 
+# The health answer that says a board records a gate's scope and suites: its
+# `milestones.gate` names both.
+GATE_RECORD_CAPABILITY = ("scope", "suites")
+FULL_GATE_HELP = "or run the full gate: pre-merge-gate without --suites"
+
+
+def scoped_gate_targets(args):
+    """The targets `--suites` names, in the order given, or None for a full
+    gate."""
+    raw = getattr(args, "suites", None)
+    return None if raw is None else tuple(raw.split(","))
+
+
+def _backticked(targets):
+    return ", ".join(f"`{target}`" for target in targets)
+
+
+def refuse_unrunnable_scoped_gate(args, *, surface, stack, get, project_key):
+    """The first act of every client's `pre-merge-gate`: a gate scoped to
+    named suites (`--suites`) that cannot run as asked raises
+    `ScopedGateRefused`, before the unattributed-run refusal and before the
+    gate's first step, so it runs nothing and files nothing. A gate without
+    `--suites` is not checked.
+
+    Refused, each naming its cause: a project that declares no suites (a
+    surface that cannot enumerate a declaration declares none, so that client
+    refuses every `--suites`); a list with an empty, padded or repeated item;
+    `--suites` beside `--release`; a target the project does not declare, or
+    declares excluded; a board whose health does not state that it records a
+    gate's scope and suites; and a gate no cycle resolves for (no `--cycle`,
+    and the agent bound to none). `project_key` is a zero-argument callable,
+    asked only once the board has to be."""
+    targets = scoped_gate_targets(args)
+    if targets is None:
+        return
+    suites = declared_gate_suites(args, surface, stack)
+    if not suites:
+        raise ScopedGateRefused(
+            "this project declares no suites this client can enumerate, so a "
+            "gate scoped with --suites has nothing to name; refused before "
+            "anything ran",
+            ["run the full gate: pre-merge-gate without --suites",
+             f"declare the project's suites \u2014 "
+             f"{declared_tier_surface_line(surface, 'unit')}"
+             if surface.suites is not None else
+             "this client's declaration is its invocation, which names no "
+             "suite to scope to"])
+    gated = tuple(suite.target for suite in suites if suite.gated)
+    excluded = {suite.target for suite in suites if not suite.gated}
+    name_help = (f"name one or more of the declared gated targets: "
+                 f"{_backticked(gated)} \u2014 comma-separated, no spaces")
+    if any(not item.strip() for item in targets):
+        raise ScopedGateRefused(
+            "--suites has an empty item; refused before anything ran",
+            [name_help, FULL_GATE_HELP])
+    padded = [item for item in targets if item != item.strip()]
+    if padded:
+        raise ScopedGateRefused(
+            f"--suites has an item padded with whitespace "
+            f"({', '.join(repr(item) for item in padded)}); refused before "
+            f"anything ran",
+            [name_help, FULL_GATE_HELP])
+    repeated = sorted({item for item in targets if targets.count(item) > 1})
+    if repeated:
+        raise ScopedGateRefused(
+            f"--suites repeats {_backticked(repeated)}: name each suite once; "
+            f"refused before anything ran",
+            [name_help, FULL_GATE_HELP])
+    if getattr(args, "release", None):
+        raise ScopedGateRefused(
+            "--suites is refused beside --release: a release gate runs in "
+            "full; refused before anything ran",
+            ["drop --suites to gate the release in full",
+             "or drop --release to re-run named suites of a cycle's gate"])
+    for item in targets:
+        if item in excluded:
+            raise ScopedGateRefused(
+                f"the project declares `{item}` excluded from the gate, so a "
+                f"gate cannot be scoped to it; refused before anything ran",
+                [name_help, FULL_GATE_HELP])
+        if item not in gated:
+            raise ScopedGateRefused(
+                f"the project does not declare `{item}`, so a gate cannot be "
+                f"scoped to it; refused before anything ran",
+                [name_help, FULL_GATE_HELP])
+    health = get("/api/health")
+    milestones = health.get("milestones") if isinstance(health, dict) else None
+    recorded = milestones.get("gate") if isinstance(milestones, dict) else None
+    if not (isinstance(recorded, list)
+            and all(field in recorded for field in GATE_RECORD_CAPABILITY)):
+        raise ScopedGateRefused(
+            "the board does not state that it records a gate's scope and "
+            "suites (its /api/health names no milestones.gate with both), so "
+            "a scoped gate would be recorded as a full one; refused before "
+            "anything ran",
+            ["upgrade the board to one whose /api/health states "
+             "milestones.gate, then re-run", FULL_GATE_HELP])
+    if getattr(args, "cycle", None) is not None:
+        return
+    agent_id = getattr(args, "agent", None)
+    bound = None
+    if agent_id:
+        _known, bound = _bound_cycle_id(
+            get(f"/api/v2/agents?project={project_key()}"), agent_id)
+    if bound is None:
+        raise ScopedGateRefused(
+            "no cycle resolves for this gate: no --cycle was given and the "
+            "agent is bound to none, so its scoped result belongs to no CR; "
+            "refused before anything ran",
+            ["re-run with --cycle <id> naming the cycle this gate belongs to",
+             "or register the agent bound to that cycle first "
+             "(register --agent <agentId> --cycle <id>), then re-run"])
+
+
 def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
                     context, crucible_url):
     """§S1/§S2 — the GATE's regression step: the one composition all five gates
@@ -6755,7 +6931,8 @@ def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
         return whole_suite()
     return run_gate_suites(suites, stack=stack, verb=verb,
                            whole_suite=whole_suite, dispatch=dispatch,
-                           context=context, crucible_url=crucible_url)
+                           context=context, crucible_url=crucible_url,
+                           named=scoped_gate_targets(args))
 
 
 # ── CR-CRU-111 §S4 — a `unit` run that WAITS says so (AC6b) ───────────────
@@ -7827,6 +8004,7 @@ GATE_OUTCOME_PASS = "pass"  # noqa: S105
 GATE_OUTCOME_FAIL = "fail"
 # A gate that ran every declared suite.
 GATE_SCOPE_FULL = "full"
+GATE_SCOPE_SCOPED = "scoped"
 
 
 def head_commit(project_dir):
@@ -7957,7 +8135,9 @@ def record_gate_outcome(args, code, project_dir, ops):
     # failed tests though its exit was 0 (a gate that keeps going past test
     # failures to finish its coverage run exits 0).
     fields = {"outcome": GATE_OUTCOME_FAIL if code or failed else GATE_OUTCOME_PASS,
-              "passed": passed, "failed": failed, "scope": GATE_SCOPE_FULL}
+              "passed": passed, "failed": failed,
+              "scope": (GATE_SCOPE_FULL if scoped_gate_targets(args) is None
+                        else GATE_SCOPE_SCOPED)}
     # The suites the composition ran, each with its own result; a gate that
     # composed none records none.
     entries = (_gate_suite_entries(ops, _gate_suite_results)
@@ -8060,6 +8240,15 @@ def add_gate_cycle_arg(p):
     """CR-CRU-056 — bind `--cycle` on a GATED verb (test/regression/
     pre-merge-gate): the binding for the register-inside-the-run case."""
     p.add_argument("--cycle", type=int, help=GATE_CYCLE_HELP)
+
+
+def add_gate_suites_arg(p):
+    """Declare `--suites` on `pre-merge-gate`: the ONE declaration site for
+    the whole fleet, so all five clients spell the flag and its help
+    identically. Checked by `refuse_unrunnable_scoped_gate` before the gate
+    runs anything."""
+    p.add_argument("--suites", metavar="TARGETS", dest="suites",
+                   help=GATE_SUITES_HELP)
 
 
 def add_filing_cycle_arg(p):

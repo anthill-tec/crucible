@@ -2208,6 +2208,11 @@ def cmd_pre_merge_gate(args):
     cleaned to zero `-D warnings` by CR-NAI-305 (2026-06-05), so this is enforced by
     default; pass `--skip-clippy` only for a deliberate bypass.
     """
+    # A gate scoped to named suites that cannot run as asked is refused before
+    # anything else.
+    _axi().refuse_unrunnable_scoped_gate(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK, get=_get,
+        project_key=lambda: _project_key(_resolve_project_dir(args.project_dir)))
     project_dir = _resolve_project_dir(args.project_dir)
     # The gate files from its first step on (clippy files a lint result), so an
     # unattributed gate is refused before that step.
@@ -3195,6 +3200,7 @@ def main():
     )
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
+    _axi().add_gate_suites_arg(pmg)
     _add_project_dir_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 

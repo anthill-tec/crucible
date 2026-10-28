@@ -1930,6 +1930,11 @@ def cmd_pre_merge_gate(args):
     """ORCHESTRATOR pre-merge gate — the ONLY path that measures coverage (project policy:
     coverage reserved for the pre-merge gate). fail-fast `check` (tsc) → `regression
     --coverage`. A check failure aborts before the suite."""
+    # A gate scoped to named suites that cannot run as asked is refused before
+    # anything else.
+    _axi().refuse_unrunnable_scoped_gate(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK, get=_get,
+        project_key=lambda: _project_key(_resolve_project_dir(args.project_dir)))
     project_dir = _resolve_project_dir(args.project_dir)
     # A package dir that cannot be run in is refused before the board is asked
     # anything.
@@ -2862,6 +2867,7 @@ def main():
     pmg.add_argument("--skip-check", action="store_true", help="Bypass the fail-fast tsc check")
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
+    _axi().add_gate_suites_arg(pmg)
     _add_reports_arg(pmg)
     _add_bun_arg(pmg)
     _add_package_dir_arg(pmg)
