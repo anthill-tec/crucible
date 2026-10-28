@@ -1,6 +1,6 @@
 # CR-CRU-212 — every client's regression runs the whole suite without coverage unless asked
 
-**Type** feature · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-28
+**Type** feature · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — merged 2026-10-28 (plan 215, cycles 780–785, gate 9108/0: bun 4176/0, python 4932/0); filed 2026-10-28
 (requested by Model B, Sandesh #1492; user rulings 2026-10-28: delivered in 0.4.0, sequenced after
 CR-CRU-211; a coverage-only flag given without `--coverage` is refused, python's `--cov-source`
 included; rust's coverage-free run never fails fast and keeps its disk guard; settled at gap analysis
@@ -98,29 +98,29 @@ The root lines, maven's description and the flags' help (AC6).
 
 ## Acceptance criteria
 
-- [ ] **AC1** maven: `regression` without `--coverage`, over an all-green project whose `.env` sets
+- [x] **AC1** maven: `regression` without `--coverage`, over an all-green project whose `.env` sets
   `CRUCIBLE_COVERAGE_PROFILE` and whose build writes `target/jacoco-report/jacoco.csv`, runs maven with
   no `-P` coverage profile and files a `regression` run whose ingest body has no `coverage` key.
-- [ ] **AC2** rust: `regression` without `--coverage` runs
+- [x] **AC2** rust: `regression` without `--coverage` runs
   `cargo nextest run --workspace [--all-features|--features X] -P <profile> --no-fail-fast` — no
   `llvm-cov`, no `cargo clean` — clearing stale junit for the profile first, and files through
   `/api/v2/runs/parsed` a `regression` run with `files` and no `coverage` key, under `--cycle` and under
   `--release` alike; an `--all-features` run is disk-guarded by `--min-free-g`.
-- [ ] **AC3** For each of maven and rust, `regression --coverage` over a fixture that writes coverage
+- [x] **AC3** For each of maven and rust, `regression --coverage` over a fixture that writes coverage
   files the run with coverage, as today (maven: the profile from `--coverage-profile`, else
   `CRUCIBLE_COVERAGE_PROFILE`, else none with the build's own `jacoco.csv` collected; rust: llvm-cov's
   lcov).
-- [ ] **AC4** maven's `pre-merge-gate` still files coverage on a green run; bun's, python's, rust's and
+- [x] **AC4** maven's `pre-merge-gate` still files coverage on a green run; bun's, python's, rust's and
   arduino's still do (GREEN-GUARD).
-- [ ] **AC5** Refused with `coverage-flag-refused`, without `--coverage`, on `regression`: maven
+- [x] **AC5** Refused with `coverage-flag-refused`, without `--coverage`, on `regression`: maven
   `--coverage-profile X`; rust `--lcov-output X`, `--ignore-run-fail`, `--keep-target`; python
   `--cov-source X` — each: one `ok:false` envelope naming the flag and `--coverage`, exit non-zero, no
   request to the board, no lock file, no runner launched.
-- [ ] **AC6** Each of the five clients' `regression --help` lists `--coverage` with the shared
+- [x] **AC6** Each of the five clients' `regression --help` lists `--coverage` with the shared
   sentence; each client's root `--help` `regression` line, and maven's root description, say coverage
   is opt-in; `--coverage-profile`, `--cov-source` and rust's coverage-only flags say they apply only
   with `--coverage`.
-- [ ] **AC7** bun's, python's and arduino's `regression` without `--coverage` file no coverage, as
+- [x] **AC7** bun's, python's and arduino's `regression` without `--coverage` file no coverage, as
   today (GREEN-GUARD).
 
 **Tests re-targeted (sanctioned by this spec):** `clients-rust-mvn-crucible.test.ts`'s maven
@@ -128,6 +128,18 @@ The root lines, maven's description and the flags' help (AC6).
 rust `regression` case drops the now-refused `--keep-target` combination and its docstring stops calling
 `regression` `cmd_workspace_regression`; `test_client_tier_stamping`'s `EARNED_SITES_DRIVEN_ON_THE_WIRE`
 gains rust's coverage-free regression site.
+
+- *Recorded at merge.* Rulings in the cycles: the shared `--coverage` help is one sentence
+  (`REGRESSION_COVERAGE_HELP`) with one help constant and declarer per coverage tool — lcov (bun,
+  arduino), coverage.py, JaCoCo, llvm-cov — as the flag-help census requires; maven `--coverage` with no
+  profile anywhere still collects the build's own JaCoCo; rust's disk guard applies to an
+  `--all-features` run on both paths, exit 2, nothing posted; the tier census needed no new entry (the
+  coverage-free run stamps inside `_workspace_regression_run`). VERIFY's V1, fixed in cycle 785: a rust
+  regression accepts a junit only when written at or after its own start (to the second), so another
+  run's report is never filed as this one's — on the coverage path and the gate's whole-suite step too;
+  V2 pinned that a plain run without `--all-features` is not disk-guarded. Nits: arduino's `--coverage`
+  help no longer names `<native_dir>/coverage/lcov.info`; bun's, python's and arduino's root
+  `regression` lines say "--coverage adds …" rather than "coverage-free".
 
 ## Non-goals
 
