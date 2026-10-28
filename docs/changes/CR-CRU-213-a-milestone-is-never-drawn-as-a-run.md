@@ -35,12 +35,20 @@ own or none; and every other surface that reads `newestEvent` or filters by "not
 
 ## Acceptance criteria (draft — fixed at gap analysis)
 
-- [ ] **AC1** An active cycle holding a test run and a `pre-merge-gate` milestone draws one run chip,
-  the test run's (DOM).
-- [ ] **AC2** A project whose newest event is a milestone reports, as `lastEvent` on the projects read,
-  its newest test run; the rail reads that run's counts.
-- [ ] **AC3** A project with no test run reports no `lastEvent` (the rail reads "no runs yet"), even when
-  it holds milestones.
+The UI criteria are proved by BDD Playwright scenarios in the e2e suite (`tests/e2e/features/`, steps in
+`tests/e2e/steps/`, reusing the workflow steps), not by a visual check (user ruling 2026-10-28: a
+scenario checks the UI's output on every run, at no token cost). The e2e suite is outside the pre-merge
+gate (DN open question 5), so this CR's cycles and its VERIFY run those scenarios through the bun
+client's e2e verb themselves.
+
+- [ ] **AC1 (BDD)** Scenario: an active cycle holding a passing test run and a `pre-merge-gate`
+  milestone shows exactly one run chip on its Now-pane line, reading the test run's ratio — no `0/0`
+  chip.
+- [ ] **AC2 (BDD)** Scenario: after a CR is closed (its newest event a `cr-merged` milestone), the
+  project rail reads the newest test run's counts, never "green · 0/0".
+- [ ] **AC3** The projects read reports, as `lastEvent`, the project's newest test run when its newest
+  event is a milestone, and no `lastEvent` when it holds no test run (the rail then reads "no runs
+  yet").
 
 ## Non-goals
 
