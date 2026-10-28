@@ -485,7 +485,7 @@ export function pairTransitions(events) {
   const stemRaw = (agentId) => String(agentId).replace(/-(RED|GREEN|FIX)$/i, "");
   const stemKey = (agentId) => stemRaw(agentId).toLowerCase();
   const sorted = events
-    .filter((e) => e.kind === "test")
+    .filter(isTestRun)
     .slice()
     .sort((a, b) => a.timestamp - b.timestamp);
   const markers = [];
