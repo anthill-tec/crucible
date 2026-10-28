@@ -155,8 +155,11 @@ class ClientEmitSelfRoundTripThroughRealSeamTest(unittest.TestCase):
         # it, never frozen here: this test's subject is encode/decode fidelity,
         # and a literal would make it a second definition of a vocabulary
         # `clients/_crucible_axi.py` owns.
+        # Every envelope also names the board events the invocation filed;
+        # that list is likewise read from the module, never frozen here.
         expected_axi = {"verb": "status", "ok": True,
-                        "tier": axi_mod.ingested_tier(), **result_fields,
+                        "tier": axi_mod.ingested_tier(),
+                        "events": axi_mod.filed_run_events(), **result_fields,
                         "context": context, "warnings": warnings}
         decoded = axi_mod._toon().decode(stdout.getvalue())
 
