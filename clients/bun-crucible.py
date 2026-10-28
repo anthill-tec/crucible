@@ -952,8 +952,11 @@ def _marry_failures(tree, log_text):
 # bun's console marker for an error it caught outside any test — a file that
 # failed to load, threw at import, or rejected at import or after its tests.
 _UNHANDLED_MARKER = "# Unhandled error between tests"
-# A `<path>:` file header bun prints, flush left, before each file's results.
-_FILE_HEADER = re.compile(r"^(?P<path>[^\s#-][^\s]*):$")
+# A `<path>:` file header bun prints, flush left, before each file's results:
+# a path naming a JavaScript/TypeScript module — the only kind of file bun
+# runs as a test file. A test's own flush-left console line (`results:`)
+# names no such file, so it is never read as a header.
+_FILE_HEADER = re.compile(r"^(?P<path>[^\s#-]\S*\.[cm]?[jt]sx?):$")
 _BLOCK_RULE = re.compile(r"^-{10,}$")
 
 
@@ -1188,15 +1191,10 @@ def _decoded_summary(resp):
     """CR-CRU-015 §S2 — the counts the SERVER decoded, in the shape the ingest
     envelope reports. On the raw route the client never parsed the report, so
     what the run envelope states is what the board actually stored — a refused
-    ingest carries no `run` and reports zeros beside its own `error`."""
-    run = resp.get("run") or {}
-
-    def count(key):
-        value = run.get(key)
-        return value if isinstance(value, int) else 0
-
-    return {"passed": count("passed"), "failed": count("failed"),
-            "pending": count("pending"), "total": count("total")}
+    or unreachable ingest carries no `run`, so its counts are null beside its
+    own `error`: no figures, never a made-up 0."""
+    return (_axi().filed_summary(resp)
+            or {"passed": None, "failed": None, "pending": None, "total": None})
 
 
 def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None,
