@@ -1,6 +1,6 @@
 # CR-CRU-213 — a milestone is never drawn as a run
 
-**Type** fix · **Points** 5 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-28
+**Type** fix · **Points** 5 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — merged 2026-10-28 (plan 212, cycles 766–770, gate 8953/0: bun 4176/0, python 4777/0; e2e 121 passed); filed 2026-10-28
 (user-raised 2026-10-28 from the browser; user rulings: a patch CR into 0.4.0, sequenced next; a run is a
 test run; the status line reads the newest run or compile result, and words a compile result and an
 aborted run as themselves; the collapsed cue counts test runs; UI criteria are BDD scenarios; re-scored
@@ -83,25 +83,25 @@ The UI criteria are proved by BDD Playwright scenarios in the e2e suite (`tests/
 `test:e2e`, which is outside the pre-merge gate (DN open question 5), so this CR's cycles and its VERIFY
 run them through the bun client's `e2e` verb, ingested under the `e2e` tier.
 
-- [ ] **AC1 (e2e)** Scenario: an active cycle holding a passing 5/5 test run, a `pre-merge-gate`
+- [x] **AC1 (e2e)** Scenario: an active cycle holding a passing 5/5 test run, a `pre-merge-gate`
   milestone and a compile result (the harness's `ingestCompile` gains an optional `context`, additively)
   — the `open-span` holds exactly one `linked-run-row`, whose `data-run-id` is the test run's and which
   reads `5/5`; no row carries the milestone's or the compile's id. A second scenario: an active cycle
   holding only a milestone shows no `open-span`.
-- [ ] **AC2 (e2e)** Scenario: once that cycle is done, collapsing its declared marker on the Runs tab
+- [x] **AC2 (e2e)** Scenario: once that cycle is done, collapsing its declared marker on the Runs tab
   reads `▸ 1 runs` (reusing the cycle-run-navigation steps).
-- [ ] **AC3 (e2e)** Scenario, on the Project pane card's status line: after a `cr-merged` milestone and a
+- [x] **AC3 (e2e)** Scenario, on the Project pane card's status line: after a `cr-merged` milestone and a
   fresh agent's registration, it reads `✓ green · 5/5 · just now`; after a rustc compile result with one
   error, `✗ 1 error · just now` with `app-ratio-fail`; after a warnings-only compile result,
   `✓ compiled · just now` with `app-ratio-pass`.
-- [ ] **AC4 (e2e)** Scenario: an aborted run on an active cycle reads `aborted` on its chip, and the
+- [x] **AC4 (e2e)** Scenario: an aborted run on an active cycle reads `aborted` on its chip, and the
   status line reads `⊘ aborted`.
-- [ ] **AC5** The projects read reports, as `lastEvent`, the newest test run or compile result — never a
+- [x] **AC5** The projects read reports, as `lastEvent`, the newest test run or compile result — never a
   milestone, gate or registration — and `null` for a project holding neither; same scope as today (an
   archived project's `lastEvent` stays `null` in the archived listing); the read is bounded (rows read do
   not grow with history) and touches no suite, case or detail row; `lastActivity` still counts every
   event (bun, against the board).
-- [ ] **AC6** `projectRollupLabel` words a compile brief `errors: 0, warnings: 3` as `✓ compiled · <age>`,
+- [x] **AC6** `projectRollupLabel` words a compile brief `errors: 0, warnings: 3` as `✓ compiled · <age>`,
   `errors: 1` as `✗ 1 error · <age>`, `errors: 3` as `✗ 3 errors · <age>`, an aborted brief as
   `⊘ aborted · <age>`, and a brief with no `kind` as today; `ProjectStatusLine` gives a compile brief with
   errors `app-ratio-fail` and without `app-ratio-pass`, and an aborted brief neither (bun unit, in the
@@ -112,6 +112,16 @@ run them through the bun client's `e2e` verb, ingested under the `e2e` tier.
 ("a project whose newest event is a milestone … answers the milestone's literal brief") pins the newest
 test run's brief instead; `projects-list-bounded-reads` takes its oracle's `lastEvent` from the newest
 non-`lifecycle` events row and expects `kind: "test"` where it expected `"gate"`.
+
+- *Recorded at merge.* Rulings in the cycles: an aborted run is a valid `lastEvent`, a registration or
+  unregistration never; one helper (`projectStatus`) decides the status line's text and tone; "compiled"
+  carries no warning count and an error line shows no warnings; one shared predicate (`isTestRun`) serves
+  `workflowLens`, `linkedRunsFor` and `pairTransitions`; the aborted chip is muted, neither ratio colour.
+  Sanctioned re-targets: `67dabc1`. Harness: `ingestCompile` takes an optional `context` (`feff870`).
+  The test type mirror (`tests/app-logic.d.ts`) was written through `ctx_edit` after the pi-lens edit hook
+  refused it as redefining exports — the mirror the finding required. Deferred: the e2e ingest counts
+  Gherkin steps (1404) where Playwright counts tests (121) — the client's playwright decoding, not this
+  CR's. Live after a board restart and a page reload.
 
 ## Non-goals
 
