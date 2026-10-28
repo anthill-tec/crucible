@@ -206,6 +206,9 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 ## Deferred — post-0.2.0
 
+- 2026-10-28 — **mvn `auto-ingest` with no report on disk prints no envelope** (found by CR-CRU-210's
+  RED census): it exits 1 after falling back to a compile capture, with nothing machine-readable on
+  stdout. Every other path of every client emits one envelope. A candidate patch CR.
 - 2026-10-28 — **pre-existing pyright findings** in `tests/client/test_client_limits_resolve_from_configuration.py`
   (an `assertIn` container typed `Any | None`, around lines 751/754; pi-lens reports 53). They predate
   CR-CRU-207 (`git diff develop` showed its only change there was the limit list). A test-hygiene cleanup.
