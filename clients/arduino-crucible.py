@@ -595,10 +595,11 @@ _NAME_HINT = ("`--name` takes comma-separated test-name fragments: "
               "`--name stall,limit`, each matching [A-Za-z0-9_]+ with an "
               "optional trailing *")
 _TESTS_HELP = ("run only these test files, by stem (test_motor), resolved "
-               "against the Makefile under --dir; handed to `make` as TESTS")
+               "against the Makefile under --dir; handed to `make` as TESTS "
+               "(see the make contract in --help)")
 _NAME_HELP = ("run only the tests whose name or file contains one of these "
               "comma-separated fragments; handed to `make` as TEST_NAME "
-              "(Unity's -f)")
+              "(Unity's -f; see the make contract in --help)")
 
 
 def _add_narrowing_args(p):
@@ -1567,6 +1568,43 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
 )
 
 
+# The ROOT help's description, printed as written (RawDescriptionHelpFormatter)
+# so the make contract keeps one variable per line and its Makefile snippet
+# keeps its shape.
+_CLI_DESCRIPTION = (
+    "Arduino-firmware Crucible stack script: runs a project's native host tests\n"
+    "through its own Makefile (`make junit`) and ingests the JUnit result to\n"
+    "Crucible; `check` compiles the sketch with arduino-cli.\n"
+    "Run `<verb> --help` for a verb's own flags.\n"
+    "\n"
+    "The make contract: the variables a native run hands the Makefile under --dir.\n"
+    "REPORTS_DIR   the run's own reports directory: write the JUnit TEST-*.xml\n"
+    "              there. A Makefile that ignores it writes to its own reports/;\n"
+    "              the client moves that output in and warns.\n"
+    "COVERAGE_DIR  on a coverage run, the directory to write lcov.info to; ignored,\n"
+    "              it is moved in and warned about the same way.\n"
+    "TESTS         the space-separated test-file stems given to --tests: build and\n"
+    "              run only those test binaries. Declare it with `TESTS ?=`, so the\n"
+    "              value from the environment wins over the Makefile's default (a\n"
+    "              plain `TESTS =` would override it).\n"
+    "TEST_NAME     the comma-separated names given to --name: hand it to each test\n"
+    "              binary, quoted, as Unity's -f, which runs the tests whose name\n"
+    "              or file contains one of them. The binaries must be built with\n"
+    "              UNITY_USE_COMMAND_LINE_ARGS and from a runner that parses its\n"
+    "              options (the Unity runner generator's cmdline_args option).\n"
+    "TESTS and TEST_NAME are never inherited from the shell: the client sets each\n"
+    "from its own flag or removes it. For example:\n"
+    "\n"
+    "    TESTS ?= $(basename $(notdir $(wildcard test_*.c)))\n"
+    "    ./build/$$t $(if $(TEST_NAME),-f \"$(TEST_NAME)\")\n"
+    "\n"
+    "One JUnit report per test file, named TEST-<stem>.xml, is recommended; a\n"
+    "combined report also works, as the client reads each case's classname.\n"
+    "A Makefile that ignores TESTS or TEST_NAME is named in a warning.\n"
+    "\n" + _axi().BOARD_CONFIGURATION_HELP
+)
+
+
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--agent",
@@ -1579,8 +1617,8 @@ def main():
                         help="subproject dir with .env + tests/native "
                              "(default: $ARDUINO_CRUCIBLE_PROJECT_DIR or CWD)")
     p = argparse.ArgumentParser(
-        description=("Arduino-firmware Crucible stack script.\n\n"
-                     + _axi().BOARD_CONFIGURATION_HELP))
+        description=_CLI_DESCRIPTION,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     # §S14 — subcommand is OPTIONAL: a bare invocation falls through to the
     # no-arg live dashboard, never argparse's required-subcommand error.
     sub = p.add_subparsers(dest="cmd", required=False)
