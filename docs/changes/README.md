@@ -198,10 +198,10 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-207](CR-CRU-207-an-ingest-is-bounded.md) | an ingest is bounded: its body size and the output a run keeps | feature | PENDING | 152 | 8 (0.4.0) |
 | [CR-CRU-208](CR-CRU-208-a-runner-that-failed-is-never-filed-as-green.md) | a runner that failed is never filed as green | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-210](CR-CRU-210-a-scoped-re-run-after-a-red-gate-closes-the-cr-suite-by-suite.md) | a scoped re-run after a red gate closes the CR, suite by suite | fix | PENDING | — | 8 (0.4.0) |
+| [CR-CRU-211](CR-CRU-211-an-arduino-agent-runs-only-its-own-native-tests.md) | an arduino agent runs only its own native tests | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-204](CR-CRU-204-the-bun-and-python-clients-send-their-reports.md) | the bun and python clients send their runners' reports and parse nothing | feature | PENDING | 152, 207, 208 | 8 (0.4.0) |
 | [CR-CRU-206](CR-CRU-206-the-maven-rust-and-arduino-clients-send-their-reports.md) | the maven, rust and arduino clients send their runners' reports and parse nothing | feature | PENDING | 204, 208 | 8 (0.4.0) |
 | [CR-CRU-209](CR-CRU-209-repeated-runs-on-the-active-cycle-fold-into-one-chip.md) | repeated runs on the active cycle fold into one chip | fix | PENDING | — | 9 (0.5.0) |
-| [CR-CRU-211](CR-CRU-211-an-arduino-agent-runs-only-its-own-native-tests.md) | an arduino agent runs only its own native tests | feature | PENDING | — | 9 (0.5.0) |
 
 ## Deferred — post-0.2.0
 

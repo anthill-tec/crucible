@@ -1,7 +1,8 @@
 # CR-CRU-211 — an arduino agent runs only its own native tests
 
-**Type** feature · **Points** 3 · **Wave** 9 (0.5.0) · **Depends on** — · **Status** PENDING — filed 2026-10-28
-(requested by Model B, Sandesh #1489; release ruled by the user 2026-10-28; gap analysis pending)
+**Type** feature · **Points** 3 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-28
+(requested by Model B, Sandesh #1489; user ruling 2026-10-28: delivered in 0.4.0, sequenced straight after
+CR-CRU-210; gap analysis pending)
 
 ## Problem
 
