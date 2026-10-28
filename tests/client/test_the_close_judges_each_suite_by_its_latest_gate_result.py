@@ -429,6 +429,30 @@ class BunClosesSuiteBySuiteTest(_EveryClientClosesSuiteBySuite):
 class PythonClosesSuiteBySuiteTest(_EveryClientClosesSuiteBySuite):
     CLIENT = "python"
 
+    def test_the_full_gate_help_says_this_client_cannot_run_a_scoped_gate(self):
+        """python enumerates no declaration, so the red suite is not
+        undeclared: the help gives the real cause \u2014 this client cannot run
+        a scoped gate \u2014 and names a full gate."""
+        red, other = self.gated
+        cr = "close-python-cannot-scope"
+        plan_id = self._history(
+            cr,
+            full(entry(red, "fail"), entry(other, "pass")),
+            scoped(entry(other, "pass")))
+        result, axi = self._close(cr, "feedc0de0012")
+        _error, help_ = self.assertRefused(cr, plan_id, result, axi)
+        self.assertHelpNamesAFullGate(help_)
+        self.assertTrue(
+            any(GATE_TYPE in line and re.search(r"\bfull\b", line)
+                and re.search(r"cannot run a scoped gate", line)
+                for line in help_),
+            f"python: the full-gate help says this client cannot run a "
+            f"scoped gate; help={help_!r}")
+        self.assertFalse(
+            any(re.search(r"no longer declared", line) for line in help_),
+            f"python: the red suite was never undeclared, so the help does "
+            f"not say it is; help={help_!r}")
+
 
 class RustClosesSuiteBySuiteTest(_EveryClientClosesSuiteBySuite):
     CLIENT = "rust"

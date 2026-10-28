@@ -53,6 +53,7 @@ from tests.client.test_an_unattributed_run_is_refused_while_a_cycle_is_active im
     _call,
 )
 from tests.client.test_client_fleet_envelope_census import (
+    _UNREACHABLE_CRUCIBLE_URL,
     CLIENT_FILES,
     _load_toon_module,
     _make_project_dir,
@@ -383,6 +384,32 @@ class _AScopedGateRefusal(unittest.TestCase):
         self.assertEqual(filed, [],
                          f"{self.CLIENT}: nothing was filed and no milestone "
                          f"posted to the board; agent={agent}")
+
+    def test_a_board_whose_health_goes_unanswered_is_refused_naming_that(self):
+        """No board listens at the declared address, so its /api/health is
+        never answered: the refusal says the health could not be read, with
+        the transport's error, rather than that the board lacks the
+        capability."""
+        first, _second = self.targets["gated"]
+        _agent, result, axi, ran = self._drive(
+            "no-answer", first, board=_UNREACHABLE_CRUCIBLE_URL,
+            key="scoped-gate-no-answer-key")
+        text = self.assertTypedRefusal(result, axi)
+        self.assertEqual(ran, [], f"{self.CLIENT}: nothing ran; "
+                                  f"{self._transcript(result)}")
+        if self.CLIENT == "python":
+            self.assertRegex(text.lower(), DECLARES_NO_SUITES,
+                             f"python: error+help={text!r}")
+            return
+        self.assertCause(text, r"health could not be read",
+                         "the board's health went unanswered")
+        self.assertIn("connection failed", text,
+                      f"{self.CLIENT}: the refusal carries the transport's "
+                      f"error; error+help={text!r}")
+        self.assertNotRegex(
+            text, r"does not state",
+            f"{self.CLIENT}: an unanswered board is not one that lacks the "
+            f"capability; error+help={text!r}")
 
 class BunRefusesAScopedGateItCannotRunTest(_AScopedGateRefusal):
     CLIENT = "bun"
