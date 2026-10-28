@@ -103,6 +103,11 @@ PLENTY_FREE_G = 5000
 # A test case only a STALE report holds: its name on the wire means a report
 # from an earlier run was read as this one's.
 STALE_CASE = "left_from_an_earlier_run"
+# A test case only a report ANOTHER run wrote moments ago holds: its name on
+# the wire means that run's report was filed as this one's.
+ANOTHER_RUNS_CASE = "written_by_another_run"
+# The warning code of a run that wrote no report of its own.
+NO_REPORT_CODE = "no-test-reports"
 
 # Keys that would let the shell running this suite decide where the client
 # looks or how it files: scrubbed from every drive.
@@ -247,19 +252,20 @@ class _RustProject:
         return [json.loads(line) for line in path.read_text().splitlines()
                 if line.strip()]
 
-    def plant_stale_junit(self, profile):
-        """A junit an earlier run left for `profile`, an hour old, holding a
-        case no run of this suite writes."""
+    def plant_stale_junit(self, profile, age_s=3600, case=STALE_CASE):
+        """A junit another run left for `profile`, `age_s` seconds old (an
+        hour by default), holding `case` — a case no run of this suite
+        writes."""
         directory = Path(self.project, "target", "nextest", profile)
         directory.mkdir(parents=True, exist_ok=True)
         junit = directory / "junit.xml"
         junit.write_text(
             '<?xml version="1.0"?><testsuites><testsuite name="stale" '
-            f'tests="1" failures="0"><testcase name="{STALE_CASE}" '
+            f'tests="1" failures="0"><testcase name="{case}" '
             'classname="stale-crate::old" time="0.001"></testcase>'
             '</testsuite></testsuites>')
-        an_hour_ago = time.time() - 3600
-        os.utime(junit, (an_hour_ago, an_hour_ago))
+        then = time.time() - age_s
+        os.utime(junit, (then, then))
         return junit
 
     def ingests(self, board):
@@ -421,6 +427,62 @@ class RustRegressionWithoutCoverageClearsStaleJunitTest(_RustProject,
                             agent="rust-regression-stale-named",
                             FAKE_NO_REPORT="1")
         self.assert_stale_report_not_read(result, stale)
+
+
+# ── a report another run wrote moments ago is never this run's ─────────
+
+class RustRegressionFilesOnlyItsOwnReportTest(_RustProject, unittest.TestCase):
+    """A junit too young for the stale-report clearing — another run wrote it
+    seconds before this one started — is not this run's report. A plain
+    `regression` whose suite run writes none takes the no-report path: it
+    files nothing, aborts the run it opened and exits non-zero, and it leaves
+    the other run's report where that run wrote it."""
+
+    # Seconds old: well inside the clearing's window, so only the run's own
+    # start time can tell the report is not this run's.
+    AGE_S = 5
+
+    def setUp(self):
+        self.board = RecordingBoard()
+        self.addCleanup(self.board.close)
+        self.make_project(self.board.url, "rust-regression-own-report")
+
+    def test_a_report_another_run_wrote_seconds_ago_is_never_filed(self):
+        planted = self.plant_stale_junit("ci", age_s=self.AGE_S,
+                                         case=ANOTHER_RUNS_CASE)
+        result = self.drive(agent="rust-regression-own-report",
+                            FAKE_NO_REPORT="1")
+        wire = json.dumps([b for _, b in self.board.posts()])
+        self.assertNotIn(
+            ANOTHER_RUNS_CASE, wire,
+            f"a report another run wrote is never filed as this run's; "
+            f"{_diagnostics(result)}")
+        self.assertEqual(
+            self.ingests(self.board), [],
+            f"a run that wrote no junit of its own files nothing; "
+            f"{_diagnostics(result)}")
+        self.assertNotEqual(result.returncode, 0,
+                            f"a run with no report of its own is a failure; "
+                            f"{_diagnostics(result)}")
+        self.assertEqual(_envelope_count(result.stdout), 1,
+                         f"exactly one envelope; {_diagnostics(result)}")
+        envelope = _envelope(result.stdout) or {}
+        self.assertEqual(
+            (envelope.get("verb"), envelope.get("ok")), ("regression", False),
+            f"an ok:false regression envelope; envelope={envelope!r}")
+        codes = [w.get("code") for w in envelope.get("warnings") or []
+                 if isinstance(w, dict)]
+        self.assertIn(NO_REPORT_CODE, codes,
+                      f"the run takes the no-report path; envelope={envelope!r}")
+        self.assertEqual(
+            len(self.board.aborts()), 1,
+            f"the run it opened is aborted, once; "
+            f"posts={[p for p, _ in self.board.posts()]!r} "
+            f"{_diagnostics(result)}")
+        self.assertTrue(
+            planted.exists(),
+            f"the other run's report stays where that run wrote it; "
+            f"{_diagnostics(result)}")
 
 
 # ── the disk guard on an `--all-features` build ────────────────────────────
