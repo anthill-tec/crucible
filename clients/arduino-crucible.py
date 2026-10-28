@@ -305,9 +305,14 @@ def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
 # ── JUnit parsing ────────────────────────────────────────────────────────────
 
 
-def _parse_junit(path):
+def _parse_junit(path, cases=None):
     """JUnit (the native harness shape) -> (summary, tree, files) for
     /api/v2/runs/parsed.
+
+    `cases`, when given, is a list each testcase is appended to, in report
+    order, as `(name, file stem)` — the stem read from the case's own
+    `classname` or `file`, None when it carries neither (the suite name is
+    never taken for a file stem). The return value is the same either way.
 
     CR-CRU-051 §S1 — `files` is the DISTINCT-SOURCE count for THIS report,
     mirroring `bun-crucible.py::_parse_junit_file` (the reference). RESOLVED
@@ -331,6 +336,9 @@ def _parse_junit(path):
             source = tc.get("file") or tc.get("classname") or suite.get("name")
             if source:
                 files.add(source.replace("\\", "/"))
+            if cases is not None:
+                cases.append((tc.get("name", "?"),
+                              _file_stem(tc.get("classname") or tc.get("file"))))
             bad = tc.find("failure") is not None or tc.find("error") is not None
             total += 1
             # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase is PENDING, never
@@ -357,6 +365,15 @@ def _parse_junit(path):
     # `summary` IS the /api/v2/runs/parsed payload's summary field verbatim, and
     # CR-CRU-047 §S2 keeps this count out of the wire.
     return summary, tree, len(files)
+
+
+def _file_stem(source):
+    """A case's file stem: the basename of its `classname`/`file` without its
+    extension, or None when there is none to read."""
+    if not source:
+        return None
+    stem = os.path.splitext(os.path.basename(source.replace("\\", "/")))[0]
+    return stem or None
 
 
 def _collect_lcov(path):
@@ -697,6 +714,56 @@ def _ignored_contract_warning(variable, native_dir, fixed, moved_to):
                       f"run writes there directly."}
 
 
+def _ignored_narrowing_warnings(args, cases):
+    """Judge the cases a narrowed run produced against the flags it was given,
+    and return one warning per narrowing variable the Makefile ignored, each
+    also printed to stderr so a run that emits no envelope still shows it.
+
+    TESTS (from `--tests`) was ignored when a case's file stem is known and is
+    not among the stems; a case with no readable file stem is not judged.
+    TEST_NAME (from `--name`) was ignored when a case's name and file stem
+    contain no element's part before `*` — Unity's `-f` also matches the
+    source file's path, so a whole file run because its stem matched is
+    honoured; an element that is just `*` matches every case."""
+    warnings = []
+    stems = getattr(args, "tests", None)
+    if stems:
+        unasked = []
+        for _name, stem in cases:
+            if stem is not None and stem not in stems and stem not in unasked:
+                unasked.append(stem)
+        if unasked:
+            print(f"[crucible] WARN: the Makefile ignored TESTS ({' '.join(stems)}): "
+                  f"it ran cases of {', '.join(unasked)}", file=sys.stderr)
+            warnings.append({
+                "code": "makefile-ignored-tests",
+                "detail": f"the Makefile ignored TESTS={' '.join(stems)!r}: it ran "
+                          f"cases of {', '.join(unasked)}, which were not asked "
+                          f"for. Honour TESTS in the Makefile (`TESTS ?=`) so a "
+                          f"narrowed run builds only those test files."})
+    name = getattr(args, "name", None)
+    if name is not None:
+        elements = name.split(",")
+        prefixes = [element.split("*", 1)[0] for element in elements]
+        unmatched = next(
+            (case for case, stem in cases
+             if not any(prefix in case or (stem is not None and prefix in stem)
+                        for prefix in prefixes)),
+            None)
+        if unmatched is not None:
+            print(f"[crucible] WARN: the Makefile ignored TEST_NAME "
+                  f"({', '.join(elements)}): it ran {unmatched}, which matches "
+                  f"none of them", file=sys.stderr)
+            warnings.append({
+                "code": "makefile-ignored-test-name",
+                "detail": f"the Makefile ignored TEST_NAME={name!r}: it ran "
+                          f"{unmatched}, whose name and file stem contain none "
+                          f"of {', '.join(elements)}. Hand TEST_NAME to the "
+                          f"Unity runner as -f \"$(TEST_NAME)\" so a narrowed "
+                          f"run runs only the matching tests."})
+    return warnings
+
+
 def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                            preflight_warnings=(), target="junit", identity=None):
     """CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight
@@ -775,8 +842,9 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
     tree = []
     files = 0
+    cases = []
     for junit in reports:
-        s, t, f = _parse_junit(junit)
+        s, t, f = _parse_junit(junit, cases)
         # CR-CRU-050 §S1 — `pending` MUST be carried forward here too; without
         # it the per-file parse fix is silently undone by the aggregation and
         # the envelope still reports pending=0.
@@ -789,6 +857,9 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
         # harness that repeated a source across reports would over-count.
         files += f
         tree.extend(t)
+    # A Makefile that ignored TESTS or TEST_NAME is named, before the
+    # ran-nothing check so the warning rides every envelope this run emits.
+    preflight_warnings += _ignored_narrowing_warnings(args, cases)
     # A narrowed run whose reports hold zero cases ran nothing whatever
     # `make`'s exit: Unity with a `-f` that matches nothing exits 0.
     if (_axi().ran_nothing(run.returncode, summary["total"])
