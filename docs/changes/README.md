@@ -199,6 +199,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-208](CR-CRU-208-a-runner-that-failed-is-never-filed-as-green.md) | a runner that failed is never filed as green | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-204](CR-CRU-204-the-bun-and-python-clients-send-their-reports.md) | the bun and python clients send their runners' reports and parse nothing | feature | PENDING | 152, 207, 208 | 8 (0.4.0) |
 | [CR-CRU-206](CR-CRU-206-the-maven-rust-and-arduino-clients-send-their-reports.md) | the maven, rust and arduino clients send their runners' reports and parse nothing | feature | PENDING | 204, 208 | 8 (0.4.0) |
+| [CR-CRU-209](CR-CRU-209-repeated-runs-on-the-active-cycle-fold-into-one-chip.md) | repeated runs on the active cycle fold into one chip | fix | PENDING | — | 9 (0.5.0) |
 
 ## Deferred — post-0.2.0
 
@@ -211,10 +212,6 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   nothing, the board's figures are the only figures. (b) nextest 0.9.130 writes no testcase for an
   `#[ignore]`d test, so the rust client's comment that it emits `<skipped/>` is wrong at that version.
   (c) surefire 3.5.4 ignored `-Dsurefire.reportsDirectory`, and failsafe also writes under `target/`.
-- 2026-10-27 — **the Now pane's run chips cannot tell repeated runs apart** (user-raised, a fix CR for a
-  release after 0.4.0). A VERIFY agent that runs one module three times shows three identical
-  `14/14` chips, which read as a duplicated run though each is its own run id. Show each chip's time,
-  or fold identical repeats into a count (`14/14 ×3`). To be filed at the next planning review.
 - 2026-09-18 — *resolved:* the `test-targets.ts` wait-blindness became **CR-CRU-144**; the BDD
   run-identity gap became a §S3 AC and shipped in CR-CRU-015 (cycle C3). Both entries deleted per
   the register's own rule — memory holds only what the repo does not yet track.
