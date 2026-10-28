@@ -208,6 +208,11 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 ## Deferred — post-0.2.0
 
+- 2026-10-28 — **the python client cannot discover with a top-level directory** (CR-CRU-214's VERIFY, V1):
+  `test --start-dir tests/client` runs unittest discovery with no `-t`, so the `tests/client` package —
+  and its isolation from the live project — is imported only incidentally (the guard then fails closed).
+  The gate's declared `test:client` passes `-t .`. A `--top-level-dir` flag (or `-t` defaulting to the
+  project root for a start dir beneath it) would change discovery for every python project: a candidate CR.
 - 2026-10-28 — **the e2e ingest counts Gherkin steps, not tests** (CR-CRU-213's VERIFY, V4): the bun
   client's `e2e` run of the Playwright/bddgen suite files 1404 cases where Playwright reports 121 tests,
   so the board's e2e figures do not match the runner's own summary. A candidate fix in the playwright
