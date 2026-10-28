@@ -55,8 +55,12 @@ one whole-suite run.
   a well-formed verdict, and refuses the post (400, nothing recorded) when either is ill-formed — a
   verdict-bearing field half-stated states nothing. Well-formed: `scope` is `full` or `scoped`; each
   entry has a non-empty `target`, an `outcome` of `pass` or `fail`, `passed` and `failed` both
-  non-negative integers or both absent (absent only on `fail`), and `failingTests` a list of strings.
-  The store writes and reads them in the milestone's payload — no column, no migration.
+  non-negative integers or both absent (absent only on `fail`), and `failingTests` a list of strings
+  (its non-empty members kept, as the top-level list's are); an entry keeps only those keys. Each of
+  `scope` and `suites` is optional — `suites` may come without `scope` — but `suites`, when present,
+  is a non-empty list, and a `null` for either is ill-formed. Both sit at the top level of the record,
+  beside the verdict, and are dropped with a verdict that is not well-formed (as today's gate fields
+  are). The store writes and reads them in the milestone's payload — no column, no migration.
   `/api/health` states the capability beside `codecs`: `milestones: { gate: ["scope", "suites"] }`.
 
 **A run names its events.** Every client envelope states `events`: the board's event id of each run
