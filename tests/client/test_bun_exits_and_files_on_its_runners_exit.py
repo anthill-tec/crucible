@@ -347,6 +347,54 @@ class RunnerExitOnARealBoardTest(_FakeRunnerProject, unittest.TestCase):
                            failed=0, where="the envelope's run")
 
 
+# ── The raw-report route with no board ──────────────────────────────────────
+
+class RawRouteWithNoBoardShowsNoFiguresTest(_FakeRunnerProject, unittest.TestCase):
+    """On the Playwright raw-report route the board decodes the report; when
+    no board answers, the ingest response carries no `run` and there are no
+    counts to state. The envelope's `run` then carries no figures — null, as
+    the board-decoded routes of the other clients state it — never zeros the
+    client made up, and a run that reached no board never exits green."""
+
+    PROJECT_KEY = "raw-route-no-board-key"
+
+    def setUp(self):
+        self.make_project(E2E_MANIFEST)
+        # A loopback port bound and released: nothing listens on it.
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        Path(self.project, ".env").write_text(
+            f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
+        Path(self.project, "crucible.toml").write_text(
+            f"[client]\nurl = {json.dumps(f'http://127.0.0.1:{port}')}\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.project, ignore_errors=True)
+
+    def test_a_declared_raw_report_target_with_no_board_shows_null_counts_and_exits_non_zero(self):
+        result = self.drive("e2e", "raw-route-no-board", FAKE_EXIT="0",
+                            CRUCIBLE_URL="", CRUCIBLE_BASE="")
+        self.assertIn("ingest playwright: ok=False", result.stderr,
+                      f"fixture guard: the run went the raw route and its "
+                      f"ingest reached no board; {_diagnostics(result)}")
+        envelope = self.envelope_of(result)
+        run = envelope.get("run")
+        self.assertIsInstance(run, dict,
+                              f"the envelope still carries its `run` block; "
+                              f"{_diagnostics(result)}")
+        run = run or {}
+        self.assertEqual(
+            {key: run.get(key, "<absent>")
+             for key in ("passed", "failed", "pending", "total")},
+            {"passed": None, "failed": None, "pending": None, "total": None},
+            f"no board decoded the report, so the envelope states no figures "
+            f"— null, never 0; run={run!r}")
+        self.assertNotEqual(result.returncode, 0,
+                            f"a run that reached no board never exits green; "
+                            f"{_diagnostics(result)}")
+
 # ── What the ingest carries, against a recording board ─────────────────────
 
 class RunnerExitReachesTheIngestTest(_FakeRunnerProject, unittest.TestCase):

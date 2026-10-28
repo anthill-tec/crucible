@@ -69,6 +69,20 @@ RAN_THEN_REJECTED = ("f_ran_then_rejected.test.ts", (
     'test("ran first", () => { expect(1).toBe(1); });\n'
     'afterAll(() => { Promise.reject(new Error("rejected after its test ran")); });\n'))
 
+# Each writes a flush-left `results:` line of its own with `console.log`
+# between its file's header and its error block: the first from a test that
+# then passes before the file rejects, the second at import before it throws.
+CONSOLE_WORD = "results"
+LOGS_THEN_REJECTED = ("g_logs_then_rejected.test.ts", (
+    'import { test, expect, afterAll } from "bun:test";\n'
+    'test("logs then passes", () => { console.log("results:"); expect(1).toBe(1); });\n'
+    'afterAll(() => { Promise.reject(new Error("rejected after the log")); });\n'))
+LOGS_THEN_THROWS = ("h_logs_then_throws_at_import.test.ts", (
+    'import { test } from "bun:test";\n'
+    'console.log("results:");\n'
+    'throw new Error("boom after a console line");\n'
+    'test("never runs", () => {});\n'))
+
 _SCRUBBED = ("BUN_CRUCIBLE_PACKAGE_DIR", "BUN_CRUCIBLE_PROJECT_DIR",
              "BUN_CRUCIBLE_BUN", "BUN_CRUCIBLE_NO_LIFECYCLE",
              "CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY",
@@ -289,6 +303,46 @@ class _Forms:
                              "rejected after its test ran", f"case={case!r}")
             self.assert_no_runner_case(event)
             self.assert_counts(event.get("summary") or {}, 3, 2, 1, "the stored run's")
+
+        def test_a_tests_own_console_line_never_takes_its_files_load_error(self):
+            agent = f"load-errors-console-line-{self.FORM}"
+            self.run_files(agent, PASSING, LOGS_THEN_REJECTED, LOGS_THEN_THROWS)
+            self.assert_console_form()
+            log_lines = _SGR.sub("", Path(self.log_path).read_text(errors="replace")).splitlines()
+            self.assertIn(f"{CONSOLE_WORD}:", log_lines,
+                          "fixture guard: the tests' own flush-left console "
+                          "line reached bun's console")
+            self.assertNotEqual(self.result.returncode, 0, self.diagnostics())
+            event = self.stored_run(agent)
+            self.assertEqual(
+                self.suites_named(event, CONSOLE_WORD), [],
+                f"no suite is made up from a test's own `{CONSOLE_WORD}:` "
+                f"console line; tree={event.get('tree')!r}")
+            self.assertEqual(
+                sorted(s.get("name") for s in event.get("tree") or []),
+                sorted([PASSING[0], LOGS_THEN_REJECTED[0], LOGS_THEN_THROWS[0]]),
+                f"the run's suites are its files' own; tree={event.get('tree')!r}")
+
+            suite, case = self.the_load_error_case(event, LOGS_THEN_REJECTED[0])
+            self.assertEqual(
+                sorted((c.get("name"), c.get("status")) for c in suite.get("children") or []),
+                [("?", "fail"), ("logs then passes", "pass")],
+                f"the case joins its file's existing suite; suite={suite!r}")
+            self.assertEqual(_message_text(case["failure"].get("message")),
+                             "rejected after the log", f"case={case!r}")
+
+            _, threw = self.the_load_error_case(event, LOGS_THEN_THROWS[0])
+            self.assertEqual(_message_text(threw["failure"].get("message")),
+                             "boom after a console line", f"case={threw!r}")
+            self.assertNotIn("rejected after the log", threw["failure"].get("trace") or "",
+                             "a file's trace holds only its own blocks")
+
+            self.assert_no_runner_case(event)
+            self.assert_counts(event.get("summary") or {}, 4, 2, 2, "the stored run's")
+            envelope = _envelope(self.result.stdout)
+            self.assertIsNotNone(envelope, f"no envelope; {self.diagnostics()}")
+            self.assert_counts((envelope or {}).get("run") or {}, 4, 2, 2,
+                               "the envelope's run")
 
         def test_a_run_where_every_file_fails_to_load_exits_non_zero(self):
             agent = f"load-errors-all-fail-{self.FORM}"
