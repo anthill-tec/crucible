@@ -652,9 +652,11 @@ class AShellNarrowingVariableNeverReachesMakeTest(_NarrowingProject,
                                                   unittest.TestCase):
     """With TESTS and TEST_NAME set in the client's own environment, every
     native run without the flags runs `make` with neither — and so runs the
-    whole catalogue."""
+    whole catalogue. A run given one flag runs `make` with that flag's
+    variable only: the other one, exported in the shell, never comes along."""
 
-    SHELL_NARROWING = {"TESTS": "test_c", "TEST_NAME": "speed"}
+    #: The narrowing the shell exports, as (variable, value) pairs.
+    SHELL_NARROWING = (("TESTS", "test_c"), ("TEST_NAME", "speed"))
 
     def setUp(self):
         self.board = RecordingBoard()
@@ -665,7 +667,7 @@ class AShellNarrowingVariableNeverReachesMakeTest(_NarrowingProject,
         self.make_project(declare_integration=declare_integration)
         install_project(self.project, self.board.url, "arduino-shell-narrowing")
         result = self.drive(verb, *extra, agent=f"ard-shell-{verb}",
-                            client_env=self.SHELL_NARROWING)
+                            client_env=dict(self.SHELL_NARROWING))
         record = self.the_one_make_run(result)
         self.assert_saw_neither(record, result)
         ingests = [b for p, b in self.board.posts() if p == PARSED_INGEST]
@@ -693,6 +695,46 @@ class AShellNarrowingVariableNeverReachesMakeTest(_NarrowingProject,
         self.assertEqual(record.get("target"), "junit-integration",
                          f"the declared tier verb ran its own target; "
                          f"recorded={record!r}")
+
+    def make_run_with_one_flag(self, verb, *flag):
+        """Run `verb` with one narrowing flag while the shell exports both
+        variables, and return the one `make` run the stand-in recorded."""
+        self.VERB = verb
+        self.make_project()
+        install_project(self.project, self.board.url, "arduino-shell-narrowing")
+        result = self.drive(verb, *flag, agent=f"ard-shell-one-flag-{verb}",
+                            client_env=dict(self.SHELL_NARROWING))
+        return self.the_one_make_run(result), result
+
+    def assert_name_flag_keeps_the_shell_tests_out(self, verb):
+        record, result = self.make_run_with_one_flag(verb, "--name", "stall")
+        self.assertEqual(
+            (record.get("tests_present"), record.get("test_name")),
+            (False, "stall"),
+            f"`{verb} --name stall` runs `make` with TEST_NAME from the flag "
+            f"and no TESTS, though the shell exports TESTS; "
+            f"recorded={record!r} {_diagnostics(result)}")
+
+    def assert_tests_flag_keeps_the_shell_test_name_out(self, verb):
+        record, result = self.make_run_with_one_flag(verb, "--tests", "test_a")
+        self.assertEqual(
+            (record.get("test_name_present"), record.get("tests")),
+            (False, "test_a"),
+            f"`{verb} --tests test_a` runs `make` with TESTS from the flag "
+            f"and no TEST_NAME, though the shell exports TEST_NAME; "
+            f"recorded={record!r} {_diagnostics(result)}")
+
+    def test_test_with_the_name_flag_runs_make_without_the_shell_tests(self):
+        self.assert_name_flag_keeps_the_shell_tests_out("test")
+
+    def test_unit_with_the_name_flag_runs_make_without_the_shell_tests(self):
+        self.assert_name_flag_keeps_the_shell_tests_out("unit")
+
+    def test_test_with_the_tests_flag_runs_make_without_the_shell_test_name(self):
+        self.assert_tests_flag_keeps_the_shell_test_name_out("test")
+
+    def test_unit_with_the_tests_flag_runs_make_without_the_shell_test_name(self):
+        self.assert_tests_flag_keeps_the_shell_test_name_out("unit")
 
 
 if __name__ == "__main__":
