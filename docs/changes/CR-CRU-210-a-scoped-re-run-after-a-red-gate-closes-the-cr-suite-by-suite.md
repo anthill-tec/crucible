@@ -160,18 +160,19 @@ GREEN-GUARD marks a criterion that holds today and pins what must not change.
   the capability; the target is undeclared or excluded (the declared targets named); the list has an
   empty, padded or repeated item; `--release` is given; no cycle resolves. python refuses every
   `--suites` as declaring no suites.
-- [ ] **AC10 (§S4)** A red full gate whose one failing suite is then re-run green by a scoped gate
+- [ ] **AC10 (§S4, GREEN-GUARD — the re-run is the latest milestone)** A red full gate whose one failing suite is then re-run green by a scoped gate
   closes, without `--accept-failing-gate`, recording no accepted-failing-gate reason.
 - [ ] **AC11 (§S4)** A red full gate followed by a green scoped gate of a *different* suite is refused;
-  the error names the suite still red and the help names `pre-merge-gate --suites <that suite>`.
+  the error names the suite still red and the help names `pre-merge-gate --suites <that suite>` (on
+  python, which declares no suites, a full gate).
 - [ ] **AC12 (§S4)** Refused: a green scoped gate with no full gate before it; a green scoped gate
   older than the latest (red) full gate; two full gates, the older red and re-run green, the newer
   red.
 - [ ] **AC13 (§S4)** A green full gate followed by a red scoped gate of one suite is refused.
 - [ ] **AC14 (§S4)** A red full gate, a green scoped re-run, then a scoped gate that fails at step 0
   is refused.
-- [ ] **AC15 (§S4, GREEN-GUARD)** A red full gate milestone with no `suites` — posted before this CR —
-  is refused even when a later scoped gate is green; a green one closes as today.
+- [ ] **AC15 (§S4)** A red full gate milestone with no `suites` — posted before this CR — is refused even
+  when a later scoped gate is green; a green one closes as today (that half a GREEN-GUARD).
 - [ ] **AC16 (§S3/§S4)** All five clients' `pre-merge-gate --help` lists `--suites`, from the one
   shared declaration; `--accept-failing-gate`'s help and its unused-reason warning speak of the gate
   result.
