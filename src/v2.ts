@@ -560,8 +560,10 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
   const projects = store.listProjects(archived).map((project) => {
     const agents = store.listAgents(project.key);
     // Bounded reads, never the project's whole event history: the newest
-    // feed row, and each UTC day's newest coverage-bearing run.
+    // feed row (activity), the newest test run or compile result (the last
+    // event shown), and each UTC day's newest coverage-bearing run.
     const last = store.newestEvent(project.key);
+    const lastRun = store.newestRun(project.key);
     const coverageDays = store.listCoverageDays(project.key);
     // §S4 (CR-CRU-001) discards coverage on failed runs, so any stored
     // coverage belongs to a green run — newest one wins.
@@ -613,7 +615,7 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
       agentsOnline: agents.filter((a) => a.liveness !== "tombstoned").length,
       agentsTotal: agents.length,
       // §S0 (CR-CRU-006) — same flattened brief shape as the events list.
-      lastEvent: last !== undefined ? eventBrief(last) : null,
+      lastEvent: lastRun !== undefined ? eventBrief(lastRun) : null,
       latestGreenCoverage: greenCovered?.coverage ?? null,
       // CR-CRU-007 integration AC (§nav table) — the id of that SAME green
       // coverage event, so the client's coverage meter can open its drill-in.
