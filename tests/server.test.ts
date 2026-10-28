@@ -37,8 +37,10 @@ describe("startServer — production boot + /api/health", () => {
     // is 7 keys now, not 6. `codecs` { test, coverage } names what the board
     // decodes, so a client can tell an older board before it sends: 8 keys.
     // `limits` { ingest_body_bytes } advertises the body bound: 9 keys.
+    // `milestones` { gate } names what a gate milestone records beyond its
+    // verdict, so a client can tell a board that keeps it: 10 keys.
     expect(Object.keys(raw as object).sort()).toEqual(
-      ["codecs", "counts", "limits", "listener", "ok", "status", "store", "uptime_s", "version"].sort(),
+      ["codecs", "counts", "limits", "listener", "milestones", "ok", "status", "store", "uptime_s", "version"].sort(),
     );
     expect(body.ok).toBe(true);
     expect(body.status).toBe("healthy");

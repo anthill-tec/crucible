@@ -923,8 +923,14 @@ def axi_object(verb, ok, result_fields, context, warnings):
     """Build the §S1 `axi` object — the ONE place its keys are assembled.
 
     Every encoding `emit_axi` writes (TOON by default, JSON on request) is
-    this same dict, so the two can never carry different keys or values."""
-    axi = {"verb": verb, "ok": ok, "tier": ingested_tier()}
+    this same dict, so the two can never carry different keys or values.
+
+    `events` names the board's event id of every run ingest this invocation
+    filed, in filing order, `[]` when it filed none: the id an orchestrator
+    needs to find the run again. A composed gate states its own list (its
+    local runs' and each dispatched suite's) through `result_fields`."""
+    axi = {"verb": verb, "ok": ok, "tier": ingested_tier(),
+           "events": filed_run_events()}
     axi.update(result_fields)
     axi["context"] = context
     axi["warnings"] = list(warnings) + limit_disclosure_warnings()
@@ -1427,6 +1433,19 @@ GATE_RELEASE_HELP = (
     "or derives it from a branch name. OMIT IT unless the gate really gates a "
     "release: a gate naming one is exempt from pruning until that release "
     "records, and is retired the moment it does.")
+
+# The ONE `--suites` help text for `pre-merge-gate`, so all five clients
+# document the flag identically.
+GATE_SUITES_HELP = (
+    "Scope this gate to the named declared suites: their targets, separated "
+    "by commas, no spaces. The gate runs its first step as every gate "
+    "does, then only those suites; naming a target this client runs itself "
+    "runs its whole suite, which covers every one of its own targets. The "
+    "outcome is recorded as a scoped gate. Refused before anything runs for "
+    "an undeclared or excluded target, an empty, padded or repeated item, "
+    "beside --release, with no cycle (no --cycle and no binding), on a "
+    "board that does not record a gate's scope and suites, and on a project "
+    "that declares no suites. Omit it for a full gate.")
 
 # §S1 — the ONE `--release` help text for the TEST-RUN verbs, so all five
 # clients document the flag identically. Not the gate's text: a gate NAMES the
@@ -2507,6 +2526,35 @@ def emit_unattributed_run_refused_hard_stop(verb, refusal, context=None,
     return 1
 
 
+# A gate scoped to named suites that cannot run as asked. Raised by
+# `refuse_unrunnable_scoped_gate` as the gate's first act, converted by
+# `run_verb` before the outcome milestone, so a refusal runs nothing, files
+# nothing and posts no milestone.
+
+SCOPED_GATE_REFUSED_CODE = "scoped-gate-refused"
+
+
+class ScopedGateRefused(Exception):
+    """Raised when `pre-merge-gate --suites` cannot run as asked; `detail`
+    names the cause and `help[]` the next moves."""
+
+    def __init__(self, detail, help_steps):
+        self.detail = detail
+        self.help = list(help_steps)
+        super().__init__(detail)
+
+
+def emit_scoped_gate_refused_hard_stop(verb, refusal, context=None):
+    """Emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for a refused scoped gate, and return the non-zero exit code.
+    Nothing is run, nothing is filed from this path."""
+    emit_axi(verb or GATE_VERB, False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {SCOPED_GATE_REFUSED_CODE} \u2014 {refusal.detail}")
+    return 1
+
+
 def _hard_stop_context(args, project_key_fn, agent_id=None):
     """The best-effort `context` a hard-stopped verb's envelope carries.
 
@@ -2585,6 +2633,11 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
         return emit_release_run_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
             _hard_stop_context(args, project_key_fn))
+    except ScopedGateRefused as refusal:
+        return emit_scoped_gate_refused_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
     except UnattributedRunRefused as refusal:
         return emit_unattributed_run_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
@@ -2600,7 +2653,9 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
         # After every typed hard stop, never in their place: an I/O or parse
         # failure the verb's own body let escape is reported, not a traceback.
         # It is not a refusal, so a gate that died this way still falls
-        # through to its outcome milestone below, as a fail.
+        # through to its outcome milestone below, as a fail, with no
+        # suites, since the composition did not finish.
+        forget_gate_suite_results()
         code = emit_escaped_failure(
             getattr(args, "cmd", None), exc,
             _hard_stop_context(args, project_key_fn,
@@ -3837,10 +3892,10 @@ def cmd_cycle_add(args, project_dir, ops):
 
 # The flag that closes a CR over a gate that was not green, and its help.
 ACCEPT_FAILING_GATE_HELP = (
-    "Close the CR even though its last pre-merge-gate did not pass (or it has "
-    "none): REASON is required, is stored on the plan, and is shown on the "
+    "Close the CR even though its gate result is not green (or it has none): "
+    "REASON is required, is stored on the plan, and is shown on the "
     "cr-merged milestone and in History. Without it a red or missing gate "
-    "refuses the close.")
+    "result refuses the close.")
 ACCEPT_FAILING_GATE_UNUSED_CODE = "accept-failing-gate-unused"
 
 
@@ -3851,50 +3906,219 @@ def add_cr_close_gate_arg(p):
                    help=ACCEPT_FAILING_GATE_HELP)
 
 
-def latest_gate_milestone(ops, project_key, cr):
-    """`(record, error)`: the CR's most recent `pre-merge-gate` milestone (None
-    when it has none), or the board's error when the read was not answered."""
+# A board event id: `evt-<ms>-<seq>`, its numeric parts in filing order.
+_EVENT_ID_SHAPE = re.compile(r"evt-(\d+)-(\d+)")
+
+
+def _milestone_order(milestone):
+    """Time order for a CR's gate milestones: timestamp, ties broken by id. An
+    event id (`evt-<ms>-<seq>`) compares by its numbers, so `-100` follows
+    `-59`; a numeric id sorts first, and an id of any other shape last, as
+    text, so mixed ids still compare."""
+    ident = milestone.get("id")
+    shaped = (_EVENT_ID_SHAPE.fullmatch(ident) if isinstance(ident, str)
+              else None)
+    if isinstance(ident, (int, float)) and not isinstance(ident, bool):
+        tie = (0, (ident,), "")
+    elif shaped:
+        tie = (1, (int(shaped.group(1)), int(shaped.group(2))), "")
+    else:
+        tie = (2, (), str(ident))
+    return (milestone.get("timestamp") or 0, tie)
+
+
+def gate_milestones(ops, project_key, cr):
+    """`(records, error)`: every `pre-merge-gate` milestone of the CR, oldest
+    first (empty when it has none), or the board's error when the read was not
+    answered."""
     resp = ops.get(f"/api/v2/projects/{project_key}/milestones"
                    f"?type={GATE_MILESTONE_TYPE}")
     if not resp.get("ok"):
-        return None, resp.get("error") or "the board did not answer"
+        return [], resp.get("error") or "the board did not answer"
     mine = [m for m in resp.get("milestones") or []
             if isinstance(m, dict) and m.get("label") == cr]
-    if not mine:
-        return None, None
-    return max(mine, key=lambda m: m.get("timestamp") or 0), None
+    return sorted(mine, key=_milestone_order), None
 
 
-def _gate_refusal_text(cr, gate):
-    """The refusal's `(error, help)` for a CR whose last gate was not a pass,
-    or that has no gate result at all."""
+def _recorded_suite_entries(gate):
+    """The well-formed suite entries a gate milestone carries (none for a gate
+    that recorded no suites)."""
+    suites = gate.get("suites")
+    if not isinstance(suites, list):
+        return []
+    return [e for e in suites if isinstance(e, dict) and e.get("target")]
+
+
+def _is_full_gate(gate):
+    """A full gate: one that says so, or one that records neither a scope nor
+    suites (the shape posted before gates recorded them). A gate with suites
+    and no scope is never one."""
+    scope = gate.get("scope")
+    if scope is not None:
+        return scope == "full"
+    return gate.get("suites") is None
+
+
+class GateVerdict:
+    """What a CR's gate history says about closing it.
+
+    `base` is the latest full gate (None when there is none). `green` is the
+    verdict. On a red per-suite verdict `red` maps each suite still red to the
+    entry that counted for it, and `stopped` is a later gate that failed
+    before composing any suite and that no later gate ran past."""
+
+    __slots__ = ("base", "green", "red", "stopped")
+
+    def __init__(self, base, green, red=None, stopped=None):
+        self.base = base
+        self.green = green
+        self.red = red or {}
+        self.stopped = stopped
+
+
+def judge_gate_history(gates):
+    """The verdict over a CR's gate milestones, oldest first.
+
+    The base is the latest full gate; with none, nothing is green. A base with
+    no suites, or that failed while none of its entries did, is judged by its
+    own outcome. Otherwise each suite the base ran counts its latest result
+    from any gate at or after the base (an entry for a target the base never
+    ran is ignored), and a later gate that failed with no suites (stopped
+    before composing any) keeps the verdict red until a later gate runs past
+    that point. Green when every counted result passes."""
+    base_at = None
+    for index, gate in enumerate(gates):
+        if _is_full_gate(gate):
+            base_at = index
+    if base_at is None:
+        return GateVerdict(None, False)
+    base = gates[base_at]
+    entries = _recorded_suite_entries(base)
+    own_outcome_only = not entries or (
+        base.get("outcome") != GATE_OUTCOME_PASS
+        and not any(e.get("outcome") != GATE_OUTCOME_PASS for e in entries))
+    if own_outcome_only:
+        return GateVerdict(base, base.get("outcome") == GATE_OUTCOME_PASS)
+    latest = {e["target"]: e for e in entries}
+    stopped = None
+    for gate in gates[base_at + 1:]:
+        later = _recorded_suite_entries(gate)
+        if not later and gate.get("suites") is None:
+            if gate.get("outcome") != GATE_OUTCOME_PASS:
+                stopped = gate
+            else:
+                stopped = None
+            continue
+        stopped = None
+        for entry in later:
+            if entry["target"] in latest:
+                latest[entry["target"]] = entry
+    red = {target: entry for target, entry in latest.items()
+           if entry.get("outcome") != GATE_OUTCOME_PASS}
+    return GateVerdict(base, not red and stopped is None, red, stopped)
+
+
+def _gate_cycle(gate):
+    cycle = (gate.get("context") or {}).get("cycleId") if gate else None
+    return cycle if cycle is not None else "<id>"
+
+
+def _gate_refusal_text(cr, verdict, declared, scopable=True):
+    """The refusal's `(error, help)` for a CR whose gate result is not green,
+    or that has no full gate result at all. `declared` is a zero-argument
+    callable answering the gated targets the project declares now, asked only
+    when suites are still red: a scoped re-run is offered when every red suite
+    is still declared, a full gate otherwise. `scopable` is False for a client
+    that cannot enumerate a declaration, so cannot run a scoped gate at all:
+    its help names a full gate, and says that is why."""
     accept = (f"or close over it deliberately: cr-close --commit <sha> --cr {cr} "
               f'--accept-failing-gate "<reason>"')
+    gate = verdict.base
     if gate is None:
-        return (f"cr-close refused: {cr} has no recorded pre-merge-gate result, "
-                f"so nothing says its suite is green; nothing was closed",
-                [f"run pre-merge-gate --agent <agentId> --cycle <id> for {cr}, "
-                 f"then re-run cr-close", accept])
-    cycle = (gate.get("context") or {}).get("cycleId")
+        return (f"cr-close refused: {cr} has no recorded full pre-merge-gate "
+                f"result (a scoped gate counts only after a full one), so "
+                f"nothing says its suite is green; nothing was closed",
+                [f"run a full gate: pre-merge-gate --agent <agentId> --cycle "
+                 f"<id> for {cr}, then re-run cr-close", accept])
+    cycle = _gate_cycle(gate)
+    if verdict.red:
+        described = []
+        for target, entry in verdict.red.items():
+            failing = entry.get("failingTests") or []
+            named = (f"; failing: {', '.join(str(t) for t in failing)}"
+                     if failing else "")
+            described.append(
+                f"`{target}` ({entry.get('outcome')}, {entry.get('failed')} "
+                f"failed, {entry.get('passed')} passed{named})")
+        error = (f"cr-close refused: {cr}'s gate result is red \u2014 still red: "
+                 f"{'; '.join(described)}; nothing was closed")
+        red = list(verdict.red)
+        if not scopable:
+            rerun = (f"this client cannot run a scoped gate; run a full gate: "
+                     f"pre-merge-gate --agent <agentId> --cycle {cycle}, then "
+                     f"cr-close")
+        elif all(target in declared() for target in red):
+            rerun = (f"fix the red suite(s), re-run them: pre-merge-gate "
+                     f"--suites {','.join(red)} --agent <agentId> --cycle "
+                     f"{cycle}, then cr-close")
+        else:
+            rerun = (f"a red suite is no longer declared, so re-run a full "
+                     f"gate: pre-merge-gate --agent <agentId> --cycle {cycle}, "
+                     f"then cr-close")
+        return error, [rerun, accept]
+    if verdict.stopped is not None:
+        stopped = verdict.stopped
+        return (f"cr-close refused: {cr}'s latest pre-merge-gate (milestone "
+                f"{stopped.get('id')}, cycle {_gate_cycle(stopped)}) failed "
+                f"before it ran any suite, so its gate result is red; nothing "
+                f"was closed",
+                [f"fix what stopped it, re-run pre-merge-gate --agent <agentId> "
+                 f"--cycle {_gate_cycle(stopped)}, then cr-close", accept])
     failing = gate.get("failingTests") or []
     named = f"; failing: {', '.join(str(t) for t in failing)}" if failing else ""
-    return (f"cr-close refused: the last pre-merge-gate for {cr} (milestone "
-            f"{gate.get('id')}, cycle {cycle}) did not pass: outcome "
+    return (f"cr-close refused: the latest full pre-merge-gate for {cr} "
+            f"(milestone {gate.get('id')}, cycle {cycle}) did not pass: outcome "
             f"{gate.get('outcome')}, {gate.get('failed')} failed, "
             f"{gate.get('passed')} passed{named}; nothing was closed",
             [f"fix the {gate.get('failed')} failing test(s), re-run pre-merge-gate "
-             f"--agent <agentId> --cycle {cycle if cycle is not None else '<id>'}, "
-             f"then cr-close", accept])
+             f"--agent <agentId> --cycle {cycle}, then cr-close", accept])
 
 
-def gate_close_verdict(args, cr, project_dir, ops):
-    """Decide whether `cr-close` may close `cr`, from its most recent
-    `pre-merge-gate` milestone. Returns `(accepted_reason, warnings, refused)`:
-    `refused` is the exit code of an already-emitted refusal (nothing closed),
-    else None and the close proceeds. A green gate closes as before; a red or
-    missing one closes only with `--accept-failing-gate <reason>`, whose reason
-    is returned to be recorded. A reason given over a GREEN gate overrides
-    nothing, so it is not recorded and a warning says so."""
+class _UnsetFlagsView:
+    """A verb's arguments as the declaration readers see them: a flag this
+    verb does not take reads as unset, so a declaration resolves from the
+    project directory and its configuration exactly as a gate given no such
+    flag resolves it."""
+
+    def __init__(self, args):
+        self._args = args
+
+    def __getattr__(self, name):
+        return getattr(self._args, name, None)
+
+
+def _declared_gated_targets(args, surface, stack):
+    """The gated targets the project declares, read through the same
+    enumeration the gate composes over; empty when the client has no
+    declaration surface it can enumerate."""
+    if surface is None:
+        return frozenset()
+    return frozenset(suite.target for suite in
+                     declared_gate_suites(_UnsetFlagsView(args), surface, stack)
+                     if suite.gated)
+
+
+def gate_close_verdict(args, cr, project_dir, ops, *, surface=None, stack=None):
+    """Decide whether `cr-close` may close `cr`, from its gate result: the
+    verdict `judge_gate_history` reads from every one of its `pre-merge-gate`
+    milestones. Returns `(accepted_reason, warnings, refused)`: `refused` is
+    the exit code of an already-emitted refusal (nothing closed), else None and
+    the close proceeds. A green result closes as before; a red or missing one
+    closes only with `--accept-failing-gate <reason>`, whose reason is
+    returned to be recorded. A reason given over a GREEN result overrides
+    nothing, so it is not recorded and a warning says so. `surface`/`stack`
+    name the client's declaration, read to decide whether the refusal offers
+    a scoped re-run of the red suites."""
     reason = getattr(args, "accept_failing_gate", None)
     context = ops.context(project_dir, cr=cr)
     if reason is not None and not reason.strip():
@@ -3904,7 +4128,7 @@ def gate_close_verdict(args, cr, project_dir, ops):
                   "help": ['cr-close --commit <sha> --accept-failing-gate "<reason>"']},
                  context, [], f"[crucible] ERROR: {error}")
         return None, [], 1
-    gate, read_error = latest_gate_milestone(ops, ops.project_key(project_dir), cr)
+    gates, read_error = gate_milestones(ops, ops.project_key(project_dir), cr)
     if read_error is not None:
         error = (f"cr-close refused: could not read {cr}'s pre-merge-gate result "
                  f"({read_error}); nothing was closed")
@@ -3914,17 +4138,20 @@ def gate_close_verdict(args, cr, project_dir, ops):
                             f"then re-run cr-close"]},
                  context, [], f"[crucible] ERROR: {error}")
         return None, [], 1
-    green = gate is not None and gate.get("outcome") == GATE_OUTCOME_PASS
-    if green:
+    verdict = judge_gate_history(gates)
+    if verdict.green:
         if reason is None:
             return None, [], None
         return None, [{"code": ACCEPT_FAILING_GATE_UNUSED_CODE,
-                       "detail": (f"{cr}'s last pre-merge-gate passed, so there was "
+                       "detail": (f"{cr}'s gate result is green, so there was "
                                   f"no failing gate to accept; the reason was not "
                                   f"recorded")}], None
     if reason is not None:
         return reason, [], None
-    error, help_steps = _gate_refusal_text(cr, gate)
+    error, help_steps = _gate_refusal_text(
+        cr, verdict, lambda: _declared_gated_targets(args, surface, stack),
+        scopable=surface is not None and surface.suites is not None)
+    gate = verdict.base
     fields = {"commit": args.commit, "cr": cr, "error": error}
     if gate is not None:
         fields["gate"] = {key: gate.get(key) for key in
@@ -3935,7 +4162,7 @@ def gate_close_verdict(args, cr, project_dir, ops):
     return None, [], 1
 
 
-def cmd_cr_close(args, project_dir, ops):
+def cmd_cr_close(args, project_dir, ops, *, surface=None, stack=None):
     """§S4c — PATCH the resolved OPEN plan closed, then post the `cr-merged`
     milestone.
 
@@ -3970,7 +4197,8 @@ def cmd_cr_close(args, project_dir, ops):
         return 1
     plan = open_plans[0]
     cr_label = plan.get("cr")
-    accepted, warnings, refused = gate_close_verdict(args, cr_label, project_dir, ops)
+    accepted, warnings, refused = gate_close_verdict(
+        args, cr_label, project_dir, ops, surface=surface, stack=stack)
     if refused is not None:
         return refused
     merge = {"commit": args.commit}
@@ -5929,6 +6157,9 @@ _refused_ingest_warnings = []
 # (`record_gate_outcome`). Module state for the reason the tier claim is.
 _filed_runs = []
 _emitted_run_counts = None
+# The per-suite results a gate's composition reported (`run_gate_suites`), for
+# the outcome milestone to carry; None while no composition ran.
+_gate_suite_results = None
 
 
 def forget_ingested_run():
@@ -5943,6 +6174,20 @@ def forget_ingested_run():
     _refused_ingest_warnings.clear()
     _filed_runs.clear()
     _emitted_run_counts = None
+    forget_gate_suite_results()
+
+
+def forget_gate_suite_results():
+    """Drop the per-suite results a composition reported: a gate whose
+    composition never ran, or that a failure escaped, records no suites."""
+    global _gate_suite_results
+    _gate_suite_results = None
+
+
+def filed_run_events():
+    """The board's event id of every run ingest this invocation filed, in
+    filing order, `[]` when it filed none."""
+    return [run["event"] for run in _filed_runs]
 
 
 def take_refused_ingest_warnings():
@@ -6561,7 +6806,7 @@ def _adopt_suite_warnings(gate_warnings, envelope):
 
 
 def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
-                    crucible_url, warnings=()):
+                    crucible_url, warnings=(), named=None):
     """§S2 — the ADDITIVE composition: this stack's OWN whole-suite regression,
     plus one dispatched run for every declared suite another stack owns, in ONE
     envelope naming them all.
@@ -6585,25 +6830,52 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     never pooled into one total. A run that FAILED, that could not be RUN at
     all, that could not be dispatched, or that reported no counts makes the
     gate NOT ok and is NAMED in `warnings[]`: "a gate that ran a subset reports
-    as a gate that ran a subset"."""
+    as a gate that ran a subset".
+
+    `named` scopes the gate to those declared targets (`--suites`): only they
+    run. Naming an own-stack target runs the whole-suite run, which covers
+    every own-stack target, so all of them are recorded; naming only
+    dispatched targets skips it. Excluded targets are not listed."""
     rows, gate_warnings = [], list(warnings)
     ok, worst = True, 0
+    scope = GATE_SCOPE_FULL if named is None else GATE_SCOPE_SCOPED
+    run_whole = True
+    if named is not None:
+        run_whole = any(suite.gated and suite.stack == stack
+                        and suite.target in named for suite in suites)
+        suites = tuple(suite for suite in suites if suite.gated and (
+            suite.target in named or (run_whole and suite.stack == stack)))
+    # What each gated suite did, in declaration order, for the outcome
+    # milestone: its target, outcome, counts and the events its run filed.
+    results = []
 
     # Rule 1, and FIRST: every own-stack declared target is reported against
     # this run, so its outcome has to be known before they are named.
     covered = tuple(suite.target for suite in suites
                     if suite.gated and suite.stack == stack)
-    code, out, error = _captured_suite_run(whole_suite)
-    envelope = _suite_envelope(out)
-    whole_counts = _suite_counts(envelope)
-    _adopt_suite_warnings(gate_warnings, envelope)
     totals = {"passed": 0, "failed": 0, "pending": 0, "total": 0}
-    totals.update(whole_counts or {})
-    whole_ok, warning_code, detail = _run_outcome(code, whole_counts, error)
-    if not whole_ok:
-        gate_warnings.append(
-            _whole_suite_warning(warning_code, stack, covered, detail))
-        ok, worst = False, worst or (code or 0)
+    whole_counts, whole_outcome, whole_events = None, None, []
+    if run_whole:
+        code, out, error = _captured_suite_run(whole_suite)
+        envelope = _suite_envelope(out)
+        whole_counts = _suite_counts(envelope)
+        _adopt_suite_warnings(gate_warnings, envelope)
+        totals.update(whole_counts or {})
+        whole_ok, warning_code, detail = _run_outcome(code, whole_counts,
+                                                      error)
+        if not whole_ok:
+            gate_warnings.append(
+                _whole_suite_warning(warning_code, stack, covered, detail))
+            ok, worst = False, worst or (code or 0)
+        whole_outcome = GATE_OUTCOME_PASS if whole_ok else GATE_OUTCOME_FAIL
+        whole_events = filed_run_events()
+    events = list(whole_events)
+    if run_whole and not covered:
+        # The whole-suite run covered no declared target, and it still ran:
+        # it is represented under the stack's own whole-suite label.
+        results.append(_gate_suite_result(whole_suite_label(stack),
+                                          whole_outcome, whole_counts,
+                                          whole_events))
 
     for suite in suites:
         row = {"suite": suite.target, "stack": suite.stack, "gated": suite.gated}
@@ -6619,12 +6891,18 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
             # are that run's, and they are NOT added to the union again.
             row["coveredBy"] = whole_suite_label(stack)
             row.update(whole_counts or {})
+            row["outcome"] = whole_outcome
             rows.append(row)
+            results.append(_gate_suite_result(suite.target, whole_outcome,
+                                              whole_counts, whole_events))
             continue
         row["client"] = sibling_client(suite.stack)
         argv, cwd = dispatch(suite) if dispatch else (None, None)
         if not argv:
+            row["outcome"] = GATE_OUTCOME_FAIL
             rows.append(row)
+            results.append(_gate_suite_result(suite.target, GATE_OUTCOME_FAIL,
+                                              None, []))
             gate_warnings.append(_gate_suite_warning(
                 GATE_SUITE_UNDISPATCHABLE_CODE, suite,
                 f"declares no invocation this gate can dispatch to "
@@ -6650,21 +6928,172 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
             row.update(counts)
             for key, value in counts.items():
                 totals[key] = totals.get(key, 0) + value
-        rows.append(row)
         _adopt_suite_warnings(gate_warnings, envelope)
         suite_ok, warning_code, detail = _run_outcome(code, counts, error)
+        suite_outcome = GATE_OUTCOME_PASS if suite_ok else GATE_OUTCOME_FAIL
+        row["outcome"] = suite_outcome
+        rows.append(row)
+        suite_events = _envelope_events(envelope)
+        events.extend(suite_events)
+        results.append(_gate_suite_result(suite.target, suite_outcome,
+                                          counts, suite_events))
         if not suite_ok:
             gate_warnings.append(
                 _gate_suite_warning(warning_code, suite, detail))
             ok = False
         worst = worst or (code or 0)
+    global _gate_suite_results
+    _gate_suite_results = results
     emit_axi(verb, ok,
-             {"run": totals, "suites": rows,
+             {"run": totals, "suites": rows, "events": events, "scope": scope,
               "help": run_help(verb, ok, totals["failed"], crucible_url)},
              context, gate_warnings,
              f"{verb}: ok={ok} suites={len(rows)} passed={totals['passed']} "
              f"failed={totals['failed']} total={totals['total']}")
     return 0 if ok else (worst or 1)
+
+
+def _envelope_events(envelope):
+    """The event ids a suite's own envelope says its run filed, `[]` when it
+    states none."""
+    events = (envelope or {}).get("events")
+    if not isinstance(events, list):
+        return []
+    return [event for event in events
+            if isinstance(event, (int, str)) and not isinstance(event, bool)]
+
+
+def _gate_suite_result(target, outcome, counts, events):
+    """One gated suite's result as the composition saw it: its target, its
+    outcome, its passed/failed counts (None when the run reported none) and
+    the events its run filed, through which its failing tests are read."""
+    if counts is not None:
+        counts = {"passed": int(counts.get("passed") or 0),
+                  "failed": int(counts.get("failed") or 0)}
+    return {"target": target, "outcome": outcome, "counts": counts,
+            "events": list(events)}
+
+
+# The health answer that says a board records a gate's scope and suites: its
+# `milestones.gate` names both.
+GATE_RECORD_CAPABILITY = ("scope", "suites")
+FULL_GATE_HELP = "or run the full gate: pre-merge-gate without --suites"
+
+
+def scoped_gate_targets(args):
+    """The targets `--suites` names, in the order given, or None for a full
+    gate."""
+    raw = getattr(args, "suites", None)
+    return None if raw is None else tuple(raw.split(","))
+
+
+def _backticked(targets):
+    return ", ".join(f"`{target}`" for target in targets)
+
+
+def refuse_unrunnable_scoped_gate(args, *, surface, stack, get, project_key):
+    """The first act of every client's `pre-merge-gate`: a gate scoped to
+    named suites (`--suites`) that cannot run as asked raises
+    `ScopedGateRefused`, before the unattributed-run refusal and before the
+    gate's first step, so it runs nothing and files nothing. A gate without
+    `--suites` is not checked.
+
+    Refused, each naming its cause: a project that declares no suites (a
+    surface that cannot enumerate a declaration declares none, so that client
+    refuses every `--suites`); a list with an empty, padded or repeated item;
+    `--suites` beside `--release`; a target the project does not declare, or
+    declares excluded; a board whose health could not be read, or does not
+    state that it records a gate's scope and suites; and a gate no cycle resolves for (no `--cycle`,
+    and the agent bound to none). `project_key` is a zero-argument callable,
+    asked only once the board has to be."""
+    targets = scoped_gate_targets(args)
+    if targets is None:
+        return
+    suites = declared_gate_suites(args, surface, stack)
+    if not suites:
+        raise ScopedGateRefused(
+            "this project declares no suites this client can enumerate, so a "
+            "gate scoped with --suites has nothing to name; refused before "
+            "anything ran",
+            ["run the full gate: pre-merge-gate without --suites",
+             f"declare the project's suites \u2014 "
+             f"{declared_tier_surface_line(surface, 'unit')}"
+             if surface.suites is not None else
+             "this client's declaration is its invocation, which names no "
+             "suite to scope to"])
+    gated = tuple(suite.target for suite in suites if suite.gated)
+    excluded = {suite.target for suite in suites if not suite.gated}
+    name_help = (f"name one or more of the declared gated targets: "
+                 f"{_backticked(gated)} \u2014 comma-separated, no spaces")
+    if any(not item.strip() for item in targets):
+        raise ScopedGateRefused(
+            "--suites has an empty item; refused before anything ran",
+            [name_help, FULL_GATE_HELP])
+    padded = [item for item in targets if item != item.strip()]
+    if padded:
+        raise ScopedGateRefused(
+            f"--suites has an item padded with whitespace "
+            f"({', '.join(repr(item) for item in padded)}); refused before "
+            f"anything ran",
+            [name_help, FULL_GATE_HELP])
+    repeated = sorted({item for item in targets if targets.count(item) > 1})
+    if repeated:
+        raise ScopedGateRefused(
+            f"--suites repeats {_backticked(repeated)}: name each suite once; "
+            f"refused before anything ran",
+            [name_help, FULL_GATE_HELP])
+    if getattr(args, "release", None):
+        raise ScopedGateRefused(
+            "--suites is refused beside --release: a release gate runs in "
+            "full; refused before anything ran",
+            ["drop --suites to gate the release in full",
+             "or drop --release to re-run named suites of a cycle's gate"])
+    for item in targets:
+        if item in excluded:
+            raise ScopedGateRefused(
+                f"the project declares `{item}` excluded from the gate, so a "
+                f"gate cannot be scoped to it; refused before anything ran",
+                [name_help, FULL_GATE_HELP])
+        if item not in gated:
+            raise ScopedGateRefused(
+                f"the project does not declare `{item}`, so a gate cannot be "
+                f"scoped to it; refused before anything ran",
+                [name_help, FULL_GATE_HELP])
+    health = get("/api/health")
+    if isinstance(health, dict) and health.get("ok") is False:
+        raise ScopedGateRefused(
+            f"the board's /api/health could not be read "
+            f"({health.get('error') or 'no error was given'}), so nothing "
+            f"shows that it records a gate's scope and suites; refused before "
+            f"anything ran",
+            ["check that the board is reachable and answers /api/health, "
+             "then re-run", FULL_GATE_HELP])
+    milestones = health.get("milestones") if isinstance(health, dict) else None
+    recorded = milestones.get("gate") if isinstance(milestones, dict) else None
+    if not (isinstance(recorded, list)
+            and all(field in recorded for field in GATE_RECORD_CAPABILITY)):
+        raise ScopedGateRefused(
+            "the board does not state that it records a gate's scope and "
+            "suites (its /api/health names no milestones.gate with both), so "
+            "a scoped gate would be recorded as a full one; refused before "
+            "anything ran",
+            ["upgrade the board to one whose /api/health states "
+             "milestones.gate, then re-run", FULL_GATE_HELP])
+    if getattr(args, "cycle", None) is not None:
+        return
+    agent_id = getattr(args, "agent", None)
+    bound = None
+    if agent_id:
+        _known, bound = _bound_cycle_id(
+            get(f"/api/v2/agents?project={project_key()}"), agent_id)
+    if bound is None:
+        raise ScopedGateRefused(
+            "no cycle resolves for this gate: no --cycle was given and the "
+            "agent is bound to none, so its scoped result belongs to no CR; "
+            "refused before anything ran",
+            ["re-run with --cycle <id> naming the cycle this gate belongs to",
+             "or register the agent bound to that cycle first "
+             "(register --agent <agentId> --cycle <id>), then re-run"])
 
 
 def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
@@ -6683,7 +7112,8 @@ def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
         return whole_suite()
     return run_gate_suites(suites, stack=stack, verb=verb,
                            whole_suite=whole_suite, dispatch=dispatch,
-                           context=context, crucible_url=crucible_url)
+                           context=context, crucible_url=crucible_url,
+                           named=scoped_gate_targets(args))
 
 
 # ── CR-CRU-111 §S4 — a `unit` run that WAITS says so (AC6b) ───────────────
@@ -7753,6 +8183,9 @@ GATE_MILESTONE_TYPE = "pre-merge-gate"
 # pi-lens-ignore: S105 — "pass" is the gate outcome the board records, not a credential
 GATE_OUTCOME_PASS = "pass"  # noqa: S105
 GATE_OUTCOME_FAIL = "fail"
+# A gate that ran every declared suite.
+GATE_SCOPE_FULL = "full"
+GATE_SCOPE_SCOPED = "scoped"
 
 
 def head_commit(project_dir):
@@ -7813,13 +8246,49 @@ def _failing_tests(ops, filed_runs):
     for run in filed_runs:
         if not run["run"].get("failed"):
             continue
-        resp = ops.get(f"/api/v2/events/{urllib.parse.quote(str(run['event']))}")
-        event = resp.get("event") if resp.get("ok") else None
-        for suite in (event or {}).get("tree") or []:
-            for leaf in suite.get("children") or []:
-                if leaf.get("status") == "fail":
-                    names.append(f"{suite.get('name')} > {leaf.get('name')}")
+        names.extend(_event_failing_tests(ops, run["event"]))
     return names
+
+
+def _event_failing_tests(ops, event_id):
+    """The failing tests of ONE filed run, named `suite > test`, read back from
+    the board's own parse of it through its event id."""
+    resp = ops.get(f"/api/v2/events/{urllib.parse.quote(str(event_id))}")
+    event = resp.get("event") if resp.get("ok") else None
+    names = []
+    for suite in (event or {}).get("tree") or []:
+        for leaf in suite.get("children") or []:
+            if leaf.get("status") == "fail":
+                names.append(f"{suite.get('name')} > {leaf.get('name')}")
+    return names
+
+
+def _gate_suite_entries(ops, results):
+    """The milestone's `suites`: one entry per gated suite the composition
+    reported, in its order. A failing entry names its failing tests, read
+    through the events its run filed; a suite with no counts to show (it could
+    not run, be dispatched or report) carries none."""
+    entries = []
+    for result in results:
+        entry = {"target": result["target"], "outcome": result["outcome"]}
+        if result["counts"] is not None:
+            entry.update(result["counts"])
+        if result["outcome"] == GATE_OUTCOME_FAIL:
+            entry["failingTests"] = [
+                name for event_id in result["events"]
+                for name in _event_failing_tests(ops, event_id)]
+        entries.append(entry)
+    return entries
+
+
+def _union(lists):
+    """Every name of `lists`, once each, in first-seen order."""
+    seen = []
+    for names in lists:
+        for name in names:
+            if name not in seen:
+                seen.append(name)
+    return seen
 
 
 def record_gate_outcome(args, code, project_dir, ops):
@@ -7847,9 +8316,19 @@ def record_gate_outcome(args, code, project_dir, ops):
     # failed tests though its exit was 0 (a gate that keeps going past test
     # failures to finish its coverage run exits 0).
     fields = {"outcome": GATE_OUTCOME_FAIL if code or failed else GATE_OUTCOME_PASS,
-              "passed": passed, "failed": failed}
+              "passed": passed, "failed": failed,
+              "scope": (GATE_SCOPE_FULL if scoped_gate_targets(args) is None
+                        else GATE_SCOPE_SCOPED)}
+    # The suites the composition ran, each with its own result; a gate that
+    # composed none records none.
+    entries = (_gate_suite_entries(ops, _gate_suite_results)
+               if _gate_suite_results else None)
+    if entries:
+        fields["suites"] = entries
     if failed:
-        fields["failingTests"] = _failing_tests(ops, filed_runs)
+        fields["failingTests"] = (
+            _union(entry.get("failingTests") or [] for entry in entries)
+            if entries else _failing_tests(ops, filed_runs))
     context = fleet_context(cr=cr)
     if cycle_id is not None:
         context["cycleId"] = cycle_id
@@ -7942,6 +8421,15 @@ def add_gate_cycle_arg(p):
     """CR-CRU-056 — bind `--cycle` on a GATED verb (test/regression/
     pre-merge-gate): the binding for the register-inside-the-run case."""
     p.add_argument("--cycle", type=int, help=GATE_CYCLE_HELP)
+
+
+def add_gate_suites_arg(p):
+    """Declare `--suites` on `pre-merge-gate`: the ONE declaration site for
+    the whole fleet, so all five clients spell the flag and its help
+    identically. Checked by `refuse_unrunnable_scoped_gate` before the gate
+    runs anything."""
+    p.add_argument("--suites", metavar="TARGETS", dest="suites",
+                   help=GATE_SUITES_HELP)
 
 
 def add_filing_cycle_arg(p):

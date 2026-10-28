@@ -62,6 +62,8 @@ import type {
   GateDecision,
   GateDecisionAction,
   GateMilestoneFields,
+  GateScope,
+  GateSuiteEntry,
   LivenessConfig,
   PackageRef,
   Plan,
@@ -149,6 +151,8 @@ interface V2Body {
   passed?: unknown;
   failed?: unknown;
   failingTests?: unknown;
+  scope?: unknown;
+  suites?: unknown;
   acceptedFailingGateReason?: unknown;
   // CR-CRU-008 §S4 — silent unregister + guarded run deletion
   silent?: unknown;
@@ -1960,12 +1964,99 @@ function countOf(value: unknown): number | undefined {
 }
 
 /**
+ * The fields a `pre-merge-gate` milestone records about the gate beyond its
+ * verdict, counts and failing tests. Health states this list, so a client can
+ * tell a board that keeps them before it posts them.
+ */
+export const GATE_MILESTONE_RECORD_FIELDS = ["scope", "suites"] as const;
+
+/** A gate's scope and suites, each present only when posted and well-formed. */
+interface GateScopeAndSuites {
+  scope?: GateScope;
+  suites?: GateSuiteEntry[];
+}
+
+/** The non-empty strings of a list, or nothing when any member is not a string. */
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  if (!value.every((t: unknown) => typeof t === "string")) return undefined;
+  return value.filter((t: string) => t.length > 0);
+}
+
+/**
+ * One suite entry, keeping only its own keys, or the reason it is ill-formed:
+ * a non-empty `target`, an `outcome` of `pass`/`fail`, `passed` and `failed`
+ * both counts or both absent (absent only on `fail`), and an optional
+ * `failingTests` list of strings whose non-empty members are kept.
+ */
+function gateSuiteEntry(value: unknown, index: number): GateSuiteEntry | string {
+  const at = `suites[${index}]`;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return `${at} must be an object`;
+  }
+  const entry = value as Record<string, unknown>;
+  const target = nonEmptyString(entry.target);
+  if (target === undefined) return `${at}.target must be a non-empty string`;
+  if (entry.outcome !== "pass" && entry.outcome !== "fail") {
+    return `${at}.outcome must be "pass" or "fail"`;
+  }
+  const countsAbsent = entry.passed === undefined && entry.failed === undefined;
+  const passed = countOf(entry.passed);
+  const failed = countOf(entry.failed);
+  if (countsAbsent) {
+    if (entry.outcome !== "fail") return `${at} must state passed and failed when its outcome is "pass"`;
+  } else if (passed === undefined || failed === undefined) {
+    return `${at}.passed and ${at}.failed must both be non-negative integers, or both absent`;
+  }
+  let failingTests: string[] | undefined;
+  if (entry.failingTests !== undefined) {
+    failingTests = stringList(entry.failingTests);
+    if (failingTests === undefined) return `${at}.failingTests must be a list of strings`;
+  }
+  return {
+    target,
+    outcome: entry.outcome,
+    ...(passed !== undefined && failed !== undefined ? { passed, failed } : {}),
+    ...(failingTests !== undefined ? { failingTests } : {}),
+  };
+}
+
+/**
+ * A gate's `scope` and `suites`, or the reason either is ill-formed. Each is
+ * optional, but a posted one is never coerced: `scope` is `full` or `scoped`,
+ * and `suites` is a non-empty list of well-formed entries. A `null` for either
+ * is ill-formed, not absent.
+ */
+function gateScopeAndSuites(body: V2Body): GateScopeAndSuites | string {
+  const out: GateScopeAndSuites = {};
+  if (body.scope !== undefined) {
+    if (body.scope !== "full" && body.scope !== "scoped") return `scope must be "full" or "scoped"`;
+    out.scope = body.scope;
+  }
+  if (body.suites !== undefined) {
+    if (!Array.isArray(body.suites) || body.suites.length === 0) {
+      return "suites must be a non-empty list of suite entries";
+    }
+    const suites: GateSuiteEntry[] = [];
+    for (const [index, value] of body.suites.entries()) {
+      const entry = gateSuiteEntry(value, index);
+      if (typeof entry === "string") return entry;
+      suites.push(entry);
+    }
+    out.suites = suites;
+  }
+  return out;
+}
+
+/**
  * A `pre-merge-gate` milestone's verdict, counts and failing tests, carried
  * only when the verdict is a literal `pass`/`fail` and both counts are
  * well-formed: a half-stated verdict states nothing. `failingTests` keeps its
- * non-empty string members and is carried only when something failed.
+ * non-empty string members and is carried only when something failed. The
+ * gate's already-validated scope and suites ride beside the verdict, and are
+ * dropped with it.
  */
-function gateMilestoneFields(body: V2Body): GateMilestoneFields | undefined {
+function gateMilestoneFields(body: V2Body, scoped: GateScopeAndSuites): GateMilestoneFields | undefined {
   const passed = countOf(body.passed);
   const failed = countOf(body.failed);
   if ((body.outcome !== "pass" && body.outcome !== "fail") || passed === undefined || failed === undefined) {
@@ -1979,6 +2070,8 @@ function gateMilestoneFields(body: V2Body): GateMilestoneFields | undefined {
     passed,
     failed,
     ...(failed > 0 && failingTests !== undefined ? { failingTests } : {}),
+    ...(scoped.scope !== undefined ? { scope: scoped.scope } : {}),
+    ...(scoped.suites !== undefined ? { suites: scoped.suites } : {}),
   };
 }
 
@@ -2079,7 +2172,12 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   // accident gets. The route carries the flag; deciding what a repair means
   // stays in the store, next to the dedup it is the exception to.
   const repairProvenance = body.repairProvenance === true;
-  const gate = gateMilestoneFields(body);
+  // A gate's scope and suites are refused whole when either is ill-formed,
+  // before anything is recorded: a verdict-bearing field half-stated states
+  // nothing, and storing the rest would read as a different gate.
+  const scoped = gateScopeAndSuites(body);
+  if (typeof scoped === "string") return fail(400, scoped, { help: milestoneHints.gateShape() });
+  const gate = gateMilestoneFields(body, scoped);
   const acceptedFailingGateReason = nonEmptyString(body.acceptedFailingGateReason);
   const written = store.recordMilestoneEvent(pk.key, agentId, body.type, {
     ...(gate !== undefined ? { gate } : {}),

@@ -1544,6 +1544,11 @@ def _check_gate(args, project_dir):
 def cmd_pre_merge_gate(args):
     """ORCHESTRATOR pre-merge gate — the ONLY path that measures coverage. Steps:
     fail-fast `check` (py_compile) → full `regression --coverage`."""
+    # A gate scoped to named suites is refused before anything else: this
+    # surface enumerates no declaration, so every `--suites` is.
+    _axi().refuse_unrunnable_scoped_gate(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK, get=_get,
+        project_key=lambda: _project_key(_resolve_project_dir(args.project_dir)))
     project_dir = _resolve_project_dir(args.project_dir)
     # The runner is chosen, and refused, before the check step and before
     # anything reaches the board.
@@ -1691,7 +1696,8 @@ def cmd_cr_close(args):
     """§S4c — close the resolved OPEN plan and post the cr-merged milestone,
     requiring a live registered caller. CR-CRU-054 §S2 — delegates to the
     shared implementation."""
-    return _axi().cmd_cr_close(args, _resolve_project_dir(args.project_dir), _ops())
+    return _axi().cmd_cr_close(args, _resolve_project_dir(args.project_dir), _ops(),
+                               surface=_TIER_DECLARATION_SURFACE, stack=_STACK)
 
 
 # ── CR-CRU-030 §S4/§S7 — append-cycle + CR-024 workflow verbs ────────────────
@@ -2256,6 +2262,7 @@ def main():
                      help="Bypass the fail-fast py_compile check step")
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
+    _axi().add_gate_suites_arg(pmg)
     _add_discover_args(pmg)
     _add_python_arg(pmg)
     _add_runner_arg(pmg)

@@ -19,6 +19,7 @@ import type {
   GateDecision,
   GateDecisionAction,
   GateMilestoneFields,
+  GateSuiteEntry,
   LivenessConfig,
   PackageRef,
   Plan,
@@ -4495,7 +4496,10 @@ export class Store {
        */
       deliveredAt?: number;
       repairProvenance?: boolean;
-      /** A `pre-merge-gate` milestone's verdict, counts and failing tests. */
+      /**
+       * A `pre-merge-gate` milestone's verdict, counts and failing tests, and
+       * the gate's scope and suites when it posted them.
+       */
       gate?: GateMilestoneFields;
       /** A `cr-merged` milestone's reason for closing over a gate that was not green. */
       acceptedFailingGateReason?: string;
@@ -4653,6 +4657,8 @@ export class Store {
             passed: gate.passed,
             failed: gate.failed,
             ...(gate.failingTests !== undefined ? { failingTests: gate.failingTests } : {}),
+            ...(gate.scope !== undefined ? { scope: gate.scope } : {}),
+            ...(gate.suites !== undefined ? { suites: gate.suites } : {}),
           }
         : {}),
       ...(acceptedFailingGateReason !== undefined ? { acceptedFailingGateReason } : {}),
@@ -5871,6 +5877,8 @@ export class Store {
       ...(event.passed !== undefined ? { passed: event.passed } : {}),
       ...(event.failed !== undefined ? { failed: event.failed } : {}),
       ...(event.failingTests !== undefined ? { failingTests: event.failingTests } : {}),
+      ...(event.scope !== undefined ? { scope: event.scope } : {}),
+      ...(event.suites !== undefined ? { suites: event.suites } : {}),
       ...(event.acceptedFailingGateReason !== undefined
         ? { acceptedFailingGateReason: event.acceptedFailingGateReason }
         : {}),
@@ -6199,6 +6207,10 @@ export class Store {
       ...(Array.isArray(payload.failingTests)
         ? { failingTests: payload.failingTests as string[] }
         : {}),
+      // A gate's scope and suites, from the same blob; ABSENT on every record
+      // whose gate did not post them.
+      ...(payload.scope === "full" || payload.scope === "scoped" ? { scope: payload.scope } : {}),
+      ...(Array.isArray(payload.suites) ? { suites: payload.suites as GateSuiteEntry[] } : {}),
       ...(typeof payload.acceptedFailingGateReason === "string"
         ? { acceptedFailingGateReason: payload.acceptedFailingGateReason }
         : {}),
