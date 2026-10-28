@@ -3906,11 +3906,24 @@ def add_cr_close_gate_arg(p):
                    help=ACCEPT_FAILING_GATE_HELP)
 
 
+# A board event id: `evt-<ms>-<seq>`, its numeric parts in filing order.
+_EVENT_ID_SHAPE = re.compile(r"evt-(\d+)-(\d+)")
+
+
 def _milestone_order(milestone):
-    """Time order for a CR's gate milestones: timestamp, ties broken by id (a
-    numeric id before a textual one, so mixed ids still compare)."""
+    """Time order for a CR's gate milestones: timestamp, ties broken by id. An
+    event id (`evt-<ms>-<seq>`) compares by its numbers, so `-100` follows
+    `-59`; a numeric id sorts first, and an id of any other shape last, as
+    text, so mixed ids still compare."""
     ident = milestone.get("id")
-    tie = (0, ident, "") if isinstance(ident, (int, float)) else (1, 0, str(ident))
+    shaped = (_EVENT_ID_SHAPE.fullmatch(ident) if isinstance(ident, str)
+              else None)
+    if isinstance(ident, (int, float)) and not isinstance(ident, bool):
+        tie = (0, (ident,), "")
+    elif shaped:
+        tie = (1, (int(shaped.group(1)), int(shaped.group(2))), "")
+    else:
+        tie = (2, (), str(ident))
     return (milestone.get("timestamp") or 0, tie)
 
 
@@ -4010,12 +4023,14 @@ def _gate_cycle(gate):
     return cycle if cycle is not None else "<id>"
 
 
-def _gate_refusal_text(cr, verdict, declared):
+def _gate_refusal_text(cr, verdict, declared, scopable=True):
     """The refusal's `(error, help)` for a CR whose gate result is not green,
     or that has no full gate result at all. `declared` is a zero-argument
     callable answering the gated targets the project declares now, asked only
     when suites are still red: a scoped re-run is offered when every red suite
-    is still declared, a full gate otherwise."""
+    is still declared, a full gate otherwise. `scopable` is False for a client
+    that cannot enumerate a declaration, so cannot run a scoped gate at all:
+    its help names a full gate, and says that is why."""
     accept = (f"or close over it deliberately: cr-close --commit <sha> --cr {cr} "
               f'--accept-failing-gate "<reason>"')
     gate = verdict.base
@@ -4038,7 +4053,11 @@ def _gate_refusal_text(cr, verdict, declared):
         error = (f"cr-close refused: {cr}'s gate result is red \u2014 still red: "
                  f"{'; '.join(described)}; nothing was closed")
         red = list(verdict.red)
-        if all(target in declared() for target in red):
+        if not scopable:
+            rerun = (f"this client cannot run a scoped gate; run a full gate: "
+                     f"pre-merge-gate --agent <agentId> --cycle {cycle}, then "
+                     f"cr-close")
+        elif all(target in declared() for target in red):
             rerun = (f"fix the red suite(s), re-run them: pre-merge-gate "
                      f"--suites {','.join(red)} --agent <agentId> --cycle "
                      f"{cycle}, then cr-close")
@@ -4130,7 +4149,8 @@ def gate_close_verdict(args, cr, project_dir, ops, *, surface=None, stack=None):
     if reason is not None:
         return reason, [], None
     error, help_steps = _gate_refusal_text(
-        cr, verdict, lambda: _declared_gated_targets(args, surface, stack))
+        cr, verdict, lambda: _declared_gated_targets(args, surface, stack),
+        scopable=surface is not None and surface.suites is not None)
     gate = verdict.base
     fields = {"commit": args.commit, "cr": cr, "error": error}
     if gate is not None:
@@ -6982,8 +7002,8 @@ def refuse_unrunnable_scoped_gate(args, *, surface, stack, get, project_key):
     surface that cannot enumerate a declaration declares none, so that client
     refuses every `--suites`); a list with an empty, padded or repeated item;
     `--suites` beside `--release`; a target the project does not declare, or
-    declares excluded; a board whose health does not state that it records a
-    gate's scope and suites; and a gate no cycle resolves for (no `--cycle`,
+    declares excluded; a board whose health could not be read, or does not
+    state that it records a gate's scope and suites; and a gate no cycle resolves for (no `--cycle`,
     and the agent bound to none). `project_key` is a zero-argument callable,
     asked only once the board has to be."""
     targets = scoped_gate_targets(args)
@@ -7040,6 +7060,14 @@ def refuse_unrunnable_scoped_gate(args, *, surface, stack, get, project_key):
                 f"scoped to it; refused before anything ran",
                 [name_help, FULL_GATE_HELP])
     health = get("/api/health")
+    if isinstance(health, dict) and health.get("ok") is False:
+        raise ScopedGateRefused(
+            f"the board's /api/health could not be read "
+            f"({health.get('error') or 'no error was given'}), so nothing "
+            f"shows that it records a gate's scope and suites; refused before "
+            f"anything ran",
+            ["check that the board is reachable and answers /api/health, "
+             "then re-run", FULL_GATE_HELP])
     milestones = health.get("milestones") if isinstance(health, dict) else None
     recorded = milestones.get("gate") if isinstance(milestones, dict) else None
     if not (isinstance(recorded, list)
