@@ -21,14 +21,20 @@ Module-loading convention copied verbatim from the sibling AXI test harness
 path via `importlib`, never import it as a package (it is a hyphenated
 filename, not importable as a plain module).
 
-Invocation:
-    python3 -m pytest tests/client/test_cr040_coverage_tooling.py -q
-Fallback:
-    python3 tests/client/test_cr040_coverage_tooling.py
+The `--cov-source` default is read by parsing only: the client's root
+parser is captured by spying on `argparse.ArgumentParser.parse_args` (the
+same seam `test_client_tier_verb_contract` uses), so no verb is ever
+dispatched and nothing reaches a board.
+
+Invocation (through the client, as a targeted run):
+    python3 clients/python-crucible.py test --agent <agentId> \
+        --tests tests.client.test_cr040_coverage_tooling
 """
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import os
 import subprocess
 import sys
@@ -55,58 +61,83 @@ def _load_client_module():
     return _load_module(SCRIPT_PATH, "python_crucible_under_test_cr040")
 
 
-def _run_main_capturing_cov_source(module, argv, patch_target):
-    """Invoke module.main() with the given argv, but intercept the subcommand's
-    handler (`cmd_regression` / `cmd_pre_merge_gate`) before it does any real
-    work (network calls, subprocess xmlrunner/coverage runs). Returns the
-    captured `args` Namespace so we can inspect the RESOLVED `--cov-source`
-    default without triggering the actual gate run."""
+def _root_parser(module):
+    """The client's ROOT argparse parser, captured at the moment it parses.
+
+    Mirrors `_root_parser` in `test_client_tier_verb_contract`: `main()`
+    builds the parser inline, so `parse_args` is spied on, the bound `self`
+    kept, and `SystemExit` raised before anything is dispatched. Takes the
+    already-loaded `module` so a caller's mocks on that same module are in
+    force while `main()` builds the parser."""
     captured = {}
 
-    def _capture(args):
-        captured["args"] = args
-        return 0
+    def spy(self, args=None, namespace=None):
+        captured.setdefault("root", self)
+        raise SystemExit(0)
 
-    with mock.patch.object(module, patch_target, side_effect=_capture):
-        full_argv = ["python-crucible.py"] + argv
-        with mock.patch.object(sys, "argv", full_argv):
-            try:
-                module.main()
-            except SystemExit:
-                pass
-    assert "args" in captured, (
-        f"{patch_target} was never invoked -- argv {argv!r} did not reach "
-        f"the expected subcommand handler"
-    )
-    return captured["args"]
+    with mock.patch.object(argparse.ArgumentParser, "parse_args", spy), \
+            mock.patch.object(sys, "argv", ["python-crucible.py", "status"]), \
+            contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(io.StringIO()):
+        try:
+            module.main()
+        except SystemExit:
+            pass
+    root = captured.get("root")
+    assert root is not None, "python-crucible.py never parsed its arguments"
+    return root
+
+
+def _verb_parsers(root):
+    for action in root._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action.choices
+    return {}
 
 
 class CovSourceDefaultTest(unittest.TestCase):
     """`--cov-source` has no default source: omitted, it is left unset and
-    the project's own coverage configuration decides what is measured."""
+    the project's own coverage configuration decides what is measured.
 
-    def test_regression_cov_source_sets_no_default_so_the_projects_config_decides(self):
-        module = _load_client_module()
-        args = _run_main_capturing_cov_source(
-            module, ["regression", "--agent", "cr040-red-probe"], "cmd_regression"
-        )
-        self.assertIsNone(
-            args.cov_source,
-            f"regression --cov-source must set no default source (the "
-            f"project's coverage config decides); got {args.cov_source!r}",
-        )
+    Read by parsing only: the verb's parser is inspected, and the dispatcher
+    and both handlers are mocked so a call to any of them is caught."""
 
-    def test_pre_merge_gate_cov_source_sets_no_default_so_the_projects_config_decides(self):
+    def _assert_cov_source_default_is_unset_and_nothing_dispatched(self, verb):
         module = _load_client_module()
-        args = _run_main_capturing_cov_source(
-            module, ["pre-merge-gate", "--agent", "cr040-red-probe"],
-            "cmd_pre_merge_gate",
+        run_verb = mock.Mock(name="run_verb", return_value=0)
+        cmd_regression = mock.Mock(name="cmd_regression", return_value=0)
+        cmd_pre_merge_gate = mock.Mock(name="cmd_pre_merge_gate", return_value=0)
+        with mock.patch.object(module._axi(), "run_verb", run_verb), \
+                mock.patch.object(module, "cmd_regression", cmd_regression), \
+                mock.patch.object(module, "cmd_pre_merge_gate", cmd_pre_merge_gate):
+            root = _root_parser(module)
+
+        parsers = _verb_parsers(root)
+        self.assertIn(verb, parsers, f"the root parser carries no {verb!r} verb")
+        cov_source_actions = [
+            action for action in parsers[verb]._actions
+            if "--cov-source" in action.option_strings
+        ]
+        self.assertEqual(
+            len(cov_source_actions), 1,
+            f"{verb} must declare exactly one --cov-source option; found "
+            f"{len(cov_source_actions)}",
         )
+        default = cov_source_actions[0].default
         self.assertIsNone(
-            args.cov_source,
-            f"pre-merge-gate --cov-source must set no default source (the "
-            f"project's coverage config decides); got {args.cov_source!r}",
+            default,
+            f"{verb} --cov-source must set no default source (the project's "
+            f"coverage config decides); got {default!r}",
         )
+        run_verb.assert_not_called()
+        cmd_regression.assert_not_called()
+        cmd_pre_merge_gate.assert_not_called()
+
+    def test_regression_cov_source_sets_no_default_and_reading_it_dispatches_no_verb(self):
+        self._assert_cov_source_default_is_unset_and_nothing_dispatched("regression")
+
+    def test_pre_merge_gate_cov_source_sets_no_default_and_reading_it_dispatches_no_verb(self):
+        self._assert_cov_source_default_is_unset_and_nothing_dispatched("pre-merge-gate")
 
 
 class CoverageDevDependencyTest(unittest.TestCase):
