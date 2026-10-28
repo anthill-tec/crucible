@@ -516,7 +516,11 @@ def _run_native_tests(args, verb, tier, want_coverage, target="junit"):
     even a failed/raising run tears that identity down via the v2 silent
     unregister, and never touches the retired /api/agents/remove shim.
     CR-CRU-056 — the cleanup fires ONLY for an identity this run created; a
-    caller who registered BEFORE the run keeps its registration and binding."""
+    caller who registered BEFORE the run keeps its registration and binding.
+
+    Ill-formed narrowing input is refused first, before the registration
+    heartbeat and run start, so a refused run reaches the board not at all."""
+    _refuse_ill_formed_narrowing(args)
     pd = _project_dir(args)
     preflight_warnings = []
     # Open under the SAME id the run will ingest under. The body
@@ -564,20 +568,77 @@ def _coverage_dir(native_dir, own_dir):
     return os.path.join(own_dir or native_dir, "coverage")
 
 
-def _make_reports_env(own_dir, want_coverage):
-    """The documented `make` contract: REPORTS_DIR (and, on a coverage run,
+# A test-file stem: no path, no extension.
+_STEM_RE = re.compile(r"[A-Za-z0-9_-]+")
+# One comma-separated test-name fragment, optionally ending in `*`.
+_NAME_ELEMENT_RE = re.compile(r"[A-Za-z0-9_]+\*?")
+_STEM_HINT = ("give a stem, not a path or file name: `--tests test_motor "
+              "test_pid`, each matching [A-Za-z0-9_-]+")
+_NAME_HINT = ("`--name` takes comma-separated test-name fragments: "
+              "`--name stall,limit`, each matching [A-Za-z0-9_]+ with an "
+              "optional trailing *")
+_TESTS_HELP = ("run only these test files, by stem (test_motor), resolved "
+               "against the Makefile under --dir; handed to `make` as TESTS")
+_NAME_HELP = ("run only the tests whose name or file contains one of these "
+              "comma-separated fragments; handed to `make` as TEST_NAME "
+              "(Unity's -f)")
+
+
+def _add_narrowing_args(p):
+    """The two flags that narrow a native run: `--tests` (the files) and
+    `--name` (Unity's name filter). Only `test` and `unit` take them."""
+    p.add_argument("--tests", nargs="+", help=_TESTS_HELP)
+    p.add_argument("--name", help=_NAME_HELP)
+
+
+def _refuse_ill_formed_narrowing(args):
+    """Raise the typed `narrowing-refused` hard stop for a stem outside
+    [A-Za-z0-9_-]+ (a path or an extension), an empty `--name`, or a `--name`
+    element outside [A-Za-z0-9_]+ with an optional trailing `*`. A verb
+    without the flags is never refused here."""
+    for stem in getattr(args, "tests", None) or ():
+        if not _STEM_RE.fullmatch(stem):
+            raise _axi().NarrowingRefused(
+                f"--tests {stem!r} is not a test-file stem; nothing ran and "
+                f"nothing was filed", [_STEM_HINT])
+    name = getattr(args, "name", None)
+    if name is None:
+        return
+    for element in name.split(","):
+        if not _NAME_ELEMENT_RE.fullmatch(element):
+            raise _axi().NarrowingRefused(
+                f"--name {name!r} holds the fragment {element!r}, which is not "
+                f"a test-name fragment; nothing ran and nothing was filed",
+                [_NAME_HINT])
+
+
+def _make_reports_env(own_dir, want_coverage, args=None):
+    """The environment every native `make` run gets. The client owns TESTS
+    and TEST_NAME: both are removed, then set only from this run's own
+    `--tests` (the stems, space-separated) and `--name` (verbatim), so a
+    variable exported in the shell never narrows a run.
+
+    The documented `make` contract: REPORTS_DIR (and, on a coverage run,
     COVERAGE_DIR) point at the run's own directory, overriding any ambient
     value. That directory is created and its previous TEST-*.xml / lcov.info
-    cleared first. None without an own directory: `make` then runs with the
-    inherited environment, as before."""
+    cleared first. Without an own directory neither is set and `make` keeps
+    its own `reports/` and `coverage/`, as before."""
+    env = os.environ.copy()
+    env.pop("TESTS", None)
+    env.pop("TEST_NAME", None)
+    tests = getattr(args, "tests", None)
+    if tests:
+        env["TESTS"] = " ".join(tests)
+    name = getattr(args, "name", None)
+    if name is not None:
+        env["TEST_NAME"] = name
     if own_dir is None:
-        return None
+        return env
     os.makedirs(own_dir, exist_ok=True)
     stale = glob.glob(os.path.join(own_dir, "TEST-*.xml"))
     stale += glob.glob(os.path.join(_coverage_dir(None, own_dir), "lcov.info"))
     for path in stale:
         os.remove(path)
-    env = os.environ.copy()
     env["REPORTS_DIR"] = own_dir
     if want_coverage:
         env["COVERAGE_DIR"] = _coverage_dir(None, own_dir)
@@ -662,7 +723,8 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
     own_dir = _run_reports_dir(args, pd)
-    make_env = _child_env(args, _make_reports_env(own_dir, want_coverage))
+    make_env = _child_env(args, _make_reports_env(own_dir, want_coverage, args))
+    narrowed = bool(getattr(args, "tests", None)) or getattr(args, "name", None) is not None
     narrator, run_id = None, None
     if agent_id:
         narrator = _narrator(pd, agent_id, identity)
@@ -727,7 +789,10 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
         # harness that repeated a source across reports would over-count.
         files += f
         tree.extend(t)
-    if _axi().ran_nothing(run.returncode, summary["total"]):
+    # A narrowed run whose reports hold zero cases ran nothing whatever
+    # `make`'s exit: Unity with a `-f` that matches nothing exits 0.
+    if (_axi().ran_nothing(run.returncode, summary["total"])
+            or (narrowed and summary["total"] == 0)):
         return _axi().emit_ran_nothing(
             verb, "TEST-*.xml", run.returncode, run.stdout or "", run_id,
             preflight_warnings, post_fn=_post, project_key=_project_key(pd),
@@ -1456,6 +1521,7 @@ def main():
     _add_run_release_arg(t)
     _add_reports_arg(t)
     _add_log_arg(t)
+    _add_narrowing_args(t)
     t.set_defaults(func=cmd_test)
 
     # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
@@ -1476,7 +1542,8 @@ def main():
                  "Runs the native host tests (`make junit`) under --dir -> "
                  "/api/v2/runs/parsed.",
                  (_add_native_dir_arg, _add_gate_cycle_arg,
-                  _add_run_release_arg, _add_reports_arg, _add_log_arg)),
+                  _add_run_release_arg, _add_reports_arg, _add_log_arg,
+                  _add_narrowing_args)),
              regression=tier_verb(
                  cmd_regression,
                  "Runs the full native suite under --dir -> "

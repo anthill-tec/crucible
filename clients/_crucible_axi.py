@@ -2555,6 +2555,35 @@ def emit_scoped_gate_refused_hard_stop(verb, refusal, context=None):
     return 1
 
 
+# A run narrowed by ill-formed input: a test-file stem or a test-name fragment
+# outside its pattern. Raised by the client before the run's registration
+# heartbeat and run start, converted by `run_verb`, so nothing reaches the
+# board and the runner never starts.
+
+NARROWING_REFUSED_CODE = "narrowing-refused"
+
+
+class NarrowingRefused(Exception):
+    """Raised when a run's narrowing flags are ill-formed; `detail` names the
+    input refused and `help[]` the form it must take."""
+
+    def __init__(self, detail, help_steps):
+        self.detail = detail
+        self.help = list(help_steps)
+        super().__init__(detail)
+
+
+def emit_narrowing_refused_hard_stop(verb, refusal, context=None):
+    """Emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for refused narrowing input, and return the non-zero exit code.
+    Nothing is run, nothing is posted from this path."""
+    emit_axi(verb or "unknown", False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {NARROWING_REFUSED_CODE} \u2014 {refusal.detail}")
+    return 1
+
+
 def _hard_stop_context(args, project_key_fn, agent_id=None):
     """The best-effort `context` a hard-stopped verb's envelope carries.
 
@@ -2633,6 +2662,11 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
         return emit_release_run_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
             _hard_stop_context(args, project_key_fn))
+    except NarrowingRefused as refusal:
+        return emit_narrowing_refused_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
     except ScopedGateRefused as refusal:
         return emit_scoped_gate_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
