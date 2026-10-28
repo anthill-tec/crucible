@@ -150,7 +150,7 @@ const REPLY_ROUTED_GET_ENVELOPES: Array<{ path: (ctx: Fixture) => string; keys: 
   // `limits` closes it: the ingest body bound a client checks before sending.
   {
     path: () => "/api/v2/health",
-    keys: ["ok", "status", "version", "uptime_s", "counts", "store", "listener", "codecs", "limits"],
+    keys: ["ok", "status", "version", "uptime_s", "counts", "store", "listener", "codecs", "milestones", "limits"],
   },
   { path: () => "/api/v2/projects", keys: ["ok", "projects"] },
   { path: () => "/api/v2/plans", keys: ["ok", "plans"] },
