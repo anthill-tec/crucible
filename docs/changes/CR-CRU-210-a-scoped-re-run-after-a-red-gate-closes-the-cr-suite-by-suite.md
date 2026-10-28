@@ -1,6 +1,6 @@
 # CR-CRU-210 — a scoped re-run after a red gate closes the CR, suite by suite
 
-**Type** fix · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-28
+**Type** fix · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — merged 2026-10-28 (plan 211, cycles 760–765, gate 8922/0: bun 4145/0, python 4777/0); filed 2026-10-28
 (user rulings 2026-10-28: regression after a gate is scoped; a patch CR into 0.4.0, sequenced next;
 re-scored 5 → 8 at gap analysis and 8 → 13 at the spec pre-review)
 
@@ -132,54 +132,67 @@ the composition runs only the named suites.
 
 GREEN-GUARD marks a criterion that holds today and pins what must not change.
 
-- [ ] **AC1 (§S1)** A `pre-merge-gate` milestone posted with `scope` and `suites` is read back with
+- [x] **AC1 (§S1)** A `pre-merge-gate` milestone posted with `scope` and `suites` is read back with
   both; one with an ill-formed `scope`, or any ill-formed `suites` entry, is refused with 400 and
   nothing recorded; `/api/health` states `milestones.gate` naming `scope` and `suites` (bun, against
   the board).
-- [ ] **AC2 (§S2)** For each of the five clients, every verb that files a run (the verbs
+- [x] **AC2 (§S2)** For each of the five clients, every verb that files a run (the verbs
   `test_every_verb_that_files_a_run_is_refused_while_a_cycle_is_active` enumerates) states `events`
   naming the id the board answered, on a passing and a failing run; a verb that filed nothing states
   `events: []`.
-- [ ] **AC3 (§S2, bun)** A full gate over a project declaring a bun suite and a dispatched python suite
+- [x] **AC3 (§S2, bun)** A full gate over a project declaring a bun suite and a dispatched python suite
   that fails posts `scope: full` and both entries, each with its own outcome and counts, the failing
   entry and the milestone's `failingTests` naming the real failing test; the gate's envelope lists the
   events of both.
-- [ ] **AC4 (§S2/§S4, bun)** A full gate over a project declaring only a dispatched suite, where that
+- [x] **AC4 (§S2/§S4, bun)** A full gate over a project declaring only a dispatched suite, where that
   suite passes and the whole suite fails, posts a `fail` entry for the whole suite, and `cr-close`
   refuses it with no scoped gate run.
-- [ ] **AC5 (§S2, bun)** A declared suite that cannot be dispatched is a `fail` entry with no counts.
-- [ ] **AC6 (§S2, GREEN-GUARD)** A gate over a project that declares no suites, and a gate stopped at
+- [x] **AC5 (§S2, bun)** A declared suite that cannot be dispatched is a `fail` entry with no counts.
+- [x] **AC6 (§S2, GREEN-GUARD)** A gate over a project that declares no suites, and a gate stopped at
   its step 0, each post a milestone with no `suites`.
-- [ ] **AC7 (§S3, bun)** `pre-merge-gate --suites <the dispatched target>` runs step 0, then that suite
+- [x] **AC7 (§S3, bun)** `pre-merge-gate --suites <the dispatched target>` runs step 0, then that suite
   only — the whole-suite run does not run — and posts `scope: scoped` naming only that suite; its
   envelope states `scope: scoped`.
-- [ ] **AC8 (§S3)** For each of maven, rust and arduino, `pre-merge-gate --suites <one declared
+- [x] **AC8 (§S3)** For each of maven, rust and arduino, `pre-merge-gate --suites <one declared
   target>` runs step 0 and the whole suite and posts `scope: scoped` naming every own-stack target.
-- [ ] **AC9 (§S3)** For each of the five clients, `--suites` is refused before anything runs — exit
+- [x] **AC9 (§S3)** For each of the five clients, `--suites` is refused before anything runs — exit
   non-zero, no run, compile or lint result filed, no milestone posted — when: the board does not state
   the capability; the target is undeclared or excluded (the declared targets named); the list has an
   empty, padded or repeated item; `--release` is given; no cycle resolves. python refuses every
   `--suites` as declaring no suites.
-- [ ] **AC10 (§S4, GREEN-GUARD — the re-run is the latest milestone)** A red full gate whose one failing suite is then re-run green by a scoped gate
+- [x] **AC10 (§S4, GREEN-GUARD — the re-run is the latest milestone)** A red full gate whose one failing suite is then re-run green by a scoped gate
   closes, without `--accept-failing-gate`, recording no accepted-failing-gate reason.
-- [ ] **AC11 (§S4)** A red full gate followed by a green scoped gate of a *different* suite is refused;
+- [x] **AC11 (§S4)** A red full gate followed by a green scoped gate of a *different* suite is refused;
   the error names the suite still red and the help names `pre-merge-gate --suites <that suite>` (on
   python, which declares no suites, a full gate).
-- [ ] **AC12 (§S4)** Refused: a green scoped gate with no full gate before it; a green scoped gate
+- [x] **AC12 (§S4)** Refused: a green scoped gate with no full gate before it; a green scoped gate
   older than the latest (red) full gate; two full gates, the older red and re-run green, the newer
   red.
-- [ ] **AC13 (§S4)** A green full gate followed by a red scoped gate of one suite is refused.
-- [ ] **AC14 (§S4)** A red full gate, a green scoped re-run, then a scoped gate that fails at step 0
+- [x] **AC13 (§S4)** A green full gate followed by a red scoped gate of one suite is refused.
+- [x] **AC14 (§S4)** A red full gate, a green scoped re-run, then a scoped gate that fails at step 0
   is refused.
-- [ ] **AC15 (§S4)** A red full gate milestone with no `suites` — posted before this CR — is refused even
+- [x] **AC15 (§S4)** A red full gate milestone with no `suites` — posted before this CR — is refused even
   when a later scoped gate is green; a green one closes as today (that half a GREEN-GUARD).
-- [ ] **AC16 (§S3/§S4)** All five clients' `pre-merge-gate --help` lists `--suites`, from the one
+- [x] **AC16 (§S3/§S4)** All five clients' `pre-merge-gate --help` lists `--suites`, from the one
   shared declaration; `--accept-failing-gate`'s help and its unused-reason warning speak of the gate
   result.
 
 Standing invariants (not new criteria): no CR citation is added under `src/`, `public/` or
 `clients/` (the tripwire's pins unchanged); no test prints an environment value or steers a client by
 a retired variable; no gate test opens the live store.
+
+- *Recorded at merge.* Rulings settled in the cycles: the well-formed rule (a42b15e); failing tests ride
+  the milestone's entries, not the envelope's rows (67a16d3); guard labels and python's full-gate help
+  (9a12b10); `events` names run ingests only, an aborted run is not listed, a passing entry omits
+  `failingTests`, every gate milestone states `scope`; the board's shape check runs for every milestone
+  type; any failure escaping the gate posts no `suites`; check order no-suites → malformed list →
+  `--release` → undeclared/excluded → board capability → no cycle; a later passing gate with no
+  `suites` clears an earlier step-0 failure; the refusal's `gate` field shows the base. Approved test
+  amendments: `d6cdee4`, `066c3b9`, `d0b56c0`, `a303f89`. Gaps: same-instant gate results keep their
+  filing order by the event id's number, with no deterministic test; the merge gate's own milestone was
+  stored without `scope`/`suites` by the dev board started before this branch — the designed fallback.
+  Nits: a full gate that composes nothing (python's) states no `scope` in its envelope; the python
+  envelope's `ok` means the ingest was accepted.
 
 ## Non-goals
 
