@@ -396,6 +396,13 @@ export const milestoneHints = {
     "nothing was declared: re-send PATCH /api/v2/projects/<key> {milestoneTypes: […]} without the reserved name — the whole declaration is refused, so a legitimate type beside it is not left half-applied",
     "a reserved type stays recordable by every project — it never has to be declared to be used",
   ],
+  /** A gate milestone whose `scope` or `suites` is ill-formed: nothing was recorded. */
+  gateShape: (): string[] => [
+    "nothing was recorded: the whole milestone is refused when its scope or suites is ill-formed",
+    "a well-formed scope and suites are welcome: scope is \"full\" or \"scoped\"; suites is a non-empty list of {target, outcome, passed?, failed?, failingTests?}",
+    "each entry: target a non-empty string; outcome \"pass\" or \"fail\"; passed and failed both non-negative integers, or both absent (only on \"fail\"); failingTests a list of strings",
+    "either may be left out (suites may come without scope), but neither may be null",
+  ],
 };
 
 /**

@@ -21,7 +21,7 @@ import {
   type StoreResolution,
 } from "./store-path.ts";
 import { Store, defaultRetention, RETENTION_DISPOSABLE_KINDS } from "./store.ts";
-import { handleV2 } from "./v2.ts";
+import { GATE_MILESTONE_RECORD_FIELDS, handleV2 } from "./v2.ts";
 import { codecNames } from "./codecs/index.ts";
 
 const pkg = JSON.parse(
@@ -347,6 +347,9 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
     // The names this board decodes, read off the codec registries, so a client
     // can tell a board that predates server-side decoding before it sends.
     codecs: codecNames(),
+    // What a gate milestone records beyond its verdict, so a client can tell
+    // a board that keeps a gate's scope and suites before it posts them.
+    milestones: { gate: [...GATE_MILESTONE_RECORD_FIELDS] },
     // The ingest body bound, resolved per request like every limit, so a client
     // can refuse a body the board would refuse before it sends a byte of it.
     limits: { ingest_body_bytes: resolveLimit("ingest_body_bytes") },

@@ -334,6 +334,12 @@ export interface RunEvent {
    */
   failingTests?: string[];
   /**
+   * A `pre-merge-gate` milestone's scope (`full` or `scoped`) and the suites
+   * the gate ran, one entry each. ABSENT when the gate did not post them.
+   */
+  scope?: GateScope;
+  suites?: GateSuiteEntry[];
+  /**
    * A `cr-merged` milestone's record that the CR closed over a gate that was
    * not green, and the reason its closer gave. ABSENT on an ordinary close.
    */
@@ -462,6 +468,26 @@ export interface GateMilestoneFields {
   passed: number;
   failed: number;
   /** Present only when `failed > 0`. */
+  failingTests?: string[];
+  /** Present only when the gate posted it. */
+  scope?: GateScope;
+  /** Present only when the gate posted it; never an empty list. */
+  suites?: GateSuiteEntry[];
+}
+
+/** Whether a gate ran every declared suite or only the ones it was named. */
+export type GateScope = "full" | "scoped";
+
+/**
+ * One suite a gate ran: its declared target, its outcome, and its counts and
+ * failing tests. The counts are both present or both absent — absent only on a
+ * `fail` whose suite could not run, be dispatched or report.
+ */
+export interface GateSuiteEntry {
+  target: string;
+  outcome: GateOutcome;
+  passed?: number;
+  failed?: number;
   failingTests?: string[];
 }
 
