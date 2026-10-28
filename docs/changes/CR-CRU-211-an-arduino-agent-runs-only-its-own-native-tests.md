@@ -1,6 +1,6 @@
 # CR-CRU-211 — an arduino agent runs only its own native tests
 
-**Type** feature · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-28
+**Type** feature · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — merged 2026-10-28 (plan 214, cycles 775–779, gate 9042/0: bun 4176/0, python 4866/0); filed 2026-10-28
 (requested by Model B, Sandesh #1489; user rulings 2026-10-28: delivered in 0.4.0, straight after
 CR-CRU-210; files and names, like bun; re-scored 3 → 5 at gap analysis and 5 → 8 at the spec pre-review)
 
@@ -88,33 +88,43 @@ The printed help's contract section (AC6).
 
 ## Acceptance criteria
 
-- [ ] **AC1** On `test` and on `unit`, `--tests test_a test_b` runs `make` with `TESTS="test_a test_b"` in
+- [x] **AC1** On `test` and on `unit`, `--tests test_a test_b` runs `make` with `TESTS="test_a test_b"` in
   its environment, with or without an own reports directory; a Makefile honouring it produces only those
   files' cases, and the run filed holds only them.
-- [ ] **AC2** On `test` and on `unit`, `--name stall,limit` runs `make` with `TEST_NAME="stall,limit"`; a
+- [x] **AC2** On `test` and on `unit`, `--name stall,limit` runs `make` with `TEST_NAME="stall,limit"`; a
   Makefile honouring it produces only the cases whose name or file contains `stall` or `limit`, and the
   run filed holds only them.
-- [ ] **AC3** On `test` and on `unit`, a Makefile that ignores `TESTS` produces a case whose file stem was
+- [x] **AC3** On `test` and on `unit`, a Makefile that ignores `TESTS` produces a case whose file stem was
   not asked for; the run is filed and its envelope warns `makefile-ignored-tests`, naming `TESTS` and the
   stems not asked for. A Makefile that honours `TESTS` and writes one combined report raises no warning.
-- [ ] **AC4** On `test` and on `unit`, a Makefile that ignores `TEST_NAME` produces a case whose name and
+- [x] **AC4** On `test` and on `unit`, a Makefile that ignores `TEST_NAME` produces a case whose name and
   file stem contain none of the elements; the run is filed and its envelope warns
   `makefile-ignored-test-name`, naming `TEST_NAME`, the elements and the first unmatched case. A Makefile
   that honours it and runs a whole file because its path matched raises no warning.
-- [ ] **AC5** On `test` and on `unit`, a stem with a path or an extension (`src/test_a`, `test_a.c`), a
+- [x] **AC5** On `test` and on `unit`, a stem with a path or an extension (`src/test_a`, `test_a.c`), a
   stem outside `[A-Za-z0-9_-]+`, an empty `--name`, or a `--name` element outside `[A-Za-z0-9_]+\*?`
   (`stall,,limit`, `a:b`, `a b`) is refused with `narrowing-refused`: one `ok:false` envelope, exit
   non-zero, no request to the board, `make` not run.
-- [ ] **AC6** `arduino-crucible.py --help` carries the `make` contract section, kept as written, naming
+- [x] **AC6** `arduino-crucible.py --help` carries the `make` contract section, kept as written, naming
   `REPORTS_DIR`, `COVERAGE_DIR`, `TESTS` and `TEST_NAME`, with `TESTS ?=`, the quoted `-f "$(TEST_NAME)"`
   and the Unity runner requirement; by their parsed options, `test` and `unit` take `--tests` and
   `--name`, and `regression`, `pre-merge-gate`, `auto-ingest` and the declared tier verbs (`module`,
   `integration`, `e2e`, `bdd`) take neither.
-- [ ] **AC7** On `test` and on `unit`, a narrowed run whose Makefile exits 0 and writes a report with zero
+- [x] **AC7** On `test` and on `unit`, a narrowed run whose Makefile exits 0 and writes a report with zero
   cases (`--name nomatch`) fails: `ok:false`, a ran-nothing warning, no ingest, exit non-zero; an
   unnarrowed zero-case run that exits 0 is filed as today (that half a GREEN-GUARD).
-- [ ] **AC8** With `TESTS` and `TEST_NAME` set in the client's own environment, `test` and `unit` without
+- [x] **AC8** With `TESTS` and `TEST_NAME` set in the client's own environment, `test` and `unit` without
   the flags, `regression`, `pre-merge-gate` and a declared tier verb run `make` with neither.
+
+- *Recorded at merge.* Rulings in the cycles: a narrowed zero-case run reuses the ran-nothing code
+  `no-test-reports`; a refusal's `help[]` carries the hint for the refused flag; `--tests` and `--name`
+  together set both variables; the ran-nothing path carries neither ignored-variable warning (nothing to
+  judge); a warning names the elements as given and the first unmatched case in report order. VERIFY's
+  findings, fixed in cycle 779: the help states that `REPORTS_DIR`/`COVERAGE_DIR` are set only for a run
+  with its own reports directory and shows their `?=` defaults; a case's file stem is judged against
+  `--tests` only when a test source `<stem>.c`/`.cpp`/`.ino` exists under `--dir`, so a constant
+  `classname` is never judged; a flag never lets the other shell variable through (mutant-proven). The
+  first gate was cut off by a power failure and re-run in full.
 
 ## Non-goals
 
