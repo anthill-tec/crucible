@@ -10,6 +10,15 @@ client test that forgets to steer then finds no project and posts nothing.
 The setup is idempotent within a process: an environment marker names the
 directory, so a second import of the package (under another name) keeps it.
 
+The isolation applies only when unittest imports this package, which it
+does in three discovery shapes: `-s tests/client -t .` (the suite's declared
+gate), dotted `tests.client.<module>` targets, and discovery from `-s tests`
+(where the package loads as `client`). Discovered with `-s tests/client` and
+no `-t .`, the top-level directory is `tests/client` itself, its modules load
+as top-level `test_x`, and this package is NOT imported unless some module
+imports `tests.client.*` -- in that shape the live-project guard finds the
+variables unset and fails, naming the cause.
+
 Scope: the isolation covers inherited resolution only. A test that removes
 one of these variables from its environment takes responsibility for
 steering, by `--project-dir` or by a working directory outside the repo.

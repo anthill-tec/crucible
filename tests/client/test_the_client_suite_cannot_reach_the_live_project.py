@@ -72,7 +72,10 @@ class TheClientSuiteCannotReachTheLiveProjectTest(unittest.TestCase):
                  if not os.environ.get(var)]
         self.assertEqual(
             unset, [],
-            f"{', '.join(unset)} unset in the client suite's process -- "
+            f"{', '.join(unset)} unset in the client suite's process -- the "
+            "suite was discovered without importing the tests.client package "
+            "(run it as `-s tests/client -t .`, as dotted "
+            "`tests.client.<module>` targets, or from `-s tests`); "
             f"{LIVE_REPO_MESSAGE} ({REPO_ROOT})")
         named = {var: _real(os.environ[var]) for var in STACK_VARIABLES.values()}
         distinct = set(named.values())
