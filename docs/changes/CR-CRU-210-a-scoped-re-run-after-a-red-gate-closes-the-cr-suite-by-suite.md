@@ -114,8 +114,10 @@ already does); lines below §3.5 keep their numbers, which comments cite.
 
 ### §S2 — a run names its events, and the milestone carries its suites
 
-`events` on every envelope; the composition's rows gain `outcome` and failing tests; the envelope
-remembers its rows for `record_gate_outcome`, which posts `scope` and `suites` as above.
+`events` on every envelope; the composition's rows gain `outcome`; the composition remembers each
+suite's result for `record_gate_outcome`, which posts `scope` and `suites` as above, each entry's
+failing tests read from the board through its run's events. A failure that escapes the gate, even
+after the composition, posts no `suites`.
 
 ### §S3 — `--suites` scopes a gate
 
