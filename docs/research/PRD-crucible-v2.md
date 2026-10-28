@@ -156,11 +156,12 @@ actually landed:
 
 | Field | Type | Notes |
 |---|---|---|
-| `type` | project-declared string | see below; `release` and `cr-merged` are reserved |
+| `type` | project-declared string | see below; `release`, `cr-merged` and `pre-merge-gate` are reserved |
 | `label` | string | the version, the CR id, or the project's own name for the goal |
 | `targetAt` | epoch seconds? | when it is DUE. Absent = undated, a legitimate state |
 | `deliveredAt` | epoch seconds? | when it was MET. Absent = outstanding |
 | `commit`, `crs`, `packages` | | a release's provenance — what shipped, and the CRs it bundled |
+| `outcome`, `passed`, `failed`, `failingTests`, `scope`, `suites` | | a `pre-merge-gate`'s verdict, counts and failing tests; `scope` (`full`/`scoped`) and `suites`, one entry per suite it ran — target, outcome, counts, failing tests (CR-CRU-210) |
 | `retired_at` | epoch ms? | "no longer the live record" — a superseded predecessor, or a gate its release retired |
 
 The two dates are what make a milestone answerable: what is due, what is outstanding,
@@ -168,14 +169,13 @@ what slipped and by how long. Absence is never zero — an undated milestone tha
 due-at-epoch would be permanently overdue.
 
 **The TYPE is definable (CR-CRU-130).** A project declares the milestone types it
-records, as project configuration. Two are RESERVED because the SERVER derives behaviour
-from them and a project redefining them would be redefining the server: `release` (the
-releases/proposals reads, `crs` membership → the queue's `COMPLETED_UNTRACKED`,
-provenance repair, the roadmap strip) and `cr-merged` (the landing evidence the release
-ceremony's provenance reads). Everything else is the project's own vocabulary, stored
-under its own name, queryable by type, and rendered as itself. An UNDECLARED type is
-refused and the refusal says how to declare it — open is not unvalidated, because a typo
-must not silently become a new category.
+records, as project configuration. Three are RESERVED because the SERVER derives behaviour from
+them and a project redefining them would be redefining the server: `release` (the releases/proposals
+reads, `crs` membership → the queue's `COMPLETED_UNTRACKED`, provenance repair, the roadmap strip),
+`cr-merged` (the landing evidence the release ceremony's provenance reads) and `pre-merge-gate` (the
+gate verdict `cr-close` judges, suite by suite). Everything else is the project's own vocabulary,
+stored under its own name, queryable by type, and rendered as itself. An UNDECLARED type is refused
+and the refusal says how to declare it — open is not unvalidated: a typo must not become a category.
 
 **Release is the KEY type**, and it is three things at once, per
 `DN-crucible-wave-track-release.md`: a dated goal, a CONTAINER of the CRs that
