@@ -13,8 +13,11 @@ Makefile that does not honour one still runs, and its run is filed as it ran
     `TEST_NAME`, the elements and the first unmatched case.
 
 A case's file stem is its `classname` (Unity's JUnit stylizer writes the file
-stem there, the test function as `name`) or its `file`; a case whose file stem
-cannot be read raises no `makefile-ignored-tests`. Unity's `-f` also matches
+stem there, the test function as `name`) or its `file`. A case is judged
+against `--tests` only when that stem names a test source (`<stem>.c`, `.cpp`
+or `.ino`) under `--dir`: a case whose file stem cannot be read, or whose
+`classname` is a constant that names no test source (`native`,
+`native.Fixture`), raises no `makefile-ignored-tests`. Unity's `-f` also matches
 the source file's path, so a Makefile that honours `TEST_NAME` may run a whole
 file whose stem contains an element — that is honoured, not ignored. Unity's
 stylizer writes ONE combined report, so a combined report whose cases are all
@@ -26,9 +29,10 @@ shows them.
 
 Every case drives the real `clients/arduino-crucible.py` as a subprocess over
 a scratch firmware project (the narrowing suite's fixture) whose
-`tests/native/Makefile` runs a python stand-in for the Unity binaries. Here
-the stand-in is told, per test, whether to honour `TESTS` and `TEST_NAME` and
-whether to stamp the file stem on each case; it records what reached `make`
+`tests/native/Makefile` runs a python stand-in for the Unity binaries, beside
+one `tests/native/test/<stem>.c` source per catalogue file. Here the stand-in
+is told, per test, whether to honour `TESTS` and `TEST_NAME` and whether to
+stamp the file stem (or a constant `classname`) on each case; it records what reached `make`
 and writes one combined `TEST-native.xml`. The board is a recording stand-in
 steered only by the scratch project's own `crucible.toml`.
 
@@ -113,11 +117,12 @@ if behaviour["stamp_file_stem"]:
     suites = []
     for stem in sorted({s for s, _ in selected}):
         cases = [n for s, n in selected if s == stem]
+        classname = behaviour.get("classname") or stem
         suites.append(
             '<testsuite name="%s" tests="%d" failures="0">%s</testsuite>'
             % (stem, len(cases), "".join(
-                '<testcase classname="%s" name="%s" time="0.001"/>' % (stem, n)
-                for n in cases)))
+                '<testcase classname="%s" name="%s" time="0.001"/>'
+                % (classname, n) for n in cases)))
     body = "<testsuites>%s</testsuites>" % "".join(suites)
 else:
     body = ('<testsuites><testsuite name="native" tests="%d" failures="0">%s'
@@ -158,13 +163,23 @@ class _IgnoredVariableProject(_NarrowingProject, _TestCaseShape):
         self.addCleanup(self.board.close)
 
     def given_a_makefile(self, *, honour_tests, honour_test_name,
-                         stamp_file_stem=True, catalogue=CATALOGUE):
+                         stamp_file_stem=True, classname=None,
+                         catalogue=CATALOGUE):
+        """The scratch project, with one test source `test/<stem>.c` per
+        catalogue file under the native dir (a firmware project's own
+        layout), and the stand-in told how to behave. `classname`, when
+        given, is written on every case instead of its file stem."""
         self.make_project(catalogue=catalogue)
+        sources = Path(self.native_dir, "test")
+        sources.mkdir()
+        for stem in sorted({stem for stem, _ in catalogue}):
+            (sources / f"{stem}.c").write_text("void setUp(void) {}\n")
         Path(self.native_dir, "run_native.py").write_text(_CONFIGURABLE_NATIVE)
         Path(self.native_dir, "behaviour.json").write_text(json.dumps({
             "honour_tests": honour_tests,
             "honour_test_name": honour_test_name,
             "stamp_file_stem": stamp_file_stem,
+            "classname": classname,
         }))
         install_project(self.project, self.board.url, "arduino-ignored-variable")
 
@@ -306,6 +321,26 @@ class _AnIgnoredTestsVariableIsNamed(_IgnoredVariableProject):
             self.warnings_coded(envelope, IGNORED_TESTS_CODE), [],
             f"warnings={envelope.get('warnings')!r}")
         self.assert_no_ignored_warning_on_stderr(result, "TESTS")
+
+    def assert_a_constant_classname_is_not_judged(self, case, classname):
+        self.given_a_makefile(honour_tests=True, honour_test_name=True,
+                              classname=classname)
+        result = self.run_narrowed(case, "--tests", "test_a")
+        self.assert_reached_make(result, tests="test_a")
+        envelope = self.assert_filed_ok(result, 2)
+        self.assertEqual(
+            self.warnings_coded(envelope, IGNORED_TESTS_CODE), [],
+            f"a Makefile that honoured TESTS but wrote the classname "
+            f"{classname!r} on every case, which names no test source under "
+            f"--dir, is not judged; warnings={envelope.get('warnings')!r}")
+        self.assert_no_ignored_warning_on_stderr(result, "TESTS")
+
+    def test_a_constant_classname_that_names_no_test_source_is_not_judged(self):
+        self.assert_a_constant_classname_is_not_judged("tests-constant", "native")
+
+    def test_a_dotted_constant_classname_that_names_no_test_source_is_not_judged(self):
+        self.assert_a_constant_classname_is_not_judged("tests-dotted-constant",
+                                                       "native.Fixture")
 
     def test_guard_an_unnarrowed_run_raises_neither_ignored_warning(self):
         """GUARD — without a narrowing flag there is nothing to ignore."""
