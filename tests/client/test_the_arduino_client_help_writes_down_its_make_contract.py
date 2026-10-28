@@ -28,14 +28,16 @@ off help text, where a flag named in prose would read as present: `test` and
 `unit` take both; `regression`, `pre-merge-gate`, `auto-ingest` and the
 declared tier verbs (`module`, `integration`, `e2e`, `bdd`) take neither.
 
-RED vs GREEN-GUARD, per test:
+What each class pins:
 
-  RED          every test in `MakeContractHelpSectionTest` and
-               `NarrowingFlagHelpPointsToTheContractTest` — the root help
-               carries no contract section today, the root parser reflows its
-               description, and neither flag's help mentions the contract.
-  GREEN-GUARD  `NarrowingFlagsByParsedOptionsTest` — the flags already sit on
-               `test` and `unit` only; these pin that no other verb gains them.
+  `MakeContractHelpSectionTest`               the root help carries the
+                                              contract section, kept as
+                                              written, with the points above.
+  `NarrowingFlagHelpPointsToTheContractTest`  each narrowing flag's help
+                                              points at that section.
+  `NarrowingFlagsByParsedOptionsTest`         `test` and `unit` take both
+                                              flags, and no other verb takes
+                                              either.
 
 The help is read from the REAL client run as a subprocess (`--help` needs no
 board and resolves no project); the parser is captured in-process and no verb
