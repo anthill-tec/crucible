@@ -198,6 +198,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-207](CR-CRU-207-an-ingest-is-bounded.md) | an ingest is bounded: its body size and the output a run keeps | feature | PENDING | 152 | 8 (0.4.0) |
 | [CR-CRU-208](CR-CRU-208-a-runner-that-failed-is-never-filed-as-green.md) | a runner that failed is never filed as green | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-210](CR-CRU-210-a-scoped-re-run-after-a-red-gate-closes-the-cr-suite-by-suite.md) | a scoped re-run after a red gate closes the CR, suite by suite | fix | PENDING | — | 8 (0.4.0) |
+| [CR-CRU-213](CR-CRU-213-a-milestone-is-never-drawn-as-a-run.md) | a milestone is never drawn as a run | fix | PENDING | — | 8 (0.4.0) |
+| [CR-CRU-214](CR-CRU-214-no-test-writes-to-the-live-board.md) | no test writes to the live board | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-211](CR-CRU-211-an-arduino-agent-runs-only-its-own-native-tests.md) | an arduino agent runs only its own native tests | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-212](CR-CRU-212-every-clients-regression-runs-the-whole-suite-without-coverage-unless-asked.md) | every client's regression runs the whole suite without coverage unless asked | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-204](CR-CRU-204-the-bun-and-python-clients-send-their-reports.md) | the bun and python clients send their runners' reports and parse nothing | feature | PENDING | 152, 207, 208 | 8 (0.4.0) |
