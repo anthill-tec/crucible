@@ -513,6 +513,118 @@ describe("projectRollupLabel — card sub-labels", () => {
   });
 });
 
+// The status line words each kind of last run as itself: a compile result by
+// its error count (it carries no test counts, so a ratio would read `0/0`), an
+// aborted test run as aborted (it ended with no counts), and a test run — or a
+// brief that names no kind — exactly as before. The briefs below carry the
+// board's own brief shape (`eventBrief`, src/v2.ts): a compile brief has
+// uniform zero counts beside `errors`/`warnings`, an aborted brief is a
+// `kind: "test"` brief with zero counts and `status: "aborted"`.
+describe("projectRollupLabel — a compile result and an aborted run are worded as themselves", () => {
+  const TWO_HOURS_MS = 7_200_000;
+
+  function compileBrief(errors: number, warnings: number) {
+    return {
+      lastEvent: {
+        kind: "compile",
+        total: 0,
+        passed: 0,
+        failed: 0,
+        errors,
+        warnings,
+        timestamp: Date.now() - TWO_HOURS_MS,
+      },
+    };
+  }
+
+  test("a compile result with no errors but three warnings reads '✓ compiled · <age>'", () => {
+    const project = compileBrief(0, 3);
+
+    const label = projectRollupLabel(project);
+
+    expect(label).toBe("✓ compiled · 2h ago");
+    expect(label).not.toContain("0/0");
+    expect(label).not.toContain("green");
+  });
+
+  test("a compile result with exactly one error reads '✗ 1 error · <age>' in the singular", () => {
+    const project = compileBrief(1, 0);
+
+    const label = projectRollupLabel(project);
+
+    expect(label).toBe("✗ 1 error · 2h ago");
+    expect(label).not.toContain("errors");
+  });
+
+  test("a compile result with three errors reads '✗ 3 errors · <age>' in the plural", () => {
+    const project = compileBrief(3, 2);
+
+    const label = projectRollupLabel(project);
+
+    expect(label).toBe("✗ 3 errors · 2h ago");
+    expect(label).not.toContain("failed");
+  });
+
+  test("an aborted test run reads '⊘ aborted · <age>', never a 0/0 ratio", () => {
+    const project = {
+      lastEvent: {
+        kind: "test",
+        status: "aborted",
+        total: 0,
+        passed: 0,
+        failed: 0,
+        timestamp: Date.now() - TWO_HOURS_MS,
+      },
+    };
+
+    const label = projectRollupLabel(project);
+
+    expect(label).toBe("⊘ aborted · 2h ago");
+    expect(label).not.toContain("0/0");
+  });
+
+  // Guards: the wording a test run already has must survive the new kinds.
+  test("a plain test run brief that names its kind keeps today's green wording", () => {
+    const project = {
+      lastEvent: {
+        kind: "test",
+        total: 5,
+        passed: 5,
+        failed: 0,
+        timestamp: Date.now() - TWO_HOURS_MS,
+      },
+    };
+
+    expect(projectRollupLabel(project)).toBe("✓ green · 5/5 · 2h ago");
+  });
+
+  test("a failing test run brief that names its kind keeps today's failed-of wording", () => {
+    const project = {
+      lastEvent: {
+        kind: "test",
+        total: 5,
+        passed: 3,
+        failed: 2,
+        timestamp: Date.now() - TWO_HOURS_MS,
+      },
+    };
+
+    expect(projectRollupLabel(project)).toBe("✗ 2 failed of 5 · 2h ago");
+  });
+
+  test("a brief with no kind keeps today's wording, green and failing alike", () => {
+    const green = {
+      lastEvent: { total: 7, passed: 7, failed: 0, timestamp: Date.now() - TWO_HOURS_MS },
+    };
+    const failing = {
+      lastEvent: { total: 7, passed: 6, failed: 1, timestamp: Date.now() - TWO_HOURS_MS },
+    };
+
+    expect(projectRollupLabel(green)).toBe("✓ green · 7/7 · 2h ago");
+    expect(projectRollupLabel(failing)).toBe("✗ 1 failed of 7 · 2h ago");
+  });
+});
+
 describe("emptyStates — storyboard F1 empty states", () => {
   test("zero projects → {kind:'no-projects'}, even if events is non-empty", () => {
     expect(emptyStates({ projects: [], events: [{ id: "e1" }] })).toEqual({
