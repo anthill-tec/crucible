@@ -377,6 +377,12 @@ describe("the active cycle's line draws only test runs", () => {
     const chip = span!.querySelector<HTMLElement>('[data-testid="linked-run-row"]')!;
     expect(norm(chip.textContent)).toBe("line-aborter aborted");
     expect(chip.textContent ?? "").not.toContain("/");
+    // Neither pass nor fail: the chip carries no verdict colour, on itself or
+    // anywhere inside it.
+    for (const verdict of ["app-ratio-pass", "app-ratio-fail"]) {
+      expect(chip.classList.contains(verdict)).toBe(false);
+      expect(chip.querySelector(`.${verdict}`)).toBeNull();
+    }
   });
 });
 

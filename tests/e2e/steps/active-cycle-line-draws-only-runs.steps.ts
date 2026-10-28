@@ -135,6 +135,10 @@ Step(
     // The whole chip: the agent, then the word — and no ratio beside it.
     await expect(chips.first()).toHaveText(text);
     await expect(chips.first()).not.toContainText("/");
+    // Neither pass nor fail: the chip carries no verdict colour, on itself or
+    // anywhere inside it.
+    await expect(chips.first()).not.toHaveClass(/(^|\s)app-ratio-(pass|fail)(\s|$)/);
+    await expect(chips.first().locator(".app-ratio-pass, .app-ratio-fail")).toHaveCount(0);
     // The run has settled: nothing on the line is still timing it.
     await expect(span.getByTestId("open-span-running-entry")).toHaveCount(0);
   },
