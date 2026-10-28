@@ -923,8 +923,14 @@ def axi_object(verb, ok, result_fields, context, warnings):
     """Build the §S1 `axi` object — the ONE place its keys are assembled.
 
     Every encoding `emit_axi` writes (TOON by default, JSON on request) is
-    this same dict, so the two can never carry different keys or values."""
-    axi = {"verb": verb, "ok": ok, "tier": ingested_tier()}
+    this same dict, so the two can never carry different keys or values.
+
+    `events` names the board's event id of every run ingest this invocation
+    filed, in filing order, `[]` when it filed none: the id an orchestrator
+    needs to find the run again. A composed gate states its own list (its
+    local runs' and each dispatched suite's) through `result_fields`."""
+    axi = {"verb": verb, "ok": ok, "tier": ingested_tier(),
+           "events": filed_run_events()}
     axi.update(result_fields)
     axi["context"] = context
     axi["warnings"] = list(warnings) + limit_disclosure_warnings()
@@ -2600,7 +2606,9 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
         # After every typed hard stop, never in their place: an I/O or parse
         # failure the verb's own body let escape is reported, not a traceback.
         # It is not a refusal, so a gate that died this way still falls
-        # through to its outcome milestone below, as a fail.
+        # through to its outcome milestone below, as a fail, with no
+        # suites, since the composition did not finish.
+        forget_gate_suite_results()
         code = emit_escaped_failure(
             getattr(args, "cmd", None), exc,
             _hard_stop_context(args, project_key_fn,
@@ -5929,6 +5937,9 @@ _refused_ingest_warnings = []
 # (`record_gate_outcome`). Module state for the reason the tier claim is.
 _filed_runs = []
 _emitted_run_counts = None
+# The per-suite results a gate's composition reported (`run_gate_suites`), for
+# the outcome milestone to carry; None while no composition ran.
+_gate_suite_results = None
 
 
 def forget_ingested_run():
@@ -5943,6 +5954,20 @@ def forget_ingested_run():
     _refused_ingest_warnings.clear()
     _filed_runs.clear()
     _emitted_run_counts = None
+    forget_gate_suite_results()
+
+
+def forget_gate_suite_results():
+    """Drop the per-suite results a composition reported: a gate whose
+    composition never ran, or that a failure escaped, records no suites."""
+    global _gate_suite_results
+    _gate_suite_results = None
+
+
+def filed_run_events():
+    """The board's event id of every run ingest this invocation filed, in
+    filing order, `[]` when it filed none."""
+    return [run["event"] for run in _filed_runs]
 
 
 def take_refused_ingest_warnings():
@@ -6588,6 +6613,9 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     as a gate that ran a subset"."""
     rows, gate_warnings = [], list(warnings)
     ok, worst = True, 0
+    # What each gated suite did, in declaration order, for the outcome
+    # milestone: its target, outcome, counts and the events its run filed.
+    results = []
 
     # Rule 1, and FIRST: every own-stack declared target is reported against
     # this run, so its outcome has to be known before they are named.
@@ -6604,6 +6632,15 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
         gate_warnings.append(
             _whole_suite_warning(warning_code, stack, covered, detail))
         ok, worst = False, worst or (code or 0)
+    whole_outcome = GATE_OUTCOME_PASS if whole_ok else GATE_OUTCOME_FAIL
+    whole_events = filed_run_events()
+    events = list(whole_events)
+    if not covered:
+        # The whole-suite run covered no declared target, and it still ran:
+        # it is represented under the stack's own whole-suite label.
+        results.append(_gate_suite_result(whole_suite_label(stack),
+                                          whole_outcome, whole_counts,
+                                          whole_events))
 
     for suite in suites:
         row = {"suite": suite.target, "stack": suite.stack, "gated": suite.gated}
@@ -6619,12 +6656,18 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
             # are that run's, and they are NOT added to the union again.
             row["coveredBy"] = whole_suite_label(stack)
             row.update(whole_counts or {})
+            row["outcome"] = whole_outcome
             rows.append(row)
+            results.append(_gate_suite_result(suite.target, whole_outcome,
+                                              whole_counts, whole_events))
             continue
         row["client"] = sibling_client(suite.stack)
         argv, cwd = dispatch(suite) if dispatch else (None, None)
         if not argv:
+            row["outcome"] = GATE_OUTCOME_FAIL
             rows.append(row)
+            results.append(_gate_suite_result(suite.target, GATE_OUTCOME_FAIL,
+                                              None, []))
             gate_warnings.append(_gate_suite_warning(
                 GATE_SUITE_UNDISPATCHABLE_CODE, suite,
                 f"declares no invocation this gate can dispatch to "
@@ -6650,21 +6693,50 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
             row.update(counts)
             for key, value in counts.items():
                 totals[key] = totals.get(key, 0) + value
-        rows.append(row)
         _adopt_suite_warnings(gate_warnings, envelope)
         suite_ok, warning_code, detail = _run_outcome(code, counts, error)
+        suite_outcome = GATE_OUTCOME_PASS if suite_ok else GATE_OUTCOME_FAIL
+        row["outcome"] = suite_outcome
+        rows.append(row)
+        suite_events = _envelope_events(envelope)
+        events.extend(suite_events)
+        results.append(_gate_suite_result(suite.target, suite_outcome,
+                                          counts, suite_events))
         if not suite_ok:
             gate_warnings.append(
                 _gate_suite_warning(warning_code, suite, detail))
             ok = False
         worst = worst or (code or 0)
+    global _gate_suite_results
+    _gate_suite_results = results
     emit_axi(verb, ok,
-             {"run": totals, "suites": rows,
+             {"run": totals, "suites": rows, "events": events,
               "help": run_help(verb, ok, totals["failed"], crucible_url)},
              context, gate_warnings,
              f"{verb}: ok={ok} suites={len(rows)} passed={totals['passed']} "
              f"failed={totals['failed']} total={totals['total']}")
     return 0 if ok else (worst or 1)
+
+
+def _envelope_events(envelope):
+    """The event ids a suite's own envelope says its run filed, `[]` when it
+    states none."""
+    events = (envelope or {}).get("events")
+    if not isinstance(events, list):
+        return []
+    return [event for event in events
+            if isinstance(event, (int, str)) and not isinstance(event, bool)]
+
+
+def _gate_suite_result(target, outcome, counts, events):
+    """One gated suite's result as the composition saw it: its target, its
+    outcome, its passed/failed counts (None when the run reported none) and
+    the events its run filed, through which its failing tests are read."""
+    if counts is not None:
+        counts = {"passed": int(counts.get("passed") or 0),
+                  "failed": int(counts.get("failed") or 0)}
+    return {"target": target, "outcome": outcome, "counts": counts,
+            "events": list(events)}
 
 
 def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
@@ -7753,6 +7825,8 @@ GATE_MILESTONE_TYPE = "pre-merge-gate"
 # pi-lens-ignore: S105 — "pass" is the gate outcome the board records, not a credential
 GATE_OUTCOME_PASS = "pass"  # noqa: S105
 GATE_OUTCOME_FAIL = "fail"
+# A gate that ran every declared suite.
+GATE_SCOPE_FULL = "full"
 
 
 def head_commit(project_dir):
@@ -7813,13 +7887,49 @@ def _failing_tests(ops, filed_runs):
     for run in filed_runs:
         if not run["run"].get("failed"):
             continue
-        resp = ops.get(f"/api/v2/events/{urllib.parse.quote(str(run['event']))}")
-        event = resp.get("event") if resp.get("ok") else None
-        for suite in (event or {}).get("tree") or []:
-            for leaf in suite.get("children") or []:
-                if leaf.get("status") == "fail":
-                    names.append(f"{suite.get('name')} > {leaf.get('name')}")
+        names.extend(_event_failing_tests(ops, run["event"]))
     return names
+
+
+def _event_failing_tests(ops, event_id):
+    """The failing tests of ONE filed run, named `suite > test`, read back from
+    the board's own parse of it through its event id."""
+    resp = ops.get(f"/api/v2/events/{urllib.parse.quote(str(event_id))}")
+    event = resp.get("event") if resp.get("ok") else None
+    names = []
+    for suite in (event or {}).get("tree") or []:
+        for leaf in suite.get("children") or []:
+            if leaf.get("status") == "fail":
+                names.append(f"{suite.get('name')} > {leaf.get('name')}")
+    return names
+
+
+def _gate_suite_entries(ops, results):
+    """The milestone's `suites`: one entry per gated suite the composition
+    reported, in its order. A failing entry names its failing tests, read
+    through the events its run filed; a suite with no counts to show (it could
+    not run, be dispatched or report) carries none."""
+    entries = []
+    for result in results:
+        entry = {"target": result["target"], "outcome": result["outcome"]}
+        if result["counts"] is not None:
+            entry.update(result["counts"])
+        if result["outcome"] == GATE_OUTCOME_FAIL:
+            entry["failingTests"] = [
+                name for event_id in result["events"]
+                for name in _event_failing_tests(ops, event_id)]
+        entries.append(entry)
+    return entries
+
+
+def _union(lists):
+    """Every name of `lists`, once each, in first-seen order."""
+    seen = []
+    for names in lists:
+        for name in names:
+            if name not in seen:
+                seen.append(name)
+    return seen
 
 
 def record_gate_outcome(args, code, project_dir, ops):
@@ -7847,9 +7957,17 @@ def record_gate_outcome(args, code, project_dir, ops):
     # failed tests though its exit was 0 (a gate that keeps going past test
     # failures to finish its coverage run exits 0).
     fields = {"outcome": GATE_OUTCOME_FAIL if code or failed else GATE_OUTCOME_PASS,
-              "passed": passed, "failed": failed}
+              "passed": passed, "failed": failed, "scope": GATE_SCOPE_FULL}
+    # The suites the composition ran, each with its own result; a gate that
+    # composed none records none.
+    entries = (_gate_suite_entries(ops, _gate_suite_results)
+               if _gate_suite_results else None)
+    if entries:
+        fields["suites"] = entries
     if failed:
-        fields["failingTests"] = _failing_tests(ops, filed_runs)
+        fields["failingTests"] = (
+            _union(entry.get("failingTests") or [] for entry in entries)
+            if entries else _failing_tests(ops, filed_runs))
     context = fleet_context(cr=cr)
     if cycle_id is not None:
         context["cycleId"] = cycle_id
