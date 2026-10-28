@@ -1864,7 +1864,7 @@ def _smoke_run(args, verb, project_dir, identity=None):
     return smoke_rc
 
 
-def cmd_workspace_regression(args, verb="workspace-regression"):
+def cmd_workspace_regression(args, verb="workspace-regression", coverage=True):
     """Full workspace coverage regression — orchestrator pre-merge gate path.
 
     Steps: cargo clean → DISK GUARD (decide/abort) → cargo llvm-cov nextest --workspace
@@ -1879,6 +1879,11 @@ def cmd_workspace_regression(args, verb="workspace-regression"):
     CR-CRU-058 §S1 — `verb` names the envelope this run belongs to: `pre-merge-gate`
     runs this body AS its regression step, so the gate's stdout must carry ONE
     document under the GATE's own verb, not the inner one's.
+
+    With `coverage` off (a `regression` run without `--coverage`) the same run
+    is coverage-free: no `cargo clean`, no llvm-cov and no post-run reclaim;
+    the disk guard applies only to an `--all-features` build. The gate lock,
+    the pre-flight, the gated identity and the parsed ingest are the same.
     """
     project_dir = _resolve_project_dir(args.project_dir)
     _refuse_unattributed(args, project_dir)
@@ -1891,11 +1896,16 @@ def cmd_workspace_regression(args, verb="workspace-regression"):
                   f"{verb}: ok=False — gate-locked")
         return 75  # gate-locked — another regression/smoke run is in progress (retry)
 
-    print("[crucible] cargo clean (workspace)", file=sys.stderr)
-    subprocess.run(["cargo", "clean"], cwd=project_dir, capture_output=True)
+    if coverage:
+        print("[crucible] cargo clean (workspace)", file=sys.stderr)
+        subprocess.run(["cargo", "clean"], cwd=project_dir, capture_output=True)
 
     min_free_g = getattr(args, "min_free_g", 80)
-    if not _disk_guard("workspace-regression", project_dir, min_free_g):
+    # A coverage-free build is disk-heavy only with --all-features, as the
+    # smoke run's guard treats it; the coverage build always is.
+    guarded = coverage or args.all_features
+    if guarded and not _disk_guard("workspace-regression", project_dir,
+                                   min_free_g):
         # §S2 — a hard-abort BEFORE any cargo/network work is a genuinely
         # different state from a run that proceeded: its help[] points at
         # reclaiming disk, never at the regression's own successor verb.
@@ -1911,19 +1921,23 @@ def cmd_workspace_regression(args, verb="workspace-regression"):
                               "gated workspace-regression run starting",
                               open_fn=_open_gate_identity,
                               close_fn=_close_gate_identity) as identity:
-            return _workspace_regression_run(args, project_dir, verb, identity)
+            return _workspace_regression_run(args, project_dir, verb, identity,
+                                             coverage=coverage)
     finally:
-        if not getattr(args, "keep_target", False):
+        if coverage and not getattr(args, "keep_target", False):
             _reclaim_disk(project_dir, "workspace-regression")
 
 
-def _workspace_regression_run(args, project_dir, verb="workspace-regression",
-                              identity=None):
-    """Build + run + ingest body (wrapped by cmd_workspace_regression's disk guard +
-    post-run reclaim). Assumes the workspace was already `cargo clean`ed."""
-    own_dir = _run_reports_dir(args, project_dir)
-    env = os.environ.copy()
-    env.setdefault("CARGO_BUILD_JOBS", WORKSPACE_BUILD_JOBS)  # full-workspace compile — see constant
+def _workspace_regression_cmd(args, coverage):
+    """The workspace run's cargo argv: llvm-cov's nextest writing lcov when
+    `coverage` is on, else plain nextest that never fails fast."""
+    if not coverage:
+        cmd = ["cargo", "nextest", "run", "--workspace"]
+        if args.all_features:
+            cmd += ["--all-features"]
+        elif args.features:
+            cmd += ["--features", args.features]
+        return cmd + ["-P", args.profile, "--no-fail-fast"]
     # --failure-mode all: tolerate corrupt .profraw from tests that spawn + SIGKILL an
     # instrumented child (crash-resume / lifecycle / nai-subprocess e2e) — llvm-profdata
     # drops those with a warning and merges the rest, so coverage still produces a valid
@@ -1940,6 +1954,21 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
     ]
     if args.ignore_run_fail:
         cmd += ["--ignore-run-fail"]
+    return cmd
+
+
+def _workspace_regression_run(args, project_dir, verb="workspace-regression",
+                              identity=None, coverage=True):
+    """Build + run + ingest body (wrapped by cmd_workspace_regression's disk guard +
+    post-run reclaim). With `coverage` on it assumes the workspace was already
+    `cargo clean`ed; with it off nothing cleaned `target/`, so the profile's
+    stale junit is cleared before the run and no lcov is read or sent."""
+    own_dir = _run_reports_dir(args, project_dir)
+    env = os.environ.copy()
+    env.setdefault("CARGO_BUILD_JOBS", WORKSPACE_BUILD_JOBS)  # full-workspace compile — see constant
+    if not coverage:
+        _clean_stale_junit(project_dir, args.profile)
+    cmd = _workspace_regression_cmd(args, coverage)
     # §S3 — narration and the llvm-cov child's own stream are interactive-only
     # (the child's output streams live to stderr, so the run is watched live);
     # stdout carries the §S1 envelope alone.
@@ -1973,13 +2002,15 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
                                          args.agent, run_id, abandoned,
                                          run_warnings,
                                          post_fn=_post)
-    print(f"[crucible] llvm-cov nextest exit={result.returncode}", file=sys.stderr)
+    runner_name = "llvm-cov nextest" if coverage else "nextest"
+    print(f"[crucible] {runner_name} exit={result.returncode}", file=sys.stderr)
     runner_exit = _axi().runner_exit_code(result.returncode)
 
     junit_path = _claim_output(f"{project_dir}/target/nextest/{args.profile}/junit.xml",
                                own_dir, _OWN_JUNIT_FILE)
-    lcov_path = _claim_output(f"{project_dir}/{args.lcov_output}",
-                              own_dir, _OWN_LCOV_FILE)
+    lcov_path = (_claim_output(f"{project_dir}/{args.lcov_output}",
+                               own_dir, _OWN_LCOV_FILE)
+                 if coverage else None)
     if not os.path.exists(junit_path):
         _emit_axi(verb, False,
                   {"help": _axi().no_report_help(verb, "junit.xml")},
@@ -2008,7 +2039,8 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
     # never `summary`/`payload` (CR-CRU-047 §S2).
     summary, tree_nodes, files = _parse_junit(junit_path)
 
-    coverage = _parse_lcov(lcov_path)
+    # A coverage-free run reads no lcov, so its ingest carries no coverage.
+    lcov = _parse_lcov(lcov_path) if lcov_path else None
 
     payload = {
         "projectKey": _project_key(project_dir),
@@ -2016,8 +2048,8 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
         "summary": summary,
         "tree": tree_nodes,
     }
-    if coverage:
-        payload["coverage"] = coverage
+    if lcov:
+        payload["coverage"] = lcov
     # §S6 ruling 3 — this body runs the WHOLE workspace under nextest, which is
     # what `regression` means, and it was the one regression path that stated
     # nothing at all and let the server's default apply. Classification is by
@@ -2047,16 +2079,16 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
     ok = exit_code == 0
     ingest_ok = bool(resp.get("ok"))
     cov_line = ""
-    if coverage:
-        cov_line = f" lines={coverage['lines']['percent']}% funcs={coverage['functions']['percent']}%"
+    if lcov:
+        cov_line = f" lines={lcov['lines']['percent']}% funcs={lcov['functions']['percent']}%"
     result_fields = {
         "run": _run_block(filed, files),
         "help": _axi().run_help(verb, ok, failed, _base_url()),
     }
-    if coverage:
+    if lcov:
         result_fields["coverage"] = {
-            "lines": coverage["lines"]["percent"],
-            "functions": coverage["functions"]["percent"],
+            "lines": lcov["lines"]["percent"],
+            "functions": lcov["functions"]["percent"],
         }
     err = resp.get("error")
     if err is not None:
@@ -2776,34 +2808,63 @@ def cmd_regression(args):
     """§S6 ruling 3 — REGRESSION tier: this client's own workspace regression.
 
     It is not a declared cell and never was: the target exists in the client
-    already (`cargo llvm-cov nextest --workspace`, disk-guarded and
-    gate-locked exactly as the orchestrator's own verb runs it), so refusing
-    the cell was the client declining work it demonstrably does. The tier verb
-    reports `regression` whichever of this client's two regression bodies runs
-    it."""
+    already (`cargo nextest run --workspace`, gate-locked exactly as the
+    orchestrator's own verb runs it), so refusing the cell was the client
+    declining work it demonstrably does. The tier verb reports `regression`
+    whichever of this client's two regression bodies runs it.
+
+    Coverage is opt-in. Without `--coverage` the workspace runs under plain
+    nextest, coverage-free; with it, the workspace-regression coverage run.
+    A coverage-only flag given without `--coverage` is refused first, before
+    the board, the gate lock, the disk guard or cargo."""
+    _axi().refuse_coverage_only_flags(args, _REGRESSION_COVERAGE_ONLY_FLAGS)
+    if not getattr(args, "coverage", False):
+        return cmd_workspace_regression(args, verb="regression", coverage=False)
+    # The coverage run's effective values for the flags left unset.
+    if args.lcov_output is None:
+        args.lcov_output = "target/lcov.info"
+    if args.ignore_run_fail is None:
+        args.ignore_run_fail = True
+    if args.keep_target is None:
+        args.keep_target = False
     return cmd_workspace_regression(args, verb="regression")
 
 
+# `regression`'s flags that only a coverage run reads, by argparse dest. Each
+# defaults to None on `regression`, so a given flag is detectable.
+_REGRESSION_COVERAGE_ONLY_FLAGS = {
+    "lcov_output": "--lcov-output",
+    "ignore_run_fail": "--ignore-run-fail",
+    "keep_target": "--keep-target",
+}
+
+
 def _add_regression_tier_args(p):
-    """§S1/AC5 — `regression`'s own flags: the surface of the
-    `workspace-regression` verb whose body it runs, minus the project-dir flag
-    the shared registration already applies to all six."""
+    """§S1/AC5 — `regression`'s own flags: the `workspace-regression` surface
+    plus the `--coverage` switch, minus the project-dir flag the shared
+    registration already applies to all six. The coverage-only flags default
+    to None so a given one is detectable without `--coverage`."""
     p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator's)")
     p.add_argument("--all-features", action="store_true",
                    help="Pass --all-features (recommended for the canonical pre-merge gate)")
     p.add_argument("--features",
                    help="Specific --features set (mutually exclusive with --all-features)")
     p.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")
-    p.add_argument("--lcov-output", default="target/lcov.info",
-                   help="lcov output path relative to project root (default: target/lcov.info)")
-    p.add_argument("--ignore-run-fail", action="store_true", default=True,
+    _axi().add_regression_coverage_arg(p, "llvm-cov")
+    p.add_argument("--lcov-output", default=None,
+                   help="lcov output path relative to project root (default: "
+                        "target/lcov.info). Applies only with --coverage.")
+    p.add_argument("--ignore-run-fail", action="store_true", default=None,
                    help="Pass --ignore-run-fail to llvm-cov so coverage is published "
-                        "even on test failures")
+                        "even on test failures (default: on). Applies only with "
+                        "--coverage; the coverage-free run never fails fast.")
     p.add_argument("--min-free-g", type=int, default=80,
-                   help="Disk-guard floor in GB: after the pre-run clean, hard-abort if "
-                        "free /home is still below this (default: 80).")
-    p.add_argument("--keep-target", action="store_true",
-                   help="Skip the post-run `cargo clean` reclaim (keep target/ artifacts).")
+                   help="Disk-guard floor in GB: hard-abort if free /home is below "
+                        "this before a coverage run (after its pre-run clean) or a "
+                        "coverage-free --all-features run (default: 80).")
+    p.add_argument("--keep-target", action="store_true", default=None,
+                   help="Skip the post-run `cargo clean` reclaim (keep target/ "
+                        "artifacts). Applies only with --coverage.")
     _add_gate_cycle_arg(p)
     _add_run_release_arg(p)
     _add_reports_arg(p)

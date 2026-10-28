@@ -1475,6 +1475,10 @@ REGRESSION_COVERAGE_JACOCO_HELP = (
     REGRESSION_COVERAGE_HELP + " With it, the build's JaCoCo coverage is "
     "collected on a run with no failure and posted to /api/v2/runs/parsed "
     "with its results.")
+REGRESSION_COVERAGE_LLVM_COV_HELP = (
+    REGRESSION_COVERAGE_HELP + " With it, the run is `cargo llvm-cov nextest` "
+    "and its lcov coverage is posted to /api/v2/runs/parsed with its "
+    "results.")
 
 
 # CR-CRU-121 §S2 — the ONE `--release` help text for `plan-file`, so all five
@@ -8574,6 +8578,11 @@ def _add_jacoco_coverage_arg(p):
                    help=REGRESSION_COVERAGE_JACOCO_HELP)
 
 
+def _add_llvm_cov_coverage_arg(p):
+    p.add_argument("--coverage", action="store_true",
+                   help=REGRESSION_COVERAGE_LLVM_COV_HELP)
+
+
 # Each coverage tool's `--coverage` declaration. A help text is a module
 # constant, never assembled from a parameter, so every flag's help reads
 # whole from source.
@@ -8581,6 +8590,7 @@ _REGRESSION_COVERAGE_DECLARERS = {
     "lcov": _add_lcov_coverage_arg,
     "coverage.py": _add_coverage_py_coverage_arg,
     "JaCoCo": _add_jacoco_coverage_arg,
+    "llvm-cov": _add_llvm_cov_coverage_arg,
 }
 
 
@@ -8588,7 +8598,8 @@ def add_regression_coverage_arg(p, tool):
     """Declare `--coverage` on a client's `regression`: the one switch that
     makes the run measure coverage. Every client states the same sentence
     (`REGRESSION_COVERAGE_HELP`), then names its own stack's coverage `tool`
-    (`lcov`, `coverage.py` or `JaCoCo`) in a sentence of its own."""
+    (`lcov`, `coverage.py`, `JaCoCo` or `llvm-cov`) in a sentence of its
+    own."""
     declare = _REGRESSION_COVERAGE_DECLARERS.get(tool)
     if declare is None:
         raise ValueError(
