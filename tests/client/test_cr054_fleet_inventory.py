@@ -2363,7 +2363,8 @@ class Cr216RunReadVerbInventoryTest(unittest.TestCase):
                   for category, name in zip(ALL_CATEGORIES, CATEGORY_NAMES)
                   if CR216_RUN_READ_VERB_FUNCTIONS & category}
         self.assertEqual(strays, {},
-                         f"a verb shipped after CR-CRU-054 has no measured "
+                         f"a verb shipped after the fleet inventory was measured has no "
+                         f"measured "
                          f"drift verdict to be classified under: {strays!r}")
 
     def test_cmd_runs_and_cmd_run_are_defined_in_all_five_clients(self):
@@ -2436,7 +2437,7 @@ class Cr216RunReadVerbInventoryTest(unittest.TestCase):
         }
         self.assertEqual(
             offenders, {},
-            f"the roadmap registrar stays CR-CRU-091's frozen five: "
+            f"the roadmap registrar stays its frozen five: "
             f"{offenders!r}")
 
 
