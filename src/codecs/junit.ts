@@ -3,7 +3,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { RunSummary, SuiteNode, TestLeaf } from "../types.ts";
-import { parseBunConsoleFailures } from "./bun-console.ts";
+import { parseBunConsoleFailures, parseBunLoadErrors } from "./bun-console.ts";
 import type { DecodedRun } from "./index.ts";
 
 interface XmlElement {
@@ -281,11 +281,15 @@ export function parseJunit(xml: string, stack?: string): DecodedRun {
  * The run's raw output read into its failing cases. Under stack `bun` only, a
  * failing case whose failure carries no message takes its message and trace
  * from bun's console in `raw`, by its name; a case the console does not
- * explain keeps its type-only failure. Under any other stack, or none, the
- * tree is left as it is.
+ * explain keeps its type-only failure. Each file bun names under
+ * `# Unhandled error between tests` gets one failing case `?`, in that file's
+ * suite, else in a new suite named by the path appended to the tree. Under any
+ * other stack, or none, the tree is left as it is.
+ *
+ * Returns the paths of the files read as having failed to load, in bun's order.
  */
-export function readJunitRawOutput(tree: SuiteNode[], raw: string, stack?: string): void {
-  if (stack !== "bun" || raw.length === 0) return;
+export function readJunitRawOutput(tree: SuiteNode[], raw: string, stack?: string): string[] {
+  if (stack !== "bun" || raw.length === 0) return [];
   const details = parseBunConsoleFailures(raw);
   for (const suite of tree) {
     for (const leaf of suite.children) {
@@ -294,6 +298,18 @@ export function readJunitRawOutput(tree: SuiteNode[], raw: string, stack?: strin
       if (detail !== undefined) leaf.failure = { ...leaf.failure, ...detail };
     }
   }
+  const loadErrors = parseBunLoadErrors(raw);
+  for (const [path, failure] of Object.entries(loadErrors)) {
+    const leaf: TestLeaf = { name: "?", status: "fail", duration_ms: 0, failure: { ...failure } };
+    const suite = tree.find((s) => s.name === path);
+    if (suite === undefined) {
+      tree.push({ name: path, status: "fail", children: [leaf] });
+    } else {
+      suite.children.push(leaf);
+      suite.status = "fail";
+    }
+  }
+  return Object.keys(loadErrors);
 }
 
 /**

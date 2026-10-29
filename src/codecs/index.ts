@@ -27,8 +27,11 @@ export interface DecodedRun extends RunSchema {
 export interface Codec {
   parse(data: string, options?: DecodeOptions): DecodedRun | Promise<DecodedRun>;
   parsePath?(path: string, options?: DecodeOptions): DecodedRun | Promise<DecodedRun>;
-  /** Reads the run's whole raw output into its decoded tree, before anything caps it. */
-  readRaw?(tree: SuiteNode[], raw: string, options?: DecodeOptions): void;
+  /**
+   * Reads the run's whole raw output into its decoded tree, before anything caps it;
+   * returns the files the reading filed cases for, counted in the run's files.
+   */
+  readRaw?(tree: SuiteNode[], raw: string, options?: DecodeOptions): string[];
 }
 
 /** One `warnings[]` entry of an ingest response, the shape the client envelopes use. */
@@ -123,6 +126,20 @@ function mergeRuns(runs: RunSchema[]): RunSchema {
   return { summary, tree: runs.flatMap((run) => run.tree) };
 }
 
+/** The run's counts recomputed from its (amended) tree; its duration kept. */
+function recount(tree: SuiteNode[], durationMs: number): RunSchema["summary"] {
+  const summary = { total: 0, passed: 0, failed: 0, pending: 0, duration_ms: durationMs };
+  for (const suite of tree) {
+    for (const leaf of suite.children) {
+      summary.total += 1;
+      if (leaf.status === "pass") summary.passed += 1;
+      else if (leaf.status === "fail") summary.failed += 1;
+      else summary.pending += 1;
+    }
+  }
+  return summary;
+}
+
 /**
  * The run's raw output: the body's `raw`, then each decoded report's own
  * output in report order — each part trimmed, empty parts dropped, the rest
@@ -196,15 +213,19 @@ export async function parseRunBody(
   }
   const merged = mergeRuns(decoded);
   const raw = joinRaw(body.raw, decoded.map((report) => report.raw));
-  if (raw !== undefined && codec.readRaw !== undefined) codec.readRaw(merged.tree, raw, options);
+  const files = new Set(decoded.flatMap((report) => report.files ?? []));
+  let summary = merged.summary;
+  if (raw !== undefined && codec.readRaw !== undefined) {
+    for (const file of codec.readRaw(merged.tree, raw, options)) files.add(file);
+    summary = recount(merged.tree, summary.duration_ms);
+  }
   const coverage =
     coverageBlock.block !== undefined ? decodeCoverageBlock(coverageBlock.block, warnings) : merged.coverage;
   const run: RunSchema = {
-    summary: merged.summary,
+    summary,
     tree: merged.tree,
     ...(coverage !== undefined ? { coverage } : {}),
     ...(raw !== undefined ? { raw } : {}),
   };
-  const files = new Set(decoded.flatMap((report) => report.files ?? []));
   return { run, warnings, files: files.size };
 }
