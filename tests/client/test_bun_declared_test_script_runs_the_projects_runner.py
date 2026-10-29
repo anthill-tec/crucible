@@ -42,6 +42,7 @@ import stat
 import subprocess
 import sys
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import ClassVar
 
@@ -60,6 +61,7 @@ TIMEOUT = 180
 AGENT = "declared-test-script-fixture-agent"
 PROJECT_KEY = "declared-test-script-fixture-key"
 PARSED_INGEST = "/api/v2/runs/parsed"
+RUNS_INGEST = "/api/v2/runs"
 RAW_INGEST = "/api/v2/runs"
 START = "/api/v2/runs/start"
 
@@ -201,9 +203,27 @@ def _envelope(stdout):
     return decoded.get("axi") if isinstance(decoded, dict) else None
 
 
-def _leaf_statuses(tree):
-    return {leaf.get("name"): leaf.get("status")
-            for suite in tree or [] for leaf in suite.get("children") or []}
+def _report_statuses(body):
+    """`{case name: status}` over the JUnit reports an ingest body carries
+    inline: what the board will file, read here only to prove the report the
+    client sent is the one the runner wrote."""
+    statuses = {}
+    for text in body.get("data") or []:
+        for case in ET.fromstring(text).iter("testcase"):
+            if case.find("failure") is not None or case.find("error") is not None:
+                status = "fail"
+            elif case.find("skipped") is not None:
+                status = "pending"
+            else:
+                status = "pass"
+            statuses[case.get("name")] = status
+    return statuses
+
+
+def _report_summary(body):
+    statuses = list(_report_statuses(body).values())
+    return {"passed": statuses.count("pass"), "failed": statuses.count("fail"),
+            "pending": statuses.count("pending"), "total": len(statuses)}
 
 
 def _diagnostics(result):
@@ -219,13 +239,21 @@ class _BoardCase(unittest.TestCase):
     def parsed_ingests(self):
         return [body for path, body in self.board.posts() if path == PARSED_INGEST]
 
-    def only_parsed_ingest(self, result):
-        ingests = self.parsed_ingests()
+    def runs_ingests(self):
+        return [body for path, body in self.board.posts() if path == RUNS_INGEST]
+
+    def only_runs_ingest(self, result):
+        self.assertEqual(self.parsed_ingests(), [],
+                         f"the run is never filed on the parsed route; "
+                         f"{_diagnostics(result)}")
+        ingests = self.runs_ingests()
         self.assertEqual(
             len(ingests), 1,
-            f"the run must be filed exactly once as a parsed JUnit result; "
-            f"{_diagnostics(result)}")
-        return ingests[0]
+            f"the run must be filed exactly once, its JUnit report sent for "
+            f"the board to decode; {_diagnostics(result)}")
+        body = ingests[0] if ingests else {}
+        self.assertEqual(body.get("codec"), "junit", f"body={body!r}")
+        return body
 
     def envelope_of(self, result):
         envelope = _envelope(result.stdout)
@@ -294,9 +322,10 @@ class DeclaredVitestScriptRunsTheTargetedFileTest(_VitestFixtureCase):
     files the counts Vitest reported through the declared env mechanism."""
 
     def test_a_targeted_run_files_vitests_one_passed_and_one_failed(self):
+        self.board.script_run(passed=1, failed=1, files=1)
         result = self.drive("--tests", MIXED_RESULT_FILE)
-        body = self.only_parsed_ingest(result)
-        summary = body.get("summary") or {}
+        body = self.only_runs_ingest(result)
+        summary = _report_summary(body)
         self.assertEqual(
             (summary.get("passed"), summary.get("failed"),
              summary.get("pending"), summary.get("total")),
@@ -304,7 +333,7 @@ class DeclaredVitestScriptRunsTheTargetedFileTest(_VitestFixtureCase):
             f"Vitest ran the one targeted file (1 passed, 1 failed); "
             f"summary={summary!r}; {_diagnostics(result)}")
         self.assertEqual(
-            _leaf_statuses(body.get("tree")),
+            _report_statuses(body),
             {PASSING_CASE: "pass", FAILING_CASE: "fail"},
             f"tree={body.get('tree')!r}")
         self.assert_untiered(body)
@@ -319,13 +348,14 @@ class DeclaredVitestScriptRunsTheTargetedFileTest(_VitestFixtureCase):
         self.assert_run_counts(envelope, 1, 1, 0)
 
     def test_the_runtime_fixture_proves_vitest_ran_on_the_bun_runtime(self):
+        self.board.script_run(passed=1, files=1)
         result = self.drive("--tests", RUNTIME_FILE)
-        body = self.only_parsed_ingest(result)
+        body = self.only_runs_ingest(result)
         self.assertEqual(
-            _leaf_statuses(body.get("tree")), {RUNTIME_CASE: "pass"},
+            _report_statuses(body), {RUNTIME_CASE: "pass"},
             f"the runtime test passes only when Vitest runs on Bun; "
             f"tree={body.get('tree')!r}; {_diagnostics(result)}")
-        summary = body.get("summary") or {}
+        summary = _report_summary(body)
         self.assertEqual((summary.get("passed"), summary.get("failed"),
                           summary.get("total")), (1, 0, 1), f"summary={summary!r}")
         self.assertEqual(result.returncode, 0, _diagnostics(result))
@@ -335,9 +365,10 @@ class DeclaredVitestScriptRunsTheTargetedFileTest(_VitestFixtureCase):
                          f"envelope={envelope!r}")
 
     def test_a_whole_suite_run_goes_through_the_declared_script(self):
+        self.board.script_run(passed=4, failed=1, files=3)
         result = self.drive()
-        body = self.only_parsed_ingest(result)
-        summary = body.get("summary") or {}
+        body = self.only_runs_ingest(result)
+        summary = _report_summary(body)
         self.assertEqual(
             (summary.get("passed"), summary.get("failed"),
              summary.get("pending"), summary.get("total")),
@@ -345,7 +376,7 @@ class DeclaredVitestScriptRunsTheTargetedFileTest(_VitestFixtureCase):
             f"the whole fixture suite runs under Vitest: three files, five "
             f"tests, one failing; summary={summary!r}; {_diagnostics(result)}")
         self.assertEqual(
-            _leaf_statuses(body.get("tree")),
+            _report_statuses(body),
             {RUNTIME_CASE: "pass", PASSING_CASE: "pass", FAILING_CASE: "fail",
              ALPHA: "pass", BETA: "pass"},
             f"tree={body.get('tree')!r}")
@@ -376,16 +407,17 @@ class DeclaredVitestScriptFiltersByNameTest(_VitestFixtureCase):
     """`test --name <pattern>` through the declared Vitest script."""
 
     def test_a_name_filter_files_one_passed_and_one_pending(self):
+        self.board.script_run(passed=1, pending=1, files=1)
         result = self.drive("--tests", NAME_FILTER_FILE, "--name", MATCHING_PATTERN)
-        body = self.only_parsed_ingest(result)
-        summary = body.get("summary") or {}
+        body = self.only_runs_ingest(result)
+        summary = _report_summary(body)
         self.assertEqual(
             (summary.get("passed"), summary.get("pending"),
              summary.get("failed"), summary.get("total")),
             (1, 1, 0, 2),
             f"only the matching test runs; the one Vitest's `-t` excluded is "
             f"filed as pending; summary={summary!r}; {_diagnostics(result)}")
-        self.assertEqual(_leaf_statuses(body.get("tree")),
+        self.assertEqual(_report_statuses(body),
                          {ALPHA: "pass", BETA: "pending"},
                          f"tree={body.get('tree')!r}")
         self.assertEqual(result.returncode, 0, _diagnostics(result))
@@ -410,7 +442,7 @@ class DeclaredVitestScriptFiltersByNameTest(_VitestFixtureCase):
             f"a warning must name the pattern that matched nothing; "
             f"envelope={envelope!r}")
         self.assertEqual(
-            self.parsed_ingests(), [],
+            self.parsed_ingests() + self.runs_ingests(), [],
             f"a run that ran nothing is never filed; posts={self.board.posts()!r}")
         compiles = [p for p, _ in self.board.posts() if p == "/api/v2/runs/compile"]
         self.assertEqual(compiles, [],
@@ -459,16 +491,17 @@ class DeclaredBunTestScriptFiltersByNameTest(_BoardCase):
                               check=False)
 
     def test_a_name_filter_through_the_script_files_one_passed_and_one_pending(self):
+        self.board.script_run(passed=1, pending=1, files=1)
         result = self.drive("--tests", "pair.test.ts", "--name", MATCHING_PATTERN)
         self.assert_went_through_the_script(result)
-        body = self.only_parsed_ingest(result)
-        summary = body.get("summary") or {}
+        body = self.only_runs_ingest(result)
+        summary = _report_summary(body)
         self.assertEqual(
             (summary.get("passed"), summary.get("pending"),
              summary.get("failed"), summary.get("total")),
             (1, 1, 0, 2),
             f"summary={summary!r}; {_diagnostics(result)}")
-        self.assertEqual(_leaf_statuses(body.get("tree")),
+        self.assertEqual(_report_statuses(body),
                          {ALPHA: "pass", BETA: "pending"},
                          f"tree={body.get('tree')!r}")
         self.assert_untiered(body)
@@ -495,7 +528,7 @@ class DeclaredBunTestScriptFiltersByNameTest(_BoardCase):
         self.assertIs(envelope.get("ok"), False, f"envelope={envelope!r}")
         self.assertIn(NO_MATCH_PATTERN, json.dumps(envelope.get("warnings") or []),
                       f"envelope={envelope!r}")
-        self.assertEqual(self.parsed_ingests(), [],
+        self.assertEqual(self.parsed_ingests() + self.runs_ingests(), [],
                          f"posts={self.board.posts()!r}")
         self.assertEqual(len(self.board.aborts()), 1,
                          f"posts={self.board.posts()!r}")
@@ -605,7 +638,8 @@ class DeclaredScriptUnderEnvArgvTest(_FakeBunCase):
                          f"the report path rides the declared variable; "
                          f"handed={call['vars']!r}")
         self.assertEqual(result.returncode, 0, _diagnostics(result))
-        self.assertEqual(len(self.parsed_ingests()), 1, _diagnostics(result))
+        self.assertEqual(len(self.runs_ingests()), 1, _diagnostics(result))
+        self.assertEqual(self.parsed_ingests(), [], _diagnostics(result))
 
     def test_a_whole_suite_run_is_the_script_alone(self):
         result = self.drive()
@@ -628,6 +662,10 @@ class DeclaredScriptWithARawReportTest(_FakeBunCase):
                                                                   "path": f"env:{RAW_JSON_VAR}"}}}
 
     def test_the_raw_report_is_posted_for_the_board_to_decode(self):
+        # A board that decodes the declared `stub` codec.
+        health = self.board.default_health()
+        health["codecs"]["test"].append("stub")
+        self.board.script_health(health)
         result = self.drive("--tests", "some.spec")
         call = self.only_bun_call(result)
         self.assertEqual(call["argv"], ["run", self.RAW_SCRIPT, "--", "some.spec"],
@@ -639,8 +677,9 @@ class DeclaredScriptWithARawReportTest(_FakeBunCase):
         self.assertEqual(len(raw), 1,
                          f"the raw report is filed once; posts={self.board.posts()!r}")
         self.assertEqual(raw[0].get("codec"), "stub", f"body={raw[0]!r}")
-        self.assertTrue(str(raw[0].get("dataPath") or "").endswith("stub.json"),
-                        f"body={raw[0]!r}")
+        self.assertEqual(raw[0].get("data"), ["{}"],
+                         f"the declared report travels inline; body={raw[0]!r}")
+        self.assertNotIn("dataPath", raw[0], f"body={raw[0]!r}")
         self.assertNotIn("tier", raw[0], f"body={raw[0]!r}")
         self.assertEqual(self.parsed_ingests(), [],
                          f"a declared raw report is never parsed here; "
