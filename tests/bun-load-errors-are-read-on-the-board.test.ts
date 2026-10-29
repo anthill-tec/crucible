@@ -6,7 +6,7 @@
 // between tests` blocks; its JUnit report holds only the cases that ran. When
 // a run's stack is `bun`, the board reads that console (the run's `raw`), in
 // both wire forms, and stores one failing case per such file, by the rules the
-// bun client applies today (`_add_load_error_cases`, clients/bun-crucible.py):
+// bun client applied before the board took that reading over:
 //
 //  - in the suite for that file when the report has one, else a new suite
 //    named by the path, appended after the decoded suites;
