@@ -416,5 +416,58 @@ class PrintedRootHelpCarriesNoStaleCoverageClaimTest(unittest.TestCase):
             "coverage regression unconditionally")
 
 
+PARSED_ROUTE = "/api/v2/runs/parsed"
+RUNS_ROUTE = "/api/v2/runs"
+
+
+class TheLcovCoverageSentenceHoldsOnEitherRouteTest(unittest.TestCase):
+    """The shared lcov `--coverage` sentence (bun's and arduino's
+    `regression`) says the coverage "is filed with its results" and names no
+    route: bun sends its reports to /api/v2/runs while arduino still posts to
+    the parsed route, and the one sentence holds for both."""
+
+    def _assert_route_neutral(self, client):
+        text = _plain(_flag_help(client, "regression", "--coverage"))
+        self.assertIn("lcov", text, f"{client}: {text!r}")
+        self.assertIn("is filed with its results", text,
+                      f"{client} `regression --coverage` help: {text!r}")
+        self.assertNotIn(PARSED_ROUTE, text,
+                         f"{client} `regression --coverage` help names a "
+                         f"route: {text!r}")
+
+    def test_bun_regression_coverage_help_says_the_coverage_is_filed_with_its_results(self):
+        self._assert_route_neutral("bun")
+
+    def test_arduino_regression_coverage_help_says_the_coverage_is_filed_with_its_results(self):
+        self._assert_route_neutral("arduino")
+
+
+class BunPrintedHelpNamesTheRouteItsReportsTakeTest(unittest.TestCase):
+    """bun sends every report to /api/v2/runs for the board to decode, so
+    neither its printed help nor its module docstring says a report is
+    parsed by the client and posted to /api/v2/runs/parsed."""
+
+    def test_no_printed_bun_help_names_the_parsed_route(self):
+        root = _root_parser("bun")
+        texts = {"<root>": [root.description or "", root.epilog or ""]}
+        for verb in _subparsers_action("bun").choices:
+            texts[verb] = _verb_help_texts("bun", verb)
+        naming = sorted(verb for verb, found in texts.items()
+                        if any(PARSED_ROUTE in text for text in found))
+        self.assertEqual(naming, [],
+                         f"bun's printed help names {PARSED_ROUTE} in: {naming}")
+
+    def test_the_bun_module_docstring_names_the_runs_route_and_not_the_parsed_one(self):
+        module = _load_module(CLIENTS_DIR / "bun-crucible.py",
+                              "bun_crucible_docstring_route_under_test")
+        doc = module.__doc__ or ""
+        self.assertNotIn(PARSED_ROUTE, doc,
+                         "the bun client's docstring still says it posts to "
+                         "the parsed route")
+        self.assertIn(RUNS_ROUTE, doc,
+                      "the bun client's docstring names the route its reports "
+                      "take")
+
+
 if __name__ == "__main__":
     unittest.main()
