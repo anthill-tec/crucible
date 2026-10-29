@@ -14,7 +14,8 @@ reports that no report was written by this run.
 Some tests write that report **before** the run, then drive the regression with a fake `cargo` that writes
 nothing. They pass only while the fixture write and the run's start fall in the same wall-clock second.
 Between them the test registers its agent and spawns the client, so under load the gap crosses a second
-boundary and the run is refused: the client files no run, and the test reads an event with no `summary`.
+boundary and the report is refused: the client aborts the run it opened, and the test reads that aborted run,
+which has no `summary`.
 
 Measured 2026-10-29:
 
@@ -45,22 +46,31 @@ ahead of the run. Measured at gap analysis, there are exactly two:
 - `tests/clients-rust-mvn-crucible.test.ts`, the CR-CRU-050 site 2 (`workspace-regression`) case;
 - `tests/client/test_client_tier_stamping.py`, `RustEarnedTierTest.test_rust_regression_ingests_the_workspace_run_as_regression`.
 
-### §S2 — the rule CR-CRU-212 made is pinned
+Each reuses a writer the passing tests already have, never a third bespoke one: the python test gives its
+file's shared `_FAKE_CARGO` an opt-in write of `target/nextest/<-P profile>/junit.xml` on a `nextest` call, the
+shape `_RECORDING_CARGO` in `tests/client/test_rust_regression_coverage_is_opt_in.py` already has, through an
+environment key restored per test with the file's others; the TS test's fake copies a fixture staged outside
+`target/` into `target/nextest/ci/junit.xml`, so the skipped and failing cases it builds are kept, and the
+comment on its no-op fake stops saying pre-placed reports survive untouched.
 
-Nothing pins that a report written before the run is refused: CR-CRU-212's fix changed only the client. One
-test pins it, with the report's time set before the run's start second rather than raced.
+The rule itself is already pinned: `RustRegressionFilesOnlyItsOwnReportTest` in
+`tests/client/test_rust_regression_coverage_is_opt_in.py` (CR-CRU-212's RED, `62b4969`) backdates a planted
+report with `os.utime` and asserts it is never filed.
 
 ## Acceptance criteria
 
 - [ ] **AC1 — the report is the run's own.** In both tests §S1 names, the nextest report the client files
       is written by the fake `cargo` during the run; neither writes it before the client starts.
-- [ ] **AC2 — the race is gone.** Each such test passes when its run spans a whole-second boundary: its fake
-      `cargo` writes the report just after the next whole second following its own start, and the run is filed.
-- [ ] **AC3 — the rule is pinned and the client unchanged.** `clients/rust-crucible.py` is untouched. A
-      `workspace-regression` run whose `junit.xml` was last written before the run's start second (its time
-      set with `os.utime`, not raced) files no run and reports that no junit.xml was written by this run.
+- [ ] **AC2 — the run files what its runner wrote.** In each such test, nothing exists at
+      `target/nextest/<profile>/junit.xml` when the client is started, and the run the board files carries the
+      counts of the report the fake `cargo` wrote.
+- [ ] **AC3 — the client is unchanged.** `clients/rust-crucible.py` is untouched, and
+      `RustRegressionFilesOnlyItsOwnReportTest` still passes unchanged.
 
 ## Non-goals
 
 - Changing `_written_since` or its whole-second floor.
 - Tests of the maven, bun, python or arduino clients.
+- The rust client's gate lock for a project directory that is not a git repository: `_gate_lock_path` then
+  resolves to the parent directory (for a scratch project under `/tmp`, the shared `/tmp/nai-gate.lock`), so
+  concurrent drives can refuse each other with exit 75. A client defect of its own, not this CR's.
