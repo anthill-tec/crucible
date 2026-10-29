@@ -2,7 +2,7 @@
 
 **Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152, CR-CRU-207, CR-CRU-208 · **Status**
 PENDING — filed 2026-10-27 (split from CR-CRU-152 at its gap analysis, user ruling; maven, rust and
-arduino are CR-CRU-206)
+arduino are CR-CRU-206); gap analysis 2026-10-29
 
 ## Problem
 
@@ -30,17 +30,25 @@ semantics live twice and the stored run says `codec: "parsed"`.
 ### §S1 — one shared ingest
 
 `_crucible_axi.py` gains the one function that posts a run's reports. It reads the board's health
-first and:
+first (through the client's `_get`, as `refuse_unrunnable_scoped_gate` does) and:
 
+- refuses, naming the health error, when health cannot be read (the board unreachable, or an
+  answer that is not `ok`), and sends nothing;
 - refuses, naming the board's version and CR-CRU-152, when health carries no `codecs` or lacks a
   codec the run needs, and sends nothing;
-- refuses, naming `ingest_body_bytes` and its value, when the body it would send is larger than
-  health's `limits.ingest_body_bytes`, and sends nothing;
-- otherwise sends `POST /api/v2/runs` with `codec`, `data` (each report file's text, in path order),
+- refuses, naming `ingest_body_bytes` and its value, when the body it would send — the bytes
+  `http_request` encodes, `len(json.dumps(payload).encode())` — is larger than health's
+  `limits.ingest_body_bytes`, and sends nothing;
+- otherwise sends `POST /api/v2/runs`, through `post_ingest` (so the body's `stack` and `release`
+  stamps, the abort of a run whose ingest the board refused, and the filed-run record hold as
+  today), with `codec`, `data` (each report file's text, in path order),
   `coverage: {codec, data}` when the run measured coverage, `raw` (the captured runner output), and
   `stack`, `tier`, `context`, `runId`, `release` and `runnerExit` (CR-CRU-208) as today.
 
-It returns the response; a 413 is reported naming `ingest_body_bytes`. Health that carries `codecs`
+A refusal before sending settles the run the verb opened exactly as the no-report exit does: the
+open `runId` is aborted through `abort_run` with the refusal as its reason, and the envelope carries
+`run-aborted` (or `run-left-open` when the abort is refused). It returns the response; a 413 is
+reported naming `ingest_body_bytes`. Health that carries `codecs`
 but no `limits` is read as no limit advertised: the client sends, and a 413 is still reported. The
 second count of the Design is a new shared function, `junit_non_skipped_count`;
 `junit_testcase_count` keeps its return type, so the maven and rust clients that call it are
@@ -63,9 +71,24 @@ Every verb but `auto-ingest`, which runs nothing, sends its captured runner outp
 
 The bun client's JUnit parse, lcov summation, console-to-leaf matching and load-error reading
 (CR-CRU-208 §S3 — it moves into the board's `src/codecs/bun-console.ts`, so a file bun names under
-`# Unhandled error between tests` still becomes a failing case), and the python client's
+`# Unhandled error between tests` still becomes a failing case; after that reading the run's
+summary is recomputed from the amended tree and its `files` count includes each such file, before
+the board's runner rule), and the python client's
 JUnit parse, classname grouping and lcov summation are deleted; their cases live in CR-CRU-152's
-server tests. The client tests that pinned them, or that stub an ingest response with no `run`
+server tests. The two clients' module docstrings and their `--coverage` help say the reports route:
+the python sentence (`REGRESSION_COVERAGE_PY_HELP`) names it, and the lcov sentence
+(`REGRESSION_COVERAGE_LCOV_HELP`, shared with the arduino client until CR-CRU-206) is reworded to
+hold on either route — the coverage "is filed with its results"; the printed-help tests follow.
+`DN-testing-tiers-in-crucible-projects.md`'s endpoint table names `/api/v2/runs` beside the parsed route.
+
+The shared test harness answers the health this CR reads: `tests/client/live_run_harness.py`'s
+`RecordingBoard` (and each in-process `_get` stub a bun or python test installs) answers health with
+`codecs: {test: ["junit", "playwright"], coverage: ["jacoco", "lcov"]}` and
+`limits: {ingest_body_bytes: <n>}`, in its own commit ahead of the client change; the maven, rust
+and arduino drives through it are unaffected. A test that needs a real board spawns its own
+(the `*_end_to_end.py` pattern), never the live one (CR-CRU-214).
+
+The client tests that pinned the parsers, or that stub an ingest response with no `run`
 block, are retired, re-pointed at the board or given a `run` block, each such test change in its own
 commit:
 
@@ -83,7 +106,7 @@ commit:
 A run's envelope `run:` block (`passed`, `failed`, `pending`, `total`, `files`) and the coverage line
 on stderr are read from the ingest response, and the response's `warnings[]` entries join the
 envelope's `warnings[]`. A run whose ingest fails, is refused (413, an older board, a body over the
-advertised limit) or cannot reach the board carries no figures and says why.
+advertised limit, a health read that failed) or cannot reach the board carries no figures and says why.
 
 ## Acceptance criteria
 
@@ -105,10 +128,12 @@ advertised limit) or cannot reach the board carries no figures and says why.
       exit and the board's response, asserted per client on a run that ran nothing, a
       bun filter that matched nothing (`bun test -t <no match>` writes skipped testcases), and a run
       with a failure.
-- [ ] **AC6 — the envelope reads the response.** Each client's envelope `run:` block equals the
-      response's `run` block on a fixture run, `files` included, and a `report-skipped` or
+- [ ] **AC6 — the envelope reads the response.** Each client's envelope `run:` block carries the
+      response's `run` block's five counts (`passed`, `failed`, `pending`, `total`, `files`) on a
+      fixture run, and a `report-skipped` or
       `coverage-dropped` warning from the board appears in the envelope's `warnings[]`.
-- [ ] **AC7 — no board, no figures.** With the board unreachable at the ingest, each client's
+- [ ] **AC7 — no board, no figures.** With the board unreachable at the ingest, or at the health
+      read before it, each client's
       envelope carries no figures and says the run was not filed, and `pre-merge-gate` reports that
       suite unreported and is not green.
 - [ ] **AC8 — an older board.** Against a board whose health carries no `codecs`, or whose `codecs`
@@ -118,17 +143,21 @@ advertised limit) or cannot reach the board carries no figures and says why.
       holds unchanged.
 - [ ] **AC9 — too large.** A body over the advertised `ingest_body_bytes` is refused by the client
       before sending, naming the limit; a 413 from the board is reported naming it; in both the run
-      is not filed.
+      is not filed. A refusal before sending (this one, AC8's, a failed health read) aborts the
+      run the verb opened and the envelope carries `run-aborted`.
 - [ ] **AC10 — raw and the runner's exit.** Each verb of §S2 but `auto-ingest` sends its captured runner
       output as `raw` and the runner's exit as `runnerExit`.
 - [ ] **AC13 — bun's load errors, read on the board.** A bun run with files that failed to load (CR-CRU-208
       §S3's shapes), ingested through `/runs` with its JUnit and console, is stored with one failing case
-      per such file, read by `src/codecs/bun-console.ts` before the board's runner rule, and no
-      `runner / exit` case beside them.
+      per such file, read by `src/codecs/bun-console.ts` before the board's runner rule; its stored
+      `summary` counts those cases, the response's `files` counts their files, and no
+      `runner / exit` case is stored beside them.
 - [ ] **AC11 — pytest's suite name.** A pytest run through the python client invokes pytest with its
       JUnit suite name pinned to `pytest`.
-- [ ] **AC12 — this repo's own runs.** A run of this repo's bun suite and of its python suite
-      through their clients stores `codec: "junit"` with the counts the runner printed.
+- [ ] **AC12 — this repo's own runs (close-out evidence, not a test).** The CR's pre-merge gate
+      runs of this repo's bun suite and of its python suite, through their clients, store
+      `codec: "junit"` with the counts the runners printed, read from the board at the merge
+      sign-off.
 
 ## Non-goals
 
