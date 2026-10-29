@@ -42,8 +42,9 @@ nothing:
          census finds twelve unearned literal sites today: bun `cmd_test`
          (`/runs/start`, `/runs/parsed`), bun `cmd_auto_ingest` (`e2e`), mvn
          `cmd_test` (`/runs`, `/runs/parsed`), mvn `cmd_auto_ingest` (`/runs`,
-         `/runs/parsed` `regression`), python `cmd_test` (`/runs/parsed`,
-         `/runs/compile`), python `cmd_auto_ingest`, rust `cmd_test` and rust
+         `/runs/parsed` `regression`), python `cmd_test` (`/runs/parsed`, since
+         CR-CRU-204 `/runs`, and `/runs/compile`), python `cmd_auto_ingest`,
+         rust `cmd_test` and rust
          `cmd_auto_ingest`.
   RED  `UnearnedTierLiteralCensusTest.
          test_no_client_stamps_a_tier_its_own_verb_did_not_earn` — the derived
@@ -149,8 +150,9 @@ ESCALATIONS recorded at the time of writing (see the report for the full text):
      one to retarget.
   3. §S2's table and this file's own census disagree with the CR's Surfaces
      paragraph about WHICH endpoint bun's two `cmd_test` sites reach: the first
-     is `_start_run` → `POST /api/v2/runs/start`, the second is
-     `_ingest_parsed` → `POST /api/v2/runs/parsed`. Both are asserted
+     is `_start_run` → `POST /api/v2/runs/start`, the second was the parsed
+     ingest → `POST /api/v2/runs/parsed` (since CR-CRU-204, `_file_reports` →
+     `POST /api/v2/runs`). Both are asserted
      separately, because a fix applied to the ingest alone leaves the OPENED
      run stamped `unit`.
 
@@ -174,6 +176,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.live_run_harness import get_answering_health  # noqa: E402
 from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
     declare_and_require_board,
 )
@@ -415,15 +418,15 @@ def _flat(census):
 # ENDPOINT, because a fix applied to one endpoint leaves the other stamped.
 SITES_DRIVEN_ON_THE_WIRE = frozenset({
     ("bun", "cmd_test", "unit", RUN_START),
-    ("bun", "cmd_test", "unit", PARSED),
-    ("bun", "cmd_auto_ingest", "e2e", PARSED),
+    ("bun", "cmd_test", "unit", RUNS),
+    ("bun", "cmd_auto_ingest", "e2e", RUNS),
     ("mvn", "cmd_test", "unit", RUNS),
     ("mvn", "cmd_test", "unit", PARSED),
     ("mvn", "cmd_auto_ingest", "unit", RUNS),
     ("mvn", "cmd_auto_ingest", "regression", PARSED),
-    ("python", "cmd_test", "unit", PARSED),
+    ("python", "cmd_test", "unit", RUNS),
     ("python", "cmd_test", "unit", COMPILE),
-    ("python", "cmd_auto_ingest", "unit", PARSED),
+    ("python", "cmd_auto_ingest", "unit", RUNS),
     ("rust", "cmd_test", "unit", RUNS),
     ("rust", "cmd_auto_ingest", "unit", RUNS),
     # AC15/AC13(ii) — arduino's two, added at cycle 385. They belong in this
@@ -735,7 +738,8 @@ class _ClientDriveCase(unittest.TestCase):
             return copy.deepcopy(response if response is not None else _OK_RESPONSE)
 
         with mock.patch.object(self.module, "_post", side_effect=fake_post, create=True), \
-                mock.patch.object(self.module, "_get", return_value=None, create=True), \
+                mock.patch.object(self.module, "_get", create=True,
+                                  side_effect=get_answering_health(lambda _p: None)), \
                 mock.patch.object(self.module, "_patch", return_value={"ok": True},
                                   create=True):
             code, out, err = _run_main(self.module, self.CLIENT, argv)
@@ -763,8 +767,9 @@ class _ClientDriveCase(unittest.TestCase):
         with open(out_path, "w") as out, open(err_path, "w") as err:
             with mock.patch.object(self.module, "_post", side_effect=fake_post,
                                    create=True), \
-                    mock.patch.object(self.module, "_get", return_value=None,
-                                      create=True), \
+                    mock.patch.object(self.module, "_get", create=True,
+                                      side_effect=get_answering_health(
+                                          lambda _p: None)), \
                     mock.patch.object(self.module, "_patch",
                                       return_value={"ok": True}, create=True), \
                     mock.patch.object(sys, "argv",
@@ -926,8 +931,8 @@ class BunUnearnedTierTest(_BunCase):
     editing one line in one client". Each client's drives sit in its own class
     so each uses its own stack's fixture.
 
-    RED — `bun-crucible.py` `cmd_test` (its `_start_run` and `_ingest_parsed`
-    calls) and `cmd_auto_ingest`."""
+    RED — `bun-crucible.py` `cmd_test` (its `_start_run` and ingest calls)
+    and `cmd_auto_ingest`."""
 
     def test_bun_test_opens_the_run_without_claiming_a_tier(self):
         """AC3, bun `cmd_test` — `_start_run` OPENS the run with
@@ -938,12 +943,12 @@ class BunUnearnedTierTest(_BunCase):
         self.assertNoStatedTier(drive, RUN_START, "bun cmd_test -> POST /runs/start")
 
     def test_bun_test_ingests_the_run_without_claiming_a_tier(self):
-        """AC3, bun `cmd_test`'s `_ingest_parsed` call — the CR's own example:
+        """AC3, bun `cmd_test`'s ingest call (`_file_reports`) — the CR's own example:
         "a targeted run of a real browser suite is recorded on the board as a
         unit run"."""
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = _JUNIT_SUITES_ONE_PASS
         drive = self.drive(self.bun_argv("test"))
-        self.assertNoStatedTier(drive, PARSED, "bun cmd_test -> POST /runs/parsed")
+        self.assertNoStatedTier(drive, RUNS, "bun cmd_test -> POST /runs")
 
     def test_bun_auto_ingest_ran_no_tests_so_it_claims_no_tier(self):
         """AC3's explicit auto-ingest clause, bun `cmd_auto_ingest` — this verb
@@ -952,8 +957,8 @@ class BunUnearnedTierTest(_BunCase):
         whatever report was lying in the reports dir."""
         self.write_bun_junit()
         drive = self.drive(self.bun_argv("auto-ingest", with_bun=False))
-        self.assertNoStatedTier(drive, PARSED,
-                                "bun cmd_auto_ingest -> POST /runs/parsed")
+        self.assertNoStatedTier(drive, RUNS,
+                                "bun cmd_auto_ingest -> POST /runs")
 
 
 class MvnUnearnedTierTest(_MvnCase):
@@ -986,16 +991,16 @@ class MvnUnearnedTierTest(_MvnCase):
 
 
 class PythonUnearnedTierTest(_PythonCase):
-    """RED — `python-crucible.py` `cmd_test` (its `/runs/parsed` and
+    """RED — `python-crucible.py` `cmd_test` (its `/runs` and
     `/runs/compile` calls) and `cmd_auto_ingest`."""
 
     def test_python_test_ingests_the_run_without_claiming_a_tier(self):
-        """AC3, python `cmd_test`'s `/runs/parsed` call — `--tests
+        """AC3, python `cmd_test`'s `/runs` call (the shared ingest) — `--tests
         tests.whatever` says nothing about the dependency that target takes."""
         os.environ["FAKE_PY_JUNIT_CONTENT"] = _JUNIT_SUITE_ONE_PASS
         drive = self.drive(self.py_argv(
             "test", ["--tests", "tests.probe", "--python", _fake("fake-python-runner")]))
-        self.assertNoStatedTier(drive, PARSED, "python cmd_test -> POST /runs/parsed")
+        self.assertNoStatedTier(drive, RUNS, "python cmd_test -> POST /runs")
 
     def test_python_test_collection_failure_claims_no_tier(self):
         """AC3, python `cmd_test`'s `/runs/compile` call — the no-XML fallback
@@ -1010,8 +1015,8 @@ class PythonUnearnedTierTest(_PythonCase):
         """AC3's auto-ingest clause, python `cmd_auto_ingest`."""
         self.write_py_reports()
         drive = self.drive(self.py_argv("auto-ingest"))
-        self.assertNoStatedTier(drive, PARSED,
-                                "python cmd_auto_ingest -> POST /runs/parsed")
+        self.assertNoStatedTier(drive, RUNS,
+                                "python cmd_auto_ingest -> POST /runs")
 
 
 class RustUnearnedTierTest(_RustCase):
@@ -1086,8 +1091,8 @@ class BunEarnedTierTest(_BunCase):
         drive = self.drive(self.bun_argv("regression"))
         self.assertStatedTier(drive, RUN_START, "regression",
                               "bun regression -> POST /runs/start")
-        self.assertStatedTier(drive, PARSED, "regression",
-                              "bun regression -> POST /runs/parsed")
+        self.assertStatedTier(drive, RUNS, "regression",
+                              "bun regression -> POST /runs")
 
 
 class PythonEarnedTierTest(_PythonCase):
@@ -1098,8 +1103,8 @@ class PythonEarnedTierTest(_PythonCase):
         drive = self.drive(self.py_argv(
             "regression", ["--python", _fake("fake-python-runner"),
                            "--start-dir", "tests", "--pattern", "test_*.py"]))
-        self.assertStatedTier(drive, PARSED, "regression",
-                              "python regression -> POST /runs/parsed")
+        self.assertStatedTier(drive, RUNS, "regression",
+                              "python regression -> POST /runs")
 
 
 class MvnEarnedTierTest(_MvnCase):

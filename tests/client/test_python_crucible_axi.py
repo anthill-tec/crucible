@@ -69,6 +69,7 @@ from unittest import mock
 # CR-CRU-131 §S1b — the project fixture carries the `crucible.toml` an
 # installed project has; the fleet census owns that helper (one fixture shape
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
+from tests.client.live_run_harness import get_answering_health, junit_sent
 from tests.client.test_client_fleet_envelope_census import install_project_limits
 
 # CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
@@ -1171,7 +1172,8 @@ class PythonCrucibleCycleBindingTest(_BasePythonAxiTest):
         self._write_auto_ingest_reports()
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
-             mock.patch.object(self.module, "_get", create=True) as get_mock:
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
+                               create=True) as get_mock:
             code, out, _err = _run_main(self.module, [
                 "auto-ingest", "--agent", "CR-X-auto", "--project-dir", self.tmpdir,
             ])
@@ -1180,7 +1182,7 @@ class PythonCrucibleCycleBindingTest(_BasePythonAxiTest):
             _plans_gets(get_mock), [],
             "the client-side active-cycle resolver is DELETED -- no plans lookup "
             "may run before an ingest; got %r" % (_plans_gets(get_mock),))
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, "the run must actually be POSTed")
         self.assertNotIn(
             "cycleId", ingest_call[0][1].get("context", {}),
@@ -1222,8 +1224,19 @@ class PythonCrucibleToolchainTest(_BasePythonAxiTest):
         client-side active-cycle-plans fixture and cycleId assertion."""
         self._write_fixture_test_module()
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True},
-                                create=True) as post_mock:
+        # The board's decoded run: figures the fixture's one passing test
+        # does not give, so an envelope stating the client's own count fails.
+        board_run = {"passed": 4, "failed": 0, "pending": 0, "total": 4, "files": 1}
+
+        def post(path, payload):
+            if path == "/api/v2/runs":
+                return {"ok": True, "changed": True, "run": dict(board_run)}
+            return {"ok": True}
+
+        with mock.patch.object(self.module, "_post", side_effect=post,
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
+                               create=True):
             code, out, _err = _run_main(self.module, [
                 "test", "--project-dir", self.tmpdir, "--python", sys.executable,
                 "--tests", f"{self.FIXTURE_PKG}.test_fixture", "--reports", "reports",
@@ -1233,24 +1246,26 @@ class PythonCrucibleToolchainTest(_BasePythonAxiTest):
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "test")
         self.assertIs(axi.get("ok"), True)
-        run = axi.get("run", {})
-        self.assertEqual(run.get("passed"), 1)
-        self.assertEqual(run.get("failed"), 0)
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertEqual(axi.get("run", {}), board_run,
+                         f"the envelope states the board's run; stdout={out!r}")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call)
+        sent = junit_sent(ingest_call[0][1]) if ingest_call else None
+        self.assertEqual((sent or {}).get("summary"),
+                         {"total": 1, "passed": 1, "failed": 0, "pending": 0},
+                         "the real xmlrunner report is sent as it stands")
         self.assertNotIn(
             "cycleId", ingest_call[0][1].get("context", {}),
             "the real unittest run's ingest payload must send no "
             "client-resolved cycleId -- attachment is server-stamped",
         )
 
-    def test_test_verb_includes_captured_runner_output_as_raw_in_parsed_payload(self):
+    def test_test_verb_includes_captured_runner_output_as_raw_in_its_runs_payload(self):
         """CR-CRU-038 §S2b -- `_run_logged` (python-crucible.py)
         ALWAYS captures the real xmlrunner combined stdout+stderr; that
-        captured output must flow into the /api/v2/runs/parsed payload as
+        captured output must flow into the /api/v2/runs payload as
         `raw` so the server-stored run carries real output for the
-        run-detail raw-toggle to reveal. Fails today: `_ingest_parsed`
-        builds no `raw` key at all, regardless of what was captured."""
+        run-detail raw-toggle to reveal."""
         marker = "PYTHON_RAW_CAPTURE_MARKER_4471"
         marker_module = FIXTURE_TEST_MODULE.replace(
             "self.assertTrue(True)",
@@ -1266,7 +1281,8 @@ class PythonCrucibleToolchainTest(_BasePythonAxiTest):
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
              mock.patch.object(self.module, "_get",
-                                return_value=self._active_cycle_plans(707),
+                                side_effect=get_answering_health(
+                                    self._active_cycle_plans(707)),
                                 create=True):
             code, out, _err = _run_main(self.module, [
                 "test", "--project-dir", self.tmpdir, "--python", sys.executable,
@@ -1274,12 +1290,12 @@ class PythonCrucibleToolchainTest(_BasePythonAxiTest):
                 "--agent", "CR-X-raw",
             ])
         self.assertEqual(code, 0, f"stdout={out!r}")
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, "the real unittest run must actually be POSTed")
         payload = ingest_call[0][1]
         self.assertIn(
             marker, payload.get("raw") or "",
-            f"the real captured xmlrunner output must flow into the parsed "
+            f"the real captured xmlrunner output must flow into the "
             f"ingest payload's `raw` field; got payload keys={sorted(payload)!r}",
         )
 

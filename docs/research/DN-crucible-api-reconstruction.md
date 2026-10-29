@@ -32,7 +32,7 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 | Base URL | `http://localhost:3849` (override: `CRUCIBLE_BASE`) | every script/skill; the v1 `arduino-crucible.py` base-URL constant (successor: `_base_url` in `clients/arduino-crucible.py`) |
 | Content type | `application/json` both directions | all clients |
 | Success shape | `{"ok": true, ...}` — clients branch on `resp.ok` | `_ingest_rustc_stderr` in `clients/rust-crucible.py` etc. |
-| Error shape | `{"ok": false, "error": "<actionable message>"}` | `_ingest_parsed` in `clients/bun-crucible.py` prints `resp['error']`; skills: "Read error responses — they tell you exactly what's wrong" |
+| Error shape | `{"ok": false, "error": "<actionable message>"}` | `_file_reports` in `clients/bun-crucible.py` prints `resp['error']`; skills: "Read error responses — they tell you exactly what's wrong" |
 | Project key type | **UUID string, mandatory** — non-UUID rejected with HTTP 400 | crucible-report-java/bun Rules: "`projectKey` must be a valid UUID — string keys are rejected with 400" |
 | Client env contract | `CRUCIBLE_PROJECT_KEY` (+ `CRUCIBLE_PROJECT_NAME` for arduino) read from the SUT project's `.env` | all scripts' `_project_key()`; `arduino-crucible.py:_load_env` |
 
@@ -118,7 +118,8 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
   `<error>` → fail; `<skipped>` → pending; else pass. `time` attr (seconds) → duration_ms.
   Root may be `<testsuites>` or a bare `<testsuite>`.
 - Historical parser quirk (the v1 `python-crucible.py`'s parsed-ingest path, later `_ingest_parsed_dir`;
-  successor: `_parse_junit_dir` in `clients/python-crucible.py`): "the server-side format=junit parser
+  successor: the board's `junit` codec, `parseJunit` in `src/codecs/junit.ts`, which decodes the
+  reports the python client sends to `/api/v2/runs`): "the server-side format=junit parser
   historically labeled leaves" with class-qualified names — v2 leaf name = testcase `name`
   attr, suite node = testsuite `name` attr.
 
@@ -180,7 +181,7 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 | `rust-crucible.py` | Rust/nextest/llvm-cov | heartbeat, remove, ingest (junit dataPath), ingest/compile (rustc), ingest/parsed (+coverage) |
 | `mvn-crucible.py` | Java/surefire/failsafe/JaCoCo | heartbeat (identity), remove, ingest (junit dir dataPath), ingest/parsed (+branches coverage), ingest/compile (no format) |
 | `python-crucible.py` | pytest/unittest/coverage.py | heartbeat, remove, ingest (junit), ingest/parsed, ingest/compile (python) |
-| `bun-crucible.py` | bun test/lcov | heartbeat (identity+repoPath), remove, ingest/parsed, ingest/compile (typescript) |
+| `bun-crucible.py` | bun test/lcov | heartbeat (identity+repoPath), remove, ingest (`/api/v2/runs`, reports inline), ingest/compile (typescript) |
 | `arduino-crucible.py` | native g++/arduino-cli | **projects/add**, heartbeat, remove, ingest/parsed, ingest/compile (no format) |
 | `hw-crucible.py` | (21-line shim) | delegates |
 | skills `crucible-report-*` | all stacks | curl/urllib/fetch equivalents of the above + events delete/clear/list |

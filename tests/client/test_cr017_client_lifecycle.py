@@ -96,6 +96,34 @@ PASS_JUNIT_XML = """<?xml version="1.0" encoding="UTF-8"?>
 TOOL_DURATION_MS = 1
 FAKE_BUN_SLEEP_MS = 250
 
+# The run ingest route: the bun client sends its runner's reports there for
+# the board to decode.
+RUNS = "/api/v2/runs"
+
+# The health the board answers, as a board that decodes the clients' reports
+# states it (`tests/client/live_run_harness.py`'s `RecordingBoard` answers the
+# same): its version, the codecs it decodes and the largest body it reads.
+HEALTH_PATHS = ("/api/health", "/api/v2/health")
+HEALTH_ANSWER = {"ok": True, "status": "healthy", "version": "0.4.0",
+                 "codecs": {"test": ["junit", "playwright"],
+                            "coverage": ["jacoco", "lcov"]},
+                 "limits": {"ingest_body_bytes": 128 * 1024 * 1024}}
+
+# The `run` block the fake board answers `/api/v2/runs` with: the one passing
+# case PASS_JUNIT_XML holds, as the board would decode it. The fake decodes
+# nothing.
+RUN_BLOCK = {"passed": 1, "failed": 0, "pending": 0, "total": 1, "files": 1}
+
+
+def _answering_health(get_side_effect):
+    """A `_get` answer that states the board's health on the health routes
+    and defers every other read to `get_side_effect`."""
+    def answer(path):
+        if path in HEALTH_PATHS:
+            return json.loads(json.dumps(HEALTH_ANSWER))
+        return get_side_effect(path)
+    return answer
+
 # The fake `bun`. Three fixture knobs beyond the sibling harnesses' two:
 #   FAKE_BUN_SLEEP_MS   sleep this long BEFORE writing the report, so the
 #                       wrapped wall-clock span provably exceeds the report's
@@ -185,6 +213,12 @@ def _run_main(module, argv):
     return code, stdout.getvalue(), stderr.getvalue()
 
 
+def _mocked_get(path, timeout=10):
+    """The drivers' `_get`: the board's health on the health routes, a
+    tolerant failure on every other read."""
+    return _answering_health(lambda _path: {"ok": False, "error": "mocked"})(path)
+
+
 class _FakeCrucible:
     """An in-process stand-in for the §S1 run-lifecycle server. Models exactly
     the three things this CR's client contract depends on: run-start issues a
@@ -226,6 +260,8 @@ class _FakeCrucible:
                 event["startedAt"] = started_at
                 event["runtime_ms"] = int(time.time() * 1000) - started_at
             self.events.append(event)
+            if path == RUNS:
+                return {"ok": True, "run": dict(RUN_BLOCK)}
             return {"ok": True}
         # CR-CRU-170 \u00a7S2 (orchestrator-approved re-pin) \u2014 the client's own
         # close of a run it opened and cannot file: `POST
@@ -308,13 +344,14 @@ class _BaseCr017ClientTest(unittest.TestCase):
 
     def _run_test_verb(self, server, extra_argv=()):
         """Drive the REAL CLI dispatch (argparse -> cmd_test) against `server`.
-        `_get` is mocked to a tolerant failure so nothing reaches :3849."""
+        `_get` answers health and is a tolerant failure for every other read,
+        so nothing reaches :3849."""
         argv = ["test", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir, "--reports", "reports",
                 "--agent", self.AGENT] + list(extra_argv)
         with mock.patch.object(self.module, "_post", side_effect=server.post), \
              mock.patch.object(self.module, "_get", create=True,
-                               return_value={"ok": False, "error": "mocked"}):
+                               side_effect=_mocked_get):
             return _run_main(self.module, argv)
 
     def _run_regression_verb(self, server, extra_argv=()):
@@ -323,7 +360,7 @@ class _BaseCr017ClientTest(unittest.TestCase):
                 "--agent", self.AGENT] + list(extra_argv)
         with mock.patch.object(self.module, "_post", side_effect=server.post), \
              mock.patch.object(self.module, "_get", create=True,
-                               return_value={"ok": False, "error": "mocked"}):
+                               side_effect=_mocked_get):
             return _run_main(self.module, argv)
 
     # -- assertions ---------------------------------------------------------
@@ -381,7 +418,7 @@ class WrappedRunOpensTheRunBeforeSpawningTheToolTest(_BaseCr017ClientTest):
 
         self.assertEqual(code, 0, f"a green wrapped run exits 0; stdout={out!r}")
         start_idx = server.index_of("/api/v2/runs/start")
-        ingest_idx = server.index_of("/api/v2/runs/parsed")
+        ingest_idx = server.index_of(RUNS)
         self.assertIsNotNone(
             start_idx,
             f"a wrapped run must POST /api/v2/runs/start; got paths={server.paths()}")
@@ -422,8 +459,10 @@ class WrappedRunOpensTheRunBeforeSpawningTheToolTest(_BaseCr017ClientTest):
         self.assertEqual(code, 0, f"stdout={out!r}")
         self.assertIn("/api/v2/runs/start", server.paths(),
                       f"`regression` wraps its run too; paths={server.paths()}")
-        self.assertEqual(server.payload_for("/api/v2/runs/parsed").get("runId"),
-                         "run-cr017-1")
+        payload = server.payload_for(RUNS)
+        self.assertIsNotNone(payload, f"the run must be ingested at {RUNS}; "
+                                      f"paths={server.paths()}")
+        self.assertEqual((payload or {}).get("runId"), "run-cr017-1")
 
 
 class WrappedRunRuntimeExceedsToolDurationTest(_BaseCr017ClientTest):
@@ -446,9 +485,11 @@ class WrappedRunRuntimeExceedsToolDurationTest(_BaseCr017ClientTest):
             f"the ingest must have CLOSED an open run (no runId reached the "
             f"server, so nothing computed a runtime); payload keys="
             f"{sorted(event['payload'])!r}")
-        duration_ms = event["payload"]["summary"]["duration_ms"]
-        self.assertEqual(duration_ms, TOOL_DURATION_MS,
-                         "fixture guard: the tool reports exactly 1 ms")
+        # The board decodes the report the client sent; the tool-reported
+        # duration is the one `time=` PASS_JUNIT_XML carries.
+        self.assertEqual(event["payload"].get("data"), [PASS_JUNIT_XML],
+                         "fixture guard: the run's report, reporting exactly 1 ms")
+        duration_ms = TOOL_DURATION_MS
         self.assertGreaterEqual(
             event["runtime_ms"], FAKE_BUN_SLEEP_MS,
             f"the wrapped span must contain the tool's {FAKE_BUN_SLEEP_MS} ms "
@@ -465,9 +506,10 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
     merely "no runId": NO start call at all, and an ingest body whose key set
     is exactly the pre-CR one."""
 
-    # The pre-CR single-shot `/api/v2/runs/parsed` body for a gated `test` run
-    # with no coverage: projectKey, agentId, summary, tree, raw. (`context`
-    # is omitted when no WORKFLOW_* env is set — `_run_context()` returns None.)
+    # The single-shot `/api/v2/runs` body for a gated `test` run with no
+    # coverage: projectKey, agentId, the report (`codec`, `data`), raw and the
+    # runner's exit. (`context` is omitted when no WORKFLOW_* env is set —
+    # `_run_context()` returns None.)
     #
     # Re-pinned 2026-09-08 (CR-CRU-111 §S2/AC3): `tier` LEFT this key set, and
     # deliberately. `test` used to stamp `tier="unit"` on a run it could not
@@ -480,7 +522,7 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
     #
     # `stack` JOINED it: every ingest states the stack of the client that
     # produced it, a single-shot one included, so the body names `bun`.
-    SINGLE_SHOT_KEYS = {"projectKey", "agentId", "stack", "summary", "tree",
+    SINGLE_SHOT_KEYS = {"projectKey", "agentId", "stack", "codec", "data",
                         "raw", "runnerExit"}
 
     def test_no_lifecycle_flag_makes_no_start_call_and_sends_no_run_id(self):
@@ -493,7 +535,7 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
             "/api/v2/runs/start", server.paths(),
             f"--no-lifecycle must make NO run-start call at all; "
             f"paths={server.paths()}")
-        payload = server.payload_for("/api/v2/runs/parsed")
+        payload = server.payload_for(RUNS)
         self.assertIsNotNone(payload, "the single-shot ingest must still happen")
         self.assertNotIn(
             "runId", payload,
@@ -519,7 +561,10 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
             "/api/v2/runs/start", server.paths(),
             f"$BUN_CRUCIBLE_NO_LIFECYCLE=1 opts out exactly like the flag; "
             f"paths={server.paths()}")
-        self.assertNotIn("runId", server.payload_for("/api/v2/runs/parsed"))
+        payload = server.payload_for(RUNS)
+        self.assertIsNotNone(payload, f"the run must still be ingested at {RUNS}; "
+                                      f"paths={server.paths()}")
+        self.assertNotIn("runId", payload or {})
 
     def test_regression_honours_the_opt_out_too(self):
         server = _FakeCrucible()
@@ -528,7 +573,10 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
 
         self.assertEqual(code, 0, f"stdout={out!r}")
         self.assertNotIn("/api/v2/runs/start", server.paths())
-        self.assertNotIn("runId", server.payload_for("/api/v2/runs/parsed"))
+        payload = server.payload_for(RUNS)
+        self.assertIsNotNone(payload, f"the run must still be ingested at {RUNS}; "
+                                      f"paths={server.paths()}")
+        self.assertNotIn("runId", payload or {})
 
 
 class OlderServerDegradesToSingleShotTest(_BaseCr017ClientTest):
@@ -550,7 +598,7 @@ class OlderServerDegradesToSingleShotTest(_BaseCr017ClientTest):
             f"ingests and the verb still succeeds; stdout={out!r} stderr={err!r}")
         self.assertIn("/api/v2/runs/start", server.paths(),
                       "the client tries the lifecycle before degrading")
-        payload = server.payload_for("/api/v2/runs/parsed")
+        payload = server.payload_for(RUNS)
         self.assertIsNotNone(payload, "the run must STILL be ingested")
         self.assertNotIn(
             "runId", payload,
@@ -815,7 +863,7 @@ class _Cr094PreflightBase(_BaseCr017ClientTest):
 
         def _get(path, timeout=10):
             gets.append((path, time.time(), timeout))
-            return get_side_effect(path)
+            return _answering_health(get_side_effect)(path)
 
         argv = [verb, "--bun", self.fake_bun, "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir, "--reports", "reports",
@@ -868,7 +916,7 @@ class UnboundRunIsWarnedOnBothChannelsTest(_Cr094PreflightBase):
                       f"the ingest still succeeds; axi={axi!r}")
         self.assertEqual(code, 0, f"a green run still exits 0; stdout={out!r}")
         self.assertIsNotNone(
-            server.payload_for("/api/v2/runs/parsed"),
+            server.payload_for(RUNS),
             f"the run must still be STORED, not refused; paths={server.paths()}")
 
     def test_the_warning_line_prints_on_stderr_and_before_the_ingest_line(self):
@@ -989,7 +1037,7 @@ class PreflightIsBestEffortTest(_Cr094PreflightBase):
         self.assertIs(axi.get("ok"), True, f"axi={axi!r}")
         self.assertEqual(code, 0, f"stdout={out!r}")
         self.assertIsNotNone(
-            server.payload_for("/api/v2/runs/parsed"),
+            server.payload_for(RUNS),
             f"the run must still be stored; paths={server.paths()}")
 
     def test_the_binding_read_is_issued_under_the_short_preflight_bound(self):
@@ -1028,7 +1076,7 @@ class PreflightIsBestEffortTest(_Cr094PreflightBase):
         self.assertEqual(self._missing_cycle_warnings(axi), [],
                          f"got warnings={axi.get('warnings')!r}")
         self.assertIsNotNone(
-            server.payload_for("/api/v2/runs/parsed"),
+            server.payload_for(RUNS),
             f"the run must still be stored; paths={server.paths()}")
 
 
@@ -1066,7 +1114,7 @@ class OrchestratorGateIsAttributableTest(_Cr094PreflightBase):
             f"`--cycle` was supplied -- there is nothing to warn about; got "
             f"warnings={axi.get('warnings')!r}")
         self.assertNotIn(MISSING_CYCLE_CODE, err, f"stderr={err!r}")
-        self.assertIsNotNone(server.payload_for("/api/v2/runs/parsed"))
+        self.assertIsNotNone(server.payload_for(RUNS))
 
     def test_regression_without_a_cycle_gets_the_preflight_warning_on_both_channels(self):
         server = _FakeCrucible()

@@ -377,7 +377,7 @@ class BunReleaseRunSuppressesNoCycleWarningTest(_Cr094PreflightBase):
             start_body.get("release"), RELEASE,
             f"the run-start body must carry top-level release={RELEASE!r}; "
             f"got {start_body!r}")
-        ingest_body = server.payload_for("/api/v2/runs/parsed") or {}
+        ingest_body = server.payload_for("/api/v2/runs") or {}
         self.assertEqual(
             ingest_body.get("release"), RELEASE,
             f"the closing ingest body must carry top-level release={RELEASE!r}; "

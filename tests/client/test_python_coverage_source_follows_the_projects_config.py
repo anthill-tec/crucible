@@ -4,7 +4,7 @@ configuration declares, not a source the client picks for it.
 Every test drives the real `python-crucible.py` `main` in-process against
 the `RecordingBoard` double, with the repo's own interpreter and its real
 coverage.py, over a scratch project built by `python_coverage_project`. It
-asserts what the board stored (the ingested coverage object), what the
+asserts the lcov coverage report the client sent the board, what the
 envelope warned, and the coverage run's own command as the client printed it
 (`[crucible] running: ...` on stderr). Both verbs that run a coverage run,
 `regression --coverage` and `pre-merge-gate`, are checked as subtests of the
@@ -56,6 +56,7 @@ from tests.client.python_coverage_project import (  # noqa: E402
     drive_interrupted,
     ingested_coverage,
     line_counts,
+    sent_report_counts,
     load_client,
     make_project,
     scrubbed_coverage_env,
@@ -98,7 +99,7 @@ class _CoverageRunCase(unittest.TestCase):
         stored = ingested_coverage(result.board)
         self.assertEqual(
             line_counts(stored), (expected_total, expected_covered),
-            f"{label}: the board must store coverage of exactly "
+            f"{label}: the lcov report sent must cover exactly "
             f"{expected_total} statements, {expected_covered} executed; got "
             f"coverage={stored!r} ({result.describe()})")
         self.assertNotIn(
@@ -196,7 +197,7 @@ class UndeclaredSourceMeasuresTheProjectTest(_CoverageRunCase):
                     CORE_TOTAL + EXTRA_TOTAL + TESTS_TOTAL,
                     CORE_COVERED + EXTRA_COVERED + TESTS_COVERED)
                 self.assertEqual(
-                    ((result.axi or {}).get("run") or {}).get("failed"), 0,
+                    (sent_report_counts(result.board) or (None, None))[1], 0,
                     f"{label}: the run is green; {result.describe()}")
                 self._assert_one_undeclared_warning(label, result)
 
@@ -208,7 +209,7 @@ class UndeclaredSourceMeasuresTheProjectTest(_CoverageRunCase):
                     extra_files={"tests/test_fails.py": FAILING_TEST_SOURCE})
                 result = drive(project_dir, board, verb)
                 self.assertEqual(
-                    ((result.axi or {}).get("run") or {}).get("failed"), 1,
+                    (sent_report_counts(result.board) or (None, None))[1], 1,
                     f"{label}: fixture -- the deliberately failing test makes "
                     f"the run red; {result.describe()}")
                 self._assert_one_undeclared_warning(label, result)
@@ -422,7 +423,7 @@ class SubprocessCoverageIsReportedTest(_CoverageRunCase):
                         f"{label} / {placement}", result,
                         CORE_TOTAL + TOOL_TOTAL, CORE_COVERED + TOOL_COVERED)
                     self.assertEqual(
-                        ((result.axi or {}).get("run") or {}).get("failed"), 0,
+                        (sent_report_counts(result.board) or (None, None))[1], 0,
                         f"{label} / {placement}: {result.describe()}")
 
 

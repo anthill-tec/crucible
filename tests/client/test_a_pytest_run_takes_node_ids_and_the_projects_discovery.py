@@ -14,7 +14,7 @@ decides discovery unless the caller states `--start-dir`/`--pattern`.
 
 Every run drives the REAL `clients/python-crucible.py` as an OS subprocess on
 a scratch project filing to a recording board named by the project's own
-`crucible.toml`; what ran is read from the one parsed ingest the board
+`crucible.toml`; what ran is read from the one /api/v2/runs ingest the board
 received.
 
 Invocation:
@@ -62,9 +62,9 @@ class _PytestCase(unittest.TestCase):
 
     def run_test_verb(self, *argv):
         result = self.project.drive(["test", "--agent", AGENT, *argv])
-        ingests = self.project.parsed_ingests()
+        ingests = self.project.runs_ingests()
         self.assertEqual(len(ingests), 1,
-                         f"exactly one parsed ingest must be filed; {diag(result)}")
+                         f"exactly one /api/v2/runs ingest must be filed; {diag(result)}")
         return result, ingests[0]
 
 
@@ -163,9 +163,9 @@ class WithoutPytestTheUnittestDefaultsStandTest(unittest.TestCase):
 
     def assert_only_the_default_selection_ran(self, verb, *argv):
         result = self.project.drive([verb, "--agent", AGENT, *argv])
-        ingests = self.project.parsed_ingests()
+        ingests = self.project.runs_ingests()
         self.assertEqual(len(ingests), 1,
-                         f"{verb}: exactly one parsed ingest; {diag(result)}")
+                         f"{verb}: exactly one /api/v2/runs ingest; {diag(result)}")
         self.assertEqual(leaves(ingests[0]), [("test_counted", "pass")],
                          f"{verb}: start dir `tests`, pattern `test_*.py`; {diag(result)}")
         self.assertEqual(counts(ingests[0]),

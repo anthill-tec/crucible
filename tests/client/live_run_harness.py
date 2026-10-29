@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +37,40 @@ ENV_KEYS_TO_SCRUB = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID",
 
 START = "/api/v2/runs/start"
 INGEST_PATHS = ("/api/v2/runs", "/api/v2/runs/parsed", "/api/v2/runs/compile")
+
+# The board's health, as a board that decodes the clients' reports states it:
+# the codec names it decodes, the largest ingest body it reads, and its
+# version. Both health routes answer it.
+HEALTH_PATHS = ("/api/health", "/api/v2/health")
+HEALTH_VERSION = "0.4.0"
+HEALTH_CODECS = {"test": ["junit", "playwright"], "coverage": ["jacoco", "lcov"]}
+# The shipped recommendation for `ingest_body_bytes` (128 MiB).
+DEFAULT_INGEST_BODY_BYTES = 128 * 1024 * 1024
+# The `run` block `/api/v2/runs` answers with until a test scripts its own.
+DEFAULT_RUN_BLOCK = {"total": 0, "passed": 0, "failed": 0}
+
+
+def board_health(ingest_body_bytes=DEFAULT_INGEST_BODY_BYTES):
+    """The health a board that decodes the clients' reports answers: what
+    `RecordingBoard` answers unscripted, for an in-process `_get` stub."""
+    return {"ok": True, "status": "healthy", "version": HEALTH_VERSION,
+            "codecs": json.loads(json.dumps(HEALTH_CODECS)),
+            "limits": {"ingest_body_bytes": ingest_body_bytes}}
+
+
+def get_answering_health(fallback=None):
+    """A `_get` side effect for an in-process client drive: the board's health
+    (`board_health`) on the health routes, and on every other read
+    `fallback(path)` when it is callable, else `fallback` itself, else a
+    tolerant failure."""
+    def _get(path, timeout=10):
+        if path in HEALTH_PATHS:
+            return board_health()
+        if callable(fallback):
+            return fallback(path)
+        return fallback if fallback is not None else {"ok": False,
+                                                      "error": "mocked"}
+    return _get
 
 
 def load_toon():
@@ -61,10 +96,26 @@ def load_client(name):
 class RecordingBoard:
     """A real `ThreadingHTTPServer` on loopback that records every request in
     wire order with its receipt time, opens a run on `/api/v2/runs/start` and
-    answers everything else `ok`."""
+    answers everything else `ok`.
 
-    def __init__(self):
+    Health (`HEALTH_PATHS`) is answered as a board that decodes the clients'
+    reports states it \u2014 `version`, `codecs` and `limits.ingest_body_bytes`
+    (`ingest_body_bytes`, the shipped 128 MiB unless a test names its own) \u2014
+    unless a test scripts another answer (`script_health`) or a failure
+    (`fail_health`). `/api/v2/runs` answers with the `run` block a test
+    scripts (`script_run`); the board decodes nothing it is sent."""
+
+    def __init__(self, ingest_body_bytes=DEFAULT_INGEST_BODY_BYTES):
         self.events = []  # [(received_at, method, path, body)]
+        self.ingest_body_bytes = ingest_body_bytes
+        # Scripted health: a whole answer that replaces the default one, or a
+        # non-200 failure `(status, error)`. Both default off.
+        self._health_override = None
+        self._health_failure = None
+        # The `run` block `/api/v2/runs` answers with, and the `warnings[]` it
+        # answers beside it (none until a test scripts them).
+        self._run_block = dict(DEFAULT_RUN_BLOCK)
+        self._run_warnings = None
         self._lock = threading.Lock()
         self._run_seq = 0
         # CR-CRU-170 \u00a7S2 \u2014 scripted refusals, so a RED test can drive the real
@@ -132,7 +183,15 @@ class RecordingBoard:
             def do_GET(self):
                 with board._lock:
                     board.events.append((time.time(), "GET", self.path, None))
-                if "/plans" in self.path:
+                    health = board._health_answer()
+                    failure = board._health_failure
+                if self.path in HEALTH_PATHS:
+                    if failure is not None:
+                        status, error = failure
+                        self._reply_status(status, {"ok": False, "error": error})
+                    else:
+                        self._reply(health)
+                elif "/plans" in self.path:
                     self._reply({"ok": True, "plans": []})
                 else:
                     self._reply({"ok": True, "agents": []})
@@ -185,8 +244,13 @@ class RecordingBoard:
                     if refuse:
                         self._reply_status(status, {"ok": False, "error": "ingest refused"})
                     elif self.path == "/api/v2/runs":
-                        self._reply({"ok": True, "changed": True,
-                                 "run": {"total": 0, "passed": 0, "failed": 0}})
+                        with board._lock:
+                            run_block = json.loads(json.dumps(board._run_block))
+                            run_warnings = board._run_warnings
+                        answer = {"ok": True, "changed": True, "run": run_block}
+                        if run_warnings is not None:
+                            answer["warnings"] = json.loads(json.dumps(run_warnings))
+                        self._reply(answer)
                     else:
                         self._reply({"ok": True, "changed": True})
                 else:
@@ -208,6 +272,63 @@ class RecordingBoard:
         self._httpd.shutdown()
         self._httpd.server_close()
         self._thread.join(timeout=5)
+
+    def _health_answer(self):
+        """The health answer as it stands (the caller holds the lock)."""
+        if self._health_override is not None:
+            return json.loads(json.dumps(self._health_override))
+        return {"ok": True, "status": "healthy", "version": HEALTH_VERSION,
+                "codecs": json.loads(json.dumps(HEALTH_CODECS)),
+                "limits": {"ingest_body_bytes": self.ingest_body_bytes}}
+
+    def default_health(self):
+        """A copy of the health this board answers unscripted, for a test to
+        alter and hand to `script_health` (drop `codecs`, drop `limits`, ...)."""
+        with self._lock:
+            override, self._health_override = self._health_override, None
+            answer = self._health_answer()
+            self._health_override = override
+        return answer
+
+    def script_health(self, health):
+        """Answer both health routes with `health`, whole, from now on \u2014 an
+        older board's health (no `codecs`), one with `codecs` but no `limits`,
+        or one whose `version` a test names."""
+        with self._lock:
+            self._health_override = json.loads(json.dumps(health))
+            self._health_failure = None
+
+    def fail_health(self, status=503, error="health unavailable"):
+        """Answer both health routes non-200 (`{ok: False, error}`, HTTP
+        `status`) from now on: health that cannot be read, on a board that
+        still answers every other route."""
+        with self._lock:
+            self._health_failure = (status, error)
+
+    def script_run(self, passed=0, failed=0, pending=0, total=None, files=None,
+                   coverage=None, warnings=None):
+        """Answer `/api/v2/runs` with this `run` block from now on. `total`
+        defaults to the sum of the three; `files` and `coverage` (the coverage
+        the board kept, `{lines, functions}`) join the block only when given,
+        and `warnings` (the board's own `[{code, detail}]`) joins the answer
+        beside it only when given. The board decodes nothing: the answer is
+        what the test scripted."""
+        block = {"passed": passed, "failed": failed, "pending": pending,
+                 "total": passed + failed + pending if total is None else total}
+        if files is not None:
+            block["files"] = files
+        if coverage is not None:
+            block["coverage"] = json.loads(json.dumps(coverage))
+        with self._lock:
+            self._run_block = block
+            self._run_warnings = (None if warnings is None
+                                  else json.loads(json.dumps(warnings)))
+
+    def health_reads(self):
+        """Every GET of a health route, in wire order."""
+        with self._lock:
+            return [p for _, m, p, _b in self.events
+                    if m == "GET" and p in HEALTH_PATHS]
 
     def posts(self):
         """`[(path, body), ...]` for every POST, in wire order."""
@@ -284,6 +405,48 @@ class RecordingBoard:
 
     def run_ids_opened(self):
         return [f"run-live-{i}" for i in range(1, self._run_seq + 1)]
+
+
+def junit_sent(body):
+    """The JUnit report texts a `/api/v2/runs` body carried as `data`, read
+    as the board's `junit` codec reads them -- the client parses none of
+    them: `{"summary": {total, passed, failed, pending}, "tree": [{name,
+    status, children: [{name, status}]}]}`, one node per `<testsuite>`, or
+    per `classname` within the one suite pytest names `pytest`. A case with a
+    `<failure>` or `<error>` is `fail`, one with `<skipped>` `pending`, any
+    other `pass`. `files` beside them counts the distinct sources the cases
+    name -- each case's `file`, else its suite's `file`, else its
+    `classname`, else its suite's name. None when the body is not a `junit`
+    ingest."""
+    if not isinstance(body, dict) or body.get("codec") != "junit":
+        return None
+    nodes = {}
+    sources = set()
+    for text in body.get("data") or []:
+        root = ET.fromstring(text)  # noqa: S314 - a report a test's own run wrote
+        for suite in list(root.iter("testsuite")) or [root]:
+            suite_name = suite.get("name", "?")
+            for case in suite.findall("testcase"):
+                name = ((case.get("classname") or suite_name)
+                        if suite_name == "pytest" else suite_name)
+                if case.find("failure") is not None or case.find("error") is not None:
+                    status = "fail"
+                elif case.find("skipped") is not None:
+                    status = "pending"
+                else:
+                    status = "pass"
+                nodes.setdefault(name, []).append(
+                    {"name": case.get("name", "?"), "status": status})
+                sources.add(case.get("file") or suite.get("file")
+                            or case.get("classname") or suite_name)
+    tree = [{"name": name,
+             "status": "fail" if any(c["status"] == "fail" for c in children) else "pass",
+             "children": children} for name, children in nodes.items()]
+    statuses = [c["status"] for children in nodes.values() for c in children]
+    return {"summary": {"total": len(statuses), "passed": statuses.count("pass"),
+                        "failed": statuses.count("fail"),
+                        "pending": statuses.count("pending")},
+            "tree": tree, "files": len(sources)}
 
 
 def first_index(posts, predicate):

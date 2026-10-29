@@ -30,6 +30,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.live_run_harness import get_answering_health, write_fake_bun
 from tests.client.test_client_fleet_envelope_census import (
     declare_board,
     install_project_limits,
@@ -189,9 +190,29 @@ class PostIngestRequiresAndCarriesTheStackTest(unittest.TestCase):
 
 # ── the census over the five clients' sources ─────────────────────────────
 
+# The shared ingest (`clients/_crucible_axi.py`): a client's call to it is an
+# ingest call exactly as a `post_ingest` call is, and must hand over `_STACK`.
+SHARED_INGEST = "ingest_reports"
+INGEST_CALLEES = ("post_ingest", SHARED_INGEST)
+
+
+def _shared_ingest_name():
+    """`SHARED_INGEST`, once the shared module is shown to define it: a census
+    keyed to a name the shared module does not carry would recognise nothing."""
+    axi = _load(AXI_PATH, "crucible_axi_shared_ingest_name")
+    return getattr(axi, SHARED_INGEST).__name__
+
+
+def _callee(call):
+    func = call.func
+    return (func.attr if isinstance(func, ast.Attribute)
+            else func.id if isinstance(func, ast.Name) else None)
+
+
 
 def _post_ingest_calls(source):
-    """Every call of `post_ingest` in `source`, however it is reached
+    """Every ingest call in `source` \u2014 `post_ingest`, or the shared ingest
+    (`SHARED_INGEST`) \u2014 however it is reached
     (`_axi().post_ingest(...)`, `axi.post_ingest(...)`, `post_ingest(...)`),
     each paired with the name of the function it sits in."""
     found = []
@@ -205,7 +226,7 @@ def _post_ingest_calls(source):
                 func = child.func
                 name = (func.attr if isinstance(func, ast.Attribute)
                         else func.id if isinstance(func, ast.Name) else None)
-                if name == "post_ingest":
+                if name in INGEST_CALLEES:
                     found.append((child_owner, child))
             visit(child, child_owner)
 
@@ -223,6 +244,9 @@ def _states_its_own_stack(call):
 
 
 def _route_of(call):
+    if _callee(call) == SHARED_INGEST:
+        # The shared ingest has one route: it sends `/api/v2/runs`.
+        return RUNS
     if len(call.args) >= 2 and isinstance(call.args[1], ast.Constant):
         return call.args[1].value
     return "<computed route>"
@@ -296,6 +320,55 @@ class EveryPostIngestCallStatesTheClientsOwnStackTest(unittest.TestCase):
         self.assert_client_states_its_stack_everywhere("rust")
 
 
+_SYNTHETIC_SHARED_INGEST_CLIENT = '''
+def files_through_the_shared_ingest(rc):
+    return _axi().{shared}(_post, _get, codec="junit", report_paths=paths,
+                           stack=_STACK, runner_exit=rc)
+
+def shares_but_names_no_stack(rc):
+    return axi.{shared}(_post, _get, codec="junit", report_paths=paths,
+                        runner_exit=rc)
+
+def shares_a_literal_stack(rc):
+    return {shared}(_post, _get, codec="junit", report_paths=paths,
+                    stack="python", runner_exit=rc)
+
+def still_posts_directly():
+    return _axi().post_ingest(_post, "/api/v2/runs/parsed", body, stack=_STACK)
+'''
+
+
+class TheCensusReadsTheSharedIngestAsAnIngestCallTest(unittest.TestCase):
+    """A client-module call to the shared ingest is an ingest call: found
+    however it is reached, and flagged unless it hands over `stack=_STACK`.
+    Proved on a synthetic client, never on the live clients."""
+
+    def setUp(self):
+        self.source = _SYNTHETIC_SHARED_INGEST_CLIENT.replace(
+            "{shared}", _shared_ingest_name())
+
+    def test_every_shared_ingest_call_is_found_beside_a_post_ingest_call(self):
+        self.assertEqual(
+            [owner for owner, _call in _post_ingest_calls(self.source)],
+            ["files_through_the_shared_ingest", "shares_but_names_no_stack",
+             "shares_a_literal_stack", "still_posts_directly"],
+            "the census must find a shared-ingest call however it is reached")
+
+    def test_a_shared_ingest_call_handed_its_own_stack_is_not_flagged(self):
+        flagged = _call_sites_without_own_stack(self.source)
+        self.assertNotIn("files_through_the_shared_ingest -> /api/v2/runs",
+                         flagged)
+        self.assertNotIn("still_posts_directly -> /api/v2/runs/parsed", flagged)
+
+    def test_a_shared_ingest_call_without_its_own_stack_is_flagged_on_the_runs_route(self):
+        self.assertEqual(
+            _call_sites_without_own_stack(self.source),
+            ["shares_but_names_no_stack -> /api/v2/runs",
+             "shares_a_literal_stack -> /api/v2/runs"],
+            "the census must flag every shared-ingest call that does not pass "
+            "`stack=_STACK`, and only those")
+
+
 # ── each client x route, driven through the client ────────────────────────
 
 
@@ -328,13 +401,14 @@ class _ClientIngestCase(unittest.TestCase):
                 os.environ[key] = value
 
     def drive(self, start_reply, body):
-        """Run `body` with the client's `_post` recording and its `_get` offline;
+        """Run `body` with the client's `_post` recording and its `_get` offline
+        but for the board's health;
         a verb's exit is part of the drive, not an error of it."""
         recorder = _RecordingPost(start_reply)
         with mock.patch.object(self.module, "_post", side_effect=recorder,
                                create=True), \
-                mock.patch.object(self.module, "_get", return_value=BOARD_OFFLINE,
-                                  create=True), \
+                mock.patch.object(self.module, "_get", create=True,
+                                  side_effect=get_answering_health(BOARD_OFFLINE)), \
                 contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(io.StringIO()), \
                 contextlib.suppress(SystemExit):
@@ -424,40 +498,38 @@ class ArduinoStatesItsStackOnEveryIngestTest(_ClientIngestCase):
 
 
 class BunStatesItsStackOnEveryIngestTest(_ClientIngestCase):
-    """bun: `_start_run`, then `_ingest_parsed` / `_ingest_raw` /
-    `_ingest_compile` with whatever runId came back."""
+    """bun: `regression` (its run opened through `_start_run`, its report sent
+    through the shared ingest), and `_start_run` then `_ingest_compile` with
+    whatever runId came back."""
 
     CLIENT = "bun"
 
-    def _parsed(self, run_id):
-        self.module._ingest_parsed(self.project_dir, AGENT, dict(SUMMARY_ONE_PASS),
-                                   list(TREE_ONE_PASS), run_id=run_id)
-
-    def _raw(self, run_id):
-        report = self.write_junit(os.path.join(self.project_dir, "report.xml"))
-        self.module._ingest_raw(self.project_dir, AGENT,
-                                {"codec": "junit", "path": report}, run_id=run_id)
+    def _regression(self):
+        fake = write_fake_bun(self.project_dir, 1)
+        args = argparse.Namespace(
+            project_dir=self.project_dir, package_dir=self.project_dir,
+            bun=fake, agent=AGENT, reports="reports", coverage=False, log=None,
+            cycle=None, release=None, no_lifecycle=False)
+        self.module.cmd_regression(args)
 
     def _compile(self, run_id):
         self.module._ingest_compile(self.project_dir, AGENT,
                                     "src/a.ts(1,1): error TS2304: boom",
                                     run_id=run_id)
 
-    def test_a_parsed_ingest_states_the_bun_stack_when_its_start_was_accepted(self):
-        recorder = self.start_then(START_ACCEPTED, self._parsed)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_ACCEPTED)
-
-    def test_a_parsed_ingest_states_the_bun_stack_when_its_start_was_refused(self):
-        recorder = self.start_then(START_REFUSED, self._parsed)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_REFUSED)
-
-    def test_a_raw_run_ingest_states_the_bun_stack_when_its_start_was_accepted(self):
-        recorder = self.start_then(START_ACCEPTED, self._raw)
+    def test_a_report_ingest_states_the_bun_stack_when_its_start_was_accepted(self):
+        recorder = self.drive(START_ACCEPTED, self._regression)
         self.assert_ingest_states_the_stack(recorder, RUNS, START_ACCEPTED)
+        self.assertEqual(recorder.bodies(PARSED), [],
+                         f"bun files no report on {PARSED}; posted to "
+                         f"{recorder.paths()!r}")
 
-    def test_a_raw_run_ingest_states_the_bun_stack_when_its_start_was_refused(self):
-        recorder = self.start_then(START_REFUSED, self._raw)
+    def test_a_report_ingest_states_the_bun_stack_when_its_start_was_refused(self):
+        recorder = self.drive(START_REFUSED, self._regression)
         self.assert_ingest_states_the_stack(recorder, RUNS, START_REFUSED)
+        self.assertEqual(recorder.bodies(PARSED), [],
+                         f"bun files no report on {PARSED}; posted to "
+                         f"{recorder.paths()!r}")
 
     def test_a_compile_ingest_states_the_bun_stack_when_its_start_was_accepted(self):
         recorder = self.start_then(START_ACCEPTED, self._compile)
@@ -532,7 +604,8 @@ _PYTHON_DIES_BEFORE_ANY_REPORT = (
 
 class PythonStatesItsStackOnEveryIngestTest(_ClientIngestCase):
     """python: the whole `test` verb (`main`), which opens the run itself — a
-    real unittest run over a one-test fixture for `/runs/parsed`, and an
+    real unittest run over a one-test fixture for `/runs` (its report sent
+    through the shared ingest), and an
     interpreter that dies before writing a report for `/runs/compile`."""
 
     CLIENT = "python"
@@ -557,21 +630,21 @@ class PythonStatesItsStackOnEveryIngestTest(_ClientIngestCase):
         fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
         self._test_verb(str(fake))
 
-    def test_a_parsed_ingest_states_the_python_stack_when_its_start_was_accepted(self):
+    def test_a_report_ingest_states_the_python_stack_when_its_start_was_accepted(self):
         recorder = self.drive(START_ACCEPTED, self._passing_suite)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_ACCEPTED)
+        self.assert_ingest_states_the_stack(recorder, RUNS, START_ACCEPTED)
 
-    def test_a_refused_start_still_leaves_the_python_stack_on_the_parsed_ingest(self):
-        """Regression guard — python already names its stack on a parsed ingest
+    def test_a_refused_start_still_leaves_the_python_stack_on_the_report_ingest(self):
+        """Regression guard — python names its stack on a report ingest
         whose start was refused; that must survive the change."""
         recorder = self.drive(START_REFUSED, self._passing_suite)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_REFUSED)
+        self.assert_ingest_states_the_stack(recorder, RUNS, START_REFUSED)
 
-    def test_a_parsed_ingest_states_the_python_stack_when_its_start_opened_no_run(self):
+    def test_a_report_ingest_states_the_python_stack_when_its_start_opened_no_run(self):
         """A board that answers the start `ok` with no runId opened nothing:
         the ingest is the single-shot body and must still name the stack."""
         recorder = self.drive(START_OPENED_NONE, self._passing_suite)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_OPENED_NONE)
+        self.assert_ingest_states_the_stack(recorder, RUNS, START_OPENED_NONE)
 
     def test_a_compile_ingest_states_the_python_stack_when_its_start_was_accepted(self):
         recorder = self.drive(START_ACCEPTED, self._dying_interpreter)

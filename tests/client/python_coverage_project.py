@@ -4,7 +4,7 @@ import but never declare, its own tests, and a vendored module inside a
 virtual environment under the project root; a driver that runs the REAL
 `python-crucible.py` `main` in-process against the `RecordingBoard` double
 with the repo's own interpreter and its real coverage.py; and the readers
-the assertions need -- the coverage object the board stored, the envelope's
+the assertions need -- the lcov coverage report the client sent the board, the envelope's
 warnings, and the coverage run's command as the client printed it on stderr.
 
 Every scratch project, board and environment change is undone by the
@@ -25,6 +25,7 @@ import sys
 import tempfile
 import textwrap
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
@@ -383,20 +384,48 @@ def source_values(command_line):
 
 
 def ingested_coverage(board):
-    """The coverage object of the last `/api/v2/runs/parsed` ingest, or None
-    when the run ingested none (or never reached the parsed ingest)."""
-    parsed = [body for path, body in board.posts() if path == "/api/v2/runs/parsed"]
-    if not parsed or not isinstance(parsed[-1], dict):
+    """The `coverage` block of the last `/api/v2/runs` ingest -- the lcov
+    report coverage.py wrote, sent inline as `{codec: "lcov", data}` for the
+    board to decode -- or None when the run ingested none (or sent no
+    coverage)."""
+    sent = [body for path, body in board.posts() if path == "/api/v2/runs"]
+    if not sent or not isinstance(sent[-1], dict):
         return None
-    return parsed[-1].get("coverage")
+    return sent[-1].get("coverage")
+
+
+def sent_report_counts(board):
+    """`(total, failed)` over the JUnit report texts the last `/api/v2/runs`
+    ingest carried as `data` -- its `<testcase>` elements, and those carrying
+    a `<failure>` or `<error>` -- or None when the run sent no report. The
+    client parses none of them; this is what the board's codec reads."""
+    sent = [body for path, body in board.posts() if path == "/api/v2/runs"]
+    if not sent or not isinstance(sent[-1], dict):
+        return None
+    total = failed = 0
+    for text in sent[-1].get("data") or []:
+        root = ET.fromstring(text)  # noqa: S314 - the report this test's own run wrote
+        for case in root.iter("testcase"):
+            total += 1
+            if case.find("failure") is not None or case.find("error") is not None:
+                failed += 1
+    return total, failed
 
 
 def line_counts(coverage):
-    """`(total, covered)` of a stored coverage object's lines, or None."""
-    if not isinstance(coverage, dict):
+    """`(lines found, lines hit)` summed over the lcov report texts a sent
+    `coverage` block carries (the `LF:`/`LH:` records the board's lcov codec
+    reads), or None when the block is not an lcov report."""
+    if not isinstance(coverage, dict) or coverage.get("codec") != "lcov":
         return None
-    lines = coverage.get("lines") or {}
-    return lines.get("total"), lines.get("covered")
+    found = hit = 0
+    for text in coverage.get("data") or []:
+        for line in str(text).splitlines():
+            if line.startswith("LF:"):
+                found += int(line[3:])
+            elif line.startswith("LH:"):
+                hit += int(line[3:])
+    return found, hit
 
 
 def warnings_with_code(axi, code):

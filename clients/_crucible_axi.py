@@ -1466,11 +1466,11 @@ REGRESSION_COVERAGE_HELP = (
     "Measure coverage and file it with the run. Without it the whole suite "
     "runs coverage-free, and no coverage is measured or filed.")
 REGRESSION_COVERAGE_LCOV_HELP = (
-    REGRESSION_COVERAGE_HELP + " With it, the run's lcov coverage is posted "
-    "to /api/v2/runs/parsed with its results.")
+    REGRESSION_COVERAGE_HELP + " With it, the run's lcov coverage is "
+    "measured and is filed with its results.")
 REGRESSION_COVERAGE_PY_HELP = (
     REGRESSION_COVERAGE_HELP + " With it, the run is under coverage.py and "
-    "its coverage is posted to /api/v2/runs/parsed with its results.")
+    "its lcov coverage report is sent to /api/v2/runs with its results.")
 REGRESSION_COVERAGE_JACOCO_HELP = (
     REGRESSION_COVERAGE_HELP + " With it, the build's JaCoCo coverage is "
     "collected on a run with no failure and posted to /api/v2/runs/parsed "
@@ -6876,6 +6876,25 @@ def _whole_suite_warning(code, stack, covered, detail):
             "detail": f"{whole_suite_label(stack)}{covers} {detail}"}
 
 
+def whole_suite_unreported_warnings(stack, response):
+    """The gate's finding on its ONE whole-suite run when that run was not
+    filed, for a gate that composes no declared suites and so emits that
+    run's own envelope: `[]` when the ingest `response` is `ok` and carries
+    the run's counts, else one `gate-suite-unreported` warning, worded as the
+    composed gate words it (`_run_outcome`), so the gate is not green and
+    says it cannot state what it covered."""
+    response = response if isinstance(response, dict) else {}
+    counts = _suite_counts(response)
+    if response.get("ok") and counts is not None:
+        return []
+    error = response.get("error")
+    cause = f": {error}" if error else ""
+    return [_whole_suite_warning(
+        GATE_SUITE_UNREPORTED_CODE, stack, (),
+        f"RAN, and was not filed, so the gate cannot say what it "
+        f"covered{cause}")]
+
+
 def _run_outcome(code, counts, error):
     """What the gate has to SAY about ONE run it made: `(ok, warning code,
     warning detail)`, the detail None for a run that simply passed.
@@ -7205,7 +7224,7 @@ def refuse_unrunnable_scoped_gate(args, *, surface, stack, get, project_key):
 
 
 def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
-                    context, crucible_url):
+                    context, crucible_url, whole_suite_alone=None):
     """§S1/§S2 — the GATE's regression step: the one composition all five gates
     run, so "the gate covers every declared suite" is a property of the fleet
     and not of one client.
@@ -7214,10 +7233,15 @@ def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
     additive rule runs it either way — as the gate's whole answer for a project
     whose declaration this stack cannot enumerate or that declares nothing (it
     IS that project's one suite), and as the union BASE for a project that
-    declares suites, which are added to it and never substituted for it."""
+    declares suites, which are added to it and never substituted for it.
+
+    `whole_suite_alone`, when given, is that same run as the gate's WHOLE
+    answer: its envelope is the gate's, so it names its own run unreported
+    when that run was not filed. The composition names it itself, so a
+    composed gate takes `whole_suite` and never this one."""
     suites = declared_gate_suites(args, surface, stack)
     if not suites:
-        return whole_suite()
+        return (whole_suite_alone or whole_suite)()
     return run_gate_suites(suites, stack=stack, verb=verb,
                            whole_suite=whole_suite, dispatch=dispatch,
                            context=context, crucible_url=crucible_url,
@@ -7633,6 +7657,158 @@ def junit_testcase_count(paths):
             return None
         count += sum(1 for _ in root.iter("testcase"))
     return count
+
+
+def junit_non_skipped_count(paths):
+    """The number of `<testcase>` elements carrying no `<skipped>` child across
+    the JUnit reports at `paths` \u2014 the cases a run actually ran, taken before
+    its reports are offered to the board.
+
+    `None` when a report cannot be read or parsed, as `junit_testcase_count`
+    answers: the count is then unknown."""
+    count = 0
+    for path in paths:
+        try:
+            # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
+            root = ET.parse(path).getroot()  # noqa: S314
+        except (ET.ParseError, OSError) as exc:
+            print(f"[crucible] WARN: could not count the results in {path} "
+                  f"({exc}) \u2014 it is filed as it stands", file=sys.stderr)
+            return None
+        count += sum(1 for case in root.iter("testcase")
+                     if case.find("skipped") is None)
+    return count
+
+
+# The health route the shared ingest reads before it sends, and the board
+# version from which a board decodes the reports the clients send inline.
+INGEST_HEALTH_PATH = "/api/health"
+INGEST_CODEC_VERSION_FLOOR = "0.4.0"
+INGEST_RUNS_PATH = "/api/v2/runs"
+INGEST_BODY_LIMIT_KEY = "ingest_body_bytes"
+_HTTP_413 = re.compile(r"^HTTP 413\b")
+
+
+def _read_report_texts(paths):
+    """`(texts, None)`: each report file's text, in path order \u2014 or
+    `(None, refusal)`: the refusal before sending that names the first path
+    that could not be read (a directory where the file should be, a file
+    without read permission)."""
+    texts = []
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                texts.append(handle.read())
+        except OSError as exc:
+            reason = exc.strerror or type(exc).__name__
+            return None, (f"the report {path} could not be read ({reason}); "
+                          f"nothing was sent")
+    return texts, None
+
+
+def _ingest_health_refusal(health, codec, coverage_codec):
+    """(PURE) Why the board whose health is `health` cannot take this run's
+    reports \u2014 its health unreadable, or it decodes no codec the run needs \u2014
+    or `None` when it can."""
+    if not isinstance(health, dict) or health.get("ok") is False:
+        error = health.get("error") if isinstance(health, dict) else None
+        return (f"the board's {INGEST_HEALTH_PATH} could not be read "
+                f"({error or 'no error was given'}), so nothing shows that it "
+                f"decodes this run's reports; nothing was sent")
+    version = health.get("version") or "an unstated version"
+    codecs = health.get("codecs")
+    needed = [("test", codec)]
+    if coverage_codec is not None:
+        needed.append(("coverage", coverage_codec))
+    if not isinstance(codecs, dict):
+        lacking = [name for _kind, name in needed]
+    else:
+        lacking = [name for kind, name in needed
+                   if not (isinstance(codecs.get(kind), list)
+                           and name in codecs[kind])]
+    if not lacking:
+        return None
+    return (f"the board (version {version}) does not decode "
+            f"{', '.join(f'`{name}`' for name in lacking)} reports: the client "
+            f"sends its reports for the board to decode, which needs a board of "
+            f"version {INGEST_CODEC_VERSION_FLOOR} or later; nothing was sent")
+
+
+def _ingest_body_limit(health):
+    """(PURE) Health's `limits.ingest_body_bytes`, or `None` when health
+    advertises no limit."""
+    limits = health.get("limits")
+    limit = (limits.get(INGEST_BODY_LIMIT_KEY)
+             if isinstance(limits, dict) else None)
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return None
+    return limit
+
+
+def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
+                   report_paths, raw=None, coverage_codec=None,
+                   coverage_paths=(), tier=None, context=None, run_id=None,
+                   release=None, runner_exit=None):
+    """The one ingest of a run's reports: the board's health is read first,
+    once, through `get_fn`, and the run is refused before anything is sent when
+    that health cannot be read, when it names no codec the run needs (the
+    refusal names its `version` and the version floor), when a report or
+    coverage file cannot be read (the refusal names its path), or when the
+    body as `post_ingest` stamps it is larger than `limits.ingest_body_bytes`.
+
+    Otherwise ONE `POST /api/v2/runs` goes out through `post_ingest`, carrying
+    `codec`, `data` (each report's text, in path order), `coverage` when a
+    coverage codec and its reports are given, `raw`, and `tier`, `context`,
+    `runId`, `release` and `runnerExit` when given; the board's answer is
+    returned, a 413 reported naming `ingest_body_bytes`.
+
+    A refusal before sending answers `{ok: False, error, warnings}`; with a
+    run open it is aborted through `abort_run`, the refusal its reason, and
+    `warnings` carries the warning that abort produced."""
+    measures_coverage = coverage_codec is not None and bool(coverage_paths)
+    health = get_fn(INGEST_HEALTH_PATH)
+    refusal = _ingest_health_refusal(
+        health, codec, coverage_codec if measures_coverage else None)
+    payload = None
+    data = coverage_data = None
+    if refusal is None:
+        data, refusal = _read_report_texts(report_paths)
+    if refusal is None and measures_coverage:
+        coverage_data, refusal = _read_report_texts(coverage_paths)
+    if refusal is None:
+        payload = {"projectKey": project_key, "agentId": agent_id,
+                   "codec": codec, "data": data}
+        if measures_coverage:
+            payload["coverage"] = {"codec": coverage_codec,
+                                   "data": coverage_data}
+        optional = (("raw", raw), ("tier", tier), ("context", context),
+                    ("runId", run_id), ("runnerExit", runner_exit))
+        payload.update({key: value for key, value in optional
+                        if value is not None})
+        limit = _ingest_body_limit(health)
+        if limit is not None:
+            # Measured as `post_ingest` stamps the body and `http_request`
+            # encodes it.
+            stamped = {**payload, "stack": stack}
+            if release:
+                stamped["release"] = release
+            size = len(json.dumps(stamped).encode())
+            if size > limit:
+                refusal = (f"the run's ingest body is {size} bytes, over the "
+                           f"board's {INGEST_BODY_LIMIT_KEY} limit of {limit}; "
+                           f"nothing was sent")
+    if refusal is not None:
+        print(f"[crucible] ERROR: {refusal}", file=sys.stderr)
+        warnings = ([abort_run(post_fn, project_key, agent_id, run_id, refusal)]
+                    if run_id else [])
+        return {"ok": False, "error": refusal, "warnings": warnings}
+    resp = post_ingest(post_fn, INGEST_RUNS_PATH, payload, stack=stack,
+                       release=release)
+    error = resp.get("error") if isinstance(resp, dict) else None
+    if isinstance(error, str) and _HTTP_413.match(error):
+        return {**resp, "error": (f"{error} \u2014 the body was larger than the "
+                                  f"board's {INGEST_BODY_LIMIT_KEY} limit")}
+    return resp
 
 
 def ran_nothing(exit_code, total):

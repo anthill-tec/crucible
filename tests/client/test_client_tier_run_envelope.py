@@ -199,6 +199,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.live_run_harness import get_answering_health, junit_sent
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 MODALITY_PATH = Path(__file__).resolve().parent / "test_client_tier_run_modality.py"
@@ -431,18 +433,26 @@ class _EnvelopeTierProbe:
     would pass a frozen expectation on one path and fail here on four."""
 
     def drive(self, argv, response=None):
-        """The harness's drive, with a stub board that answers an ingest with
-        the counts it was sent, as the board answers a run it stored. A
-        `response` the test hands in is answered as given."""
+        """The harness's drive, with a stub board that answers its health as
+        a board that decodes the clients' reports, and an ingest with the
+        counts it was sent -- a parsed `summary`, or the JUnit reports a
+        `/api/v2/runs` body carries, read as the board's codec reads them
+        (`junit_sent`) -- as the board answers a run it stored. A `response`
+        the test hands in is answered as given."""
         if response is not None:
             return super().drive(argv, response)  # type: ignore[misc]
         harness = _MODALITY._HARNESS
         calls = []
+        # The clients that send their runner's reports inline (CR-CRU-204);
+        # the others' `/api/v2/runs` bodies are answered as before.
+        inline = self.CLIENT in ("bun", "python")  # type: ignore[attr-defined]
 
         def fake_post(path, payload):
             calls.append((path, copy.deepcopy(payload)))
             answer = copy.deepcopy(harness._OK_RESPONSE)
             summary = (payload or {}).get("summary")
+            if not isinstance(summary, dict) and inline:
+                summary = (junit_sent(payload) or {}).get("summary")
             if isinstance(summary, dict):
                 answer["run"] = {key: summary.get(key, 0) for key in
                                  ("total", "passed", "failed", "pending")}
@@ -451,8 +461,8 @@ class _EnvelopeTierProbe:
         module = self.module  # type: ignore[attr-defined]
         with mock.patch.object(module, "_post", side_effect=fake_post,
                                create=True), \
-                mock.patch.object(module, "_get", return_value=None,
-                                  create=True), \
+                mock.patch.object(module, "_get", create=True,
+                                  side_effect=get_answering_health(lambda _p: None)), \
                 mock.patch.object(module, "_patch", return_value={"ok": True},
                                   create=True):
             code, out, err = harness._run_main(

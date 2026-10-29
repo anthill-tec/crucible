@@ -18,8 +18,8 @@ report, as a genuine OS subprocess — never the live :3849/:3850 server.
 WHAT IS RED HERE, and why, read from the clients at HEAD of this branch:
 
   * bun's two DECLARED-tier rows (`unit`, flag mechanism; `e2e`, the RAW-report
-    mechanism the real incident used) — `cmd_regression`'s `_ingest_parsed`/
-    `_ingest_raw` calls carry no `if not args.agent` guard at all, so a passing,
+    mechanism the real incident used) — `cmd_regression`'s parsed and raw
+    ingest calls carry no `if not args.agent` guard at all, so a passing,
     unfiled run still POSTs. RED on the "posts nothing" assertion.
 
 THE EVIDENCE VERBS (user ruling 2026-10-08, §S1 amended 8df5ade): bun/python/
@@ -239,7 +239,7 @@ def _assert_refused_before_the_runner_starts(case, label, result, marker, posts)
 class BunDeclaredTierVerbPostsNothingWhenUnfiledTest(unittest.TestCase):
     """RED — bun's declared-tier cells (`unit`/`module`/`integration`/`e2e`/
     `bdd`) all dispatch into `cmd_regression`'s `script=` branch, which carries
-    NO `if not args.agent` guard: `_ingest_parsed`/`_ingest_raw` are called
+    NO `if not args.agent` guard: its parsed and raw ingest calls are made
     unconditionally. Two rows: the flag-mechanism default (`unit`, the
     ordinary case), and the RAW-report mechanism the real incident used
     (`e2e`, modelled byte-for-byte on this repo's own `package.json`

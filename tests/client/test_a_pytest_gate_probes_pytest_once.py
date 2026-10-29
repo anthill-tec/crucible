@@ -116,7 +116,7 @@ class AGateWithPytestChosenProbesPytestOnceTest(unittest.TestCase):
         self.assertTrue(any(runs[0][i:i + 2] == ["-m", "pytest"]
                             for i in range(len(runs[0]))),
                         f"the suite runs under pytest; {self.why()}")
-        ingests = self.project.parsed_ingests()
+        ingests = self.project.runs_ingests()
         self.assertEqual(len(ingests), 1, self.why())
         self.assertEqual(counts(ingests[0]),
                          {"total": 3, "passed": 1, "failed": 1, "pending": 1},

@@ -29,7 +29,12 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from tests.client.live_run_harness import RecordingBoard, install_project, load_client
+from tests.client.live_run_harness import (
+    RecordingBoard,
+    install_project,
+    junit_sent,
+    load_client,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REAL_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
@@ -99,10 +104,15 @@ def _suite_running_line(stderr_text):
     return candidates[-1]
 
 
-def _last_parsed_payload(board):
-    parsed = [body for path, body in board.posts() if path == "/api/v2/runs/parsed"]
-    assert parsed, f"no /api/v2/runs/parsed POST observed; posts={board.posts()!r}"
-    return parsed[-1]
+def _last_sent_report(board):
+    """The run's last `/api/v2/runs` ingest, its JUnit report texts read as
+    the board's `junit` codec reads them (`junit_sent`): the client sends
+    the runner's reports and counts nothing itself."""
+    sent = [body for path, body in board.posts() if path == "/api/v2/runs"]
+    assert sent, f"no /api/v2/runs POST observed; posts={board.posts()!r}"
+    read = junit_sent(sent[-1])
+    assert read is not None, f"the ingest is not a junit one; body={sent[-1]!r}"
+    return read
 
 
 class EveryVerbRunsThroughItsOwnRunnerModuleTest(unittest.TestCase):
@@ -153,7 +163,7 @@ class EveryVerbRunsThroughItsOwnRunnerModuleTest(unittest.TestCase):
                     f"{RUNNER_MODULE_FILENAME!r} (shipped beside toon.py), "
                     f"named on the verb's own spawned command line; "
                     f"got cmd={cmd_line!r}")
-                payload = _last_parsed_payload(board)
+                payload = _last_sent_report(board)
                 summary = payload["summary"]
                 self.assertEqual(
                     summary["total"], 2,

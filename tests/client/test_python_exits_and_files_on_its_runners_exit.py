@@ -54,7 +54,7 @@ TOON = load_toon()
 PYTHON_CLIENT = CLIENTS / "python-crucible.py"
 TIMEOUT = 120
 
-PARSED_INGEST = "/api/v2/runs/parsed"
+RUNS_INGEST = "/api/v2/runs"
 COMPILE_INGEST = "/api/v2/runs/compile"
 
 PASSING_CLASS = "fake_module.FakeCase"
@@ -343,29 +343,29 @@ class PythonRunnerExitReachesTheIngestTest(_FakeInterpreterProject, unittest.Tes
         self.assertIs(type(body["runnerExit"]), int,
                       "runnerExit is sent as an integer, never a string or bool")
 
-    def test_a_clean_test_run_sends_runner_exit_0_on_the_parsed_ingest(self):
+    def test_a_clean_test_run_sends_runner_exit_0_on_its_runs_ingest(self):
         result = self.drive("test", "py-runner-exit-carry-clean", FAKE_EXIT="0")
-        self.assert_runner_exit(self.the_one_ingest(PARSED_INGEST, result), 0)
+        self.assert_runner_exit(self.the_one_ingest(RUNS_INGEST, result), 0)
 
-    def test_a_test_runner_exiting_1_sends_runner_exit_1_on_the_parsed_ingest(self):
+    def test_a_test_runner_exiting_1_sends_runner_exit_1_on_its_runs_ingest(self):
         result = self.drive("test", "py-runner-exit-carry-test", FAKE_EXIT="1")
-        self.assert_runner_exit(self.the_one_ingest(PARSED_INGEST, result), 1)
+        self.assert_runner_exit(self.the_one_ingest(RUNS_INGEST, result), 1)
 
-    def test_a_regression_runner_exiting_1_sends_runner_exit_1_on_the_parsed_ingest(self):
+    def test_a_regression_runner_exiting_1_sends_runner_exit_1_on_its_runs_ingest(self):
         result = self.drive("regression", "py-runner-exit-carry-regression",
                             FAKE_EXIT="1")
-        self.assert_runner_exit(self.the_one_ingest(PARSED_INGEST, result), 1)
+        self.assert_runner_exit(self.the_one_ingest(RUNS_INGEST, result), 1)
 
     def test_a_runner_killed_by_sigkill_sends_runner_exit_137(self):
         result = self.drive("test", "py-runner-exit-carry-sigkill",
                             FAKE_SIGNAL="KILL")
-        self.assert_runner_exit(self.the_one_ingest(PARSED_INGEST, result),
+        self.assert_runner_exit(self.the_one_ingest(RUNS_INGEST, result),
                                 128 + int(signal.SIGKILL))
 
     def test_a_refused_ingest_after_a_clean_test_runner_exits_non_zero(self):
         self.board.refuse_ingest_for("run-live-1")
         result = self.drive("test", "py-runner-exit-refused-test", FAKE_EXIT="0")
-        self.the_one_ingest(PARSED_INGEST, result)
+        self.the_one_ingest(RUNS_INGEST, result)
         self.assertNotEqual(result.returncode, 0,
                             f"a refused ingest never exits green; "
                             f"{_diagnostics(result)}")
@@ -374,7 +374,7 @@ class PythonRunnerExitReachesTheIngestTest(_FakeInterpreterProject, unittest.Tes
         self.board.refuse_ingest_for("run-live-1")
         result = self.drive("regression", "py-runner-exit-refused-regression",
                             FAKE_EXIT="0")
-        self.the_one_ingest(PARSED_INGEST, result)
+        self.the_one_ingest(RUNS_INGEST, result)
         self.assertNotEqual(result.returncode, 0,
                             f"a refused ingest never exits green; "
                             f"{_diagnostics(result)}")

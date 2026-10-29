@@ -222,8 +222,8 @@ class TheEmptyCaptureFallbackNamesTheRunnerTest(unittest.TestCase):
                             f"a runner that produced nothing fails the run; {why}")
         self.assertIsNotNone(envelope(result.stdout),
                              f"stdout must be one AXI envelope; {why}")
-        self.assertEqual(self.project.parsed_ingests(), [],
-                         f"no report, so no parsed ingest; {why}")
+        self.assertEqual(self.project.runs_ingests(), [],
+                         f"no report, so no report ingest; {why}")
         compiled = self.project.compile_ingests()
         self.assertEqual(len(compiled), 1,
                          f"exactly one compile record is filed; {why}")

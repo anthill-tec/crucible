@@ -74,11 +74,17 @@ import time
 import unittest
 from pathlib import Path
 
+from tests.client.live_run_harness import HEALTH_PATHS, board_health
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUN_SCRIPT = REPO_ROOT / "clients" / "bun-crucible.py"
 SHIPPED_TOML = REPO_ROOT / "clients" / "crucible.toml"
 
 AGENT = "bun-run-lifecycle-fixture"
+# The run's ingest: bun sends its runner's reports to the board's run route,
+# after reading the board's health; never the parsed route.
+RUNS = "/api/v2/runs"
+PARSED = "/api/v2/runs/parsed"
 PROJECT_KEY = "test-key-bun-run-lifecycle"
 
 ENV_KEYS_TO_SCRUB = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID",
@@ -151,7 +157,9 @@ class _RecordingBoard:
     genuine stand-in socket, never a mock, since the client runs as a real
     OS subprocess and cannot have its `_post` patched in-process. Answers
     every POST plausibly (a `runId` for `/api/v2/runs/start`, `ok` for
-    everything else) and records every request in WIRE order with its
+    everything else, the board's health on `HEALTH_PATHS` as a board that
+    decodes bun's reports states it, and a `run` block on `/api/v2/runs`)
+    and records every request in WIRE order with its
     receipt wall-clock time, so a test can assert both "X happened before Y"
     (index order) and "X happened before this external wall-clock event"
     (the spawn stamp)."""
@@ -184,7 +192,9 @@ class _RecordingBoard:
             def do_GET(self):
                 with board._lock:
                     board.events.append((time.time(), "GET", self.path, None))
-                if "/plans" in self.path:
+                if self.path in HEALTH_PATHS:
+                    self._reply(board_health())
+                elif "/plans" in self.path:
                     self._reply({"ok": True, "plans": []})
                 else:
                     self._reply({"ok": True, "agents": []})
@@ -199,6 +209,10 @@ class _RecordingBoard:
                         run_id = f"run-bun-lifecycle-{board._run_seq}"
                     self._reply({"ok": True, "changed": True, "runId": run_id,
                                  "startedAt": int(time.time() * 1000)})
+                elif self.path == RUNS:
+                    self._reply({"ok": True, "changed": True,
+                                 "run": {"passed": 12, "failed": 0, "pending": 0,
+                                         "total": 12, "files": 1}})
                 else:
                     self._reply({"ok": True, "changed": True})
 
@@ -323,11 +337,13 @@ class NarratedBunTestRunFinalizesThroughTheSharedPathTest(unittest.TestCase):
 
         # -- AC1: run opens before the suite, in request order --------------
         start_idx = _first_matching_index(posts, lambda p, b: p == "/api/v2/runs/start")
-        ingest_idx = _first_matching_index(posts, lambda p, b: p == "/api/v2/runs/parsed")
+        ingest_idx = _first_matching_index(posts, lambda p, b: p == RUNS)
         self.assertIsNotNone(
             start_idx, f"AC1: must POST /api/v2/runs/start; got paths={paths!r}")
         self.assertIsNotNone(
-            ingest_idx, f"AC1: the run must still ingest; got paths={paths!r}")
+            ingest_idx, f"AC1: the run must still ingest, at {RUNS}; got paths={paths!r}")
+        self.assertNotIn(PARSED, paths, f"bun's reports go to {RUNS}; paths={paths!r}")
+        self.assertEqual(paths.count(RUNS), 1, f"one run ingest; paths={paths!r}")
         assert start_idx is not None and ingest_idx is not None
         self.assertLess(
             start_idx, ingest_idx,
@@ -387,19 +403,19 @@ class NarratedBunTestRunFinalizesThroughTheSharedPathTest(unittest.TestCase):
         # -- §S2: 'ingesting…' follows the final count, precedes the ingest --
         ingesting_idx = _first_matching_index(
             posts, lambda p, b: _is_heartbeat_message(p, b, "ingesting…"))
-        parsed_idx = _first_matching_index(posts, lambda p, b: p == "/api/v2/runs/parsed")
+        runs_idx = _first_matching_index(posts, lambda p, b: p == RUNS)
         self.assertIsNotNone(
             ingesting_idx,
             f"§S2: the message must follow the run to its end -- "
             f"'ingesting…' must be posted while the result is being "
             f"recorded; posted messages={all_messages!r}")
-        assert final_idx is not None and ingesting_idx is not None and parsed_idx is not None
+        assert final_idx is not None and ingesting_idx is not None and runs_idx is not None
         self.assertLess(
             final_idx, ingesting_idx,
             "the final count must land BEFORE 'ingesting…' replaces it on "
             "the board -- never the reverse")
         self.assertLess(
-            ingesting_idx, parsed_idx,
+            ingesting_idx, runs_idx,
             "'ingesting…' must be posted BEFORE the ingest POST itself "
             "(§S2), not after -- the exact ordering bug the CR names for "
             "mvn's finish(), which this test guards bun against too")

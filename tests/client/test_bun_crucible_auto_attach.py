@@ -32,10 +32,14 @@ to `--reporter-outfile=`. This file follows the identical technique, reusing
 the SAME open-plan/cycle GET-response fixture shape the sibling
 `NoCycleIdWarningTest`/`IngestEnvelopeTest` classes already use.
 
+The client files a run through the shared ingest, which reads the board's
+health before it sends: every `_get` stub below answers health
+(`get_answering_health`, `board_health`), and the run's ingest is its ONE
+`POST /api/v2/runs`, never the parsed route.
+
 Invocation:
-    python3 -m pytest tests/client/test_bun_crucible_auto_attach.py -q
-Fallback:
-    python3 tests/client/test_bun_crucible_auto_attach.py
+    python3 clients/python-crucible.py test \
+        --tests tests.client.test_bun_crucible_auto_attach
 """
 
 import contextlib
@@ -48,6 +52,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+from tests.client.live_run_harness import board_health, get_answering_health
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
@@ -153,6 +159,24 @@ def _post_call_for_path(post_mock, path):
         if call_path == path:
             return call
     return None
+
+
+RUNS = "/api/v2/runs"
+PARSED = "/api/v2/runs/parsed"
+
+
+def _run_ingest_call(testcase, post_mock):
+    """The run's ONE `POST /api/v2/runs`, after asserting nothing went to the
+    parsed route."""
+    paths = [(c[0][0] if c[0] else c[1].get("path")) for c in post_mock.call_args_list]
+    testcase.assertNotIn(PARSED, paths,
+                         f"the run's reports go to {RUNS}, never the parsed "
+                         f"route; posted {paths!r}")
+    testcase.assertEqual(paths.count(RUNS), 1,
+                         f"exactly one run ingest; posted {paths!r}")
+    call = _post_call_for_path(post_mock, RUNS)
+    assert call is not None
+    return call
 
 
 class _BaseAutoAttachTest(unittest.TestCase):
@@ -304,14 +328,15 @@ class IngestNeverResolvesClientSideCycleTest(_BaseAutoAttachTest):
 
     def test_test_verb_never_calls_get_and_sends_no_resolved_cycle(self):
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
-             mock.patch.object(self.module, "_get") as get_mock:
+             mock.patch.object(self.module, "_get",
+                               side_effect=get_answering_health()) as get_mock:
             code, out, _err = self._run_test_verb()
         self.assertEqual(code, 0, f"stdout={out!r}")
         self.assertEqual(
             _plans_gets(get_mock), [],
             "the client-side active-cycle resolver is DELETED -- no plans lookup "
             "may run before an ingest; got %r" % (_plans_gets(get_mock),))
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        ingest_call = _run_ingest_call(self, post_mock)
         self.assertIsNotNone(ingest_call, "the run must actually be POSTed")
         self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}) or {})
         axi = self._decode_axi(out)
@@ -319,39 +344,39 @@ class IngestNeverResolvesClientSideCycleTest(_BaseAutoAttachTest):
 
     def test_regression_verb_never_calls_get_and_sends_no_resolved_cycle(self):
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
-             mock.patch.object(self.module, "_get") as get_mock:
+             mock.patch.object(self.module, "_get",
+                               side_effect=get_answering_health()) as get_mock:
             code, out, _err = self._run_regression_verb()
         self.assertEqual(code, 0, f"stdout={out!r}")
         self.assertEqual(
             _plans_gets(get_mock), [],
             "the client-side active-cycle resolver is DELETED -- no plans lookup "
             "may run before an ingest; got %r" % (_plans_gets(get_mock),))
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        ingest_call = _run_ingest_call(self, post_mock)
         self.assertIsNotNone(ingest_call)
         self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}) or {})
 
     def test_auto_ingest_verb_never_calls_get_and_sends_no_resolved_cycle(self):
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
-             mock.patch.object(self.module, "_get") as get_mock:
+             mock.patch.object(self.module, "_get",
+                               side_effect=get_answering_health()) as get_mock:
             code, out, _err = self._run_auto_ingest_verb()
         self.assertEqual(code, 0, f"stdout={out!r}")
         self.assertEqual(
             _plans_gets(get_mock), [],
             "the client-side active-cycle resolver is DELETED -- no plans lookup "
             "may run before an ingest; got %r" % (_plans_gets(get_mock),))
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        ingest_call = _run_ingest_call(self, post_mock)
         self.assertIsNotNone(ingest_call)
         self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}) or {})
 
 
-class RawCaptureInParsedPayloadTest(_BaseAutoAttachTest):
-    """CR-CRU-038 §S2b -- `_run_logged` already captures the wrapped bun
-    test runner's combined stdout+stderr (used today for §S2c
-    failure-marrying, `_marry_failures(tree, result.stdout)`); that SAME
-    captured output must ALSO flow into the /api/v2/runs/parsed payload as
-    `raw` so a real ingested run carries real output for the run-detail
-    raw-toggle to reveal. Fails today -- `_ingest_parsed` never builds a
-    `raw` key, regardless of what `_run_logged` captured."""
+class RawCaptureInRunIngestPayloadTest(_BaseAutoAttachTest):
+    """CR-CRU-038 §S2b, CR-CRU-204 AC10 -- `_run_logged` captures the
+    wrapped bun test runner's combined stdout+stderr; that captured output
+    rides the run's `/api/v2/runs` ingest as `raw`, so a real ingested run
+    carries real output for the run-detail raw-toggle to reveal (and the
+    board reads bun's console from it)."""
 
     ACTIVE_CYCLE_ID = 910
     RAW_MARKER = "BUN_RAW_CAPTURE_MARKER_9182"
@@ -391,21 +416,23 @@ sys.exit(int(os.environ.get("FAKE_BUN_EXIT_CODE", "0")))
                         {"id": self.ACTIVE_CYCLE_ID - 1, "status": "done"}]},
         ])
 
-    def test_test_verb_includes_captured_runner_output_as_raw_in_parsed_payload(self):
+    def test_test_verb_includes_captured_runner_output_as_raw_in_run_ingest_payload(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
-             mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans()):
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(
+                 self._active_cycle_plans())):
             code, out, _err = self._run_test_verb()
 
         self.assertEqual(code, 0, f"stdout={out!r}")
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        self.assertIsNotNone(ingest_call, "the run must actually be POSTed")
+        ingest_call = _run_ingest_call(self, post_mock)
         payload = ingest_call[0][1]
         self.assertIn(
             self.RAW_MARKER, payload.get("raw") or "",
             f"the real captured bun-test runner output must flow into the "
-            f"parsed ingest payload's `raw` field; got payload keys={sorted(payload)!r}",
+            f"run ingest payload's `raw` field; got payload keys={sorted(payload)!r}",
         )
+        self.assertEqual(payload.get("data"), [PASS_JUNIT_XML],
+                         f"the report text rides beside it; payload={payload!r}")
 
 
 class BoundRegistrationServerStampedAttachTest(_BaseAutoAttachTest):
@@ -435,7 +462,9 @@ class BoundRegistrationServerStampedAttachTest(_BaseAutoAttachTest):
             "events": [],
         }
 
-        def fake_get(path):
+        def fake_get(path, timeout=10):
+            if path in ("/api/health", "/api/v2/health"):
+                return board_health()
             if path.endswith("/plans"):
                 return {"ok": True, "plans": list(state["plans"].values())}
             return {"ok": False, "error": f"unhandled GET {path}"}
@@ -462,7 +491,7 @@ class BoundRegistrationServerStampedAttachTest(_BaseAutoAttachTest):
                 return {"ok": True}
             if path in ("/api/v2/agents/heartbeat", "/api/v2/agents/unregister"):
                 return {"ok": True}
-            if path == "/api/v2/runs/parsed":
+            if path == RUNS:
                 state["ingest_payloads"].append(payload)
                 bound = state["agents"].get(payload["agentId"], {}).get("boundCycleId")
                 # SERVER-STAMPING: the real server ignores any client-sent
@@ -493,7 +522,10 @@ class BoundRegistrationServerStampedAttachTest(_BaseAutoAttachTest):
         self.assertEqual(
             state["agents"]["CR-CRU-056-smoke"]["boundCycleId"], 501,
             "the agent row must carry the binding declared at register time")
-        self.assertEqual(len(state["events"]), 1)
+        self.assertEqual(len(state["events"]), 1,
+                         f"the run files ONE ingest at {RUNS}; "
+                         f"events={state['events']!r}")
+        self.assertEqual(state["ingest_payloads"][0].get("data"), [PASS_JUNIT_XML])
         self.assertNotIn(
             "cycleId", state["ingest_payloads"][0].get("context", {}) or {},
             "the client must send no client-resolved cycleId at ingest time")

@@ -2619,10 +2619,68 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
 // file in its child `bun test`, fired for the right reason, and gets no
 // change.
+//
+// UPDATED 2026-10-29 by CR-CRU-204's CLOSE-OUT (the FIX round, cycle 792).
+// `clients` moves 883 -> 856 (-27). MEASURED with this file's own machinery
+// on the feature branch AFTER the branch's last content edit: the recorded
+// head 883 against a measured 856, and `src` (830) and `public` (514)
+// re-measure at their recorded heads.
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show f1d06ae:<path>` (the merge-base with `develop`),
+// attributes all twenty-seven. Every one is a REMOVAL, and every classified
+// file the branch touches is listed:
+//
+//   clients -27:
+//     clients/bun-crucible.py 165 -> 145 (-20): the client sends bun's
+//       reports inline to /api/v2/runs and parses nothing, so the client parsers and
+//       ingest helpers it deletes take their docstring and comment citations
+//       with them. `_parse_junit_file` (-4: `CR-CRU-047`, `CR-CRU-050`,
+//       `CR-CRU-007`, `CR-CRU-008`); the console reading,
+//       `_parse_console_failures` and its patterns (-5: `CR-CRU-008`,
+//       `CR-CRU-055`, `CR-CRU-088` three times); `_ingest_parsed` (-4:
+//       `CR-CRU-016`, `CR-CRU-017`, `CR-CRU-019`, `CR-CRU-038`); `_ingest_raw`
+//       (-2: `CR-CRU-015`, `CR-CRU-017`); `_decoded_summary` and
+//       `_raw_route_coverage_warning` (-1 `CR-CRU-015` each); the
+//       board-decodes comment in `cmd_regression` (-2: `CR-CRU-015`,
+//       `CR-CRU-047`); and the print-only `files` sentence in
+//       `_emit_ingest_axi`'s docstring (-1 `CR-CRU-047`), whose parameter
+//       left with the parsed summary.
+//     clients/python-crucible.py 122 -> 115 (-7): the same move for python.
+//       `_parse_junit_dir` (-4: `CR-CRU-051`, `CR-CRU-050`, `CR-CRU-047`
+//       twice) and `_ingest_parsed` (-2: `CR-CRU-051`, `CR-CRU-047`) are
+//       deleted. `_emit_ingest_axi`'s rewritten docstring nets -1: it drops
+//       the `CR-CRU-047` propagation note and keeps `CR-CRU-051` for the
+//       board's `files` (one out, one in), and its `CR-CRU-056`/`-058`/`-094`
+//       paragraphs are rewrapped, not removed.
+//     clients/_crucible_axi.py 221 -> 221 (0): the shared ingest it gains
+//       carries no citation, and no changed line drops one.
+//
+//   src 0: src/codecs/bun-console.ts (0 -> 0), src/codecs/index.ts (2 -> 2)
+//     and src/codecs/junit.ts (3 -> 3) change for the board's load-error
+//     reading (AC13) and add or remove no citation, so `src` (830)
+//     re-measures at its recorded head.
+//
+//   public 0: the branch changes no file under `public/`, so `public` (514)
+//     could not have moved.
+//
+// A NET LOSS, and stated as one: `clients` goes DOWN in this re-record. It is
+// not lineage shed from living code. The twenty-seven citations sat on the
+// client parsers and ingest helpers this CR DELETES, and they left with them;
+// the reading they explained now lives in the board's codecs. No CR-CRU-204
+// citation is added under a classified tree. `clients` (856) is still far
+// above its 601 floor, so the directional half holds.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the branch's last content edit, so
+// these are its final figures and not a mid-cycle reading. It clears the
+// CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
+// file in its child `bun test`, fired for the right reason, and gets no
+// change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 830 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 514 },
-  clients: { exts: [".py"], develop: 601, head: 883 },
+  clients: { exts: [".py"], develop: 601, head: 856 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

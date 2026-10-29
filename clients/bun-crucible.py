@@ -19,14 +19,17 @@ the project path, the bun package dir, and the bun binary are parameterizable.
 Subcommands:
   register, unregister  Agent lifecycle.
   test                  Run a TARGETED test (file/path) or the whole suite, via
-                        `bun test --reporter=junit` → parse → /api/v2/runs/parsed. The
-                        per-cycle RED/GREEN workhorse. With --agent the result is ingested
-                        regardless of pass/fail (junit captures failures). The reports
-                        file is wiped first so only THIS run's XML is ingested.
-  regression            Run the FULL suite. With --coverage (bun --coverage-reporter=lcov)
-                        posts /api/v2/runs/parsed with line/function coverage; else posts
-                        the parsed junit only. Orchestrator pre-merge gate path.
-  auto-ingest           Ingest only: parse an already-produced junit file → /api/v2/runs/parsed.
+                        `bun test --reporter=junit`, and send the JUnit report, inline
+                        and unparsed, with the captured output, to /api/v2/runs for the
+                        board to decode. The per-cycle RED/GREEN workhorse. With --agent
+                        the result is ingested regardless of pass/fail (junit captures
+                        failures). The reports file is wiped first so only THIS run's
+                        XML is ingested.
+  regression            Run the FULL suite and send its JUnit report to /api/v2/runs.
+                        With --coverage (bun --coverage-reporter=lcov) the lcov report
+                        travels with it, for the board to decode. Orchestrator pre-merge
+                        gate path.
+  auto-ingest           Ingest only: send an already-produced junit file to /api/v2/runs.
   check                 `tsc --noEmit` typecheck gate over the package; ingest any errors to
                         /api/v2/runs/compile. (Most TS RED failures are runtime, but a type
                         error should still surface.)
@@ -55,7 +58,7 @@ Project + Crucible endpoint:
   Run-lifecycle opt-out (CR-CRU-017 §S4): --no-lifecycle > $BUN_CRUCIBLE_NO_LIFECYCLE.
   Posts to the board the project's `crucible.toml` declares (`[client] url`,
   shipped default http://localhost:3849), v2 endpoints ONLY:
-  /api/v2/agents/register|unregister, /api/v2/runs/start|parsed|compile,
+  /api/v2/agents/register|unregister, /api/v2/runs, /api/v2/runs/start|compile,
   /api/v2/projects/<key>/plans. This in-repo clients/ copy is the SOURCE OF
   TRUTH (CR-CRU-008 Risk section) — ~/.claude/scripts/ mirrors it.
 
@@ -89,7 +92,6 @@ import subprocess
 import sys
 import tempfile
 import tomllib
-import xml.etree.ElementTree as ET
 
 DEFAULT_JUNIT = "junit.xml"
 # The STACK this client's runs belong to — the server's own `{tier, stack,
@@ -243,7 +245,7 @@ def _request(method, path, payload=None, timeout=None):
     """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error.
 
     CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
-    (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
+    (`/api/v2/runs`) for a large regression/coverage run can legitimately
     take the server >10s, and a short bound there is a false-negative. The short
     hook-safe bound is applied ONLY on the status/plans read path via `_get`.
 
@@ -357,7 +359,7 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None):
     """Run `cmd` on the shared run path (`run_streamed`): the combined output
     streams live to stderr and `log_path` while the runner works, the optional
     `narrator` observes every line, and the returned capture stays
-    byte-identical for the §S2c failure-marrying parser. CR-CRU-017 §S4: a
+    byte-identical for the `raw` the board reads failure detail from. CR-CRU-017 §S4: a
     signal trap raising through the read reaps the runner before it propagates."""
     return _axi().run_streamed(cmd, cwd, env, log_path, narrator)
 
@@ -594,8 +596,8 @@ def _declared_report_mechanism(package_dir, script):
 # `codec` is the decoder the BOARD resolves from its own registry, `file` is
 # what the report is called inside this client's reports dir, and `path` reuses
 # `reportPath`'s `env:<VAR>` vocabulary for how the target is told where to
-# write it. NO entry is the default: the target's JUnit XML is parsed here and
-# POSTed to /api/v2/runs/parsed, exactly as before.
+# write it. NO entry is the default: the target's JUnit XML is the report sent,
+# under the `junit` codec.
 RAW_REPORT_KEY = "rawReport"
 RAW_REPORT_DECLARATION = f"crucible.{RAW_REPORT_KEY}"
 
@@ -685,367 +687,6 @@ def _render_invocation(cmd, report_env=None, passthrough=()):
     return prefix + " ".join(list(head) + [shlex.quote(a) for a in passthrough])
 
 
-def _parse_junit_file(junit_path):
-    """Parse a bun JUnit XML file into (summary, tree, files) with per-test leaf
-    names. `files` (CR-CRU-047 §S2) is the number of DISTINCT test FILES the run
-    collected — bun stamps each `<testcase>` with `file="tests/..."`; a case
-    missing that attribute falls back to its `classname`, then to its suite
-    name, so the count degrades to "distinct suites" rather than to zero. It
-    rides the printed run envelope only, never the ingest payload, so a
-    shrinking suite is visible in the gate output itself."""
-    tree_nodes = []
-    total = passed = failed = pending = 0
-    duration_ms = 0
-    files = set()
-    # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
-    root = ET.parse(junit_path).getroot()  # noqa: S314
-    suites = root.findall(".//testsuite") or [root]
-    for suite in suites:
-        children = []
-        suite_fail = False
-        for tc in suite.findall("testcase"):
-            source = tc.get("file") or tc.get("classname") or suite.get("name")
-            if source:
-                files.add(source.replace("\\", "/"))
-            tc_time = int(float(tc.get("time", 0)) * 1000)
-            fail = tc.find("failure") is not None or tc.find("error") is not None
-            # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase (bun emits it for
-            # BOTH `test.skip` and `test.todo`) is PENDING, never passed. Order
-            # matters: failure/error first, then skipped, then pass. A skip does
-            # NOT fail its suite. Mirrors `_parse_junit` in
-            # `clients/mvn-crucible.py`, the reference.
-            if fail:
-                status = "fail"
-                failed += 1
-                suite_fail = True
-            elif tc.find("skipped") is not None:
-                status = "pending"
-                pending += 1
-            else:
-                status = "pass"
-                passed += 1
-            total += 1
-            duration_ms += tc_time
-            entry = {
-                "name": tc.get("name", "?"),
-                "status": status,
-                "duration_ms": tc_time,
-            }
-            if fail:
-                # Interim fidelity fix (CR-CRU-007 dog-food finding): preserve the
-                # <failure>/<error> assertion message + trace so drill-ins show
-                # WHY a test failed. CR-CRU-008 replaces this whole client-side
-                # parse with server-side v2 codec ingestion.
-                fnode = tc.find("failure")
-                if fnode is None:
-                    fnode = tc.find("error")
-                if fnode is not None:
-                    failure = {}
-                    msg = (fnode.get("message") or "").strip()
-                    txt = (fnode.text or "").strip()
-                    if msg:
-                        failure["message"] = msg[:1000]
-                    elif txt:
-                        failure["message"] = txt.splitlines()[0][:1000]
-                    if txt:
-                        failure["trace"] = txt[:8000]
-                    ftype = fnode.get("type")
-                    if ftype:
-                        failure["type"] = ftype
-                    if failure:
-                        entry["failure"] = failure
-            children.append(entry)
-        if children:
-            tree_nodes.append({
-                "name": suite.get("name", "?"),
-                "status": "fail" if suite_fail else "pass",
-                "children": children,
-            })
-    summary = {"total": total, "passed": passed, "failed": failed,
-               "pending": pending, "duration_ms": duration_ms}
-    return summary, tree_nodes, len(files)
-
-
-# bun's per-test RESULT-line family — the same ANSI trap `_COMPLETION_LINE`
-# documents above, and the identical stale-pattern defect. bun colourises these
-# lines EVEN THROUGH A PIPE; the real captured bytes of a failing line are
-#   \x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m mismatched expectation\x1b[0m \x1b[0m\x1b[2m[0.13ms\x1b[0m\x1b[2m]\x1b[0m
-# so SGR runs sit on BOTH sides of the glyph, INSIDE the name (a nested
-# describe renders as `suite\x1b[2m >\x1b[0m\x1b[1m name`) and all through the
-# `[0.13ms]` duration tail — whose `[` is itself followed by an SGR run. An
-# anchored `^\(fail\)` matches ZERO real output; so would a naive `^✗`.
-# Matching therefore happens on the WIRE form, while everything STORED (name,
-# message, trace) is stripped clean — junit leaf names carry no escapes, so a
-# married key must not either.
-# §S1b (CR-CRU-055): an uncoloured pipe (bun ≥1.3.14 canary) emits the SECOND
-# legal wire form — PLAIN result lines with no SGR runs:
-#   (fail) scratch > fails one [0.15ms]
-#   (pass) scratch > passes one [0.04ms]
-#   (skip) scratch > skipped one        (no duration tail)
-#   (todo) scratch > todo one           (no duration tail)
-# The `error:` detail block still arrives IMMEDIATELY BEFORE its `(fail)`
-# line, so both matcher families accept both forms and the marrying logic
-# downstream is unchanged. (`_ANSI_SGR_RUN` is zero-or-more, so the existing
-# duration-tail pattern already matches the plain `[0.15ms]` tail.)
-# pi-lens-ignore: python-unsafe-regex — compiles a module-built constant pattern; no user input reaches it
-_ANSI_SGR_RE = re.compile(_ANSI_SGR_RUN)
-_DURATION_TAIL = (r"(?:\s+" + _ANSI_SGR_RUN + r"\[" + _ANSI_SGR_RUN
-                  + r"[0-9.]+\s*m?s" + _ANSI_SGR_RUN + r"\])?")
-_FAIL_LINE = re.compile(
-    r"^" + _ANSI_SGR_RUN + r"(?:✗|\(fail\))" + _ANSI_SGR_RUN + r"\s+(?P<name>.*?)"
-    + _ANSI_SGR_RUN + _DURATION_TAIL + _ANSI_SGR_RUN + r"\s*$"
-)
-# The non-failing result markers — ANSI pass (✓), skip (»), todo (✎) and their
-# plain twins `(pass)`/`(skip)`/`(todo)`. Each ends the preceding detail
-# block, so an `error:` block can never cross a finished test and marry onto
-# the wrong leaf. (Skip/todo lines carry no duration tail.)
-_RESULT_BOUNDARY_LINE = re.compile(
-    r"^" + _ANSI_SGR_RUN + r"(?:[✓»✎]" + _ANSI_SGR_RUN + r"|\((?:pass|skip|todo)\))\s"
-)
-# CR-CRU-088 §S1: the block's PRODUCER, named by the source echo bun prints
-# above the caret for every failure — `N | test("<name>", …`. Position alone
-# cannot attribute a block (a test's own prelude and an earlier test's
-# aftermath are positionally identical — both sit between two result lines),
-# but the echo can: it is a window onto the source that actually raised.
-# Matched on the STRIPPED line, because the echo is colourised too
-# (`test(\x1b[0m\x1b[32m"name"\x1b[0m, …`), and the gutter is right-aligned
-# once line numbers reach two digits (` 9 |` … `10 |`). `describe(`
-# deliberately does not match: only a test declaration names a producer. A
-# name that is not a plain string literal (`test.each`, a variable) yields no
-# echo name and so falls back to the positional rule.
-_ECHO_TEST_DECL = re.compile(
-    r"^\s*\d+\s*\|\s*(?:test|it)(?:\.\w+)*\s*\(\s*(?P<q>[\"'`])(?P<name>.*?)(?P=q)"
-)
-# The `test(`/`it(` DECLARATION LINE, whether or not its name is readable. §S1
-# (CR-CRU-088 C3): a declaration the pattern above cannot read (`test.each`, a
-# variable, a name on the next source line) must NULL the window rather than
-# leave the PREVIOUS declaration's name standing — an inherited name disagrees
-# with the result line and would drop the producer's own block.
-_ECHO_TEST_LINE = re.compile(r"^\s*\d+\s*\|\s*(?:test|it)(?:\.\w+)*\s*\(")
-# The caret marking the offending column. §S1: the producing test is the LAST
-# declaration echoed AT OR ABOVE it — the window routinely spans a test
-# boundary, so its FIRST declaration is usually the PREVIOUS test's, and
-# anything echoed below the caret belongs to the next block's window.
-_ECHO_CARET = re.compile(r"^\s*\^\s*$")
-
-
-def _strip_ansi(text):
-    """Drop SGR escape runs. bun colourises its stream even through a pipe, so
-    every value lifted off that stream is cleaned before it is stored."""
-    return _ANSI_SGR_RE.sub("", text)
-
-
-def _parse_console_failures(log_text):
-    r"""§S2c (CR-CRU-008) — marry bun's console failure detail to leaf names.
-
-    bun's JUnit reporter writes a BARE `<failure type="..."/>` for EVERY
-    failure kind (assertion mismatch, thrown Error, timeout alike) — the human
-    detail exists only on the console stream, as an `error: <detail>` block
-    under a source echo of the code that raised.
-
-    Detail printed AFTER the fail line (a timeout's `^ this test timed out
-    after Nms.`) is structurally NOT a preceding block and stays unmatched —
-    that leaf degrades to type-only.
-
-    §S1 (CR-CRU-088) — POSITION ALONE CANNOT ATTRIBUTE THAT BLOCK. A test's own
-    prelude and an earlier test's aftermath (a leaked async throw, printed
-    after its own producer's result line) are positionally identical: both sit
-    between two result lines. So a block is attributed to the test its ECHO
-    NAMES, and marries the following `(fail)` line only when the two agree:
-
-      - echo names X, next `(fail)` line is X → marry to X (the common case);
-      - echo names X, next `(fail)` line is Y → the block is X's aftermath, so
-        it marries to NOBODY (X already carries its own message; overwriting Y's
-        leaf would state a falsehood about which test failed and why);
-      - no RESOLVABLE `test("…")` literal in the echo — no declaration at all,
-        or one whose name the echo cannot yield (`test.each`, a variable, a
-        declaration split across source lines, an interpolated template, an
-        escaped quote) → keep the positional rule, so shapes the echo does not
-        cover behave exactly as before.
-
-    Under nested describes the echo carries the BARE name while the result line
-    carries the composed `suite > name` key, so the comparison is against that
-    key's trailing segment — the only form in which the two are comparable.
-
-    Every line is ANSI-colourised — including the `error:` prefix, which
-    arrives as `\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m ` — so the block is
-    accumulated in its stripped form and the result lines are matched on the
-    wire form.
-    """
-    details = {}
-    block = []        # stripped lines since the last result-line boundary
-    error_idx = None  # index in `block` of the most recent "error:" line
-    echo_name = None  # producer named by the echo above that "error:" line
-    window = None     # last declaration echoed in the window being read
-    caret = False     # the window's caret is behind us
-    for line in log_text.splitlines():
-        m = _FAIL_LINE.match(line)
-        if m:
-            name = _strip_ansi(m.group("name")).strip()
-            # Nested describes print "suite > name"; junit leaves carry the
-            # bare test name, which is also what the echo names.
-            leaf = name.split(" > ")[-1]
-            if error_idx is not None and echo_name in (None, leaf):
-                detail = block[error_idx:]
-                message = detail[0][len("error:"):].strip()
-                married = {"message": message[:1000]}
-                trace = "\n".join(detail).rstrip()
-                if trace:
-                    married["trace"] = trace[:8000]
-                details[name] = married
-                details.setdefault(leaf, married)
-            block, error_idx = [], None
-            echo_name, window, caret = None, None, False
-            continue
-        if _RESULT_BOUNDARY_LINE.match(line):
-            block, error_idx = [], None
-            echo_name, window, caret = None, None, False
-            continue
-        plain = _strip_ansi(line)
-        if plain.startswith("error:"):
-            error_idx = len(block)
-            # The window just read belongs to THIS block; the next one starts
-            # fresh, so a second block in the same run is attributed to its own
-            # echo rather than inheriting this one's. The DEGRADATION that buys
-            # (unchanged from before §S1, and rare — bun prints a fresh echo
-            # per error): a SECOND `error:` under ONE echo window sees
-            # `echo_name is None` and so marries POSITIONALLY, to whatever the
-            # next `(fail)` line is, with no echo vouching for it.
-            echo_name, window, caret = window, None, False
-        elif not caret:
-            if _ECHO_TEST_LINE.match(plain):
-                declared = _ECHO_TEST_DECL.match(plain)
-                echoed = declared.group("name") if declared else None
-                # `test.each`, a variable, a multi-line declaration, an
-                # interpolated template literal or an escaped quote names no
-                # resolvable producer -- NULL the window so the block falls
-                # back to the positional rule instead of inheriting the
-                # PREVIOUS declaration's name and being dropped.
-                window = (None if echoed is None or "${" in echoed
-                          or "\\" in echoed else echoed)
-            elif _ECHO_CARET.match(plain):
-                caret = True
-        block.append(plain)
-    return details
-
-
-def _marry_failures(tree, log_text):
-    """§S2c — attach console-married {message, trace} to failing leaves whose
-    junit <failure> carried no message (bun writes bare nodes). Unmatched
-    failing leaves keep their type-only failure object untouched."""
-    if not log_text:
-        return
-    details = _parse_console_failures(log_text)
-    if not details:
-        return
-    for suite in tree:
-        for leaf in suite.get("children", []):
-            if leaf.get("status") != "fail":
-                continue
-            if (leaf.get("failure") or {}).get("message"):
-                continue
-            detail = details.get(leaf.get("name"))
-            if detail:
-                leaf.setdefault("failure", {}).update(detail)
-
-
-# bun's console marker for an error it caught outside any test — a file that
-# failed to load, threw at import, or rejected at import or after its tests.
-_UNHANDLED_MARKER = "# Unhandled error between tests"
-# A `<path>:` file header bun prints, flush left, before each file's results:
-# a path naming a JavaScript/TypeScript module — the only kind of file bun
-# runs as a test file. A test's own flush-left console line (`results:`)
-# names no such file, so it is never read as a header.
-_FILE_HEADER = re.compile(r"^(?P<path>[^\s#-]\S*\.[cm]?[jt]sx?):$")
-_BLOCK_RULE = re.compile(r"^-{10,}$")
-
-
-def _parse_load_errors(log_text):
-    """The files bun named under `# Unhandled error between tests`, read from
-    its captured console in either wire form (plain or ANSI): an ordered
-    `{path: [block, ...]}`, each block the stripped lines between its two
-    rules. A block printed before any file header is attributed to no file."""
-    errors = {}
-    current = None   # the file whose header was read last
-    block = None     # the lines of the block being read, or None
-    opened = False   # the block's opening rule is behind us
-    for line in (log_text or "").splitlines():
-        plain = _strip_ansi(line).rstrip()
-        if block is not None:
-            if _BLOCK_RULE.match(plain.strip()):
-                if not opened:
-                    opened = True
-                    continue
-                if current is not None:
-                    errors.setdefault(current, []).append(block)
-                block, opened = None, False
-                continue
-            if opened:
-                block.append(plain)
-            continue
-        if plain.strip() == _UNHANDLED_MARKER:
-            block, opened = [], False
-            continue
-        header = _FILE_HEADER.match(plain)
-        if header and not plain.startswith("error:"):
-            current = header.group("path")
-    return errors
-
-
-def _add_load_error_cases(tree, summary, log_text):
-    """Add one failing case `?` per file bun named under `# Unhandled error
-    between tests` to `tree`, in that file's suite (a new suite named by the
-    path when the report holds none): message the first block's `error:` line
-    without its label, trace every block for that file. `summary` is counted
-    up to match. Returns the number of files that had no suite before."""
-    added_files = 0
-    for path, blocks in _parse_load_errors(log_text).items():
-        message = ""
-        for text in blocks[0]:
-            if text.startswith("error:"):
-                message = text[len("error:"):].strip()
-                break
-        trace = "\n\n".join("\n".join(b).strip() for b in blocks).strip()
-        failure = {"message": (message or "unhandled error between tests")[:1000]}
-        if trace:
-            failure["trace"] = trace[:8000]
-        case = {"name": "?", "status": "fail", "duration_ms": 0,
-                "failure": failure}
-        suite = next((s for s in tree if s.get("name") == path), None)
-        if suite is None:
-            tree.append({"name": path, "status": "fail", "children": [case]})
-            added_files += 1
-        else:
-            suite.setdefault("children", []).append(case)
-            suite["status"] = "fail"
-        summary["total"] += 1
-        summary["failed"] += 1
-    return added_files
-
-
-def _parse_lcov(lcov_path):
-    """Sum LF/LH/FNF/FNH from an lcov file into a Crucible coverage object, or None."""
-    if not os.path.exists(lcov_path):
-        return None
-    lf = lh = ff = fh = 0
-    with open(lcov_path) as f:
-        for line in f:
-            if line.startswith("LF:"):
-                lf += int(line[3:].strip() or 0)
-            elif line.startswith("LH:"):
-                lh += int(line[3:].strip() or 0)
-            elif line.startswith("FNF:"):
-                ff += int(line[4:].strip() or 0)
-            elif line.startswith("FNH:"):
-                fh += int(line[4:].strip() or 0)
-    return {
-        "lines": {"total": lf, "covered": lh,
-                  "percent": round(lh / lf * 100, 1) if lf else 0},
-        "functions": {"total": ff, "covered": fh,
-                      "percent": round(fh / ff * 100, 1) if ff else 0},
-    }
-
-
 def _run_context():
     """CR-CRU-008 §S2 — env + git → run context for declared cycle linkage.
 
@@ -1058,100 +699,63 @@ def _run_context():
     return _axi().run_context()
 
 
-def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
-                   context=None, raw=None, run_id=None, release=None,
-                   runner_exit=None):
-    payload = {
-        "projectKey": _project_key(project_dir),
-        "agentId": agent_id,
-        "summary": summary,
-        "tree": tree,
-    }
-    if coverage:
-        payload["coverage"] = coverage
-    # Regression sweeps must be distinguishable from focused unit runs
-    # (storyboard F7). Server-side tier passthrough: CR-CRU-016 §S4.
-    if tier:
-        payload["tier"] = tier
-    # CR-CRU-019 §P1 — declared cycle linkage: env/git context rides the
-    # payload verbatim when present (server passthrough on the v1 shim).
-    if context:
-        payload["context"] = context
-    # CR-CRU-038 §S2b — the captured runner output rides along as `raw` so the
-    # server-stored run carries real output for the run-detail raw-toggle.
-    if raw:
-        payload["raw"] = raw
-    # CR-CRU-017 §S1/§S4 — the runId of the OPEN run this ingest CLOSES. Absent
-    # (single-shot, or `--no-lifecycle`) the body is byte-identical to the
-    # pre-lifecycle one and the server stores no lifecycle fields at all.
-    if run_id:
-        payload["runId"] = run_id
-    # The runner's exit, so the board files a runner that failed over a clean
-    # report as failed. Absent (`auto-ingest`, which runs no runner): unsent.
-    if runner_exit is not None:
-        payload["runnerExit"] = runner_exit
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
-                              release=release)
+JUNIT_CODEC = "junit"
+LCOV_CODEC = "lcov"
+COVERAGE_NOT_MEASURED_CODE = "coverage-not-measured"
+
+
+def _file_reports(project_dir, agent_id, *, codec, report_paths, raw=None,
+                  coverage_paths=(), tier=None, context=None, run_id=None,
+                  release=None, runner_exit=None):
+    """Send a run's reports to the board for it to decode: the shared
+    `ingest_reports`, which reads the board's health first and, unless it
+    refuses, makes ONE `POST /api/v2/runs` carrying `codec`, the report texts
+    inline, the lcov coverage report when one is given, `raw` and
+    `runnerExit`. This client parses none of them.
+
+    Prints the human ingest line on stderr from the board's answer \u2014 its
+    counts and the coverage it kept \u2014 and returns that answer."""
+    resp = _axi().ingest_reports(
+        _post, _get, stack=_STACK, project_key=_project_key(project_dir),
+        agent_id=agent_id, codec=codec, report_paths=report_paths, raw=raw,
+        coverage_codec=LCOV_CODEC if coverage_paths else None,
+        coverage_paths=coverage_paths, tier=tier, context=context,
+        run_id=run_id, release=release, runner_exit=runner_exit)
+    run = _filed_run(resp)
+    coverage = run.get("coverage")
+    if not isinstance(coverage, dict):
+        coverage = {}
     cov_line = ""
-    if coverage:
-        cov_line = (f" lines={coverage['lines']['percent']}%"
-                    f" funcs={coverage['functions']['percent']}%")
+    for key, label in (("lines", "lines"), ("functions", "funcs")):
+        figure = coverage.get(key)
+        if isinstance(figure, dict):
+            cov_line += f" {label}={figure.get('percent')}%"
     # The human-readable ingest line is interactive-only (stderr); the machine
-    # channel is the §S1 TOON AXI envelope the caller emits on stdout.
+    # channel is the TOON AXI envelope the caller emits on stdout.
     print(
-        f"ingest: ok={resp.get('ok')} passed={summary['passed']} "
-        f"failed={summary['failed']} pending={summary.get('pending', 0)} "
-        f"total={summary['total']}{cov_line}"
+        f"ingest: ok={resp.get('ok')} codec={codec} "
+        f"passed={run.get('passed')} failed={run.get('failed')} "
+        f"pending={run.get('pending')} total={run.get('total')}{cov_line}"
         + (f" error={resp['error']}" if resp.get("error") else ""),
         file=sys.stderr,
     )
     return resp
 
 
-def _ingest_raw(project_dir, agent_id, raw_report, tier=None, context=None,
-                run_id=None, release=None, runner_exit=None):
-    """CR-CRU-015 §S2 — POST the RAW report and let the BOARD decode it, at
-    `/api/v2/runs`, whose `codec` names the decoder the server resolves from its
-    own registry (`mvn-crucible.py`'s `_ingest_junit_dir` already ingests this
-    way, with `codec: "junit"`).
+def _filed_run(resp):
+    """(PURE) The `run` block of the board's ingest answer, `{}` when the run
+    was not filed (refused, unreachable, too large) and so has no figures."""
+    run = resp.get("run") if isinstance(resp, dict) else None
+    return run if isinstance(run, dict) else {}
 
-    This client parses NOTHING on this route, and that is the point: a
-    client-side parse can only send back the shape this client knows how to
-    build, so everything its parser has no notion of — for the playwright codec,
-    every Gherkin step of every scenario — is discarded before the board ever
-    sees the report. The path is handed over as `dataPath`, so the report is
-    read once, by the side that decodes it.
 
-    Returns the response dict; the caller emits the §S1 envelope from the
-    summary the SERVER decoded."""
-    payload = {
-        "projectKey": _project_key(project_dir),
-        "codec": raw_report["codec"],
-        "dataPath": raw_report["path"],
-        "agentId": agent_id,
-    }
-    if tier:
-        payload["tier"] = tier
-    if context:
-        payload["context"] = context
-    # CR-CRU-017 §S1/§S4 — the same optional run-closing seam every ingest
-    # route shares; absent, the server stores no lifecycle fields.
-    if run_id:
-        payload["runId"] = run_id
-    if runner_exit is not None:
-        payload["runnerExit"] = runner_exit
-    resp = _axi().post_ingest(_post, "/api/v2/runs", payload, stack=_STACK,
-                              release=release)
-    run = resp.get("run") or {}
-    print(
-        f"ingest {raw_report['codec']}: ok={resp.get('ok')} "
-        f"report={raw_report['path']} passed={run.get('passed')} "
-        f"failed={run.get('failed')} pending={run.get('pending', 0)} "
-        f"total={run.get('total')}"
-        + (f" error={resp['error']}" if resp.get("error") else ""),
-        file=sys.stderr,
-    )
-    return resp
+def _coverage_not_measured_warning(where):
+    """The warning a `--coverage` run carries when it left no coverage report
+    to send: the run is filed with no coverage at all."""
+    return {"code": COVERAGE_NOT_MEASURED_CODE,
+            "detail": (f"--coverage was requested, and {where}: no coverage "
+                       f"report was sent, so this run is filed with no "
+                       f"coverage")}
 
 
 def _raw_report_result_count(raw_report):
@@ -1185,16 +789,6 @@ def _raw_report_result_count(raw_report):
             count += len(suite.get("specs") or [])
             suites.extend(suite.get("suites") or [])
     return count
-
-
-def _decoded_summary(resp):
-    """CR-CRU-015 §S2 — the counts the SERVER decoded, in the shape the ingest
-    envelope reports. On the raw route the client never parsed the report, so
-    what the run envelope states is what the board actually stored — a refused
-    or unreachable ingest carries no `run`, so its counts are null beside its
-    own `error`: no figures, never a made-up 0."""
-    return (_axi().filed_summary(resp)
-            or {"passed": None, "failed": None, "pending": None, "total": None})
 
 
 def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None,
@@ -1276,26 +870,6 @@ def _run_left_open_warning(run_id, cause):
     close — one wording for the fleet, built by the shared
     `run_left_open_warning`."""
     return _axi().run_left_open_warning(run_id, cause)
-
-
-def _raw_route_coverage_warning(codec, script):
-    """CR-CRU-015 §S2 — the structured warning for a `--coverage` the RAW route
-    cannot carry. `POST /api/v2/runs` posts a report and the codec that decodes
-    it, and has no coverage field at all, so coverage measured by a target
-    whose report the BOARD decodes is measured and then dropped. The flag is
-    accepted on every declared-tier verb, so the drop is easy to reach and
-    impossible to see — it is stated here on the same terms the parsed
-    branch's own "lcov coverage unavailable" WARN states its miss."""
-    return {
-        "code": "raw-report-carries-no-coverage",
-        "detail": (f"--coverage was requested, and `{script}` declares that its "
-                   f"report is decoded on the board by the `{codec}` codec: "
-                   f"the raw report route carries NO coverage, so whatever "
-                   f"this run measured is not ingested and this run is stored "
-                   f"with no coverage at all. Run a target ingested by the "
-                   f"PARSED route (e.g. `regression --coverage`) for coverage "
-                   f"evidence"),
-    }
 
 
 def _run_left_open_help():
@@ -1439,7 +1013,7 @@ def cmd_test(args, tier=None):
     `--tier` flag (AC11 retires the one CR-CRU-008's contract named). A file path
     says nothing about the dependency the tests under it take, so absent a stated
     tier this run claims none — on BOTH endpoints, the run this verb OPENS
-    (`/api/v2/runs/start`) as well as the one it ingests (`/api/v2/runs/parsed`),
+    (`/api/v2/runs/start`) as well as the one it ingests (`/api/v2/runs`),
     since the run row is what the board's tier column reads first."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
@@ -1542,37 +1116,37 @@ def cmd_test(args, tier=None):
         runner_exit = _axi().runner_exit_code(result.returncode)
 
         if os.path.exists(junit_path):
-            summary, tree, files = _parse_junit_file(junit_path)
-            if _axi().ran_nothing(result.returncode, summary["total"]):
+            # The client decides two things locally, from the runner's exit
+            # and two counts over its JUnit report; everything else is the
+            # board's.
+            if _axi().ran_nothing(result.returncode,
+                                  _axi().junit_testcase_count([junit_path])):
                 return _axi().emit_ran_nothing(
                     "test", "junit.xml", result.returncode,
                     getattr(result, "stdout", None) or "", run_id,
                     run_warnings, post_fn=_post,
                     project_key=_project_key(project_dir),
                     agent_id=args.agent)
-            if name is not None and not (summary["passed"] or summary["failed"]):
+            if (name is not None
+                    and _axi().junit_non_skipped_count([junit_path]) == 0):
                 return _emit_filter_ran_nothing(project_dir, args.agent, run_id,
                                                 name, run_warnings)
-            # §S2c — the captured run log IS the failure-detail source.
-            _marry_failures(tree, getattr(result, "stdout", None))
-            # Every file bun could not load is a failing case of its own.
-            files += _add_load_error_cases(tree, summary,
-                                           getattr(result, "stdout", None))
-            resp = _ingest_parsed(project_dir, args.agent, summary, tree,
-                                  tier=tier,
-                                  context=_run_context(),
-                                  raw=getattr(result, "stdout", None),
-                                  run_id=run_id, release=release,
-                                  runner_exit=runner_exit)
-            filed = _axi().filed_summary(resp, summary)
-            _emit_ingest_axi("test", resp, filed, files, project_dir, args.agent,
+            # The board decodes the report, the captured console with it
+            # (failure detail, files that failed to load).
+            resp = _file_reports(project_dir, args.agent, codec=JUNIT_CODEC,
+                                 report_paths=[junit_path],
+                                 raw=getattr(result, "stdout", None),
+                                 tier=tier, context=_run_context(),
+                                 run_id=run_id, release=release,
+                                 runner_exit=runner_exit)
+            _emit_ingest_axi("test", resp, project_dir, args.agent,
                              warnings=(run_warnings
                                        + _axi().unit_run_wall_vs_cpu_warnings(
                                            tier, "bun", timing)),
                              run_id=run_id, name=name)
             # The exit carries the runner's verdict and the filed run's, and
             # a refused ingest is never green.
-            return _axi().verb_exit(runner_exit, {**resp, "run": filed})
+            return _axi().verb_exit(runner_exit, resp)
         # No XML → a hard collection/compile failure. Ingest as a FAILING compile:
         # one synthetic tsc-format diagnostic (so errorCount=1 and the card reads
         # red — never a misleading clean '0 errors') + the captured output as raw.
@@ -1595,7 +1169,8 @@ def cmd_test(args, tier=None):
 
 
 def cmd_regression(args, verb="regression", tier: str | None = "regression",
-                   script=None, passthrough=(), name=None):
+                   script=None, passthrough=(), name=None,
+                   name_unfiled=False):
     """CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
     carries ONE document under the GATE's own verb, not the inner one's.
@@ -1612,7 +1187,10 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     A `test` run through the project's declared test script runs this body
     under `verb="test"`: its files and `-t <name>` filter are the passthrough,
     `name` is that filter (a filtered run that ran nothing is aborted, as on
-    `test`'s own path), and its envelope names the script it went through."""
+    `test`'s own path), and its envelope names the script it went through.
+
+    `name_unfiled` — set only by a gate whose whole answer is this run — adds
+    one `gate-suite-unreported` warning when the run was not filed."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     bun = _resolve_bun(args.bun)
@@ -1718,7 +1296,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
 
         # CR-CRU-015 §S2 — the report that MATTERS is the one this run will
         # ingest: the raw report the board decodes when the target declares
-        # one, and the JUnit XML this client parses otherwise. A run whose
+        # one, and the JUnit XML this client sends otherwise. A run whose
         # declared raw report is missing is starved exactly as a run with no
         # XML is — it must never quietly ingest the other one by the route the
         # declaration exists to refuse.
@@ -1762,7 +1340,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
             return 1
 
         # A report that EXISTS but holds no results — the declared raw report,
-        # or the JUnit XML this client parses — from a runner that exited
+        # or the JUnit XML this client sends — from a runner that exited
         # non-zero, is a run that never ran: it takes the no-report exit
         # above, never a `total: 0` ingest.
         result_count = (_raw_report_result_count(raw_report) if raw_report
@@ -1786,65 +1364,52 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
                 return _emit_filter_uncounted(project_dir, args.agent, run_id,
                                               name, script, junit_path,
                                               run_warnings)
-            filtered = _parse_junit_file(junit_path)[0]
-            if not (filtered["passed"] or filtered["failed"]):
+            if _axi().junit_non_skipped_count([junit_path]) == 0:
                 return _emit_filter_ran_nothing(project_dir, args.agent, run_id,
                                                 name, run_warnings,
                                                 script=named_script)
-        if raw_report:
-            # CR-CRU-015 §S2 — the board decodes. The client reads the JUnit
-            # XML the same run wrote for its distinct-FILE count ONLY (the
-            # envelope's shrink signal, print-only by CR-CRU-047 §S2); the
-            # evidence itself is the raw report, and the counts reported are
-            # the ones the server's codec produced from it.
-            files = (_parse_junit_file(junit_path)[2]
-                     if os.path.exists(junit_path) else 0)
-            # §S2 — `--coverage` is accepted on every declared-tier verb and
-            # this route has nowhere to put it. Silence here is the exact
-            # failure the declaration exists to end, so the drop is stated on
-            # BOTH channels the parsed branch below uses for its own miss: the
-            # operator's stream, and the envelope the next reader parses.
-            if coverage_on:
-                print(f"[crucible] WARN: --coverage is not carried by the "
-                      f"`{raw_report['codec']}` raw report route — this run "
-                      f"is ingested with no coverage", file=sys.stderr)
-                run_warnings.append(
-                    _raw_route_coverage_warning(raw_report["codec"], script))
-            resp = _ingest_raw(project_dir, args.agent, raw_report, tier=tier,
-                               context=_run_context(), run_id=run_id,
-                               release=release, runner_exit=runner_exit)
-            summary = _decoded_summary(resp)
-        else:
-            summary, tree, files = _parse_junit_file(junit_path)
-            _marry_failures(tree, getattr(result, "stdout", None))
-            # Every file bun could not load is a failing case of its own.
-            files += _add_load_error_cases(tree, summary,
-                                           getattr(result, "stdout", None))
-            coverage = None
-            if coverage_on:
-                lcov_path = os.path.join(coverage_dir, "lcov.info")
-                coverage = _parse_lcov(lcov_path)
-                if coverage is None:
-                    print(f"[crucible] WARN: lcov coverage unavailable at "
-                          f"{lcov_path}", file=sys.stderr)
-            resp = _ingest_parsed(project_dir, args.agent, summary, tree,
-                                  coverage, tier=tier, context=_run_context(),
-                                  run_id=run_id, release=release,
-                                  runner_exit=runner_exit)
-            # The envelope states the run as the board filed it.
-            summary = _axi().filed_summary(resp, summary)
-        exit_code = _axi().verb_exit(runner_exit, {**resp, "run": summary})
+        # The board decodes every report this run sends; the client parses
+        # none. A target declaring a raw report sends that report under its
+        # declared codec; every other run sends its JUnit report.
+        codec = raw_report["codec"] if raw_report else JUNIT_CODEC
+        coverage_paths = []
+        if coverage_on:
+            lcov_path = os.path.join(coverage_dir, "lcov.info")
+            # Only an invocation handed bun's coverage flags measures any: a
+            # target told its report path through `env:<VAR>` is handed none,
+            # so an lcov left at that path is not this run's.
+            if "--coverage" in cmd and os.path.exists(lcov_path):
+                coverage_paths = [lcov_path]
+            else:
+                where = (f"the run left no lcov coverage report at {lcov_path}"
+                         if "--coverage" in cmd else
+                         f"`{script}` is told its report path through the "
+                         f"environment and is handed no coverage flags, so it "
+                         f"measured none")
+                print(f"[crucible] WARN: --coverage was requested but {where} "
+                      f"— this run is filed with no coverage", file=sys.stderr)
+                run_warnings.append(_coverage_not_measured_warning(where))
+        resp = _file_reports(project_dir, args.agent, codec=codec,
+                             report_paths=[ingest_path],
+                             raw=getattr(result, "stdout", None),
+                             coverage_paths=coverage_paths, tier=tier,
+                             context=_run_context(), run_id=run_id,
+                             release=release, runner_exit=runner_exit)
+        exit_code = _axi().verb_exit(runner_exit, resp)
         ok = exit_code == 0
         # §S2 — a GATE run's next step is derived from the run state it reached
         # (unrecorded / red / green); the plain `regression` verb keeps its
         # canned _HELP_STEPS entry, unchanged.
-        help_steps = (_axi().run_help(verb, ok, summary["failed"], _base_url())
+        help_steps = (_axi().run_help(verb, ok, _filed_run(resp).get("failed"),
+                                      _base_url())
                       if verb not in ("regression", "test") else None)
-        _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
+        if name_unfiled:
+            run_warnings += _axi().whole_suite_unreported_warnings(_STACK,
+                                                                   resp)
+        _emit_ingest_axi(verb, resp, project_dir, args.agent,
                          help_steps=help_steps, warnings=run_warnings,
                          run_id=run_id, name=name, script=named_script)
         return exit_code
-
 
 def cmd_auto_ingest(args):
     project_dir = _resolve_project_dir(args.project_dir)
@@ -1854,7 +1419,6 @@ def cmd_auto_ingest(args):
     if not os.path.exists(junit_path):
         print(f"[crucible] no {junit_path} — nothing to ingest", file=sys.stderr)
         return 1
-    summary, tree, files = _parse_junit_file(junit_path)
     # CR-CRU-094 §S3 — this verb offers no `--cycle` at all and its ingest is
     # the furthest of any from the run that produced the report, so an
     # unattributed store here is the hardest to notice; the check runs before
@@ -1864,11 +1428,13 @@ def cmd_auto_ingest(args):
         cycle_id=getattr(args, "cycle", None),
         context=_run_context())
     # CR-CRU-111 §S2/AC3 — this verb runs NO tests: it ingests a report it merely
-    # found, so it cannot know its tier by construction and states none.
-    resp = _ingest_parsed(project_dir, args.agent, summary, tree,
-                          context=_axi().cycle_context(
-                              _run_context(), getattr(args, "cycle", None)))
-    _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
+    # found, so it cannot know its tier by construction and states none, and
+    # it ran no runner, so it sends neither `raw` nor `runnerExit`.
+    resp = _file_reports(project_dir, args.agent, codec=JUNIT_CODEC,
+                         report_paths=[junit_path],
+                         context=_axi().cycle_context(
+                             _run_context(), getattr(args, "cycle", None)))
+    _emit_ingest_axi("auto-ingest", resp, project_dir, args.agent,
                      warnings=preflight_warnings)
     return 0 if resp.get("ok") else 1
 
@@ -1986,6 +1552,11 @@ def cmd_pre_merge_gate(args):
         # invoked.
         whole_suite=lambda: cmd_regression(_gate_regression_args(args),
                                            verb="pre-merge-gate"),
+        # With no declared suite that run IS the gate: its envelope names it
+        # unreported when it was not filed (the composition names it itself).
+        whole_suite_alone=lambda: cmd_regression(
+            _gate_regression_args(args), verb="pre-merge-gate",
+            name_unfiled=True),
         context=_axi_context(project_dir, agent_id=args.agent),
         crucible_url=_base_url())
 
@@ -2390,13 +1961,14 @@ _HELP_STEPS = {
 }
 
 
-def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=None,
+def _emit_ingest_axi(verb, resp, project_dir, agent, help_steps=None,
                      warnings=None, run_id=None, name=None, script=None):
     """Emit the §S1 envelope for an ingest verb
-    (test/regression/auto-ingest): run{passed,failed,pending,total,files}.
-    `files` (CR-CRU-047 §S2) is the distinct test-FILE count from
-    `_parse_junit_file`, a sibling of the test counts, so a suite that silently
-    shrinks is visible in the gate output. CR-CRU-056 §S3 — the client RESOLVES
+    (test/regression/auto-ingest): run{passed,failed,pending,total,files}, each
+    figure read from the board's ingest answer (its `run` block). A run that
+    was not filed (refused, unreachable, too large) states no figures: each is
+    null beside the envelope's `error`. The answer's own `warnings[]` join the
+    envelope's. CR-CRU-056 §S3 — the client RESOLVES
     no cycle: a bound agent's run is server-stamped with its registered cycle
     (a stale binding gets a 409, surfaced via `error`). C5 — the envelope
     context ECHOES the attachment the SERVER reported (`context.cycleId` on the
@@ -2409,9 +1981,10 @@ def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=
 
     `name` is the test-name filter the run was narrowed by; an unfiltered run
     adds no key."""
-    run = {"passed": summary["passed"], "failed": summary["failed"],
-           "pending": summary.get("pending", 0),
-           "total": summary["total"], "files": files}
+    filed = _filed_run(resp)
+    run = {key: (filed.get(key) if isinstance(filed.get(key), int)
+                 and not isinstance(filed.get(key), bool) else None)
+           for key in ("passed", "failed", "pending", "total", "files")}
     context = _axi_context(project_dir, agent_id=agent,
                            cycle_id=_axi().echoed_cycle_id(resp))
     # §S15 — the ingest envelope names the next step (mark the cycle done once
@@ -2428,7 +2001,10 @@ def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
+    board_warnings = [w for w in (resp.get("warnings") or [])
+                      if isinstance(w, dict)]
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context,
+              list(warnings or []) + board_warnings)
 
 
 def _agent_id(args):
@@ -2589,7 +2165,7 @@ def _add_declared_tier_args(p):
     refusal, and argparse's usage error is not a refusal."""
     p.add_argument("--agent", help="If set, ingest the declared run's junit result")
     p.add_argument("--coverage", action="store_true",
-                   help="Run with bun lcov coverage and post /api/v2/runs/parsed with coverage")
+                   help="Run with bun lcov coverage; the lcov report is filed with the run's results")
     _add_gate_cycle_arg(p)
     _add_run_release_arg(p)
     _add_reports_arg(p)
@@ -2730,8 +2306,8 @@ _CLI_DESCRIPTION = (
     "\n"
     "A target whose report the BOARD should decode declares that beside it, under\n"
     "`crucible.rawReport.<target>` = {codec, file, path}: the run's raw report is\n"
-    "POSTed to /api/v2/runs under that codec and parsed server-side, instead of being\n"
-    "parsed here and POSTed to /api/v2/runs/parsed.\n"
+    "POSTed to /api/v2/runs under that codec instead of its JUnit report. Every report\n"
+    "is decoded by the board; this client parses none.\n"
     "\n"
     "Run `<verb> --help` for a verb's own flags.\n"
     "\n" + _axi().BOARD_CONFIGURATION_HELP

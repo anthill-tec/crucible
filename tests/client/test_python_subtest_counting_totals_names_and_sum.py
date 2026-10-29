@@ -1,6 +1,6 @@
 """Python's test/regression verbs run `unittest` through xmlrunner's own
-discovery entry point (built by the client's `_xmlrunner_cmd` helper and
-parsed back by `_parse_junit_dir`). `unittest` reports every subtest to the
+discovery entry point (built by the client's `_xmlrunner_cmd` helper, its
+JUnit reports sent to the board for it to decode). `unittest` reports every subtest to the
 result through `addSubTest(test, subtest, outcome)`, with `outcome` `None` for
 a pass. The installed unittest-xml-reporting result class's `addSubTest`
 writes a `<testcase>` only when `outcome` is not `None` -- a passing subtest
@@ -17,8 +17,9 @@ fails (the plain test plus one `<testcase>` per failing subtest, named
 `<method> (<params>)`). This file drives the REAL `python-crucible.py`
 `test` and `regression` verbs (regression both with and without coverage.py
 on) against a real interpreter holding the real unittest-xml-reporting
-4.0.0, through an in-process HTTP board double, and asserts what the board
-actually stores: the total must be identical whether every subtest passes or
+4.0.0, through an in-process HTTP board double, and asserts what the reports the
+client sends the board hold, read as the board's `junit` codec reads them
+(`junit_sent`): the total must be identical whether every subtest passes or
 some of them fail, every subtest's case name must be identical between the
 two runs, and `passed + failed + pending` must equal `total` on every run.
 
@@ -36,7 +37,12 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from tests.client.live_run_harness import RecordingBoard, install_project, load_client
+from tests.client.live_run_harness import (
+    RecordingBoard,
+    install_project,
+    junit_sent,
+    load_client,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REAL_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
@@ -101,10 +107,15 @@ def _run_main(module, argv):
     return code, stdout.getvalue(), stderr.getvalue()
 
 
-def _last_parsed_payload(board):
-    parsed = [body for path, body in board.posts() if path == "/api/v2/runs/parsed"]
-    assert parsed, f"no /api/v2/runs/parsed POST observed; posts={board.posts()!r}"
-    return parsed[-1]
+def _last_sent_report(board):
+    """The run's last `/api/v2/runs` ingest, its JUnit report texts read as
+    the board's `junit` codec reads them (`junit_sent`): the client sends
+    the runner's reports and counts nothing itself."""
+    sent = [body for path, body in board.posts() if path == "/api/v2/runs"]
+    assert sent, f"no /api/v2/runs POST observed; posts={board.posts()!r}"
+    read = junit_sent(sent[-1])
+    assert read is not None, f"the ingest is not a junit one; body={sent[-1]!r}"
+    return read
 
 
 def _case_names(payload):
@@ -189,7 +200,7 @@ class TotalsAndNamesMatchAcrossRunOutcomesTest(_SubtestCountingCase):
             with self.subTest(verb=verb_label, run="all subtests pass"):
                 _code, _out, err, board = self._run_scenario(
                     verb_argv, PARITY_FIXTURE_SOURCE, env={})
-                payload = _last_parsed_payload(board)
+                payload = _last_sent_report(board)
                 summary = payload["summary"]
                 self.assertEqual(
                     summary["total"], 4,
@@ -211,7 +222,7 @@ class TotalsAndNamesMatchAcrossRunOutcomesTest(_SubtestCountingCase):
                 _code, _out, err, board = self._run_scenario(
                     verb_argv, PARITY_FIXTURE_SOURCE,
                     env={"SUBTEST_PARITY_FAIL_CASES": "0,1,2"})
-                payload = _last_parsed_payload(board)
+                payload = _last_sent_report(board)
                 summary = payload["summary"]
                 self.assertEqual(
                     summary["total"], 4,
@@ -232,7 +243,7 @@ class TotalsAndNamesMatchAcrossRunOutcomesTest(_SubtestCountingCase):
         _code, _out, err, board = self._run_scenario(
             ["test", "--start-dir", "pkg", "--pattern", "fixture_subtests.py"],
             PARITY_FIXTURE_SOURCE, env={"SUBTEST_PARITY_FAIL_CASES": "1"})
-        payload = _last_parsed_payload(board)
+        payload = _last_sent_report(board)
         summary = payload["summary"]
         self.assertEqual(
             summary["total"], 4,
@@ -279,7 +290,7 @@ class ParentsOwnFailureIsItsOwnCaseTest(_SubtestCountingCase):
             ["test", "--start-dir", "pkg", "--pattern", "fixture_parent_fail.py"],
             PARENT_FAIL_FIXTURE_SOURCE, env=env,
             module_filename="fixture_parent_fail.py")
-        payload = _last_parsed_payload(board)
+        payload = _last_sent_report(board)
         summary = payload["summary"]
         self.assertEqual(
             summary["total"], 4,
@@ -353,7 +364,7 @@ class NestedAndSkippedSubtestsTest(_SubtestCountingCase):
             ["test", "--start-dir", "pkg", "--pattern", "fixture_nested_and_skipped.py"],
             NESTED_AND_SKIPPED_FIXTURE_SOURCE, env={},
             module_filename="fixture_nested_and_skipped.py")
-        payload = _last_parsed_payload(board)
+        payload = _last_sent_report(board)
         summary = payload["summary"]
         self.assertEqual(
             summary["total"], 3,
@@ -384,7 +395,7 @@ class NestedAndSkippedSubtestsTest(_SubtestCountingCase):
             NESTED_AND_SKIPPED_FIXTURE_SOURCE,
             env={"NESTED_INNER_FAIL": "1"},
             module_filename="fixture_nested_and_skipped.py")
-        payload = _last_parsed_payload(board)
+        payload = _last_sent_report(board)
         summary = payload["summary"]
         self.assertEqual(
             summary["total"], 3,

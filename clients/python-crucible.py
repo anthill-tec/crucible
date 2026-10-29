@@ -30,15 +30,19 @@ an unbound agent's runs attach only via an explicit `context.cycleId`.
 Subcommands:
   register, unregister  Agent lifecycle.
   test                  Run a TARGETED test (dotted path) or discover, via xmlrunner →
-                        JUnit XML → /api/v2/runs/parsed (no tier claimed). The per-cycle
-                        RED/GREEN workhorse. The reports dir is wiped first so only THIS
-                        run's XML is ingested. If --agent omitted, just runs (exit code
-                        only). If NO XML is produced (import/collection failure), the
-                        CAPTURED runner output is ingested to /api/v2/runs/compile.
-  regression            Run the FULL suite (discover) via xmlrunner (tier regression).
-                        With --coverage (coverage.py), posts /api/v2/runs/parsed with
-                        line/function coverage. Orchestrator pre-merge gate path.
-  auto-ingest           Ingest only: post an already-produced reports dir (parsed).
+                        JUnit XML, and send every JUnit report, inline and unparsed,
+                        with the captured output, to /api/v2/runs for the board to
+                        decode (no tier claimed). The per-cycle RED/GREEN workhorse.
+                        The reports dir is wiped first so only THIS run's XML is
+                        ingested. If --agent omitted, just runs (exit code only). If
+                        NO XML is produced (import/collection failure), the CAPTURED
+                        runner output is ingested to /api/v2/runs/compile.
+  regression            Run the FULL suite (discover) via xmlrunner (tier regression)
+                        and send its JUnit reports to /api/v2/runs. With --coverage
+                        (coverage.py) the `coverage lcov` report travels with them,
+                        for the board to decode. Orchestrator pre-merge gate path.
+  auto-ingest           Ingest only: send an already-produced reports dir's JUnit
+                        reports to /api/v2/runs.
   check                 python -m py_compile over given paths (default app/ + tests/);
                         ingest any errors to /api/v2/runs/compile. Syntax gate.
   pre-merge-gate        ORCHESTRATOR gate: fail-fast check → regression --coverage.
@@ -65,7 +69,7 @@ Project + Crucible endpoint:
   coverage.py) plus any imports the code-under-test needs.
   Posts to the board the project's `crucible.toml` declares (`[client] url`,
   shipped default http://localhost:3849), v2 endpoints ONLY:
-  /api/v2/agents/register|unregister, /api/v2/runs/parsed, /api/v2/runs/compile,
+  /api/v2/agents/register|unregister, /api/v2/runs, /api/v2/runs/compile,
   /api/v2/projects/<key>/plans, /api/v2/gates, /api/v2/milestones.
 
 Agent naming (CR-CRU-044 §S4/§S5): the agentId is a FREE-FORM identifier carrying no
@@ -88,7 +92,6 @@ import shutil
 import subprocess
 import sys
 import tomllib
-import xml.etree.ElementTree as ET
 
 DEFAULT_REPORTS = "test-reports"
 # The STACK this client's runs belong to — the server's own `{tier, stack,
@@ -274,7 +277,7 @@ def _request(method, path, payload=None, timeout=None):
     """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error.
 
     CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
-    (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
+    (`/api/v2/runs`) for a large regression/coverage run can legitimately
     take the server >10s, and a short bound there is a false-negative. The short
     hook-safe bound is applied ONLY on the status/plans read path via `_get`.
 
@@ -604,29 +607,29 @@ def _open_plans(project_dir):
     return _axi().open_plans(_get, _plans_path(project_dir))
 
 
-def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=None,
+def _emit_ingest_axi(verb, resp, project_dir, agent, help_steps=None,
                      warnings=None):
     """Emit the §S1 envelope for an ingest verb:
-    run{passed,failed,pending,total,files}. `files` (CR-CRU-051 §S2, propagating
-    CR-CRU-047 §S2 from the bun reference) is the distinct-source count from
-    `_parse_junit_dir` — per-FILE on xmlrunner 4.x (it stamps `file=`),
-    degrading to per-CLASS on a report without it — carried as a
-    sibling of the test counts so a suite that silently shrinks is visible in
-    the gate output itself. CR-CRU-056 §S3 — the client RESOLVES no
-    cycle: a bound agent's run is stamped with its registered cycle SERVER-side
-    (a stale binding gets a 409, surfaced via `error`). C5 — the envelope
-    context ECHOES the attachment the SERVER reported (`context.cycleId` on the
-    ingest response), so the agent sees which cycle absorbed its evidence
-    without a second `GET /api/v2/events`; absent → the key is omitted.
+    run{passed,failed,pending,total,files}, each figure read from the board's
+    ingest answer (its `run` block) -- the board decodes the reports this
+    client sends, `files` (CR-CRU-051 §S2) included. A run that was not filed
+    (refused, unreachable, too large) states no figures: each is null beside
+    the envelope's `error`. The answer's own `warnings[]` join the envelope's.
+    CR-CRU-056 §S3 -- the client RESOLVES no cycle: a bound agent's run is
+    stamped with its registered cycle SERVER-side (a stale binding gets a 409,
+    surfaced via `error`). C5 -- the envelope context ECHOES the attachment
+    the SERVER reported (`context.cycleId` on the ingest response); absent,
+    the key is omitted.
 
-    CR-CRU-058 §S2 — `help_steps` lets a GATE caller supply the STATE-DERIVED
+    CR-CRU-058 §S2 -- `help_steps` lets a GATE caller supply the STATE-DERIVED
     next step for the run it just made (`_axi().run_help`), instead of the
     canned per-verb `HELP_STEPS` entry; unset keeps today's behaviour exactly.
-    CR-CRU-094 §S3 — `warnings` carries the run's pre-flight finding onto the
+    CR-CRU-094 §S3 -- `warnings` carries the run's pre-flight finding onto the
     envelope, so the stderr line and `warnings[]` say the same thing."""
-    run = {"passed": summary["passed"], "failed": summary["failed"],
-           "pending": summary.get("pending", 0),
-           "total": summary["total"], "files": files}
+    filed = _filed_run(resp)
+    run = {key: (filed.get(key) if isinstance(filed.get(key), int)
+                 and not isinstance(filed.get(key), bool) else None)
+           for key in ("passed", "failed", "pending", "total", "files")}
     context = _axi_context(project_dir, agent_id=agent,
                            cycle_id=_axi().echoed_cycle_id(resp))
     result_fields = {"run": run,
@@ -636,7 +639,10 @@ def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=
         # Faithful pass-through: a 409 (stale binding / unregistered poster)
         # carries the server's structured envelope inside the HTTP error body.
         result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
+    board_warnings = [w for w in (resp.get("warnings") or [])
+                      if isinstance(w, dict)]
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context,
+              list(warnings or []) + board_warnings)
 
 
 def cmd_register(args):
@@ -715,12 +721,14 @@ def _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir):
 
 def _pytest_args(targets, start_dir, pattern, reports_dir):
     """pytest's arguments: verbose, a JUnit report in the reports dir in the
-    xunit1 family (the one that stamps `file=` on each test case), and what to
+    xunit1 family (the one that stamps `file=` on each test case) with its
+    suite name pinned to `pytest` (the board groups such a suite's cases by
+    module, whatever the project's own configuration names it), and what to
     run. Node ids given, they alone are passed, as unittest's dotted paths
     are; otherwise a stated start dir is the path pytest is given and a
     stated pattern its `python_files`, and whatever is unstated is left to the
     project's own pytest configuration."""
-    args = ["-v", "-o", "junit_family=xunit1",
+    args = ["-v", "-o", "junit_family=xunit1", "-o", "junit_suite_name=pytest",
             f"--junitxml={os.path.join(reports_dir, 'TEST-pytest.xml')}"]
     if targets:
         return args + list(targets)
@@ -739,86 +747,11 @@ def _suite_cmd(python, runner, targets, start_dir, pattern, reports_dir):
     return _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir)
 
 
-def _parse_junit_dir(reports_dir, by_classname=False):
-    """Parse every TEST-*.xml in reports_dir into (summary, tree, files) with
-    per-method leaf names for the /api/v2/runs/parsed path so the Crucible tree
-    shows real names.
-
-    CR-CRU-051 §S1 — `files` is the DISTINCT-SOURCE count, mirroring
-    `bun-crucible.py::_parse_junit_file` (the reference).
-
-    RESOLVED GRANULARITY FOR THIS CLIENT: **VERSION-DEPENDENT — per-FILE on the
-    xmlrunner we run, per-CLASS on one that predates it.** Measured, not
-    assumed: unittest-xml-reporting 4.0.0 stamps each `<testcase>` with BOTH
-    `classname` AND a real `file="tests/client/foo.py"`, so the first rung of
-    the chain hits and the count is genuinely per test FILE (a whole-module run
-    of one file reports files=1, not one-per-TestCase-class). Where `file` is
-    absent the count degrades to `classname` — i.e. distinct test CLASSES, NOT
-    files, which is the format's contract and is named honestly here rather
-    than implying a precision that report cannot give — and then to the suite
-    name. The chain never collapses to zero: a constant zero would make a
-    shrinking suite look identical to a healthy one. It rides the printed run
-    envelope only, never the ingest payload (CR-CRU-047 §S2).
-
-    The tree has one node per `<testsuite>`, or with `by_classname` one per
-    distinct `classname` within it: pytest writes a single suite named
-    `pytest`, so its run is grouped by module (or module and class) instead."""
-    tree_nodes = []
-    total = passed = failed = pending = 0
-    duration_ms = 0
-    files = set()
-    for xml_file in sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml"))):
-        # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
-        root = ET.parse(xml_file).getroot()  # noqa: S314
-        suites = root.findall(".//testsuite") or [root]
-        for suite in suites:
-            # node name -> {"children": [...], "fail": bool}, in first-seen order.
-            groups = {}
-            for tc in suite.findall("testcase"):
-                node_name = suite.get("name", "?")
-                if by_classname:
-                    node_name = tc.get("classname") or node_name
-                group = groups.setdefault(node_name, {"children": [], "fail": False})
-                source = tc.get("file") or tc.get("classname") or suite.get("name")
-                if source:
-                    files.add(source.replace("\\", "/"))
-                tc_time = int(float(tc.get("time", 0)) * 1000)
-                fail = tc.find("failure") is not None or tc.find("error") is not None
-                # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase (unittest's
-                # skip/skipIf/skipUnless, as emitted by xmlrunner) is PENDING,
-                # never passed. Order matters: failure/error first, then
-                # skipped, then pass. A skip does NOT fail its suite.
-                # Mirrors `_parse_junit` in `clients/mvn-crucible.py`, the
-                # reference implementation.
-                if fail:
-                    status = "fail"
-                    failed += 1
-                    group["fail"] = True
-                elif tc.find("skipped") is not None:
-                    status = "pending"
-                    pending += 1
-                else:
-                    status = "pass"
-                    passed += 1
-                total += 1
-                duration_ms += tc_time
-                group["children"].append({
-                    "name": tc.get("name", "?"),
-                    "status": status,
-                    "duration_ms": tc_time,
-                })
-            for node_name, group in groups.items():
-                tree_nodes.append({
-                    "name": node_name,
-                    "status": "fail" if group["fail"] else "pass",
-                    "children": group["children"],
-                })
-    summary = {"total": total, "passed": passed, "failed": failed,
-               "pending": pending, "duration_ms": duration_ms}
-    # `files` is returned as a SIBLING of `summary`, deliberately not a key
-    # inside it: `summary` IS the /api/v2/runs/parsed payload's summary field
-    # verbatim, and CR-CRU-047 §S2 keeps this count out of the wire.
-    return summary, tree_nodes, len(files)
+def _report_paths(reports_dir):
+    """Every TEST-*.xml report in `reports_dir`, in sorted path order: the
+    reports a run sends to the board, which decodes them; this client parses
+    none of them."""
+    return sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml")))
 
 
 def _produced_xml(reports_dir):
@@ -904,53 +837,63 @@ def _is_zero_discovery(result):
     return "Ran 0 tests" in out
 
 
-def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
-                   context=None, raw=None, files=None, run_id=None,
-                   release=None, runner_exit=None):
-    """POST the client-parsed run (per-method leaf names) to /api/v2/runs/parsed.
-    Returns the parsed response dict (the caller emits the §S1 envelope).
+JUNIT_CODEC = "junit"
+LCOV_CODEC = "lcov"
+COVERAGE_NOT_MEASURED_CODE = "coverage-not-measured"
 
-    CR-CRU-051 §S2 — `files` (the distinct-source count) is a PRINT-ONLY
-    argument: it is appended to the human-readable count line and is never
-    added to `payload`/`summary`, which go on the wire (CR-CRU-047 §S2).
-    `run_id` is the OPEN run this ingest closes; absent, the single-shot body.
-    The stack rides on the body through the shared `post_ingest`."""
-    payload = {
-        "projectKey": _project_key(project_dir),
-        "agentId": agent_id,
-        "summary": summary,
-        "tree": tree,
-    }
-    if coverage:
-        payload["coverage"] = coverage
-    if tier:
-        payload["tier"] = tier
-    if context:
-        payload["context"] = context
-    if raw:
-        payload["raw"] = raw
-    if run_id:
-        payload["runId"] = run_id
-    # The runner's exit, so the board files a runner that failed over a clean
-    # report as failed. Absent (`auto-ingest`, which runs no runner): unsent.
-    if runner_exit is not None:
-        payload["runnerExit"] = runner_exit
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
-                              release=release)
+
+def _file_reports(project_dir, agent_id, report_paths, *, raw=None,
+                  coverage_paths=(), tier=None, context=None, run_id=None,
+                  release=None, runner_exit=None):
+    """Send a run's JUnit reports to the board for it to decode: the shared
+    `ingest_reports`, which reads the board's health first and, unless it
+    refuses, makes ONE `POST /api/v2/runs` carrying `codec: "junit"`, every
+    report's text inline, the lcov coverage report when one is given, `raw`
+    and `runnerExit`. This client parses none of them.
+
+    Prints the human ingest line on stderr from the board's answer -- its
+    counts and the coverage it kept -- and returns that answer. The stack
+    rides on the body through the shared ingest."""
+    resp = _axi().ingest_reports(
+        _post, _get, stack=_STACK, project_key=_project_key(project_dir),
+        agent_id=agent_id, codec=JUNIT_CODEC, report_paths=report_paths,
+        raw=raw, coverage_codec=LCOV_CODEC if coverage_paths else None,
+        coverage_paths=coverage_paths, tier=tier, context=context,
+        run_id=run_id, release=release, runner_exit=runner_exit)
+    run = _filed_run(resp)
+    coverage = run.get("coverage")
+    if not isinstance(coverage, dict):
+        coverage = {}
     cov_line = ""
-    if coverage:
-        cov_line = (f" lines={coverage['lines']['percent']}%"
-                    f" funcs={coverage['functions']['percent']}%")
+    for key, label in (("lines", "lines"), ("functions", "funcs")):
+        figure = coverage.get(key)
+        if isinstance(figure, dict):
+            cov_line += f" {label}={figure.get('percent')}%"
     print(
-        f"ingest parsed: ok={resp.get('ok')} passed={summary['passed']} "
-        f"failed={summary['failed']} pending={summary.get('pending', 0)} "
-        f"total={summary['total']}"
-        + (f" files={files}" if files is not None else "")
-        + cov_line
+        f"ingest: ok={resp.get('ok')} codec={JUNIT_CODEC} "
+        f"passed={run.get('passed')} failed={run.get('failed')} "
+        f"pending={run.get('pending')} total={run.get('total')} "
+        f"files={run.get('files')}{cov_line}"
         + (f" error={resp['error']}" if resp.get("error") else ""),
         file=sys.stderr,
     )
     return resp
+
+
+def _filed_run(resp):
+    """(PURE) The `run` block of the board's ingest answer, `{}` when the run
+    was not filed (refused, unreachable, too large) and so has no figures."""
+    run = resp.get("run") if isinstance(resp, dict) else None
+    return run if isinstance(run, dict) else {}
+
+
+def _coverage_not_measured_warning(where):
+    """The warning a `--coverage` run carries when it left no coverage report
+    to send: the run is filed with no coverage at all."""
+    return {"code": COVERAGE_NOT_MEASURED_CODE,
+            "detail": (f"--coverage was requested, and {where}: no coverage "
+                       f"report was sent, so this run is filed with no "
+                       f"coverage")}
 
 
 def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None,
@@ -982,7 +925,8 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=Non
 
 
 def _collect_coverage(python, project_dir, env, data_file=None):
-    """Run `coverage lcov` and sum LF/LH/FNF/FNH into a Crucible coverage object.
+    """Run `coverage lcov` and return the path of the lcov report it wrote,
+    which the run sends for the board to decode; the client sums nothing.
     Returns None if coverage.py or the lcov output is unavailable.
 
     `data_file` is where the run wrote coverage.py's data when it reported
@@ -1015,23 +959,7 @@ def _collect_coverage(python, project_dir, env, data_file=None):
         print(f"[crucible] WARN: coverage lcov unavailable ({r.stderr.strip()[:120]})",
               file=sys.stderr)
         return None
-    lf = lh = ff = fh = 0
-    with open(lcov_path) as f:
-        for line in f:
-            if line.startswith("LF:"):
-                lf += int(line[3:].strip())
-            elif line.startswith("LH:"):
-                lh += int(line[3:].strip())
-            elif line.startswith("FNF:"):
-                ff += int(line[4:].strip())
-            elif line.startswith("FNH:"):
-                fh += int(line[4:].strip())
-    return {
-        "lines": {"total": lf, "covered": lh,
-                  "percent": round(lh / lf * 100, 1) if lf else 0},
-        "functions": {"total": ff, "covered": fh,
-                      "percent": round(fh / ff * 100, 1) if ff else 0},
-    }
+    return lcov_path
 
 
 # Read in the run's interpreter (the client never imports coverage.py itself):
@@ -1119,7 +1047,7 @@ def _erase_coverage_data(python, project_dir, env, data_file=None):
 
 
 def cmd_test(args, tier=None, verb="test"):
-    """Targeted/discover unittest via xmlrunner → JUnit XML → /api/v2/runs/parsed.
+    """Targeted/discover unittest via xmlrunner → JUnit XML → /api/v2/runs.
     With --agent the result is ingested (regardless of pass/fail); a bound agent's
     run is server-stamped with its registered cycle. Exit code reflects the runner.
 
@@ -1211,28 +1139,29 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     # A pytest that failed as a runner wrote no result, whatever JUnit it left.
     if (_produced_xml(reports_dir)
             and not _pytest_failed_as_runner(runner, result)):
-        summary, tree, files = _parse_junit_dir(reports_dir,
-                                                by_classname=runner == _PYTEST)
-        if _axi().ran_nothing(result.returncode, summary["total"]):
+        report_paths = _report_paths(reports_dir)
+        # The client decides one thing locally, from the runner's exit and
+        # the count of the report's test cases; everything else is the board's.
+        if _axi().ran_nothing(result.returncode,
+                              _axi().junit_testcase_count(report_paths)):
             return _axi().emit_ran_nothing(
                 verb, "TEST-*.xml", result.returncode, result.stdout or "",
                 run_id, envelope_warnings, post_fn=_post,
                 project_key=_project_key(project_dir), agent_id=args.agent,
                 subject=_no_report_subject(verb, runner))
         runner_exit = _axi().runner_exit_code(result.returncode)
-        resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier=tier,
-                              context=_run_context(),
-                              raw=result.stdout, files=files, run_id=run_id,
-                              release=release, runner_exit=runner_exit)
+        resp = _file_reports(project_dir, args.agent, report_paths,
+                             raw=result.stdout, tier=tier,
+                             context=_run_context(), run_id=run_id,
+                             release=release, runner_exit=runner_exit)
         # The envelope states the run as the board filed it.
-        filed = _axi().filed_summary(resp, summary)
-        _emit_ingest_axi(verb, resp, filed, files, project_dir, args.agent,
+        _emit_ingest_axi(verb, resp, project_dir, args.agent,
                          warnings=(envelope_warnings
                                    + _axi().unit_run_wall_vs_cpu_warnings(
                                        tier, "python", timing)))
         # The exit carries the runner's verdict and the filed run's, and a
         # refused ingest is never green.
-        return _axi().verb_exit(runner_exit, {**resp, "run": filed})
+        return _axi().verb_exit(runner_exit, resp)
     # No XML at all → a hard collection/syntax failure. Ingest the CAPTURED runner
     # output as compile so the RED is still reported rather than silently lost.
     # CR-CRU-111 AC13a — a COMPILE ingest is a build event and carries NO test
@@ -1290,7 +1219,7 @@ def cmd_regression(args, verb="regression", runner=None, carried_warnings=()):
 def _regression_run(args, verb="regression", preflight_warnings=(), identity=None,
                     runner=_UNITTEST):
     """Full-suite discover via xmlrunner (tier regression). With --coverage: run under
-    coverage.py and post /api/v2/runs/parsed with coverage. A bound agent's run is
+    coverage.py and send its lcov report to /api/v2/runs with the JUnit reports. A bound agent's run is
     server-stamped with its registered cycle. `verb` (CR-CRU-058 §S1) names the
     envelope — see `cmd_regression`.
 
@@ -1415,39 +1344,53 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
                   f"{verb}: ok=False — no JUnit XML, ingested as compile")
         return result.returncode or 1
 
-    summary, tree, files = _parse_junit_dir(reports_dir, by_classname=runner == _PYTEST)
-    if _axi().ran_nothing(result.returncode, summary["total"]):
+    report_paths = _report_paths(reports_dir)
+    # The client decides one thing locally, from the runner's exit and the
+    # count of the report's test cases; everything else is the board's.
+    if _axi().ran_nothing(result.returncode,
+                          _axi().junit_testcase_count(report_paths)):
         return _axi().emit_ran_nothing(
             verb, "TEST-*.xml", result.returncode, result.stdout or "",
             run_id, envelope_warnings, post_fn=_post,
             project_key=_project_key(project_dir), agent_id=args.agent,
             subject=_no_report_subject(verb, runner))
-    coverage = (_collect_coverage(python, project_dir, env, data_file)
-                if coverage_on else None)
+    coverage_paths = []
+    if coverage_on:
+        lcov_path = _collect_coverage(python, project_dir, env, data_file)
+        if lcov_path:
+            coverage_paths = [lcov_path]
+        else:
+            envelope_warnings.append(_coverage_not_measured_warning(
+                "`coverage lcov` left no lcov coverage report"))
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
     runner_exit = _axi().runner_exit_code(result.returncode)
-    resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                          tier="regression", context=_run_context(), files=files,
-                          run_id=run_id, release=release,
-                          runner_exit=runner_exit)
-    # The envelope states the run as the board filed it.
-    summary = _axi().filed_summary(resp, summary)
-    exit_code = _axi().verb_exit(runner_exit, {**resp, "run": summary})
+    resp = _file_reports(project_dir, args.agent, report_paths,
+                         raw=result.stdout, coverage_paths=coverage_paths,
+                         tier="regression", context=_run_context(),
+                         run_id=run_id, release=release,
+                         runner_exit=runner_exit)
+    exit_code = _axi().verb_exit(runner_exit, resp)
     ok = exit_code == 0
     # §S2 — a GATE run's next step is derived from the run state it reached
     # (unrecorded / red / green); the plain `regression` verb keeps its canned
     # HELP_STEPS entry, unchanged.
-    help_steps = (_axi().run_help(verb, ok, summary["failed"], _base_url())
-                  if verb != "regression" else None)
-    _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
+    gate = verb != "regression"
+    help_steps = (_axi().run_help(verb, ok, _filed_run(resp).get("failed"),
+                                  _base_url())
+                  if gate else None)
+    # A gate whose one whole-suite run was not filed cannot say what it
+    # covered: it names that suite unreported, as a composed gate does.
+    if gate:
+        envelope_warnings += _axi().whole_suite_unreported_warnings(_STACK, resp)
+    _emit_ingest_axi(verb, resp, project_dir, args.agent,
                      help_steps=help_steps, warnings=envelope_warnings)
     return exit_code
 
 
 def cmd_auto_ingest(args):
-    """Ingest an already-produced reports dir (client-parsed → per-method names).
-    A bound agent's run is server-stamped with its registered cycle."""
+    """Ingest an already-produced reports dir: its JUnit reports are sent to
+    /api/v2/runs for the board to decode. A bound agent's run is server-stamped with its registered cycle."""
     project_dir = _resolve_project_dir(args.project_dir)
     reports_dir = _reports_dir(project_dir, args.reports)
     if not _produced_xml(reports_dir):
@@ -1462,7 +1405,6 @@ def cmd_auto_ingest(args):
                   [_axi().no_report_warning("auto-ingest", "TEST-*.xml", 1, "")],
                   f"auto-ingest: ok=False — no TEST-*.xml in {reports_dir}")
         return 1
-    summary, tree, files = _parse_junit_dir(reports_dir)
     # CR-CRU-094 §S3 — this verb runs no runner and offers no `--cycle`, so its
     # ingest is the furthest from the run that produced the reports and an
     # unattributed store here is the hardest to notice; checked before the POST.
@@ -1472,11 +1414,11 @@ def cmd_auto_ingest(args):
         context=_run_context())
     # CR-CRU-111 §S2/AC3 — this verb runs NO tests: it ingests reports it merely
     # found, so it cannot know their tier by construction and states none.
-    resp = _ingest_parsed(project_dir, args.agent, summary, tree,
-                          context=_axi().cycle_context(
-                              _run_context(), getattr(args, "cycle", None)),
-                          files=files)
-    _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
+    # It ran no runner either, so it sends neither `raw` nor `runnerExit`.
+    resp = _file_reports(project_dir, args.agent, _report_paths(reports_dir),
+                         context=_axi().cycle_context(
+                             _run_context(), getattr(args, "cycle", None)))
+    _emit_ingest_axi("auto-ingest", resp, project_dir, args.agent,
                      warnings=preflight_warnings)
     return 0 if resp.get("ok") else 1
 

@@ -80,6 +80,9 @@ HELP_CLIENTS = (
 # appends its argv to `interpreter_runs.jsonl` beside it; a suite run (`-o
 # <reports dir>`) writes one passing JUnit case there; `coverage lcov -o
 # <file>` writes a small lcov; everything else exits 0.
+# The lcov report the stand-in's `coverage lcov` writes, byte for byte.
+PYTHON_LCOV_TEXT = ("SF:pkg_under_measure/mod.py\nFNF:2\nFNH:1\n"
+                    "LF:10\nLH:8\nend_of_record\n")
 _RECORDING_PYTHON = r'''
 import json
 import os
@@ -434,11 +437,12 @@ class PythonCovSourceWithCoverageRunsTest(_PythonProject, unittest.TestCase):
             ["--source", COV_SOURCE],
             f"coverage measures the --cov-source given; runs={suite_runs!r}")
         path, body = _the_one_ingest(self, self.board, result)
-        self.assertEqual(path, "/api/v2/runs/parsed", _diagnostics(result))
-        coverage = (body or {}).get("coverage") or {}
+        self.assertEqual(path, "/api/v2/runs", _diagnostics(result))
         self.assertEqual(
-            (coverage.get("lines") or {}).get("total"), 10,
-            f"the ingest carries the run's lcov coverage; body={body!r}")
+            (body or {}).get("coverage"),
+            {"codec": "lcov", "data": [PYTHON_LCOV_TEXT]},
+            f"the ingest carries the run's lcov coverage report, inline; "
+            f"body={body!r}")
         self.assertEqual((body or {}).get("tier"), "regression",
                          f"body={body!r}")
 
@@ -475,6 +479,18 @@ class RegressionWithoutCoverageFilesNoCoverageTest(unittest.TestCase):
             cwd=project, env=_client_env(FAKE_TOTAL="1"),
             capture_output=True, text=True, timeout=TIMEOUT, check=False)
         self._assert_no_coverage(result)
+        # bun sends its runner's reports (CR-CRU-204): the one ingest is its
+        # `/api/v2/runs` post, the JUnit report inline and no coverage report.
+        path, body = _the_one_ingest(self, self.board, result)
+        self.assertEqual(path, "/api/v2/runs", _diagnostics(result))
+        data = (body or {}).get("data")
+        self.assertTrue(
+            isinstance(data, list) and len(data) == 1
+            and data[0].count("<testcase") == 1,
+            f"the run's one-case JUnit report rides inline; body={body!r}")
+        self.assertNotIn("coverage-not-measured", result.stdout or "",
+                         f"a run that never asked for coverage is not told it "
+                         f"measured none; {_diagnostics(result)}")
 
     def test_guard_python_regression_without_coverage_files_no_coverage(self):
         driver = _PythonProject()

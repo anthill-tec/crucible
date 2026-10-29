@@ -181,9 +181,20 @@ class AFailedEraseNamesItsCauseTest(_FailureCauseCase):
                     or "Is a directory" in erase_lines[0],
                     f"{label}: the erase's line names its cause, coverage.py's "
                     f"IsADirectoryError; got {erase_lines[0]!r}")
-                run = (result.axi or {}).get("run") or {}
+                # The run went ahead and was filed: its one `/api/v2/runs`
+                # ingest carries the runner's JUnit reports, holding the
+                # fixture's three tests and no failure (the client parses
+                # none of it; the board decodes it).
+                sent = [body for path, body in board.posts()
+                        if path == "/api/v2/runs"]
                 self.assertEqual(
-                    (run.get("total"), run.get("failed")), (3, 0),
+                    len(sent), 1,
+                    f"{label}: a failed erase never stops the run being filed; "
+                    f"{result.describe()}")
+                data = "".join((sent[0] or {}).get("data") or []) if sent else ""
+                self.assertEqual(
+                    (data.count("<testcase"), data.count("<failure"),
+                     data.count("<error")), (3, 0, 0),
                     f"{label}: a failed erase never fails the run; "
                     f"{result.describe()}")
 

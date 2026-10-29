@@ -189,6 +189,7 @@ _MODALITY = _load_module(MODALITY_PATH, "cr112_c1_modality_harness")
 #: would make its own config unparsable the moment the shipped file carried one
 #: too, and a fixture that checked the resolution its own way would be a second
 #: spelling of a safety device.
+from tests.client.live_run_harness import HEALTH_PATHS, board_health, junit_sent  # noqa: E402
 from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
     declare_board,
     would_resolve,
@@ -396,13 +397,27 @@ class _StubBoard:
                 return payload
 
             def _answer(self, payload=None):
-                # An ingest is answered with the counts it was sent, as the
-                # board answers a run it stored.
-                answer = dict(_BOARD_OK)
+                # Health is answered as a board that decodes the clients'
+                # reports states it. An ingest is answered with the counts it
+                # was sent -- a parsed `summary`, or the JUnit reports a bun
+                # or python `/api/v2/runs` body carries inline, read as the
+                # board's codec reads them (`junit_sent`) -- as the board
+                # answers a run it stored.
+                if self.path in HEALTH_PATHS:
+                    answer = board_health()
+                else:
+                    answer = dict(_BOARD_OK)
                 summary = (payload or {}).get("summary")
+                read = None
+                if (not isinstance(summary, dict) and isinstance(payload, dict)
+                        and payload.get("stack") in ("bun", "python")):
+                    read = junit_sent(payload) or {}
+                    summary = read.get("summary")
                 if isinstance(summary, dict):
                     answer["run"] = {key: summary.get(key, 0) for key in
                                      ("total", "passed", "failed", "pending")}
+                    if read:
+                        answer["run"]["files"] = read.get("files")
                 body = json.dumps(answer).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")

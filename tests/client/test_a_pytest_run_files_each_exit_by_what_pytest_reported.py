@@ -141,7 +141,7 @@ class _APytestRunnerFailure(_OneExitOfAPytestRun):
                       f"{diag(self.result)}")
 
     def test_no_test_is_filed(self):
-        self.assertEqual(self.project.parsed_ingests(), [],
+        self.assertEqual(self.project.runs_ingests(), [],
                          f"a runner failure files no tests, even where pytest wrote "
                          f"a JUnit file; {diag(self.result)}")
 
@@ -227,9 +227,9 @@ class ACollectionErrorIsOneFailedTestTest(_OneExitOfAPytestRun):
                       f"the scratch project must make pytest exit 2; {diag(self.result)}")
 
     def test_it_files_one_failed_test(self):
-        ingests = self.project.parsed_ingests()
+        ingests = self.project.runs_ingests()
         self.assertEqual(len(ingests), 1,
-                         f"exactly one parsed ingest; {diag(self.result)}")
+                         f"exactly one /api/v2/runs ingest; {diag(self.result)}")
         self.assertEqual(counts(ingests[0]),
                          {"total": 1, "passed": 0, "failed": 1, "pending": 0},
                          f"the collection error is one failed test; {diag(self.result)}")
@@ -266,7 +266,7 @@ class NothingCollectedAbortsTheRunTest(_OneExitOfAPytestRun):
         self.assertEqual(self.project.compile_ingests(), [],
                          f"a run that collected nothing files no compile record; "
                          f"{diag(self.result)}")
-        self.assertEqual(self.project.parsed_ingests(), [],
+        self.assertEqual(self.project.runs_ingests(), [],
                          f"a run that collected nothing files no tests; {diag(self.result)}")
         self.assertNotEqual(self.result.returncode, 0, diag(self.result))
 
@@ -365,7 +365,7 @@ class ASigtermDuringAPytestRunLeavesItAbortedTest(unittest.TestCase):
         aborted = [w for w in self.axi.get("warnings") or []
                    if isinstance(w, dict) and w.get("code") == "run-aborted"]
         self.assertEqual(len(aborted), 1, self.diag())
-        self.assertEqual(self.project.parsed_ingests(), [], self.diag())
+        self.assertEqual(self.project.runs_ingests(), [], self.diag())
         self.assertEqual(self.project.compile_ingests(), [], self.diag())
 
 # The shared bases drive no run of their own: out of the module's namespace,

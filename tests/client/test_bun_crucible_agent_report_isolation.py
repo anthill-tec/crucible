@@ -19,6 +19,12 @@ land its own shape and still satisfy every assertion here. The board's HTTP
 seam (`_post`/`_get`) is mocked throughout; no live server and no real bun
 binary is ever touched.
 
+The client files a run's reports through the shared ingest: the board's
+health is read first (the `_get` stub answers it, `get_answering_health`),
+then ONE `POST /api/v2/runs` carries each report's text inline (`data`,
+`coverage.data`). So what this file asserts the client READ is the text it
+SENT: its own run's report, never another agent's or a stale one.
+
 Module-loading + fake-bun convention copied verbatim from the sibling
 harnesses (`test_bun_crucible_auto_attach.py`, `test_client_fleet_envelope_census.py`):
 a tiny fake `bun` executable that answers `bun test`'s own flag contract, plus
@@ -26,9 +32,8 @@ a tiny fake `bun` executable that answers `bun test`'s own flag contract, plus
 the fixture's own `package.json` script table.
 
 Invocation:
-    python3 -m pytest tests/client/test_bun_crucible_agent_report_isolation.py -q
-Fallback:
-    python3 tests/client/test_bun_crucible_agent_report_isolation.py
+    python3 clients/python-crucible.py test \
+        --tests tests.client.test_bun_crucible_agent_report_isolation
 """
 
 import contextlib
@@ -42,6 +47,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+from tests.client.live_run_harness import get_answering_health
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
@@ -166,6 +173,13 @@ def _run_main(module, argv):
     return code, stdout.getvalue(), stderr.getvalue()
 
 
+RUNS = "/api/v2/runs"
+PARSED = "/api/v2/runs/parsed"
+# What the board answers the run ingest with: the run as it filed it.
+BOARD_RUN_ANSWER = {"ok": True, "changed": True,
+                    "run": {"passed": 1, "failed": 0, "pending": 0, "total": 1}}
+
+
 def _post_call_for_path(post_mock, path):
     for call in post_mock.call_args_list:
         args, kwargs = call
@@ -173,6 +187,27 @@ def _post_call_for_path(post_mock, path):
         if call_path == path:
             return call
     return None
+
+
+def _paths_posted(post_mock):
+    return [(call[0][0] if call[0] else call[1].get("path"))
+            for call in post_mock.call_args_list]
+
+
+def _runs_ingest_body(testcase, post_mock):
+    """The body of the run's ONE `POST /api/v2/runs`, after asserting the
+    parsed route was never used."""
+    paths = _paths_posted(post_mock)
+    testcase.assertNotIn(
+        PARSED, paths,
+        f"the client sends its runner's reports, never a parse of them, to "
+        f"{RUNS}; posted {paths!r}")
+    testcase.assertEqual(
+        paths.count(RUNS), 1,
+        f"the run files exactly one ingest at {RUNS}; posted {paths!r}")
+    call = _post_call_for_path(post_mock, RUNS)
+    assert call is not None
+    return call[0][1]
 
 
 def _files_under(root):
@@ -232,10 +267,10 @@ class _BaseIsolationTest(unittest.TestCase):
         if reports:
             argv += ["--reports", reports]
         argv += list(extra)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+        with mock.patch.object(self.module, "_post", return_value=BOARD_RUN_ANSWER,
                                 create=True) as post_mock, \
-             mock.patch.object(self.module, "_get", return_value={"ok": False},
-                                create=True):
+             mock.patch.object(self.module, "_get",
+                                side_effect=get_answering_health(), create=True):
             code, out, err = _run_main(self.module, argv)
         return code, out, err, post_mock
 
@@ -247,10 +282,10 @@ class _BaseIsolationTest(unittest.TestCase):
         if reports:
             argv += ["--reports", reports]
         argv += list(extra)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+        with mock.patch.object(self.module, "_post", return_value=BOARD_RUN_ANSWER,
                                 create=True) as post_mock, \
-             mock.patch.object(self.module, "_get", return_value={"ok": False},
-                                create=True):
+             mock.patch.object(self.module, "_get",
+                                side_effect=get_answering_health(), create=True):
             code, out, err = _run_main(self.module, argv)
         return code, out, err, post_mock
 
@@ -276,12 +311,12 @@ class AgentDefaultDirectoryTest(_BaseIsolationTest):
             f"top level when an agent id is given; found {top_files!r}",
         )
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        self.assertIsNotNone(ingest_call, "the real bun-test run must be ingested")
-        assert ingest_call is not None
-        summary = ingest_call[0][1]["summary"]
-        self.assertEqual(summary["passed"], 1)
-        self.assertEqual(summary["failed"], 0)
+        body = _runs_ingest_body(self, post_mock)
+        self.assertEqual(body.get("codec"), "junit", f"body={body!r}")
+        self.assertEqual(
+            body.get("data"), [PASSING_JUNIT_XML],
+            f"the ingest carries the run's own junit.xml text inline, read "
+            f"from {own_dir}; body={body!r}")
 
 
 class AgentDirectoryIsolationTest(_BaseIsolationTest):
@@ -307,16 +342,13 @@ class AgentDirectoryIsolationTest(_BaseIsolationTest):
             "by alpha's wipe",
         )
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        assert ingest_call is not None
-        summary = ingest_call[0][1]["summary"]
+        body = _runs_ingest_body(self, post_mock)
         self.assertEqual(
-            summary["failed"], 0,
-            f"agent-alpha's ingested summary must reflect ONLY its own real "
-            f"run (0 failures), not agent-bravo's 13 planted failures; "
-            f"got summary={summary!r}",
+            body.get("data"), [PASSING_JUNIT_XML],
+            f"agent-alpha's ingest must carry ONLY its own real run's report, "
+            f"never agent-bravo's planted one; body={body!r}",
         )
-        self.assertEqual(summary["total"], 1)
+        self.assertNotIn("AGENT_BRAVO_SENTINEL", json.dumps(body))
 
     def test_a_stale_file_in_the_same_agents_own_directory_is_still_wiped_before_the_run(self):
         own_dir = os.path.join(self.tmpdir, "test-reports", "agent-alpha")
@@ -328,14 +360,13 @@ class AgentDirectoryIsolationTest(_BaseIsolationTest):
         code, _out, err, post_mock = self._run_test_verb(agent="agent-alpha")
         self.assertEqual(code, 0, f"stderr={err!r}")
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        assert ingest_call is not None
-        summary = ingest_call[0][1]["summary"]
+        body = _runs_ingest_body(self, post_mock)
         self.assertEqual(
-            (summary["passed"], summary["failed"], summary["total"]), (1, 0, 1),
-            f"the stale planted failures (42) must be GONE from the ingested "
-            f"summary; got summary={summary!r}",
+            body.get("data"), [PASSING_JUNIT_XML],
+            f"the stale planted report must be GONE from the ingest: it "
+            f"carries this run's report only; body={body!r}",
         )
+        self.assertNotIn("STALE_FROM_A_PRIOR_RUN", json.dumps(body))
         with open(stale_path) as f:
             remaining = f.read()
         self.assertNotIn("STALE_FROM_A_PRIOR_RUN", remaining)
@@ -345,14 +376,21 @@ class AgentDirectorySurvivesTest(_BaseIsolationTest):
     """AC3 -- the agent's directory is still there after its run."""
 
     def test_agent_directory_still_exists_after_the_run_holding_its_results(self):
-        code, _out, err, _post_mock = self._run_test_verb(agent="agent-alpha")
+        code, _out, err, post_mock = self._run_test_verb(agent="agent-alpha")
         self.assertEqual(code, 0, f"stderr={err!r}")
 
         own_dir = os.path.join(self.tmpdir, "test-reports", "agent-alpha")
         junit_path = os.path.join(own_dir, "junit.xml")
         self.assertTrue(os.path.exists(junit_path), f"{junit_path} must still exist")
-        summary, _tree, _files = self.module._parse_junit_file(junit_path)
-        self.assertEqual((summary["passed"], summary["failed"]), (1, 0))
+        with open(junit_path) as f:
+            kept = f.read()
+        self.assertEqual(kept, PASSING_JUNIT_XML,
+                         "the agent's junit.xml still holds the run's results")
+        body = _runs_ingest_body(self, post_mock)
+        self.assertEqual(
+            body.get("data"), [kept],
+            f"the report the directory keeps is the one the ingest sent; "
+            f"body={body!r}")
 
 
 class UnchangedLocationsTest(_BaseIsolationTest):
@@ -384,19 +422,20 @@ class UnchangedLocationsTest(_BaseIsolationTest):
             f"an explicit --reports must not be nested by agent id; "
             f"{nested} must not exist",
         )
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        self.assertIsNotNone(ingest_call)
+        body = _runs_ingest_body(self, post_mock)
+        self.assertEqual(body.get("data"), [PASSING_JUNIT_XML], f"body={body!r}")
 
     def test_auto_ingest_with_an_explicit_reports_dir_reads_exactly_that_directory(self):
         caller_dir = os.path.join(self.tmpdir, "caller-produced-reports")
         os.makedirs(caller_dir, exist_ok=True)
+        caller_report = _junit_suite("caller.suite", 1, "CALLER_PRODUCED_TESTCASE")
         with open(os.path.join(caller_dir, "junit.xml"), "w") as f:
-            f.write(_junit_suite("caller.suite", 1, "CALLER_PRODUCED_TESTCASE"))
+            f.write(caller_report)
 
-        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+        with mock.patch.object(self.module, "_post", return_value=BOARD_RUN_ANSWER,
                                 create=True) as post_mock, \
-             mock.patch.object(self.module, "_get", return_value={"ok": False},
-                                create=True):
+             mock.patch.object(self.module, "_get",
+                                side_effect=get_answering_health(), create=True):
             code, _out, err = _run_main(self.module, [
                 "auto-ingest", "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir,
@@ -404,15 +443,11 @@ class UnchangedLocationsTest(_BaseIsolationTest):
             ])
         self.assertEqual(code, 0, f"stderr={err!r}")
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        self.assertIsNotNone(ingest_call, "auto-ingest must ingest the given directory")
-        assert ingest_call is not None
-        summary = ingest_call[0][1]["summary"]
+        body = _runs_ingest_body(self, post_mock)
         self.assertEqual(
-            (summary["total"], summary["failed"]), (1, 1),
-            f"auto-ingest with an explicit --reports must read EXACTLY the "
-            f"given directory's content, agent id or not; got "
-            f"summary={summary!r}",
+            body.get("data"), [caller_report],
+            f"auto-ingest with an explicit --reports must send EXACTLY the "
+            f"given directory's report, agent id or not; body={body!r}",
         )
         self.assertFalse(
             os.path.isdir(os.path.join(caller_dir, "agent-alpha")),
@@ -423,7 +458,7 @@ class UnchangedLocationsTest(_BaseIsolationTest):
 class RegressionCoverageFollowsTheAgentTest(_BaseIsolationTest):
     """AC5 -- coverage follows the run: `regression --coverage`'s
     `--coverage-dir` lands under the agent's own directory, never the fixed
-    `<package>/coverage`, and the ingested figures come from THAT lcov."""
+    `<package>/coverage`, and the coverage the ingest sends is THAT lcov."""
 
     LCOV = "SF:src/agent.ts\nDA:1,1\nDA:2,1\nDA:3,0\nLF:3\nLH:2\nFNF:1\nFNH:1\nend_of_record\n"
     DECOY_LCOV = ("SF:src/decoy.ts\nDA:1,0\nDA:2,0\nLF:2\nLH:0\nFNF:5\nFNH:0\n"
@@ -432,8 +467,8 @@ class RegressionCoverageFollowsTheAgentTest(_BaseIsolationTest):
     def test_regression_coverage_dir_lands_under_the_agents_own_directory(self):
         # A decoy at the OLD fixed location (<package_dir>/coverage/lcov.info):
         # if the client still reads there instead of the agent's own
-        # directory, the ingested figures below would match this decoy, not
-        # the real run.
+        # directory, the coverage sent below would be this decoy, not the
+        # real run's.
         decoy_dir = os.path.join(self.tmpdir, "coverage")
         os.makedirs(decoy_dir, exist_ok=True)
         with open(os.path.join(decoy_dir, "lcov.info"), "w") as f:
@@ -452,18 +487,13 @@ class RegressionCoverageFollowsTheAgentTest(_BaseIsolationTest):
             f"found {_files_under(own_dir)!r}",
         )
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        assert ingest_call is not None
-        coverage = ingest_call[0][1].get("coverage")
-        self.assertIsNotNone(coverage, "a --coverage run must ingest a coverage object")
+        body = _runs_ingest_body(self, post_mock)
         self.assertEqual(
-            coverage["lines"]["total"], 3,
-            f"the ingested coverage must come from the RUN's own lcov "
-            f"(lines total=3), not the decoy at the old fixed "
-            f"<package>/coverage location (lines total=2); got "
-            f"coverage={coverage!r}",
+            body.get("coverage"), {"codec": "lcov", "data": [self.LCOV]},
+            f"the ingest must send the RUN's own lcov as its coverage report, "
+            f"not the decoy at the old fixed <package>/coverage location; "
+            f"body={body!r}",
         )
-        self.assertEqual(coverage["lines"]["covered"], 2)
         with open(os.path.join(decoy_dir, "lcov.info")) as f:
             self.assertEqual(
                 f.read(), self.DECOY_LCOV,
@@ -488,11 +518,10 @@ class DeclaredRawReportFollowsTheAgentTest(_BaseIsolationTest):
         os.environ["FAKE_E2E_RAW_CONTENT"] = json.dumps({"marker": self.RAW_MARKER})
         os.environ["FAKE_E2E_EXIT_CODE"] = "0"
 
-        with mock.patch.object(self.module, "_post", return_value={"ok": True,
-                                "run": {"passed": 1, "failed": 0, "pending": 0,
-                                        "total": 1}}, create=True) as post_mock, \
-             mock.patch.object(self.module, "_get", return_value={"ok": False},
-                                create=True):
+        with mock.patch.object(self.module, "_post", return_value=BOARD_RUN_ANSWER,
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                side_effect=get_answering_health(), create=True):
             code, _out, err = _run_main(self.module, [
                 "e2e", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir, "--agent", "agent-alpha",
@@ -510,16 +539,18 @@ class DeclaredRawReportFollowsTheAgentTest(_BaseIsolationTest):
             written = json.load(f)
         self.assertEqual(written.get("marker"), self.RAW_MARKER)
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
-        self.assertIsNotNone(ingest_call, "the raw report must be sent to /api/v2/runs")
-        assert ingest_call is not None
-        payload = ingest_call[0][1]
+        with open(expected_path) as f:
+            raw_text = f.read()
+        payload = _runs_ingest_body(self, post_mock)
+        self.assertEqual(payload.get("codec"), "playwright", f"body={payload!r}")
         self.assertEqual(
-            payload.get("dataPath"), expected_path,
-            f"the client must send dataPath under the agent's own directory, "
-            f"not the shared/top-level location; got "
-            f"dataPath={payload.get('dataPath')!r}",
+            payload.get("data"), [raw_text],
+            f"the client must send the raw report it read from the agent's own "
+            f"directory inline as `data`; body={payload!r}",
         )
+        self.assertNotIn("dataPath", payload,
+                         f"the raw report travels inline, never as a path; "
+                         f"body={payload!r}")
         # AC3 -- still there after the run.
         self.assertTrue(os.path.exists(expected_path))
 

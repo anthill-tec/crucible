@@ -5,7 +5,7 @@
 // exists only on the console stream, as an `error: <detail>` block under a
 // source echo of the code that raised. This module reads that stream into
 // `{message, trace?}` per result-line name, by the rules the bun client
-// applies (`_parse_console_failures` in clients/bun-crucible.py). It knows
+// applied before it handed its console to the board. It knows
 // nothing of JUnit or of any route: a caller hands it console text and decides
 // what to do with what it reads.
 
@@ -78,10 +78,83 @@ function strip(text: string): string {
   return rstrip(text).replace(PY_LEADING, "");
 }
 
+// bun's marker for an error it caught outside any test: a file that failed
+// to load, threw at import, or rejected at import or after its tests.
+const UNHANDLED_MARKER = "# Unhandled error between tests";
+// A `<path>:` file header bun prints, flush left, before each file's results:
+// a path naming a JavaScript/TypeScript module, the only kind of file bun
+// runs as a test file. A test's own flush-left console line (`results:`)
+// names no such file, so it is never read as a header.
+const FILE_HEADER = /^(?<path>[^\s#-]\S*\.[cm]?[jt]sx?):$/;
+// The rule of dashes that opens and closes each unhandled-error block.
+const BLOCK_RULE = /^-{10,}$/;
+// The fallback message of a block that carries no `error:` line.
+const LOAD_ERROR_FALLBACK = "unhandled error between tests";
+
 /** The first `limit` characters, counted by code point. */
 function cut(text: string, limit: number): string {
   if (text.length <= limit) return text;
   return Array.from(text).slice(0, limit).join("");
+}
+
+/**
+ * The files bun named under `# Unhandled error between tests`, read from its
+ * console in either wire form, each mapped to the failure of the one case its
+ * load error is filed as, in the order bun named the files.
+ *
+ * A file header is a flush-left `<path>:` whose path ends in a JS/TS module
+ * extension; an `error:` line never is one. A block is the lines between the
+ * two rules under the marker, and belongs to the file whose header was read
+ * last; a block before any header belongs to no file. The message is the
+ * first block's `error:` line without its label (`unhandled error between
+ * tests` when it has none), cut at 1000 characters; the trace is every block
+ * for that file (each block's lines joined by "\n", the blocks by "\n\n",
+ * trimmed), cut at 8000. Everything kept is free of SGR escapes. These are
+ * the rules the bun client read load errors by, before the board read them.
+ */
+export function parseBunLoadErrors(consoleText: string): Record<string, BunConsoleDetail> {
+  const errors = new Map<string, string[][]>();
+  let current: string | undefined; // the file whose header was read last
+  let block: string[] | undefined; // the lines of the block being read
+  let opened = false; // the block's opening rule is behind us
+  for (const line of splitLines(consoleText)) {
+    const plain = rstrip(stripAnsi(line));
+    if (block !== undefined) {
+      if (BLOCK_RULE.test(strip(plain))) {
+        if (!opened) {
+          opened = true;
+          continue;
+        }
+        if (current !== undefined) {
+          const blocks = errors.get(current);
+          if (blocks === undefined) errors.set(current, [block]);
+          else blocks.push(block);
+        }
+        block = undefined;
+        opened = false;
+        continue;
+      }
+      if (opened) block.push(plain);
+      continue;
+    }
+    if (strip(plain) === UNHANDLED_MARKER) {
+      block = [];
+      opened = false;
+      continue;
+    }
+    const header = FILE_HEADER.exec(plain);
+    if (header !== null && !plain.startsWith("error:")) current = header.groups?.["path"];
+  }
+  const read: Record<string, BunConsoleDetail> = {};
+  for (const [path, blocks] of errors) {
+    const errorLine = (blocks[0] ?? []).find((text) => text.startsWith("error:"));
+    const message = errorLine === undefined ? "" : strip(errorLine.slice("error:".length));
+    const trace = strip(blocks.map((b) => strip(b.join("\n"))).join("\n\n"));
+    const failure: BunConsoleDetail = { message: cut(message || LOAD_ERROR_FALLBACK, MESSAGE_LIMIT) };
+    if (trace.length > 0) failure.trace = cut(trace, TRACE_LIMIT);
+    read[path] = failure;
+  }
+  return read;
 }
 
 /**

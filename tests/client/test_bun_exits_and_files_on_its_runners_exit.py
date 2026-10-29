@@ -375,21 +375,20 @@ class RawRouteWithNoBoardShowsNoFiguresTest(_FakeRunnerProject, unittest.TestCas
 
     def test_a_declared_raw_report_target_with_no_board_shows_null_counts_and_exits_non_zero(self):
         result = self.drive("e2e", "raw-route-no-board", FAKE_EXIT="0")
-        self.assertIn("ingest playwright: ok=False", result.stderr,
-                      f"fixture guard: the run went the raw route and its "
-                      f"ingest reached no board; {_diagnostics(result)}")
         envelope = self.envelope_of(result)
-        run = envelope.get("run")
-        self.assertIsInstance(run, dict,
-                              f"the envelope still carries its `run` block; "
+        self.assertIs(envelope.get("ok"), False,
+                      f"a run that reached no board is not filed; "
+                      f"{_diagnostics(result)}")
+        self.assertIsInstance(envelope.get("error"), str,
+                              f"the envelope says why the run was not filed; "
                               f"{_diagnostics(result)}")
-        run = run or {}
+        run = envelope.get("run") if isinstance(envelope.get("run"), dict) else {}
+        figures = {key: run[key] for key in ("passed", "failed", "pending", "total")
+                   if isinstance(run.get(key), int)}
         self.assertEqual(
-            {key: run.get(key, "<absent>")
-             for key in ("passed", "failed", "pending", "total")},
-            {"passed": None, "failed": None, "pending": None, "total": None},
+            figures, {},
             f"no board decoded the report, so the envelope states no figures "
-            f"— null, never 0; run={run!r}")
+            f"— never 0; run={run!r}")
         self.assertNotEqual(result.returncode, 0,
                             f"a run that reached no board never exits green; "
                             f"{_diagnostics(result)}")
@@ -418,6 +417,8 @@ class RunnerExitReachesTheIngestTest(_FakeRunnerProject, unittest.TestCase):
             f"[client]\nurl = {json.dumps(self.board.url)}\n")
 
     def the_one_ingest(self, path, result):
+        self.assertEqual([p for p, _b in self.board.posts() if p == PARSED_INGEST], [],
+                         f"bun never posts to {PARSED_INGEST}; {_diagnostics(result)}")
         bodies = [b for p, b in self.board.posts() if p == path]
         self.assertEqual(len(bodies), 1,
                          f"exactly one {path} ingest; posts={self.board.posts()!r} "
@@ -433,23 +434,23 @@ class RunnerExitReachesTheIngestTest(_FakeRunnerProject, unittest.TestCase):
         self.assertIs(type(body["runnerExit"]), int,
                       "runnerExit is sent as an integer, never a string or bool")
 
-    def test_a_clean_test_run_sends_runner_exit_0_on_the_parsed_ingest(self):
+    def test_a_clean_test_run_sends_runner_exit_0_on_the_runs_ingest(self):
         result = self.drive("test", "runner-exit-carry-clean", FAKE_EXIT="0")
-        self.assert_runner_exit(self.the_one_ingest(PARSED_INGEST, result), 0)
+        self.assert_runner_exit(self.the_one_ingest(RAW_INGEST, result), 0)
 
-    def test_a_test_runner_exiting_1_sends_runner_exit_1_on_the_parsed_ingest(self):
+    def test_a_test_runner_exiting_1_sends_runner_exit_1_on_the_runs_ingest(self):
         result = self.drive("test", "runner-exit-carry-test", FAKE_EXIT="1")
-        self.assert_runner_exit(self.the_one_ingest(PARSED_INGEST, result), 1)
+        self.assert_runner_exit(self.the_one_ingest(RAW_INGEST, result), 1)
 
-    def test_a_regression_runner_exiting_1_sends_runner_exit_1_on_the_parsed_ingest(self):
+    def test_a_regression_runner_exiting_1_sends_runner_exit_1_on_the_runs_ingest(self):
         result = self.drive("regression", "runner-exit-carry-regression",
                             FAKE_EXIT="1")
-        self.assert_runner_exit(self.the_one_ingest(PARSED_INGEST, result), 1)
+        self.assert_runner_exit(self.the_one_ingest(RAW_INGEST, result), 1)
 
     def test_a_runner_killed_by_sigkill_sends_runner_exit_137(self):
         result = self.drive("test", "runner-exit-carry-sigkill",
                             FAKE_SIGNAL="KILL")
-        self.assert_runner_exit(self.the_one_ingest(PARSED_INGEST, result),
+        self.assert_runner_exit(self.the_one_ingest(RAW_INGEST, result),
                                 128 + int(signal.SIGKILL))
 
     def test_a_declared_e2e_target_exiting_1_sends_runner_exit_1_on_the_raw_ingest(self):
@@ -463,7 +464,7 @@ class RunnerExitReachesTheIngestTest(_FakeRunnerProject, unittest.TestCase):
     def test_a_refused_ingest_after_a_clean_test_runner_exits_non_zero(self):
         self.board.refuse_ingest_for("run-live-1")
         result = self.drive("test", "runner-exit-refused-test", FAKE_EXIT="0")
-        self.the_one_ingest(PARSED_INGEST, result)
+        self.the_one_ingest(RAW_INGEST, result)
         self.assertNotEqual(result.returncode, 0,
                             f"a refused ingest never exits green; "
                             f"{_diagnostics(result)}")
@@ -472,7 +473,7 @@ class RunnerExitReachesTheIngestTest(_FakeRunnerProject, unittest.TestCase):
         self.board.refuse_ingest_for("run-live-1")
         result = self.drive("regression", "runner-exit-refused-regression",
                             FAKE_EXIT="0")
-        self.the_one_ingest(PARSED_INGEST, result)
+        self.the_one_ingest(RAW_INGEST, result)
         self.assertNotEqual(result.returncode, 0,
                             f"a refused ingest never exits green; "
                             f"{_diagnostics(result)}")
