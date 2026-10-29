@@ -9,8 +9,9 @@ scratch unittest project that holds three passing tests and one failing test,
 its own `.env`, and a project `crucible.toml` whose `[client] url` names a
 `RecordingBoard` on a free loopback port. Never the live board.
 
-What the board recorded is the observable outcome: the `summary` of the
-parsed ingest (`/api/v2/runs/parsed`) and the absence of any compile ingest
+What the board received is the observable outcome: the runner's JUnit
+reports the one `/api/v2/runs` ingest carried, read as the board's `junit`
+codec reads them (`junit_sent`), and the absence of any compile ingest
 (`/api/v2/runs/compile`). A relative project dir that is kept relative sends
 the runner's reports to a directory the client never reads, and the run is
 filed as a compile failure; the gate's py_compile step fails the same way.
@@ -29,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.client.live_run_harness import (  # noqa: E402
     RecordingBoard,
     install_project,
+    junit_sent,
     scrubbed_env,
 )
 
@@ -40,7 +42,7 @@ AGENT = "relative-project-dir-agent"
 PROJECT_KEY = "relative-project-dir-run-key"
 PROJECT_NAME = "scratch-project"
 
-PARSED = "/api/v2/runs/parsed"
+RUNS = "/api/v2/runs"
 COMPILE = "/api/v2/runs/compile"
 
 EXPECTED_PASSED = 3
@@ -91,11 +93,12 @@ class _Run:
         return [body for p, body in self.board.posts() if p == path]
 
     def filed_counts(self):
-        """`(passed, failed)` of every parsed ingest the board received."""
-        return [((body or {}).get("summary") or {}).get("passed")
-                for body in self.posts_to(PARSED)], \
-               [((body or {}).get("summary") or {}).get("failed")
-                for body in self.posts_to(PARSED)]
+        """`(passed, failed)` of the reports every `/api/v2/runs` ingest
+        the board received carried (`junit_sent`)."""
+        read = [(junit_sent(body) or {}).get("summary") or {}
+                for body in self.posts_to(RUNS)]
+        return ([summary.get("passed") for summary in read],
+                [summary.get("failed") for summary in read])
 
 
 class RunFromTheParentWithARelativeProjectDirTest(unittest.TestCase):
