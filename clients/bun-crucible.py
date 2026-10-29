@@ -1769,6 +1769,18 @@ def cmd_history(args):
     Delegates to the shared implementation."""
     return _axi().cmd_history(args, _resolve_project_dir(args.project_dir), _ops())
 
+
+def cmd_runs(args):
+    """List a cycle's or a release's stored test and compile runs
+    (read-only, no --agent). Delegates to the shared implementation."""
+    return _axi().cmd_runs(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_run(args):
+    """Show one stored test or compile run of this project (read-only, no
+    --agent). Delegates to the shared implementation."""
+    return _axi().cmd_run(args, _resolve_project_dir(args.project_dir), _ops())
+
 def cmd_project_meta(args):
     """§S4 — a project's metadata map: a read (GET …/metadata, no
     --agent) or, with --set/--unset, a write (PATCH …/metadata, --agent
@@ -2639,6 +2651,11 @@ def main():
     # SHARED registrar for the same reason; only `--project-dir` is this
     # client's own. No --agent: `next` is read-only (§S4).
     _axi().add_next_verb(sub, cmd_next, add_args=(_add_project_dir_arg,))
+
+    # The stored-run READ verbs, built by the shared registrar; only this
+    # client's project-dir argument is its own. No --agent: both are read-only.
+    _axi().add_run_read_verbs(sub, {"runs": cmd_runs, "run": cmd_run},
+                              add_args=(_add_project_dir_arg,))
 
     # ── CR-CRU-075 §S1 — the queue REGISTRATION verb through the shared
     # registrar, so five clients cannot fork one verb's flag surface. No
