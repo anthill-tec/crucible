@@ -3,8 +3,9 @@
 On the default path -- no declared test script -- the bun client's `test` verb
 runs `bun test`. `--name <pattern>` is a regular expression handed to it
 unchanged as `-t <pattern>`. Bun reports every test the filter excludes as
-`<skipped/>`, and the client files those as pending, exactly as the runner
-reported them. The envelope's `name` field names the filter.
+`<skipped/>`, and the client sends that report as it stands
+(`POST /api/v2/runs`) for the board to file them as pending. The envelope's
+`name` field names the filter.
 
 A filtered run in which nothing passed and nothing failed ran nothing: it is
 aborted rather than filed, the envelope reads `ok: false`, the command exits 1,
@@ -49,6 +50,7 @@ TIMEOUT = 120
 AGENT = "name-filter-fixture-agent"
 PROJECT_KEY = "name-filter-fixture-key"
 PARSED_INGEST = "/api/v2/runs/parsed"
+RUNS_INGEST = "/api/v2/runs"
 START = "/api/v2/runs/start"
 
 _CLIENT_RESOLUTION_KEYS = ("BUN_CRUCIBLE_PACKAGE_DIR", "BUN_CRUCIBLE_PROJECT_DIR",
@@ -127,10 +129,6 @@ def _envelope(stdout):
     return decoded.get("axi") if isinstance(decoded, dict) else None
 
 
-def _leaf_statuses(tree):
-    return {leaf.get("name"): leaf.get("status")
-            for suite in tree or [] for leaf in suite.get("children") or []}
-
 
 class _RealBunCase(unittest.TestCase):
     """The scratch package, the real `bun`, and a recording board."""
@@ -160,6 +158,9 @@ class _RealBunCase(unittest.TestCase):
     def parsed_ingests(self):
         return [body for path, body in self.board.posts() if path == PARSED_INGEST]
 
+    def runs_ingests(self):
+        return [body for path, body in self.board.posts() if path == RUNS_INGEST]
+
     @staticmethod
     def diagnostics(result):
         return (f"exit={result.returncode} stdout={result.stdout!r} "
@@ -170,23 +171,34 @@ class NameFilterOnTheDefaultBunTestPathTest(_RealBunCase):
     """`test --name <pattern>` on a two-test file with one match files
     1 passed and 1 pending, and the envelope names the filter."""
 
+    def drive_filtered(self, *extra):
+        # The board decodes the report the client sends; the run block it
+        # answers is the one the report bun wrote decodes to.
+        self.board.script_run(passed=1, failed=0, pending=1, total=2, files=1)
+        return self.drive(*extra)
+
     def assert_one_passed_one_pending(self, result):
-        ingests = self.parsed_ingests()
+        self.assertEqual(self.parsed_ingests(), [],
+                         f"the run is never filed on the parsed route; "
+                         f"{self.diagnostics(result)}")
+        ingests = self.runs_ingests()
         self.assertEqual(
             len(ingests), 1,
             f"the filtered run must be filed exactly once; "
             f"{self.diagnostics(result)}")
         body = ingests[0]
-        summary = body.get("summary") or {}
-        self.assertEqual(
-            (summary.get("passed"), summary.get("pending"),
-             summary.get("failed"), summary.get("total")),
-            (1, 1, 0, 2),
-            f"only the matching test runs (1 passed); the one the filter "
-            f"excluded is filed as pending; summary={summary!r}")
-        self.assertEqual(
-            _leaf_statuses(body.get("tree")), {ALPHA: "pass", BETA: "pending"},
-            f"tree={body.get('tree')!r}")
+        self.assertEqual(body.get("codec"), "junit", f"body={body!r}")
+        reports = body.get("data") or []
+        self.assertEqual(len(reports), 1, f"one JUnit report is sent; body={body!r}")
+        report = reports[0] if reports else ""
+        # The report bun wrote, sent as it stands: the matching test ran, and
+        # the one the filter excluded is a skipped case for the board to file
+        # as pending.
+        self.assertRegex(report, r'<testcase[^>]*name="' + ALPHA + r'"[^>]*/?>',
+                         f"report={report!r}")
+        beta = report[report.find(BETA):]
+        self.assertRegex(beta.split("</testcase>")[0], r"<skipped",
+                         f"the excluded test is a skipped case; report={report!r}")
         self.assertNotIn(
             "tier", body,
             f"a `test` run claims no tier, filtered or not; body={body!r}")
@@ -204,11 +216,12 @@ class NameFilterOnTheDefaultBunTestPathTest(_RealBunCase):
                          (1, 1, 0), f"envelope run={run!r}")
 
     def test_a_targeted_run_filtered_by_name_files_one_passed_and_one_pending(self):
-        result = self.drive("--tests", "pair.test.ts", "--name", MATCHING_PATTERN)
+        result = self.drive_filtered("--tests", "pair.test.ts", "--name",
+                                     MATCHING_PATTERN)
         self.assert_one_passed_one_pending(result)
 
     def test_a_whole_suite_run_filtered_by_name_files_one_passed_and_one_pending(self):
-        result = self.drive("--name", MATCHING_PATTERN)
+        result = self.drive_filtered("--name", MATCHING_PATTERN)
         self.assert_one_passed_one_pending(result)
 
 
@@ -234,7 +247,7 @@ class NameFilterMatchingNothingAbortsTheRunTest(_RealBunCase):
             f"envelope={envelope!r}")
 
         self.assertEqual(
-            self.parsed_ingests(), [],
+            self.parsed_ingests() + self.runs_ingests(), [],
             f"a run that ran nothing is never filed -- two skipped tests are "
             f"not a green run; posts={self.board.posts()!r}")
         started = [p for p, _ in self.board.posts() if p == START]
