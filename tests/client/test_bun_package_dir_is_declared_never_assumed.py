@@ -277,11 +277,18 @@ class DeclaredPackageDirIsWhereEveryVerbRunsTest(_PackageDirCase):
                              "--project-dir", self.project])
         self.assertEqual(result.returncode, 0,
                          f"stdout={result.stdout!r} stderr={result.stderr[-1500:]!r}")
-        ingests = [json.dumps(body) for path, body in self.board.posts()
-                   if path == "/api/v2/runs/parsed"]
-        self.assertEqual(len(ingests), 1, f"exactly one ingest; got {ingests!r}")
-        self.assertIn("declared_package_case", ingests[0])
-        self.assertNotIn("project_root_decoy_case", ingests[0])
+        ingests = [body for path, body in self.board.posts()
+                   if path == "/api/v2/runs"]
+        self.assertEqual(len(ingests), 1,
+                         f"exactly one ingest, at /api/v2/runs; "
+                         f"posts={self.board.posts()!r}")
+        self.assertEqual(
+            ingests[0].get("data"), [_junit("declared_package_case")],
+            f"the ingest sends the report found under the declared package "
+            f"dir, inline, never the project root's decoy; body={ingests[0]!r}")
+        self.assertNotIn("project_root_decoy_case", json.dumps(ingests[0]))
+        self.assertNotIn("/api/v2/runs/parsed",
+                         [path for path, _ in self.board.posts()])
 
     def test_pre_merge_gate_runs_its_check_and_regression_in_the_declared_package_dir(self):
         # No `test:*` script, so the gate is its tsc step plus its own
