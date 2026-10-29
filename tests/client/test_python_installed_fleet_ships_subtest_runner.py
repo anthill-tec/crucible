@@ -35,7 +35,7 @@ REAL_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "tests" / "client"))
-from live_run_harness import RecordingBoard, install_project  # noqa: E402
+from live_run_harness import RecordingBoard, install_project, junit_sent  # noqa: E402
 
 RUNNER_MODULE_FILENAME = "subtest_runner.py"
 CLIENTS_DIRNAME = "clients"
@@ -107,10 +107,15 @@ def _run_main(module, argv):
     return code, stdout.getvalue(), stderr.getvalue()
 
 
-def _last_parsed_payload(board):
-    parsed = [body for path, body in board.posts() if path == "/api/v2/runs/parsed"]
-    assert parsed, f"no /api/v2/runs/parsed POST observed; posts={board.posts()!r}"
-    return parsed[-1]
+def _last_sent_report(board):
+    """The run's last `/api/v2/runs` ingest, its JUnit report texts read as
+    the board's `junit` codec reads them (`junit_sent`): the client sends
+    the runner's reports and counts nothing itself."""
+    sent = [body for path, body in board.posts() if path == "/api/v2/runs"]
+    assert sent, f"no /api/v2/runs POST observed; posts={board.posts()!r}"
+    read = junit_sent(sent[-1])
+    assert read is not None, f"the ingest is not a junit one; body={sent[-1]!r}"
+    return read
 
 
 class _InstalledFleetCase(unittest.TestCase):
@@ -198,7 +203,7 @@ class InstalledPythonClientRunsASubtestFixtureWithCorrectTotalsTest(_InstalledFl
                 "--python", str(REAL_VENV_PYTHON)]
         _code, _out, err = _run_main(installed_module, argv)
 
-        payload = _last_parsed_payload(board)
+        payload = _last_sent_report(board)
         summary = payload["summary"]
         self.assertEqual(
             summary["total"], 4,
