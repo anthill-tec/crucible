@@ -468,6 +468,19 @@ _JUNIT_SUITE_ONE_PASS = (
     '<testcase classname="TierProbeTest" name="probe" time="0.001"/>'
     '</testsuite>'
 )
+# CR-CRU-215 §S1 — the nextest report the fake `cargo` writes during a rust
+# workspace run, handed to it through FAKE_CARGO_JUNIT_CONTENT. Its counts
+# (3 run, 2 passed, 1 failed) are distinct from every other fixture here, so a
+# filed run carrying them can only have read the report the fake wrote.
+_NEXTEST_JUNIT_TWO_PASS_ONE_FAIL = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<testsuites><testsuite name="probe-crate::tier" tests="3" failures="1" errors="0">'
+    '<testcase classname="probe-crate::tier" name="adds" time="0.001"/>'
+    '<testcase classname="probe-crate::tier" name="subtracts" time="0.001"/>'
+    '<testcase classname="probe-crate::tier" name="divides" time="0.001">'
+    '<failure message="boom">boom</failure></testcase>'
+    '</testsuite></testsuites>'
+)
 
 # `bun`: writes FAKE_BUN_JUNIT_CONTENT to --reporter-outfile= (empty content =
 # the no-XML collection failure), and answers `bun x tsc --noEmit` as a failing
@@ -549,9 +562,25 @@ if code:
 sys.exit(code)
 """
 
+# CR-CRU-215 §S1 — opt-in: with FAKE_CARGO_JUNIT_CONTENT set, a call naming
+# `nextest` writes that content to `target/nextest/<-P profile>/junit.xml` under
+# the working directory during the run, the shape `_RECORDING_CARGO` in
+# test_rust_regression_coverage_is_opt_in.py has. Unset, nothing is written.
 _FAKE_CARGO = """#!{python}
 import os
 import sys
+
+_args = sys.argv[1:]
+_junit = os.environ.get("FAKE_CARGO_JUNIT_CONTENT")
+if _junit is not None and "nextest" in _args:
+    _profile = "default"
+    for _i, _a in enumerate(_args):
+        if _a == "-P" and _i + 1 < len(_args):
+            _profile = _args[_i + 1]
+    _junit_dir = os.path.join(os.getcwd(), "target", "nextest", _profile)
+    os.makedirs(_junit_dir, exist_ok=True)
+    with open(os.path.join(_junit_dir, "junit.xml"), "w") as _handle:
+        _handle.write(_junit)
 
 code = int(os.environ.get("FAKE_CARGO_EXIT_CODE", "0"))
 if code:
@@ -680,6 +709,7 @@ _ENV_KEYS = (
     "FAKE_BUN_JUNIT_CONTENT", "FAKE_BUN_EXIT_CODE", "FAKE_BUN_OUTPUT",
     "FAKE_PY_JUNIT_CONTENT", "FAKE_PY_EXIT_CODE", "FAKE_PY_OUTPUT",
     "FAKE_MVN_EXIT_CODE", "FAKE_CARGO_EXIT_CODE", "FAKE_MAKE_EXIT_CODE",
+    "FAKE_CARGO_JUNIT_CONTENT",
     "BUN_CRUCIBLE_PROJECT_DIR", "BUN_CRUCIBLE_PACKAGE_DIR",
     "BUN_CRUCIBLE_NO_LIFECYCLE",
     "PY_CRUCIBLE_PROJECT_DIR", "PY_CRUCIBLE_PYTHON",
@@ -1191,11 +1221,33 @@ class RustEarnedTierTest(_RustCase):
 
     def test_rust_regression_ingests_the_workspace_run_as_regression(self):
         """§S2's converse, rust `_workspace_regression_run` — the tier verb's
-        own body."""
-        self.write_nextest_junit()
+        own body.
+
+        CR-CRU-215 §S1/AC1/AC2 — the report this run files is the run's own:
+        the fake `cargo` writes `target/nextest/ci/junit.xml` on its `nextest`
+        call, from FAKE_CARGO_JUNIT_CONTENT, and nothing is placed there before
+        the client starts (CR-CRU-212's `_written_since` refuses a report older
+        than the run's start, to the whole second). The filed run carries that
+        report's counts."""
+        report = Path(self.tmpdir, "target", "nextest", "ci", "junit.xml")
+        os.environ["FAKE_CARGO_JUNIT_CONTENT"] = _NEXTEST_JUNIT_TWO_PASS_ONE_FAIL
+        self.assertFalse(
+            report.exists(),
+            f"AC2 — nothing may exist at {report} when the client is started; "
+            f"the report must be written by the fake `cargo` during the run.")
         drive = self.drive_with_real_std(self.rust_argv("regression", (), crate=False))
         self.assertStatedTier(drive, PARSED, "regression",
                               "rust regression -> POST /runs/parsed")
+        payload = self._ingest_payload(drive, PARSED,
+                                       "rust regression -> POST /runs/parsed")
+        summary = payload.get("summary") or {}
+        self.assertEqual(
+            {k: summary.get(k) for k in ("total", "passed", "failed", "pending")},
+            {"total": 3, "passed": 2, "failed": 1, "pending": 0},
+            f"AC2 — the filed run must carry the counts of the report the fake "
+            f"`cargo` wrote (3 run, 2 passed, 1 failed); summary={summary!r}")
+        self.assertEqual(len(drive.payloads(PARSED)), 1,
+                         f"exactly one ingest per run; paths={drive.paths()!r}")
 
     def test_rust_regression_ingest_carries_the_per_crate_regression_tier(self):
         """§S2's converse, rust `_regression_ingest_run` — the per-crate body,
