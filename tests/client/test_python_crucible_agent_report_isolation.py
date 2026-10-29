@@ -39,6 +39,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.live_run_harness import get_answering_health, junit_sent
 from tests.client.test_client_fleet_envelope_census import install_project_limits
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -52,8 +53,8 @@ class FixtureTest(unittest.TestCase):
         self.assertTrue(True)
 """
 
-# A hand-written JUnit fixture in the bare `<testsuite>` shape `_parse_junit_dir`
-# accepts (xmlrunner's own shape) -- used to plant "already there before this
+# A hand-written JUnit fixture in the bare `<testsuite>` shape xmlrunner
+# writes -- used to plant "already there before this
 # run" files a real run never wrote, so a test can prove whether the client
 # read/cleared them without needing a second real subprocess run per case.
 def _junit_suite(name, failures, testcase_name):
@@ -105,6 +106,15 @@ def _post_call_for_path(post_mock, path):
     return None
 
 
+def _sent_summary(call):
+    """`{total, passed, failed, pending}` over the JUnit report texts one
+    `/api/v2/runs` POST carried, read as the board's `junit` codec reads
+    them -- the client parses none of them."""
+    read = junit_sent(call[0][1]) if call is not None else None
+    assert read is not None, f"not a junit ingest: {call!r}"
+    return read["summary"]
+
+
 def _files_under(root):
     """Every file path under `root`, relative to it, sorted -- an empty list
     when `root` does not exist."""
@@ -150,7 +160,7 @@ class _BaseIsolationTest(unittest.TestCase):
         argv += list(extra)
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
-             mock.patch.object(self.module, "_get", return_value={"ok": False},
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
                                 create=True):
             code, out, err = _run_main(self.module, argv)
         return code, out, err, post_mock
@@ -179,10 +189,10 @@ class AgentDefaultDirectoryTest(_BaseIsolationTest):
             f"top level when an agent id is given; found {shared_root_files!r}",
         )
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, "the real unittest run must be ingested")
         assert ingest_call is not None
-        summary = ingest_call[0][1]["summary"]
+        summary = _sent_summary(ingest_call)
         self.assertEqual(summary["passed"], 1)
         self.assertEqual(summary["failed"], 0)
 
@@ -210,9 +220,9 @@ class AgentDirectoryIsolationTest(_BaseIsolationTest):
             "nor cleared by alpha's wipe",
         )
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         assert ingest_call is not None
-        summary = ingest_call[0][1]["summary"]
+        summary = _sent_summary(ingest_call)
         self.assertEqual(
             summary["failed"], 0,
             f"agent-alpha's ingested summary must reflect ONLY its own real "
@@ -231,9 +241,9 @@ class AgentDirectoryIsolationTest(_BaseIsolationTest):
         code, _out, err, post_mock = self._run_test_verb(agent="agent-alpha")
         self.assertEqual(code, 0, f"stderr={err!r}")
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         assert ingest_call is not None
-        summary = ingest_call[0][1]["summary"]
+        summary = _sent_summary(ingest_call)
         self.assertEqual(
             (summary["passed"], summary["failed"], summary["total"]), (1, 0, 1),
             f"the stale planted failures (42) must be GONE from the ingested "
@@ -258,7 +268,9 @@ class AgentDirectorySurvivesTest(_BaseIsolationTest):
 
         own_dir = os.path.join(self.tmpdir, "test-reports", "agent-alpha")
         self.assertTrue(os.path.isdir(own_dir), f"{own_dir} must still exist")
-        summary, _tree, _files = self.module._parse_junit_dir(own_dir)
+        reports = [Path(own_dir, name).read_text() for name in sorted(os.listdir(own_dir))
+                   if name.startswith("TEST-") and name.endswith(".xml")]
+        summary = junit_sent({"codec": "junit", "data": reports})["summary"]
         self.assertEqual(
             (summary["passed"], summary["failed"]), (1, 0),
             "the surviving directory must hold THIS run's real results",
@@ -300,7 +312,7 @@ class UnchangedLocationsTest(_BaseIsolationTest):
             f"an explicit --reports must not be nested by agent id; "
             f"{nested_under_agent} must not exist",
         )
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call)
 
     def test_auto_ingest_with_an_explicit_reports_dir_reads_exactly_that_directory(self):
@@ -311,7 +323,7 @@ class UnchangedLocationsTest(_BaseIsolationTest):
 
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
-             mock.patch.object(self.module, "_get", return_value={"ok": False},
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
                                 create=True):
             code, _out, err = _run_main(self.module, [
                 "auto-ingest", "--project-dir", self.tmpdir,
@@ -319,10 +331,10 @@ class UnchangedLocationsTest(_BaseIsolationTest):
             ])
         self.assertEqual(code, 0, f"stderr={err!r}")
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, "auto-ingest must ingest the given directory")
         assert ingest_call is not None
-        summary = ingest_call[0][1]["summary"]
+        summary = _sent_summary(ingest_call)
         self.assertEqual(
             (summary["total"], summary["failed"]), (1, 1),
             f"auto-ingest with an explicit --reports must read EXACTLY the "
@@ -365,7 +377,7 @@ class RegressionCoverageFollowsTheAgentTest(_BaseIsolationTest):
         self._write_coverage_fixture()
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
-             mock.patch.object(self.module, "_get", return_value={"ok": False},
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
                                 create=True):
             code, _out, err = _run_main(self.module, [
                 "regression", "--project-dir", self.tmpdir, "--python", sys.executable,
@@ -400,18 +412,20 @@ class RegressionCoverageFollowsTheAgentTest(_BaseIsolationTest):
             "the derived coverage.lcov must NOT be left at the project root",
         )
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call)
         assert ingest_call is not None
         payload = ingest_call[0][1]
         coverage = payload.get("coverage")
-        self.assertIsNotNone(coverage, "a --coverage run must ingest a coverage object")
-        self.assertGreater(
-            coverage["lines"]["total"], 0,
-            f"the ingested coverage must reflect the REAL run over "
-            f"covfixturepkg, not an empty/absent measurement; got "
-            f"coverage={coverage!r}",
-        )
+        self.assertEqual((coverage or {}).get("codec"), "lcov",
+                         f"a --coverage run must send its lcov report; "
+                         f"coverage={coverage!r}")
+        lcov = "".join((coverage or {}).get("data") or [])
+        self.assertIn("SF:", lcov, f"coverage={coverage!r}")
+        self.assertIn("covfixturepkg", lcov,
+                      f"the lcov report sent must reflect the REAL run over "
+                      f"covfixturepkg, not an empty/absent measurement; got "
+                      f"coverage={coverage!r}")
 
 
 class ReportsHelpTextTest(_BaseIsolationTest):
