@@ -42,8 +42,9 @@ nothing:
          census finds twelve unearned literal sites today: bun `cmd_test`
          (`/runs/start`, `/runs/parsed`), bun `cmd_auto_ingest` (`e2e`), mvn
          `cmd_test` (`/runs`, `/runs/parsed`), mvn `cmd_auto_ingest` (`/runs`,
-         `/runs/parsed` `regression`), python `cmd_test` (`/runs/parsed`,
-         `/runs/compile`), python `cmd_auto_ingest`, rust `cmd_test` and rust
+         `/runs/parsed` `regression`), python `cmd_test` (`/runs/parsed`, since
+         CR-CRU-204 `/runs`, and `/runs/compile`), python `cmd_auto_ingest`,
+         rust `cmd_test` and rust
          `cmd_auto_ingest`.
   RED  `UnearnedTierLiteralCensusTest.
          test_no_client_stamps_a_tier_its_own_verb_did_not_earn` — the derived
@@ -423,9 +424,9 @@ SITES_DRIVEN_ON_THE_WIRE = frozenset({
     ("mvn", "cmd_test", "unit", PARSED),
     ("mvn", "cmd_auto_ingest", "unit", RUNS),
     ("mvn", "cmd_auto_ingest", "regression", PARSED),
-    ("python", "cmd_test", "unit", PARSED),
+    ("python", "cmd_test", "unit", RUNS),
     ("python", "cmd_test", "unit", COMPILE),
-    ("python", "cmd_auto_ingest", "unit", PARSED),
+    ("python", "cmd_auto_ingest", "unit", RUNS),
     ("rust", "cmd_test", "unit", RUNS),
     ("rust", "cmd_auto_ingest", "unit", RUNS),
     # AC15/AC13(ii) — arduino's two, added at cycle 385. They belong in this
@@ -990,16 +991,16 @@ class MvnUnearnedTierTest(_MvnCase):
 
 
 class PythonUnearnedTierTest(_PythonCase):
-    """RED — `python-crucible.py` `cmd_test` (its `/runs/parsed` and
+    """RED — `python-crucible.py` `cmd_test` (its `/runs` and
     `/runs/compile` calls) and `cmd_auto_ingest`."""
 
     def test_python_test_ingests_the_run_without_claiming_a_tier(self):
-        """AC3, python `cmd_test`'s `/runs/parsed` call — `--tests
+        """AC3, python `cmd_test`'s `/runs` call (the shared ingest) — `--tests
         tests.whatever` says nothing about the dependency that target takes."""
         os.environ["FAKE_PY_JUNIT_CONTENT"] = _JUNIT_SUITE_ONE_PASS
         drive = self.drive(self.py_argv(
             "test", ["--tests", "tests.probe", "--python", _fake("fake-python-runner")]))
-        self.assertNoStatedTier(drive, PARSED, "python cmd_test -> POST /runs/parsed")
+        self.assertNoStatedTier(drive, RUNS, "python cmd_test -> POST /runs")
 
     def test_python_test_collection_failure_claims_no_tier(self):
         """AC3, python `cmd_test`'s `/runs/compile` call — the no-XML fallback
@@ -1014,8 +1015,8 @@ class PythonUnearnedTierTest(_PythonCase):
         """AC3's auto-ingest clause, python `cmd_auto_ingest`."""
         self.write_py_reports()
         drive = self.drive(self.py_argv("auto-ingest"))
-        self.assertNoStatedTier(drive, PARSED,
-                                "python cmd_auto_ingest -> POST /runs/parsed")
+        self.assertNoStatedTier(drive, RUNS,
+                                "python cmd_auto_ingest -> POST /runs")
 
 
 class RustUnearnedTierTest(_RustCase):
@@ -1102,8 +1103,8 @@ class PythonEarnedTierTest(_PythonCase):
         drive = self.drive(self.py_argv(
             "regression", ["--python", _fake("fake-python-runner"),
                            "--start-dir", "tests", "--pattern", "test_*.py"]))
-        self.assertStatedTier(drive, PARSED, "regression",
-                              "python regression -> POST /runs/parsed")
+        self.assertStatedTier(drive, RUNS, "regression",
+                              "python regression -> POST /runs")
 
 
 class MvnEarnedTierTest(_MvnCase):
