@@ -217,6 +217,26 @@ class FilteredRunThroughARawReportScriptTest(_DeclaredScriptCase):
                                        "reportPath": {RAW_SCRIPT: f"env:{JUNIT_VAR}"},
                                        "rawReport": {RAW_SCRIPT: {"codec": "stub", "file": "stub.json",
                                                                   "path": f"env:{RAW_VAR}"}}}
+    # What the fake writes as the raw report: the text the ingest's `data`
+    # carries inline.
+    RAW_TEXT = "{}"
+
+    def setUp(self):
+        super().setUp()
+        # The shared ingest reads the board's health before it sends and
+        # refuses a codec the board does not decode: this board decodes the
+        # declared `stub` codec beside the clients' own.
+        health = self.board.default_health()
+        health["codecs"]["test"].append("stub")
+        self.board.script_health(health)
+
+    def assert_raw_report_sent_inline(self, body):
+        self.assertEqual(body.get("codec"), "stub", f"body={body!r}")
+        self.assertEqual(body.get("data"), [self.RAW_TEXT],
+                         f"the raw report's text rides inline as `data`; "
+                         f"body={body!r}")
+        self.assertNotIn("dataPath", body,
+                         f"a report travels inline, never as a path; body={body!r}")
 
     def assert_ran_through_the_script_with_both_report_variables(self, result):
         calls = self.bun_calls()
@@ -270,7 +290,7 @@ class FilteredRunThroughARawReportScriptTest(_DeclaredScriptCase):
         self.assertEqual(len(raw), 1,
                          f"the raw report is filed exactly once; "
                          f"posts={self.board.posts()!r}")
-        self.assertEqual(raw[0].get("codec"), "stub", f"body={raw[0]!r}")
+        self.assert_raw_report_sent_inline(raw[0])
         self.assertEqual(
             [p for p, _ in self.report_posts() if p != RAW_INGEST], [],
             f"a board-decoded report is never also filed parsed; "
@@ -302,6 +322,7 @@ class FilteredRunThroughARawReportScriptTest(_DeclaredScriptCase):
                          f"only a FILTERED run needs the JUnit count; an "
                          f"unfiltered one files its raw report once; "
                          f"posts={self.board.posts()!r}")
+        self.assert_raw_report_sent_inline(raw[0])
         self.assertEqual(self.board.aborts(), [],
                          f"posts={self.board.posts()!r}")
 
