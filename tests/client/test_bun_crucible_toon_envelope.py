@@ -48,10 +48,16 @@ either: `--bun` points at a tiny fake executable (same technique as
 `test_bun_crucible_lifecycle.py`) that copies a fixture JUnit XML to
 `--reporter-outfile=`.
 
+The ingest verbs file their reports through the shared ingest: the board's
+health is read first (the `_get` stubs answer it, `get_answering_health`),
+then ONE `POST /api/v2/runs` carries the report texts. The envelope's `run:`
+block is the board's answer's `run` block, so each ingest drive scripts that
+answer (`BOARD_RUN`) with figures the fixture report does not hold: an
+envelope that states the client's own count of its report is caught.
+
 Invocation:
-    python3 -m pytest tests/client/test_bun_crucible_toon_envelope.py -q
-Fallback:
-    python3 tests/client/test_bun_crucible_toon_envelope.py
+    python3 clients/python-crucible.py test \
+        --tests tests.client.test_bun_crucible_toon_envelope
 """
 
 import contextlib
@@ -69,6 +75,7 @@ from unittest import mock
 # CR-CRU-131 §S1b — the project fixture carries the `crucible.toml` an
 # installed project has; the fleet census owns that helper (one fixture shape
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
+from tests.client.live_run_harness import get_answering_health
 from tests.client.test_client_fleet_envelope_census import install_project_limits
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -81,6 +88,45 @@ PASS_JUNIT_XML = """<?xml version="1.0" encoding="UTF-8"?>
 </testsuite>
 </testsuites>
 """
+
+RUNS = "/api/v2/runs"
+PARSED = "/api/v2/runs/parsed"
+# The `run` block the scripted board answers the run ingest with. The fixture
+# report holds ONE passing case: three passed over two files is the board's
+# figure, never one the client could have counted from that report.
+BOARD_RUN = {"passed": 3, "failed": 0, "pending": 0, "total": 3, "files": 2}
+BOARD_RUN_ANSWER = {"ok": True, "changed": True, "run": BOARD_RUN}
+# The figures of the plain stderr line, read from that answer (CR-CRU-050
+# \u00a7S2: the line carries `pending`).
+BOARD_FIGURES_LINE = "passed=3 failed=0 pending=0 total=3"
+
+
+def _run_ingest_body(testcase, post_mock):
+    """The body of the run's ONE `POST /api/v2/runs`, after asserting nothing
+    went to the parsed route."""
+    paths = [(c[0][0] if c[0] else c[1].get("path")) for c in post_mock.call_args_list]
+    testcase.assertNotIn(PARSED, paths,
+                         f"the run's reports go to {RUNS}, never the parsed "
+                         f"route; posted {paths!r}")
+    testcase.assertEqual(paths.count(RUNS), 1,
+                         f"exactly one run ingest; posted {paths!r}")
+    for call in post_mock.call_args_list:
+        if (call[0][0] if call[0] else call[1].get("path")) == RUNS:
+            return call[0][1]
+    raise AssertionError("unreachable: the run ingest was counted above")
+
+
+def _assert_board_figures_line(testcase, err, out):
+    """The plain stderr ingest line states the board's figures (and `pending`),
+    and stays off stdout, the TOON channel."""
+    lines = [line for line in err.splitlines()
+             if "ok=True" in line and BOARD_FIGURES_LINE in line]
+    testcase.assertEqual(
+        len(lines), 1,
+        f"one stderr ingest line states the board's figures "
+        f"({BOARD_FIGURES_LINE!r}); stderr={err!r}")
+    testcase.assertNotIn(BOARD_FIGURES_LINE, out)
+
 
 FAIL_JUNIT_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <testsuites>
@@ -516,8 +562,9 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
         os.environ["FAKE_BUN_EXIT_CODE"] = "0"
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
-             mock.patch.object(self.module, "_get", create=True) as get_mock:
+        with mock.patch.object(self.module, "_post", return_value=BOARD_RUN_ANSWER) as post_mock, \
+             mock.patch.object(self.module, "_get", create=True,
+                               side_effect=get_answering_health()) as get_mock:
             code, out, err = _run_main(self.module, [
                 "test", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir, "--reports", "reports",
@@ -532,28 +579,25 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "test")
         self.assertIs(axi.get("ok"), True)
-        run = axi.get("run")
-        self.assertIsInstance(run, dict)
-        self.assertEqual(run.get("passed"), 1)
-        self.assertEqual(run.get("failed"), 0)
-        self.assertEqual(run.get("total"), 1)
+        self.assertEqual(
+            axi.get("run"), BOARD_RUN,
+            f"the envelope's run block is the board's answer's run block, its "
+            f"five counts; axi={axi!r}")
 
         context = axi.get("context")
         self.assertEqual(context.get("projectKey"), self.PROJECT_KEY)
         self.assertEqual(context.get("agentId"), "CR-CRU-013-C51-test")
         self.assertNotIn("cycleId", context)
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        self.assertIsNotNone(ingest_call)
-        self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}))
+        body = _run_ingest_body(self, post_mock)
+        self.assertEqual(body.get("data"), [PASS_JUNIT_XML], f"body={body!r}")
+        self.assertNotIn("cycleId", body.get("context", {}))
 
         self.assertEqual(axi.get("warnings"), [])
 
-        # CR-CRU-050 §S2 — the plain stderr line now also carries `pending`, so
-        # a line that omits a skip count can never be misread as summing.
-        legacy_line = "ingest: ok=True passed=1 failed=0 pending=0 total=1"
-        self.assertIn(legacy_line, err)
-        self.assertNotIn(legacy_line, out)
+        # CR-CRU-050 §S2 — the plain stderr line carries `pending`, so a line
+        # that omits a skip count can never be misread as summing.
+        _assert_board_figures_line(self, err, out)
 
     def test_test_command_envelope_echoes_the_cycle_the_SERVER_reported(self):
         """CR-CRU-056 C5 (VERIFY fix round): attachment is server-stamped, so
@@ -568,9 +612,10 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         answer."""
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
         os.environ["FAKE_BUN_EXIT_CODE"] = "0"
-        server_response = {"ok": True, "context": {"cycleId": 152}}
+        server_response = {**BOARD_RUN_ANSWER, "context": {"cycleId": 152}}
         with mock.patch.object(self.module, "_post", return_value=server_response) as post_mock, \
-             mock.patch.object(self.module, "_get", create=True) as get_mock:
+             mock.patch.object(self.module, "_get", create=True,
+                               side_effect=get_answering_health()) as get_mock:
             code, out, _err = _run_main(self.module, [
                 "test", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir, "--reports", "reports",
@@ -592,9 +637,8 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
             _plans_gets(get_mock), [],
             "the client-side active-cycle resolver is DELETED -- no plans lookup "
             "may run before an ingest; got %r" % (_plans_gets(get_mock),))
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        self.assertIsNotNone(ingest_call)
-        self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}))
+        body = _run_ingest_body(self, post_mock)
+        self.assertNotIn("cycleId", body.get("context", {}))
 
     def test_test_command_envelope_omits_cycle_when_the_server_reports_no_attachment(self):
         """The mirror case: a cycle-less ingest (server echoed no context)
@@ -602,13 +646,15 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         fabricated into a null or a guessed active cycle."""
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
         os.environ["FAKE_BUN_EXIT_CODE"] = "0"
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
-             mock.patch.object(self.module, "_get", create=True) as get_mock:
+        with mock.patch.object(self.module, "_post", return_value=BOARD_RUN_ANSWER) as post_mock, \
+             mock.patch.object(self.module, "_get", create=True,
+                               side_effect=get_answering_health()) as get_mock:
             code, out, _err = _run_main(self.module, [
                 "test", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir, "--reports", "reports",
                 "--agent", "CR-CRU-056-C5-no-echo",
             ])
+        _run_ingest_body(self, post_mock)
 
         self.assertEqual(code, 0)
         self.assertEqual(
@@ -643,8 +689,9 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
         os.environ["FAKE_BUN_EXIT_CODE"] = "0"
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
-             mock.patch.object(self.module, "_get", create=True) as get_mock:
+        with mock.patch.object(self.module, "_post", return_value=BOARD_RUN_ANSWER) as post_mock, \
+             mock.patch.object(self.module, "_get", create=True,
+                               side_effect=get_answering_health()) as get_mock:
             code, out, err = _run_main(self.module, [
                 "regression", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir, "--reports", "reports",
@@ -659,21 +706,17 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "regression")
         self.assertIs(axi.get("ok"), True)
-        run = axi.get("run")
-        self.assertEqual(run.get("passed"), 1)
-        self.assertEqual(run.get("total"), 1)
+        self.assertEqual(axi.get("run"), BOARD_RUN,
+                         f"the envelope's run block is the board's; axi={axi!r}")
         context = axi.get("context")
         self.assertEqual(context.get("agentId"), "CR-CRU-013-C51-regression")
         self.assertNotIn("cycleId", context)
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        self.assertIsNotNone(ingest_call)
-        self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}))
+        body = _run_ingest_body(self, post_mock)
+        self.assertEqual(body.get("data"), [PASS_JUNIT_XML], f"body={body!r}")
+        self.assertNotIn("cycleId", body.get("context", {}))
 
-        # CR-CRU-050 §S2 — the plain stderr line now also carries `pending`, so
-        # a line that omits a skip count can never be misread as summing.
-        legacy_line = "ingest: ok=True passed=1 failed=0 pending=0 total=1"
-        self.assertIn(legacy_line, err)
-        self.assertNotIn(legacy_line, out)
+        # CR-CRU-050 §S2 — the plain stderr line carries `pending`.
+        _assert_board_figures_line(self, err, out)
 
     def test_auto_ingest_emits_toon_envelope_with_run_summary(self):
         """CR-CRU-056 §S3 retarget: attachment is server-stamped from the
@@ -685,8 +728,9 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
             f.write(PASS_JUNIT_XML)
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
 
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
-             mock.patch.object(self.module, "_get", create=True) as get_mock:
+        with mock.patch.object(self.module, "_post", return_value=BOARD_RUN_ANSWER) as post_mock, \
+             mock.patch.object(self.module, "_get", create=True,
+                               side_effect=get_answering_health()) as get_mock:
             code, out, err = _run_main(self.module, [
                 "auto-ingest", "--agent", "CR-CRU-013-C51-auto",
                 "--project-dir", self.tmpdir, "--package-dir", self.tmpdir,
@@ -701,21 +745,18 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "auto-ingest")
         self.assertIs(axi.get("ok"), True)
-        run = axi.get("run")
-        self.assertEqual(run.get("passed"), 1)
-        self.assertEqual(run.get("total"), 1)
+        self.assertEqual(axi.get("run"), BOARD_RUN,
+                         f"the envelope's run block is the board's; axi={axi!r}")
         context = axi.get("context")
         self.assertEqual(context.get("agentId"), "CR-CRU-013-C51-auto")
         self.assertNotIn("cycleId", context)
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        self.assertIsNotNone(ingest_call)
-        self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}))
+        body = _run_ingest_body(self, post_mock)
+        self.assertEqual(body.get("data"), [PASS_JUNIT_XML], f"body={body!r}")
+        self.assertNotIn("cycleId", body.get("context", {}))
+        self.assertNotIn("raw", body, f"auto-ingest runs nothing; body={body!r}")
 
-        # CR-CRU-050 §S2 — the plain stderr line now also carries `pending`, so
-        # a line that omits a skip count can never be misread as summing.
-        legacy_line = "ingest: ok=True passed=1 failed=0 pending=0 total=1"
-        self.assertIn(legacy_line, err)
-        self.assertNotIn(legacy_line, out)
+        # CR-CRU-050 §S2 — the plain stderr line carries `pending`.
+        _assert_board_figures_line(self, err, out)
 
 
 # CR-CRU-056 §S3/§S3c — `NoCycleIdWarningTest` (the CR-CRU-030/036-era
