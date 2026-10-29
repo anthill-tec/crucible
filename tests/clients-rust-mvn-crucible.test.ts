@@ -71,7 +71,7 @@
 // (register, unregister, junit ingest, parsed ingest) must move to v2 with
 // NO exception, and every test below pins v1 as NEVER hit.
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
@@ -975,17 +975,28 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (worksp
     writeFileSync(join(dir, ".gitkeep"), "");
     runGit(["add", "."], dir);
     runGit(["commit", "-q", "-m", "initial"], dir);
-    const junitDir = join(dir, "target", "nextest", "ci"); // default --profile
-    Bun.spawnSync({ cmd: ["mkdir", "-p", junitDir] });
-    writeJunitXml(join(junitDir, "junit.xml"), "cr050_workspace_fixture", [
+    // CR-CRU-215 §S1/AC1: the report this run files is staged OUTSIDE
+    // `target/` — the fake `cargo` copies it into the nextest report path
+    // during the run, so the client (`_written_since`, CR-CRU-212) reads a
+    // report its own run wrote, never one placed ahead of the run.
+    const fixturesDir = join(dir, "fixtures");
+    Bun.spawnSync({ cmd: ["mkdir", "-p", fixturesDir] });
+    const stagedJunit = join(fixturesDir, "junit.xml");
+    writeJunitXml(stagedJunit, "cr050_workspace_fixture", [
       { name: "delta" },
       { name: "epsilon", fail: true },
       { name: "zeta", skip: true },
     ]);
+    const reportPath = join(dir, "target", "nextest", "ci", "junit.xml"); // default --profile
     const binDir = scratch.dir("fake-cargo-bin-cr050-ws-");
     writeExecutable(join(binDir, "cargo"), NOOP_SCRIPT);
     const path = `${binDir}:${process.env.PATH ?? ""}`;
     await ensureRegistered(RUST_SCRIPT_PATH, "rust-cr050-workspace-agent", { cwd: dir, crucibleUrl: baseUrl });
+
+    // CR-CRU-215 AC2: nothing exists at the nextest report path when the
+    // client is started — the staged fixture is the only copy.
+    expect(existsSync(reportPath)).toBe(false);
+    expect(existsSync(stagedJunit)).toBe(true);
 
     const res = await runScript(
       RUST_SCRIPT_PATH,
@@ -999,11 +1010,16 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (worksp
       { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } },
     );
 
+    // CR-CRU-215 AC1: the report was written by this run's fake `cargo`, so
+    // the client never takes its no-report path (`_written_since`).
+    expect(res.stderr).not.toContain("no junit.xml written by this run");
+
     const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
-    // §S1 — counts.
+    // §S1 — counts; CR-CRU-215 AC2: exactly the staged report's counts, the
+    // report the fake `cargo` wrote during the run.
     expect(event.summary?.total).toBe(3);
     expect(event.summary?.failed).toBe(1);
     expect(event.summary?.passed).toBe(1);
