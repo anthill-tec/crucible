@@ -469,5 +469,43 @@ class BunPrintedHelpNamesTheRouteItsReportsTakeTest(unittest.TestCase):
                       "take")
 
 
+class PythonPrintedHelpNamesTheRouteItsReportsTakeTest(unittest.TestCase):
+    """python sends every report to /api/v2/runs for the board to decode, so
+    neither its printed help, its `regression --coverage` sentence
+    (`REGRESSION_COVERAGE_PY_HELP`) nor its module docstring says a report
+    is posted to /api/v2/runs/parsed."""
+
+    def test_no_printed_python_help_names_the_parsed_route(self):
+        root = _root_parser("python")
+        texts = {"<root>": [root.description or "", root.epilog or ""]}
+        for verb in _subparsers_action("python").choices:
+            texts[verb] = _verb_help_texts("python", verb)
+        naming = sorted(verb for verb, found in texts.items()
+                        if any(PARSED_ROUTE in text for text in found))
+        self.assertEqual(naming, [],
+                         f"python's printed help names {PARSED_ROUTE} in: {naming}")
+
+    def test_the_python_regression_coverage_help_names_the_runs_route(self):
+        text = _plain(_flag_help("python", "regression", "--coverage"))
+        self.assertIn("coverage.py", text, f"{text!r}")
+        self.assertNotIn(PARSED_ROUTE, text,
+                         f"python `regression --coverage` help names the parsed "
+                         f"route: {text!r}")
+        self.assertIn(RUNS_ROUTE, text,
+                      f"python `regression --coverage` help names the route its "
+                      f"coverage takes: {text!r}")
+
+    def test_the_python_module_docstring_names_the_runs_route_and_not_the_parsed_one(self):
+        module = _load_module(CLIENTS_DIR / "python-crucible.py",
+                              "python_crucible_docstring_route_under_test")
+        doc = module.__doc__ or ""
+        self.assertNotIn(PARSED_ROUTE, doc,
+                         "the python client's docstring still says it posts to "
+                         "the parsed route")
+        self.assertIn(RUNS_ROUTE, doc,
+                      "the python client's docstring names the route its reports "
+                      "take")
+
+
 if __name__ == "__main__":
     unittest.main()
