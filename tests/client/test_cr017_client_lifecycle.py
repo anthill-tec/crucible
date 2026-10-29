@@ -459,8 +459,10 @@ class WrappedRunOpensTheRunBeforeSpawningTheToolTest(_BaseCr017ClientTest):
         self.assertEqual(code, 0, f"stdout={out!r}")
         self.assertIn("/api/v2/runs/start", server.paths(),
                       f"`regression` wraps its run too; paths={server.paths()}")
-        self.assertEqual(server.payload_for(RUNS).get("runId"),
-                         "run-cr017-1")
+        payload = server.payload_for(RUNS)
+        self.assertIsNotNone(payload, f"the run must be ingested at {RUNS}; "
+                                      f"paths={server.paths()}")
+        self.assertEqual((payload or {}).get("runId"), "run-cr017-1")
 
 
 class WrappedRunRuntimeExceedsToolDurationTest(_BaseCr017ClientTest):
@@ -559,7 +561,10 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
             "/api/v2/runs/start", server.paths(),
             f"$BUN_CRUCIBLE_NO_LIFECYCLE=1 opts out exactly like the flag; "
             f"paths={server.paths()}")
-        self.assertNotIn("runId", server.payload_for(RUNS))
+        payload = server.payload_for(RUNS)
+        self.assertIsNotNone(payload, f"the run must still be ingested at {RUNS}; "
+                                      f"paths={server.paths()}")
+        self.assertNotIn("runId", payload or {})
 
     def test_regression_honours_the_opt_out_too(self):
         server = _FakeCrucible()
@@ -568,7 +573,10 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
 
         self.assertEqual(code, 0, f"stdout={out!r}")
         self.assertNotIn("/api/v2/runs/start", server.paths())
-        self.assertNotIn("runId", server.payload_for(RUNS))
+        payload = server.payload_for(RUNS)
+        self.assertIsNotNone(payload, f"the run must still be ingested at {RUNS}; "
+                                      f"paths={server.paths()}")
+        self.assertNotIn("runId", payload or {})
 
 
 class OlderServerDegradesToSingleShotTest(_BaseCr017ClientTest):
