@@ -203,6 +203,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-211](CR-CRU-211-an-arduino-agent-runs-only-its-own-native-tests.md) | an arduino agent runs only its own native tests | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-212](CR-CRU-212-every-clients-regression-runs-the-whole-suite-without-coverage-unless-asked.md) | every client's regression runs the whole suite without coverage unless asked | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-204](CR-CRU-204-the-bun-and-python-clients-send-their-reports.md) | the bun and python clients send their runners' reports and parse nothing | feature | PENDING | 152, 207, 208 | 8 (0.4.0) |
+| [CR-CRU-215](CR-CRU-215-a-rust-regression-test-writes-its-report-during-the-run.md) | a rust regression test writes its report during the run it files | fix | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-206](CR-CRU-206-the-maven-rust-and-arduino-clients-send-their-reports.md) | the maven, rust and arduino clients send their runners' reports and parse nothing | feature | PENDING | 204, 208 | 8 (0.4.0) |
 | [CR-CRU-209](CR-CRU-209-repeated-runs-on-the-active-cycle-fold-into-one-chip.md) | repeated runs on the active cycle fold into one chip | fix | PENDING | — | 9 (0.5.0) |
 
