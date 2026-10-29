@@ -236,7 +236,7 @@ class TheGateOnTheUnmodifiedPytestFixtureRunsItsSuiteTest(unittest.TestCase):
                          f"record; {diag(self.result)}")
 
     def test_the_gate_goes_on_to_run_and_file_the_fixtures_suite(self):
-        ingests = self.project.parsed_ingests()
+        ingests = self.project.runs_ingests()
         self.assertEqual(len(ingests), 1,
                          f"the gate's regression step runs and files exactly once; "
                          f"{diag(self.result)}")
