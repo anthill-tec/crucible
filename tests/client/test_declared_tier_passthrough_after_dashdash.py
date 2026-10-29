@@ -203,6 +203,19 @@ def _write_recorder(root, name, tool_tag, report_var):
                        _RECORDER_TAIL.replace("__REPORT_VAR__", report_var))
 
 
+def _inline_report(case, body):
+    """The one raw report a rawReport target's ingest carries: its text rides
+    inline as `data` (a list of the report texts), never as a `dataPath` the
+    board would have to open (CR-CRU-204 \u00a7S2, AC1)."""
+    case.assertNotIn("dataPath", body,
+                     f"a report travels inline, never as a path; body={body!r}")
+    data = body.get("data")
+    case.assertIsInstance(data, list, f"`data` is a list of report texts; body={body!r}")
+    case.assertEqual(len(data), 1,
+                     f"the target wrote exactly one report; body={body!r}")
+    return json.loads(data[0])
+
+
 def _declare(root, scripts, report_path, raw_report):
     manifest = {
         "name": "cr170-dashdash-fixture",
@@ -346,13 +359,7 @@ class FeatureArgumentAfterDashDashReachesOnlyTheLastCommandTest(_DashDashCase):
         _path, body = ingests[0]
         self.assertEqual(body.get("tier"), "e2e", f"body={body!r}")
         self.assertEqual(body.get("codec"), "playwright", f"body={body!r}")
-        data_path = body.get("dataPath")
-        self.assertTrue(
-            data_path and os.path.exists(data_path),
-            f"the dataPath the board was told to decode must exist; "
-            f"body={body!r}")
-        with open(data_path) as handle:
-            report = json.load(handle)
+        report = _inline_report(self, body)
         titles = [spec["title"] for spec in report["suites"][0]["specs"]]
         self.assertEqual(
             titles, [self.FEATURE_PATH],
@@ -436,8 +443,7 @@ class NoDashDashLeavesTheDeclaredTargetUnchangedTest(_DashDashCase):
         self.assertEqual(len(ingests), 1, f"ingests={ingests!r}; "
                          f"all posts={self.board.posts()!r}")
         _path, body = ingests[0]
-        with open(body["dataPath"]) as handle:
-            report = json.load(handle)
+        report = _inline_report(self, body)
         titles = [spec["title"] for spec in report["suites"][0]["specs"]]
         self.assertEqual(
             titles, WHOLE_SUITE_CASES,
@@ -514,6 +520,12 @@ class DashDashAppliesToAnyDeclaredTierNotJustE2eTest(_DashDashCase):
                 raw_report={"test:module": {
                     "codec": "generic", "file": "module.json",
                     "path": f"env:{MODULE_JSON_VAR}"}})
+        # The shared ingest reads the board's health before it sends and
+        # refuses a codec the board does not decode: this board decodes the
+        # declared `generic` codec beside the clients' own.
+        health = self.board.default_health()
+        health["codecs"]["test"].append("generic")
+        self.board.script_health(health)
 
     def test_dashdash_forwards_to_a_declared_module_target_too(self):
         feature = "tests/module/widgets.spec.ts"
