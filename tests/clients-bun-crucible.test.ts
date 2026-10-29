@@ -876,15 +876,17 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
     }
   });
 
-  test("records tier:'unit' and posts to /api/v2/runs/parsed only (never v1 /api/ingest/parsed)", () => {
+  test("records tier:'unit' and files its run through POST /api/v2/runs only (never /api/v2/runs/parsed, never v1 /api/ingest/parsed)", () => {
     expect(runResult?.code).not.toBe(0); // 3 of 4 fixture tests fail
     expect(event?.tier).toBe("unit");
     expect(event?.summary?.total).toBe(4);
     expect(event?.summary?.passed).toBe(1);
     expect(event?.summary?.failed).toBe(3);
+    expect(event?.codec).toBe("junit");
     expect(
-      proxy?.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed"),
-    ).toBe(true);
+      proxy?.calls.filter((c) => c.method === "POST" && c.path === "/api/v2/runs").length,
+    ).toBe(1);
+    expect(proxy?.calls.some((c) => c.path === "/api/v2/runs/parsed")).toBe(false);
     expect(proxy?.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
