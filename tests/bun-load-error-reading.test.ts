@@ -5,8 +5,7 @@
 // tests` blocks, each the lines between two rules of dashes. The board reads
 // that stream in its own module, `src/codecs/bun-console.ts` — the module
 // that already reads bun's failure detail — by the rules the bun client
-// applies today (`_parse_load_errors` + `_add_load_error_cases` in
-// clients/bun-crucible.py):
+// applied to its console before the board took that reading over:
 //
 //  - a file header is a flush-left `<path>:` whose path ends in a JS/TS module
 //    extension (.js .mjs .cjs .ts .mts .cts .jsx .tsx); any other flush-left
