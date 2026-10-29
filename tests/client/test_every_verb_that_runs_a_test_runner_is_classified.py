@@ -315,6 +315,21 @@ def _callee_name(call):
     return None
 
 
+# The ingest calls the census recognises: `post_ingest`, and the shared ingest
+# in `clients/_crucible_axi.py`, which sends through `post_ingest` itself and
+# puts the `runner_exit=` it is handed on the body as `runnerExit`.
+SHARED_INGEST = "ingest_reports"
+INGEST_CALLEES = ("post_ingest", SHARED_INGEST)
+
+
+def _shared_ingest_name():
+    """`SHARED_INGEST`, once the shared module is shown to define it: a census
+    keyed to a name the shared module does not carry would recognise nothing."""
+    axi = _load_module(CLIENTS_DIR / "_crucible_axi.py",
+                       "runner_exit_census_shared_ingest_name")
+    return getattr(axi, SHARED_INGEST).__name__
+
+
 class ClientSource:
     """One client's module-level functions and the facts the census reads off
     them."""
@@ -330,12 +345,25 @@ class ClientSource:
             if self._calls(node, "runner_exit_code")}
         self.posts_ingest = {
             name for name, node in self.functions.items()
-            if self._calls(node, "post_ingest")}
+            if any(self._calls(node, callee) for callee in INGEST_CALLEES)}
         self.sends_runner_exit = {
             name for name in self.posts_ingest
             if any(isinstance(n, ast.Constant) and n.value == "runnerExit"
-                   for n in ast.walk(self.functions[name]))}
+                   for n in ast.walk(self.functions[name]))
+            or self._hands_the_shared_ingest_a_runner_exit(self.functions[name])}
         self._returns_memo = {}
+
+    @staticmethod
+    def _hands_the_shared_ingest_a_runner_exit(node):
+        """A call of the shared ingest handed a `runner_exit=` that is not the
+        literal `None`: the shared ingest puts it on the body as `runnerExit`."""
+        return any(
+            isinstance(n, ast.Call) and _callee_name(n) == SHARED_INGEST
+            and any(k.arg == "runner_exit"
+                    and not (isinstance(k.value, ast.Constant)
+                             and k.value.value is None)
+                    for k in n.keywords)
+            for n in ast.walk(node))
 
     def _referenced(self, name, node):
         return {n.id for n in ast.walk(node)
@@ -379,7 +407,7 @@ class ClientSource:
 
         def is_ingest_call(call):
             callee = _callee_name(call)
-            if callee == "post_ingest":
+            if callee in INGEST_CALLEES:
                 return name in self.sends_runner_exit
             return (callee in self.functions and callee != name
                     and callee not in stop
@@ -842,6 +870,154 @@ class TheCensusCheckerIsProvedOnASyntheticClientTest(unittest.TestCase):
     def test_the_synthetic_client_raises_exactly_the_mutants_findings(self):
         # Bounded: no finding beyond the ones each mutant owes.
         self.assertEqual(len(self.findings), 13, "\n".join(self.findings))
+
+
+# \u2500\u2500 the shared ingest is an ingest call, proved on a synthetic client \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+_SYNTHETIC_SHARED_INGEST_CLIENT = textwrap.dedent('''
+    """A synthetic client whose verbs file through the shared ingest: one
+    compliant body, and one mutant per way the seam can be misused."""
+    import argparse
+
+    _STACK = "synthetic"
+
+
+    def _axi():
+        raise RuntimeError("never run: the census only reads this source")
+
+
+    def _post(path, payload):
+        raise RuntimeError("never run")
+
+
+    def _get(path):
+        raise RuntimeError("never run")
+
+
+    def _shared_body(args):
+        result = _axi().spawn(args)
+        runner_exit = _axi().runner_exit_code(result.returncode)
+        resp = _axi().{shared}(_post, _get, codec="junit",
+                               report_paths=result.reports, raw=result.output,
+                               stack=_STACK, runner_exit=runner_exit)
+        return _axi().verb_exit(runner_exit, resp)
+
+
+    def cmd_shared(args):
+        return _shared_body(args)
+
+
+    def _exitless_body(args):
+        result = _axi().spawn(args)
+        runner_exit = _axi().runner_exit_code(result.returncode)
+        resp = _axi().{shared}(_post, _get, codec="junit",
+                               report_paths=result.reports, stack=_STACK)
+        return _axi().verb_exit(runner_exit, resp)
+
+
+    def cmd_exitless(args):
+        return _exitless_body(args)
+
+
+    def _none_exit_body(args):
+        result = _axi().spawn(args)
+        runner_exit = _axi().runner_exit_code(result.returncode)
+        resp = _axi().{shared}(_post, _get, codec="junit",
+                               report_paths=result.reports, stack=_STACK,
+                               runner_exit=None)
+        return _axi().verb_exit(runner_exit, resp)
+
+
+    def cmd_none_exit(args):
+        return _none_exit_body(args)
+
+
+    def cmd_files_on_disk(args):
+        resp = _axi().{shared}(_post, _get, codec="junit",
+                               report_paths=args.reports, stack=_STACK)
+        return 0 if resp.get("ok") else 1
+
+
+    def cmd_quietly_files(args):
+        _axi().{shared}(_post, _get, codec="junit", report_paths=args.reports,
+                        stack=_STACK)
+        return 0
+
+
+    def main():
+        p = argparse.ArgumentParser()
+        sub = p.add_subparsers(dest="cmd", required=True)
+        for verb, func in (("shared", cmd_shared), ("exitless", cmd_exitless),
+                           ("none-exit", cmd_none_exit),
+                           ("files-on-disk", cmd_files_on_disk),
+                           ("quietly-files", cmd_quietly_files)):
+            sub.add_parser(verb).set_defaults(func=func)
+        args = p.parse_args()
+        return args.func(args)
+''')
+
+_SYNTHETIC_SHARED_INGEST_CENSUS = {
+    "shared": applies("_shared_body"),
+    "exitless": applies("_exitless_body"),
+    "none-exit": applies("_none_exit_body"),
+    "files-on-disk": exempt("files a report already on disk; runs no runner"),
+    "quietly-files": not_ingesting("claims to file nothing"),
+}
+
+
+class TheCensusReadsTheSharedIngestAsTheIngestCallTest(unittest.TestCase):
+    """A client-module call of the shared ingest is the ingest call: handed a
+    `runner_exit`, it sends `runnerExit`; reaching it is filing something."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.source = _SYNTHETIC_SHARED_INGEST_CLIENT.replace(
+            "{shared}", _shared_ingest_name())
+        cls.tmpdir = tempfile.mkdtemp(prefix="runner-exit-census-shared-")
+        path = Path(cls.tmpdir) / "synthetic-shared-crucible.py"
+        path.write_text(cls.source)
+        cls.handlers = verb_handlers(path, "runner_exit_census_synthetic_shared")
+        cls.findings = census_findings("shared", cls.source, cls.handlers,
+                                       _SYNTHETIC_SHARED_INGEST_CENSUS)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def about(self, needle):
+        return [f for f in self.findings if needle in f]
+
+    def test_a_body_handing_the_shared_ingest_its_runner_exit_applies_the_rule(self):
+        self.assertEqual(self.about("`shared`"), [])
+        self.assertEqual(self.about("body `_shared_body`"), [])
+
+    def test_a_body_handing_the_shared_ingest_no_runner_exit_is_named(self):
+        self.assertEqual(
+            self.about("body `_exitless_body`"),
+            ["shared body `_exitless_body`: sends no `runnerExit` \u2014 it "
+             "reaches no ingest that puts `runnerExit` in the payload it posts",
+             "shared body `_exitless_body`: does not return verb_exit \u2014 "
+             "its exit is not the runner's and the filed run's"])
+
+    def test_a_body_handing_the_shared_ingest_a_literal_none_runner_exit_is_named(self):
+        self.assertEqual(
+            self.about("body `_none_exit_body`"),
+            ["shared body `_none_exit_body`: sends no `runnerExit` \u2014 it "
+             "reaches no ingest that puts `runnerExit` in the payload it posts",
+             "shared body `_none_exit_body`: does not return verb_exit \u2014 "
+             "its exit is not the runner's and the filed run's"])
+
+    def test_a_verb_filing_through_the_shared_ingest_without_a_runner_is_exempt(self):
+        self.assertEqual(self.about("`files-on-disk`"), [])
+
+    def test_a_not_ingesting_verb_that_calls_the_shared_ingest_is_named(self):
+        self.assertEqual(
+            self.about("`quietly-files`"),
+            ["shared `quietly-files`: classified not-ingesting, yet it reaches "
+             "the ingest helper(s) ['cmd_quietly_files']"])
+
+    def test_the_synthetic_shared_client_raises_exactly_the_mutants_findings(self):
+        self.assertEqual(len(self.findings), 5, "\n".join(self.findings))
 
 
 if __name__ == "__main__":

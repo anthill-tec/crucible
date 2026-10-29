@@ -189,9 +189,29 @@ class PostIngestRequiresAndCarriesTheStackTest(unittest.TestCase):
 
 # ── the census over the five clients' sources ─────────────────────────────
 
+# The shared ingest (`clients/_crucible_axi.py`): a client's call to it is an
+# ingest call exactly as a `post_ingest` call is, and must hand over `_STACK`.
+SHARED_INGEST = "ingest_reports"
+INGEST_CALLEES = ("post_ingest", SHARED_INGEST)
+
+
+def _shared_ingest_name():
+    """`SHARED_INGEST`, once the shared module is shown to define it: a census
+    keyed to a name the shared module does not carry would recognise nothing."""
+    axi = _load(AXI_PATH, "crucible_axi_shared_ingest_name")
+    return getattr(axi, SHARED_INGEST).__name__
+
+
+def _callee(call):
+    func = call.func
+    return (func.attr if isinstance(func, ast.Attribute)
+            else func.id if isinstance(func, ast.Name) else None)
+
+
 
 def _post_ingest_calls(source):
-    """Every call of `post_ingest` in `source`, however it is reached
+    """Every ingest call in `source` \u2014 `post_ingest`, or the shared ingest
+    (`SHARED_INGEST`) \u2014 however it is reached
     (`_axi().post_ingest(...)`, `axi.post_ingest(...)`, `post_ingest(...)`),
     each paired with the name of the function it sits in."""
     found = []
@@ -205,7 +225,7 @@ def _post_ingest_calls(source):
                 func = child.func
                 name = (func.attr if isinstance(func, ast.Attribute)
                         else func.id if isinstance(func, ast.Name) else None)
-                if name == "post_ingest":
+                if name in INGEST_CALLEES:
                     found.append((child_owner, child))
             visit(child, child_owner)
 
@@ -223,6 +243,9 @@ def _states_its_own_stack(call):
 
 
 def _route_of(call):
+    if _callee(call) == SHARED_INGEST:
+        # The shared ingest has one route: it sends `/api/v2/runs`.
+        return RUNS
     if len(call.args) >= 2 and isinstance(call.args[1], ast.Constant):
         return call.args[1].value
     return "<computed route>"
@@ -294,6 +317,55 @@ class EveryPostIngestCallStatesTheClientsOwnStackTest(unittest.TestCase):
 
     def test_every_rust_ingest_call_passes_its_own_stack(self):
         self.assert_client_states_its_stack_everywhere("rust")
+
+
+_SYNTHETIC_SHARED_INGEST_CLIENT = '''
+def files_through_the_shared_ingest(rc):
+    return _axi().{shared}(_post, _get, codec="junit", report_paths=paths,
+                           stack=_STACK, runner_exit=rc)
+
+def shares_but_names_no_stack(rc):
+    return axi.{shared}(_post, _get, codec="junit", report_paths=paths,
+                        runner_exit=rc)
+
+def shares_a_literal_stack(rc):
+    return {shared}(_post, _get, codec="junit", report_paths=paths,
+                    stack="python", runner_exit=rc)
+
+def still_posts_directly():
+    return _axi().post_ingest(_post, "/api/v2/runs/parsed", body, stack=_STACK)
+'''
+
+
+class TheCensusReadsTheSharedIngestAsAnIngestCallTest(unittest.TestCase):
+    """A client-module call to the shared ingest is an ingest call: found
+    however it is reached, and flagged unless it hands over `stack=_STACK`.
+    Proved on a synthetic client, never on the live clients."""
+
+    def setUp(self):
+        self.source = _SYNTHETIC_SHARED_INGEST_CLIENT.replace(
+            "{shared}", _shared_ingest_name())
+
+    def test_every_shared_ingest_call_is_found_beside_a_post_ingest_call(self):
+        self.assertEqual(
+            [owner for owner, _call in _post_ingest_calls(self.source)],
+            ["files_through_the_shared_ingest", "shares_but_names_no_stack",
+             "shares_a_literal_stack", "still_posts_directly"],
+            "the census must find a shared-ingest call however it is reached")
+
+    def test_a_shared_ingest_call_handed_its_own_stack_is_not_flagged(self):
+        flagged = _call_sites_without_own_stack(self.source)
+        self.assertNotIn("files_through_the_shared_ingest -> /api/v2/runs",
+                         flagged)
+        self.assertNotIn("still_posts_directly -> /api/v2/runs/parsed", flagged)
+
+    def test_a_shared_ingest_call_without_its_own_stack_is_flagged_on_the_runs_route(self):
+        self.assertEqual(
+            _call_sites_without_own_stack(self.source),
+            ["shares_but_names_no_stack -> /api/v2/runs",
+             "shares_a_literal_stack -> /api/v2/runs"],
+            "the census must flag every shared-ingest call that does not pass "
+            "`stack=_STACK`, and only those")
 
 
 # ── each client x route, driven through the client ────────────────────────
