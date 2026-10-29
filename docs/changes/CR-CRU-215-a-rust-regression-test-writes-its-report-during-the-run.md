@@ -1,8 +1,8 @@
 # CR-CRU-215 — a rust regression test writes its report during the run it files
 
-**Type** fix · **Points** 2 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-29
-(found by CR-CRU-204's scoped re-gate; user ruling: a patch CR into 0.4.0, sequenced after CR-CRU-204);
-gap analysis 2026-10-29
+**Type** fix · **Points** 2 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — merged 2026-10-29 (plan 217, cycles 795–796,
+gate 9277/0: bun 4226/0, python 5051/0); filed 2026-10-29 (found by CR-CRU-204's scoped re-gate; user ruling: a
+patch CR into 0.4.0, sequenced after CR-CRU-204)
 
 ## Problem
 
@@ -59,13 +59,19 @@ report with `os.utime` and asserts it is never filed.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the report is the run's own.** In both tests §S1 names, the nextest report the client files
+- [x] **AC1 — the report is the run's own.** In both tests §S1 names, the nextest report the client files
       is written by the fake `cargo` during the run; neither writes it before the client starts.
-- [ ] **AC2 — the run files what its runner wrote.** In each such test, nothing exists at
+- [x] **AC2 — the run files what its runner wrote.** In each such test, nothing exists at
       `target/nextest/<profile>/junit.xml` when the client is started, and the run the board files carries the
       counts of the report the fake `cargo` wrote.
-- [ ] **AC3 — the client is unchanged.** `clients/rust-crucible.py` is untouched, and
+- [x] **AC3 — the client is unchanged.** `clients/rust-crucible.py` is untouched, and
       `RustRegressionFilesOnlyItsOwnReportTest` still passes unchanged.
+
+- *Recorded at merge:* VERIFY approved with no blocking finding. With a 1.1 s pause forced before the run's
+  start in a `/tmp` copy of the client, both tests pass and their versions at this CR's base fail as measured;
+  four mutations (no write, a write ahead, in each test) each turn a test red. F1, left at the user's ruling:
+  the TS case's fake writes `target/nextest/ci/junit.xml` whatever `-P` says — correct while the case relies on
+  the default profile `ci`. The shared `/tmp/nai-gate.lock` the probe showed is CR-CRU-217.
 
 ## Non-goals
 
