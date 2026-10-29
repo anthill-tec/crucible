@@ -32,11 +32,8 @@ failure. Their `run:` envelopes (`_emit_ingest_axi` / `_emit_ingest_summary_axi`
 build `run = {"passed", "failed", "pending", "total"}` with no `files` key at
 all. Neither parser's docstring/comment mentions "granularity" anywhere
 (confirmed by grep). Every test below against these three clients therefore
-fails now for the right reason. The bun-client tests are a REGRESSION PIN
-(AC "confirmed, not assumed") -- bun already carries this behavior from
-CR-CRU-047, so those specific assertions may already pass; they are not new
-capability, they guard against this CR's edits touching the reference by
-mistake.
+fails now for the right reason. The bun client's own pin is retired: it
+parses no report any more, and the board answers its run's `files` count.
 
 Module-loading + HTTP-mocking convention copied verbatim from the sibling
 `test_python_crucible_axi.py` / `test_mvn_crucible_axi.py` /
@@ -70,7 +67,6 @@ CLIENTS_DIR = REPO_ROOT / "clients"
 PYTHON_SCRIPT = CLIENTS_DIR / "python-crucible.py"
 MVN_SCRIPT = CLIENTS_DIR / "mvn-crucible.py"
 ARDUINO_SCRIPT = CLIENTS_DIR / "arduino-crucible.py"
-BUN_SCRIPT = CLIENTS_DIR / "bun-crucible.py"
 
 
 def _load_module_by_path(path, cache_key):
@@ -214,24 +210,6 @@ ARDUINO_BARE = (
     '</testsuites>'
 )
 
-# bun (reference/unchanged): testcases stamp `file` (CR-CRU-047 §S2).
-BUN_FILE_ATTR = (
-    '<?xml version="1.0" ?>'
-    '<testsuites>'
-    '<testsuite name="toon.test.ts">'
-    '<testcase file="tests/a.test.ts" name="passes_a" time="0.001"></testcase>'
-    '<testcase file="tests/b.test.ts" name="passes_b" time="0.001"></testcase>'
-    '</testsuite>'
-    '</testsuites>'
-)
-BUN_BARE = (
-    '<?xml version="1.0" ?>'
-    '<testsuites>'
-    '<testsuite name="toon.bare.ts">'
-    '<testcase name="passes" time="0.001"></testcase>'
-    '</testsuite>'
-    '</testsuites>'
-)
 
 
 # ── python-crucible.py :: _parse_junit_dir ──────────────────────────────────
@@ -580,74 +558,6 @@ class ArduinoFilesCountParityTest(unittest.TestCase):
             "files", payload.get("summary", {}),
             "the ingest payload's summary must never carry a files key -- "
             "it rides the printed run: envelope only (CR-CRU-047 §S2)")
-
-
-# ── bun-crucible.py :: _parse_junit_file -- REGRESSION PIN, not new capability ──
-
-
-class BunFilesCountUnchangedTest(unittest.TestCase):
-    """AC (verbatim): "bun-crucible.py is unchanged (already correct) --
-    confirmed, not assumed." bun already implements this (CR-CRU-047 §S2), so
-    these specific assertions may already pass on first run -- that is
-    EXPECTED and correct for a regression pin (it is not exercising new
-    capability; it is guarding the reference implementation against this
-    CR's edits touching the other four clients by mistake). The file's
-    overall RED signal comes from the python/mvn/arduino classes above, which
-    fail today."""
-
-    PROJECT_KEY = "cr051-c1-bun-key"
-
-    def setUp(self):
-        self.module = _load_module_by_path(BUN_SCRIPT, "cr051_c1_bun_under_test")
-        self.tmpdir = tempfile.mkdtemp(prefix="cr051-c1-bun-")
-        _write(os.path.join(self.tmpdir, ".env"),
-               f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
-
-    def tearDown(self):
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-
-    def test_parse_junit_file_still_computes_distinct_file_count(self):
-        junit_path = os.path.join(self.tmpdir, "junit.xml")
-        _write(junit_path, BUN_FILE_ATTR)
-
-        summary, tree, files = self.module._parse_junit_file(junit_path)
-
-        self.assertEqual(summary["total"], 2)
-        self.assertEqual(
-            files, 2,
-            f"bun's reference implementation must still compute 2 distinct "
-            f"file= values (tests/a.test.ts, tests/b.test.ts); "
-            f"got files={files!r}")
-
-    def test_parse_junit_file_fallback_to_suite_name_still_never_zero(self):
-        junit_path = os.path.join(self.tmpdir, "junit.xml")
-        _write(junit_path, BUN_BARE)
-
-        summary, tree, files = self.module._parse_junit_file(junit_path)
-
-        self.assertEqual(summary["total"], 1)
-        self.assertGreater(
-            files, 0,
-            "bun's reference fallback must still never degrade to 0")
-        self.assertEqual(files, 1)
-
-    def test_ingest_payload_still_never_carries_files_key(self):
-        """The `files` count bun already computes must still ride the
-        printed envelope only, never the `/api/v2/runs/parsed` payload."""
-        junit_path = os.path.join(self.tmpdir, "junit.xml")
-        _write(junit_path, BUN_FILE_ATTR)
-        summary, tree, files = self.module._parse_junit_file(junit_path)
-
-        with mock.patch.object(self.module, "_post", return_value={"ok": True},
-                                create=True) as post_mock:
-            self.module._ingest_parsed(
-                self.tmpdir, "CR-CRU-051-C1-bun-nofiles", summary, tree)
-
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        self.assertIsNotNone(ingest_call)
-        payload = ingest_call[0][1]
-        self.assertNotIn("files", payload)
-        self.assertNotIn("files", payload.get("summary", {}))
 
 
 if __name__ == "__main__":
