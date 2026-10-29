@@ -47,7 +47,7 @@ two layers can be held to it. What the server already declares:
 | the tier vocabulary as a TYPE | `Tier` — `src/types.ts` |
 | VALIDATION of a submitted tier against that vocabulary | `TIERS.has(body.tier)` — `src/v2.ts` |
 | the `{tier, stack, context}` trio taken **verbatim, never fabricated** | `runMeta` — `src/v2.ts` |
-| the ingest and lifecycle endpoints | `POST /api/v2/runs/start`, `/api/v2/runs/parsed`, `/api/v2/runs/compile` |
+| the ingest and lifecycle endpoints | `POST /api/v2/runs/start`, `/api/v2/runs`, `/api/v2/runs/parsed`, `/api/v2/runs/compile` |
 | the stored record | `EventRow` / `RunRow` — `src/store.ts` |
 | tier passthrough as a shipped contract | CR-CRU-016 §S4; the per-subcommand map CR-CRU-008 §S2 |
 

@@ -5,7 +5,7 @@
 // exists only on the console stream, as an `error: <detail>` block under a
 // source echo of the code that raised. This module reads that stream into
 // `{message, trace?}` per result-line name, by the rules the bun client
-// applies (`_parse_console_failures` in clients/bun-crucible.py). It knows
+// applied before it handed its console to the board. It knows
 // nothing of JUnit or of any route: a caller hands it console text and decides
 // what to do with what it reads.
 
@@ -109,8 +109,8 @@ function cut(text: string, limit: number): string {
  * first block's `error:` line without its label (`unhandled error between
  * tests` when it has none), cut at 1000 characters; the trace is every block
  * for that file (each block's lines joined by "\n", the blocks by "\n\n",
- * trimmed), cut at 8000. Everything kept is free of SGR escapes. The port of
- * `_parse_load_errors` + `_add_load_error_cases` (clients/bun-crucible.py).
+ * trimmed), cut at 8000. Everything kept is free of SGR escapes. These are
+ * the rules the bun client read load errors by, before the board read them.
  */
 export function parseBunLoadErrors(consoleText: string): Record<string, BunConsoleDetail> {
   const errors = new Map<string, string[][]>();
