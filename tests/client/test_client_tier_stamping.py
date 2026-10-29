@@ -174,6 +174,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.live_run_harness import get_answering_health  # noqa: E402
 from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
     declare_and_require_board,
 )
@@ -415,8 +416,8 @@ def _flat(census):
 # ENDPOINT, because a fix applied to one endpoint leaves the other stamped.
 SITES_DRIVEN_ON_THE_WIRE = frozenset({
     ("bun", "cmd_test", "unit", RUN_START),
-    ("bun", "cmd_test", "unit", PARSED),
-    ("bun", "cmd_auto_ingest", "e2e", PARSED),
+    ("bun", "cmd_test", "unit", RUNS),
+    ("bun", "cmd_auto_ingest", "e2e", RUNS),
     ("mvn", "cmd_test", "unit", RUNS),
     ("mvn", "cmd_test", "unit", PARSED),
     ("mvn", "cmd_auto_ingest", "unit", RUNS),
@@ -735,7 +736,8 @@ class _ClientDriveCase(unittest.TestCase):
             return copy.deepcopy(response if response is not None else _OK_RESPONSE)
 
         with mock.patch.object(self.module, "_post", side_effect=fake_post, create=True), \
-                mock.patch.object(self.module, "_get", return_value=None, create=True), \
+                mock.patch.object(self.module, "_get", create=True,
+                                  side_effect=get_answering_health(lambda _p: None)), \
                 mock.patch.object(self.module, "_patch", return_value={"ok": True},
                                   create=True):
             code, out, err = _run_main(self.module, self.CLIENT, argv)
@@ -763,8 +765,9 @@ class _ClientDriveCase(unittest.TestCase):
         with open(out_path, "w") as out, open(err_path, "w") as err:
             with mock.patch.object(self.module, "_post", side_effect=fake_post,
                                    create=True), \
-                    mock.patch.object(self.module, "_get", return_value=None,
-                                      create=True), \
+                    mock.patch.object(self.module, "_get", create=True,
+                                      side_effect=get_answering_health(
+                                          lambda _p: None)), \
                     mock.patch.object(self.module, "_patch",
                                       return_value={"ok": True}, create=True), \
                     mock.patch.object(sys, "argv",
@@ -943,7 +946,7 @@ class BunUnearnedTierTest(_BunCase):
         unit run"."""
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = _JUNIT_SUITES_ONE_PASS
         drive = self.drive(self.bun_argv("test"))
-        self.assertNoStatedTier(drive, PARSED, "bun cmd_test -> POST /runs/parsed")
+        self.assertNoStatedTier(drive, RUNS, "bun cmd_test -> POST /runs")
 
     def test_bun_auto_ingest_ran_no_tests_so_it_claims_no_tier(self):
         """AC3's explicit auto-ingest clause, bun `cmd_auto_ingest` — this verb
@@ -952,8 +955,8 @@ class BunUnearnedTierTest(_BunCase):
         whatever report was lying in the reports dir."""
         self.write_bun_junit()
         drive = self.drive(self.bun_argv("auto-ingest", with_bun=False))
-        self.assertNoStatedTier(drive, PARSED,
-                                "bun cmd_auto_ingest -> POST /runs/parsed")
+        self.assertNoStatedTier(drive, RUNS,
+                                "bun cmd_auto_ingest -> POST /runs")
 
 
 class MvnUnearnedTierTest(_MvnCase):
@@ -1086,8 +1089,8 @@ class BunEarnedTierTest(_BunCase):
         drive = self.drive(self.bun_argv("regression"))
         self.assertStatedTier(drive, RUN_START, "regression",
                               "bun regression -> POST /runs/start")
-        self.assertStatedTier(drive, PARSED, "regression",
-                              "bun regression -> POST /runs/parsed")
+        self.assertStatedTier(drive, RUNS, "regression",
+                              "bun regression -> POST /runs")
 
 
 class PythonEarnedTierTest(_PythonCase):
