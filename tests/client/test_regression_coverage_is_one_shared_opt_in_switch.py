@@ -80,6 +80,9 @@ HELP_CLIENTS = (
 # appends its argv to `interpreter_runs.jsonl` beside it; a suite run (`-o
 # <reports dir>`) writes one passing JUnit case there; `coverage lcov -o
 # <file>` writes a small lcov; everything else exits 0.
+# The lcov report the stand-in's `coverage lcov` writes, byte for byte.
+PYTHON_LCOV_TEXT = ("SF:pkg_under_measure/mod.py\nFNF:2\nFNH:1\n"
+                    "LF:10\nLH:8\nend_of_record\n")
 _RECORDING_PYTHON = r'''
 import json
 import os
@@ -434,11 +437,12 @@ class PythonCovSourceWithCoverageRunsTest(_PythonProject, unittest.TestCase):
             ["--source", COV_SOURCE],
             f"coverage measures the --cov-source given; runs={suite_runs!r}")
         path, body = _the_one_ingest(self, self.board, result)
-        self.assertEqual(path, "/api/v2/runs/parsed", _diagnostics(result))
-        coverage = (body or {}).get("coverage") or {}
+        self.assertEqual(path, "/api/v2/runs", _diagnostics(result))
         self.assertEqual(
-            (coverage.get("lines") or {}).get("total"), 10,
-            f"the ingest carries the run's lcov coverage; body={body!r}")
+            (body or {}).get("coverage"),
+            {"codec": "lcov", "data": [PYTHON_LCOV_TEXT]},
+            f"the ingest carries the run's lcov coverage report, inline; "
+            f"body={body!r}")
         self.assertEqual((body or {}).get("tier"), "regression",
                          f"body={body!r}")
 
