@@ -1,8 +1,8 @@
 # CR-CRU-217 — the rust gate lock of a project outside git is its own
 
-**Type** fix · **Points** 2 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-29
-(found at CR-CRU-215's spec pre-review, F6; user ruling: its own CR, sequenced after CR-CRU-215); gap
-analysis and spec pre-review 2026-10-29
+**Type** fix · **Points** 2 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — merged 2026-10-29 (plan 218, cycles 797–799,
+gate 9292/0: bun 4226/0, python 5066/0); filed 2026-10-29 (found at CR-CRU-215's spec pre-review, F6; user
+ruling: its own CR, sequenced after CR-CRU-215)
 
 ## Problem
 
@@ -63,19 +63,27 @@ drive's lock private to its project.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — outside git, no lock path.** For a directory that is not a git repository — under a private
+- [x] **AC1 — outside git, no lock path.** For a directory that is not a git repository — under a private
       scratch parent, with `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` removed from the environment, and
       `git rev-parse --git-common-dir` asserted to fail there first — `_gate_lock_path` returns `None`; two such
       directories under one parent both return `None`.
-- [ ] **AC2 — a repository is unchanged.** For a git repository and for a linked worktree of it,
+- [x] **AC2 — a repository is unchanged.** For a git repository and for a linked worktree of it,
       `_gate_lock_path` returns the parent of the common git directory joined with `nai-gate.lock`, as today;
       the function's body uses only `os` and `subprocess`.
-- [ ] **AC3 — a run outside git takes no lock and leaves nothing.** A gated `workspace-regression` run from such
+- [x] **AC3 — a run outside git takes no lock and leaves nothing.** A gated `workspace-regression` run from such
       a non-git directory, driven in-process, files its run; afterwards no `nai-gate.lock` exists in the project
       directory or its parent, `_HELD_GATE_LOCK` is `None`, and none of the process's SIGTERM, SIGINT and SIGHUP
       handlers is `_gate_lock_signal`.
-- [ ] **AC4 — the unlocked run says so.** That run's stderr carries one line saying it takes no gate lock
+- [x] **AC4 — the unlocked run says so.** That run's stderr carries one line saying it takes no gate lock
       because no git repository was resolved; a run in a git repository carries no such line.
+
+- *Recorded at merge:* VERIFY approved; its F1 was fixed in its own cycle (799, user ruling): a git older than
+  2.31 echoes `--path-format=absolute` and exits 0, so `_gate_lock_path` takes git's answer only when it is one
+  absolute line, and returns `None` for anything else — §S1's "prints a directory". Model B's derivation gate
+  still holds for a main tree and a linked worktree (reproduced against the new body). The two existing tests
+  that took `/tmp/nai-gate.lock` (`test_rust_regression_coverage_is_opt_in`, `RustEarnedTierTest`) now run
+  unlocked. Model B was told (Sandesh 1496); its CR-MDB-052 item 15 drops the same dead branch from
+  `gate-lock.sh` and the contract.
 
 ## Non-goals
 

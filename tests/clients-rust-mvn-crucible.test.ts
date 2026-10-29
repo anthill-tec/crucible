@@ -971,8 +971,8 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (worksp
     const key = await createProject(baseUrl, "clients-rc-cr050-workspace-regression");
     const dir = scratch.dir("rust-crucible-cr050-workspace-");
     writeEnvFile(dir, key);
-    // `_acquire_gate_lock` resolves the lock path via `git rev-parse
-    // --git-common-dir` — a real (even if empty) git repo is required.
+    // `git init` keeps the drive's gate lock private to its project: inside
+    // a repository `_acquire_gate_lock` locks at the repository root.
     runGit(["init", "-q"], dir);
     writeFileSync(join(dir, ".gitkeep"), "");
     runGit(["add", "."], dir);
@@ -1148,7 +1148,7 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S2 (extended), CR-CRU-058 §
     const key = await createProject(baseUrl, "clients-rc-cr050-smoke-test");
     const dir = scratch.dir("rust-crucible-cr050-smoke-");
     writeEnvFile(dir, key);
-    runGit(["init", "-q"], dir); // required for the gate-lock path resolution
+    runGit(["init", "-q"], dir); // keeps the drive's gate lock private to its project
     writeFileSync(join(dir, ".gitkeep"), "");
     runGit(["add", "."], dir);
     runGit(["commit", "-q", "-m", "initial"], dir);
