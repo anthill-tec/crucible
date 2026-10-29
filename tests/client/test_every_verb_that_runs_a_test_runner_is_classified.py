@@ -1020,5 +1020,320 @@ class TheCensusReadsTheSharedIngestAsTheIngestCallTest(unittest.TestCase):
         self.assertEqual(len(self.findings), 5, "\n".join(self.findings))
 
 
+# ── the per-verb route-and-call-site table ─────────────────────────────────
+#
+# Every verb the census classifies as filing something (`applies` or `exempt`)
+# has a row naming the ingest call sites its handler reaches, split in two:
+#
+#   * `report` — the sites that file a run's REPORT (the `/api/v2/runs` and
+#     `/api/v2/runs/parsed` routes);
+#   * `no_report` — the sites that file no report (the synthetic compile
+#     ingest a run with no report, or a compile gate, files on
+#     `/api/v2/runs/compile`).
+#
+# A site is `(owner, callee, route)`: the client function holding the call, the
+# ingest it calls (`post_ingest`, with its literal route, or the shared ingest,
+# whose one route is `/api/v2/runs`). A call of the shared ingest is its own
+# call site, whichever client function holds it, so its owner reads `SHARED`.
+#
+# The table is shaped per client. Bun files every report through the shared
+# ingest. Python stays on `/api/v2/runs/parsed` until its own cycle moves it;
+# maven, rust and arduino sit at their current routes until CR-CRU-206 moves
+# them, extending this same table.
+
+RUNS_ROUTE = "/api/v2/runs"
+PARSED_ROUTE = "/api/v2/runs/parsed"
+COMPILE_ROUTE = "/api/v2/runs/compile"
+REPORT_ROUTES = (RUNS_ROUTE, PARSED_ROUTE)
+SHARED = "<the shared ingest>"
+
+
+class Routes(NamedTuple):
+    report: frozenset
+    no_report: frozenset
+
+
+def routes(report=(), no_report=()):
+    return Routes(frozenset(report), frozenset(no_report))
+
+
+def ingest_sites(source):
+    """`{function: {(owner, callee, route)}}` — every ingest call each
+    module-level function of `source` holds."""
+    found = {}
+    for node in ast.parse(source).body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call):
+                continue
+            callee = _callee_name(call)
+            if callee == SHARED_INGEST:
+                site = (SHARED, SHARED_INGEST, RUNS_ROUTE)
+            elif callee == "post_ingest":
+                route = (call.args[1].value if len(call.args) >= 2
+                         and isinstance(call.args[1], ast.Constant)
+                         else "<computed route>")
+                site = (node.name, "post_ingest", route)
+            else:
+                continue
+            found.setdefault(node.name, set()).add(site)
+    return found
+
+
+def verb_routes(source, handlers, census):
+    """`{verb: Routes}` for every verb `census` classifies as filing
+    something, read off the ingest sites its handler reaches."""
+    code = ClientSource(source)
+    sites = ingest_sites(source)
+    table = {}
+    for verb, entry in census.items():
+        if entry.kind == NOT_INGESTING or verb not in handlers:
+            continue
+        reached = {site for owner in code.reach(handlers[verb])
+                   for site in sites.get(owner, ())}
+        table[verb] = routes(
+            report={s for s in reached if s[2] in REPORT_ROUTES},
+            no_report={s for s in reached if s[2] not in REPORT_ROUTES})
+    return table
+
+
+_THROUGH_THE_SHARED_INGEST = {(SHARED, SHARED_INGEST, RUNS_ROUTE)}
+_BUN_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
+_PY_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
+_PY_PARSED = {("_ingest_parsed", "post_ingest", PARSED_ROUTE)}
+_MVN_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
+_MVN_PARSED = {("_ingest_parsed", "post_ingest", PARSED_ROUTE)}
+_MVN_JUNIT_DIR = {("_ingest_junit_dir", "post_ingest", RUNS_ROUTE)}
+_RUST_JUNIT = {("_ingest_junit_axi", "post_ingest", RUNS_ROUTE)}
+_RUST_RUSTC = {("_ingest_rustc_stderr", "post_ingest", COMPILE_ROUTE)}
+_RUST_WORKSPACE = {("_workspace_regression_run", "post_ingest", PARSED_ROUTE)}
+_ARDUINO_NATIVE = {("_run_native_tests_body", "post_ingest", PARSED_ROUTE)}
+_ARDUINO_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
+
+ROUTE_TABLE = {
+    "bun": {
+        # `test` with no junit.xml files the synthetic compile ingest: no report.
+        "test": routes(_THROUGH_THE_SHARED_INGEST, _BUN_COMPILE),
+        "regression": routes(_THROUGH_THE_SHARED_INGEST),
+        "unit": routes(_THROUGH_THE_SHARED_INGEST),
+        "module": routes(_THROUGH_THE_SHARED_INGEST),
+        "integration": routes(_THROUGH_THE_SHARED_INGEST),
+        "e2e": routes(_THROUGH_THE_SHARED_INGEST),
+        "bdd": routes(_THROUGH_THE_SHARED_INGEST),
+        # Its tsc step files a compile ingest: no report.
+        "pre-merge-gate": routes(_THROUGH_THE_SHARED_INGEST, _BUN_COMPILE),
+        "auto-ingest": routes(_THROUGH_THE_SHARED_INGEST),
+        "check": routes((), _BUN_COMPILE),
+    },
+    "python": {
+        **{verb: routes(_PY_PARSED, _PY_COMPILE)
+           for verb in ("test", "unit", "module", "integration", "e2e",
+                        "bdd", "regression", "pre-merge-gate")},
+        "auto-ingest": routes(_PY_PARSED),
+        "check": routes((), _PY_COMPILE),
+    },
+    "mvn": {
+        "test": routes(_MVN_JUNIT_DIR, _MVN_COMPILE),
+        "unit": routes(_MVN_JUNIT_DIR | _MVN_PARSED, _MVN_COMPILE),
+        "module": routes(_MVN_JUNIT_DIR | _MVN_PARSED, _MVN_COMPILE),
+        "bdd": routes(_MVN_JUNIT_DIR | _MVN_PARSED, _MVN_COMPILE),
+        "integration": routes(_MVN_PARSED, _MVN_COMPILE),
+        "e2e": routes(_MVN_PARSED, _MVN_COMPILE),
+        "regression": routes(_MVN_PARSED, _MVN_COMPILE),
+        "pre-merge-gate": routes(_MVN_PARSED, _MVN_COMPILE),
+        "auto-ingest": routes(_MVN_JUNIT_DIR | _MVN_PARSED, _MVN_COMPILE),
+        "check": routes((), _MVN_COMPILE),
+        "compile": routes((), _MVN_COMPILE),
+    },
+    "rust": {
+        **{verb: routes(_RUST_JUNIT, _RUST_RUSTC)
+           for verb in ("test", "unit", "integration", "e2e", "module", "bdd")},
+        "smoke-test": routes({("_smoke_run", "post_ingest", RUNS_ROUTE)}),
+        "docker-e2e-gate": routes({("_smoke_run", "post_ingest", RUNS_ROUTE)}),
+        "workspace-regression": routes(_RUST_WORKSPACE),
+        "regression": routes(_RUST_WORKSPACE),
+        "pre-merge-gate": routes(_RUST_WORKSPACE, _RUST_RUSTC),
+        "regression-ingest": routes(
+            {("_regression_ingest_run", "post_ingest", PARSED_ROUTE)}),
+        "auto-ingest": routes(
+            _RUST_JUNIT, {("cmd_auto_ingest", "post_ingest", COMPILE_ROUTE)}),
+        "check": routes((), _RUST_RUSTC),
+        "clippy": routes((), _RUST_RUSTC),
+        "workspace-clippy": routes((), _RUST_RUSTC),
+    },
+    "arduino": {
+        **{verb: routes(_ARDUINO_NATIVE)
+           for verb in ("test", "unit", "regression", "module", "integration",
+                        "e2e", "bdd")},
+        "pre-merge-gate": routes(_ARDUINO_NATIVE, _ARDUINO_COMPILE),
+        "auto-ingest": routes({("cmd_auto_ingest", "post_ingest", PARSED_ROUTE)}),
+        "check": routes((), _ARDUINO_COMPILE),
+        "compile": routes((), _ARDUINO_COMPILE),
+    },
+}
+
+
+def _route_lines(table):
+    return "\n".join(
+        f"  {verb}: report={sorted(r.report)} no_report={sorted(r.no_report)}"
+        for verb, r in sorted(table.items()))
+
+
+class EveryFilingVerbsRouteAndCallSiteAreTabledTest(unittest.TestCase):
+    """The route-and-call-site table, against each real client's source."""
+
+    def assert_client_matches_its_table(self, client):
+        actual = verb_routes(_client_source(client), _client_handlers(client),
+                             client_census(client))
+        expected = ROUTE_TABLE[client]
+        self.assertEqual(
+            actual, expected,
+            f"{client}: the ingest call sites each filing verb reaches.\n"
+            f"actual:\n{_route_lines(actual)}\nexpected:\n"
+            f"{_route_lines(expected)}")
+
+    def test_every_bun_report_verb_files_through_the_shared_ingest_only(self):
+        self.assert_client_matches_its_table("bun")
+
+    def test_every_python_report_verb_stays_on_the_parsed_route(self):
+        self.assert_client_matches_its_table("python")
+
+    def test_every_mvn_filing_verb_sits_at_its_current_route(self):
+        self.assert_client_matches_its_table("mvn")
+
+    def test_every_rust_filing_verb_sits_at_its_current_route(self):
+        self.assert_client_matches_its_table("rust")
+
+    def test_every_arduino_filing_verb_sits_at_its_current_route(self):
+        self.assert_client_matches_its_table("arduino")
+
+    def test_the_table_has_a_row_for_every_filing_verb_and_no_other(self):
+        for client in CLIENT_KEYS:
+            census = client_census(client)
+            filing = {verb for verb, entry in census.items()
+                      if entry.kind != NOT_INGESTING
+                      and verb in _client_handlers(client)}
+            with self.subTest(client=client):
+                self.assertEqual(set(ROUTE_TABLE[client]), filing)
+
+    def test_bun_states_neither_the_parsed_route_nor_a_data_path(self):
+        # Docstrings may name the route; no live string may.
+        tree = ast.parse(_client_source("bun"))
+        docstrings = {id(node.value) for node in ast.walk(tree)
+                      if isinstance(node, ast.Expr)
+                      and isinstance(node.value, ast.Constant)}
+        live = [node.value for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in docstrings]
+        self.assertEqual(
+            [text for text in live if text in (PARSED_ROUTE, "dataPath")], [],
+            "the bun client never posts to the parsed route and never sends "
+            "a `dataPath`")
+
+
+_SYNTHETIC_ROUTED_CLIENT = textwrap.dedent('''
+    import argparse
+
+
+    def _axi():
+        raise RuntimeError("never run: the table only reads this source")
+
+
+    def _post(path, payload):
+        raise RuntimeError("never run")
+
+
+    def _get(path):
+        raise RuntimeError("never run")
+
+
+    def _file_compile(text):
+        return _axi().post_ingest(_post, "/api/v2/runs/compile", {"e": text},
+                                  stack="synthetic")
+
+
+    def _file_parsed(counts):
+        return _axi().post_ingest(_post, "/api/v2/runs/parsed", counts,
+                                  stack="synthetic")
+
+
+    def _shared_body(args):
+        if args.nothing:
+            return _file_compile("no report")
+        return _axi().{shared}(_post, _get, codec="junit", report_paths=[],
+                               stack="synthetic", runner_exit=0)
+
+
+    def cmd_shared(args):
+        return _shared_body(args)
+
+
+    def cmd_parsed(args):
+        return _file_parsed({})
+
+
+    def cmd_compile(args):
+        return _file_compile("tsc")
+
+
+    def cmd_status(args):
+        return 0
+
+
+    def main():
+        p = argparse.ArgumentParser()
+        sub = p.add_subparsers(dest="cmd", required=True)
+        for verb, func in (("shared", cmd_shared), ("parsed", cmd_parsed),
+                           ("compile", cmd_compile), ("status", cmd_status)):
+            sub.add_parser(verb).set_defaults(func=func)
+        args = p.parse_args()
+        return args.func(args)
+''')
+
+
+class TheRouteTableIsProvedOnASyntheticClientTest(unittest.TestCase):
+    """The table reader, on a synthetic client: a shared-ingest verb with a
+    compile no-report exit, a parsed-route verb, a compile gate, and a verb
+    that files nothing."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.source = _SYNTHETIC_ROUTED_CLIENT.replace("{shared}",
+                                                      _shared_ingest_name())
+        cls.tmpdir = tempfile.mkdtemp(prefix="route-table-synthetic-")
+        path = Path(cls.tmpdir) / "synthetic-routed-crucible.py"
+        path.write_text(cls.source)
+        handlers = verb_handlers(path, "route_table_synthetic")
+        census = {"shared": applies("_shared_body"),
+                  "parsed": exempt("files a report on disk"),
+                  "compile": exempt("a compile gate"),
+                  "status": not_ingesting("reads only")}
+        cls.table = verb_routes(cls.source, handlers, census)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_a_shared_ingest_call_is_its_own_call_site_on_the_runs_route(self):
+        self.assertEqual(
+            self.table["shared"],
+            routes({(SHARED, SHARED_INGEST, RUNS_ROUTE)},
+                   {("_file_compile", "post_ingest", COMPILE_ROUTE)}))
+
+    def test_a_post_ingest_call_is_read_with_its_owner_and_literal_route(self):
+        self.assertEqual(
+            self.table["parsed"],
+            routes({("_file_parsed", "post_ingest", PARSED_ROUTE)}))
+
+    def test_a_compile_ingest_is_a_no_report_site(self):
+        self.assertEqual(
+            self.table["compile"],
+            routes((), {("_file_compile", "post_ingest", COMPILE_ROUTE)}))
+
+    def test_a_verb_that_files_nothing_has_no_row(self):
+        self.assertNotIn("status", self.table)
+
+
 if __name__ == "__main__":
     unittest.main()
