@@ -30,6 +30,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.live_run_harness import get_answering_health, write_fake_bun
 from tests.client.test_client_fleet_envelope_census import (
     declare_board,
     install_project_limits,
@@ -400,13 +401,14 @@ class _ClientIngestCase(unittest.TestCase):
                 os.environ[key] = value
 
     def drive(self, start_reply, body):
-        """Run `body` with the client's `_post` recording and its `_get` offline;
+        """Run `body` with the client's `_post` recording and its `_get` offline
+        but for the board's health;
         a verb's exit is part of the drive, not an error of it."""
         recorder = _RecordingPost(start_reply)
         with mock.patch.object(self.module, "_post", side_effect=recorder,
                                create=True), \
-                mock.patch.object(self.module, "_get", return_value=BOARD_OFFLINE,
-                                  create=True), \
+                mock.patch.object(self.module, "_get", create=True,
+                                  side_effect=get_answering_health(BOARD_OFFLINE)), \
                 contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(io.StringIO()), \
                 contextlib.suppress(SystemExit):
@@ -496,40 +498,38 @@ class ArduinoStatesItsStackOnEveryIngestTest(_ClientIngestCase):
 
 
 class BunStatesItsStackOnEveryIngestTest(_ClientIngestCase):
-    """bun: `_start_run`, then `_ingest_parsed` / `_ingest_raw` /
-    `_ingest_compile` with whatever runId came back."""
+    """bun: `regression` (its run opened through `_start_run`, its report sent
+    through the shared ingest), and `_start_run` then `_ingest_compile` with
+    whatever runId came back."""
 
     CLIENT = "bun"
 
-    def _parsed(self, run_id):
-        self.module._ingest_parsed(self.project_dir, AGENT, dict(SUMMARY_ONE_PASS),
-                                   list(TREE_ONE_PASS), run_id=run_id)
-
-    def _raw(self, run_id):
-        report = self.write_junit(os.path.join(self.project_dir, "report.xml"))
-        self.module._ingest_raw(self.project_dir, AGENT,
-                                {"codec": "junit", "path": report}, run_id=run_id)
+    def _regression(self):
+        fake = write_fake_bun(self.project_dir, 1)
+        args = argparse.Namespace(
+            project_dir=self.project_dir, package_dir=self.project_dir,
+            bun=fake, agent=AGENT, reports="reports", coverage=False, log=None,
+            cycle=None, release=None, no_lifecycle=False)
+        self.module.cmd_regression(args)
 
     def _compile(self, run_id):
         self.module._ingest_compile(self.project_dir, AGENT,
                                     "src/a.ts(1,1): error TS2304: boom",
                                     run_id=run_id)
 
-    def test_a_parsed_ingest_states_the_bun_stack_when_its_start_was_accepted(self):
-        recorder = self.start_then(START_ACCEPTED, self._parsed)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_ACCEPTED)
-
-    def test_a_parsed_ingest_states_the_bun_stack_when_its_start_was_refused(self):
-        recorder = self.start_then(START_REFUSED, self._parsed)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_REFUSED)
-
-    def test_a_raw_run_ingest_states_the_bun_stack_when_its_start_was_accepted(self):
-        recorder = self.start_then(START_ACCEPTED, self._raw)
+    def test_a_report_ingest_states_the_bun_stack_when_its_start_was_accepted(self):
+        recorder = self.drive(START_ACCEPTED, self._regression)
         self.assert_ingest_states_the_stack(recorder, RUNS, START_ACCEPTED)
+        self.assertEqual(recorder.bodies(PARSED), [],
+                         f"bun files no report on {PARSED}; posted to "
+                         f"{recorder.paths()!r}")
 
-    def test_a_raw_run_ingest_states_the_bun_stack_when_its_start_was_refused(self):
-        recorder = self.start_then(START_REFUSED, self._raw)
+    def test_a_report_ingest_states_the_bun_stack_when_its_start_was_refused(self):
+        recorder = self.drive(START_REFUSED, self._regression)
         self.assert_ingest_states_the_stack(recorder, RUNS, START_REFUSED)
+        self.assertEqual(recorder.bodies(PARSED), [],
+                         f"bun files no report on {PARSED}; posted to "
+                         f"{recorder.paths()!r}")
 
     def test_a_compile_ingest_states_the_bun_stack_when_its_start_was_accepted(self):
         recorder = self.start_then(START_ACCEPTED, self._compile)
