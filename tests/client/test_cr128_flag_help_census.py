@@ -114,6 +114,7 @@ Fallback:
     python3 tests/client/test_cr128_flag_help_census.py
 """
 
+import argparse
 import ast
 import copy
 import re
@@ -137,6 +138,7 @@ from test_client_tier_surface import (  # noqa: E402
     EXPECTED_CLIENT_COUNT,
 )
 from test_cr054_verb_surface_lift import _load_module_by_path  # noqa: E402
+from test_client_fleet_envelope_census import enumerate_verbs  # noqa: E402
 
 TYPES_TS_PATH = REPO_ROOT / "src" / "types.ts"
 V2_ROUTES_PATH = REPO_ROOT / "src" / "v2.ts"
@@ -1211,6 +1213,59 @@ class UntouchedFlagSignatureTest(unittest.TestCase):
         """GUARD. 18 offenders were measured 2026-09-13; the pin must hold all
         18, or it silently permits a behaviour change on the ones it omits."""
         self.assertEqual(18, len(UNTOUCHED_KEYWORD_PIN))
+
+
+# CR-CRU-216 §S3 — "Every new flag carries its own help text." The derived
+# census above already fails a new flag that declares no `help=`; what it
+# cannot see is a verb that is not there. So the stored-run read verbs' flags
+# are read off each client's LIVE parser (`enumerate_verbs`, the same argparse
+# capture the envelope census uses): both verbs present in all five clients,
+# `runs` carrying the four flags §S1 names, and every option of either verb
+# described by a help text of its own.
+RUN_READ_VERB_FLAGS = {
+    "runs": ("--cycle", "--release", "--fields", "--full"),
+    "run": (),
+}
+
+
+def _option_help(subparser):
+    """`{long flag: help text}` for every option of `subparser` but `-h`."""
+    found = {}
+    for action in subparser._actions:
+        if isinstance(action, argparse._HelpAction) or not action.option_strings:
+            continue
+        longs = [o for o in action.option_strings if o.startswith("--")]
+        found[(longs or action.option_strings)[0]] = action.help
+    return found
+
+
+class RunReadVerbFlagsDescribeThemselvesTest(unittest.TestCase):
+    """RED until `runs` and `run` exist: §S3's "every new flag carries its own
+    help text", on the verbs' live flag surface in every client."""
+
+    def test_every_flag_of_runs_and_run_carries_its_own_help_in_every_client(self):
+        problems = []
+        for client, path in sorted(CLIENT_FILES.items()):
+            verbs = enumerate_verbs(client, Path(path))
+            for verb, required in RUN_READ_VERB_FLAGS.items():
+                subparser = verbs.get(verb)
+                if subparser is None:
+                    problems.append("%s: no `%s` verb" % (client, verb))
+                    continue
+                helps = _option_help(subparser)
+                for flag in required:
+                    if flag not in helps:
+                        problems.append("%s %s: no %s" % (client, verb, flag))
+                for flag, text in sorted(helps.items()):
+                    if (not isinstance(text, str) or text == argparse.SUPPRESS
+                            or not text.strip()
+                            or text.strip().lstrip("-") == flag.lstrip("-")):
+                        problems.append("%s %s %s: help %r"
+                                        % (client, verb, flag, text))
+        self.assertEqual(
+            [], problems,
+            "the stored-run read verbs exist in all five clients and every "
+            "one of their flags describes itself:\n  " + "\n  ".join(problems))
 
 
 if __name__ == "__main__":

@@ -158,6 +158,12 @@ SHARED_CENSUS = {
     "gate-report": _GATE_RECORD,
 }
 
+# The stored-run read verbs (CR-CRU-216 §S3): read-only, filing nothing. Named
+# in EVERY client's own census below rather than in `SHARED_CENSUS`, whose
+# entries a client may lack without a finding: the spec owes both verbs to all
+# five clients, so a client missing either is a census finding.
+_STORED_RUN_READ = _READ
+
 # Each client's own verbs. A declared tier verb (one the shared
 # `declared_tier_run` registers) is classified by the body its client's
 # declared-target RUN function reaches.
@@ -173,6 +179,8 @@ CLIENT_CENSUS = {
         "pre-merge-gate": applies("cmd_regression"),
         "auto-ingest": _RUNS_NO_RUNNER,
         "check": _COMPILE_GATE,
+        "runs": _STORED_RUN_READ,
+        "run": _STORED_RUN_READ,
     },
     "python": {
         "test": applies("_test_run"),
@@ -185,6 +193,8 @@ CLIENT_CENSUS = {
         "pre-merge-gate": applies("_regression_run"),
         "auto-ingest": _RUNS_NO_RUNNER,
         "check": _COMPILE_GATE,
+        "runs": _STORED_RUN_READ,
+        "run": _STORED_RUN_READ,
     },
     "mvn": {
         "unit": applies("_surefire_tier_run"),
@@ -200,6 +210,8 @@ CLIENT_CENSUS = {
         "compile": _COMPILE_GATE,
         "docker-up": _DOCKER,
         "docker-down": _DOCKER,
+        "runs": _STORED_RUN_READ,
+        "run": _STORED_RUN_READ,
     },
     "rust": {
         "test": applies("_test_run"),
@@ -223,6 +235,8 @@ CLIENT_CENSUS = {
         "workspace-clippy": _LINT_GATE,
         "docker-up": _DOCKER,
         "docker-down": _DOCKER,
+        "runs": _STORED_RUN_READ,
+        "run": _STORED_RUN_READ,
     },
     "arduino": {
         "test": applies("_run_native_tests"),
@@ -236,6 +250,8 @@ CLIENT_CENSUS = {
         "auto-ingest": _RUNS_NO_RUNNER,
         "check": _COMPILE_GATE,
         "compile": _COMPILE_GATE,
+        "runs": _STORED_RUN_READ,
+        "run": _STORED_RUN_READ,
     },
 }
 

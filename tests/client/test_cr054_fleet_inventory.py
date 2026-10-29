@@ -2273,5 +2273,173 @@ class Cr108TrackRuleIsNotRederivedByTheFleetTest(unittest.TestCase):
             f"TWO. Still derived in: {offenders!r}")
 
 
+# ---------------------------------------------------------------------------
+# CR-CRU-216 SS3/AC5 -- `runs` and `run` join the fleet inventory.
+#
+# Same discipline as every post-CR-054 section above: the two stored-run read
+# delegators are frozen as their OWN named set, asserted DISJOINT from THE_42,
+# from the four measured categories and from every earlier post-054 set, and
+# checked by the same defined-in-every-client / duplicate-definition /
+# hand-rolled-subparser machinery. Nothing here touches THE_42's count.
+#
+# The spec does not NAME the shared registrar, so it is not named here either:
+# it is the one registrar `_shared_registrar_verb_sets` discovers registering
+# these verbs, and the derived CR-CRU-075 parity check above then owes it to
+# every client the day it lands.
+# ---------------------------------------------------------------------------
+
+# The two shared-implementation delegators, in every client.
+CR216_RUN_READ_VERB_FUNCTIONS = frozenset({"cmd_runs", "cmd_run"})
+
+# The CLI verb names those functions are registered under (5 clients x 2
+# verbs), each mapped onto its own delegator.
+CR216_RUN_READ_VERBS = ("runs", "run")
+CR216_RUN_READ_DELEGATOR_OF = {"runs": "cmd_runs", "run": "cmd_run"}
+
+
+def _cr216_registrars(axi_path=AXI_MODULE_PATH):
+    """The shared registrars that register either stored-run read verb, as
+    `{name: frozenset(verbs)}`."""
+    return {name: verbs
+            for name, verbs in _shared_registrar_verb_sets(axi_path).items()
+            if verbs & set(CR216_RUN_READ_VERBS)}
+
+
+def _registrar_dict_mapping(path, registrar):
+    """The verb -> delegator-name dict a client hands `registrar` in a
+    REACHABLE call (a module-level statement or one of `main()`'s own body,
+    `_client_registrar_calls`' rule); None when it makes no such call."""
+    tree = ast.parse(path.read_text())
+    reachable = list(tree.body)
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and node.name == "main":
+            reachable.extend(node.body)
+    for statement in reachable:
+        if not (isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Call)
+                and _called_registrar_name(statement.value) == registrar):
+            continue
+        mapping = {}
+        call = statement.value
+        for arg in list(call.args) + [kw.value for kw in call.keywords]:
+            if isinstance(arg, ast.Dict):
+                for key, value in zip(arg.keys, arg.values):
+                    if isinstance(key, ast.Constant):
+                        mapping[key.value] = (value.id if isinstance(value, ast.Name)
+                                              else ast.unparse(value))
+        return mapping
+    return None
+
+
+class Cr216RunReadVerbInventoryTest(unittest.TestCase):
+    """AC5 -- both verbs in all five clients, each client with its own
+    `cmd_runs` and `cmd_run`, registered through ONE shared registrar."""
+
+    def test_the_run_read_set_holds_exactly_the_two_verbs(self):
+        self.assertEqual(len(CR216_RUN_READ_VERB_FUNCTIONS), 2)
+        self.assertEqual(len(CR216_RUN_READ_VERBS), 2)
+        self.assertEqual(set(CR216_RUN_READ_DELEGATOR_OF),
+                         set(CR216_RUN_READ_VERBS))
+        self.assertEqual(set(CR216_RUN_READ_DELEGATOR_OF.values()),
+                         CR216_RUN_READ_VERB_FUNCTIONS)
+
+    def test_the_run_read_set_is_disjoint_from_every_earlier_frozen_set(self):
+        for label, other in (("THE_42", THE_42),) + POST_CR054_VERB_FUNCTION_SETS:
+            with self.subTest(other=label):
+                overlap = CR216_RUN_READ_VERB_FUNCTIONS & other
+                self.assertEqual(overlap, frozenset(),
+                                 f"the run-read set must not touch {label}; "
+                                 f"overlap: {overlap!r}")
+        for label, other in POST_CR054_VERB_NAME_SETS:
+            with self.subTest(other=label):
+                overlap = set(CR216_RUN_READ_VERBS) & other
+                self.assertEqual(overlap, set(),
+                                 f"`runs`/`run` are new CLI verb names, not "
+                                 f"renames of {label}; overlap: {overlap!r}")
+
+    def test_no_run_read_delegator_is_classified_into_a_measured_category(self):
+        strays = {name: sorted(CR216_RUN_READ_VERB_FUNCTIONS & category)
+                  for category, name in zip(ALL_CATEGORIES, CATEGORY_NAMES)
+                  if CR216_RUN_READ_VERB_FUNCTIONS & category}
+        self.assertEqual(strays, {},
+                         f"a verb shipped after the fleet inventory was measured has no "
+                         f"measured "
+                         f"drift verdict to be classified under: {strays!r}")
+
+    def test_cmd_runs_and_cmd_run_are_defined_in_all_five_clients(self):
+        missing = {
+            name: [c for c in CLIENT_FILES
+                   if name not in _ALL_CLIENT_FUNCTION_NAMES[c]]
+            for name in sorted(CR216_RUN_READ_VERB_FUNCTIONS)
+        }
+        missing = {k: v for k, v in missing.items() if v}
+        self.assertEqual(
+            missing, {},
+            f"SS3: every client defines its own cmd_runs and cmd_run; "
+            f"missing from: {missing!r}")
+
+    def test_no_client_defines_a_run_read_delegator_twice(self):
+        offenders = [f"{client}:{name} ({counts[name]}x)"
+                     for client, counts in _ALL_CLIENT_FUNCTION_NAMES.items()
+                     for name in sorted(CR216_RUN_READ_VERB_FUNCTIONS)
+                     if counts.get(name, 0) > 1]
+        self.assertEqual(
+            offenders, [],
+            f"a duplicate top-level def would silently make the SECOND "
+            f"definition win at import time: {offenders!r}")
+
+    def test_one_shared_registrar_registers_both_verb_names(self):
+        registrars = _cr216_registrars()
+        self.assertEqual(
+            sorted(registrars.values(), key=sorted),
+            [frozenset(CR216_RUN_READ_VERBS)],
+            f"SS3: exactly ONE shared registrar in _crucible_axi.py "
+            f"registers `runs` and `run` (the add_roadmap_verbs shape); "
+            f"found {registrars!r}")
+
+    def test_every_client_wires_both_verbs_to_its_own_delegators(self):
+        registrars = _cr216_registrars()
+        if len(registrars) != 1:
+            self.fail(f"no single shared registrar to wire through: "
+                      f"{registrars!r}")
+        (registrar,) = registrars
+        offenders = {}
+        for client, path in CLIENT_FILES.items():
+            mapping = _registrar_dict_mapping(path, registrar)
+            if mapping is None:
+                offenders[client] = f"unwired: no reachable {registrar}(...)"
+                continue
+            wrong = {verb: mapping.get(verb) for verb in CR216_RUN_READ_VERBS
+                     if mapping.get(verb) != CR216_RUN_READ_DELEGATOR_OF[verb]}
+            if wrong:
+                offenders[client] = f"not wired to its own delegators: {wrong!r}"
+        self.assertEqual(
+            offenders, {},
+            f"each client hands the shared registrar a funcs mapping of both "
+            f"verbs onto its OWN cmd_runs/cmd_run (5 clients x 2 verbs): "
+            f"{offenders!r}")
+
+    def test_no_client_hand_rolls_a_run_read_subparser(self):
+        offenders = {client: sorted(set(CR216_RUN_READ_VERBS) & registered)
+                     for client, registered in _ALL_CLIENT_VERB_NAMES.items()
+                     if set(CR216_RUN_READ_VERBS) & registered}
+        self.assertEqual(
+            offenders, {},
+            f"the `runs`/`run` subparsers are built ONCE, by the shared "
+            f"registrar: {offenders!r}")
+
+    def test_no_client_smuggles_the_run_read_verbs_into_the_frozen_five(self):
+        offenders = {
+            client: sorted(set(mapping) & set(CR216_RUN_READ_VERBS))
+            for client, mapping in _ALL_CLIENT_ROADMAP_REGISTRATIONS.items()
+            if set(mapping) & set(CR216_RUN_READ_VERBS)
+        }
+        self.assertEqual(
+            offenders, {},
+            f"the roadmap registrar stays its frozen five: "
+            f"{offenders!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

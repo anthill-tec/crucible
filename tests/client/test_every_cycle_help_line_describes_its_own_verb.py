@@ -9,8 +9,17 @@ kind's wording tells its reader something the run does not do.
 
 THE POPULATION is read off each client's real argparse (`enumerate_verbs`),
 never a hand-kept list: every verb whose subparser declares `--cycle`, except
-`register` (whose `--cycle` binds a registration, not a run) and `plan-file`
-(whose `--cycle` is a cycle LABEL).
+`register` (whose `--cycle` binds a registration, not a run), `plan-file`
+(whose `--cycle` is a cycle LABEL) and `runs` (whose `--cycle` is a READ
+FILTER: it selects the cycle whose stored runs to list, takes no `--agent`
+and posts nothing, so it is neither gated nor filing).
+
+A read filter is its own kind, pinned rather than exempted: in every client
+`runs` declares `--cycle`, takes no `--agent`, and its `--cycle` help states
+the cycle whose stored runs to list and carries neither shared wording. Any
+other `--cycle` verb that takes no `--agent` cannot be a run verb, so the
+census names it as unclassified instead of driving or scoring it: a future
+read verb must be counted as a read filter, never as a run.
 
 THE ORACLE is behaviour. Each verb is driven as a real subprocess, with
 `--agent` and `--cycle`, against its own `RecordingBoard`
@@ -69,6 +78,13 @@ CYCLE = 7
 # The two verbs whose `--cycle` is not a run's.
 NOT_A_RUNS_CYCLE = ("register", "plan-file")
 
+# The verbs whose `--cycle` is a READ FILTER: it selects which stored runs to
+# read back. Read-only (no `--agent`), so neither gated nor filing.
+READ_FILTER_CYCLE = ("runs",)
+
+# What every read filter's `--cycle` help states (CR-CRU-216 §S1).
+READ_FILTER_WORDING = "whose stored runs to list"
+
 TIERS = ("unit", "module", "integration", "e2e", "bdd")
 SEEDED_REPORTS = "seeded-reports"
 
@@ -94,12 +110,37 @@ def _cycle_action(subparser):
     return None
 
 
-def _runs_cycle_verbs(client_key):
-    """`{verb: subparser}` for every verb of the client that takes a run's
-    `--cycle`, read off the client's own argparse."""
+def _takes_agent(subparser):
+    return any("--agent" in action.option_strings
+               for action in subparser._actions)
+
+def _cycle_verbs(client_key):
+    """`{verb: subparser}` for every verb of the client whose subparser
+    declares `--cycle`, read off the client's own argparse, less the two
+    whose `--cycle` is not a run's."""
     verbs = enumerate_verbs(client_key, CLIENT_FILES[client_key])
     return {verb: sub for verb, sub in verbs.items()
             if verb not in NOT_A_RUNS_CYCLE and _cycle_action(sub) is not None}
+
+def _read_filter_cycle_verbs(client_key):
+    """`{verb: subparser}` for the client's verbs whose `--cycle` is a read
+    filter."""
+    return {verb: sub for verb, sub in _cycle_verbs(client_key).items()
+            if verb in READ_FILTER_CYCLE}
+
+def _unclassified_cycle_verbs(client_key):
+    """Verbs declaring `--cycle` that are neither a read filter nor a run
+    verb: no `--agent`, so they cannot be driven as a run, and not counted
+    as a read filter either."""
+    return sorted(verb for verb, sub in _cycle_verbs(client_key).items()
+                  if verb not in READ_FILTER_CYCLE and not _takes_agent(sub))
+
+def _runs_cycle_verbs(client_key):
+    """`{verb: subparser}` for every verb of the client that takes a run's
+    `--cycle` (gated or filing): it declares `--cycle` and `--agent` and is
+    not a read filter."""
+    return {verb: sub for verb, sub in _cycle_verbs(client_key).items()
+            if verb not in READ_FILTER_CYCLE and _takes_agent(sub)}
 
 
 def _seed(client_key, verb, project_dir, red):
@@ -300,6 +341,71 @@ class CycleHelpMatchesTheVerbTest(unittest.TestCase):
             row["help"], FILING,
             "rust docker-e2e-gate's --cycle help must be the shared filing "
             "wording (FILING_CYCLE_HELP), not the gated one")
+
+class ReadFilterCycleIsItsOwnKindTest(unittest.TestCase):
+    """A read verb's `--cycle` selects stored runs to read back: it is
+    neither gated nor filing, and the census counts it as neither."""
+
+    def test_every_client_declares_runs_with_a_read_filter_cycle(self):
+        """`runs` is in every client, declares `--cycle`, takes no
+        `--agent`, and is kept out of the gated/filing population."""
+        for client_key in sorted(CLIENT_FILES):
+            with self.subTest(client=client_key):
+                read_filters = _read_filter_cycle_verbs(client_key)
+                self.assertEqual(
+                    sorted(read_filters), list(READ_FILTER_CYCLE),
+                    f"{client_key}: every read-filter verb must declare --cycle")
+                for verb, sub in read_filters.items():
+                    self.assertFalse(
+                        _takes_agent(sub),
+                        f"{client_key} {verb} is read-only and must take no "
+                        f"--agent; one that does is a run verb miscounted as "
+                        f"a read filter")
+                self.assertNotIn(
+                    "runs", _runs_cycle_verbs(client_key),
+                    f"{client_key}: runs' --cycle is a read filter and must not "
+                    f"be driven as a gated or filing run")
+
+    def test_runs_cycle_help_names_the_stored_runs_it_lists_in_neither_run_wording(self):
+        """In every client `runs`' `--cycle` help states the cycle whose
+        stored runs to list, and carries neither GATE_CYCLE_HELP nor
+        FILING_CYCLE_HELP."""
+        shared = _shared()
+        for client_key in sorted(CLIENT_FILES):
+            with self.subTest(client=client_key):
+                sub = _read_filter_cycle_verbs(client_key).get("runs")
+                if sub is None:
+                    self.fail(f"{client_key}: runs must declare --cycle")
+                help_text = _cycle_action(sub).help or ""
+                self.assertIn("cycle", help_text.lower())
+                self.assertIn(
+                    READ_FILTER_WORDING, help_text,
+                    f"{client_key} runs: --cycle help must state the cycle "
+                    f"whose stored runs to list; got {help_text!r}")
+                for name, wording in (("GATE_CYCLE_HELP", shared.GATE_CYCLE_HELP),
+                                      ("FILING_CYCLE_HELP", shared.FILING_CYCLE_HELP)):
+                    self.assertNotEqual(
+                        help_text, wording,
+                        f"{client_key} runs: a read filter's --cycle help must "
+                        f"not be {name}")
+                    self.assertNotIn(
+                        wording, help_text,
+                        f"{client_key} runs: a read filter's --cycle help must "
+                        f"not carry {name}")
+
+    def test_no_cycle_verb_is_left_unclassified(self):
+        """Every verb declaring `--cycle` is register, plan-file, a read
+        filter, or a run verb taking `--agent`. A future read verb whose
+        `--cycle` is counted as none of these is named here, never driven as
+        a run nor silently dropped."""
+        unclassified = {client_key: _unclassified_cycle_verbs(client_key)
+                        for client_key in sorted(CLIENT_FILES)}
+        unclassified = {c: v for c, v in unclassified.items() if v}
+        self.assertEqual(
+            unclassified, {},
+            f"verbs declaring --cycle without --agent must be counted as read "
+            f"filters (READ_FILTER_CYCLE) or take --agent as a run verb; "
+            f"unclassified: {unclassified}")
 
 
 if __name__ == "__main__":

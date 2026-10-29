@@ -1,6 +1,7 @@
 # CR-CRU-216 — the client reads a stored run back
 
-**Type** feature · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-29
+**Type** feature · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — merged 2026-10-30 (plan 219, cycles 800–803,
+gate: bun 4226/0 at cycle 802, python 5284/0 at cycle 803); filed 2026-10-29
 (user ruling 2026-10-29, from CR-CRU-204's merge sign-off: `runs` list and `run <id>` detail, sequenced after
 CR-CRU-215); gap analysis and spec pre-review 2026-10-30 (re-scored 5 → 8)
 
@@ -86,31 +87,37 @@ and the printed-help walks cover their flags.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — `runs`.** Against a board holding test and compile runs in two cycles and one release, plus a gate
+- [x] **AC1 — `runs`.** Against a board holding test and compile runs in two cycles and one release, plus a gate
       milestone and a gate record in the first cycle, `runs --cycle <id>` lists exactly that cycle's test and
       compile runs and `runs --release <label>` exactly that release's, every row carrying every column §S1 names
       with the board's values — a compile row its `errors` and `warnings` and empty test counts, a test row the
       reverse — and no milestone or gate row; an unknown cycle is an empty table, `ok: true`, naming the project
       key in its `help`.
-- [ ] **AC2 — the list is bounded.** Past the `roadmap_list_rows` limit the table is cut, `totalCount` states the
+- [x] **AC2 — the list is bounded.** Past the `roadmap_list_rows` limit the table is cut, `totalCount` states the
       true number of runs, and `--full` prints every row; `--fields` narrows the columns.
-- [ ] **AC3 — `run`.** For a stored failing test run, `run <id>` prints its brief, its per-suite counts (with
+- [x] **AC3 — `run`.** For a stored failing test run, `run <id>` prints its brief, its per-suite counts (with
       `browser`) and its failing tests; for a failing compile run, its brief with `errors` and `warnings` and its
       diagnostics. It refuses, `ok: false`, exit 1: an id the board does not hold, naming it; a gate or milestone
       id, naming the kind; another project's run, naming both keys; and a failing-tests read that fails after
       the suites read succeeded.
-- [ ] **AC4 — usage and the board's absence.** Neither flag, both, or a non-integer `--cycle` is an `ok: false`
+- [x] **AC4 — usage and the board's absence.** Neither flag, both, or a non-integer `--cycle` is an `ok: false`
       envelope naming the flags, exit 2, with no request sent. Driven as `runs --cycle 1` and `run <id>` against
       a board that is not reachable, each prints one `ok: false` envelope naming the board, exits 1 and prints no
       traceback.
-- [ ] **AC5 — every client, one registrar.** All five clients expose `runs` and `run` through the one shared
+- [x] **AC5 — every client, one registrar.** All five clients expose `runs` and `run` through the one shared
       registrar, each with its own `cmd_runs` and `cmd_run` and no `add_parser` of its own for either; the fleet
       envelope census reads both verbs as enveloped in every client, and the runner census classifies both as
       read-only.
-- [ ] **AC6 — read only.** Neither verb sends anything but `GET` requests.
-- [ ] **AC7 — through the real board.** One test files a test run through the python client against a board it
+- [x] **AC6 — read only.** Neither verb sends anything but `GET` requests.
+- [x] **AC7 — through the real board.** One test files a test run through the python client against a board it
       spawns, then reads it back with `runs --cycle` and `run <id>` through that client, and the values printed
       equal the stored ones.
+- *Recorded at merge:* VERIFY approved with no blocking finding. Its S2 was fixed in its own cycle (802, user
+  ruling): `run` against an unreachable board now gives the reachability step `runs` gives, one shared phrasing,
+  not a `runs --cycle` step. Cycle 802's full gate found the cycle-help census driving every `--cycle` verb as a
+  gated or filing run; `runs`' `--cycle` is a read filter, so cycle 803 pins it as its own kind (test-only), and
+  the python suite was re-run alone. VERIFY's S1 (the crucible skill names no 0.4.0 verbs) goes to Model B with
+  the 0.4.0 notice.
 
 ## Non-goals
 
