@@ -17,8 +17,9 @@
 //  - the response's `run` block carries the kept coverage as
 //    `coverage: {lines, functions, branches?}`.
 //
-// Every expected coverage object below is what the clients compute today on
-// the same text: `_parse_lcov` (clients/bun-crucible.py) and `_collect_jacoco`
+// Every expected coverage object below is what the clients computed on the
+// same text: the bun client's lcov summation (before the board's `lcov` codec,
+// `src/codecs/coverage.ts`, took it over) and `_collect_jacoco`
 // (clients/mvn-crucible.py), run on these exact texts. Driven through the real
 // production HTTP surface (`startServer`, in-memory store); every stored
 // outcome is read back through the board's own reads — the run detail
