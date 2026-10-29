@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.client.live_run_harness import (
     RecordingBoard,
     install_project,
+    junit_sent,
     load_client,
     load_toon,
     scrubbed_env,
@@ -186,9 +187,9 @@ def _subtests_uncounted_warning(axi):
     return None
 
 
-def _last_parsed_or_compile_payload(board):
+def _last_report_or_compile_payload(board):
     for path, body in reversed(board.posts()):
-        if path in ("/api/v2/runs/parsed", "/api/v2/runs/compile"):
+        if path in ("/api/v2/runs", "/api/v2/runs/compile"):
             return path, body
     return None, None
 
@@ -309,22 +310,19 @@ class AFiledRunCarriesTheWarningTest(_FallbackCase):
                     code, 0,
                     f"{verb_label}: a filed all-passing run's exit must stay "
                     f"unchanged by the warning; got code={code} stdout={out!r}")
-                run_summary = axi.get("run") or {}
+                path, payload = _last_report_or_compile_payload(board)
                 self.assertEqual(
-                    run_summary.get("total"), 2,
+                    path, "/api/v2/runs",
+                    f"{verb_label}: a filed run must reach the board's "
+                    f"report-ingest path; posts={board.posts()!r}")
+                # The board decodes xmlrunner's own report as it stands: the
+                # reports sent hold its OWN 2 cases, none recounted.
+                sent = (junit_sent(payload) or {}).get("summary") or {}
+                self.assertEqual(
+                    (sent.get("total"), sent.get("failed")), (2, 0),
                     f"{verb_label}: the run must be filed with xmlrunner's "
                     f"OWN counts (2 cases, none recounted); got "
-                    f"run={run_summary!r}")
-                self.assertEqual(run_summary.get("failed"), 0, run_summary)
-                path, payload = _last_parsed_or_compile_payload(board)
-                self.assertEqual(
-                    path, "/api/v2/runs/parsed",
-                    f"{verb_label}: a filed run must reach the board's "
-                    f"parsed-ingest path; posts={board.posts()!r}")
-                self.assertEqual(
-                    (payload or {}).get("summary", {}).get("total"), 2,
-                    f"{verb_label}: the board must store the SAME total "
-                    f"xmlrunner's own report carried; payload={payload!r}")
+                    f"payload={payload!r}")
 
 
 class ARanNothingRunCarriesTheWarningTest(_FallbackCase):
@@ -380,7 +378,7 @@ class ANoReportCompileFailureCarriesTheWarningTest(_FallbackCase):
                     f"stderr={err!r}")
                 assert warning is not None  # narrowed by the assert above
                 self.assertIn(FAKE_VERSION, str(warning.get("detail", "")))
-                path, _payload = _last_parsed_or_compile_payload(board)
+                path, _payload = _last_report_or_compile_payload(board)
                 self.assertEqual(
                     path, "/api/v2/runs/compile",
                     f"{verb_label}: a no-report run must still be filed as "
