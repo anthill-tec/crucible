@@ -439,6 +439,138 @@ class ARefusalBeforeSendingAbortsTheOpenRunTest(_SharedIngestCase):
                      if c in ("run-aborted", "run-left-open")], [])
 
 
+# ── a report the client cannot read is a refusal before sending ────────────
+
+_RUNNING_AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
+_ROOT_SKIP_REASON = ("root reads a file whatever its mode bits, so no report "
+                     "can be made unreadable to this process")
+
+
+class AReportTheClientCannotReadIsRefusedBeforeSendingTest(_SharedIngestCase):
+    """A report or coverage path `ingest_reports` cannot read (a directory
+    where the file should be, a file without read permission) is a refusal
+    before sending (§S1): nothing goes to `/api/v2/runs`, the answer is
+    `{ok: False, error, warnings}` with the error naming the path and saying
+    nothing was sent, and an open run is aborted once with that refusal as
+    its reason, exactly as the other refusals before sending settle it."""
+
+    def directory_where_a_report_should_be(self, name):
+        path = os.path.join(self.scratch, name)
+        os.mkdir(path)
+        return path
+
+    def unreadable_report(self, name, text):
+        path = self._write(name, text)
+        os.chmod(path, 0)
+        self.addCleanup(os.chmod, path, 0o600)
+        return path
+
+    def ingest_unreadable(self, board, **overrides):
+        """The ingest's answer; an `OSError` it lets escape is the defect,
+        reported as a failure naming it."""
+        try:
+            return self.ingest(board, **overrides)
+        except OSError as exc:
+            self.fail(f"ingest_reports let {type(exc).__name__} escape for a "
+                      f"report it cannot read ({exc}); it must refuse before "
+                      f"sending and answer {{ok: False, error, warnings}}")
+
+    def assert_refused_naming(self, resp, path):
+        error = self.assert_refused(resp)
+        self.assertIn(path, error,
+                      f"the refusal names the path it cannot read; got {error!r}")
+        self.assertIn("nothing was sent", error,
+                      f"the refusal says nothing was sent; got {error!r}")
+        self.assertIsNone(CR_LITERAL.search(error),
+                          f"no CR literal in a client's refusal; got {error!r}")
+        return error
+
+    def assert_open_run_aborted_once(self, board, resp, error, code):
+        self.assertEqual(board.posts(RUNS), [], "nothing was ingested")
+        aborts = board.aborts()
+        self.assertEqual([p for p, _b in aborts], [f"/api/v2/runs/{RUN_ID}/abort"],
+                         f"the open run is aborted exactly once; posted "
+                         f"{[p for p, _ in board.posts()]!r}")
+        self.assertEqual([p for p, _b in board.posts()], [p for p, _b in aborts],
+                         "the abort is the only POST")
+        self.assertEqual(aborts[0][1], {"projectKey": PROJECT_KEY,
+                                        "agentId": AGENT, "reason": error},
+                         "the abort's reason is the refusal")
+        self.assertEqual(self.warning_codes(resp), [code])
+        self.assertIn(RUN_ID, resp["warnings"][0].get("detail", ""))
+
+    def assert_nothing_settled(self, resp):
+        self.assertEqual(
+            [c for c in self.warning_codes(resp)
+             if c in ("run-aborted", "run-left-open")], [],
+            f"no run was open: nothing to settle; got {resp!r}")
+
+    def test_a_report_path_that_is_a_directory_aborts_the_open_run_and_sends_nothing(self):
+        directory = self.directory_where_a_report_should_be("TEST-c.xml")
+        board = _Board()
+        self.axi.forget_ingested_run()
+        resp = self.ingest_unreadable(
+            board, run_id=RUN_ID,
+            report_paths=[self.report_a, directory, self.report_b])
+        error = self.assert_refused_naming(resp, directory)
+        self.assert_open_run_aborted_once(board, resp, error, "run-aborted")
+
+    def test_a_report_path_that_is_a_directory_with_no_run_open_posts_nothing(self):
+        directory = self.directory_where_a_report_should_be("TEST-c.xml")
+        board = _Board()
+        resp = self.ingest_unreadable(board, report_paths=[directory])
+        self.assert_refused_naming(resp, directory)
+        self.assert_sent_nothing(board)
+        self.assert_nothing_settled(resp)
+
+    def test_a_coverage_path_that_is_a_directory_aborts_the_open_run_and_sends_nothing(self):
+        directory = self.directory_where_a_report_should_be("lcov-dir.info")
+        board = _Board()
+        self.axi.forget_ingested_run()
+        resp = self.ingest_unreadable(board, run_id=RUN_ID, coverage_codec="lcov",
+                                      coverage_paths=[directory])
+        error = self.assert_refused_naming(resp, directory)
+        self.assert_open_run_aborted_once(board, resp, error, "run-aborted")
+
+    def test_an_unreadable_report_whose_abort_is_refused_leaves_the_run_open_and_says_so(self):
+        directory = self.directory_where_a_report_should_be("TEST-c.xml")
+        board = _Board(abort_ok=False)
+        self.axi.forget_ingested_run()
+        resp = self.ingest_unreadable(board, run_id=RUN_ID,
+                                      report_paths=[directory])
+        error = self.assert_refused_naming(resp, directory)
+        self.assert_open_run_aborted_once(board, resp, error, "run-left-open")
+
+    @unittest.skipIf(_RUNNING_AS_ROOT, _ROOT_SKIP_REASON)
+    def test_a_report_without_read_permission_aborts_the_open_run_and_sends_nothing(self):
+        unreadable = self.unreadable_report("TEST-c.xml", JUNIT_B)
+        board = _Board()
+        self.axi.forget_ingested_run()
+        resp = self.ingest_unreadable(board, run_id=RUN_ID,
+                                      report_paths=[self.report_a, unreadable])
+        error = self.assert_refused_naming(resp, unreadable)
+        self.assert_open_run_aborted_once(board, resp, error, "run-aborted")
+
+    @unittest.skipIf(_RUNNING_AS_ROOT, _ROOT_SKIP_REASON)
+    def test_a_report_without_read_permission_with_no_run_open_posts_nothing(self):
+        unreadable = self.unreadable_report("TEST-c.xml", JUNIT_B)
+        board = _Board()
+        resp = self.ingest_unreadable(board, report_paths=[unreadable])
+        self.assert_refused_naming(resp, unreadable)
+        self.assert_sent_nothing(board)
+        self.assert_nothing_settled(resp)
+
+    @unittest.skipIf(_RUNNING_AS_ROOT, _ROOT_SKIP_REASON)
+    def test_a_coverage_report_without_read_permission_aborts_the_open_run(self):
+        unreadable = self.unreadable_report("lcov-locked.info", LCOV)
+        board = _Board()
+        self.axi.forget_ingested_run()
+        resp = self.ingest_unreadable(board, run_id=RUN_ID, coverage_codec="lcov",
+                                      coverage_paths=[unreadable])
+        error = self.assert_refused_naming(resp, unreadable)
+        self.assert_open_run_aborted_once(board, resp, error, "run-aborted")
+
+
 # ── the shared ingest over real HTTP, against the recording board ──────────
 
 class TheSharedIngestAgainstTheRecordingBoardTest(_SharedIngestCase):

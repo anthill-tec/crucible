@@ -140,7 +140,8 @@ _SCRUBBED = ("BUN_CRUCIBLE_PACKAGE_DIR", "BUN_CRUCIBLE_PROJECT_DIR",
 
 # A fake `bun`, for `bun test ...` and `bun run <script> ...` alike. It prints
 # OUTPUT_MARKER, writes JUNIT_TEXT (SKIPPED_JUNIT_TEXT under `-t`,
-# EMPTY_JUNIT_TEXT under FAKE_ZERO=1, nothing under FAKE_REPORT=none) where
+# EMPTY_JUNIT_TEXT under FAKE_ZERO=1, nothing under FAKE_REPORT=none, a
+# directory in its place under FAKE_REPORT=dir) where
 # `--reporter-outfile=` or the declared JUnit variable points, LCOV_TEXT to
 # `<--coverage-dir>/lcov.info` when `--coverage` is given (unless
 # FAKE_NO_LCOV=1), PLAYWRIGHT_TEXT where the declared raw variable points,
@@ -171,7 +172,10 @@ for arg in argv:
         coverage_dir = arg.split("=", 1)[1]
 sys.stdout.write(MARKER + "\nmath.test.ts:\n(pass) math > adds two numbers [0.02ms]\n")
 sys.stdout.flush()
-if os.environ.get("FAKE_REPORT") != "none":
+if os.environ.get("FAKE_REPORT") == "dir":
+    if junit:
+        os.makedirs(junit, exist_ok=True)
+elif os.environ.get("FAKE_REPORT") != "none":
     if junit:
         if os.environ.get("FAKE_ZERO") == "1":
             write(junit, EMPTY)
@@ -612,6 +616,30 @@ class ABoardThatCannotTakeTheRunIsRefusedBeforeSendingTest(_BunProject, unittest
         self.make(board=RecordingBoard(ingest_body_bytes=64))
         result = self.drive("test", "body-too-large")
         self.assert_refused_before_sending(result, "ingest_body_bytes", "64")
+
+    def test_a_report_the_client_cannot_read_is_refused_before_sending_and_the_run_aborted(self):
+        # The runner exits 0 and leaves a directory where `junit.xml` should
+        # be (`os.path.exists` holds for it): the report cannot be read, a
+        # refusal before sending that settles the open run as every other
+        # one does.
+        result = self.drive("test", "report-is-a-directory", FAKE_REPORT="dir")
+        for stream, text in (("stdout", result.stdout), ("stderr", result.stderr)):
+            self.assertNotIn("Traceback (most recent call last)", text,
+                             f"the verb settles the refusal, it does not crash "
+                             f"({stream}); {self.diagnostics(result)}")
+        self.assert_refused_before_sending(result, "junit.xml", "nothing was sent")
+        error = self.envelope_of(result).get("error")
+        self.assertIsInstance(error, str, self.diagnostics(result))
+        self.assertIn(os.path.join("reports", ""), error or "",
+                      f"the envelope's error names the report's path; "
+                      f"{self.diagnostics(result)}")
+        self.assertIn("junit.xml", error or "",
+                      f"the envelope's error names the unreadable report; "
+                      f"{self.diagnostics(result)}")
+        aborts = self.board.aborts()
+        self.assertIn("junit.xml",
+                      (aborts[0][1] or {}).get("reason", "") if aborts else "",
+                      f"the abort's reason is the refusal; aborts={aborts!r}")
 
     def test_a_413_from_the_board_is_reported_naming_ingest_body_bytes(self):
         self.board.refuse_ingest_for(FIRST_RUN, status=413)
