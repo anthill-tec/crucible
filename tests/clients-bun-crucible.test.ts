@@ -1032,10 +1032,10 @@ describe("clients/bun-crucible.py — CR-CRU-088 AC4 (E2E): an aftermath block n
     // assertion in this file that pinned bun's stream (it turned `test-bun`
     // red on a bun that reordered it and blocked every publish). The
     // defect's exact input shape is therefore observed and reported here,
-    // and pinned fatally only over FROZEN BYTES — in
-    // tests/client/test_cr088_failure_detail_names_its_leaf.py and
-    // tests/client/test_cr087_console_failure_attribution.py, where no
-    // installed bun can move it. The fix's own guarantee is asserted
+    // and pinned fatally only over FROZEN BYTES — now on the board, in
+    // tests/bun-console-failure-detail-is-read-on-the-board.test.ts (the
+    // AFTERMATH_BLEED capture), where no installed bun can move it. The
+    // fix's own guarantee is asserted
     // version-independently in the next test.
     const orderingHolds = leaked > gammaFail && deltaFail > leaked;
     if (!orderingHolds) {
@@ -1043,7 +1043,7 @@ describe("clients/bun-crucible.py — CR-CRU-088 AC4 (E2E): an aftermath block n
         "[CR-CRU-088 AC4] this bun does not print the aftermath shape " +
           `(gamma=${gammaFail}, leaked=${leaked}, delta=${deltaFail}); ` +
           "attribution below still holds, and the shape itself stays pinned " +
-          "over frozen bytes in the two python modules.",
+          "over frozen bytes in the board-side console failure detail test.",
       );
     }
   });
