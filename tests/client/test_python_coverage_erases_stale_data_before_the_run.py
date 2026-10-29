@@ -40,6 +40,7 @@ from tests.client.python_coverage_project import (  # noqa: E402
     drive,
     ingested_coverage,
     line_counts,
+    sent_report_counts,
     make_project,
     plant_earlier_parallel_data,
 )
@@ -179,9 +180,8 @@ class AnEarlierRunsCombinedDataFileIsNotMergedTest(_StaleDataCase):
                     f"{sorted(os.listdir(own_dir))!r}")
 
                 second = drive(project_dir, board, verb, start_dir="small")
-                run = (second.axi or {}).get("run") or {}
                 self.assertEqual(
-                    (run.get("total"), run.get("failed")), (1, 0),
+                    sent_report_counts(second.board), (1, 0),
                     f"{label}: fixture -- the second run is the smaller one; "
                     f"{second.describe()}")
                 self._assert_only_this_runs_coverage(label, second)
