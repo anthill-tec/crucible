@@ -78,8 +78,9 @@ RUN_ID = "run-live-1"
 # The board's own ingest routes (mirrors `_crucible_axi.RUN_INGEST_PATHS` plus
 # the compile route \u2014 every path an ingest that carries a `runId` can land
 # on, across all five clients: `/api/v2/runs` (mvn/rust/arduino's raw JUnit
-# ingest, and bun's inline-report ingest), `/api/v2/runs/parsed` (python's
-# parsed-tree ingest), `/api/v2/runs/compile` (the no-report compile fallback).
+# ingest, and bun's and python's inline-report ingest), `/api/v2/runs/parsed`
+# (a parsed-tree ingest), `/api/v2/runs/compile` (the no-report compile
+# fallback).
 INGEST_PATHS = ("/api/v2/runs", "/api/v2/runs/parsed", "/api/v2/runs/compile")
 # The route a client that sends its runner's reports files them on
 # (CR-CRU-204), and the parsed route it no longer uses.
@@ -148,7 +149,8 @@ class _PipeCloseCase(unittest.TestCase):
         return bool(filed)
 
     def assert_filed_inline_on_the_run_route(self, run_id=RUN_ID):
-        """CR-CRU-204 — bun sends its runner's reports: the run it filed was
+        """CR-CRU-204 — bun and python send their runner's reports: the run
+        it filed was
         filed by ONE `POST /api/v2/runs` carrying the JUnit report's text
         inline, never the parsed route."""
         filed = self.filed_posts(run_id)
@@ -239,6 +241,7 @@ class StdoutClosedTest(_PipeCloseCase):
              "--python", fake, "--project-dir", self.project,
              "--reports", "reports", "--agent", AGENT], self.env())
         self.assert_clean_exit_despite_closed_stdout(rc, err)
+        self.assert_filed_inline_on_the_run_route()
 
     def test_rust_test_with_stdout_closed(self):
         write_fake_cargo(self.bin_dir)
@@ -310,7 +313,10 @@ class StderrClosedTest(_PipeCloseCase):
              "--python", fake, "--project-dir", self.project,
              "--reports", "reports", "--agent", AGENT], self.env())
         self.assert_run_opened()
-        self.assert_run_settled("stderr")
+        if self.assert_run_settled("stderr"):
+            self.assert_filed_inline_on_the_run_route()
+        self.assertNotIn(PARSED, [p for p, _ in self.board.posts()],
+                         f"python never files on {PARSED}; posts={self.board.posts()!r}")
 
     def test_rust_test_with_stderr_closed_mid_run(self):
         write_fake_cargo(self.bin_dir)
