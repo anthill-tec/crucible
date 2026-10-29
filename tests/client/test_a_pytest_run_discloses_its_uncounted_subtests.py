@@ -84,7 +84,7 @@ class _ARunWithPassingSubtests(_OneRunOnAPytestProject):
     and discloses that its passing subtests were not counted."""
 
     def test_the_run_files_the_one_parent_test(self):
-        ingests = self.project.parsed_ingests()
+        ingests = self.project.runs_ingests()
         self.assertEqual(len(ingests), 1, diag(self.result))
         self.assertEqual(counts(ingests[0]),
                          {"total": 1, "passed": 1, "failed": 0, "pending": 0},
@@ -122,7 +122,7 @@ class ARunWithoutSubtestsCarriesNoWarningTest(_OneRunOnAPytestProject):
     """The plain fixture (one pass, one fail, one skip) has no subtests."""
 
     def test_the_run_files_the_fixtures_three_tests(self):
-        ingests = self.project.parsed_ingests()
+        ingests = self.project.runs_ingests()
         self.assertEqual(len(ingests), 1, diag(self.result))
         self.assertEqual(counts(ingests[0])["total"], 3, diag(self.result))
 
