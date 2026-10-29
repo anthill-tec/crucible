@@ -7690,12 +7690,20 @@ _HTTP_413 = re.compile(r"^HTTP 413\b")
 
 
 def _read_report_texts(paths):
-    """Each report file's text, in path order."""
+    """`(texts, None)`: each report file's text, in path order \u2014 or
+    `(None, refusal)`: the refusal before sending that names the first path
+    that could not be read (a directory where the file should be, a file
+    without read permission)."""
     texts = []
     for path in paths:
-        with open(path, encoding="utf-8", errors="replace") as handle:
-            texts.append(handle.read())
-    return texts
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                texts.append(handle.read())
+        except OSError as exc:
+            reason = exc.strerror or type(exc).__name__
+            return None, (f"the report {path} could not be read ({reason}); "
+                          f"nothing was sent")
+    return texts, None
 
 
 def _ingest_health_refusal(health, codec, coverage_codec):
@@ -7744,8 +7752,9 @@ def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
     """The one ingest of a run's reports: the board's health is read first,
     once, through `get_fn`, and the run is refused before anything is sent when
     that health cannot be read, when it names no codec the run needs (the
-    refusal names its `version` and the version floor), or when the body as
-    `post_ingest` stamps it is larger than `limits.ingest_body_bytes`.
+    refusal names its `version` and the version floor), when a report or
+    coverage file cannot be read (the refusal names its path), or when the
+    body as `post_ingest` stamps it is larger than `limits.ingest_body_bytes`.
 
     Otherwise ONE `POST /api/v2/runs` goes out through `post_ingest`, carrying
     `codec`, `data` (each report's text, in path order), `coverage` when a
@@ -7761,12 +7770,17 @@ def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
     refusal = _ingest_health_refusal(
         health, codec, coverage_codec if measures_coverage else None)
     payload = None
+    data = coverage_data = None
+    if refusal is None:
+        data, refusal = _read_report_texts(report_paths)
+    if refusal is None and measures_coverage:
+        coverage_data, refusal = _read_report_texts(coverage_paths)
     if refusal is None:
         payload = {"projectKey": project_key, "agentId": agent_id,
-                   "codec": codec, "data": _read_report_texts(report_paths)}
+                   "codec": codec, "data": data}
         if measures_coverage:
             payload["coverage"] = {"codec": coverage_codec,
-                                   "data": _read_report_texts(coverage_paths)}
+                                   "data": coverage_data}
         optional = (("raw", raw), ("tier", tier), ("context", context),
                     ("runId", run_id), ("runnerExit", runner_exit))
         payload.update({key: value for key, value in optional
