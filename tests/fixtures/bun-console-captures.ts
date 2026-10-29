@@ -21,8 +21,8 @@
 //    second `error:` under one echo window, and a detail longer than the
 //    message (1000) and trace (8000) cuts.
 //
-// CLIENT_READING is `_parse_console_failures` (clients/bun-crucible.py) run
-// over each capture, keyed "<capture>/<wire>": for every married block, the
+// CLIENT_READING is the bun client's own console failure reading, as it read
+// each capture, keyed "<capture>/<wire>": for every married block, the
 // composed result-line name AND its last " > " segment, each mapped to
 // {message, trace}. It was computed once, from the client as it stands, and
 // is frozen here so the port is held to the client's rules after the client
