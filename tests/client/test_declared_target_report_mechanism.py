@@ -57,6 +57,14 @@ No request leaves the process (the client's `_post`/`_get`/`_patch` seam is
 recorded, so the live board on :3849 is never touched) and no real bun,
 playwright or bun package is needed anywhere on the machine.
 
+CR-CRU-204: bun sends its runner's reports, so a run's ingest is its ONE
+`POST /api/v2/runs` carrying the JUnit report's text inline (`data`), sent
+after the board's health is read (the `_get` stub answers it). What this file
+asserted the client COUNTED from the report it now asserts the client SENT:
+the report the runner wrote, whole. Every case that asserts an ingest
+(`assertIngested`) reads that route, so the AC4 pins and the FLAG half of AC3
+fail until bun files its reports there.
+
 WHAT IS RED HERE AND WHAT IS A PIN, stated per test, because a suite that does
 not say which of its members were born green is a suite whose colour means
 nothing. Measured on `feature/CR-CRU-133` @ `b68270f`:
@@ -108,6 +116,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
+from tests.client.live_run_harness import get_answering_health
 from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
     declare_and_require_board,
 )
@@ -157,7 +166,8 @@ _ENV_KEYS = (
 _OK_RESPONSE = {"ok": True,
                 "run": {"passed": 1, "failed": 0, "pending": 0, "total": 1}}
 
-_INGEST = "/api/v2/runs/parsed"
+_INGEST = "/api/v2/runs"
+_PARSED = "/api/v2/runs/parsed"
 
 
 # ── fixtures: the two runners ──────────────────────────────────────────────
@@ -386,8 +396,8 @@ class _DeclaredTargetCase(unittest.TestCase):
         stdout, stderr = io.StringIO(), io.StringIO()
         with mock.patch.object(self.module, "_post", side_effect=fake_post,
                                create=True), \
-                mock.patch.object(self.module, "_get", return_value=None,
-                                  create=True), \
+                mock.patch.object(self.module, "_get", create=True,
+                                  side_effect=get_answering_health(lambda _p: None)), \
                 mock.patch.object(self.module, "_patch",
                                   return_value={"ok": True}, create=True), \
                 mock.patch.object(self.module, "_bun_run_script_cmd",
@@ -424,7 +434,16 @@ class _DeclaredTargetCase(unittest.TestCase):
             f"{site}: the drive POSTed nothing to {_INGEST}, so this test "
             f"measured nothing. paths={drive.paths()!r} exit={drive.code} "
             f"stderr={drive.err[-2000:]!r}")
+        self.assertNotIn(
+            _PARSED, drive.paths(),
+            f"{site}: bun's reports go to {_INGEST}, never the parsed route; "
+            f"paths={drive.paths()!r}")
+        self.assertEqual(len(payloads), 1,
+                         f"{site}: one run ingest; paths={drive.paths()!r}")
         payload = payloads[0]
+        self.assertEqual(payload.get("codec"), "junit",
+                         f"{site}: the run's JUnit report is sent for the board "
+                         f"to decode; body={payload!r}")
         self.assertEqual(payload.get("agentId"), AGENT,
                          f"{site}: the first POST to {_INGEST} is not this "
                          f"run's ingest body: {payload!r}")
@@ -475,14 +494,12 @@ class DeclaredE2eTargetIngestsTest(_DeclaredTargetCase):
         self.assertEqual(measured, E2E_TEST_COUNT,
                          "AC1: the fixture suite is no longer the measured "
                          f"size ({measured} cases).")
-        summary = payload.get("summary") or {}
-        self.assertEqual(summary.get("total"), measured,
-                         f"AC1: the ingest must carry every test the run "
-                         f"produced; summary={summary!r}")
-        self.assertEqual(summary.get("passed"), measured,
-                         f"AC1: a green e2e run ingests green; summary={summary!r}")
-        self.assertEqual(summary.get("failed"), 0,
-                         f"AC1: summary={summary!r}")
+        self.assertEqual(
+            payload.get("data"), [report.read_text()],
+            f"AC1: the ingest must carry every test the run produced -- the "
+            f"report the runner wrote, whole, for the board to count; "
+            f"body={payload!r}")
+        self.assertEqual(report.read_text(), E2E_JUNIT_XML)
         self.assertEqual(drive.code, 0,
                          f"AC1: a green ingested run exits 0; "
                          f"stdout={drive.document[-1500:]!r}")
@@ -627,7 +644,11 @@ class ReportMechanismFollowsTheDeclarationTest(_DeclaredTargetCase):
                          f"AC3(env): the target ran {len(runs)} time(s). "
                          f"stderr={drive.err[-2000:]!r}")
         self.assertNoBunFlag(runs[0]["argv"], "AC3(env,--coverage)")
-        self.assertIngested(drive, "e2e", "AC3(env,--coverage)")
+        payload = self.assertIngested(drive, "e2e", "AC3(env,--coverage)")
+        self.assertNotIn(
+            "coverage", payload,
+            f"AC3(env,--coverage): an env-declared target measures no "
+            f"coverage, so the ingest sends no coverage block; body={payload!r}")
 
     def test_a_flag_declared_target_is_handed_its_path_by_flag(self):
         """PIN — the FLAG half. A target that declares the default mechanism
@@ -645,8 +666,8 @@ class ReportMechanismFollowsTheDeclarationTest(_DeclaredTargetCase):
             f"the path as `bun test`'s own flag. Seen: "
             f"{self.flags_seen_by('fake-bun')!r}")
         payload = self.assertIngested(drive, "unit", "AC3(flag)")
-        self.assertEqual((payload.get("summary") or {}).get("total"), 3,
-                         f"AC3(flag): summary={payload.get('summary')!r}")
+        self.assertEqual(payload.get("data"), [UNIT_JUNIT_XML],
+                         f"AC3(flag): body={payload!r}")
 
     def test_both_mechanisms_reach_the_board_through_the_one_builder(self):
         """RED — "through the same code path", asserted rather than assumed: one
@@ -662,10 +683,10 @@ class ReportMechanismFollowsTheDeclarationTest(_DeclaredTargetCase):
         flag_drive = self.drive("unit")
         env_drive = self.drive("e2e")
 
-        self.assertEqual((self.assertIngested(flag_drive, "unit", "AC3")
-                          .get("summary") or {}).get("total"), 3)
-        self.assertEqual((self.assertIngested(env_drive, "e2e", "AC3")
-                          .get("summary") or {}).get("total"), E2E_TEST_COUNT)
+        self.assertEqual(self.assertIngested(flag_drive, "unit", "AC3")
+                         .get("data"), [UNIT_JUNIT_XML])
+        self.assertEqual(self.assertIngested(env_drive, "e2e", "AC3")
+                         .get("data"), [E2E_JUNIT_XML])
         for label, drive in (("flag", flag_drive), ("env", env_drive)):
             self.assertEqual(
                 len(drive.built), 1,
@@ -726,8 +747,8 @@ class DeclaredBunTestTargetsKeepWorkingTest(_DeclaredTargetCase):
                     f"{self.flags_seen_by('fake-bun')!r}")
                 payload = self.assertIngested(drive, tier, f"AC4(test:{tier})")
                 self.assertEqual(
-                    (payload.get("summary") or {}).get("total"), 3,
-                    f"AC4: summary={payload.get('summary')!r}")
+                    payload.get("data"), [UNIT_JUNIT_XML],
+                    f"AC4: body={payload!r}")
                 self.assertEqual(drive.code, 0, f"AC4: exit={drive.code}")
 
     def test_no_bun_test_target_this_project_declares_needs_a_declaration(self):
