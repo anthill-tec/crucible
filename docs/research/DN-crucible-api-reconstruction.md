@@ -32,7 +32,7 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 | Base URL | `http://localhost:3849` (override: `CRUCIBLE_BASE`) | every script/skill; the v1 `arduino-crucible.py` base-URL constant (successor: `_base_url` in `clients/arduino-crucible.py`) |
 | Content type | `application/json` both directions | all clients |
 | Success shape | `{"ok": true, ...}` — clients branch on `resp.ok` | `_ingest_rustc_stderr` in `clients/rust-crucible.py` etc. |
-| Error shape | `{"ok": false, "error": "<actionable message>"}` | `_file_reports` in `clients/bun-crucible.py` prints `resp['error']`; skills: "Read error responses — they tell you exactly what's wrong" |
+| Error shape | `{"ok": false, "error": "<actionable message>"}` | the shared `ingest_reports` in `clients/_crucible_axi.py` prints `resp['error']` on its ingest line; skills: "Read error responses — they tell you exactly what's wrong" |
 | Project key type | **UUID string, mandatory** — non-UUID rejected with HTTP 400 | crucible-report-java/bun Rules: "`projectKey` must be a valid UUID — string keys are rejected with 400" |
 | Client env contract | `CRUCIBLE_PROJECT_KEY` (+ `CRUCIBLE_PROJECT_NAME` for arduino) read from the SUT project's `.env` | all scripts' `_project_key()`; `arduino-crucible.py:_load_env` |
 
