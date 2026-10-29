@@ -1,7 +1,8 @@
 # CR-CRU-215 — a rust regression test writes its report during the run it files
 
 **Type** fix · **Points** 2 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-29
-(found by CR-CRU-204's scoped re-gate; user ruling: a patch CR into 0.4.0, sequenced after CR-CRU-204)
+(found by CR-CRU-204's scoped re-gate; user ruling: a patch CR into 0.4.0, sequenced after CR-CRU-204);
+gap analysis 2026-10-29
 
 ## Problem
 
@@ -36,18 +37,28 @@ one its own run wrote, as CR-CRU-212's rule requires. The client is unchanged.
 
 ### §S1 — the fake cargo writes the report
 
-Every test that drives a rust regression or workspace-regression run through a fake `cargo` and expects it to
-file the nextest report writes that `junit.xml` from the fake `cargo` when it runs, not ahead of the run. A
-census at RED lists them (at least the two above).
+Every test that drives a rust run through a fake `cargo` into `_workspace_regression_run` — the one body
+`workspace-regression`, `regression` and `pre-merge-gate` reach, and the one that applies `_written_since` —
+and expects it to file the nextest report writes that `junit.xml` from the fake `cargo` when it runs, not
+ahead of the run. Measured at gap analysis, there are exactly two:
+
+- `tests/clients-rust-mvn-crucible.test.ts`, the CR-CRU-050 site 2 (`workspace-regression`) case;
+- `tests/client/test_client_tier_stamping.py`, `RustEarnedTierTest.test_rust_regression_ingests_the_workspace_run_as_regression`.
+
+### §S2 — the rule CR-CRU-212 made is pinned
+
+Nothing pins that a report written before the run is refused: CR-CRU-212's fix changed only the client. One
+test pins it, with the report's time set before the run's start second rather than raced.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the report is the run's own.** In each test the census lists, the nextest report the client
-      files is written by the fake `cargo` during the run; no such test writes it before the client starts.
-- [ ] **AC2 — the race is gone.** Each such test passes when the fixture would otherwise straddle a second
-      boundary: a fake `cargo` that sleeps past the next whole second before writing still files the run.
-- [ ] **AC3 — the client is unchanged.** `clients/rust-crucible.py` is untouched; a report written before the
-      run started is still refused, as CR-CRU-212 pinned.
+- [ ] **AC1 — the report is the run's own.** In both tests §S1 names, the nextest report the client files
+      is written by the fake `cargo` during the run; neither writes it before the client starts.
+- [ ] **AC2 — the race is gone.** Each such test passes when its run spans a whole-second boundary: its fake
+      `cargo` writes the report just after the next whole second following its own start, and the run is filed.
+- [ ] **AC3 — the rule is pinned and the client unchanged.** `clients/rust-crucible.py` is untouched. A
+      `workspace-regression` run whose `junit.xml` was last written before the run's start second (its time
+      set with `os.utime`, not raced) files no run and reports that no junit.xml was written by this run.
 
 ## Non-goals
 
