@@ -1131,17 +1131,6 @@ describe("bare line references — real-world false positives, closed this cycle
     );
     expect(bareLineHits).toEqual([]);
   });
-
-  test("the real failure-detail fixture's line:column stack positions produce no bare-line violation", () => {
-    const relPath = "tests/client/test_cr088_failure_detail_names_its_leaf.py";
-    const allRelPaths = listAllRepoFiles();
-    const repo = realRepo(allRelPaths);
-    const text = readFileSync(join(REPO_ROOT, relPath), "utf8");
-    const bareLineHits = findCitationViolations(relPath, text, repo, EXEMPT_FIXTURES).filter((v) =>
-      v.reason.includes("bare line reference"),
-    );
-    expect(bareLineHits).toEqual([]);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1212,24 +1201,6 @@ const EXEMPT_FIXTURES: ExemptFixture[] = [
     reason:
       "a synthetic tsc-shaped compiler-error payload posted to the compile-ingest endpoint under " +
       "test; the file is invented for the fixture and never exists.",
-  },
-  {
-    citingFile: "tests/client/test_cr088_failure_detail_names_its_leaf.py",
-    text: ["d", ".test.ts", ":", "7"].join(""),
-    reason:
-      "a captured real `bun test` failure transcript, printed against a throwaway fixture file the " +
-      "test itself writes into an mkdtemp replica and deletes; the parser test asserts on this exact " +
-      "frame text, not on the fixture file continuing to exist.",
-  },
-  {
-    citingFile: "tests/client/test_cr088_failure_detail_names_its_leaf.py",
-    text: ["d", ".test.ts", ":", "11"].join(""),
-    reason: "the same throwaway-fixture transcript's second frame.",
-  },
-  {
-    citingFile: "tests/client/test_cr088_failure_detail_names_its_leaf.py",
-    text: ["d", ".test.ts", ":", "15"].join(""),
-    reason: "the same throwaway-fixture transcript's third frame.",
   },
   {
     citingFile: "tests/roadmap-visual-grammar.test.ts",
