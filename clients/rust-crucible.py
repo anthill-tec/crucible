@@ -570,9 +570,11 @@ def _gate_lock_path(project_dir):
     git dir), NOT inside .git, SHARED across all worktrees. Matches
     gate-lock.sh's lock_path() with ONE difference: outside a git repository
     (or when git cannot be run) this returns None — the run takes no lock —
-    where lock_path() falls back to /tmp/nai-gate.lock. Self-contained (only
-    `os` and `subprocess`): Model B's derivation-equality gate runs this body
-    alone."""
+    where lock_path() falls back to /tmp/nai-gate.lock. git's answer is taken
+    only when the call exits 0 and prints ONE line that is an absolute path —
+    a git older than 2.31 echoes `--path-format=absolute` back (a relative or
+    two-line answer), and that too returns None. Self-contained (only `os` and
+    `subprocess`): Model B's derivation-equality gate runs this body alone."""
     try:
         proc = subprocess.run(
             ["git", "-C", project_dir, "rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -581,7 +583,7 @@ def _gate_lock_path(project_dir):
     except OSError:
         return None
     gcd = proc.stdout.strip() if proc.returncode == 0 else ""
-    if not gcd:
+    if not gcd or "\n" in gcd or not os.path.isabs(gcd):
         return None
     return os.path.join(os.path.dirname(gcd), "nai-gate.lock")
 
