@@ -414,10 +414,14 @@ def junit_sent(body):
     status, children: [{name, status}]}]}`, one node per `<testsuite>`, or
     per `classname` within the one suite pytest names `pytest`. A case with a
     `<failure>` or `<error>` is `fail`, one with `<skipped>` `pending`, any
-    other `pass`. None when the body is not a `junit` ingest."""
+    other `pass`. `files` beside them counts the distinct sources the cases
+    name -- each case's `file`, else its suite's `file`, else its
+    `classname`, else its suite's name. None when the body is not a `junit`
+    ingest."""
     if not isinstance(body, dict) or body.get("codec") != "junit":
         return None
     nodes = {}
+    sources = set()
     for text in body.get("data") or []:
         root = ET.fromstring(text)  # noqa: S314 - a report a test's own run wrote
         for suite in list(root.iter("testsuite")) or [root]:
@@ -433,6 +437,8 @@ def junit_sent(body):
                     status = "pass"
                 nodes.setdefault(name, []).append(
                     {"name": case.get("name", "?"), "status": status})
+                sources.add(case.get("file") or suite.get("file")
+                            or case.get("classname") or suite_name)
     tree = [{"name": name,
              "status": "fail" if any(c["status"] == "fail" for c in children) else "pass",
              "children": children} for name, children in nodes.items()]
@@ -440,7 +446,7 @@ def junit_sent(body):
     return {"summary": {"total": len(statuses), "passed": statuses.count("pass"),
                         "failed": statuses.count("fail"),
                         "pending": statuses.count("pending")},
-            "tree": tree}
+            "tree": tree, "files": len(sources)}
 
 
 def first_index(posts, predicate):
