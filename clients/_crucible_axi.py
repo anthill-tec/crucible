@@ -3283,6 +3283,289 @@ def cmd_history(args, project_dir, ops):
     return 0
 
 
+# ── `runs` and `run`: a project's stored runs, read back ────────────────────
+#
+# Two read-only verbs (no --agent), written once here for the five clients.
+# A run is a `test` or a `compile` record; the board's cycle and release lists
+# also carry gate milestones and gate records, which are not runs and are
+# never listed. Each kind reads honestly: a compile record stores no test
+# counts (its brief's four counts are 0, not counts), so a compile row carries
+# `errors`/`warnings` and empty test counts, and a test row the reverse.
+
+RUNS_VERB = "runs"
+RUN_VERB = "run"
+
+#: The record kinds that are runs.
+RUN_KINDS = ("test", "compile")
+
+#: The count columns of a test row and of a compile row.
+RUN_TEST_COUNTS = ("passed", "failed", "pending", "total")
+RUN_COMPILE_COUNTS = ("errors", "warnings")
+
+#: The columns of `run`'s diagnostics table.
+RUN_DIAGNOSTIC_COLUMNS = ("level", "file", "line", "code", "message")
+
+RUNS_USAGE = ("runs takes exactly one of --cycle <id> (an integer) or "
+              "--release <label>")
+
+
+def add_run_read_verbs(sub, funcs, *, parents=(), add_args=()):
+    """Register the `runs` and `run` subparsers on `sub`, once for the fleet.
+
+    The `add_roadmap_verbs` shape: `funcs` maps each verb name to the
+    client's own delegator, `parents` carries a client's shared parent
+    parsers, and `add_args` its read-verb arg adders (its project-dir
+    argument, exactly as it passes them to `add_next_verb`). Both verbs are
+    read-only, so neither takes --agent.
+
+    `--cycle` is a plain string here, not `type=int`: a non-integer cycle is
+    refused by the verb's own envelope (exit 2), never by argparse's bare
+    usage exit."""
+    rs = sub.add_parser(
+        "runs", parents=list(parents),
+        help="List a cycle's or a release's stored test and compile runs → "
+             "GET …/events (newest first). Read-only: no --agent.")
+    rs.add_argument("--cycle",
+                    help="The cycle id (an integer) whose stored runs to "
+                         "list. Give exactly one of --cycle or --release.")
+    rs.add_argument("--release",
+                    help="The release label whose stored runs to list. Give "
+                         "exactly one of --cycle or --release.")
+    rs.add_argument("--fields",
+                    help="Comma-separated columns to NARROW each row to, "
+                         "from: event, kind, tier, codec, stack, passed, "
+                         "failed, pending, total, errors, warnings, agent, "
+                         "cycleId, release.")
+    rs.add_argument("--full", action="store_true",
+                    help="List every run; by default the table is cut at the "
+                         "project's roadmap_list_rows limit (totalCount "
+                         "always states the true number).")
+    for adder in add_args:
+        adder(rs)
+    rs.set_defaults(func=funcs[RUNS_VERB])
+
+    rn = sub.add_parser(
+        "run", parents=list(parents),
+        help="Show one stored test or compile run of this project → GET "
+             "…/events/<id>: its brief, and its per-suite counts and failing "
+             "tests, or its diagnostics. Read-only: no --agent.")
+    rn.add_argument("event_id", metavar="event-id",
+                    help="The board's event id of the run (the `event` "
+                         "column of `runs`).")
+    rn.add_argument("--full", action="store_true",
+                    help="Print every diagnostic of a compile run; by "
+                         "default the table is cut at the project's "
+                         "roadmap_list_rows limit.")
+    for adder in add_args:
+        adder(rn)
+    rn.set_defaults(func=funcs[RUN_VERB])
+
+
+def build_run_rows(events):
+    """(PURE) One uniform row per `test`/`compile` record of a board list, in
+    the list's order, carrying every column, in order (event, kind, tier,
+    codec, stack, the four test counts, errors, warnings, agent, cycleId,
+    release): `event` from `id`,
+    `agent` from `agentId`, a value the board lacks None — never invented. A
+    test row's `errors`/`warnings` and a compile row's four test counts are
+    None. Every other record kind is dropped."""
+    rows = []
+    for event in events or []:
+        if not isinstance(event, dict) or event.get("kind") not in RUN_KINDS:
+            continue
+        is_test = event.get("kind") == "test"
+        row = {"event": event.get("id")}
+        for key in ("kind", "tier", "codec", "stack"):
+            row[key] = event.get(key)
+        for key in RUN_TEST_COUNTS:
+            row[key] = event.get(key) if is_test else None
+        for key in RUN_COMPILE_COUNTS:
+            row[key] = None if is_test else event.get(key)
+        row["agent"] = event.get("agentId")
+        row["cycleId"] = event.get("cycleId")
+        row["release"] = event.get("release")
+        rows.append(row)
+    return rows
+
+
+def _runs_scope(args):
+    """The one list scope `runs` was given, as `(query, label)` — or
+    `(None, error)` when it was given neither, both, or a non-integer
+    cycle."""
+    cycle = getattr(args, "cycle", None)
+    release = getattr(args, "release", None)
+    if (cycle is None) == (release is None):
+        return None, RUNS_USAGE
+    if release is not None:
+        return {"release": release}, f"release {release}"
+    try:
+        cycle_id = int(cycle)
+    except ValueError:
+        return None, f"--cycle {cycle!r} is not an integer: {RUNS_USAGE}"
+    return {"cycleId": str(cycle_id)}, f"cycle {cycle_id}"
+
+
+def cmd_runs(args, project_dir, ops):
+    """List a cycle's or a release's stored test and compile runs (read-only,
+    no --agent): ONE read, `GET /api/v2/events?project=<key>&cycleId=<id>` or
+    `…&release=<label>`, answered as one envelope whose `runs` table holds the
+    runs in the board's order (`build_run_rows`), narrowed by `--fields`, cut
+    at `roadmap_list_rows` unless `--full`, with `totalCount` the true number.
+
+    Neither scope, both, or a non-integer --cycle is refused before any
+    request, exit 2. A failed read is a refusal with no table, exit 1. An
+    unknown cycle or release is an empty table whose help names the project
+    key that was asked about."""
+    emit = _status_emitter(args, ops)
+    scope, label = _runs_scope(args)
+    if scope is None:
+        emit(RUNS_VERB, False,
+             {"error": label,
+              "help": ["runs --cycle <id>", "runs --release <label>"]},
+             ops.context(project_dir), [], f"runs: ok=False error={label}")
+        return EXIT_USAGE
+    key = ops.project_key(project_dir)
+    query = urllib.parse.urlencode({"project": key, **scope})
+    resp = ops.get(f"/api/v2/events?{query}") or {}
+    if not resp.get("ok"):
+        error = f"could not read the stored runs of {label}: {resp.get('error')}"
+        emit(RUNS_VERB, False,
+             {"error": error,
+              "help": [f"check the Crucible server is running / reachable "
+                       f"at {ops.base_url}, then re-run runs"]},
+             ops.context(project_dir), [], f"runs: ok=False error={error}")
+        return 1
+    rows, total = roadmap_rows({RUNS_VERB: build_run_rows(resp.get("events"))},
+                               RUNS_VERB, args)
+    help_steps = (["run <event> — one run in full"] if total else
+                  [f"no test or compile run of project {key} is stored for "
+                   f"{label} — check CRUCIBLE_PROJECT_KEY in the project's "
+                   f".env names the project the runs were filed under"])
+    emit(RUNS_VERB, True,
+         {RUNS_VERB: rows, "totalCount": total, "help": help_steps},
+         ops.context(project_dir), [],
+         f"runs: ok=True {label} runs={total}")
+    return 0
+
+
+def _run_brief(event):
+    """(PURE) A stored run's brief, read honestly per kind: a test run's four
+    counts (and its coverage lines percent when stored), a compile run's
+    `errors` and `warnings` and no test counts."""
+    brief = {"event": event.get("id")}
+    for key in ("kind", "tier", "codec", "stack"):
+        brief[key] = event.get(key)
+    if event.get("kind") == "test":
+        summary = event.get("summary") or {}
+        for key in RUN_TEST_COUNTS:
+            brief[key] = summary.get(key)
+    else:
+        compile_record = event.get("compile") or {}
+        brief["errors"] = compile_record.get("errorCount")
+        brief["warnings"] = compile_record.get("warningCount")
+    brief["cycleId"] = event.get("cycleId")
+    brief["release"] = event.get("release")
+    brief["agent"] = event.get("agentId")
+    lines = ((event.get("coverage") or {}).get("lines") or {}).get("percent")
+    if lines is not None:
+        brief["coverageLines"] = lines
+    return brief
+
+
+def _run_suite_rows(event):
+    """(PURE) A test run's per-suite counts, one row (name, browser, passed,
+    failed, pending) per top-level suite of its `?depth=suites` tree, in stored order."""
+    rows = []
+    for suite in event.get("tree") or []:
+        counts = suite.get("counts") or {}
+        rows.append({"name": suite.get("name"), "browser": suite.get("browser"),
+                     "passed": counts.get("passed"),
+                     "failed": counts.get("failed"),
+                     "pending": counts.get("pending")})
+    return rows
+
+
+def _run_diagnostic_rows(event):
+    """(PURE) A compile run's diagnostics, one `RUN_DIAGNOSTIC_COLUMNS` row
+    each, in stored order, a missing value None."""
+    return [{key: diagnostic.get(key) for key in RUN_DIAGNOSTIC_COLUMNS}
+            for diagnostic in (event.get("compile") or {}).get("diagnostics") or []
+            if isinstance(diagnostic, dict)]
+
+
+def _run_refusal(emit, ops, project_dir, error):
+    """The `run` refusal: ok:false naming what was refused, no brief, exit 1."""
+    emit(RUN_VERB, False,
+         {"error": error,
+          "help": ["runs --cycle <id> — lists the runs this project stored"]},
+         ops.context(project_dir), [], f"run: ok=False error={error}")
+    return 1
+
+
+def cmd_run(args, project_dir, ops):
+    """Show one stored run of the client's project (read-only, no --agent).
+
+    The record is read with `?depth=suites` (a record with no tree answers
+    with its full read, less the raw output). A test run then reads its
+    failing tests through `_event_failing_tests`, the one reading of them —
+    a second request, because the stored per-suite counts come only from
+    `?depth=suites` and the leaves only from the full record. The envelope
+    carries the brief under `run`, then a test run's `suites` and
+    `failingTests`, or a compile run's `diagnostics` (cut at
+    `roadmap_list_rows` unless `--full`) with their `totalCount`.
+
+    Refused, exit 1: an id the board does not hold, another project's
+    record (naming both keys), a record that is not a run (naming its kind),
+    and a read that fails — the second included, so a run is never printed
+    with an empty failing list it could not read."""
+    emit = _status_emitter(args, ops)
+    event_id = args.event_id
+    path = f"/api/v2/events/{urllib.parse.quote(str(event_id))}"
+    resp = ops.get(f"{path}?depth=suites") or {}
+    if not resp.get("ok"):
+        error = resp.get("error")
+        if str(error).startswith("HTTP 404"):
+            return _run_refusal(emit, ops, project_dir,
+                                f"the board holds no run {event_id}")
+        return _run_refusal(emit, ops, project_dir,
+                            f"could not read run {event_id}: {error}")
+    event = resp.get("event") or {}
+    key = ops.project_key(project_dir)
+    if event.get("projectKey") != key:
+        return _run_refusal(
+            emit, ops, project_dir,
+            f"{event_id} belongs to project {event.get('projectKey')}, not "
+            f"this client's project {key}")
+    kind = event.get("kind")
+    if kind not in RUN_KINDS:
+        return _run_refusal(
+            emit, ops, project_dir,
+            f"{event_id} is a {kind} record, not a run (a run is a test or a "
+            f"compile record)")
+    brief = _run_brief(event)
+    if kind == "test":
+        failing = _event_failing_tests(ops, event_id, strict=True)
+        if failing is None:
+            return _run_refusal(
+                emit, ops, project_dir,
+                f"could not read the failing tests of run {event_id}")
+        fields = {RUN_VERB: brief, "suites": _run_suite_rows(event),
+                  "failingTests": failing}
+        legacy = (f"run: ok=True {event_id} test passed={brief.get('passed')} "
+                  f"failed={brief.get('failed')}")
+    else:
+        diagnostics = _run_diagnostic_rows(event)
+        fields = {RUN_VERB: brief,
+                  "diagnostics": truncate_rows(
+                      diagnostics, full=bool(getattr(args, "full", False))),
+                  "totalCount": len(diagnostics)}
+        legacy = (f"run: ok=True {event_id} compile errors={brief.get('errors')} "
+                  f"warnings={brief.get('warnings')}")
+    emit(RUN_VERB, True, {**fields, "help": ["runs --cycle <id>"]},
+         ops.context(project_dir), [], legacy)
+    return 0
+
+
 # ── §S4 — `project-meta`: a project's metadata map, read and written ─────────
 
 PROJECT_META_VERB = "project-meta"
@@ -8534,10 +8817,16 @@ def _failing_tests(ops, filed_runs):
     return names
 
 
-def _event_failing_tests(ops, event_id):
+def _event_failing_tests(ops, event_id, *, strict=False):
     """The failing tests of ONE filed run, named `suite > test`, read back from
-    the board's own parse of it through its event id."""
-    resp = ops.get(f"/api/v2/events/{urllib.parse.quote(str(event_id))}")
+    the board's own parse of it through its event id.
+
+    A failed read yields no names; with `strict` it yields None instead, so a
+    caller that must not mistake an unread run for a run with no failing tests
+    (`cmd_run`) can refuse."""
+    resp = ops.get(f"/api/v2/events/{urllib.parse.quote(str(event_id))}") or {}
+    if strict and not resp.get("ok"):
+        return None
     event = resp.get("event") if resp.get("ok") else None
     names = []
     for suite in (event or {}).get("tree") or []:
