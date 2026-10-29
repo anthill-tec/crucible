@@ -44,6 +44,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.live_run_harness import get_answering_health
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "python-crucible.py"
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
@@ -243,30 +245,57 @@ class CoverageRunEnvTest(unittest.TestCase):
             "grandchild test subprocesses",
         )
 
-    def test_collect_coverage_env_does_not_set_pythonsafepath(self):
-        """Same lock-in for the sibling `coverage lcov` step: the env
-        `_collect_coverage` builds for its subprocess must ALSO carry no
-        PYTHONSAFEPATH key. Patches the `subprocess.run` seam and aborts before
-        any real work via a sentinel, mirroring the run-step test above."""
+    def test_coverage_lcov_env_does_not_set_pythonsafepath_and_its_report_is_sent(self):
+        """Same lock-in for the sibling `coverage lcov` step: the env the
+        client builds for that subprocess must ALSO carry no PYTHONSAFEPATH
+        key. Drives `_regression_run` with the runner and every
+        `subprocess.run` stood in for: the runner writes one JUnit report,
+        and `coverage lcov` (captured) writes the lcov report the run then
+        sends, inline, as `coverage: {codec: "lcov", data}` on its one
+        `/api/v2/runs` ingest."""
         module = _load_client_module()
         captured = {}
+        lcov_text = "SF:clients/x.py\nDA:1,1\nLF:1\nLH:1\nend_of_record\n"
+        junit_text = ('<?xml version="1.0" ?><testsuite name="t.T" tests="1">'
+                      '<testcase classname="t.T" name="test_a" time="0.001"/>'
+                      '</testsuite>')
 
-        def _capture_env(_cmd, **kwargs):
-            captured["env"] = kwargs.get("env")
-            # Abort before the real `coverage lcov` subprocess -- we only need the
-            # env that _collect_coverage built for it.
-            raise CoverageRunEnvTest._AbortAfterCapture()
+        def _fake_runner(cmd, _cwd, _env, _log_path, _narrator=None):
+            reports = cmd[cmd.index("-o") + 1]
+            os.makedirs(reports, exist_ok=True)
+            with open(os.path.join(reports, "TEST-t.T.xml"), "w") as f:
+                f.write(junit_text)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        def _fake_run(cmd, **kwargs):
+            if "lcov" in cmd:
+                captured["env"] = kwargs.get("env")
+                with open(cmd[cmd.index("-o") + 1], "w") as f:
+                    f.write(lcov_text)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
 
         with tempfile.TemporaryDirectory() as tmp:
-            base_env = dict(os.environ)
-            with mock.patch.object(module.subprocess, "run",
-                                    side_effect=_capture_env):
-                with self.assertRaises(CoverageRunEnvTest._AbortAfterCapture):
-                    module._collect_coverage(sys.executable, tmp, base_env)
+            with open(os.path.join(tmp, ".env"), "w") as f:
+                f.write("CRUCIBLE_PROJECT_KEY=cr040-env-probe-key\n")
+            args = argparse.Namespace(
+                project_dir=tmp, python=sys.executable, reports="reports",
+                coverage=True, cov_source="crucible_axi,clients",
+                start_dir="tests", pattern="test_*.py", agent="cr040-env-probe",
+                log=None,
+            )
+            with mock.patch.object(module, "_run_logged", side_effect=_fake_runner), \
+                    mock.patch.object(module.subprocess, "run", side_effect=_fake_run), \
+                    mock.patch.object(module, "_post",
+                                      return_value={"ok": True}) as post_mock, \
+                    mock.patch.object(module, "_get",
+                                      side_effect=get_answering_health()), \
+                    contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                module._regression_run(args)
 
-        self.assertIn("env", captured, "subprocess.run was never reached")
+        self.assertIn("env", captured, "`coverage lcov` was never run")
         self.assertIsNotNone(
-            captured["env"], "_collect_coverage must pass an explicit env"
+            captured["env"], "the `coverage lcov` step must pass an explicit env"
         )
         self.assertNotIn(
             "PYTHONSAFEPATH", captured["env"],
@@ -274,7 +303,14 @@ class CoverageRunEnvTest(unittest.TestCase):
             "rationale as the coverage-run step (real coverage.py beats the "
             "namespace-dir shadow)",
         )
-
+        sent = [c.args[1] for c in post_mock.call_args_list
+                if c.args and c.args[0] == "/api/v2/runs"]
+        self.assertEqual(len(sent), 1,
+                         f"one /api/v2/runs ingest; posts="
+                         f"{[c.args[0] for c in post_mock.call_args_list]!r}")
+        self.assertEqual(sent[0].get("coverage") if sent else None,
+                         {"codec": "lcov", "data": [lcov_text]},
+                         "the lcov report `coverage lcov` wrote is sent as it stands")
 
 if __name__ == "__main__":
     unittest.main()
