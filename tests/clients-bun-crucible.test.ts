@@ -1480,11 +1480,11 @@ describe("clients/bun-crucible.py — byte-compatible CLI surface (existing verb
 // ── CR-CRU-015 §S2 — `--coverage` on a target the BOARD decodes ──────────
 //
 // `--coverage` is accepted on EVERY declared-tier verb (`_add_declared_tier_args`),
-// and a target that declares a RAW report is ingested through POST /api/v2/runs
-// — which carries a report and the codec that decodes it, and no coverage at
-// all. The parsed branch beside it prints a WARN when its lcov is missing; the
-// raw branch printed nothing, so `e2e --agent X --coverage` ran, filed a
-// coverage-less event, and said nothing about the coverage it dropped.
+// and a target that declares a RAW report measures no coverage under the
+// `env:<VAR>` mechanism. Its run still files its declared report inline through
+// POST /api/v2/runs, and the envelope carries the one route-neutral warning
+// for a `--coverage` run that left no coverage report to send:
+// `coverage-not-measured`.
 //
 // Driven on a FIXTURE project that declares its own raw report and a STUB bun
 // that writes both reports, so the subject is what the client says about the
@@ -1631,11 +1631,11 @@ describe("clients/bun-crucible.py — CR-CRU-015 §S2: a raw-decoded target neve
     return { res, baseUrl, key };
   }
 
-  test("with --coverage the dropped coverage is stated on BOTH channels — attributably, naming the declared codec — and the run still ingests by the raw route", async () => {
+  test("with --coverage the run that measured none carries coverage-not-measured and still ingests its declared report through POST /api/v2/runs", async () => {
     const { res, baseUrl, key } = await driveE2e("clients-bc-raw-coverage", true);
 
-    // NON-VACUITY — the drive really took the raw route: the board decoded the
-    // report itself, so the warning below is about a run that HAPPENED.
+    // NON-VACUITY: the drive really filed its run: the board decoded the
+    // declared report itself, so the warning below is about a run that HAPPENED.
     expect(res.code).toBe(0);
     const events = await getEvents(baseUrl, key);
     expect(events.length).toBe(1);
@@ -1643,21 +1643,13 @@ describe("clients/bun-crucible.py — CR-CRU-015 §S2: a raw-decoded target neve
     expect(event.codec).toBe(RAW_FIXTURE_CODEC);
     expect(event.tier).toBe("e2e");
 
-    // The STRUCTURED channel: an attributable code, naming the codec the
-    // project declared and the coverage this route does not carry. The
-    // sentence itself is not pinned — a re-wording must not red this.
-    const structured = warningRows(res.stdout).find((row) =>
-      row.includes("raw-report-carries-no-coverage"),
-    );
-    expect(structured).toBeDefined();
-    expect(structured).toContain(RAW_FIXTURE_CODEC);
-    expect(structured!.toLowerCase()).toContain("coverage");
-
-    // The OPERATOR's channel: the same miss on stderr, where the parsed branch
-    // prints its own "lcov coverage unavailable".
-    const printed = warnLines(res.stderr).find((line) => /coverage/i.test(line));
-    expect(printed).toBeDefined();
-    expect(printed).toContain(RAW_FIXTURE_CODEC);
+    // The STRUCTURED channel: the one route-neutral code for a --coverage run
+    // that left no coverage report to send. The sentence itself is not
+    // pinned, so a re-wording must not red this.
+    const rows = warningRows(res.stdout);
+    expect(rows.filter((row) => row.includes("coverage-not-measured")).length).toBe(1);
+    // The route-specific warning is retired.
+    expect(rows.some((row) => row.includes("raw-report-carries-no-coverage"))).toBe(false);
   });
 
   test("WITHOUT --coverage the same fixture warns about nothing — the warning is the flag's, not the route's", async () => {
@@ -1669,7 +1661,7 @@ describe("clients/bun-crucible.py — CR-CRU-015 §S2: a raw-decoded target neve
     expect(events.length).toBe(1);
     expect((await getFullEvent(baseUrl, events[0]!.id)).codec).toBe(RAW_FIXTURE_CODEC);
 
-    expect(warningRows(res.stdout).some((row) => row.includes("raw-report-carries-no-coverage"))).toBe(
+    expect(warningRows(res.stdout).some((row) => row.includes("coverage-not-measured"))).toBe(
       false,
     );
     expect(warnLines(res.stderr).some((line) => /coverage/i.test(line))).toBe(false);
