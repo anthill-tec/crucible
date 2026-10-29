@@ -118,7 +118,8 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
   `<error>` → fail; `<skipped>` → pending; else pass. `time` attr (seconds) → duration_ms.
   Root may be `<testsuites>` or a bare `<testsuite>`.
 - Historical parser quirk (the v1 `python-crucible.py`'s parsed-ingest path, later `_ingest_parsed_dir`;
-  successor: `_parse_junit_dir` in `clients/python-crucible.py`): "the server-side format=junit parser
+  successor: the board's `junit` codec, `parseJunit` in `src/codecs/junit.ts`, which decodes the
+  reports the python client sends to `/api/v2/runs`): "the server-side format=junit parser
   historically labeled leaves" with class-qualified names — v2 leaf name = testcase `name`
   attr, suite node = testsuite `name` attr.
 
