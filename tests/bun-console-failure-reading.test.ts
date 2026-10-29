@@ -4,7 +4,7 @@
 // kind; the human detail exists only on its console stream, as an `error:`
 // block under a source echo of the code that raised. The board reads that
 // stream in its own module, `src/codecs/bun-console.ts`, by the rules the bun
-// client applies today (`_parse_console_failures` in clients/bun-crucible.py):
+// client applied to its console before the board took that reading over:
 //
 //  - a block marries the result line that follows it, and only when the
 //    echo's last test declaration at or above the caret names that line's
@@ -24,8 +24,8 @@
 //
 // EXPORT ASSUMED: `parseBunConsoleFailures(consoleText: string)` returning a
 // plain object keyed by result-line name, each value `{message, trace?}` —
-// the shape `_parse_console_failures` returns. Every capture and the client's
-// own reading of it come from tests/fixtures/bun-console-captures.ts.
+// the shape the client's console reading returned. Every capture and the
+// client's own reading of it come from tests/fixtures/bun-console-captures.ts.
 import { describe, test, expect } from "bun:test";
 import { parseBunConsoleFailures } from "../src/codecs/bun-console.ts";
 import {
