@@ -1470,7 +1470,7 @@ REGRESSION_COVERAGE_LCOV_HELP = (
     "measured and is filed with its results.")
 REGRESSION_COVERAGE_PY_HELP = (
     REGRESSION_COVERAGE_HELP + " With it, the run is under coverage.py and "
-    "its coverage is posted to /api/v2/runs/parsed with its results.")
+    "its lcov coverage report is sent to /api/v2/runs with its results.")
 REGRESSION_COVERAGE_JACOCO_HELP = (
     REGRESSION_COVERAGE_HELP + " With it, the build's JaCoCo coverage is "
     "collected on a run with no failure and posted to /api/v2/runs/parsed "
@@ -6874,6 +6874,25 @@ def _whole_suite_warning(code, stack, covered, detail):
               if covered else "")
     return {"code": code,
             "detail": f"{whole_suite_label(stack)}{covers} {detail}"}
+
+
+def whole_suite_unreported_warnings(stack, response):
+    """The gate's finding on its ONE whole-suite run when that run was not
+    filed, for a gate that composes no declared suites and so emits that
+    run's own envelope: `[]` when the ingest `response` is `ok` and carries
+    the run's counts, else one `gate-suite-unreported` warning, worded as the
+    composed gate words it (`_run_outcome`), so the gate is not green and
+    says it cannot state what it covered."""
+    response = response if isinstance(response, dict) else {}
+    counts = _suite_counts(response)
+    if response.get("ok") and counts is not None:
+        return []
+    error = response.get("error")
+    cause = f": {error}" if error else ""
+    return [_whole_suite_warning(
+        GATE_SUITE_UNREPORTED_CODE, stack, (),
+        f"RAN, and was not filed, so the gate cannot say what it "
+        f"covered{cause}")]
 
 
 def _run_outcome(code, counts, error):
