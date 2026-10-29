@@ -17,7 +17,11 @@ THREE-call bracket (`_post("/api/agents/heartbeat")` → ingest →
 `_post("/api/agents/remove")`). Endpoint literals were corrected then: the
 register/unregister verbs live at `/api/v2/agents/register|unregister` (not
 the retired `/api/agents/heartbeat|remove` shim), and ingest lives at
-`/api/v2/runs/parsed` (not `/api/ingest/*`).
+`/api/v2/runs/parsed` (not `/api/ingest/*`). CR-CRU-204 moves it once more:
+bun sends its runner's reports, so the run's ingest is its ONE `POST
+/api/v2/runs` (`RUNS`) carrying the report text inline (`data`), read after
+the board's health (`_get` answers it, `get_answering_health`), and never the
+parsed route.
 
 CR-CRU-056 (C5) retarget note — the SECOND redesign of this same bracket, and
 the reason the pins below moved again:
@@ -76,10 +80,9 @@ extend, and the dispatch instructions say the request-sequence pins suffice
 in that case. The request-sequence + payload-shape pins below are the full
 RED coverage for §S5.
 
-Invocation (the documented convention for every tests/client/ harness):
-    python3 -m pytest tests/client/ -q          (run from the repo root)
-Fallback:
-    python3 tests/client/test_bun_crucible_lifecycle.py
+Invocation:
+    python3 clients/python-crucible.py test \\
+        --tests tests.client.test_bun_crucible_lifecycle
 """
 
 import argparse
@@ -93,6 +96,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.live_run_harness import get_answering_health
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
 
@@ -103,6 +108,11 @@ PASS_JUNIT_XML = """<?xml version="1.0" encoding="UTF-8"?>
 </testsuite>
 </testsuites>
 """
+
+# The run's ingest: bun's reports go to the board's run route, never the
+# parsed one.
+RUNS = "/api/v2/runs"
+PARSED = "/api/v2/runs/parsed"
 
 FAIL_JUNIT_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <testsuites>
@@ -191,10 +201,14 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
         # exists to short-circuit this lookup, so `_get` is mocked here
         # (module-wide for this bracket-only test class) to return that
         # tolerant failure deterministically, never touching the live server.
+        # CR-CRU-204 §S1 — the shared ingest reads the board's health first, so
+        # the health routes answer as a board that decodes bun's reports; every
+        # other read keeps that tolerant failure.
         self._get_patcher = mock.patch.object(
             self.module, "_get",
-            return_value={"ok": False,
-                          "error": "connection failed: mock (non-UUID project key)"})
+            side_effect=get_answering_health(
+                {"ok": False,
+                 "error": "connection failed: mock (non-UUID project key)"}))
         self._get_patcher.start()
 
     def tearDown(self):
@@ -255,7 +269,7 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
 
         def fake_post(path, payload):
             calls.append((path, copy.deepcopy(payload)))
-            if raise_on_ingest and path.startswith("/api/v2/runs/"):
+            if raise_on_ingest and path == RUNS:
                 raise RuntimeError("simulated ingest network failure")
             agent_id = payload.get("agentId")
             if path in ("/api/v2/agents/heartbeat", "/api/v2/agents/register"):
@@ -297,7 +311,8 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         paths = [c[0] for c in calls]
-        ingest_idx = [i for i, p in enumerate(paths) if p.startswith("/api/v2/runs/")]
+        self.assertNotIn(PARSED, paths, f"bun's reports go to {RUNS}; paths={paths}")
+        ingest_idx = [i for i, p in enumerate(paths) if p == RUNS]
         unregister_idx = [i for i, p in enumerate(paths) if p == "/api/v2/agents/unregister"]
 
         self.assertEqual(len(ingest_idx), 1,
@@ -329,8 +344,10 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
         self._assert_open_heartbeat_payload(calls[0][1], agent)
         ingest_payload = calls[ingest_idx[0]][1]
         self.assertEqual(ingest_payload.get("agentId"), agent)
-        self.assertEqual(ingest_payload.get("summary", {}).get("passed"), 1)
-        self.assertEqual(ingest_payload.get("summary", {}).get("failed"), 0)
+        self.assertEqual(ingest_payload.get("codec"), "junit")
+        self.assertEqual(ingest_payload.get("data"), [PASS_JUNIT_XML],
+                         f"the run's report text rides inline; body={ingest_payload!r}")
+        self.assertEqual(ingest_payload.get("runnerExit"), 0)
 
         self._assert_unregister_payload(calls[unregister_idx[0]][1], agent)
 
@@ -346,7 +363,8 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         paths = [c[0] for c in calls]
-        ingest_idx = [i for i, p in enumerate(paths) if p.startswith("/api/v2/runs/")]
+        self.assertNotIn(PARSED, paths, f"bun's reports go to {RUNS}; paths={paths}")
+        ingest_idx = [i for i, p in enumerate(paths) if p == RUNS]
         unregister_idx = [i for i, p in enumerate(paths) if p == "/api/v2/agents/unregister"]
 
         self.assertEqual(len(ingest_idx), 1,
@@ -374,8 +392,10 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
         ingest_payload = calls[ingest_idx[0]][1]
         self.assertEqual(ingest_payload.get("agentId"), agent)
         self.assertEqual(ingest_payload.get("tier"), "regression")
-        self.assertEqual(ingest_payload.get("summary", {}).get("passed"), 1)
-        self.assertEqual(ingest_payload.get("summary", {}).get("failed"), 0)
+        self.assertEqual(ingest_payload.get("codec"), "junit")
+        self.assertEqual(ingest_payload.get("data"), [PASS_JUNIT_XML],
+                         f"the run's report text rides inline; body={ingest_payload!r}")
+        self.assertEqual(ingest_payload.get("runnerExit"), 0)
 
         self._assert_unregister_payload(calls[unregister_idx[0]][1], agent)
 
@@ -404,8 +424,9 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
             self.module.cmd_test(self._test_args(agent))
 
         paths = [c[0] for c in calls]
-        self.assertTrue(any(p.startswith("/api/v2/runs/") for p in paths),
-                         f"a failing test run must still INGEST, got paths={paths}")
+        self.assertEqual(paths.count(RUNS), 1,
+                         f"a failing test run must still INGEST at {RUNS}, got paths={paths}")
+        self.assertNotIn(PARSED, paths)
         self.assertIn("/api/v2/agents/unregister", paths,
                        "a failing test run must still tear down the identity it "
                        "created (the bracket is outcome-independent)")
@@ -413,9 +434,10 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
                          "the opening identity heartbeat must be the FIRST call")
         self.assertEqual(paths[-1], "/api/v2/agents/unregister")
 
-        ingest_payload = next(p for path, p in calls if path.startswith("/api/v2/runs/"))
-        self.assertEqual(ingest_payload.get("summary", {}).get("failed"), 1)
-        self.assertEqual(ingest_payload.get("summary", {}).get("passed"), 0)
+        ingest_payload = next(p for path, p in calls if path == RUNS)
+        self.assertEqual(ingest_payload.get("data"), [FAIL_JUNIT_XML],
+                         f"the failing report rides inline; body={ingest_payload!r}")
+        self.assertEqual(ingest_payload.get("runnerExit"), 1)
 
     def test_regression_command_failing_run_still_ingests_and_unregisters(self):
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = FAIL_JUNIT_XML
@@ -426,8 +448,10 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
             self.module.cmd_regression(self._regression_args(agent))
 
         paths = [c[0] for c in calls]
-        self.assertTrue(any(p.startswith("/api/v2/runs/") for p in paths),
-                         f"a failing regression run must still INGEST, got paths={paths}")
+        self.assertEqual(paths.count(RUNS), 1,
+                         f"a failing regression run must still INGEST at {RUNS}, "
+                         f"got paths={paths}")
+        self.assertNotIn(PARSED, paths)
         self.assertIn("/api/v2/agents/unregister", paths,
                        "a failing regression run must still tear down the identity "
                        "it created (the bracket is outcome-independent)")
@@ -435,8 +459,10 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
                          "the opening identity heartbeat must be the FIRST call")
         self.assertEqual(paths[-1], "/api/v2/agents/unregister")
 
-        ingest_payload = next(p for path, p in calls if path.startswith("/api/v2/runs/"))
-        self.assertEqual(ingest_payload.get("summary", {}).get("failed"), 1)
+        ingest_payload = next(p for path, p in calls if path == RUNS)
+        self.assertEqual(ingest_payload.get("data"), [FAIL_JUNIT_XML],
+                         f"the failing report rides inline; body={ingest_payload!r}")
+        self.assertEqual(ingest_payload.get("runnerExit"), 1)
 
     # ---- Bonus: an exception mid-ingest must not skip the unregister (real try/finally) ----
 
@@ -451,8 +477,7 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
                 self.module.cmd_test(self._test_args(agent))
 
         paths = [c[0] for c in calls]
-        self.assertTrue(any(p.startswith("/api/v2/runs/") for p in paths),
-                         "the ingest must fire before it raises")
+        self.assertIn(RUNS, paths, f"the {RUNS} ingest must fire before it raises")
         self.assertIn("/api/v2/agents/unregister", paths,
                        "unregister must STILL fire despite the ingest exception "
                        "(the bracket is a try/finally, not a try/except-success-only)")
@@ -513,7 +538,7 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
 
         second_run_paths = [p for p, _ in calls[first_run_calls:]]
         self.assertTrue(
-            any(p.startswith("/api/v2/runs/") for p in second_run_paths),
+            second_run_paths.count(RUNS) == 1,
             f"the SECOND consecutive gated run must still ingest under the "
             f"caller's live registration, got paths={second_run_paths}")
         self.assertNotIn("/api/v2/agents/unregister", [p for p, _ in calls],
@@ -558,7 +583,10 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
         self._assert_open_heartbeat_payload(calls[0][1], agent, cycle=152)
         # §S3 — the CLIENT still resolves nothing: the ingest carries no
         # cycle of its own; the server stamps it from the binding.
-        ingest_payload = next(p for path, p in calls if path.startswith("/api/v2/runs/"))
+        ingest_payload = next((p for path, p in calls if path == RUNS), None)
+        self.assertIsNotNone(ingest_payload,
+                             f"the run ingests at {RUNS}; paths={[c[0] for c in calls]}")
+        assert ingest_payload is not None
         self.assertNotIn("cycleId", ingest_payload.get("context", {}),
                           "the client must send NO resolved cycle on the ingest "
                           "— attachment is server-stamped from the binding (§S3)")
