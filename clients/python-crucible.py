@@ -626,7 +626,7 @@ def _emit_ingest_axi(verb, resp, project_dir, agent, help_steps=None,
     canned per-verb `HELP_STEPS` entry; unset keeps today's behaviour exactly.
     CR-CRU-094 §S3 -- `warnings` carries the run's pre-flight finding onto the
     envelope, so the stderr line and `warnings[]` say the same thing."""
-    filed = _filed_run(resp)
+    filed = _axi().filed_run(resp)
     run = {key: (filed.get(key) if isinstance(filed.get(key), int)
                  and not isinstance(filed.get(key), bool) else None)
            for key in ("passed", "failed", "pending", "total", "files")}
@@ -839,7 +839,6 @@ def _is_zero_discovery(result):
 
 JUNIT_CODEC = "junit"
 LCOV_CODEC = "lcov"
-COVERAGE_NOT_MEASURED_CODE = "coverage-not-measured"
 
 
 def _file_reports(project_dir, agent_id, report_paths, *, raw=None,
@@ -849,51 +848,14 @@ def _file_reports(project_dir, agent_id, report_paths, *, raw=None,
     `ingest_reports`, which reads the board's health first and, unless it
     refuses, makes ONE `POST /api/v2/runs` carrying `codec: "junit"`, every
     report's text inline, the lcov coverage report when one is given, `raw`
-    and `runnerExit`. This client parses none of them.
-
-    Prints the human ingest line on stderr from the board's answer -- its
-    counts and the coverage it kept -- and returns that answer. The stack
-    rides on the body through the shared ingest."""
-    resp = _axi().ingest_reports(
+    and `runnerExit`. This client parses none of them. Returns the board's
+    answer. The stack rides on the body through the shared ingest."""
+    return _axi().ingest_reports(
         _post, _get, stack=_STACK, project_key=_project_key(project_dir),
         agent_id=agent_id, codec=JUNIT_CODEC, report_paths=report_paths,
         raw=raw, coverage_codec=LCOV_CODEC if coverage_paths else None,
         coverage_paths=coverage_paths, tier=tier, context=context,
         run_id=run_id, release=release, runner_exit=runner_exit)
-    run = _filed_run(resp)
-    coverage = run.get("coverage")
-    if not isinstance(coverage, dict):
-        coverage = {}
-    cov_line = ""
-    for key, label in (("lines", "lines"), ("functions", "funcs")):
-        figure = coverage.get(key)
-        if isinstance(figure, dict):
-            cov_line += f" {label}={figure.get('percent')}%"
-    print(
-        f"ingest: ok={resp.get('ok')} codec={JUNIT_CODEC} "
-        f"passed={run.get('passed')} failed={run.get('failed')} "
-        f"pending={run.get('pending')} total={run.get('total')} "
-        f"files={run.get('files')}{cov_line}"
-        + (f" error={resp['error']}" if resp.get("error") else ""),
-        file=sys.stderr,
-    )
-    return resp
-
-
-def _filed_run(resp):
-    """(PURE) The `run` block of the board's ingest answer, `{}` when the run
-    was not filed (refused, unreachable, too large) and so has no figures."""
-    run = resp.get("run") if isinstance(resp, dict) else None
-    return run if isinstance(run, dict) else {}
-
-
-def _coverage_not_measured_warning(where):
-    """The warning a `--coverage` run carries when it left no coverage report
-    to send: the run is filed with no coverage at all."""
-    return {"code": COVERAGE_NOT_MEASURED_CODE,
-            "detail": (f"--coverage was requested, and {where}: no coverage "
-                       f"report was sent, so this run is filed with no "
-                       f"coverage")}
 
 
 def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None,
@@ -1360,7 +1322,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         if lcov_path:
             coverage_paths = [lcov_path]
         else:
-            envelope_warnings.append(_coverage_not_measured_warning(
+            envelope_warnings.append(_axi().coverage_not_measured_warning(
                 "`coverage lcov` left no lcov coverage report"))
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
@@ -1376,7 +1338,8 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     # (unrecorded / red / green); the plain `regression` verb keeps its canned
     # HELP_STEPS entry, unchanged.
     gate = verb != "regression"
-    help_steps = (_axi().run_help(verb, ok, _filed_run(resp).get("failed"),
+    help_steps = (_axi().run_help(verb, ok,
+                                  _axi().filed_run(resp).get("failed"),
                                   _base_url())
                   if gate else None)
     # A gate whose one whole-suite run was not filed cannot say what it

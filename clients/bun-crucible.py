@@ -701,7 +701,6 @@ def _run_context():
 
 JUNIT_CODEC = "junit"
 LCOV_CODEC = "lcov"
-COVERAGE_NOT_MEASURED_CODE = "coverage-not-measured"
 
 
 def _file_reports(project_dir, agent_id, *, codec, report_paths, raw=None,
@@ -711,51 +710,14 @@ def _file_reports(project_dir, agent_id, *, codec, report_paths, raw=None,
     `ingest_reports`, which reads the board's health first and, unless it
     refuses, makes ONE `POST /api/v2/runs` carrying `codec`, the report texts
     inline, the lcov coverage report when one is given, `raw` and
-    `runnerExit`. This client parses none of them.
-
-    Prints the human ingest line on stderr from the board's answer \u2014 its
-    counts and the coverage it kept \u2014 and returns that answer."""
-    resp = _axi().ingest_reports(
+    `runnerExit`. This client parses none of them. Returns the board's
+    answer."""
+    return _axi().ingest_reports(
         _post, _get, stack=_STACK, project_key=_project_key(project_dir),
         agent_id=agent_id, codec=codec, report_paths=report_paths, raw=raw,
         coverage_codec=LCOV_CODEC if coverage_paths else None,
         coverage_paths=coverage_paths, tier=tier, context=context,
         run_id=run_id, release=release, runner_exit=runner_exit)
-    run = _filed_run(resp)
-    coverage = run.get("coverage")
-    if not isinstance(coverage, dict):
-        coverage = {}
-    cov_line = ""
-    for key, label in (("lines", "lines"), ("functions", "funcs")):
-        figure = coverage.get(key)
-        if isinstance(figure, dict):
-            cov_line += f" {label}={figure.get('percent')}%"
-    # The human-readable ingest line is interactive-only (stderr); the machine
-    # channel is the TOON AXI envelope the caller emits on stdout.
-    print(
-        f"ingest: ok={resp.get('ok')} codec={codec} "
-        f"passed={run.get('passed')} failed={run.get('failed')} "
-        f"pending={run.get('pending')} total={run.get('total')}{cov_line}"
-        + (f" error={resp['error']}" if resp.get("error") else ""),
-        file=sys.stderr,
-    )
-    return resp
-
-
-def _filed_run(resp):
-    """(PURE) The `run` block of the board's ingest answer, `{}` when the run
-    was not filed (refused, unreachable, too large) and so has no figures."""
-    run = resp.get("run") if isinstance(resp, dict) else None
-    return run if isinstance(run, dict) else {}
-
-
-def _coverage_not_measured_warning(where):
-    """The warning a `--coverage` run carries when it left no coverage report
-    to send: the run is filed with no coverage at all."""
-    return {"code": COVERAGE_NOT_MEASURED_CODE,
-            "detail": (f"--coverage was requested, and {where}: no coverage "
-                       f"report was sent, so this run is filed with no "
-                       f"coverage")}
 
 
 def _raw_report_result_count(raw_report):
@@ -1388,7 +1350,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
                          f"measured none")
                 print(f"[crucible] WARN: --coverage was requested but {where} "
                       f"— this run is filed with no coverage", file=sys.stderr)
-                run_warnings.append(_coverage_not_measured_warning(where))
+                run_warnings.append(_axi().coverage_not_measured_warning(where))
         resp = _file_reports(project_dir, args.agent, codec=codec,
                              report_paths=[ingest_path],
                              raw=getattr(result, "stdout", None),
@@ -1400,7 +1362,8 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         # §S2 — a GATE run's next step is derived from the run state it reached
         # (unrecorded / red / green); the plain `regression` verb keeps its
         # canned _HELP_STEPS entry, unchanged.
-        help_steps = (_axi().run_help(verb, ok, _filed_run(resp).get("failed"),
+        help_steps = (_axi().run_help(verb, ok,
+                                      _axi().filed_run(resp).get("failed"),
                                       _base_url())
                       if verb not in ("regression", "test") else None)
         if name_unfiled:
@@ -1993,7 +1956,7 @@ def _emit_ingest_axi(verb, resp, project_dir, agent, help_steps=None,
 
     `name` is the test-name filter the run was narrowed by; an unfiltered run
     adds no key."""
-    filed = _filed_run(resp)
+    filed = _axi().filed_run(resp)
     run = {key: (filed.get(key) if isinstance(filed.get(key), int)
                  and not isinstance(filed.get(key), bool) else None)
            for key in ("passed", "failed", "pending", "total", "files")}

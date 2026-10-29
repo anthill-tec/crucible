@@ -8062,7 +8062,11 @@ def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
 
     A refusal before sending answers `{ok: False, error, warnings}`; with a
     run open it is aborted through `abort_run`, the refusal its reason, and
-    `warnings` carries the warning that abort produced."""
+    `warnings` carries the warning that abort produced.
+
+    On every path it returns by it prints the run's one human ingest line on
+    stderr (`_print_ingest_line`), the last line it prints: after a refusal's
+    `[crucible] ERROR:` line and, with a run open, after the abort's line."""
     measures_coverage = coverage_codec is not None and bool(coverage_paths)
     health = get_fn(INGEST_HEALTH_PATH)
     refusal = _ingest_health_refusal(
@@ -8099,14 +8103,54 @@ def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
         print(f"[crucible] ERROR: {refusal}", file=sys.stderr)
         warnings = ([abort_run(post_fn, project_key, agent_id, run_id, refusal)]
                     if run_id else [])
-        return {"ok": False, "error": refusal, "warnings": warnings}
-    resp = post_ingest(post_fn, INGEST_RUNS_PATH, payload, stack=stack,
-                       release=release)
-    error = resp.get("error") if isinstance(resp, dict) else None
-    if isinstance(error, str) and _HTTP_413.match(error):
-        return {**resp, "error": (f"{error} \u2014 the body was larger than the "
-                                  f"board's {INGEST_BODY_LIMIT_KEY} limit")}
+        resp = {"ok": False, "error": refusal, "warnings": warnings}
+    else:
+        resp = post_ingest(post_fn, INGEST_RUNS_PATH, payload, stack=stack,
+                           release=release)
+        error = resp.get("error") if isinstance(resp, dict) else None
+        if isinstance(error, str) and _HTTP_413.match(error):
+            resp = {**resp, "error": (
+                f"{error} \u2014 the body was larger than the board's "
+                f"{INGEST_BODY_LIMIT_KEY} limit")}
+    _print_ingest_line(resp, codec)
     return resp
+
+
+def _print_ingest_line(resp, codec):
+    """Print a run's human ingest line on stderr from the board's answer: its
+    `run` block's figures (`None` without one), the coverage axes it kept,
+    and its error when it carries one."""
+    run, answer = filed_run(resp), resp if isinstance(resp, dict) else {}
+    coverage = run.get("coverage")
+    coverage = coverage if isinstance(coverage, dict) else {}
+    cov_line = "".join(
+        f" {label}={coverage[key].get('percent')}%"
+        for key, label in (("lines", "lines"), ("functions", "funcs"))
+        if isinstance(coverage.get(key), dict))
+    error = f" error={answer['error']}" if answer.get("error") else ""
+    print(f"ingest: ok={answer.get('ok')} codec={codec} "
+          f"passed={run.get('passed')} failed={run.get('failed')} "
+          f"pending={run.get('pending')} total={run.get('total')} "
+          f"files={run.get('files')}{cov_line}{error}", file=sys.stderr)
+
+
+def filed_run(resp):
+    """(PURE) The `run` block of the board's ingest answer, `{}` when the run
+    was not filed (refused, unreachable, too large) and so has no figures."""
+    run = resp.get("run") if isinstance(resp, dict) else None
+    return run if isinstance(run, dict) else {}
+
+
+COVERAGE_NOT_MEASURED_CODE = "coverage-not-measured"
+
+
+def coverage_not_measured_warning(where):
+    """The warning a `--coverage` run carries when it left no coverage report
+    to send: the run is filed with no coverage at all."""
+    return {"code": COVERAGE_NOT_MEASURED_CODE,
+            "detail": (f"--coverage was requested, and {where}: no coverage "
+                       f"report was sent, so this run is filed with no "
+                       f"coverage")}
 
 
 def ran_nothing(exit_code, total):
