@@ -914,6 +914,38 @@ class RunReadUsageAndAnAbsentBoard:
     def test_run_against_an_unreachable_board_is_one_refusal_naming_it(self):
         self.assertBoardAbsentRefusal(["run", "evt-t-new"])
 
+    def unreachable_run_help(self):
+        """`run evt-t-new` against the unreachable fixture board: its
+        refusal's `help` steps, each as a string."""
+        code, out, err = self.drive_unreachable(["run", "evt-t-new"])
+        axi = self.envelope(out, err)
+        self.assertIs(axi.get("ok"), False, f"{self.CLIENT}: {axi!r}")
+        help_steps = axi.get("help")
+        self.assertIsInstance(
+            help_steps, list,
+            f"{self.CLIENT}: the refusal carries a `help` list; {axi!r}")
+        return [str(step) for step in help_steps], axi
+
+    def test_run_against_an_unreachable_board_helps_by_naming_the_board_to_reach(self):
+        # The step `runs`' own unreachable-board refusal already gives
+        # (`cmd_runs`, clients/_crucible_axi.py): the board's address and its
+        # reachability — the one thing that helps when the board is down.
+        help_steps, axi = self.unreachable_run_help()
+        self.assertTrue(
+            any(UNREACHABLE_BOARD in step and "reachable" in step.lower()
+                for step in help_steps),
+            f"{self.CLIENT}: an unreachable board's `run` refusal helps with a "
+            f"step naming {UNREACHABLE_BOARD} and its reachability, as `runs` "
+            f"does; help={help_steps!r} envelope={axi!r}")
+
+    def test_run_against_an_unreachable_board_does_not_point_at_runs_cycle(self):
+        # `runs --cycle` reads the same absent board, so it cannot help here.
+        help_steps, axi = self.unreachable_run_help()
+        self.assertFalse(
+            any("runs --cycle" in step for step in help_steps),
+            f"{self.CLIENT}: with the board down, `runs --cycle` is no step "
+            f"that helps; help={help_steps!r} envelope={axi!r}")
+
 
 # ── AC6 — read only ─────────────────────────────────────────────────────────
 
