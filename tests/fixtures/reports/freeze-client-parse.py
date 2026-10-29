@@ -6,9 +6,6 @@ For every fixture directory under `tests/fixtures/reports/` this writes an
 TODAY, by calling the client's own parser functions (each client module is
 imported by path from `clients/`; nothing here re-implements a parse):
 
-  python   `_parse_junit_dir` (`by_classname` for the pytest report, as the
-           `test` verb runs it; `auto-ingest`'s ungrouped tree beside it) +
-           `_collect_coverage` (fed the fixture's lcov)
   mvn      `_report_dirs` / `_dirs_with_xml` (surefire, then failsafe — the
            order the regression verb reads them) + `_parse_junit` +
            `_collect_jacoco` (the CSVs it selects under the fixture tree)
@@ -20,10 +17,11 @@ Each `expected.json` also names its inputs — the report files in the order the
 client reads them and the coverage files and their codec — so a test can send
 the same texts to the board in the same order.
 
-bun is not frozen here any more: the bun client sends its runner's reports to
-the board and parses none of them (CR-CRU-204), so there is no client parse
-left to freeze. `bun/expected.json` stays as it was frozen at CR-CRU-152's base,
-the record of what the bun client computed before the board took the parse.
+bun and python are not frozen here any more: their clients send the runner's
+reports to the board and parse none of them (CR-CRU-204), so there is no
+client parse left to freeze. `bun/expected.json` and the two
+`python/*/expected.json` stay as they were frozen at CR-CRU-152's base, the
+record of what those clients computed before the board took the parse.
 
 Run from anywhere: `python3 tests/fixtures/reports/freeze-client-parse.py`.
 """
@@ -32,9 +30,7 @@ import glob
 import importlib.util
 import json
 import os
-import shutil
 import sys
-import tempfile
 
 sys.dont_write_bytecode = True
 
@@ -66,37 +62,6 @@ def _write(fixture_dir, document):
     with open(os.path.join(fixture_dir, "expected.json"), "w") as f:
         json.dump(document, f, indent=2, ensure_ascii=False)
         f.write("\n")
-
-
-def _python_coverage(python_client, lcov_file):
-    """`_collect_coverage` itself, fed the fixture's lcov: the `coverage lcov`
-    step it spawns is replaced by a no-op command, so it reads the lcov the
-    real run wrote, at the path it derives beside the data file."""
-    with tempfile.TemporaryDirectory() as tmp:
-        shutil.copyfile(lcov_file, os.path.join(tmp, "coverage.lcov"))
-        return python_client._collect_coverage(
-            shutil.which("true"), tmp, dict(os.environ),
-            data_file=os.path.join(tmp, ".coverage"))
-
-
-def freeze_python():
-    python = _client("python")
-    for runner, by_classname in (("xmlrunner", False), ("pytest", True)):
-        d = os.path.join(HERE, "python", runner)
-        reports = sorted(glob.glob(os.path.join(d, "TEST-*.xml")))
-        summary, tree, files = python._parse_junit_dir(d, by_classname=by_classname)
-        coverage = _python_coverage(python, os.path.join(d, "lcov.info"))
-        document = {
-            "stack": "python",
-            "reports": _rel(d, reports),
-            "coverage": {"codec": "lcov", "reports": ["lcov.info"]},
-            "client": {"summary": summary, "tree": tree, "files": files,
-                       "coverage": coverage},
-        }
-        if by_classname:
-            # `auto-ingest` reads the same directory without grouping.
-            document["clientAutoIngestTree"] = python._parse_junit_dir(d)[1]
-        _write(d, document)
 
 
 def freeze_mvn():
@@ -161,7 +126,6 @@ def freeze_arduino():
 
 
 def main():
-    freeze_python()
     freeze_mvn()
     freeze_rust()
     freeze_arduino()
