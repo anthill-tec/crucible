@@ -9,6 +9,11 @@ functions; rerun it with `python3 tests/fixtures/reports/freeze-client-parse.py`
 `expected.json` also names its inputs: the report files in the order the client
 reads them, the coverage files and their codec, and for bun the console.
 
+Every `expected.json` was frozen at CR-CRU-152's base, and is kept as the record
+of the client parse at that point. A client that sends its runner's reports to
+the board parses none of them, so the script no longer freezes its set: bun's
+`expected.json` (CR-CRU-204) is not regenerated, and is never rewritten.
+
 `tests/real-stack-reports-decode-on-the-board.test.ts` sends each set to
 `POST /api/v2/runs` and compares the board's decode with the frozen parse.
 
