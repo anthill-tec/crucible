@@ -468,6 +468,19 @@ _JUNIT_SUITE_ONE_PASS = (
     '<testcase classname="TierProbeTest" name="probe" time="0.001"/>'
     '</testsuite>'
 )
+# CR-CRU-215 §S1 — the nextest report the fake `cargo` writes during a rust
+# workspace run, handed to it through FAKE_CARGO_JUNIT_CONTENT. Its counts
+# (3 run, 2 passed, 1 failed) are distinct from every other fixture here, so a
+# filed run carrying them can only have read the report the fake wrote.
+_NEXTEST_JUNIT_TWO_PASS_ONE_FAIL = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<testsuites><testsuite name="probe-crate::tier" tests="3" failures="1" errors="0">'
+    '<testcase classname="probe-crate::tier" name="adds" time="0.001"/>'
+    '<testcase classname="probe-crate::tier" name="subtracts" time="0.001"/>'
+    '<testcase classname="probe-crate::tier" name="divides" time="0.001">'
+    '<failure message="boom">boom</failure></testcase>'
+    '</testsuite></testsuites>'
+)
 
 # `bun`: writes FAKE_BUN_JUNIT_CONTENT to --reporter-outfile= (empty content =
 # the no-XML collection failure), and answers `bun x tsc --noEmit` as a failing
@@ -680,6 +693,7 @@ _ENV_KEYS = (
     "FAKE_BUN_JUNIT_CONTENT", "FAKE_BUN_EXIT_CODE", "FAKE_BUN_OUTPUT",
     "FAKE_PY_JUNIT_CONTENT", "FAKE_PY_EXIT_CODE", "FAKE_PY_OUTPUT",
     "FAKE_MVN_EXIT_CODE", "FAKE_CARGO_EXIT_CODE", "FAKE_MAKE_EXIT_CODE",
+    "FAKE_CARGO_JUNIT_CONTENT",
     "BUN_CRUCIBLE_PROJECT_DIR", "BUN_CRUCIBLE_PACKAGE_DIR",
     "BUN_CRUCIBLE_NO_LIFECYCLE",
     "PY_CRUCIBLE_PROJECT_DIR", "PY_CRUCIBLE_PYTHON",
@@ -1191,11 +1205,33 @@ class RustEarnedTierTest(_RustCase):
 
     def test_rust_regression_ingests_the_workspace_run_as_regression(self):
         """§S2's converse, rust `_workspace_regression_run` — the tier verb's
-        own body."""
-        self.write_nextest_junit()
+        own body.
+
+        CR-CRU-215 §S1/AC1/AC2 — the report this run files is the run's own:
+        the fake `cargo` writes `target/nextest/ci/junit.xml` on its `nextest`
+        call, from FAKE_CARGO_JUNIT_CONTENT, and nothing is placed there before
+        the client starts (CR-CRU-212's `_written_since` refuses a report older
+        than the run's start, to the whole second). The filed run carries that
+        report's counts."""
+        report = Path(self.tmpdir, "target", "nextest", "ci", "junit.xml")
+        os.environ["FAKE_CARGO_JUNIT_CONTENT"] = _NEXTEST_JUNIT_TWO_PASS_ONE_FAIL
+        self.assertFalse(
+            report.exists(),
+            f"AC2 — nothing may exist at {report} when the client is started; "
+            f"the report must be written by the fake `cargo` during the run.")
         drive = self.drive_with_real_std(self.rust_argv("regression", (), crate=False))
         self.assertStatedTier(drive, PARSED, "regression",
                               "rust regression -> POST /runs/parsed")
+        payload = self._ingest_payload(drive, PARSED,
+                                       "rust regression -> POST /runs/parsed")
+        summary = payload.get("summary") or {}
+        self.assertEqual(
+            {k: summary.get(k) for k in ("total", "passed", "failed", "pending")},
+            {"total": 3, "passed": 2, "failed": 1, "pending": 0},
+            f"AC2 — the filed run must carry the counts of the report the fake "
+            f"`cargo` wrote (3 run, 2 passed, 1 failed); summary={summary!r}")
+        self.assertEqual(len(drive.payloads(PARSED)), 1,
+                         f"exactly one ingest per run; paths={drive.paths()!r}")
 
     def test_rust_regression_ingest_carries_the_per_crate_regression_tier(self):
         """§S2's converse, rust `_regression_ingest_run` — the per-crate body,
