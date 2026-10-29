@@ -2,11 +2,12 @@
 
 The board decodes every report a client sends (`POST /api/v2/runs`), so a
 client module defines no JUnit parse, no lcov summation, no console parse and
-no classname grouping. It keeps exactly three counts it needs before any
-ingest, and the scan exempts only those: `junit_testcase_count` and
-`junit_non_skipped_count` ("ran nothing" and bun's filter check) and bun's
-`_raw_report_result_count` (a Playwright report's result count, until that
-report retires).
+no classname grouping. It keeps only the counts it needs before any ingest,
+and the scan exempts only those: `junit_testcase_count` and
+`junit_non_skipped_count` ("ran nothing" and bun's filter check) in either
+client, and in the bun client alone `_raw_report_result_count` (a Playwright
+report's result count, until that report retires). The python client has no
+raw report, so its scan exempts the two JUnit counts and nothing else.
 
 The scan reads a module's syntax tree, never its text, so a docstring or a
 comment that names a report shape is not a parse:
@@ -43,6 +44,8 @@ CLIENTS = REPO_ROOT / "clients"
 
 EXEMPT = ("junit_testcase_count", "junit_non_skipped_count",
           "_raw_report_result_count")
+# The python client's exemptions: the two JUnit counts, never bun's raw one.
+PYTHON_EXEMPT = ("junit_testcase_count", "junit_non_skipped_count")
 
 XML_MODULES = ("ET", "ElementTree", "etree", "minidom")
 XML_PARSERS = ("parse", "fromstring", "iterparse", "XML", "parseString")
@@ -91,16 +94,16 @@ def _findings_in(node, owner, docstrings):
     return found
 
 
-def report_parse_findings(source):
+def report_parse_findings(source, exempt=EXEMPT):
     """`[(owner, kind, marker)]` — every report parse `source` holds, its owner
-    the top-level function (or `<module>`) holding it; the exempt counts are
+    the top-level function (or `<module>`) holding it; the `exempt` counts are
     not read."""
     tree = ast.parse(source)
     docstrings = _docstring_nodes(tree)
     found = []
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name in EXEMPT:
+            if node.name in exempt:
                 continue
             found += _findings_in(node, node.name, docstrings)
         elif isinstance(node, ast.ClassDef):
@@ -218,6 +221,29 @@ class TheReportParseScanIsProvedOnSyntheticSourcesTest(unittest.TestCase):
              ("_count_cases", JUNIT, "ET.parse")],
             _lines(report_parse_findings(renamed)))
 
+    def test_the_python_exemptions_are_the_two_junit_counts_alone(self):
+        # Under the python client's exemptions bun's raw-report count is a
+        # parse like any other function; the two JUnit counts stay exempt.
+        self.assertEqual(
+            [kind for owner, kind, _marker
+             in report_parse_findings(_CLEAN_CLIENT, PYTHON_EXEMPT)
+             if owner != "_raw_report_result_count"],
+            [], _lines(report_parse_findings(_CLEAN_CLIENT, PYTHON_EXEMPT)))
+        violating = _CLEAN_CLIENT.replace(
+            "def _raw_report_result_count(raw_report):\n"
+            "    with open(raw_report[\"path\"]) as handle:\n"
+            "        return len(json.load(handle).get(\"suites\") or [])",
+            "def _raw_report_result_count(path):\n"
+            "    return len(list(ET.parse(path).getroot().iter(\"testcase\")))")
+        self.assertNotEqual(violating, _CLEAN_CLIENT, "fixture -- the body was replaced")
+        self.assertEqual(
+            report_parse_findings(violating, PYTHON_EXEMPT),
+            [("_raw_report_result_count", JUNIT, ".iter('testcase')"),
+             ("_raw_report_result_count", JUNIT, "ET.parse")],
+            _lines(report_parse_findings(violating, PYTHON_EXEMPT)))
+        self.assertEqual(report_parse_findings(violating), [],
+                         "under bun's exemptions the same function is exempt")
+
 
 class TheBunClientParsesNoReportTest(unittest.TestCase):
 
@@ -227,6 +253,21 @@ class TheBunClientParsesNoReportTest(unittest.TestCase):
         self.assertEqual(
             findings, [],
             "the bun client parses none of its runner's reports; found:\n"
+            + _lines(findings))
+
+
+class ThePythonClientParsesNoReportTest(unittest.TestCase):
+
+    def test_the_python_client_module_defines_no_report_parse(self):
+        """No JUnit parse, no lcov summation and no classname grouping in
+        `python-crucible.py`: only the two shared JUnit counts it calls are
+        exempt, and they live in the shared module."""
+        findings = report_parse_findings(
+            (CLIENTS / "python-crucible.py").read_text(encoding="utf-8"),
+            PYTHON_EXEMPT)
+        self.assertEqual(
+            findings, [],
+            "the python client parses none of its runner's reports; found:\n"
             + _lines(findings))
 
 
