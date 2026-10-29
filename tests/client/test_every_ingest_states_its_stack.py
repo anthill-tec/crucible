@@ -604,7 +604,8 @@ _PYTHON_DIES_BEFORE_ANY_REPORT = (
 
 class PythonStatesItsStackOnEveryIngestTest(_ClientIngestCase):
     """python: the whole `test` verb (`main`), which opens the run itself — a
-    real unittest run over a one-test fixture for `/runs/parsed`, and an
+    real unittest run over a one-test fixture for `/runs` (its report sent
+    through the shared ingest), and an
     interpreter that dies before writing a report for `/runs/compile`."""
 
     CLIENT = "python"
@@ -629,21 +630,21 @@ class PythonStatesItsStackOnEveryIngestTest(_ClientIngestCase):
         fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
         self._test_verb(str(fake))
 
-    def test_a_parsed_ingest_states_the_python_stack_when_its_start_was_accepted(self):
+    def test_a_report_ingest_states_the_python_stack_when_its_start_was_accepted(self):
         recorder = self.drive(START_ACCEPTED, self._passing_suite)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_ACCEPTED)
+        self.assert_ingest_states_the_stack(recorder, RUNS, START_ACCEPTED)
 
-    def test_a_refused_start_still_leaves_the_python_stack_on_the_parsed_ingest(self):
-        """Regression guard — python already names its stack on a parsed ingest
+    def test_a_refused_start_still_leaves_the_python_stack_on_the_report_ingest(self):
+        """Regression guard — python names its stack on a report ingest
         whose start was refused; that must survive the change."""
         recorder = self.drive(START_REFUSED, self._passing_suite)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_REFUSED)
+        self.assert_ingest_states_the_stack(recorder, RUNS, START_REFUSED)
 
-    def test_a_parsed_ingest_states_the_python_stack_when_its_start_opened_no_run(self):
+    def test_a_report_ingest_states_the_python_stack_when_its_start_opened_no_run(self):
         """A board that answers the start `ok` with no runId opened nothing:
         the ingest is the single-shot body and must still name the stack."""
         recorder = self.drive(START_OPENED_NONE, self._passing_suite)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_OPENED_NONE)
+        self.assert_ingest_states_the_stack(recorder, RUNS, START_OPENED_NONE)
 
     def test_a_compile_ingest_states_the_python_stack_when_its_start_was_accepted(self):
         recorder = self.drive(START_ACCEPTED, self._dying_interpreter)
