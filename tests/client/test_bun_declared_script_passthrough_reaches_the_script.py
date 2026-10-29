@@ -35,6 +35,7 @@ import stat
 import subprocess
 import sys
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from tests.client.live_run_harness import (
@@ -51,6 +52,7 @@ TIMEOUT = 120
 AGENT = "declared-passthrough-fixture-agent"
 PROJECT_KEY = "declared-passthrough-fixture-key"
 PARSED_INGEST = "/api/v2/runs/parsed"
+RUNS_INGEST = "/api/v2/runs"
 
 # The client's own resolution variables: a value inherited from the shell
 # running this suite would silently decide the directory or binary under test.
@@ -139,9 +141,21 @@ def _envelope(stdout):
     return decoded.get("axi") if isinstance(decoded, dict) else None
 
 
-def _leaf_statuses(tree):
-    return {leaf.get("name"): leaf.get("status")
-            for suite in tree or [] for leaf in suite.get("children") or []}
+def _report_statuses(body):
+    """`{case name: status}` over the JUnit reports an ingest body carries
+    inline: read here only to prove the report the client sent is the one bun
+    wrote; the board decodes it."""
+    statuses = {}
+    for text in body.get("data") or []:
+        for case in ET.fromstring(text).iter("testcase"):
+            if case.find("failure") is not None or case.find("error") is not None:
+                status = "fail"
+            elif case.find("skipped") is not None:
+                status = "pending"
+            else:
+                status = "pass"
+            statuses[case.get("name")] = status
+    return statuses
 
 
 class FlagMechanismPassthroughRunsOnlyTheMatchingTestTest(unittest.TestCase):
@@ -175,29 +189,31 @@ class FlagMechanismPassthroughRunsOnlyTheMatchingTestTest(unittest.TestCase):
     def parsed_ingests(self):
         return [body for path, body in self.board.posts() if path == PARSED_INGEST]
 
+    def runs_ingests(self):
+        return [body for path, body in self.board.posts() if path == RUNS_INGEST]
+
     def test_unit_passthrough_name_filter_files_one_passed_and_one_pending(self):
+        # The board's answer for the report bun writes: it decodes, the
+        # harness does not.
+        self.board.script_run(passed=1, pending=1, files=1)
         result = self.drive("--", "-t", "alpha")
         diagnostics = (f"exit={result.returncode} stdout={result.stdout!r} "
                        f"stderr={result.stderr[-2500:]!r}")
 
-        ingests = self.parsed_ingests()
+        self.assertEqual(self.parsed_ingests(), [],
+                         f"the run is never filed on the parsed route; {diagnostics}")
+        ingests = self.runs_ingests()
         self.assertEqual(
             len(ingests), 1,
-            f"the filtered run must be filed exactly once as a parsed JUnit "
-            f"result -- a passthrough lost behind `--` makes bun find no "
-            f"test file and write no report; {diagnostics}")
-        body = ingests[0]
-        summary = body.get("summary") or {}
+            f"the filtered run must be filed exactly once, its JUnit report "
+            f"sent -- a passthrough lost behind `--` makes bun find no test "
+            f"file and write no report; {diagnostics}")
+        body = ingests[0] if ingests else {}
+        self.assertEqual(body.get("codec"), "junit", f"body={body!r}")
         self.assertEqual(
-            (summary.get("passed"), summary.get("pending"),
-             summary.get("failed"), summary.get("total")),
-            (1, 1, 0, 2),
-            f"`-t alpha` must run only the matching test (1 passed) and leave "
-            f"the other filtered out (1 pending); summary={summary!r}")
-        self.assertEqual(
-            _leaf_statuses(body.get("tree")), {ALPHA: "pass", BETA: "pending"},
-            f"the matching test passes and the excluded one is pending; "
-            f"tree={body.get('tree')!r}")
+            _report_statuses(body), {ALPHA: "pass", BETA: "pending"},
+            f"`-t alpha` runs only the matching test and leaves the other "
+            f"filtered out, as the report bun wrote says; body={body!r}")
         self.assertEqual(body.get("tier"), "unit",
                          f"a tier verb's run rides its own tier; body={body!r}")
 
