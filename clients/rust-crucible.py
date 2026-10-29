@@ -568,20 +568,19 @@ def _parse_lcov(lcov_path):
 def _gate_lock_path(project_dir):
     """The STANDARD gate-lock path — the MAIN repo ROOT (parent of the common
     git dir), NOT inside .git, SHARED across all worktrees. Matches
-    gate-lock.sh's lock_path(). Returns None if not resolvable."""
+    gate-lock.sh's lock_path() with ONE difference: outside a git repository
+    (or when git cannot be run) this returns None — the run takes no lock —
+    where lock_path() falls back to /tmp/nai-gate.lock. Self-contained (only
+    `os` and `subprocess`): Model B's derivation-equality gate runs this body
+    alone."""
     try:
-        gcd = subprocess.run(
+        proc = subprocess.run(
             ["git", "-C", project_dir, "rev-parse", "--path-format=absolute", "--git-common-dir"],
             capture_output=True, text=True,
-        ).stdout.strip()
-        if not gcd:  # fallback for older git — resolve to absolute ourselves
-            gd = subprocess.run(
-                ["git", "-C", project_dir, "rev-parse", "--git-common-dir"],
-                capture_output=True, text=True,
-            ).stdout.strip()
-            gcd = gd if os.path.isabs(gd) else os.path.abspath(os.path.join(project_dir, gd))
-    except Exception:
+        )
+    except OSError:
         return None
+    gcd = proc.stdout.strip() if proc.returncode == 0 else ""
     if not gcd:
         return None
     return os.path.join(os.path.dirname(gcd), "nai-gate.lock")
@@ -667,7 +666,10 @@ def _acquire_gate_lock(project_dir, agent):
     global _HELD_GATE_LOCK
     path = _gate_lock_path(project_dir)
     if not path:
-        return True   # can't resolve a lock path → run unlocked (degraded, don't block)
+        # No git repository resolved → run unlocked (degraded, don't block), and say so.
+        print(f"[crucible] this run takes no gate lock: no git repository was resolved "
+              f"for the project directory {project_dir}", file=sys.stderr)
+        return True
     if os.path.exists(path):
         hp = _lock_field(path, "pid")
         ep = _lock_field(path, "epoch")
