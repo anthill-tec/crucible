@@ -3405,6 +3405,13 @@ def _runs_scope(args):
     return {"cycleId": str(cycle_id)}, f"cycle {cycle_id}"
 
 
+def _board_unreachable_read_help(verb, base_url):
+    """(PURE) The one step that helps a read verb (`runs`, `run`) whose board
+    could not be read: reach the board, then re-run the verb."""
+    return [f"check the Crucible server is running / reachable "
+            f"at {base_url}, then re-run {verb}"]
+
+
 def cmd_runs(args, project_dir, ops):
     """List a cycle's or a release's stored test and compile runs (read-only,
     no --agent): ONE read, `GET /api/v2/events?project=<key>&cycleId=<id>` or
@@ -3431,8 +3438,7 @@ def cmd_runs(args, project_dir, ops):
         error = f"could not read the stored runs of {label}: {resp.get('error')}"
         emit(RUNS_VERB, False,
              {"error": error,
-              "help": [f"check the Crucible server is running / reachable "
-                       f"at {ops.base_url}, then re-run runs"]},
+              "help": _board_unreachable_read_help(RUNS_VERB, ops.base_url)},
              ops.context(project_dir), [], f"runs: ok=False error={error}")
         return 1
     rows, total = roadmap_rows({RUNS_VERB: build_run_rows(resp.get("events"))},
@@ -3493,11 +3499,14 @@ def _run_diagnostic_rows(event):
             if isinstance(diagnostic, dict)]
 
 
-def _run_refusal(emit, ops, project_dir, error):
-    """The `run` refusal: ok:false naming what was refused, no brief, exit 1."""
+def _run_refusal(emit, ops, project_dir, error, help_steps=None):
+    """The `run` refusal: ok:false naming what was refused, no brief, exit 1.
+    Its help points at `runs --cycle` unless the caller names a step that
+    helps more (an unreachable board, which `runs` cannot read either)."""
     emit(RUN_VERB, False,
          {"error": error,
-          "help": ["runs --cycle <id> — lists the runs this project stored"]},
+          "help": help_steps or ["runs --cycle <id> — lists the runs this "
+                                 "project stored"]},
          ops.context(project_dir), [], f"run: ok=False error={error}")
     return 1
 
@@ -3527,8 +3536,14 @@ def cmd_run(args, project_dir, ops):
         if str(error).startswith("HTTP 404"):
             return _run_refusal(emit, ops, project_dir,
                                 f"the board holds no run {event_id}")
-        return _run_refusal(emit, ops, project_dir,
-                            f"could not read run {event_id}: {error}")
+        # An `HTTP <status>` error is an answer the board gave; anything else
+        # is a transport failure (`http_request`), where only reaching the board
+        # helps.
+        unreachable = not str(error).startswith("HTTP ")
+        return _run_refusal(
+            emit, ops, project_dir, f"could not read run {event_id}: {error}",
+            _board_unreachable_read_help(RUN_VERB, ops.base_url)
+            if unreachable else None)
     event = resp.get("event") or {}
     key = ops.project_key(project_dir)
     if event.get("projectKey") != key:
