@@ -174,7 +174,7 @@ class _IngestHeldSignalCase(unittest.TestCase):
     # ── the shared assertion ────────────────────────────────────────────
 
     def _assert_ingest_signal_filed_the_run(self, label, signum, code, stdout,
-                                            stderr, ingest_path):
+                                            stderr, ingest_path, inline=False):
         signame = signal.Signals(signum).name
         run_ids = self.board.run_ids_opened()
         self.assertEqual(
@@ -192,7 +192,27 @@ class _IngestHeldSignalCase(unittest.TestCase):
             body.get("runId"), run_id,
             f"{label}: the ingest must carry the runId it closes; got "
             f"{body!r}")
-        if "summary" in body:
+        if inline:
+            # CR-CRU-204 — a client that sends its runner's reports carries
+            # the report's text inline, never a path or a parse of it.
+            self.assertEqual(
+                body.get("codec"), "junit",
+                f"{label}: the report ingest names its codec; got {body!r}")
+            data = body.get("data")
+            self.assertIsInstance(data, list,
+                                  f"{label}: `data` carries the report texts; "
+                                  f"got {body!r}")
+            self.assertEqual(
+                len(data), 1, f"{label}: one JUnit report; got {body!r}")
+            self.assertEqual(
+                data[0].count("<testcase"), 3,
+                f"{label}: the filed run must carry the runner's own report "
+                f"(3 cases); got {body!r}")
+            self.assertNotIn("dataPath", body,
+                             f"{label}: the report travels inline; got {body!r}")
+            self.assertNotIn("summary", body,
+                             f"{label}: the client parses nothing; got {body!r}")
+        elif "summary" in body:
             summary = body["summary"]
             self.assertEqual(
                 summary.get("total"), 3,
@@ -246,12 +266,15 @@ class _IngestHeldSignalCase(unittest.TestCase):
 # path the AC's own §S2 named as this client's `test`-verb ingest). Named by
 # CLIENT in every subTest/assertion below, never by line number.
 INGEST_HELD_SITES = (
-    ("bun", "_bun_test_cmd", "/api/v2/runs/parsed"),
+    ("bun", "_bun_test_cmd", "/api/v2/runs"),
     ("python", "_python_test_cmd", "/api/v2/runs/parsed"),
     ("mvn", "_mvn_test_cmd", "/api/v2/runs"),
     ("rust", "_rust_test_cmd", "/api/v2/runs"),
     ("arduino", "_arduino_test_cmd", "/api/v2/runs/parsed"),
 )
+# The clients that send their runner's reports inline through the shared
+# ingest (CR-CRU-204): their ingest body carries `data`, never a parse.
+INLINE_REPORT_CLIENTS = frozenset({"bun"})
 
 
 class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):
@@ -271,7 +294,7 @@ class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):
                     cmd, ingest_path, signal.SIGTERM)
                 self._assert_ingest_signal_filed_the_run(
                     f"{key} test", signal.SIGTERM, code, stdout, stderr,
-                    ingest_path)
+                    ingest_path, inline=key in INLINE_REPORT_CLIENTS)
 
 
 if __name__ == "__main__":
