@@ -3,18 +3,21 @@
 With `[python] runner = "pytest"` in the project's own `crucible.toml`, the
 python client's `test`, `regression` (with and without `--coverage`), a tier
 verb declared by `--start-dir`, and `pre-merge-gate` each run the project's
-tests under pytest and file what pytest reported through the same parse the
-unittest path uses:
+tests under pytest and send pytest's own JUnit report, inline, in one
+`/api/v2/runs` body for the board to decode -- the client parses none of it:
 
-* the counts of the fixture's three tests: 1 passed, 1 failed, 1 pending;
-* `files` counted per test FILE -- pytest stamps `file=` on each test case
-  only with `-o junit_family=xunit1`, so a file holding a module-level test
-  and a test class is one file, never two;
-* the run's tree grouped by each test case's `classname` (the module for a
-  module-level test, the module and class for a test in a class), never one
-  node named after pytest's single `<testsuite name="pytest">`;
-* `pre-merge-gate` and `regression --coverage` file coverage measured by
-  coverage.py over the pytest run.
+* the report sent holds the fixture's three tests: 1 passed, 1 failed, 1
+  pending;
+* its cases carry `file=` -- pytest stamps it only with
+  `-o junit_family=xunit1` -- so the board counts a file holding a
+  module-level test and a test class as one file, never two;
+* its one suite is named `pytest`, so the board groups it by each case's
+  `classname` (the module for a module-level test, the module and class for
+  a test in a class);
+* the envelope's `run:` block is the board's answer, never the client's own
+  count;
+* `pre-merge-gate` and `regression --coverage` send the lcov report
+  coverage.py wrote over the pytest run.
 
 Every run drives the REAL `clients/python-crucible.py` as an OS subprocess on
 a scratch copy of `tests/fixtures/pytest-project`, filing to a recording board
@@ -34,12 +37,20 @@ from tests.client.pytest_project_harness import (
     counts,
     diag,
     envelope,
+    lcov_lines,
     leaves,
     require_pytest_and_coverage,
+    sent_files,
+    suite_names,
     tree_groups,
 )
 
 ONE_PASSED_ONE_FAILED_ONE_PENDING = {"total": 3, "passed": 1, "failed": 1, "pending": 1}
+
+# The `run` block the recording board answers the ingest with: figures no
+# parse of the fixture's report gives, so an envelope that states the
+# client's own count is caught.
+BOARD_RUN = {"passed": 11, "failed": 12, "pending": 13, "total": 36, "files": 7}
 
 # A file holding both a module-level test and a test class: one FILE whose
 # tests carry two `classname`s.
@@ -68,10 +79,11 @@ class _OneRunOfThePytestFixture(unittest.TestCase):
         require_pytest_and_coverage()
         cls.project = ScratchProject(f"pytest-every-verb-{cls.__name__}-")
         cls.project.declare("pytest")
+        cls.project.board.script_run(**BOARD_RUN)
         for rel, text in cls.EXTRA_FILES:
             cls.project.write(rel, text)
         cls.result = cls.project.drive(list(cls.ARGV))
-        cls.ingests = cls.project.parsed_ingests()
+        cls.ingests = cls.project.runs_ingests()
         cls.axi = envelope(cls.result.stdout)
 
     @classmethod
@@ -80,8 +92,11 @@ class _OneRunOfThePytestFixture(unittest.TestCase):
 
     def the_one_ingest(self):
         self.assertEqual(len(self.ingests), 1,
-                         f"exactly one parsed ingest must be filed; {diag(self.result)}")
-        return self.ingests[0]
+                         f"exactly one /api/v2/runs ingest must be filed; "
+                         f"{diag(self.result)}")
+        body = self.ingests[0]
+        self.assertEqual(body.get("codec"), "junit", diag(self.result))
+        return body
 
     def the_envelope_run(self):
         if self.axi is None:
@@ -108,23 +123,25 @@ class _FilesTheFixturesCounts(_OneRunOfThePytestFixture):
                          f"a run that ran its tests files no compile record; "
                          f"{diag(self.result)}")
 
-    def test_the_envelope_counts_three_tests_in_two_files(self):
+    def test_the_report_sent_holds_three_tests_in_two_files(self):
+        body = self.the_one_ingest()
+        self.assertEqual(sent_files(body), {"check_outcomes.py", "check_skipped.py"},
+                         diag(self.result))
+
+    def test_the_envelope_run_block_is_the_boards_answer(self):
         run = self.the_envelope_run()
         self.assertEqual({k: run.get(k) for k in ("passed", "failed", "pending", "total", "files")},
-                         {"passed": 1, "failed": 1, "pending": 1, "total": 3, "files": 2},
-                         diag(self.result))
+                         BOARD_RUN, diag(self.result))
 
     def test_the_tree_groups_the_tests_by_classname(self):
         body = self.the_one_ingest()
-        groups = tree_groups(body)
-        self.assertNotIn("pytest", groups,
-                         f"the tree must not file every test under pytest's one suite "
-                         f"node; tree={body.get('tree')!r}")
-        self.assertEqual(groups, FIXTURE_GROUPS, f"tree={body.get('tree')!r}")
-        node = next(n for n in body["tree"] if n.get("name") == "check_outcomes")
-        self.assertEqual(node.get("status"), "fail",
-                         f"the module holding the failing test is a failing node; "
-                         f"tree={body.get('tree')!r}")
+        self.assertEqual(suite_names(body), ["pytest"],
+                         f"pytest's one suite is named `pytest`, the name the "
+                         f"board groups by classname; data={body.get('data')!r}")
+        self.assertEqual(tree_groups(body), FIXTURE_GROUPS, f"data={body.get('data')!r}")
+        for key in ("summary", "tree"):
+            self.assertNotIn(key, body, f"the client sends no parse of its own; "
+                                        f"{diag(self.result)}")
 
     def test_the_run_is_filed_under_the_tier_its_verb_names(self):
         body = self.the_one_ingest()
@@ -137,13 +154,12 @@ class _FilesTheFixturesCountsAndCoverage(_FilesTheFixturesCounts):
     def test_coverage_measured_by_coverage_py_over_the_pytest_run_is_filed(self):
         body = self.the_one_ingest()
         coverage = body.get("coverage")
-        self.assertIsInstance(coverage, dict,
-                              f"the run must file coverage; {diag(self.result)}")
-        lines = coverage.get("lines") or {}
-        total, covered = lines.get("total"), lines.get("covered")
-        if not isinstance(total, int) or not isinstance(covered, int):
-            self.fail(f"coverage lines must carry integer total/covered; "
-                      f"coverage={coverage!r}")
+        measured = lcov_lines(body)
+        if measured is None:
+            self.fail(f"the run must send its lcov report as "
+                      f"coverage: {{codec: lcov, data}}; coverage={coverage!r} "
+                      f"{diag(self.result)}")
+        total, covered = measured
         # Measured over the fixture's own files: its two module-level tests'
         # five statements ran; the skipped test's body never did.
         self.assertGreaterEqual(covered, 5, f"coverage={coverage!r}")
@@ -197,8 +213,8 @@ class FilesAreCountedPerFileNotPerClassnameTest(_OneRunOfThePytestFixture):
         body = self.the_one_ingest()
         self.assertEqual(counts(body), {"total": 5, "passed": 3, "failed": 1, "pending": 1},
                          diag(self.result))
-        run = self.the_envelope_run()
-        self.assertEqual(run.get("files"), 3,
+        self.assertEqual(sent_files(body),
+                         {"check_outcomes.py", "check_skipped.py", "check_mixed.py"},
                          f"three test files (check_outcomes, check_skipped, "
                          f"check_mixed); {diag(self.result)}")
 
@@ -208,7 +224,7 @@ class FilesAreCountedPerFileNotPerClassnameTest(_OneRunOfThePytestFixture):
             **FIXTURE_GROUPS,
             "check_mixed": [("test_at_module_level", "pass")],
             "check_mixed.TestInAClass": [("test_in_a_class", "pass")],
-        }, f"tree={body.get('tree')!r}")
+        }, f"data={body.get('data')!r}")
 
 
 # The shared bases drive no verb of their own: out of the module's namespace,
