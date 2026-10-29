@@ -397,8 +397,8 @@ function writeArduinoEnvFile(dir: string, projectKey: string, projectName: strin
 }
 
 /** Minimal JUnit XML (`<testsuite><testcase>...`) — the shape both
- * python-crucible's `_parse_junit_dir` and arduino-crucible's `_parse_junit`
- * parse (both use xml.etree.ElementTree over testsuite/testcase/failure).
+ * the board's junit codec reads for python-crucible and arduino-crucible's
+ * `_parse_junit` parses (both use xml.etree.ElementTree over testsuite/testcase/failure).
  * CR-CRU-050 §S1/§S1b — `skip` emits a bare `<skipped/>` child (xmlrunner's
  * and the native-harness's real shape for a skipped testcase), which the
  * defective parsers fold into `passed` today via a bare `else:`. */
@@ -771,7 +771,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     return { dir, pythonPath };
   }
 
-  test("posts to /api/v2/runs/parsed (never v1 /api/ingest/parsed) with tier:'unit' and the parsed summary", async () => {
+  test("sends its report to /api/v2/runs (never /api/v2/runs/parsed or v1 /api/ingest/parsed) and the board stores tier:'unit' and the decoded summary", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-test-unit-tier");
@@ -806,7 +806,8 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     expect(event.summary?.total).toBe(3);
     expect(event.summary?.passed).toBe(2);
     expect(event.summary?.failed).toBe(1);
-    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed")).toBe(true);
+    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs")).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/v2/runs/parsed")).toBe(false);
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
@@ -924,7 +925,7 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
     return { dir, pythonPath };
   }
 
-  test("'regression' (no --coverage) posts to /api/v2/runs/parsed (never v1 /api/ingest/parsed) with tier:'regression'", async () => {
+  test("'regression' (no --coverage) sends its report to /api/v2/runs (never /api/v2/runs/parsed or v1 /api/ingest/parsed) with tier:'regression'", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-regression-tier");
@@ -957,7 +958,8 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
     expect(event.tier).toBe("regression");
     expect(event.summary?.total).toBe(2);
     expect(event.summary?.passed).toBe(2);
-    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed")).toBe(true);
+    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs")).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/v2/runs/parsed")).toBe(false);
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
@@ -996,9 +998,9 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
   });
 
   // CR-CRU-036 C4 contract, re-scoped by CR-CRU-045 (gap-analysis disproved
-  // the original C4 FIX-round reading): `_collect_coverage` runs
+  // the original C4 FIX-round reading): the client's lcov step runs
   // `python -m coverage lcov -o <path>` with `cwd=project_dir`
-  // (`_collect_coverage` in clients/python-crucible.py). For a `-m` invocation Python prepends
+  // (clients/python-crucible.py). For a `-m` invocation Python prepends
   // the CURRENT WORKING DIRECTORY to sys.path AHEAD of PYTHONPATH, so a
   // `coverage/` subdirectory sitting directly in project_dir is on the
   // interpreter's path. The REAL hazard (this is bun's own lcov output
@@ -1200,14 +1202,12 @@ describe("clients/python-crucible.py — byte-compatible CLI surface (existing f
   });
 });
 
-// CR-CRU-050 §S1/§S1b/§S2 — `_parse_junit_dir` (python-crucible.py)
-// today checks only `tc.find("failure")`/`tc.find("error")`; a bare
-// `else: passed += 1` folds every `<skipped/>` testcase into `passed`, and
-// the summary hardcodes `"pending": 0`. `_parse_junit` in mvn-crucible.py is the correct
-// precedent this fixes toward. `_emit_ingest_axi` (python-crucible.py)
-// also drops `pending` from the printed `run:` TOON block, and
-// `_ingest_parsed`'s plain "ingest parsed: ..." stderr line
-// (python-crucible.py) drops it too — both are §S2 surfaces.
+// CR-CRU-050 §S1/§S1b/§S2 — python's JUnit parse once folded every
+// `<skipped/>` testcase into `passed` and hardcoded `"pending": 0`; since
+// CR-CRU-204 the client sends xmlrunner's report to the board, whose codec
+// counts a skipped case as pending. The printed `run:` TOON block and the
+// plain stderr ingest line both state the board's answer, pending included —
+// both are §S2 surfaces.
 describe("clients/python-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> testcases count as pending, never passed (fake xmlrunner)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
@@ -1227,7 +1227,7 @@ describe("clients/python-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> 
     return { dir, pythonPath };
   }
 
-  test("§S1/§S1b/§S2: ingested summary counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), the real pass/fail leaves are unaffected, and BOTH the TOON run: block and the plain 'ingest parsed: ...' stderr line carry pending=1", async () => {
+  test("§S1/§S1b/§S2: ingested summary counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), the real pass/fail leaves are unaffected, and BOTH the TOON run: block and the plain stderr ingest line carry pending=1", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-cr050-pending");
@@ -1283,8 +1283,9 @@ describe("clients/python-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> 
     expect(block).toContain("total: 3");
     expect(block).toContain("pending: 1");
 
-    // §S2 (extended) — the plain "ingest parsed: ..." stderr line too.
-    expect(runResult.stderr).toContain("ingest parsed:");
+    // §S2 (extended) — the plain stderr ingest line too, read from the
+    // board's answer.
+    expect(runResult.stderr).not.toContain("ingest parsed:");
     expect(runResult.stderr).toContain("pending=1");
   });
 });
