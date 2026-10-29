@@ -179,9 +179,23 @@ class PythonRegressionFollowsTheLiveRunLifecycleTest(_LiveVerbCase):
         drive = drive_live(cmd, self.project, self.env(), self.scratch, MARKER,
                            self.log_path)
         # unittest states no total up front: `running N`, then `ran N/N`.
+        # python sends its runner's reports: the run's ingest is its one
+        # `/api/v2/runs` post, the report inline (CR-CRU-204).
         self.assert_live_lifecycle(
-            drive, "/api/v2/runs/parsed", r"^running \d+$",
+            drive, "/api/v2/runs", r"^running \d+$",
             f"ran {TOTAL}/{TOTAL}", with_log=True)
+        paths = [p for p, _ in self.board.posts()]
+        self.assertNotIn("/api/v2/runs/parsed", paths, f"paths={paths!r}")
+        body = next(b for p, b in self.board.posts() if p == "/api/v2/runs")
+        self.assertEqual(body.get("codec"), "junit", f"body={body!r}")
+        data = body.get("data")
+        self.assertTrue(
+            isinstance(data, list) and len(data) == 1
+            and data[0].count("<testcase") == TOTAL,
+            f"the regression's JUnit report ({TOTAL} cases) rides inline; "
+            f"body={body!r}")
+        self.assertIn(MARKER, body.get("raw") or "",
+                      f"the captured runner output rides as `raw`; body={body!r}")
 
 
 class RustGateVerbsFollowTheLiveRunLifecycleTest(_LiveVerbCase):
