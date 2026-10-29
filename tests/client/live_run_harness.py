@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -404,6 +405,42 @@ class RecordingBoard:
 
     def run_ids_opened(self):
         return [f"run-live-{i}" for i in range(1, self._run_seq + 1)]
+
+
+def junit_sent(body):
+    """The JUnit report texts a `/api/v2/runs` body carried as `data`, read
+    as the board's `junit` codec reads them -- the client parses none of
+    them: `{"summary": {total, passed, failed, pending}, "tree": [{name,
+    status, children: [{name, status}]}]}`, one node per `<testsuite>`, or
+    per `classname` within the one suite pytest names `pytest`. A case with a
+    `<failure>` or `<error>` is `fail`, one with `<skipped>` `pending`, any
+    other `pass`. None when the body is not a `junit` ingest."""
+    if not isinstance(body, dict) or body.get("codec") != "junit":
+        return None
+    nodes = {}
+    for text in body.get("data") or []:
+        root = ET.fromstring(text)  # noqa: S314 - a report a test's own run wrote
+        for suite in list(root.iter("testsuite")) or [root]:
+            suite_name = suite.get("name", "?")
+            for case in suite.findall("testcase"):
+                name = ((case.get("classname") or suite_name)
+                        if suite_name == "pytest" else suite_name)
+                if case.find("failure") is not None or case.find("error") is not None:
+                    status = "fail"
+                elif case.find("skipped") is not None:
+                    status = "pending"
+                else:
+                    status = "pass"
+                nodes.setdefault(name, []).append(
+                    {"name": case.get("name", "?"), "status": status})
+    tree = [{"name": name,
+             "status": "fail" if any(c["status"] == "fail" for c in children) else "pass",
+             "children": children} for name, children in nodes.items()]
+    statuses = [c["status"] for children in nodes.values() for c in children]
+    return {"summary": {"total": len(statuses), "passed": statuses.count("pass"),
+                        "failed": statuses.count("fail"),
+                        "pending": statuses.count("pending")},
+            "tree": tree}
 
 
 def first_index(posts, predicate):
