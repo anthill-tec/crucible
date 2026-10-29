@@ -533,6 +533,13 @@ class TheEnvelopeReadsTheResponseTest(_BunProject, unittest.TestCase):
                     _figures(self.envelope_of(result)),
                     {"passed": 7, "failed": 2, "pending": 3, "total": 12, "files": 5},
                     self.diagnostics(result))
+                self.assertEqual(
+                    [token for line in result.stderr.splitlines()
+                     if line.startswith("ingest: ")
+                     for token in line.split() if token.startswith("files=")],
+                    ["files=5"],
+                    "the one `ingest:` line carries the answer's files figure; "
+                    + self.diagnostics(result))
 
     def test_a_board_report_skipped_warning_joins_the_envelope_warnings(self):
         warning = {"code": "report-skipped",
