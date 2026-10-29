@@ -59,8 +59,8 @@
 //       thing that can fill a leaf's `failure.message` in.
 //     - bun 1.4.0 writes `message="..."` PLUS element text on `<failure>`
 //       for every kind, including `message="test timed out"` on a
-//       TimeoutError. `_parse_junit_file` lifts that straight off the XML
-//       (correctly — richer reporter detail wins) and `_marry_failures`
+//       TimeoutError. The JUnit parse lifts that straight off the XML
+//       (correctly — richer reporter detail wins) and the console marrying
 //       then SKIPS the leaf, because it already carries a message. So on
 //       1.4.0 a live timeout leaf is not an unmatched leaf at all, and its
 //       message never passed through the marrying parser.
@@ -947,15 +947,15 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
 });
 
 // CR-CRU-088 AC4 — the fix holds END TO END. Every other assertion for this
-// CR drives `_parse_console_failures` by direct import; these two describes
-// run the REAL client over REAL `bun test` output, POST to
-// /api/v2/runs/parsed, and read the STORED event back over HTTP, so what is
+// CR drove the client's console failure reading by direct import; these two
+// describes run the REAL client over REAL `bun test` output, file the run on
+// the board, and read the STORED event back over HTTP, so what is
 // asserted is what a reader of Crucible evidence actually sees.
 //
 // HONEST LABEL: this is a BACKFILL, not a RED — the production fix landed in
 // C1, so these assertions passed on their first run. Their worth was proved
-// by MUTATION instead: with the echo-name comparison dropped from
-// `_parse_console_failures` (`if error_idx is not None and echo_name in
+// by MUTATION instead: with the echo-name comparison dropped from the
+// client's console failure reading (`if error_idx is not None and echo_name in
 // (None, leaf):` → `if error_idx is not None:`, i.e. marrying positionally
 // again), the run goes 29 pass / 1 fail — the AC4 assertion failing on the
 // `delta fails later` leaf with
@@ -967,9 +967,9 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
 // That mutation-detecting assertion now lives over FROZEN bytes — the
 // CR-CRU-088 AC4 describe in the frozen-bytes section — because bun 1.4.0's
 // JUnit reporter stamps `message="leaked boom"` onto the delta leaf ITSELF:
-// bun's own attribution of a leaked async throw, which `_parse_junit_file`
-// lifts (correctly — richer reporter detail wins) and `_marry_failures` then
-// correctly leaves alone. Over LIVE bytes that leaf's message therefore
+// bun's own attribution of a leaked async throw, which the JUnit parse
+// lifts (correctly — richer reporter detail wins) and the console marrying
+// then correctly leaves alone. Over LIVE bytes that leaf's message therefore
 // stopped being evidence about the client at all (CI run 33056533678). What
 // remains here is the live half the file header calls version-stable: which
 // leaves FAIL, and that the leaking leaf carries detail of its OWN from
@@ -1842,10 +1842,10 @@ describe("clients/bun-crucible.py — CR-CRU-056 (C5): a gated run removes only 
 // ── CR-CRU-050 §S1/§S1b/§S2 — <skipped/> testcases fold into `pending`, ───
 // never `passed` ────────────────────────────────────────────────────────────
 //
-// `_parse_junit_file` (clients/bun-crucible.py) today checks only
-// `tc.find("failure")`/`tc.find("error")`; a bare `else: passed += 1` folds
+// The bun client's JUnit parse checked only
+// `tc.find("failure")`/`tc.find("error")`; a bare `else: passed += 1` folded
 // every `<skipped/>` testcase (bun's real shape for BOTH `test.skip` and
-// `test.todo` — probed above) into `passed`, and the summary hardcodes
+// `test.todo` — probed above) into `passed`, and the summary hardcoded
 // `"pending": 0`. `_parse_junit` in `mvn-crucible.py` is the correct precedent this fixes
 // toward: `<skipped>` → `status="pending"`, `pending` incremented, `passed`
 // left untouched.
