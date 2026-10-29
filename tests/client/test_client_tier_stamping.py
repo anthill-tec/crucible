@@ -149,8 +149,9 @@ ESCALATIONS recorded at the time of writing (see the report for the full text):
      one to retarget.
   3. §S2's table and this file's own census disagree with the CR's Surfaces
      paragraph about WHICH endpoint bun's two `cmd_test` sites reach: the first
-     is `_start_run` → `POST /api/v2/runs/start`, the second is
-     `_ingest_parsed` → `POST /api/v2/runs/parsed`. Both are asserted
+     is `_start_run` → `POST /api/v2/runs/start`, the second was the parsed
+     ingest → `POST /api/v2/runs/parsed` (since CR-CRU-204, `_file_reports` →
+     `POST /api/v2/runs`). Both are asserted
      separately, because a fix applied to the ingest alone leaves the OPENED
      run stamped `unit`.
 
@@ -929,8 +930,8 @@ class BunUnearnedTierTest(_BunCase):
     editing one line in one client". Each client's drives sit in its own class
     so each uses its own stack's fixture.
 
-    RED — `bun-crucible.py` `cmd_test` (its `_start_run` and `_ingest_parsed`
-    calls) and `cmd_auto_ingest`."""
+    RED — `bun-crucible.py` `cmd_test` (its `_start_run` and ingest calls)
+    and `cmd_auto_ingest`."""
 
     def test_bun_test_opens_the_run_without_claiming_a_tier(self):
         """AC3, bun `cmd_test` — `_start_run` OPENS the run with
@@ -941,7 +942,7 @@ class BunUnearnedTierTest(_BunCase):
         self.assertNoStatedTier(drive, RUN_START, "bun cmd_test -> POST /runs/start")
 
     def test_bun_test_ingests_the_run_without_claiming_a_tier(self):
-        """AC3, bun `cmd_test`'s `_ingest_parsed` call — the CR's own example:
+        """AC3, bun `cmd_test`'s ingest call (`_file_reports`) — the CR's own example:
         "a targeted run of a real browser suite is recorded on the board as a
         unit run"."""
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = _JUNIT_SUITES_ONE_PASS

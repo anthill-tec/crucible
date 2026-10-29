@@ -23,7 +23,7 @@ is emitted as explicit null AND raises a `warnings[]` entry ... never silently
 dropped."
 
 RED phase: as of this writing `cmd_register`/`cmd_unregister`/`cmd_plan_file`/
-`_cycle_transition`/`cmd_cr_close`/`_ingest_parsed` all `print()` a single
+`_cycle_transition`/`cmd_cr_close` and the ingest helper all `print()` a single
 ad-hoc human-readable line straight to stdout (confirmed by reading
 clients/bun-crucible.py) and never call `clients/toon.py`'s `encode()` at all
 for these verbs (`_toon()` today is only ever `.decode()`d, for the no-mistakes

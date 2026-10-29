@@ -6,7 +6,8 @@ distinction have their own complications) and is deliberately OUT of this file.
 Contract pinned VERBATIM from
 docs/changes/CR-CRU-051-files-count-fleet-parity.md:
 
-  §S1 -- "Follow bun-crucible.py:_parse_junit_file, which is the reference. Its
+  §S1 -- "Follow [bun-crucible.py's own JUnit parser, deleted since by
+  CR-CRU-204, which sends bun's reports to the board unparsed], which is the reference. Its
   fallback chain exists precisely so the count degrades instead of collapsing
   to zero": `source = tc.get("file") or tc.get("classname") or suite.get("name")`.
   "State the resolved granularity per client" -- surefire/xmlrunner stamp

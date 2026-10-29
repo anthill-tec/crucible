@@ -368,7 +368,7 @@ class TwoConcurrentAgentsFileTheirOwnReportsEndToEndTest(unittest.TestCase):
         started together (Popen, not run()) and forced to overlap for real by
         the fake `bun`'s own filesystem barrier. Each reads its OWN,
         differently-sized test file and ingests through the real gated
-        bracket (`_open_gate_identity` -> `_ingest_parsed` ->
+        bracket (`_open_gate_identity` -> `_file_reports` ->
         `_close_gate_identity`, clients/bun-crucible.py::cmd_test) against the
         real board. Expected to PASS: the per-agent isolation this proves end
         to end already landed."""
