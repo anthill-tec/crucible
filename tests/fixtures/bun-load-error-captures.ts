@@ -11,8 +11,8 @@
 // already does (the reading never looks at it), and the JUnit's hostname to
 // `host`. Each scenario carries the JUnit bun wrote for that run beside its console.
 //
-// CLIENT_LOAD_ERROR_READING is `_add_load_error_cases` (clients/bun-crucible.py)
-// run over an empty tree with each capture, keyed "<capture>/<wire>": the files
+// CLIENT_LOAD_ERROR_READING is the bun client's own load-error reading, run
+// over an empty tree with each capture, keyed "<capture>/<wire>": the files
 // bun named, in order, each mapped to the one `?` case's failure {message, trace}.
 // It was computed once, from the client as it stands, and is frozen here so the
 // port is held to the client's rules after the client stops reading the console.
