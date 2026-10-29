@@ -37,6 +37,17 @@ ENV_KEYS_TO_SCRUB = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID",
 START = "/api/v2/runs/start"
 INGEST_PATHS = ("/api/v2/runs", "/api/v2/runs/parsed", "/api/v2/runs/compile")
 
+# The board's health, as a board that decodes the clients' reports states it:
+# the codec names it decodes, the largest ingest body it reads, and its
+# version. Both health routes answer it.
+HEALTH_PATHS = ("/api/health", "/api/v2/health")
+HEALTH_VERSION = "0.4.0"
+HEALTH_CODECS = {"test": ["junit", "playwright"], "coverage": ["jacoco", "lcov"]}
+# The shipped recommendation for `ingest_body_bytes` (128 MiB).
+DEFAULT_INGEST_BODY_BYTES = 128 * 1024 * 1024
+# The `run` block `/api/v2/runs` answers with until a test scripts its own.
+DEFAULT_RUN_BLOCK = {"total": 0, "passed": 0, "failed": 0}
+
 
 def load_toon():
     spec = importlib.util.spec_from_file_location("toon_for_live_run_tests",
@@ -61,10 +72,24 @@ def load_client(name):
 class RecordingBoard:
     """A real `ThreadingHTTPServer` on loopback that records every request in
     wire order with its receipt time, opens a run on `/api/v2/runs/start` and
-    answers everything else `ok`."""
+    answers everything else `ok`.
 
-    def __init__(self):
+    Health (`HEALTH_PATHS`) is answered as a board that decodes the clients'
+    reports states it \u2014 `version`, `codecs` and `limits.ingest_body_bytes`
+    (`ingest_body_bytes`, the shipped 128 MiB unless a test names its own) \u2014
+    unless a test scripts another answer (`script_health`) or a failure
+    (`fail_health`). `/api/v2/runs` answers with the `run` block a test
+    scripts (`script_run`); the board decodes nothing it is sent."""
+
+    def __init__(self, ingest_body_bytes=DEFAULT_INGEST_BODY_BYTES):
         self.events = []  # [(received_at, method, path, body)]
+        self.ingest_body_bytes = ingest_body_bytes
+        # Scripted health: a whole answer that replaces the default one, or a
+        # non-200 failure `(status, error)`. Both default off.
+        self._health_override = None
+        self._health_failure = None
+        # The `run` block `/api/v2/runs` answers with.
+        self._run_block = dict(DEFAULT_RUN_BLOCK)
         self._lock = threading.Lock()
         self._run_seq = 0
         # CR-CRU-170 \u00a7S2 \u2014 scripted refusals, so a RED test can drive the real
@@ -132,7 +157,15 @@ class RecordingBoard:
             def do_GET(self):
                 with board._lock:
                     board.events.append((time.time(), "GET", self.path, None))
-                if "/plans" in self.path:
+                    health = board._health_answer()
+                    failure = board._health_failure
+                if self.path in HEALTH_PATHS:
+                    if failure is not None:
+                        status, error = failure
+                        self._reply_status(status, {"ok": False, "error": error})
+                    else:
+                        self._reply(health)
+                elif "/plans" in self.path:
                     self._reply({"ok": True, "plans": []})
                 else:
                     self._reply({"ok": True, "agents": []})
@@ -185,8 +218,10 @@ class RecordingBoard:
                     if refuse:
                         self._reply_status(status, {"ok": False, "error": "ingest refused"})
                     elif self.path == "/api/v2/runs":
+                        with board._lock:
+                            run_block = dict(board._run_block)
                         self._reply({"ok": True, "changed": True,
-                                 "run": {"total": 0, "passed": 0, "failed": 0}})
+                                     "run": run_block})
                     else:
                         self._reply({"ok": True, "changed": True})
                 else:
@@ -208,6 +243,55 @@ class RecordingBoard:
         self._httpd.shutdown()
         self._httpd.server_close()
         self._thread.join(timeout=5)
+
+    def _health_answer(self):
+        """The health answer as it stands (the caller holds the lock)."""
+        if self._health_override is not None:
+            return json.loads(json.dumps(self._health_override))
+        return {"ok": True, "status": "healthy", "version": HEALTH_VERSION,
+                "codecs": json.loads(json.dumps(HEALTH_CODECS)),
+                "limits": {"ingest_body_bytes": self.ingest_body_bytes}}
+
+    def default_health(self):
+        """A copy of the health this board answers unscripted, for a test to
+        alter and hand to `script_health` (drop `codecs`, drop `limits`, ...)."""
+        with self._lock:
+            override, self._health_override = self._health_override, None
+            answer = self._health_answer()
+            self._health_override = override
+        return answer
+
+    def script_health(self, health):
+        """Answer both health routes with `health`, whole, from now on \u2014 an
+        older board's health (no `codecs`), one with `codecs` but no `limits`,
+        or one whose `version` a test names."""
+        with self._lock:
+            self._health_override = json.loads(json.dumps(health))
+            self._health_failure = None
+
+    def fail_health(self, status=503, error="health unavailable"):
+        """Answer both health routes non-200 (`{ok: False, error}`, HTTP
+        `status`) from now on: health that cannot be read, on a board that
+        still answers every other route."""
+        with self._lock:
+            self._health_failure = (status, error)
+
+    def script_run(self, passed=0, failed=0, pending=0, total=None, files=None):
+        """Answer `/api/v2/runs` with this `run` block from now on. `total`
+        defaults to the sum of the three; `files` is carried only when given.
+        The board decodes nothing: the block is what the test scripted."""
+        block = {"passed": passed, "failed": failed, "pending": pending,
+                 "total": passed + failed + pending if total is None else total}
+        if files is not None:
+            block["files"] = files
+        with self._lock:
+            self._run_block = block
+
+    def health_reads(self):
+        """Every GET of a health route, in wire order."""
+        with self._lock:
+            return [p for _, m, p, _b in self.events
+                    if m == "GET" and p in HEALTH_PATHS]
 
     def posts(self):
         """`[(path, body), ...]` for every POST, in wire order."""
