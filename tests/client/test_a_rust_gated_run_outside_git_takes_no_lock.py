@@ -30,6 +30,14 @@ the common git directory, joined with `nai-gate.lock`.
     takes no gate lock because no git repository was resolved; a run in a git
     repository carries no such line.
 
+  * Only one absolute directory is a common dir — git older than 2.31 does
+    not know `--path-format=absolute`: `rev-parse` echoes the option on its
+    own line, then prints the common dir (relative `.git` in a main tree),
+    and exits 0. That answer is not "a directory" (§S1), so the lock path is
+    `None` for a main tree and a linked worktree alike, and a gated run under
+    such a git drops no `nai-gate.lock` in its working directory, the project
+    or its parent — it files its run and says it took no lock.
+
 Every directory lives under a private `tempfile.mkdtemp` parent, never `/tmp`
 itself, so a lock today's code drops in a project's parent lands somewhere
 only this suite owns; nothing here creates or deletes `/tmp/nai-gate.lock`.
@@ -143,6 +151,51 @@ with open(os.path.join(here, "git_launches.jsonl"), "a") as handle:
     handle.write(json.dumps(sys.argv[1:]) + "\n")
 os.execv(%r, [%r] + sys.argv[1:])
 '''
+
+# A `git` older than 2.31, which does not know `--path-format=absolute`:
+# `rev-parse` echoes the unknown option on its own line, prints the common git
+# dir it was asked for (in argument order), and exits 0 — the answer AC1's
+# "when that call prints a directory" must not mistake for one. Every launch is
+# recorded in `git_launches.jsonl` beside it; anything other than a
+# `rev-parse … --path-format=absolute` becomes the real git.
+_OLD_GIT = r'''
+import json
+import os
+import sys
+
+here = os.path.dirname(os.path.abspath(__file__))
+args = sys.argv[1:]
+with open(os.path.join(here, "git_launches.jsonl"), "a") as handle:
+    handle.write(json.dumps(args) + "\n")
+if "rev-parse" in args and "--path-format=absolute" in args:
+    lines = []
+    for arg in args[args.index("rev-parse") + 1:]:
+        if arg == "--path-format=absolute":
+            lines.append(arg)
+        elif arg == "--git-common-dir":
+            lines.append(%r)
+    sys.stdout.write("".join(line + "\n" for line in lines))
+    sys.exit(0)
+os.execv(%r, [%r] + args)
+'''
+
+
+def _install_old_git(case, bin_dir, common_dir_answer):
+    """Put a git-older-than-2.31 stand-in first on PATH in `bin_dir`, whose
+    `rev-parse --path-format=absolute --git-common-dir` answers
+    `--path-format=absolute` then `common_dir_answer`, exit 0. Returns the
+    path of its launch record."""
+    real_git = shutil.which("git")
+    case.assertIsNotNone(real_git, "fixture: git must be on PATH")
+    _write_script(os.path.join(bin_dir, "git"),
+                  _OLD_GIT % (common_dir_answer, real_git, real_git))
+    os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+    return Path(bin_dir, "git_launches.jsonl")
+
+
+def _launches(record):
+    return ([json.loads(line) for line in record.read_text().splitlines()
+             if line.strip()] if record.exists() else [])
 
 
 def _write_script(path, body):
@@ -405,6 +458,63 @@ class InARepositoryTheGateLockPathIsUnchangedTest(_GitFreeEnvironment):
             "builtins and its own locals")
 
 
+class AnOldGitsEchoedAnswerIsNoGateLockPathTest(_GitFreeEnvironment):
+    """§S1 / AC1 — the lock path comes from git's answer only when that answer
+    is ONE absolute directory. A git older than 2.31 echoes the unknown
+    `--path-format=absolute` and exits 0; its two-line answer is not a
+    directory, so there is no lock path (and no fallback)."""
+
+    def _old_git_answers(self, project, answer, bin_dir):
+        record = _install_old_git(self, bin_dir, answer)
+        # The fixture is proved first: the stand-in answers exactly as an old
+        # git does, two lines and exit 0.
+        probe = subprocess.run(
+            ["git", "-C", project, "rev-parse", "--path-format=absolute",
+             "--git-common-dir"], capture_output=True, text=True, check=False)
+        self.assertEqual(
+            (probe.returncode, probe.stdout),
+            (0, f"--path-format=absolute\n{answer}\n"),
+            "fixture: the stand-in git must answer like git < 2.31")
+        record.unlink()
+        resolved = self.module._gate_lock_path(project)
+        launches = _launches(record)
+        self.assertTrue(
+            any("--path-format=absolute" in launch for launch in launches),
+            f"fixture: `_gate_lock_path` must have asked the stand-in git; "
+            f"launches={launches!r}")
+        return resolved
+
+    def test_a_main_trees_echoed_relative_answer_has_no_gate_lock_path(self):
+        parent = _private_parent(self, "rust-gate-lock-oldgit-main-")
+        repo = os.path.join(parent, "repo")
+        _git("init", "-q", repo)
+        bin_dir = os.path.join(parent, "bin")
+        os.mkdir(bin_dir)
+        resolved = self._old_git_answers(repo, ".git", bin_dir)
+        self.assertIsNone(
+            resolved,
+            f"§S1 — git's answer '--path-format=absolute\\n.git' is not one "
+            f"absolute directory, so there is no lock path; a relative "
+            f"{resolved!r} is created in whatever the process's cwd is")
+
+    def test_a_linked_worktrees_echoed_two_line_answer_has_no_gate_lock_path(self):
+        parent = _private_parent(self, "rust-gate-lock-oldgit-linked-")
+        repo = os.path.join(parent, "main")
+        linked = os.path.join(parent, "linked")
+        _git("init", "-q", repo)
+        _git("-C", repo, "commit", "-q", "--allow-empty", "-m", "fixture")
+        _git("-C", repo, "worktree", "add", "-q", "--detach", linked)
+        bin_dir = os.path.join(parent, "bin")
+        os.mkdir(bin_dir)
+        resolved = self._old_git_answers(
+            linked, os.path.join(repo, ".git"), bin_dir)
+        self.assertIsNone(
+            resolved,
+            f"§S1 — git's two-line answer '--path-format=absolute\\n"
+            f"{os.path.join(repo, '.git')}' is not one absolute directory, so "
+            f"there is no lock path; resolved={resolved!r}")
+
+
 # ── AC3 / AC4: a gated run, driven in-process ─────────────────────────────
 
 
@@ -564,6 +674,66 @@ class ARustGatedRunInARepositoryStillLocksSilentlyTest(_InProcessGatedRun):
             _no_lock_lines(stderr), [],
             f"AC4 — a run in a git repository carries no 'no gate lock' line; "
             f"stderr={stderr[-2500:]!r}")
+
+
+class ARustGatedRunUnderAnOldGitTakesNoLockTest(_InProcessGatedRun):
+    """§S1 / AC1, through the run — a gated `workspace-regression` from a main
+    tree whose git is older than 2.31 (it echoes `--path-format=absolute`,
+    then `.git`, exit 0) takes no lock: nothing lands in the process's cwd, the
+    project or its parent, and the run files and says it is unlocked.
+
+    The process's cwd is a private scratch directory for the drive (restored
+    after), so a relative lock path could only land where this test looks."""
+
+    def setUp(self):
+        super().setUp()
+        _git("init", "-q", self.project)
+        self.record = _install_old_git(self, self.bin_dir, ".git")
+        self.cwd = os.path.join(self.parent, "cwd")
+        os.mkdir(self.cwd)
+        saved_cwd = os.getcwd()
+        self.addCleanup(os.chdir, saved_cwd)
+        # Runs BEFORE the cwd is restored (cleanups are LIFO), so a relative
+        # lock the module holds is removed from the scratch cwd, never from
+        # the directory this suite was started in.
+        self.addCleanup(self.module._release_gate_lock)
+        os.chdir(self.cwd)
+
+    def test_a_workspace_regression_under_an_old_git_drops_no_lock_and_says_it_is_unlocked(self):
+        code, stdout, stderr = self.drive_workspace_regression()
+        self.assert_the_run_filed(code, stdout, stderr)
+        launches = _launches(self.record)
+        self.assertTrue(
+            any("--path-format=absolute" in launch for launch in launches),
+            f"fixture: the run must have asked the stand-in git for the lock "
+            f"path; launches={launches!r}")
+        left = [path for path in (os.path.join(self.cwd, GATE_LOCK_FILE),
+                                  os.path.join(self.project, GATE_LOCK_FILE),
+                                  os.path.join(self.parent, GATE_LOCK_FILE))
+                if os.path.lexists(path)]
+        self.assertEqual(
+            left, [],
+            f"§S1 — an old git's echoed answer is no lock path, so the run "
+            f"creates no {GATE_LOCK_FILE} in its cwd, the project or its "
+            f"parent; found {left!r} stderr={stderr[-2500:]!r}")
+        self.assertIsNone(
+            self.module._HELD_GATE_LOCK,
+            f"§S1 — the process holds no gate lock; "
+            f"_HELD_GATE_LOCK={self.module._HELD_GATE_LOCK!r}")
+        installed = [signal.Signals(sig).name for sig in _GATE_SIGNALS
+                     if signal.getsignal(sig) is self.module._gate_lock_signal]
+        self.assertEqual(
+            installed, [],
+            f"§S1 — an unlocked run installs no gate-lock signal handler; "
+            f"_gate_lock_signal is the handler for {installed!r}")
+        lines = _no_lock_lines(stderr)
+        self.assertEqual(
+            len(lines), 1,
+            f"§S2 — the unlocked run says so in ONE stderr line; "
+            f"matching={lines!r} stderr={stderr[-2500:]!r}")
+        self.assertNotIn(
+            "gate lock created", stderr,
+            f"§S1 — no gate lock is created; stderr={stderr[-2500:]!r}")
 
 
 if __name__ == "__main__":
