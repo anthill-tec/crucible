@@ -562,9 +562,25 @@ if code:
 sys.exit(code)
 """
 
+# CR-CRU-215 §S1 — opt-in: with FAKE_CARGO_JUNIT_CONTENT set, a call naming
+# `nextest` writes that content to `target/nextest/<-P profile>/junit.xml` under
+# the working directory during the run, the shape `_RECORDING_CARGO` in
+# test_rust_regression_coverage_is_opt_in.py has. Unset, nothing is written.
 _FAKE_CARGO = """#!{python}
 import os
 import sys
+
+_args = sys.argv[1:]
+_junit = os.environ.get("FAKE_CARGO_JUNIT_CONTENT")
+if _junit is not None and "nextest" in _args:
+    _profile = "default"
+    for _i, _a in enumerate(_args):
+        if _a == "-P" and _i + 1 < len(_args):
+            _profile = _args[_i + 1]
+    _junit_dir = os.path.join(os.getcwd(), "target", "nextest", _profile)
+    os.makedirs(_junit_dir, exist_ok=True)
+    with open(os.path.join(_junit_dir, "junit.xml"), "w") as _handle:
+        _handle.write(_junit)
 
 code = int(os.environ.get("FAKE_CARGO_EXIT_CODE", "0"))
 if code:
