@@ -6,7 +6,6 @@ For every fixture directory under `tests/fixtures/reports/` this writes an
 TODAY, by calling the client's own parser functions (each client module is
 imported by path from `clients/`; nothing here re-implements a parse):
 
-  bun      `_parse_junit_file` + `_marry_failures` (the console) + `_parse_lcov`
   python   `_parse_junit_dir` (`by_classname` for the pytest report, as the
            `test` verb runs it; `auto-ingest`'s ungrouped tree beside it) +
            `_collect_coverage` (fed the fixture's lcov)
@@ -18,8 +17,13 @@ imported by path from `clients/`; nothing here re-implements a parse):
            body aggregates them + `_collect_lcov`
 
 Each `expected.json` also names its inputs — the report files in the order the
-client reads them, the coverage files and their codec, and (bun) the console —
-so a test can send the same texts to the board in the same order.
+client reads them and the coverage files and their codec — so a test can send
+the same texts to the board in the same order.
+
+bun is not frozen here any more: the bun client sends its runner's reports to
+the board and parses none of them (CR-CRU-204), so there is no client parse
+left to freeze. `bun/expected.json` stays as it was frozen at CR-CRU-152's base,
+the record of what the bun client computed before the board took the parse.
 
 Run from anywhere: `python3 tests/fixtures/reports/freeze-client-parse.py`.
 """
@@ -62,25 +66,6 @@ def _write(fixture_dir, document):
     with open(os.path.join(fixture_dir, "expected.json"), "w") as f:
         json.dump(document, f, indent=2, ensure_ascii=False)
         f.write("\n")
-
-
-def freeze_bun():
-    bun = _client("bun")
-    d = os.path.join(HERE, "bun")
-    junit = os.path.join(d, "junit.xml")
-    with open(os.path.join(d, "console.txt")) as f:
-        console = f.read()
-    summary, tree, files = bun._parse_junit_file(junit)
-    bun._marry_failures(tree, console)
-    coverage = bun._parse_lcov(os.path.join(d, "lcov.info"))
-    _write(d, {
-        "stack": "bun",
-        "reports": ["junit.xml"],
-        "coverage": {"codec": "lcov", "reports": ["lcov.info"]},
-        "raw": "console.txt",
-        "client": {"summary": summary, "tree": tree, "files": files,
-                   "coverage": coverage},
-    })
 
 
 def _python_coverage(python_client, lcov_file):
@@ -176,7 +161,6 @@ def freeze_arduino():
 
 
 def main():
-    freeze_bun()
     freeze_python()
     freeze_mvn()
     freeze_rust()
