@@ -88,8 +88,10 @@ class RecordingBoard:
         # non-200 failure `(status, error)`. Both default off.
         self._health_override = None
         self._health_failure = None
-        # The `run` block `/api/v2/runs` answers with.
+        # The `run` block `/api/v2/runs` answers with, and the `warnings[]` it
+        # answers beside it (none until a test scripts them).
         self._run_block = dict(DEFAULT_RUN_BLOCK)
+        self._run_warnings = None
         self._lock = threading.Lock()
         self._run_seq = 0
         # CR-CRU-170 \u00a7S2 \u2014 scripted refusals, so a RED test can drive the real
@@ -219,9 +221,12 @@ class RecordingBoard:
                         self._reply_status(status, {"ok": False, "error": "ingest refused"})
                     elif self.path == "/api/v2/runs":
                         with board._lock:
-                            run_block = dict(board._run_block)
-                        self._reply({"ok": True, "changed": True,
-                                     "run": run_block})
+                            run_block = json.loads(json.dumps(board._run_block))
+                            run_warnings = board._run_warnings
+                        answer = {"ok": True, "changed": True, "run": run_block}
+                        if run_warnings is not None:
+                            answer["warnings"] = json.loads(json.dumps(run_warnings))
+                        self._reply(answer)
                     else:
                         self._reply({"ok": True, "changed": True})
                 else:
@@ -276,16 +281,24 @@ class RecordingBoard:
         with self._lock:
             self._health_failure = (status, error)
 
-    def script_run(self, passed=0, failed=0, pending=0, total=None, files=None):
+    def script_run(self, passed=0, failed=0, pending=0, total=None, files=None,
+                   coverage=None, warnings=None):
         """Answer `/api/v2/runs` with this `run` block from now on. `total`
-        defaults to the sum of the three; `files` is carried only when given.
-        The board decodes nothing: the block is what the test scripted."""
+        defaults to the sum of the three; `files` and `coverage` (the coverage
+        the board kept, `{lines, functions}`) join the block only when given,
+        and `warnings` (the board's own `[{code, detail}]`) joins the answer
+        beside it only when given. The board decodes nothing: the answer is
+        what the test scripted."""
         block = {"passed": passed, "failed": failed, "pending": pending,
                  "total": passed + failed + pending if total is None else total}
         if files is not None:
             block["files"] = files
+        if coverage is not None:
+            block["coverage"] = json.loads(json.dumps(coverage))
         with self._lock:
             self._run_block = block
+            self._run_warnings = (None if warnings is None
+                                  else json.loads(json.dumps(warnings)))
 
     def health_reads(self):
         """Every GET of a health route, in wire order."""
