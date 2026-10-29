@@ -49,6 +49,29 @@ DEFAULT_INGEST_BODY_BYTES = 128 * 1024 * 1024
 DEFAULT_RUN_BLOCK = {"total": 0, "passed": 0, "failed": 0}
 
 
+def board_health(ingest_body_bytes=DEFAULT_INGEST_BODY_BYTES):
+    """The health a board that decodes the clients' reports answers: what
+    `RecordingBoard` answers unscripted, for an in-process `_get` stub."""
+    return {"ok": True, "status": "healthy", "version": HEALTH_VERSION,
+            "codecs": json.loads(json.dumps(HEALTH_CODECS)),
+            "limits": {"ingest_body_bytes": ingest_body_bytes}}
+
+
+def get_answering_health(fallback=None):
+    """A `_get` side effect for an in-process client drive: the board's health
+    (`board_health`) on the health routes, and on every other read
+    `fallback(path)` when it is callable, else `fallback` itself, else a
+    tolerant failure."""
+    def _get(path, timeout=10):
+        if path in HEALTH_PATHS:
+            return board_health()
+        if callable(fallback):
+            return fallback(path)
+        return fallback if fallback is not None else {"ok": False,
+                                                      "error": "mocked"}
+    return _get
+
+
 def load_toon():
     spec = importlib.util.spec_from_file_location("toon_for_live_run_tests",
                                                   CLIENTS / "toon.py")
