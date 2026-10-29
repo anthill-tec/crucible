@@ -1466,8 +1466,8 @@ REGRESSION_COVERAGE_HELP = (
     "Measure coverage and file it with the run. Without it the whole suite "
     "runs coverage-free, and no coverage is measured or filed.")
 REGRESSION_COVERAGE_LCOV_HELP = (
-    REGRESSION_COVERAGE_HELP + " With it, the run's lcov coverage is posted "
-    "to /api/v2/runs/parsed with its results.")
+    REGRESSION_COVERAGE_HELP + " With it, the run's lcov coverage is "
+    "measured and is filed with its results.")
 REGRESSION_COVERAGE_PY_HELP = (
     REGRESSION_COVERAGE_HELP + " With it, the run is under coverage.py and "
     "its coverage is posted to /api/v2/runs/parsed with its results.")
