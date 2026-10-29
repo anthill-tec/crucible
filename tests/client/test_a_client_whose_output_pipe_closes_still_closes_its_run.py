@@ -78,9 +78,13 @@ RUN_ID = "run-live-1"
 # The board's own ingest routes (mirrors `_crucible_axi.RUN_INGEST_PATHS` plus
 # the compile route \u2014 every path an ingest that carries a `runId` can land
 # on, across all five clients: `/api/v2/runs` (mvn/rust/arduino's raw JUnit
-# ingest), `/api/v2/runs/parsed` (bun/python's parsed-tree ingest),
-# `/api/v2/runs/compile` (the no-report compile fallback).
+# ingest, and bun's inline-report ingest), `/api/v2/runs/parsed` (python's
+# parsed-tree ingest), `/api/v2/runs/compile` (the no-report compile fallback).
 INGEST_PATHS = ("/api/v2/runs", "/api/v2/runs/parsed", "/api/v2/runs/compile")
+# The route a client that sends its runner's reports files them on
+# (CR-CRU-204), and the parsed route it no longer uses.
+RUNS = "/api/v2/runs"
+PARSED = "/api/v2/runs/parsed"
 
 
 class _PipeCloseCase(unittest.TestCase):
@@ -143,6 +147,24 @@ class _PipeCloseCase(unittest.TestCase):
                 f"name it in its reason; got reason={reason!r}")
         return bool(filed)
 
+    def assert_filed_inline_on_the_run_route(self, run_id=RUN_ID):
+        """CR-CRU-204 — bun sends its runner's reports: the run it filed was
+        filed by ONE `POST /api/v2/runs` carrying the JUnit report's text
+        inline, never the parsed route."""
+        filed = self.filed_posts(run_id)
+        self.assertEqual(
+            [p for p, _ in filed], [RUNS],
+            f"the run is filed by one {RUNS} ingest, never {PARSED}; "
+            f"posts={self.board.posts()!r}")
+        body = filed[0][1]
+        self.assertEqual(body.get("codec"), "junit", f"body={body!r}")
+        data = body.get("data")
+        self.assertTrue(
+            isinstance(data, list) and len(data) == 1
+            and data[0].count("<testcase") == 3,
+            f"the ingest carries the runner's own report (3 cases) inline; "
+            f"body={body!r}")
+
 
 # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
 # STDOUT closes before the client ever writes to it
@@ -200,6 +222,7 @@ class StdoutClosedTest(_PipeCloseCase):
              "--package-dir", self.project, "--reports", "reports",
              "--agent", AGENT], self.env())
         self.assert_clean_exit_despite_closed_stdout(rc, err)
+        self.assert_filed_inline_on_the_run_route()
 
     def test_mvn_unit_with_stdout_closed(self):
         write_fake_mvnw(self.project)
@@ -266,7 +289,10 @@ class StderrClosedTest(_PipeCloseCase):
              "--package-dir", self.project, "--reports", "reports",
              "--agent", AGENT], self.env())
         self.assert_run_opened()
-        self.assert_run_settled("stderr")
+        if self.assert_run_settled("stderr"):
+            self.assert_filed_inline_on_the_run_route()
+        self.assertNotIn(PARSED, [p for p, _ in self.board.posts()],
+                         f"bun never files on {PARSED}; posts={self.board.posts()!r}")
 
     def test_mvn_unit_with_stderr_closed_mid_run(self):
         write_fake_mvnw(self.project)
