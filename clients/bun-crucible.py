@@ -1169,7 +1169,8 @@ def cmd_test(args, tier=None):
 
 
 def cmd_regression(args, verb="regression", tier: str | None = "regression",
-                   script=None, passthrough=(), name=None):
+                   script=None, passthrough=(), name=None,
+                   name_unfiled=False):
     """CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
     carries ONE document under the GATE's own verb, not the inner one's.
@@ -1186,7 +1187,10 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     A `test` run through the project's declared test script runs this body
     under `verb="test"`: its files and `-t <name>` filter are the passthrough,
     `name` is that filter (a filtered run that ran nothing is aborted, as on
-    `test`'s own path), and its envelope names the script it went through."""
+    `test`'s own path), and its envelope names the script it went through.
+
+    `name_unfiled` — set only by a gate whose whole answer is this run — adds
+    one `gate-suite-unreported` warning when the run was not filed."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     bun = _resolve_bun(args.bun)
@@ -1399,6 +1403,9 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         help_steps = (_axi().run_help(verb, ok, _filed_run(resp).get("failed"),
                                       _base_url())
                       if verb not in ("regression", "test") else None)
+        if name_unfiled:
+            run_warnings += _axi().whole_suite_unreported_warnings(_STACK,
+                                                                   resp)
         _emit_ingest_axi(verb, resp, project_dir, args.agent,
                          help_steps=help_steps, warnings=run_warnings,
                          run_id=run_id, name=name, script=named_script)
@@ -1545,6 +1552,11 @@ def cmd_pre_merge_gate(args):
         # invoked.
         whole_suite=lambda: cmd_regression(_gate_regression_args(args),
                                            verb="pre-merge-gate"),
+        # With no declared suite that run IS the gate: its envelope names it
+        # unreported when it was not filed (the composition names it itself).
+        whole_suite_alone=lambda: cmd_regression(
+            _gate_regression_args(args), verb="pre-merge-gate",
+            name_unfiled=True),
         context=_axi_context(project_dir, agent_id=args.agent),
         crucible_url=_base_url())
 

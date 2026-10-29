@@ -7224,7 +7224,7 @@ def refuse_unrunnable_scoped_gate(args, *, surface, stack, get, project_key):
 
 
 def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
-                    context, crucible_url):
+                    context, crucible_url, whole_suite_alone=None):
     """§S1/§S2 — the GATE's regression step: the one composition all five gates
     run, so "the gate covers every declared suite" is a property of the fleet
     and not of one client.
@@ -7233,10 +7233,15 @@ def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
     additive rule runs it either way — as the gate's whole answer for a project
     whose declaration this stack cannot enumerate or that declares nothing (it
     IS that project's one suite), and as the union BASE for a project that
-    declares suites, which are added to it and never substituted for it."""
+    declares suites, which are added to it and never substituted for it.
+
+    `whole_suite_alone`, when given, is that same run as the gate's WHOLE
+    answer: its envelope is the gate's, so it names its own run unreported
+    when that run was not filed. The composition names it itself, so a
+    composed gate takes `whole_suite` and never this one."""
     suites = declared_gate_suites(args, surface, stack)
     if not suites:
-        return whole_suite()
+        return (whole_suite_alone or whole_suite)()
     return run_gate_suites(suites, stack=stack, verb=verb,
                            whole_suite=whole_suite, dispatch=dispatch,
                            context=context, crucible_url=crucible_url,
