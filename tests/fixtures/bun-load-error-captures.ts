@@ -4,8 +4,9 @@
 //
 // PROVENANCE. Every capture below is a REAL `bun test` 1.4.2 run, in both wire
 // forms (plain under `NO_COLOR=1`, ANSI under `FORCE_COLOR=1`), over the very
-// scratch files tests/client/test_bun_files_each_test_file_that_failed_to_load.py
-// and ..._skips_a_tests_own_console_lines.py drive live (same names, same bodies),
+// scratch files the bun client's own load-error tests drove live (same names,
+// same bodies) before the board took that reading over — the cases those tests
+// pinned are now held by tests/bun-load-errors-are-read-on-the-board.test.ts —
 // with `--reporter=junit`; the scratch directory in bun's `at` and `from` lines
 // is normalised to /tmp/bun-fixture/ as tests/fixtures/bun-console-captures.ts
 // already does (the reading never looks at it), and the JUnit's hostname to
