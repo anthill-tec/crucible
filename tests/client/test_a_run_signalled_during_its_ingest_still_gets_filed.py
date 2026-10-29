@@ -10,7 +10,7 @@ of the identity's opening heartbeat or `/runs/start`.
 Ground truth, read directly off `clients/_crucible_axi.py` on this branch:
 `gated_run` installs its trap for the whole bracket and opens the identity
 inside `trap.held()` — but the ingest POST (`post_ingest`, called from every
-client's own `_ingest_parsed`/`_ingest_junit_dir`/`_ingest_junit_axi`) is
+client's own ingest, the shared `ingest_reports` included) is
 made OUTSIDE any `held()` span. A SIGTERM landing while that POST is
 blocked on its reply is therefore raised immediately by `AbandonTrap.handle`
 (its `_holding` count is zero at that point), unwinding `post_fn` before it
@@ -267,14 +267,14 @@ class _IngestHeldSignalCase(unittest.TestCase):
 # CLIENT in every subTest/assertion below, never by line number.
 INGEST_HELD_SITES = (
     ("bun", "_bun_test_cmd", "/api/v2/runs"),
-    ("python", "_python_test_cmd", "/api/v2/runs/parsed"),
+    ("python", "_python_test_cmd", "/api/v2/runs"),
     ("mvn", "_mvn_test_cmd", "/api/v2/runs"),
     ("rust", "_rust_test_cmd", "/api/v2/runs"),
     ("arduino", "_arduino_test_cmd", "/api/v2/runs/parsed"),
 )
 # The clients that send their runner's reports inline through the shared
 # ingest (CR-CRU-204): their ingest body carries `data`, never a parse.
-INLINE_REPORT_CLIENTS = frozenset({"bun"})
+INLINE_REPORT_CLIENTS = frozenset({"bun", "python"})
 
 
 class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):
