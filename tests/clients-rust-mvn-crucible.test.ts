@@ -323,9 +323,11 @@ function writeExecutable(path: string, script: string): void {
   chmodSync(path, 0o755);
 }
 
-/** A no-op stand-in for `cargo`/`mvnw` — never touches the filesystem, so
- * pre-placed report/coverage fixtures survive untouched and are exactly
- * what a real run would have produced. */
+/** A no-op stand-in for `cargo`/`mvnw` — never touches the filesystem; the
+ * cases that use it lay their own report/coverage fixtures. The CR-CRU-050
+ * site 2 `workspace-regression` case does not use it: that client files only
+ * a report its own run wrote (CR-CRU-212 `_written_since`), so its fake
+ * `cargo` writes the report during the run (CR-CRU-215 §S1). */
 const NOOP_SCRIPT = "#!/bin/sh\nexit 0\n";
 
 function writeEnvFile(dir: string, projectKey: string): void {
@@ -989,7 +991,17 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (worksp
     ]);
     const reportPath = join(dir, "target", "nextest", "ci", "junit.xml"); // default --profile
     const binDir = scratch.dir("fake-cargo-bin-cr050-ws-");
-    writeExecutable(join(binDir, "cargo"), NOOP_SCRIPT);
+    // CR-CRU-215 §S1: this case's own fake `cargo` — on its `nextest` call
+    // (`cargo llvm-cov … nextest … -P ci`) it copies the staged fixture into
+    // the nextest report path, so the report is written during the run.
+    writeExecutable(
+      join(binDir, "cargo"),
+      "#!/bin/sh\n" +
+        'case " $* " in\n' +
+        `  *" nextest "*) mkdir -p '${join(dir, "target", "nextest", "ci")}' && cp '${stagedJunit}' '${reportPath}' || exit 1 ;;\n` +
+        "esac\n" +
+        "exit 0\n",
+    );
     const path = `${binDir}:${process.env.PATH ?? ""}`;
     await ensureRegistered(RUST_SCRIPT_PATH, "rust-cr050-workspace-agent", { cwd: dir, crucibleUrl: baseUrl });
 
