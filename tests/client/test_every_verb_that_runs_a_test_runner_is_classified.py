@@ -1036,10 +1036,9 @@ class TheCensusReadsTheSharedIngestAsTheIngestCallTest(unittest.TestCase):
 # whose one route is `/api/v2/runs`). A call of the shared ingest is its own
 # call site, whichever client function holds it, so its owner reads `SHARED`.
 #
-# The table is shaped per client. Bun files every report through the shared
-# ingest. Python stays on `/api/v2/runs/parsed` until its own cycle moves it;
-# maven, rust and arduino sit at their current routes until CR-CRU-206 moves
-# them, extending this same table.
+# The table is shaped per client. Bun and python file every report through
+# the shared ingest, and nothing else; maven, rust and arduino sit at their
+# current routes until CR-CRU-206 moves them, extending this same table.
 
 RUNS_ROUTE = "/api/v2/runs"
 PARSED_ROUTE = "/api/v2/runs/parsed"
@@ -1101,7 +1100,6 @@ def verb_routes(source, handlers, census):
 _THROUGH_THE_SHARED_INGEST = {(SHARED, SHARED_INGEST, RUNS_ROUTE)}
 _BUN_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 _PY_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
-_PY_PARSED = {("_ingest_parsed", "post_ingest", PARSED_ROUTE)}
 _MVN_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 _MVN_PARSED = {("_ingest_parsed", "post_ingest", PARSED_ROUTE)}
 _MVN_JUNIT_DIR = {("_ingest_junit_dir", "post_ingest", RUNS_ROUTE)}
@@ -1127,10 +1125,12 @@ ROUTE_TABLE = {
         "check": routes((), _BUN_COMPILE),
     },
     "python": {
-        **{verb: routes(_PY_PARSED, _PY_COMPILE)
+        # Each suite verb's no-report exit (no JUnit, or pytest failed as a
+        # runner) files the synthetic compile ingest: no report.
+        **{verb: routes(_THROUGH_THE_SHARED_INGEST, _PY_COMPILE)
            for verb in ("test", "unit", "module", "integration", "e2e",
                         "bdd", "regression", "pre-merge-gate")},
-        "auto-ingest": routes(_PY_PARSED),
+        "auto-ingest": routes(_THROUGH_THE_SHARED_INGEST),
         "check": routes((), _PY_COMPILE),
     },
     "mvn": {
@@ -1196,7 +1196,7 @@ class EveryFilingVerbsRouteAndCallSiteAreTabledTest(unittest.TestCase):
     def test_every_bun_report_verb_files_through_the_shared_ingest_only(self):
         self.assert_client_matches_its_table("bun")
 
-    def test_every_python_report_verb_stays_on_the_parsed_route(self):
+    def test_every_python_report_verb_files_through_the_shared_ingest_only(self):
         self.assert_client_matches_its_table("python")
 
     def test_every_mvn_filing_verb_sits_at_its_current_route(self):
