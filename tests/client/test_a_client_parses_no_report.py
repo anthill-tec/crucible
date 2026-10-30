@@ -12,7 +12,10 @@ maven client calls the shared counts and defines none, so its scan exempts one
 function alone, `_read_declared_profile`: its read of the project's own
 `pom.xml` for a tier profile is not a report parse. The rust client calls the
 shared counts and defines none, and its read of `.config/nextest.toml` is a
-TOML parse, so its scan exempts nothing at all.
+TOML parse, so its scan exempts nothing at all. The arduino client calls the
+shared counts and the shared case reader (`junit_case_sources`, for its
+narrowing check) and defines none, and its read of the Makefile for a declared
+target is a text search, so its scan exempts nothing at all either.
 
 The scan reads a module's syntax tree, never its text, so a docstring or a
 comment that names a report shape is not a parse:
@@ -59,6 +62,9 @@ PYTHON_EXEMPT = ("junit_testcase_count", "junit_non_skipped_count")
 MVN_EXEMPT = ("_read_declared_profile",)
 # The rust client's exemptions: none.
 RUST_EXEMPT = ()
+# The arduino client's exemptions: none. Its narrowing check reads each case's
+# name and file stem through the shared reader, which the run module defines.
+ARDUINO_EXEMPT = ()
 
 XML_MODULES = ("ET", "ElementTree", "etree", "minidom")
 XML_PARSERS = ("parse", "fromstring", "iterparse", "XML", "parseString")
@@ -432,6 +438,56 @@ class TheRustClientParsesNoReportTest(unittest.TestCase):
         self.assertEqual(
             findings, [],
             "the rust client parses none of its runner's reports; found:\n"
+            + _lines(findings))
+
+
+_ARDUINO_CLIENT_WITH_ITS_OWN_CASE_READER = textwrap.dedent(r'''
+    """An arduino client that sends the native harness's JUnit and lcov,
+    reads its Makefile for a declared target, and reads each case's name and
+    file stem itself."""
+    import os
+    import re
+    import xml.etree.ElementTree as ET
+
+    def _read_declared_make_target(makefile, target):
+        with open(makefile, encoding="utf-8") as handle:
+            text = handle.read()
+        return target if re.search(rf"^{re.escape(target)}\s*:", text, re.M) else None
+
+    def junit_case_sources(paths):
+        cases = []
+        for path in paths:
+            for case in ET.parse(path).getroot().iter("testcase"):
+                source = case.get("classname") or case.get("file") or ""
+                stem = os.path.splitext(os.path.basename(source))[0] or None
+                cases.append((case.get("name") or "?", stem))
+        return cases
+''')
+
+
+class TheArduinoClientParsesNoReportTest(unittest.TestCase):
+
+    def test_an_arduino_client_defining_its_own_case_reader_is_found(self):
+        # Under arduino's empty exemption set the shared case reader, defined
+        # in the client itself, is a parse; the Makefile read is not.
+        self.assertEqual(
+            report_parse_findings(_ARDUINO_CLIENT_WITH_ITS_OWN_CASE_READER,
+                                  ARDUINO_EXEMPT),
+            [("junit_case_sources", JUNIT, ".iter('testcase')"),
+             ("junit_case_sources", JUNIT, "ET.parse"),
+             ("junit_case_sources", CLASSNAME, "classname")],
+            _lines(report_parse_findings(_ARDUINO_CLIENT_WITH_ITS_OWN_CASE_READER,
+                                         ARDUINO_EXEMPT)))
+
+    def test_the_arduino_client_module_defines_no_report_parse(self):
+        """No JUnit parse, no lcov summation and no classname grouping in
+        `arduino-crucible.py`: nothing is exempt."""
+        findings = report_parse_findings(
+            (CLIENTS / "arduino-crucible.py").read_text(encoding="utf-8"),
+            ARDUINO_EXEMPT)
+        self.assertEqual(
+            findings, [],
+            "the arduino client parses none of its runner's reports; found:\n"
             + _lines(findings))
 
 
