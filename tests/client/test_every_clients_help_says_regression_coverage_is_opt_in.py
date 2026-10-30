@@ -423,8 +423,8 @@ RUNS_ROUTE = "/api/v2/runs"
 class TheLcovCoverageSentenceHoldsOnEitherRouteTest(unittest.TestCase):
     """The shared lcov `--coverage` sentence (bun's and arduino's
     `regression`) says the coverage "is filed with its results" and names no
-    route: bun sends its reports to /api/v2/runs while arduino still posts to
-    the parsed route, and the one sentence holds for both."""
+    route: both clients send their reports and their lcov to /api/v2/runs,
+    and the one sentence holds for both."""
 
     def _assert_route_neutral(self, client):
         text = _plain(_flag_help(client, "regression", "--coverage"))
