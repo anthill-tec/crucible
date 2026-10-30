@@ -50,7 +50,10 @@ nothing (aborted, as today).
 ### §S4 — the live state
 
 To be written at this CR's re-run gap analysis (Rule 20), when its turn comes after CR-CRU-223: the live state filled from each batch, as CR-CRU-223 §S1 defines it, the
-change frame it emits, and the narration it replaces for a streamed run.
+change frame it emits, and the narration it replaces for a streamed run. Settled at CR-CRU-223's pre-review (user rulings): this CR
+owns the live state's table, `Store.runLive`'s body (CR-CRU-223 ships its signature answering nothing), filling it from each
+batch, and emitting the change frames; those frames are throttled to a stated cadence, so a long stream never re-runs the
+board's events refresh once per batch.
 
 ## Acceptance criteria
 
@@ -63,6 +66,8 @@ To be made exact at its re-run gap analysis. These hold under any design:
 - [ ] A batch the board acknowledged survives a board restart; a stream whose tests disagree with its run-end totals stores a
       run that says so.
 - [ ] A run that streams nothing leaves the open run aborted, as today.
+- [ ] Live-state change frames are throttled: a stream of many batches emits no more than one frame per stated interval while
+      its run is open, and one more when it settles (user ruling at CR-CRU-223's pre-review).
 
 ## Non-goals
 
