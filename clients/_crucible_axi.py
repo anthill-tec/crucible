@@ -632,7 +632,7 @@ def http_request(base_url, method, path, payload=None, timeout=None):
     without this function acquiring a second opinion about where to post.
 
     CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
-    (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
+    (`/api/v2/runs`) for a large regression/coverage run can legitimately
     take the server >10s, and a short bound there is a false-negative. The short
     hook-safe bound is applied ONLY on the status/plans read path via `_get`.
     The bound is passed as a `timeout=` KEYWORD, which the fleet's hook-safety
