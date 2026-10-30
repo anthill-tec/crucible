@@ -788,6 +788,48 @@ body {
   cursor: pointer;
 }
 .app-suite-row .app-suite-name { flex: 1; }
+/* CR-CRU-223 §S3 — the run detail's live mode (storyboard F25, option A):
+   one row per failure so far, its name and file on one line and the first
+   line of its message (or its type) beneath, each truncating on its line.
+   The row's fixed height is LIVE_ROW_HEIGHT (app.js), which drives the
+   window; then one passed row, a count that does not expand. */
+.app-live-failure {
+  box-sizing: border-box;
+  height: 40px;
+  padding: 3px 0 3px 10px;
+  border-left: 2px solid var(--fail);
+  overflow: hidden;
+  font: 10.5px var(--mono);
+}
+.app-live-failure-head {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.app-live-glyph { flex: 0 0 auto; color: var(--fail); }
+.app-live-failure-name,
+.app-live-failure-file {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.app-live-failure-name { flex: 0 1 auto; }
+.app-live-failure-file { flex: 0 10 auto; color: var(--ink-faint); }
+.app-live-failure-message {
+  padding-left: 12px;
+  color: var(--ink-faint);
+  font-size: 9.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.app-live-passed {
+  margin-top: 6px;
+  color: var(--ink-faint);
+  font: 10px var(--mono);
+}
 .app-suite-row.fail { color: var(--fail); }
 .app-tree-toggle { color: var(--ink-dim); width: 12px; }
 .app-suite-counts { white-space: pre; }
