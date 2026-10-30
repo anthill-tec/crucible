@@ -73,7 +73,7 @@ const L_FAIL = eventLine({
   file: "src/b.test.ts",
   status: "fail",
   duration_ms: 12,
-  failure: { message: "expected 1\nreceived 2", type: "AssertionError", trace: "expected 1\nreceived 2\n  at b.test.ts:4" },
+  failure: { message: "expected 1\nreceived 2", type: "AssertionError", trace: "expected 1\nreceived 2\n  at Parser.rejects" },
 });
 const L_PENDING = eventLine({
   event: "test-end",
@@ -119,7 +119,7 @@ const EXPECTED_TREE = [
         name: "rejects 😀",
         status: "fail",
         duration_ms: 12,
-        failure: { message: "expected 1\nreceived 2", type: "AssertionError", trace: "expected 1\nreceived 2\n  at b.test.ts:4" },
+        failure: { message: "expected 1\nreceived 2", type: "AssertionError", trace: "expected 1\nreceived 2\n  at Parser.rejects" },
       },
     ],
   },
