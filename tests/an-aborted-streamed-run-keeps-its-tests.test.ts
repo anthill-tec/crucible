@@ -18,7 +18,7 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { shippedLimits } from "../src/limits.ts";
-import { RUN_STREAM_TABLES } from "../src/run-stream.ts";
+import { ABORTED_BEFORE_CLOSE, RUN_STREAM_TABLES } from "../src/run-stream.ts";
 import type { ServerHandle } from "../src/server.ts";
 import {
   bootOn,
@@ -242,6 +242,57 @@ describe("a streamed run aborted by the sweep keeps the tests it streamed", () =
     expect(aborted.map((e) => e.abortReason)).toEqual(["abandoned"]);
     expect(aborted[0]!.summary).toEqual(DIED_SUMMARY);
     await expectKeptItsTests(s, "abandoned");
+  });
+});
+
+// "Aborted before its close" is the reason `abortedStreamRecord`
+// (src/run-stream.ts) gives a stream whose codec states none of its own; it
+// is read off the constant the module exports, and pinned to its text once.
+
+/** The whole stream: the three tests and a run-end that agrees with them. */
+const WHOLE_STREAM =
+  DIED_MID_RUN + eventLine({ event: "run-end", total: 3, passed: 1, failed: 1, pending: 1, duration_ms: 7 });
+
+/** An aborted run whose held stream is whole keeps its tests, flagged aborted before its close. */
+async function expectAbortedBeforeItsClose(s: Subject, reason: string): Promise<void> {
+  const event = await abortedEvent(s);
+  expect(event.status).toBe("aborted");
+  expect(event.abortReason).toBe(reason);
+  expect(event.summary).toEqual(DIED_SUMMARY);
+  expect(event.tree).toEqual(await closedTreeOf(WHOLE_STREAM));
+  expect(event.incomplete).toBe(ABORTED_BEFORE_CLOSE);
+  const brief = await briefOf(s, event.id);
+  expect(brief.incomplete).toBe(ABORTED_BEFORE_CLOSE);
+  expect(streamRows(s)).toEqual(NO_ROWS);
+}
+
+describe("a streamed run aborted after its matching run-end is flagged incomplete: aborted before its close", () => {
+  test("the reason is the text `aborted before its close`", () => {
+    expect(ABORTED_BEFORE_CLOSE).toBe("aborted before its close");
+  });
+
+  test("by its client: POST /api/v2/runs/<runId>/abort stores incomplete exactly `aborted before its close`", async () => {
+    const s = await subject("whole-aborter");
+    await stream(s, WHOLE_STREAM);
+    await abortByClient(s, "runner crashed");
+    await expectAbortedBeforeItsClose(s, "runner crashed");
+  });
+
+  test("by the sweep, abandoned: the `abandoned` event's incomplete is exactly `aborted before its close`", async () => {
+    const s = await subject("whole-loser", NEVER_TOMBSTONED);
+    await stream(s, WHOLE_STREAM);
+    const startedAt = s.handle.store.getRun(s.runId)?.startedAt as number;
+    const aborted = s.handle.store.sweepOpenRuns(startedAt + ABANDON_MS);
+    expect(aborted.map((e) => e.abortReason)).toEqual(["abandoned"]);
+    await expectAbortedBeforeItsClose(s, "abandoned");
+  });
+
+  test("by the sweep, agent died: the `agent died` event's incomplete is exactly `aborted before its close`", async () => {
+    const s = await subject("whole-dier", TOMBSTONES_FAST);
+    await stream(s, WHOLE_STREAM);
+    const aborted = s.handle.store.sweepOpenRuns(Date.now() + TOMBSTONES_FAST.tombstoneAfterMs * 5);
+    expect(aborted.map((e) => e.abortReason)).toEqual(["agent died"]);
+    await expectAbortedBeforeItsClose(s, "agent died");
   });
 });
 

@@ -28,8 +28,8 @@
 //
 // No fixture file is added: the stream is built from the stored JUnit run.
 import { describe, test, expect, afterEach } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { ServerHandle } from "../src/server.ts";
 import {
   batchesOf,
@@ -72,7 +72,8 @@ interface Fixture {
   raw?: string;
 }
 
-function loadFixture(label: string, dir: string): Fixture {
+function loadFixture(dir: string): Fixture {
+  const label = dir;
   const root = join(FIXTURES, dir);
   const expected = JSON.parse(readFileSync(join(root, "expected.json"), "utf-8")) as Expected;
   const read = (rel: string): string => readFileSync(join(root, rel), "utf-8");
@@ -84,14 +85,24 @@ function loadFixture(label: string, dir: string): Fixture {
   };
 }
 
-const FIXTURE_SET: Fixture[] = [
-  loadFixture("bun", "bun"),
-  loadFixture("python (xmlrunner)", "python/xmlrunner"),
-  loadFixture("python (pytest)", "python/pytest"),
-  loadFixture("mvn (surefire and failsafe)", "mvn"),
-  loadFixture("rust (nextest)", "rust"),
-  loadFixture("arduino (native harness)", "arduino"),
-];
+/**
+ * Every fixture directory under `tests/fixtures/reports/`: each one holding
+ * an `expected.json`, at any depth (python keeps one per runner), read off
+ * the tree rather than kept by hand, so a stack's fixture added later is
+ * streamed too. Sorted, so the run order is the same on every machine.
+ */
+function fixtureDirs(): string[] {
+  return readdirSync(FIXTURES, { recursive: true, encoding: "utf-8" })
+    .flatMap((entry) =>
+      entry.split(/[\\/]/).at(-1) === "expected.json" ? [dirname(entry).split("\\").join("/")] : [],
+    )
+    .sort((a, b) => a.localeCompare(b));
+}
+
+/** The fewest fixture directories the read may find: the six stacks' fixtures committed today. */
+const AT_LEAST = 6;
+
+const FIXTURE_SET: Fixture[] = fixtureDirs().map(loadFixture);
 
 // ── The stored run, and the same run as a stream ────────────────────────────
 
@@ -174,6 +185,15 @@ function noSurrogateSplit(text: string, cut: number): number {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+
+describe("the fixtures are read from tests/fixtures/reports/, never kept by hand", () => {
+  test("the read finds at least the six stacks' fixture directories, so an empty read cannot pass vacuously", () => {
+    const dirs = fixtureDirs();
+    expect(dirs.length).toBeGreaterThanOrEqual(AT_LEAST);
+    expect(dirs).toEqual(expect.arrayContaining(["arduino", "bun", "mvn", "python/pytest", "python/xmlrunner", "rust"]));
+    expect(FIXTURE_SET.map((f) => f.label)).toEqual(dirs);
+  });
+});
 
 for (const f of FIXTURE_SET) {
   describe(`a real ${f.label} run streamed as crucible-events is stored as its JUnit record`, () => {

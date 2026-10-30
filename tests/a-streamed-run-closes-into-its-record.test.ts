@@ -27,6 +27,7 @@
 // events held BEFORE it — a registration already records a lifecycle event.
 import { describe, test, expect, afterEach } from "bun:test";
 import type { Database } from "bun:sqlite";
+import { codecs } from "../src/codecs/index.ts";
 import { RUN_STREAM_TABLES } from "../src/run-stream.ts";
 import { shippedLimits } from "../src/limits.ts";
 import type { ServerHandle } from "../src/server.ts";
@@ -466,6 +467,44 @@ describe("a run that streams its record is closed only with the stream codec", (
     });
     expectNamesTheStreamCodec(res);
     await expectRefusedAndStillOpen(s, res, before, GREEN_STREAM);
+  });
+
+  test("closed by /runs naming a stream codec other than the one its first batch fixed: a 400 naming crucible-events, nothing stored, the run open", async () => {
+    // A second stream codec, registered for this test only, as the stream
+    // route's own codec test registers it: it decodes a stream exactly as
+    // crucible-events does, so a close naming it could only be refused for
+    // naming a codec the run's stream was not fixed with.
+    const probe = "probe-stream-codec";
+    const crucibleEvents = codecs.get(STREAM_CODEC);
+    if (crucibleEvents === undefined) throw new Error(`no ${STREAM_CODEC} codec registered`);
+    expect(crucibleEvents.stream).toBe(true);
+    codecs.set(probe, { parse: (data, options) => crucibleEvents.parse(data, options), stream: true });
+    try {
+      const handle = boot();
+      // The control: a run whose first batch fixed the probe codec closes with it.
+      const control = await subject(handle, "probe-closer");
+      const fixed = await sendBatch(handle, control.runId, {
+        projectKey: control.key,
+        agentId: control.agentId,
+        from: 0,
+        data: GREEN_STREAM,
+        codec: probe,
+      });
+      expect(fixed.status, JSON.stringify(fixed.body)).toBe(200);
+      expectAccepted(await close(control, { codec: probe }));
+      expect(handle.store.getRun(control.runId)?.state).toBe("ended");
+
+      // The subject: its first batch fixed crucible-events; the close names the probe.
+      const s = await subject(handle, "closer");
+      await stream(s, GREEN_STREAM);
+      const before = eventIds(s);
+      const res = await close(s, { codec: probe });
+      expectNamesTheStreamCodec(res);
+      expect(String(res.body.error)).toMatch(/\bnot stored\b/i);
+      await expectRefusedAndStillOpen(s, res, before, GREEN_STREAM);
+    } finally {
+      codecs.delete(probe);
+    }
   });
 });
 
