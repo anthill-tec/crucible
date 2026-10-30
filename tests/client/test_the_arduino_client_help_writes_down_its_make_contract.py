@@ -38,6 +38,10 @@ What each class pins:
   `NarrowingFlagsByParsedOptionsTest`         `test` and `unit` take both
                                               flags, and no other verb takes
                                               either.
+  `MakeExitsNonZeroWhenATestBinaryFailsTest`  the contract states that
+                                              `make <target>` exits non-zero
+                                              when a test binary fails, and
+                                              its example loop does.
 
 The help is read from the REAL client run as a subprocess (`--help` needs no
 board and resolves no project); the parser is captured in-process and no verb
@@ -225,6 +229,66 @@ class MakeContractHelpSectionTest(unittest.TestCase):
         self.assertTrue("TEST-<stem>.xml" in _root_help(),
                         "the contract recommends one TEST-<stem>.xml per test "
                         "file")
+
+
+def _sentences_saying_make_fails_with_a_binary(help_text):
+    """The sentences of `help_text` (plain, split at a full stop) that say
+    `make` exits non-zero when a test binary fails: each names `make`, a
+    non-zero exit and a failing test binary."""
+    return [s for s in re.split(r"\.(?:\s|$)", _plain(help_text))
+            if "make" in s and re.search(r"non-?zero", s)
+            and "fail" in s and "binar" in s]
+
+
+def _example_loop(help_text):
+    """The example recipe's loop over the test binaries: the text from its
+    `for t in $(TESTS)` to the end of its `done` line, `None` without one."""
+    match = re.search(r"for t in \$\(TESTS\).*?done[^\n]*", help_text, re.DOTALL)
+    return match.group(0) if match else None
+
+
+# What makes a shell `for` loop in a recipe exit non-zero on a failing
+# iteration: its status is otherwise the LAST iteration's alone.
+_LOOP_FAILS_ON_A_BINARY = ("exit", "set -e", "||")
+
+
+class MakeExitsNonZeroWhenATestBinaryFailsTest(unittest.TestCase):
+    """A run without `--agent` exits with `make`'s exit, so the contract
+    states that `make <target>` exits non-zero when a test binary fails, and
+    its example loop does."""
+
+    def test_the_sentence_reader_is_proved_on_synthetic_help(self):
+        stated = ("REPORTS_DIR  where to write.\n"
+                  "`make <target>` must exit non-zero when a test binary "
+                  "fails: the client exits with make's exit.\n")
+        self.assertEqual(len(_sentences_saying_make_fails_with_a_binary(stated)), 1)
+        unstated = ("REPORTS_DIR  where to write. A Makefile that ignores it "
+                    "writes to its own reports/. One JUnit report per test "
+                    "file is recommended.\n")
+        self.assertEqual(_sentences_saying_make_fails_with_a_binary(unstated), [])
+
+    def test_the_loop_reader_is_proved_on_synthetic_help(self):
+        failing = ('    for t in $(TESTS); do ./build/$$t || exit 1; done\n')
+        silent = ('    for t in $(TESTS); do ./build/$$t; done\n')
+        self.assertTrue(any(m in _example_loop(failing) for m in _LOOP_FAILS_ON_A_BINARY))
+        self.assertFalse(any(m in _example_loop(silent) for m in _LOOP_FAILS_ON_A_BINARY))
+
+    def test_root_help_states_make_exits_non_zero_when_a_test_binary_fails(self):
+        found = _sentences_saying_make_fails_with_a_binary(_root_help())
+        self.assertEqual(
+            len(found), 1,
+            "the make contract states, once, that `make <target>` exits "
+            f"non-zero when a test binary fails; found {found!r}")
+
+    def test_the_example_loop_exits_non_zero_when_a_test_binary_fails(self):
+        loop = _example_loop(_root_help())
+        self.assertIsNotNone(loop, "the contract shows its example loop over "
+                                   "$(TESTS)")
+        self.assertTrue(
+            any(marker in (loop or "") for marker in _LOOP_FAILS_ON_A_BINARY),
+            f"the example loop exits non-zero when a test binary fails (a "
+            f"shell loop's status is otherwise its last iteration's); it "
+            f"reads {loop!r}")
 
 
 class NarrowingFlagHelpPointsToTheContractTest(unittest.TestCase):
