@@ -155,6 +155,7 @@ function expectOk(res: Answer, s: Subject, held: number): void {
 describe("POST /api/v2/runs/<runId>/stream answers how much of the stream the board holds", () => {
   test("each batch is answered 200 {ok: true, runId, held}, held the UTF-8 bytes held so far — a cut mid-line after a multibyte character included", async () => {
     const s = await subject();
+    const before = eventIds(s);
     const first = L_START + L_PASS.slice(0, AFTER_CAFE);
     const second = L_PASS.slice(AFTER_CAFE) + L_FAIL;
     expectOk(await batch(s, 0, first), s, utf8(first));
@@ -162,13 +163,14 @@ describe("POST /api/v2/runs/<runId>/stream answers how much of the stream the bo
     expectOk(await batch(s, utf8(first + second), L_END), s, utf8(first + second + L_END));
     // Bytes, not UTF-16 units: the stream holds "—", "é" and "😀".
     expect(utf8(first + second + L_END)).toBeGreaterThan((first + second + L_END).length);
-    expect(eventIds(s)).toEqual([]);
+    expect(eventIds(s)).toEqual(before);
   });
 
   test("a batch stores no event and leaves the run open — the stream is not the close", async () => {
     const s = await subject();
+    const before = eventIds(s);
     expectOk(await batch(s, 0, L_START + L_PASS + L_FAIL + L_END), s, utf8(L_START + L_PASS + L_FAIL + L_END));
-    expect(eventIds(s)).toEqual([]);
+    expect(eventIds(s)).toEqual(before);
     expect(s.handle.store.getRun(s.runId)?.state).toBe("open");
   });
 });
@@ -276,6 +278,7 @@ describe("a stream's total is bounded by ingest_body_bytes", () => {
       const limit = shippedLimits().ingest_body_bytes?.min ?? 1048576;
       bodyLimitAt(limit);
       const s = await subject(bootWithOperatorFile());
+      const before = eventIds(s);
       const first = padLine(600_000);
       const second = padLine(limit - 600_000);
       expectOk(await batch(s, 0, first), s, 600_000);
@@ -291,7 +294,7 @@ describe("a stream's total is bounded by ingest_body_bytes", () => {
       const again = await batch(s, limit, L_START);
       expectRefused(again, 413);
       expect(again.body.held).toBe(limit);
-      expect(eventIds(s)).toEqual([]);
+      expect(eventIds(s)).toEqual(before);
       expect(s.handle.store.getRun(s.runId)?.state).toBe("open");
     },
     SLOW,
@@ -398,11 +401,12 @@ describe("a batch is refused for a project, caller or run the route cannot take 
   test("another project's run is a 400, and nothing is appended", async () => {
     const s = await subject();
     const otherKey = await readyProject(s.handle, [s.agentId], "other-project");
+    const before = eventIds(s, otherKey);
     expectOk(await batch(s, 0, L_START), s, utf8(L_START));
     const res = await sendBatch(s.handle, s.runId, { projectKey: otherKey, agentId: s.agentId, from: utf8(L_START), data: L_PASS });
     expectRefused(res, 400);
     expect(res.body.error as string).toContain(`runId ${s.runId}`);
-    expect(eventIds(s, otherKey)).toEqual([]);
+    expect(eventIds(s, otherKey)).toEqual(before);
     await expectHolds(s, L_START);
   });
 
