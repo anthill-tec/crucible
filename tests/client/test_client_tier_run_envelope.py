@@ -77,7 +77,10 @@ code, and every drive in this file is built from them:
                               rust client sends its
                               reports to the board)
   arduino  unit               `_emit_ingest_summary_axi` TEST-*.xml tests="0"
-                                                        → ingested
+                              (replaced since by        → ingested
+                              `_emit_run_axi`, as the
+                              arduino client sends its
+                              reports to the board)
 
   client   compile ingest, and whether it is a FALLBACK from the tier verb
   bun      NOT from `regression` — that verb's no-JUnit exit ingests NOTHING
