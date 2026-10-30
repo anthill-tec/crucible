@@ -15,6 +15,15 @@
 
 The file keeps its first slug.
 
+**Pre-review: due** — the CR scores 13 points, and its gap analysis needed rulings from the user.
+
+**PROPOSED, awaiting the user's ruling** (Rule 19). The gap analysis chose these; each is marked *(proposed)* where the steps state it:
+- **P1:** the close is the stream route's last batch (`final: true`), not a `POST /api/v2/runs` ingest.
+- **P2:** a close holding no test is refused (400) and leaves the run open for the sweep or the abort.
+- **P3:** the agents read serves `runningLine` from the live state, and `AgentRow` reads it before the agent's `message`.
+- **P4:** the run detail's header states `incomplete — <reason>`.
+- **P5:** a live failure's `id` falls back to `<suite>::<name>`.
+
 ## Problem
 
 A run's live progress is a count, not data.
@@ -135,7 +144,7 @@ Each refusal states that nothing was stored.
 
 ### §S3 — the record at close
 
-**The close is the stream route's last batch.** A batch with `final: true` may carry:
+**The close is the stream route's last batch** *(proposed, P1)*. A batch with `final: true` may carry:
 - a last `data` tail;
 - `coverage` (`{codec, data}`, as on `POST /api/v2/runs`);
 - `raw` (the runner's console);
@@ -153,13 +162,13 @@ It closes the run in this order:
 The answer is the one `POST /api/v2/runs` gives: `runResponse`, with `files`, `verdict` and `help`. When the stream is
 incomplete, the answer also carries the warning `stream-incomplete`, stating the reason.
 
-**A streamed run that holds no test is refused at close.** That is a 400, the run is left open, and nothing is stored, so a
+**A streamed run that holds no test is refused at close** *(proposed, P2)*. That is a 400, the run is left open, and nothing is stored, so a
 run that streamed nothing is still settled by the sweep or the client's abort, as today.
 
 **The completeness flag** is stored on the run's event as `incomplete` (the reason text), and is absent on a complete run. Read
 back:
 - `GET /api/v2/events/<id>` and the event brief carry it;
-- the run detail's header states `incomplete — <reason>` in the fail colour.
+- the run detail's header states `incomplete — <reason>` in the fail colour *(proposed, P4)*.
 
 **A streamed run that is aborted keeps what it streamed.** This applies to the sweep (`agent died` / `abandoned`) and to the
 client's `POST /api/v2/runs/<runId>/abort`:
@@ -185,7 +194,7 @@ It is deleted when the run settles.
   - each `test-end` adds one to `completed` and to its status count, sets `currentFile` to its non-blank `file`, and on `fail`
     appends a failure `{id, name, suite, file, message?, type?}`.
 - **Failure fields:**
-  - `id` is the test's `id`, else `<suite>::<name>`;
+  - `id` is the test's `id`, else `<suite>::<name>` *(proposed, P5)*;
   - `message` is the first line of the failure's message, else of its trace;
   - `type` is the failure's type;
   - each is cut to JUnit's `MESSAGE_LIMIT`.
@@ -201,7 +210,7 @@ per `LIVE_FRAME_MS`:
 
 `LIVE_FRAME_MS` is one named constant (2000) in `src/store.ts`. It is not a server limit.
 
-**The agent's row.**
+**The agent's row** *(proposed, P3)*.
 - **The agents read:** `GET /api/v2/agents` serves `runningLine` for an agent whose open run holds a live state:
   - `running <completed>/<total> · <currentFile>`;
   - `running <completed> done · <currentFile>` without a total;
