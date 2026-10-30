@@ -560,5 +560,53 @@ class MavenPrintedHelpNamesTheRouteItsReportsTakeTest(unittest.TestCase):
                       "take")
 
 
+# Phrases that say coverage is published on a failing run: the rust client
+# sends its lcov on every coverage run, and the board discards a red run's.
+_PUBLISHED_ON_FAILURE = ("published even on", "published on failure",
+                         "published on a failing")
+
+
+class RustPrintedHelpNamesTheRouteItsReportsTakeTest(unittest.TestCase):
+    """rust sends its nextest report and its lcov to /api/v2/runs for the
+    board to decode, on a red run as on a green one, so neither its printed
+    help nor its module docstring names /api/v2/runs/parsed, and no printed
+    help says coverage is published on a failing run."""
+
+    def _printed_texts(self):
+        root = _root_parser("rust")
+        texts = {"<root>": [root.description or "", root.epilog or ""]}
+        for pseudo in _subparsers_action("rust")._choices_actions:
+            texts["<root>"].append(pseudo.help or "")
+        for verb in _subparsers_action("rust").choices:
+            texts[verb] = _verb_help_texts("rust", verb)
+        return texts
+
+    def test_no_printed_rust_help_names_the_parsed_route(self):
+        naming = sorted(verb for verb, found in self._printed_texts().items()
+                        if any(PARSED_ROUTE in text for text in found))
+        self.assertEqual(naming, [],
+                         f"rust's printed help names {PARSED_ROUTE} in: {naming}")
+
+    def test_no_printed_rust_help_says_coverage_is_published_on_a_failing_run(self):
+        stating = sorted(
+            (verb, phrase) for verb, found in self._printed_texts().items()
+            for phrase in _PUBLISHED_ON_FAILURE
+            if any(phrase in _plain(text) for text in found))
+        self.assertEqual(stating, [],
+                         f"rust's printed help says coverage is published on a "
+                         f"failing run in: {stating}")
+
+    def test_the_rust_module_docstring_names_the_runs_route_and_not_the_parsed_one(self):
+        module = _load_module(CLIENTS_DIR / "rust-crucible.py",
+                              "rust_crucible_docstring_route_under_test")
+        doc = module.__doc__ or ""
+        self.assertNotIn(PARSED_ROUTE, doc,
+                         "the rust client's docstring still says it posts to "
+                         "the parsed route")
+        self.assertIn(RUNS_ROUTE, doc,
+                      "the rust client's docstring names the route its reports "
+                      "take")
+
+
 if __name__ == "__main__":
     unittest.main()
