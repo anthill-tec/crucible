@@ -6,7 +6,6 @@ For every fixture directory under `tests/fixtures/reports/` this writes an
 TODAY, by calling the client's own parser functions (each client module is
 imported by path from `clients/`; nothing here re-implements a parse):
 
-  rust     `_parse_junit` + `_parse_lcov`
   arduino  `_parse_junit` per `TEST-*.xml`, aggregated as the native-test run
            body aggregates them + `_collect_lcov`
 
@@ -14,12 +13,12 @@ Each `expected.json` also names its inputs — the report files in the order the
 client reads them and the coverage files and their codec — so a test can send
 the same texts to the board in the same order.
 
-bun, python and mvn are not frozen here any more: their clients send the
-runner's reports to the board and parse none of them (CR-CRU-204, and the
-maven client after it), so there is no client parse left to freeze.
-`bun/expected.json`, the two `python/*/expected.json` and `mvn/expected.json`
-stay as they were frozen at CR-CRU-152's base, the record of what those
-clients computed before the board took the parse.
+bun, python, mvn and rust are not frozen here any more: their clients send
+the runner's reports to the board and parse none of them (CR-CRU-204, and the
+maven and rust clients after it), so there is no client parse left to freeze.
+`bun/expected.json`, the two `python/*/expected.json`, `mvn/expected.json` and
+`rust/expected.json` stay as they were frozen at CR-CRU-152's base, the record
+of what those clients computed before the board took the parse.
 
 Run from anywhere: `python3 tests/fixtures/reports/freeze-client-parse.py`.
 """
@@ -62,20 +61,6 @@ def _write(fixture_dir, document):
         f.write("\n")
 
 
-def freeze_rust():
-    rust = _client("rust")
-    d = os.path.join(HERE, "rust")
-    summary, tree, files = rust._parse_junit(os.path.join(d, "junit.xml"))
-    coverage = rust._parse_lcov(os.path.join(d, "lcov.info"))
-    _write(d, {
-        "stack": "rust",
-        "reports": ["junit.xml"],
-        "coverage": {"codec": "lcov", "reports": ["lcov.info"]},
-        "client": {"summary": summary, "tree": tree, "files": len(files),
-                   "coverage": coverage},
-    })
-
-
 def freeze_arduino():
     arduino = _client("arduino")
     d = os.path.join(HERE, "arduino")
@@ -101,7 +86,6 @@ def freeze_arduino():
 
 
 def main():
-    freeze_rust()
     freeze_arduino()
 
 
