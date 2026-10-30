@@ -246,7 +246,7 @@ _PY_TEST_FAIL = (
 
 # arduino's fake `make`: exits 0 and writes NO report. The census module's
 # stock fake `make` writes its own passing `TEST-DetectorProbe.xml` on every
-# `make junit`, which the arduino client sums beside the fixture's own report,
+# `make junit`, which the arduino client sends beside the fixture's own report,
 # so it is replaced in BOTH arduino bin dirs: the only report the gate reads is
 # the one `_write_native_fixture` wrote.
 _SILENT_MAKE_BODY = "#!/usr/bin/env python3\nimport sys\n\nsys.exit(0)\n"

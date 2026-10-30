@@ -26,7 +26,11 @@ context=None, run_id=None, release=None, runner_exit=None)` in
   carry `run-aborted` (`run-left-open` when the abort is refused).
 
 `junit_non_skipped_count(paths)` counts the `<testcase>` elements carrying no
-`<skipped>`; `junit_testcase_count` keeps its contract.
+`<skipped>`; `junit_testcase_count` keeps its contract. `junit_case_sources(paths)`
+reads each `<testcase>` as `(name, stem)` (the name `"?"` when it has none; the
+stem from `classname`, else `file`, a backslash read as `/`, its basename without
+extension, `None` when that is empty), and answers `None` with one warning for a
+report it cannot read.
 
 Driven in-process through recording `get`/`post` seams, and over real HTTP
 against `RecordingBoard` (never the live board).
@@ -706,6 +710,127 @@ class TheTwoJunitCountsTest(_SharedIngestCase):
         missing = os.path.join(self.scratch, "TEST-missing.xml")
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertIsNone(self.axi.junit_testcase_count([missing]))
+
+
+# ── the shared case reader: each case's name and file stem ──────────────────
+
+def _native_report(*cases, wrap=True):
+    """A native-harness JUnit report holding `cases`, each the attribute text
+    of one `<testcase>` (`name="a" classname="b"`)."""
+    body = "".join(f"    <testcase {attrs} time=\"0.001\"/>\n" for attrs in cases)
+    suite = f'  <testsuite name="native" tests="{len(cases)}">\n{body}  </testsuite>\n'
+    if not wrap:
+        return '<?xml version="1.0" encoding="UTF-8"?>\n' + suite
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n<testsuites>\n'
+            + suite + '</testsuites>\n')
+
+
+class TheJunitCaseSourcesReaderTest(_SharedIngestCase):
+    """`junit_case_sources(paths)`: each `<testcase>` across the reports, in
+    report order, as `(name, stem)`; `None`, with one warning, when a report
+    cannot be read or parsed."""
+
+    def sources(self, *texts):
+        paths = [self._write(f"TEST-cases-{i}.xml", text)
+                 for i, text in enumerate(texts)]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            found = self.axi.junit_case_sources(paths)
+        self.assertEqual(err.getvalue(), "",
+                         "a readable report is read without a warning")
+        return found
+
+    def test_the_stem_is_the_cases_classname(self):
+        self.assertEqual(
+            self.sources(_native_report(
+                'name="test_spins_up" classname="test_motor" '
+                'file="test/test_other.c"')),
+            [("test_spins_up", "test_motor")])
+
+    def test_the_stem_falls_back_to_the_cases_file_without_a_classname(self):
+        self.assertEqual(
+            self.sources(_native_report(
+                'name="test_holds_four_bytes" file="test/test_ring.cpp"')),
+            [("test_holds_four_bytes", "test_ring")])
+
+    def test_an_empty_classname_falls_through_to_the_file(self):
+        self.assertEqual(
+            self.sources(_native_report(
+                'name="test_holds_four_bytes" classname="" '
+                'file="test/test_ring.cpp"')),
+            [("test_holds_four_bytes", "test_ring")])
+
+    def test_a_backslash_is_read_as_a_slash(self):
+        self.assertEqual(
+            self.sources(_native_report(
+                'name="test_settles" file="test\\native\\test_debounce.cpp"',
+                'name="test_spins_up" classname="src\\test_motor.c"')),
+            [("test_settles", "test_debounce"), ("test_spins_up", "test_motor")])
+
+    def test_the_stem_is_the_basename_without_its_extension(self):
+        self.assertEqual(
+            self.sources(_native_report(
+                'name="test_spins_up" classname="firmware/test/test_motor.ino"',
+                'name="test_pid_tunes" file="/abs/path/test_pid.c"',
+                'name="test_plain" classname="test_plain"')),
+            [("test_spins_up", "test_motor"), ("test_pid_tunes", "test_pid"),
+             ("test_plain", "test_plain")])
+
+    def test_an_empty_stem_is_none(self):
+        self.assertEqual(
+            self.sources(_native_report(
+                'name="test_neither"',
+                'name="test_both_empty" classname="" file=""',
+                'name="test_a_directory" file="test/"')),
+            [("test_neither", None), ("test_both_empty", None),
+             ("test_a_directory", None)])
+
+    def test_a_nameless_case_is_a_question_mark(self):
+        self.assertEqual(
+            self.sources(_native_report('classname="test_motor"')),
+            [("?", "test_motor")])
+
+    def test_every_testcase_element_in_the_tree_is_walked_in_report_order(self):
+        # A testcase directly under the root, one under a nested testsuite and
+        # two reports: every one is read, the first report's first.
+        nested = ('<?xml version="1.0" encoding="UTF-8"?>\n<testsuites>\n'
+                  '  <testcase name="test_at_the_root" classname="test_root"/>\n'
+                  '  <testsuite name="outer">\n'
+                  '    <testsuite name="inner">\n'
+                  '      <testcase name="test_deep" classname="test_deep"/>\n'
+                  '    </testsuite>\n'
+                  '  </testsuite>\n'
+                  '</testsuites>\n')
+        bare = _native_report('name="test_bare" classname="test_bare"', wrap=False)
+        found = self.sources(nested, bare)
+        self.assertEqual(found, [("test_at_the_root", "test_root"),
+                                 ("test_deep", "test_deep"),
+                                 ("test_bare", "test_bare")])
+        self.assertEqual(len(found), self.axi.junit_testcase_count(
+            [os.path.join(self.scratch, "TEST-cases-0.xml"),
+             os.path.join(self.scratch, "TEST-cases-1.xml")]),
+            "the reader walks the cases `junit_testcase_count` counts")
+
+    def test_no_reports_have_no_cases(self):
+        self.assertEqual(self.sources(), [])
+
+    def test_an_unreadable_report_is_none_with_one_warning(self):
+        readable = self._write("TEST-readable.xml", _native_report(
+            'name="test_spins_up" classname="test_motor"'))
+        broken = self._write("TEST-broken.xml", "<testsuite><testcase")
+        missing = os.path.join(self.scratch, "TEST-missing.xml")
+        for paths in ([broken], [missing], [readable, broken]):
+            with self.subTest(paths=[os.path.basename(p) for p in paths]):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    found = self.axi.junit_case_sources(paths)
+                self.assertIsNone(found)
+                lines = [line for line in err.getvalue().splitlines() if line.strip()]
+                self.assertEqual(len(lines), 1,
+                                 f"one warning names the unreadable report; "
+                                 f"stderr={err.getvalue()!r}")
+                self.assertIn("WARN", lines[0] if lines else "")
+                self.assertIn(paths[-1], lines[0] if lines else "")
 
 
 if __name__ == "__main__":

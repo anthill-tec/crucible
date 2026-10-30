@@ -262,14 +262,14 @@ INGEST_HELD_SITES = (
     ("python", "_python_test_cmd", "/api/v2/runs"),
     ("mvn", "_mvn_test_cmd", "/api/v2/runs"),
     ("rust", "_rust_test_cmd", "/api/v2/runs"),
-    ("arduino", "_arduino_test_cmd", "/api/v2/runs/parsed"),
+    ("arduino", "_arduino_test_cmd", "/api/v2/runs"),
 )
 # The clients that send their runner's reports inline through the shared
 # ingest (CR-CRU-204), each with the number of report files its fake runner
 # writes for the 3-case run: their ingest body carries `data`, never a parse.
-# bun, python and rust write one report; maven's surefire writes one per
-# class.
-INLINE_REPORT_CLIENTS = {"bun": 1, "python": 1, "mvn": 3, "rust": 1}
+# bun, python, rust and arduino write one report; maven's surefire writes one
+# per class.
+INLINE_REPORT_CLIENTS = {"bun": 1, "python": 1, "mvn": 3, "rust": 1, "arduino": 1}
 
 
 class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):

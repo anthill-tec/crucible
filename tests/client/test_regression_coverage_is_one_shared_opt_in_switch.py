@@ -513,6 +513,18 @@ class RegressionWithoutCoverageFilesNoCoverageTest(unittest.TestCase):
             cwd=project, env=_client_env(FAKE_TOTAL="1"),
             capture_output=True, text=True, timeout=TIMEOUT, check=False)
         self._assert_no_coverage(result)
+        # arduino sends its runner's reports: the one ingest is its
+        # `/api/v2/runs` post, the native JUnit report inline and no coverage.
+        path, body = _the_one_ingest(self, self.board, result)
+        self.assertEqual(path, "/api/v2/runs", _diagnostics(result))
+        data = (body or {}).get("data")
+        self.assertTrue(
+            isinstance(data, list) and len(data) == 1
+            and data[0].count("<testcase") == 1,
+            f"the run's one-case JUnit report rides inline; body={body!r}")
+        self.assertNotIn("coverage-not-measured", result.stdout or "",
+                         f"a run that never asked for coverage is not told it "
+                         f"measured none; {_diagnostics(result)}")
 
 
 if __name__ == "__main__":

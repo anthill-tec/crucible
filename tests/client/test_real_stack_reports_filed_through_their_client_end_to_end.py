@@ -9,8 +9,10 @@ figures through the CLIENT VERB: `bun-crucible.py test`,
 `python-crucible.py test` (unittest and pytest) and `mvn-crucible.py
 regression` (a two-module reactor's surefire and failsafe reports, compared
 by `(suite, case)`, since the client reads them from one pooled directory in
-name order) and `rust-crucible.py test` (nextest's one report, written where
-nextest writes it, compared by `(suite, case)`) run a faithful fake runner
+name order), `rust-crucible.py test` (nextest's one report, written where
+nextest writes it, compared by `(suite, case)`) and `arduino-crucible.py unit`
+(the native harness's three reports, written into the run's own reports
+directory, compared by `(suite, case)`) run a faithful fake runner
 that writes the fixture's own report bytes where the client tells it to (and,
 for bun, prints the fixture's captured console as its output), exits non-zero
 as the fixture's run did, and the client sends what it found to the board
@@ -27,7 +29,7 @@ over the board's own `GET /api/v2/events/<id>`.
 The fixtures are failing runs, whose coverage the board discards, so the
 coverage object is proven on a PASSING report filed beside each fixture's own
 lcov through the coverage-measuring verb (`regression --coverage`; rust's
-`regression-ingest`): the stored coverage object equals the fixture's
+`regression-ingest`; arduino's `regression --coverage`): the stored coverage object equals the fixture's
 `expected.json` coverage.
 
 The board is a scratch `bun run src/server.ts` on a free port with a throwaway
@@ -714,6 +716,124 @@ class RustFixtureFiledThroughTheRustClientEndToEndTest(_FiledThroughTheClient):
                             FAKE_LCOV=str(FIXTURES / "rust" / "lcov.info"),
                             FAKE_EXIT="0")
         self.assert_coverage_stored("rust", agent, result)
+        event = self.stored_run(agent, result)
+        self.assertEqual(event.get("codec"), "junit",
+                         f"the board decoded the report and the lcov the client "
+                         f"sent; event={json.dumps(event)[:3000]} "
+                         f"{self.diagnostics(result)}")
+
+
+ARDUINO_CLIENT = CLIENTS_DIR / "arduino-crucible.py"
+_ARDUINO_SCRUBBED = ("ARDUINO_CRUCIBLE_PROJECT_DIR", "AGENT_ID", "TESTS",
+                     "TEST_NAME")
+
+# A passing native-harness report: the run the board keeps a coverage report
+# on.
+GREEN_NATIVE_JUNIT = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<testsuites>\n'
+    '  <testsuite name="test_green" tests="1" failures="0" skipped="0" '
+    'time="0.000010">\n'
+    '    <testcase name="test_passes" classname="test_green" '
+    'file="test/test_green.cpp" line="12" time="0.000010"/>\n'
+    '  </testsuite>\n'
+    '</testsuites>\n')
+
+# A `make` stand-in, faithful to the native harness's make contract: whatever
+# the target, it prints a Unity verdict line, copies each of FAKE_REPORTS (an
+# os.pathsep-joined list) into REPORTS_DIR (else `reports/` under its cwd)
+# under its own name and, when COVERAGE_DIR is set and FAKE_LCOV given,
+# FAKE_LCOV to `<COVERAGE_DIR>/lcov.info`; then it exits FAKE_EXIT.
+_FAKE_MAKE = r'''
+import os
+import shutil
+import sys
+
+reports = os.environ.get("REPORTS_DIR") or "reports"
+os.makedirs(reports, exist_ok=True)
+for src in os.environ["FAKE_REPORTS"].split(os.pathsep):
+    shutil.copyfile(src, os.path.join(reports, os.path.basename(src)))
+coverage = os.environ.get("COVERAGE_DIR")
+if coverage and os.environ.get("FAKE_LCOV"):
+    os.makedirs(coverage, exist_ok=True)
+    shutil.copyfile(os.environ["FAKE_LCOV"], os.path.join(coverage, "lcov.info"))
+sys.stdout.write("test/test_green.cpp:12:test_passes:PASS\n")
+sys.stdout.flush()
+sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
+'''
+
+
+class ArduinoFixtureFiledThroughTheArduinoClientEndToEndTest(_FiledThroughTheClient):
+    """The arduino fixture's three native-harness reports, copied by a fake
+    `make` into the run's own reports directory, filed by `unit`; its lcov,
+    filed beside a passing report by `regression --coverage`."""
+
+    client_label = "arduino-crucible.py"
+
+    def setUp(self):
+        super().setUp()
+        os.makedirs(os.path.join(self.project, "tests", "native"))
+        self.bin_dir = os.path.join(self.scratch, "bin")
+        os.makedirs(self.bin_dir)
+        _write_executable(os.path.join(self.bin_dir, "make"), _FAKE_MAKE)
+
+    def env(self, **fake):
+        env = super().env(**fake)
+        for key in _ARDUINO_SCRUBBED:
+            env.pop(key, None)
+        env["PATH"] = self.bin_dir + os.pathsep + env.get("PATH", "")
+        return env
+
+    def argv(self, verb, agent, *extra):
+        return [verb, "--agent", agent, "--project-dir", self.project,
+                "--reports", "reports", *extra]
+
+    def test_the_arduino_fixture_filed_by_unit_stores_its_expected_counts_and_statuses(self):
+        agent = "real-arduino-through-client"
+        expected = _expected("arduino")
+        reports = [str(FIXTURES / "arduino" / name) for name in expected["reports"]]
+        self.assertEqual(len(reports), 3, "fixture sanity: the three reports")
+        result = self.drive(ARDUINO_CLIENT, self.argv("unit", agent),
+                            FAKE_REPORTS=os.pathsep.join(reports), FAKE_EXIT="0")
+        event = self.stored_run(agent, result)
+        where = f"event={json.dumps(event)[:3000]} {self.diagnostics(result)}"
+        self.assertEqual(event.get("codec"), "junit",
+                         f"the board decoded the reports the client sent; {where}")
+        self.assertEqual(_counts(event.get("summary")),
+                         {"total": 13, "passed": 8, "failed": 2, "pending": 3},
+                         f"the stored counts are the fixture's; {where}")
+        self.assertEqual(_counts(event.get("summary")),
+                         _counts(expected["client"]["summary"]),
+                         f"the stored counts are expected.json's; {where}")
+        self.assertEqual(_cases(event.get("tree")), _cases(expected["client"]["tree"]),
+                         f"every case is stored with the fixture's status, by "
+                         f"(suite, case); {where}")
+        envelope = _envelope(result.stdout) or {}
+        self.assertEqual(_counts(envelope.get("run")), _counts(event.get("summary")),
+                         f"the envelope's run: counts are the stored ones; {where}")
+        self.assertEqual(expected["client"]["files"], 3,
+                         "fixture sanity: the client summed 3 sources per report")
+        self.assertEqual((envelope.get("run") or {}).get("files"), 2,
+                         f"the envelope's run.files is the answer's 2 (the esp32 "
+                         f"and uno reports share a source), not the per-report "
+                         f"sum of 3; {where}")
+        self.assertEqual(result.returncode, 1,
+                         f"make exited 0, and the board's failure count makes "
+                         f"the verb exit 1; {where}")
+
+    def test_the_arduino_fixtures_lcov_filed_by_regression_coverage_stores_its_expected_coverage(self):
+        agent = "real-arduino-coverage-through-client"
+        green = Path(self.scratch, "green", "TEST-test_green.xml")
+        green.parent.mkdir(parents=True)
+        green.write_text(GREEN_NATIVE_JUNIT, encoding="utf-8")
+        self.assertEqual(_expected("arduino")["coverage"]["reports"], ["lcov.info"],
+                         "fixture sanity: the one lcov report")
+        result = self.drive(ARDUINO_CLIENT,
+                            self.argv("regression", agent, "--coverage"),
+                            FAKE_REPORTS=str(green),
+                            FAKE_LCOV=str(FIXTURES / "arduino" / "lcov.info"),
+                            FAKE_EXIT="0")
+        self.assert_coverage_stored("arduino", agent, result)
         event = self.stored_run(agent, result)
         self.assertEqual(event.get("codec"), "junit",
                          f"the board decoded the report and the lcov the client "

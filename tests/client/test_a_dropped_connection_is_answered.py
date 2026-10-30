@@ -64,7 +64,6 @@ PROJECT_KEY = "test-key-dropped-connection"
 PROJECT_NAME = "dropped-connection-fixture"
 RUN_ID = "run-live-1"
 RUNS = "/api/v2/runs"
-PARSED = "/api/v2/runs/parsed"
 TIMEOUT = 120
 TOON = load_toon()
 COUNT_KEYS = ("passed", "failed", "pending", "total", "files")
@@ -321,6 +320,9 @@ class ADroppedIngestIsReportedAsAnUnfiledRunTest(_DroppedIngestCase):
     def test_rust_test_whose_ingest_is_dropped_reports_an_unfiled_run(self):
         self.drive(self.rust_test)
 
+    def test_arduino_unit_whose_ingest_is_dropped_reports_an_unfiled_run(self):
+        self.drive(self.arduino_unit)
+
     def test_python_test_whose_ingest_and_abort_are_both_dropped_leaves_the_run_open(self):
         self.board.drop_next(RUNS, "close")
         self.board.drop_next(f"/api/v2/runs/{RUN_ID}/abort", "close")
@@ -357,25 +359,8 @@ class ARunTheBoardMayHoldSaysSoTest(_DroppedIngestCase):
     def test_rust_test_whose_filed_run_lost_its_answer_says_the_board_may_hold_it(self):
         self.drive(self.rust_test)
 
-
-class TheArduinoClientAnswersADroppedIngestTest(_DroppedIngestCase):
-    """arduino still posts to the parsed route: its envelope is `ok: false`
-    naming the board, and it exits 1 with no traceback."""
-
-    def test_arduino_unit_whose_parsed_ingest_is_dropped_names_the_board(self):
-        self.board.drop_next(PARSED, "close")
-        verb, result = self.arduino_unit()
-        where = self.diagnostics(result)
-        self.assertEqual([p for p, _b in self.board.posts() if p == PARSED], [PARSED],
-                         f"the run's one ingest reached the board; {where}")
-        self.assertNotIn(TRACEBACK, result.stderr, where)
-        self.assertEqual(result.returncode, 1, where)
-        envelope = self.envelope(result)
-        self.assertEqual(envelope.get("verb"), verb, where)
-        self.assertIs(envelope.get("ok"), False, where)
-        error = envelope.get("error") or ""
-        self.assertTrue(error.startswith(CONNECTION_LOST), where)
-        self.assertIn(self.board.url, error, f"the error names the board; {where}")
+    def test_arduino_unit_whose_filed_run_lost_its_answer_says_the_board_may_hold_it(self):
+        self.drive(self.arduino_unit)
 
 
 # ── a gate's declared suite ─────────────────────────────────────────────────

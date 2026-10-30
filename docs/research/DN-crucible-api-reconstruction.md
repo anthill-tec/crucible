@@ -141,8 +141,8 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 ```
 - `coverage` optional; `branches` optional within it (rust/bun send lines+functions only;
   java/vscode add branches).
-- `name` (run label) optional — arduino sends the project name (`_run_native_tests_body` in
-  `clients/arduino-crucible.py`).
+- `name` (run label) optional — no client sends it now: arduino, the last client on this route,
+  sends its reports inline to `/api/v2/runs` (`_file_reports` in `clients/arduino-crucible.py`).
 - **Server safety net: coverage on a failing run is DISCARDED** — crucible-report-java:
   "Crucible's `recordEvent` discards coverage on failing runs as a safety net". (Client
   discipline: coverage only on full green regression.)
@@ -151,8 +151,13 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 ```json
 {"projectKey": "<uuid>", "agentId": "<id>", "format": "rustc", "errors": "<raw compiler output>"}
 ```
-- `format` values sent: `rustc` (rust), `python` (python), `typescript` (bun),
-  **absent** (mvn, arduino, vscode) — so format is OPTIONAL; absent implies javac/generic.
+- `format` values sent: `rustc` (rust — `_ingest_rustc_stderr` and `cmd_auto_ingest` in
+  `clients/rust-crucible.py`), `python` (python — `_ingest_compile` in
+  `clients/python-crucible.py`), `typescript` (bun — `_ingest_compile` in
+  `clients/bun-crucible.py`), `gcc` (arduino — `_ingest_compile` in
+  `clients/arduino-crucible.py`), **absent** (mvn — `_ingest_compile` in
+  `clients/mvn-crucible.py`; vscode, per its skill, with no client in this repo) — so format
+  is OPTIONAL; absent implies javac/generic.
 - Server parses errors into structured per-file entries; raw text kept as fallback:
   - java: `[ERROR] /path/File.java:[line,col] message` (crucible-report-java §Compile Failure)
   - rustc: `error[EXXXX]:` blocks with ` --> path:line:col`
@@ -182,7 +187,7 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 | `mvn-crucible.py` | Java/surefire/failsafe/JaCoCo | heartbeat (identity), remove, ingest (`/api/v2/runs`, reports inline: `junit` + `jacoco`), ingest/compile (no format) |
 | `python-crucible.py` | pytest/unittest/coverage.py | heartbeat, remove, ingest (`/api/v2/runs`, reports inline: `junit` + `lcov`), ingest/compile (python) |
 | `bun-crucible.py` | bun test/lcov | heartbeat (identity+repoPath), remove, ingest (`/api/v2/runs`, reports inline), ingest/compile (typescript) |
-| `arduino-crucible.py` | native g++/arduino-cli | **projects/add**, heartbeat, remove, ingest/parsed, ingest/compile (no format) |
+| `arduino-crucible.py` | native g++/arduino-cli | heartbeat, remove, ingest (`/api/v2/runs`, reports inline: `junit` + `lcov`), ingest/compile (gcc) |
 | `hw-crucible.py` | (21-line shim) | delegates |
 | skills `crucible-report-*` | all stacks | curl/urllib/fetch equivalents of the above + events delete/clear/list |
 | skill `crucible-register` / `agent-protocol` / `heartbeat.sh` | lifecycle | heartbeat, remove |

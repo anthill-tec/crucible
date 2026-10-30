@@ -442,9 +442,11 @@ SITES_DRIVEN_ON_THE_WIRE = frozenset({
     # keyword-only instrument could not SEE them, so nothing ever required
     # them to be driven. `cmd_test` stated `unit` POSITIONALLY and
     # `cmd_auto_ingest` stated it as a DICT KEY — "the two arduino sites above
-    # ARE AC3 sites and were invisible to cycle 378".
-    ("arduino", "cmd_test", "unit", PARSED),
-    ("arduino", "cmd_auto_ingest", "unit", PARSED),
+    # ARE AC3 sites and were invisible to cycle 378". Both reach the one
+    # /api/v2/runs ingest: the shared ingest, since the arduino client sends
+    # its reports to the board.
+    ("arduino", "cmd_test", "unit", RUNS),
+    ("arduino", "cmd_auto_ingest", "unit", RUNS),
 })
 
 
@@ -454,9 +456,10 @@ SITES_DRIVEN_ON_THE_WIRE = frozenset({
 # including the one §S6's gate ruling earns — and a tier the census now calls
 # EARNED has to be earned on the WIRE too, not merely in the scan.
 EARNED_SITES_DRIVEN_ON_THE_WIRE = frozenset({
-    ("arduino", "cmd_unit", "unit", PARSED),
-    ("arduino", "cmd_regression", "regression", PARSED),
-    ("arduino", "cmd_pre_merge_gate", "regression", PARSED),
+    # arduino's three reach the one /api/v2/runs ingest: the shared ingest.
+    ("arduino", "cmd_unit", "unit", RUNS),
+    ("arduino", "cmd_regression", "regression", RUNS),
+    ("arduino", "cmd_pre_merge_gate", "regression", RUNS),
     # rust's two regression bodies reach the one /api/v2/runs ingest: the
     # shared ingest, since the rust client sends its reports to the board.
     ("rust", "_workspace_regression_run", "regression", RUNS),
@@ -1099,8 +1102,10 @@ class ArduinoUnearnedTierTest(_ArduinoCase):
         about the dependency those tests take."""
         self.write_native_reports()
         drive = self.drive(self.arduino_argv("test"))
-        self.assertNoStatedTier(drive, PARSED,
-                                "arduino cmd_test -> POST /runs/parsed")
+        self.assertNoStatedTier(drive, RUNS, "arduino cmd_test -> POST /runs")
+        self.assertEqual(drive.payloads(PARSED), [],
+                         f"nothing is posted to the parsed route; "
+                         f"paths={drive.paths()!r}")
 
     def test_arduino_auto_ingest_ran_no_tests_so_it_claims_no_tier(self):
         """AC3's auto-ingest clause, arduino — the DICT-KEY spelling, and the
@@ -1108,8 +1113,8 @@ class ArduinoUnearnedTierTest(_ArduinoCase):
         ingests `TEST-*.xml` files it merely FOUND."""
         self.write_native_reports()
         drive = self.drive(self.arduino_argv("auto-ingest"))
-        self.assertNoStatedTier(drive, PARSED,
-                                "arduino cmd_auto_ingest -> POST /runs/parsed")
+        self.assertNoStatedTier(drive, RUNS,
+                                "arduino cmd_auto_ingest -> POST /runs")
 
 
 # ── the converse: an EARNED tier survives ──────────────────────────────────
@@ -1189,16 +1194,15 @@ class ArduinoEarnedTierTest(_ArduinoCase):
         EARNED tier: the verb's own name is the tier it states."""
         self.write_native_reports()
         drive = self.drive(self.arduino_argv("unit"))
-        self.assertStatedTier(drive, PARSED, "unit",
-                              "arduino unit -> POST /runs/parsed")
+        self.assertStatedTier(drive, RUNS, "unit", "arduino unit -> POST /runs")
 
     def test_arduino_regression_ingests_the_full_native_suite_as_regression(self):
         """§S2's converse, arduino `cmd_regression`, driven with `--coverage` —
         AC5's own example of a flag the migration had to keep."""
         self.write_native_reports()
         drive = self.drive(self.arduino_argv("regression", ["--coverage"]))
-        self.assertStatedTier(drive, PARSED, "regression",
-                              "arduino regression --coverage -> POST /runs/parsed")
+        self.assertStatedTier(drive, RUNS, "regression",
+                              "arduino regression --coverage -> POST /runs")
 
     def test_arduino_pre_merge_gate_inherits_the_tier_of_the_run_it_drives(self):
         """§S6's gate ruling, on the WIRE — "a gate verb inherits the tier of
@@ -1214,8 +1218,8 @@ class ArduinoEarnedTierTest(_ArduinoCase):
         it."""
         self.write_native_reports()
         drive = self.drive(self.arduino_argv("pre-merge-gate", ["--skip-check"]))
-        self.assertStatedTier(drive, PARSED, "regression",
-                              "arduino pre-merge-gate -> POST /runs/parsed")
+        self.assertStatedTier(drive, RUNS, "regression",
+                              "arduino pre-merge-gate -> POST /runs")
 
 
 class RustEarnedTierTest(_RustCase):

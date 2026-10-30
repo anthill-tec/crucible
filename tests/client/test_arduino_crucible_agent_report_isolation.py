@@ -53,6 +53,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.live_run_harness import get_answering_health
 from tests.client.test_client_fleet_envelope_census import install_project_limits
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -67,6 +68,9 @@ GOOD_NATIVE_JUNIT_XML = (
 )
 
 LCOV_FIXTURE = "TN:\nSF:src/main.c\nFNF:1\nFNH:1\nLF:2\nLH:2\nend_of_record\n"
+
+# The `run` block a board answers an ingest of one passing case with.
+_ONE_PASSED_RUN = {"passed": 1, "failed": 0, "pending": 0, "total": 1, "files": 1}
 
 
 def _native_junit_suite(name, tests, failures, testcase_prefix):
@@ -206,11 +210,16 @@ class _BaseArduinoIsolationTest(unittest.TestCase):
         return decoded["axi"]
 
     def _mocked_transport(self, post_return=None):
+        """Health answers as a board that decodes the reports, so the shared
+        ingest sends; every other read is the tolerant failure, and every
+        post answers `ok` with one passing case's run."""
         return (
             mock.patch.object(self.module, "_post",
-                              return_value=post_return or {"ok": True}, create=True),
+                              return_value=post_return or {"ok": True,
+                                                           "run": _ONE_PASSED_RUN},
+                              create=True),
             mock.patch.object(self.module, "_get",
-                              return_value={"ok": False}, create=True),
+                              side_effect=get_answering_health(), create=True),
         )
 
 
@@ -299,18 +308,19 @@ class AgentDirectoryReadAndMoveTest(_BaseArduinoIsolationTest):
                 "test", "--project-dir", self.tmpdir, "--agent", "agent-z",
             ])
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+                          "the run is never posted to the parsed route")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(
             ingest_call,
             f"the real make-junit run must be ingested; stdout={out!r} stderr={err!r}")
         assert ingest_call is not None
-        summary = ingest_call[0][1]["summary"]
+        data = ingest_call[0][1].get("data")
         self.assertEqual(
-            (summary["passed"], summary["failed"], summary["total"]), (1, 0, 1),
-            f"the ingested summary must reflect ONLY the fresh report the "
-            f"Makefile wrote under REPORTS_DIR (1 passed) -- the 4 stale "
-            f"decoy failures sitting in the project's fixed default "
-            f"reports/ must not be read; got summary={summary!r}",
+            data, [GOOD_NATIVE_JUNIT_XML],
+            f"the ingest sends ONLY the fresh report the Makefile wrote under "
+            f"REPORTS_DIR -- the stale decoy sitting in the project's fixed "
+            f"default reports/ must not be read; got data={data!r}",
         )
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
 
@@ -379,8 +389,8 @@ class AgentDirectoryCoverageIgnoredByMakefileMoveAndReadTest(_BaseArduinoIsolati
     """AC7 -- when a Makefile ignores BOTH REPORTS_DIR and COVERAGE_DIR (writes
     its own fixed reports/ and coverage/), the client must move BOTH the
     JUnit AND the lcov into the agent's own directory, warn about the
-    ignored COVERAGE_DIR specifically, and ingest coverage parsed from the
-    MOVED lcov.info -- never the one left (or since-moved-away) at the
+    ignored COVERAGE_DIR specifically, and send the MOVED lcov.info as the
+    run's coverage report -- never the one left (or since-moved-away) at the
     project's fixed <native_dir>/coverage/lcov.info."""
 
     def test_regression_coverage_run_moves_lcov_into_the_agents_directory_and_warns_about_coverage_dir(self):
@@ -416,25 +426,16 @@ class AgentDirectoryCoverageIgnoredByMakefileMoveAndReadTest(_BaseArduinoIsolati
             f"warning naming it; got warnings={warnings!r}",
         )
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+                          "the run is never posted to the parsed route")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, f"stdout={out!r} stderr={err!r}")
         assert ingest_call is not None
         coverage = ingest_call[0][1].get("coverage")
-        self.assertIsNotNone(
-            coverage,
-            "the ingested payload must carry coverage parsed from the MOVED "
-            "lcov.info, not an absent/fixed-path read",
-        )
-        assert coverage is not None
         self.assertEqual(
-            (coverage["lines"]["total"], coverage["lines"]["covered"]), (2, 2),
-            f"the ingested line coverage must reflect the MOVED lcov's real "
-            f"fixture values (LF:2/LH:2); got coverage={coverage!r}",
-        )
-        self.assertEqual(
-            (coverage["functions"]["total"], coverage["functions"]["covered"]), (1, 1),
-            f"the ingested function coverage must reflect the MOVED lcov's "
-            f"real fixture values (FNF:1/FNH:1); got coverage={coverage!r}",
+            coverage, {"codec": "lcov", "data": [LCOV_FIXTURE]},
+            f"the ingest sends the MOVED lcov.info's text as its coverage "
+            f"report, not an absent/fixed-path read; got coverage={coverage!r}",
         )
 
 

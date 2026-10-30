@@ -76,6 +76,7 @@ from unittest import mock
 # installed project has; the fleet census owns that helper (one fixture shape
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
 from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client.live_run_harness import get_answering_health
 
 # CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
 # this client register, and through what?", reused rather than re-derived.
@@ -96,6 +97,8 @@ PASS_NATIVE_JUNIT_XML = (
     '<testcase name="test_passes" time="0.001"/>'
     '</testsuite>'
 )
+# The `run` block a board answers an ingest of one passing case with.
+_ONE_PASSED_RUN = {"passed": 1, "failed": 0, "pending": 0, "total": 1, "files": 1}
 
 _RELAY_MARKER = "arduino-gate-axi-relay-marker-111"
 _FINAL_SNAPSHOT = (
@@ -1196,9 +1199,13 @@ class ArduinoCrucibleCycleBindingTest(_BaseArduinoAxiTest):
 
     def test_ingest_verb_never_calls_get_and_sends_no_resolved_cycle_in_context(self):
         _write_native_make_junit_fixture(self.tmpdir)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+        # Health answers as a board that decodes the reports, so the shared
+        # ingest sends; every other read is the tolerant failure.
+        with mock.patch.object(self.module, "_post",
+                                return_value={"ok": True, "run": _ONE_PASSED_RUN},
                                 create=True) as post_mock, \
-             mock.patch.object(self.module, "_get", create=True) as get_mock:
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
+                               create=True) as get_mock:
             code, out, _err = _run_main(self.module, [
                 "test", "--agent", "CR-A-auto", "--project-dir", self.tmpdir,
             ])
@@ -1207,7 +1214,9 @@ class ArduinoCrucibleCycleBindingTest(_BaseArduinoAxiTest):
             _plans_gets(get_mock), [],
             "the client-side active-cycle resolver is DELETED -- no plans lookup "
             "may run before an ingest; got %r" % (_plans_gets(get_mock),))
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+                          "the run is never posted to the parsed route")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, "the run must actually be POSTed")
         self.assertNotIn(
             "cycleId", ingest_call[0][1].get("context", {}),
@@ -1230,9 +1239,10 @@ class ArduinoCrucibleToolchainTest(_BaseArduinoAxiTest):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         _write_native_make_junit_fixture(self.tmpdir)
         with mock.patch.object(self.module, "_post",
-                                return_value={"ok": True,
-                                               "run": {"passed": 1, "failed": 0, "total": 1}},
-                                create=True) as post_mock:
+                                return_value={"ok": True, "run": _ONE_PASSED_RUN},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
+                               create=True):
             code, out, _err = _run_main(self.module, [
                 "test", "--project-dir", self.tmpdir, "--agent", "CR-A-toolchain",
             ])
@@ -1243,7 +1253,9 @@ class ArduinoCrucibleToolchainTest(_BaseArduinoAxiTest):
         run = axi.get("run", {})
         self.assertEqual(run.get("passed"), 1)
         self.assertEqual(run.get("failed"), 0)
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+                          "the native make-junit run is never posted to the parsed route")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, "the real native make-junit run must actually be POSTed")
         self.assertNotIn(
             "cycleId", ingest_call[0][1].get("context", {}),
@@ -1251,13 +1263,10 @@ class ArduinoCrucibleToolchainTest(_BaseArduinoAxiTest):
             "client-resolved cycleId -- attachment is server-stamped",
         )
 
-    def test_test_verb_includes_captured_runner_output_as_raw_in_parsed_payload(self):
+    def test_test_verb_includes_captured_runner_output_as_raw_in_its_runs_ingest(self):
         """CR-CRU-038 §S2b -- `_run_native_tests_body` captures `make junit`'s
-        combined output via `capture_output=True` (`run.stdout + run.stderr`,
-        already used for the no-reports error path); that captured output
-        must ALSO flow into the /api/v2/runs/parsed payload as `raw` for a
-        successful run. Fails today -- the payload built there has no `raw`
-        key at all."""
+        combined output; that captured output flows into the `/api/v2/runs`
+        body the shared ingest sends, as `raw`, for a successful run."""
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         marker = "ARDUINO_RAW_CAPTURE_MARKER_3390"
         native_dir = os.path.join(self.tmpdir, "tests", "native")
@@ -1276,19 +1285,22 @@ class ArduinoCrucibleToolchainTest(_BaseArduinoAxiTest):
                                                "run": {"passed": 1, "failed": 0, "total": 1}},
                                 create=True) as post_mock, \
              mock.patch.object(self.module, "_get",
-                                return_value=self._active_cycle_plans(51),
+                                side_effect=get_answering_health(
+                                    self._active_cycle_plans(51)),
                                 create=True):
             code, out, _err = _run_main(self.module, [
                 "test", "--project-dir", self.tmpdir, "--agent", "CR-A-raw",
             ])
         self.assertEqual(code, 0, f"stdout={out!r}")
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+                          "the native make-junit run is never posted to the parsed route")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, "the native make-junit run must actually be POSTed")
         payload = ingest_call[0][1]
         self.assertIn(
             marker, payload.get("raw") or "",
             f"the real captured native make-junit runner output must flow "
-            f"into the parsed ingest payload's `raw` field; got payload "
+            f"into the ingest payload's `raw` field; got payload "
             f"keys={sorted(payload)!r}",
         )
 

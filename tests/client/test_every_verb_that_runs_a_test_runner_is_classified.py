@@ -1052,9 +1052,9 @@ class TheCensusReadsTheSharedIngestAsTheIngestCallTest(unittest.TestCase):
 # whose one route is `/api/v2/runs`). A call of the shared ingest is its own
 # call site, whichever client function holds it, so its owner reads `SHARED`.
 #
-# The table is shaped per client. Bun and python file every report through
-# the shared ingest, and nothing else; maven, rust and arduino sit at their
-# current routes until CR-CRU-206 moves them, extending this same table.
+# The table is shaped per client. Every client files every report through
+# the shared ingest, and nothing else; what each files beside it is a
+# compile ingest, which carries no report.
 
 RUNS_ROUTE = "/api/v2/runs"
 PARSED_ROUTE = "/api/v2/runs/parsed"
@@ -1118,7 +1118,6 @@ _BUN_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 _PY_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 _MVN_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 _RUST_RUSTC = {("_ingest_rustc_stderr", "post_ingest", COMPILE_ROUTE)}
-_ARDUINO_NATIVE = {("_run_native_tests_body", "post_ingest", PARSED_ROUTE)}
 _ARDUINO_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 
 ROUTE_TABLE = {
@@ -1178,11 +1177,15 @@ ROUTE_TABLE = {
         "workspace-clippy": routes((), _RUST_RUSTC),
     },
     "arduino": {
-        **{verb: routes(_ARDUINO_NATIVE)
+        # Every native `make` verb files its TEST-*.xml through the shared
+        # ingest; a run with no report files nothing.
+        **{verb: routes(_THROUGH_THE_SHARED_INGEST)
            for verb in ("test", "unit", "regression", "module", "integration",
                         "e2e", "bdd")},
-        "pre-merge-gate": routes(_ARDUINO_NATIVE, _ARDUINO_COMPILE),
-        "auto-ingest": routes({("cmd_auto_ingest", "post_ingest", PARSED_ROUTE)}),
+        # The gate's arduino-cli compile step files a compile ingest: no
+        # report. Its whole suite files through the shared ingest.
+        "pre-merge-gate": routes(_THROUGH_THE_SHARED_INGEST, _ARDUINO_COMPILE),
+        "auto-ingest": routes(_THROUGH_THE_SHARED_INGEST),
         "check": routes((), _ARDUINO_COMPILE),
         "compile": routes((), _ARDUINO_COMPILE),
     },
@@ -1220,7 +1223,7 @@ class EveryFilingVerbsRouteAndCallSiteAreTabledTest(unittest.TestCase):
     def test_every_rust_report_verb_files_through_the_shared_ingest_only(self):
         self.assert_client_matches_its_table("rust")
 
-    def test_every_arduino_filing_verb_sits_at_its_current_route(self):
+    def test_every_arduino_report_verb_files_through_the_shared_ingest_only(self):
         self.assert_client_matches_its_table("arduino")
 
     def test_the_table_has_a_row_for_every_filing_verb_and_no_other(self):
@@ -1273,6 +1276,20 @@ class EveryFilingVerbsRouteAndCallSiteAreTabledTest(unittest.TestCase):
             [text for text in live if text in (PARSED_ROUTE, "dataPath")], [],
             "the rust client never posts to the parsed route and never sends "
             "a `dataPath`")
+
+    def test_arduino_states_neither_the_parsed_route_nor_a_data_path(self):
+        # Docstrings may name the route; no live string may.
+        tree = ast.parse(_client_source("arduino"))
+        docstrings = {id(node.value) for node in ast.walk(tree)
+                      if isinstance(node, ast.Expr)
+                      and isinstance(node.value, ast.Constant)}
+        live = [node.value for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in docstrings]
+        self.assertEqual(
+            [text for text in live if text in (PARSED_ROUTE, "dataPath")], [],
+            "the arduino client never posts to the parsed route and never "
+            "sends a `dataPath`")
 
 
 _SYNTHETIC_ROUTED_CLIENT = textwrap.dedent('''

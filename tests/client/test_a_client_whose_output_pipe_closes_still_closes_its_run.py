@@ -77,8 +77,8 @@ RUN_ID = "run-live-1"
 
 # The board's own ingest routes (mirrors `_crucible_axi.RUN_INGEST_PATHS` plus
 # the compile route \u2014 every path an ingest that carries a `runId` can land
-# on, across all five clients: `/api/v2/runs` (mvn/arduino's raw JUnit
-# ingest, and bun's, python's and rust's inline-report ingest), `/api/v2/runs/parsed`
+# on, across all five clients: `/api/v2/runs` (mvn's raw JUnit ingest, and
+# bun's, python's, rust's and arduino's inline-report ingest), `/api/v2/runs/parsed`
 # (a parsed-tree ingest), `/api/v2/runs/compile` (the no-report compile
 # fallback).
 INGEST_PATHS = ("/api/v2/runs", "/api/v2/runs/parsed", "/api/v2/runs/compile")
@@ -149,8 +149,8 @@ class _PipeCloseCase(unittest.TestCase):
         return bool(filed)
 
     def assert_filed_inline_on_the_run_route(self, run_id=RUN_ID):
-        """CR-CRU-204 — bun, python and rust send their runner's reports: the
-        run it filed was
+        """CR-CRU-204 — bun, python, rust and arduino send their runner's
+        reports: the run it filed was
         filed by ONE `POST /api/v2/runs` carrying the JUnit report's text
         inline, never the parsed route."""
         filed = self.filed_posts(run_id)
@@ -259,6 +259,7 @@ class StdoutClosedTest(_PipeCloseCase):
              "--dir", "tests/native", "--project-dir", self.project,
              "--reports", "reports", "--agent", AGENT], self.env())
         self.assert_clean_exit_despite_closed_stdout(rc, err)
+        self.assert_filed_inline_on_the_run_route()
 
 
 # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
@@ -338,7 +339,10 @@ class StderrClosedTest(_PipeCloseCase):
              "--dir", "tests/native", "--project-dir", self.project,
              "--reports", "reports", "--agent", AGENT], self.env())
         self.assert_run_opened()
-        self.assert_run_settled("stderr")
+        if self.assert_run_settled("stderr"):
+            self.assert_filed_inline_on_the_run_route()
+        self.assertNotIn(PARSED, [p for p, _ in self.board.posts()],
+                         f"arduino never files on {PARSED}; posts={self.board.posts()!r}")
 
 
 if __name__ == "__main__":

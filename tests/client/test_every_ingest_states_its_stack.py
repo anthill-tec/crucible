@@ -456,9 +456,9 @@ class _ClientIngestCase(unittest.TestCase):
 
 
 class ArduinoStatesItsStackOnEveryIngestTest(_ClientIngestCase):
-    """arduino: `/runs/compile` through `_ingest_compile`, `/runs/parsed`
-    through the native-test body `_run_native_tests_body` (its `make` spawn
-    replaced by a fake that writes one passing report)."""
+    """arduino: `/runs/compile` through `_ingest_compile`, `/runs` through
+    the native-test body `_run_native_tests_body` and the shared ingest (its
+    `make` spawn replaced by a fake that writes one passing report)."""
 
     CLIENT = "arduino"
 
@@ -490,13 +490,18 @@ class ArduinoStatesItsStackOnEveryIngestTest(_ClientIngestCase):
             self.module._run_native_tests_body(args, "test", None, False,
                                                self.project_dir)
 
-    def test_a_parsed_ingest_states_the_arduino_stack_when_its_start_was_accepted(self):
-        recorder = self.drive(START_ACCEPTED, self._native_tests)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_ACCEPTED)
+    def assert_report_ingest_states_the_stack(self, start_reply):
+        recorder = self.drive(start_reply, self._native_tests)
+        self.assert_ingest_states_the_stack(recorder, RUNS, start_reply)
+        self.assertEqual(recorder.bodies(PARSED), [],
+                         f"arduino files no report on {PARSED}; posted to "
+                         f"{recorder.paths()!r}")
 
-    def test_a_parsed_ingest_states_the_arduino_stack_when_its_start_was_refused(self):
-        recorder = self.drive(START_REFUSED, self._native_tests)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_REFUSED)
+    def test_a_report_ingest_states_the_arduino_stack_when_its_start_was_accepted(self):
+        self.assert_report_ingest_states_the_stack(START_ACCEPTED)
+
+    def test_a_report_ingest_states_the_arduino_stack_when_its_start_was_refused(self):
+        self.assert_report_ingest_states_the_stack(START_REFUSED)
 
 
 class BunStatesItsStackOnEveryIngestTest(_ClientIngestCase):

@@ -504,6 +504,32 @@ def junit_non_skipped_count(paths):
     return count
 
 
+def junit_case_sources(paths):
+    """Each `<testcase>` across the JUnit reports at `paths`, in report order
+    and walked as `junit_testcase_count` walks them, as `(name, stem)`: the
+    case's `name` (`"?"` when it has none), and the stem of its `classname`,
+    else its `file` \u2014 a backslash read as `/`, the basename without its
+    extension, `None` when that is empty or the case carries neither.
+
+    `None` when a report cannot be read or parsed, as `junit_testcase_count`
+    answers: the cases are then unknown."""
+    cases = []
+    for path in paths:
+        try:
+            # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
+            root = ET.parse(path).getroot()  # noqa: S314
+        except (ET.ParseError, OSError) as exc:
+            print(f"[crucible] WARN: could not read the cases in {path} "
+                  f"({exc}) \u2014 it is filed as it stands", file=sys.stderr)
+            return None
+        for case in root.iter("testcase"):
+            source = (case.get("classname") or case.get("file") or "")
+            base = os.path.basename(source.replace("\\", "/"))
+            cases.append((case.get("name") or "?",
+                          os.path.splitext(base)[0] or None))
+    return cases
+
+
 # The health route the shared ingest reads before it sends, and the board
 # version from which a board decodes the reports the clients send inline.
 INGEST_HEALTH_PATH = "/api/health"
@@ -762,21 +788,6 @@ def verb_exit(runner_exit, response):
     if isinstance(failed, int) and failed > 0:
         return 1
     return 0
-
-
-def filed_summary(resp, summary=None):
-    """(PURE) The counts of the run as the BOARD filed it \u2014 the ingest
-    response's `run`, which includes any case the board added \u2014 else
-    `summary`: the client's own parse on a parsed route, `None` where the
-    board decoded the report and the response carries no counts."""
-    run = resp.get("run") if isinstance(resp, dict) else None
-    if isinstance(run, dict) and all(
-            isinstance(run.get(k), int) for k in ("total", "passed", "failed")):
-        pending = run.get("pending")
-        return {"passed": run["passed"], "failed": run["failed"],
-                "pending": pending if isinstance(pending, int) else 0,
-                "total": run["total"]}
-    return summary
 
 
 def emit_ran_nothing(verb, artifact, exit_code, output, run_id, warnings=(),

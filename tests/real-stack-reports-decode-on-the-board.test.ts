@@ -3,7 +3,8 @@
 // `tests/fixtures/reports/<stack>/` holds what each stack's runner wrote on a
 // real run with passing, failing and skipped cases (see the README there), and
 // beside it `expected.json`: that stack's client parse of the same files,
-// frozen by `freeze-client-parse.py` calling the clients' own parsers.
+// frozen by a since-retired script calling the clients' own parsers, before
+// every client sent its reports to the board for it to decode.
 //
 // Each fixture is sent to `POST /api/v2/runs` as its client would send it —
 // `codec: "junit"`, `data` the report texts in the order the client reads

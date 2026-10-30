@@ -918,11 +918,14 @@ class NoBoardNoFiguresTest(_MavenProject, unittest.TestCase):
 # ── AC9 — one ingest line, and the shared module does not grow ─────────────
 
 # Each shared module's line budget is that module's size (its newline count,
-# as the test below counts it) recorded when the run pipeline was split out of
-# the core into its own module, so neither shared module grows unnoticed. The
-# maven client's move to the shared ingest adds nothing to either. A change
-# that grows a shared module re-records its budget here, in the same change.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9088, "_crucible_run.py": 1123}
+# as the test below counts it), so neither shared module grows unnoticed:
+# `_crucible_axi.py`'s recorded when the run pipeline was split out of the core
+# into its own module, `_crucible_run.py`'s re-recorded when the arduino
+# client's move to the shared ingest grew it (`junit_case_sources` in,
+# `filed_summary` out). The maven client's move to the shared ingest adds
+# nothing to either. A change that grows a shared module re-records its budget
+# here, in the same change.
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9088, "_crucible_run.py": 1134}
 _OWN_INGEST_LINES = ("ingest junit:", "ingest parsed:")
 
 
