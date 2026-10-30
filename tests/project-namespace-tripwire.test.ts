@@ -2866,9 +2866,56 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
 // file in its child `bun test`, fired for the right reason, and gets no
 // change.
+//
+// UPDATED 2026-10-30 by CR-CRU-223's CLOSE-OUT (the FIX round, cycle 820).
+// TWO heads move: `src` 830 -> 840 (+10) and `public` 514 -> 532 (+18).
+// MEASURED with this file's own machinery on the feature branch AFTER the
+// branch's last content edit (`acd6520`): the recorded heads 830/514 against
+// a measured 840/532, and `clients` (799) re-measures at its recorded head.
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show b1c2b96:<path>` (the merge-base with `develop`),
+// attributes all twenty-eight. Every one is an ADDITION, and every classified
+// file the branch touches is listed:
+//
+//   src +10:
+//     src/v2.ts 263 -> 268 (+5 `CR-CRU-223`): `RUN_LIVE_RE`, `handleRunLive`
+//       (GET /api/v2/runs/<runId>/live), `openRunBrief`'s docstring and its
+//       `live` field, and `liveCounts`.
+//     src/types.ts 68 -> 71 (+3): `RunLiveFailure` and `RunLive` (+2
+//       `CR-CRU-223`), and `RunLive`'s note that `CR-CRU-200` fills it from
+//       the run's test stream (+1).
+//     src/store.ts 391 -> 393 (+2): `Store#runLive` (+1 `CR-CRU-223`), and
+//       its note that `CR-CRU-200` gives it a body (+1).
+//
+//   public +18:
+//     public/app.js 287 -> 300 (+13): the refresh tick's live read,
+//       `readLive`, `settleLive`, `liveCountText`, `RunningProgress`,
+//       `RunningCard`, `LiveHeadContent`, `detailBodyFor`,
+//       `WorkspaceRunDetail`'s shared live body, `LIVE_ROW_HEIGHT`,
+//       `isLiveRunId` and `LiveRunBody` (+12 `CR-CRU-223`); `RunningCard`'s
+//       comment also names the `CR-CRU-017` "not clickable" rule it narrows
+//       (+1).
+//     public/styles.css 83 -> 88 (+5): the live drill-in's `.app-live-*`
+//       block, the running card's live state and `.app-evt-running`'s
+//       rewritten comment (+3 `CR-CRU-223`); that comment now names
+//       `CR-CRU-017`'s user rule (+1), and the phone band's touch floor for
+//       the now-clickable card cites `CR-CRU-018` (+1).
+//
+// A NET GAIN of twenty-eight, and stated as one: the branch adds the live
+// view's lineage on the constructs it adds or rewords, and removes no
+// citation. `src` (840) and `public` (532) stay above their 512 and 378
+// floors, so the directional half holds.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the branch's last content edit, so
+// these are its final figures and not a mid-cycle reading. It clears the
+// CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
+// file in its child `bun test`, fired for the right reason, and gets no
+// change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 830 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 514 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 840 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 532 },
   clients: { exts: [".py"], develop: 601, head: 799 },
 };
 
