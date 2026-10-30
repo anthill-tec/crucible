@@ -3,11 +3,11 @@
 The arduino body that runs a test runner — `_run_native_tests` (`test`,
 `unit`, `regression`, the declared make targets, `pre-merge-gate`) — sends the
 runner's exit (`make`'s, the process whose report it files) as `runnerExit` on
-its ingest, builds its envelope's `run:` counts from the ingest response's
-`run` (its own parse when the response carries none), and exits non-zero
-whenever the runner exited non-zero, the ingest was not `ok`, or the run it
-filed has a failure. A run without `--agent` files nothing and exits non-zero
-when the runner did or its report records a failure.
+its one `/api/v2/runs` ingest, builds its envelope's `run:` counts from the
+ingest response's `run`, and exits non-zero whenever the runner exited
+non-zero, the ingest was not `ok`, or the run it filed has a failure. A run
+without `--agent` files nothing and exits with the runner's exit, whatever its
+report records.
 
 `ArduinoRunnerExitOnARealBoardTest`
     End to end against a REAL scratch board (`tests/client/real_board.py`):
@@ -23,9 +23,9 @@ when the runner did or its report records a failure.
     and the exit of a clean runner whose ingest was refused.
 
 `ArduinoRunWithoutAgentExitsOnItsRunnerTest`
-    No `--agent`: nothing is filed, and the exit is non-zero when the runner
-    exited non-zero over a clean report or exited 0 over a failing one; a
-    clean runner over a clean report exits 0.
+    No `--agent`: nothing is filed, and the exit is the runner's: non-zero
+    when the runner exited non-zero over a clean report, 0 when it exited 0
+    over a failing one or over a clean one.
 
 Every run drives the real `clients/arduino-crucible.py` as a subprocess, with a
 fake `make` first on PATH that writes its JUnit report into `REPORTS_DIR`
@@ -60,7 +60,7 @@ ARDUINO_CLIENT = CLIENTS / "arduino-crucible.py"
 TIMEOUT = 120
 NATIVE_DIR = "tests/native"
 
-PARSED_INGEST = "/api/v2/runs/parsed"
+RUNS_INGEST = "/api/v2/runs"
 
 # Keys that would let the shell running this suite decide what the client
 # resolves or how it files: scrubbed from every drive.
@@ -246,11 +246,11 @@ class ArduinoRunnerExitOnARealBoardTest(_FakeMakeProject, unittest.TestCase):
 
     def test_unit_whose_runner_exits_1_over_a_passing_report_files_the_runner_case(self):
         self.assert_filed_red_with_the_runner_case(
-            "unit", "ard-runner-exit-unit-parsed", ("--reports", "reports"))
+            "unit", "ard-runner-exit-unit-filed", ("--reports", "reports"))
 
     def test_pre_merge_gate_whose_runner_exits_1_over_a_passing_report_is_not_green(self):
         self.assert_filed_red_with_the_runner_case(
-            "pre-merge-gate", "ard-runner-exit-gate-parsed", ("--skip-check",))
+            "pre-merge-gate", "ard-runner-exit-gate-filed", ("--skip-check",))
 
     def test_a_runner_killed_by_sigkill_files_exit_137(self):
         agent = "ard-runner-exit-test-sigkill"
@@ -327,42 +327,43 @@ class ArduinoRunnerExitReachesTheIngestTest(_FakeMakeProject, unittest.TestCase)
     def drive_reported(self, verb, agent, **fake_env):
         return self.drive(verb, agent, ("--reports", "reports"), **fake_env)
 
-    def test_a_clean_test_run_sends_runner_exit_0_on_the_parsed_ingest(self):
+    def test_a_clean_test_run_sends_runner_exit_0_on_the_runs_ingest(self):
         result = self.drive_reported("test", "ard-runner-exit-carry-clean",
                                      FAKE_EXIT="0")
-        self.assert_runner_exit(self.the_one_ingest(PARSED_INGEST, result), 0)
+        self.assert_runner_exit(self.the_one_ingest(RUNS_INGEST, result), 0)
 
-    def test_a_test_runner_exiting_1_sends_runner_exit_1_on_the_parsed_ingest(self):
+    def test_a_test_runner_exiting_1_sends_runner_exit_1_on_the_runs_ingest(self):
         result = self.drive_reported("test", "ard-runner-exit-carry-test",
                                      FAKE_EXIT="1")
-        self.assert_runner_exit(self.the_one_ingest(PARSED_INGEST, result), 1)
+        self.assert_runner_exit(self.the_one_ingest(RUNS_INGEST, result), 1)
 
-    def test_a_regression_runner_exiting_1_sends_runner_exit_1_on_the_parsed_ingest(self):
+    def test_a_regression_runner_exiting_1_sends_runner_exit_1_on_the_runs_ingest(self):
         result = self.drive_reported("regression", "ard-runner-exit-carry-regression",
                                      FAKE_EXIT="1")
-        self.assert_runner_exit(self.the_one_ingest(PARSED_INGEST, result), 1)
+        self.assert_runner_exit(self.the_one_ingest(RUNS_INGEST, result), 1)
 
     def test_a_runner_killed_by_sigkill_sends_runner_exit_137(self):
         result = self.drive_reported("test", "ard-runner-exit-carry-sigkill",
                                      FAKE_SIGNAL="KILL")
-        self.assert_runner_exit(self.the_one_ingest(PARSED_INGEST, result),
+        self.assert_runner_exit(self.the_one_ingest(RUNS_INGEST, result),
                                 128 + int(signal.SIGKILL))
 
     def test_a_refused_ingest_after_a_clean_test_runner_exits_non_zero(self):
         self.board.refuse_ingest_for("run-live-1")
         result = self.drive_reported("test", "ard-runner-exit-refused-test",
                                      FAKE_EXIT="0")
-        self.the_one_ingest(PARSED_INGEST, result)
+        self.the_one_ingest(RUNS_INGEST, result)
         self.assertNotEqual(result.returncode, 0,
                             f"a refused ingest never exits green; "
                             f"{_diagnostics(result)}")
 
 
-# ── No `--agent`: nothing filed, the exit is the runner's and the report's ──
+# ── No `--agent`: nothing filed, the exit is the runner's ──────────────────
 
 class ArduinoRunWithoutAgentExitsOnItsRunnerTest(_FakeMakeProject, unittest.TestCase):
-    """A run without `--agent` files nothing; it exits non-zero when the
-    runner did or its report records a failure."""
+    """A run without `--agent` files nothing; it exits with the runner's
+    exit, which the make contract requires to be non-zero when a test binary
+    fails."""
 
     PROJECT_KEY = "ard-runner-exit-no-agent-key"
 
@@ -381,11 +382,13 @@ class ArduinoRunWithoutAgentExitsOnItsRunnerTest(_FakeMakeProject, unittest.Test
                          f"a run without --agent files nothing; "
                          f"{_diagnostics(result)}")
 
-    def test_a_runner_exiting_0_over_a_failing_report_exits_non_zero(self):
+    def test_a_runner_exiting_0_over_a_failing_report_exits_zero(self):
+        # The run files nothing and reads no failure count from its report:
+        # its exit is the runner's.
         result = self.drive("test", FAKE_EXIT="0", FAKE_REPORT="failing")
-        self.assertNotEqual(result.returncode, 0,
-                            f"a report recording a failure never exits green; "
-                            f"{_diagnostics(result)}")
+        self.assertEqual(result.returncode, 0,
+                         f"a run without --agent exits with the runner's exit; "
+                         f"{_diagnostics(result)}")
         self.assert_nothing_filed(result)
 
     def test_a_runner_exiting_1_over_a_clean_report_exits_non_zero(self):
