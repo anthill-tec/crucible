@@ -1,7 +1,9 @@
-"""A run's ingest helpers live once, in the shared module.
+"""A run's ingest helpers live once, in the shared modules.
 
-`clients/_crucible_axi.py` holds the three pieces every client that reaches
-the shared ingest needs, once:
+The shared modules (`clients/_crucible_axi.py`, the core every client loads,
+and `clients/_crucible_run.py`, the run pipeline the core loads and
+re-exports) hold the three pieces every client that reaches the shared ingest
+needs, once:
 
   * `filed_run(resp)` (PURE) — the answer's `run` block, `{}` when the run was
     not filed;
@@ -18,9 +20,10 @@ The bun and python clients keep no copy. A source scan of each asserts:
     begins with `ingest: ` — the human ingest line is printed by
     `ingest_reports` itself (`auto-ingest: ok=False …` and
     `ingest compile (python): ok=…` are other lines and do not match);
-  * bun's `cmd_regression` and `_emit_ingest_axi`, and python's
-    `_emit_ingest_axi` and `_regression_run`, call `_axi().filed_run` /
-    `_axi().coverage_not_measured_warning` where they called the client's own;
+  * bun's `cmd_regression` and python's `_regression_run` call
+    `_axi().filed_run` / `_axi().coverage_not_measured_warning` where they
+    called the client's own, and bun's and python's `_emit_ingest_axi` call
+    the one run emitter, `_axi().emit_run_axi`, which reads `filed_run`;
   * `_file_reports`'s only statement besides an optional docstring is
     `return _axi().ingest_reports(...)`, with the arguments it passes today.
 
@@ -49,7 +52,7 @@ CLIENTS = REPO_ROOT / "clients"
 
 OWN_FUNCTIONS = ("_filed_run", "_coverage_not_measured_warning")
 OWN_CONSTANT = "COVERAGE_NOT_MEASURED_CODE"
-SHARED_FUNCTIONS = ("coverage_not_measured_warning", "filed_run")
+SHARED_FUNCTIONS = ("coverage_not_measured_warning", "emit_run_axi", "filed_run")
 INGEST_LINE_PREFIX = "ingest: "
 
 # Where each client called its own copies, and so where it now calls the
@@ -57,10 +60,10 @@ INGEST_LINE_PREFIX = "ingest: "
 CALL_SITES = {
     "bun-crucible.py": {
         "cmd_regression": ("coverage_not_measured_warning", "filed_run"),
-        "_emit_ingest_axi": ("filed_run",),
+        "_emit_ingest_axi": ("emit_run_axi",),
     },
     "python-crucible.py": {
-        "_emit_ingest_axi": ("filed_run",),
+        "_emit_ingest_axi": ("emit_run_axi",),
         "_regression_run": ("coverage_not_measured_warning", "filed_run"),
     },
 }
@@ -413,31 +416,40 @@ class TheRustClientFilesThroughOneSharedIngestCallTest(unittest.TestCase):
 
 
 class TheSharedModuleDefinesTheIngestHelpersOnceTest(unittest.TestCase):
-    """`_crucible_axi.py` defines each helper at its top level, once, and each
-    does what both clients' copies did."""
+    """The shared modules define each helper at the top level, once between
+    them, and each does what both clients' copies did."""
 
-    @classmethod
-    def setUpClass(cls):
-        cls.tree = ast.parse((CLIENTS / "_crucible_axi.py").read_text(encoding="utf-8"))
+    SHARED_MODULES = ("_crucible_axi.py", "_crucible_run.py")
 
     def setUp(self):
         self.axi = load_client("_crucible_axi.py")
 
+    def trees(self):
+        trees = []
+        for name in self.SHARED_MODULES:
+            path = CLIENTS / name
+            self.assertTrue(path.is_file(), f"the shared module {name} exists")
+            trees.append(ast.parse(path.read_text(encoding="utf-8")))
+        return trees
+
     def top_level_definitions(self, name):
         count = 0
-        for node in self.tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
-                count += 1
-            elif isinstance(node, ast.Assign):
-                count += sum(1 for t in node.targets
-                             if isinstance(t, ast.Name) and t.id == name)
+        for tree in self.trees():
+            for node in tree.body:
+                if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and node.name == name):
+                    count += 1
+                elif isinstance(node, ast.Assign):
+                    count += sum(1 for t in node.targets
+                                 if isinstance(t, ast.Name) and t.id == name)
         return count
 
     def test_each_helper_is_defined_once_at_the_top_level(self):
         for name in ("filed_run", "coverage_not_measured_warning", OWN_CONSTANT):
             with self.subTest(name=name):
                 self.assertEqual(self.top_level_definitions(name), 1,
-                                 f"_crucible_axi.py defines `{name}` exactly once")
+                                 f"the shared modules define `{name}` exactly "
+                                 f"once between them")
 
     def test_the_coverage_not_measured_code_is_its_warning_code(self):
         self.assertEqual(self.axi.COVERAGE_NOT_MEASURED_CODE, "coverage-not-measured")
