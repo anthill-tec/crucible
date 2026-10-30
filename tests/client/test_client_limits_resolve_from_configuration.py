@@ -160,13 +160,16 @@ TOON_MODULE_PATH = CLIENTS_DIR / "toon.py"
 #: fixture's scratch fleet beside the module that reads it (see `setUp`).
 SHIPPED_DATA_PATH = CLIENTS_DIR / "crucible.toml"
 
+#: The run pipeline the shared module loads BY FILE PATH from its own directory.
+RUN_MODULE_PATH = CLIENTS_DIR / "_crucible_run.py"
+
 #: The files the fixture's scratch fleet carries: the shared module under test,
-#: the client whose REAL entry point some cases drive, the codec that client
-#: loads BY FILE PATH from its own directory, and the shipped package data the
-#: loader falls back to. A clients-only copy lays down a module that cannot
-#: resolve anything.
-_SCRATCH_FLEET = (AXI_MODULE_PATH, BUN_CLIENT_PATH, TOON_MODULE_PATH,
-                  SHIPPED_DATA_PATH)
+#: the run module it loads from its own directory, the client whose REAL entry
+#: point some cases drive, the codec that client loads BY FILE PATH from its
+#: own directory, and the shipped package data the loader falls back to. A
+#: clients-only copy lays down a module that cannot resolve anything.
+_SCRATCH_FLEET = (AXI_MODULE_PATH, RUN_MODULE_PATH, BUN_CLIENT_PATH,
+                  TOON_MODULE_PATH, SHIPPED_DATA_PATH)
 
 #: The four fields §S1b requires of every limit -- DOCUMENTATION, all of it.
 #: A vocabulary, not a limit. `value` is deliberately NOT one of them: it is
