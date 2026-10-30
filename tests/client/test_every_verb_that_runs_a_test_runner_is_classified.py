@@ -1277,6 +1277,20 @@ class EveryFilingVerbsRouteAndCallSiteAreTabledTest(unittest.TestCase):
             "the rust client never posts to the parsed route and never sends "
             "a `dataPath`")
 
+    def test_arduino_states_neither_the_parsed_route_nor_a_data_path(self):
+        # Docstrings may name the route; no live string may.
+        tree = ast.parse(_client_source("arduino"))
+        docstrings = {id(node.value) for node in ast.walk(tree)
+                      if isinstance(node, ast.Expr)
+                      and isinstance(node.value, ast.Constant)}
+        live = [node.value for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in docstrings]
+        self.assertEqual(
+            [text for text in live if text in (PARSED_ROUTE, "dataPath")], [],
+            "the arduino client never posts to the parsed route and never "
+            "sends a `dataPath`")
+
 
 _SYNTHETIC_ROUTED_CLIENT = textwrap.dedent('''
     import argparse
