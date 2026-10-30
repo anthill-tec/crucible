@@ -7,7 +7,10 @@ and the scan exempts only those: `junit_testcase_count` and
 `junit_non_skipped_count` ("ran nothing" and bun's filter check) in either
 client, and in the bun client alone `_raw_report_result_count` (a Playwright
 report's result count, until that report retires). The python client has no
-raw report, so its scan exempts the two JUnit counts and nothing else.
+raw report, so its scan exempts the two JUnit counts and nothing else. The
+maven client calls the shared counts and defines none, so its scan exempts one
+function alone, `_read_declared_profile`: its read of the project's own
+`pom.xml` for a tier profile is not a report parse.
 
 The scan reads a module's syntax tree, never its text, so a docstring or a
 comment that names a report shape is not a parse:
@@ -24,7 +27,11 @@ comment that names a report shape is not a parse:
     result lines alone (`(?:✗|\\(fail\\))`), the source echo gutter of a test
     declaration, and the caret line under it. The live narration's own
     completion pattern, which counts passing and failing lines alike, is a
-    stream reader and not a parse.
+    stream reader and not a parse;
+  * JaCoCo summation — a call of a CSV reader (`csv.reader`,
+    `csv.DictReader`), or a JaCoCo counter column named (`LINE_COVERED`,
+    `LINE_MISSED`, `METHOD_COVERED`, `METHOD_MISSED`, `BRANCH_COVERED`,
+    `BRANCH_MISSED`).
 
 The checker is proved on synthetic sources (a violation of each kind, an
 exempt count, and a clean client) before it is pointed at a real module.
@@ -46,6 +53,8 @@ EXEMPT = ("junit_testcase_count", "junit_non_skipped_count",
           "_raw_report_result_count")
 # The python client's exemptions: the two JUnit counts, never bun's raw one.
 PYTHON_EXEMPT = ("junit_testcase_count", "junit_non_skipped_count")
+# The maven client's one exemption: its POM read for a declared tier profile.
+MVN_EXEMPT = ("_read_declared_profile",)
 
 XML_MODULES = ("ET", "ElementTree", "etree", "minidom")
 XML_PARSERS = ("parse", "fromstring", "iterparse", "XML", "parseString")
@@ -58,9 +67,13 @@ CONSOLE_MARKERS = (
     r"\s*\|\s*(?:test|it)",
     r"^\s*\^\s*$",
 )
+CSV_READERS = ("reader", "DictReader")
+JACOCO_COLUMNS = ("LINE_COVERED", "LINE_MISSED", "METHOD_COVERED",
+                  "METHOD_MISSED", "BRANCH_COVERED", "BRANCH_MISSED")
 
 JUNIT, CLASSNAME, LCOV, CONSOLE = ("JUnit parse", "classname grouping",
                                    "lcov summation", "console parse")
+JACOCO = "JaCoCo summation"
 
 
 def _docstring_nodes(tree):
@@ -81,6 +94,8 @@ def _findings_in(node, owner, docstrings):
                     and isinstance(n.args[0], ast.Constant)
                     and n.args[0].value in JUNIT_ELEMENTS):
                 found.append((owner, JUNIT, f".{n.func.attr}({n.args[0].value!r})"))
+            if n.func.attr in CSV_READERS and base == "csv":
+                found.append((owner, JACOCO, f"csv.{n.func.attr}"))
         if (isinstance(n, ast.Constant) and isinstance(n.value, str)
                 and id(n) not in docstrings):
             text = n.value
@@ -91,6 +106,8 @@ def _findings_in(node, owner, docstrings):
             for marker in CONSOLE_MARKERS:
                 if marker in text:
                     found.append((owner, CONSOLE, marker))
+            if text in JACOCO_COLUMNS:
+                found.append((owner, JACOCO, text))
     return found
 
 
@@ -245,6 +262,95 @@ class TheReportParseScanIsProvedOnSyntheticSourcesTest(unittest.TestCase):
                          "under bun's exemptions the same function is exempt")
 
 
+_CLEAN_JACOCO_CLIENT = textwrap.dedent(r'''
+    """A client that names `LINE_COVERED` and `csv.DictReader` only in its
+    docstrings, as prose, and sends every `jacoco.csv` it finds."""
+    import csv
+    import glob
+    import xml.etree.ElementTree as ET
+
+    JACOCO_CSV = "jacoco.csv"
+
+    def _read_declared_profile(pom, target):
+        for element in ET.parse(pom).getroot().iter():
+            if element.tag.endswith("id") and element.text == target:
+                return target
+        return None
+
+    def _coverage_paths(maven_dir):
+        """Every JaCoCo CSV, sent as it is; LINE_COVERED is never summed."""
+        return sorted(glob.glob(maven_dir + "/**/target/site/jacoco/" + JACOCO_CSV,
+                                recursive=True))
+
+    def _write_summary(rows, path):
+        with open(path, "w") as handle:
+            csv.writer(handle).writerows(rows)
+''')
+
+_VIOLATING_JACOCO_CLIENT = textwrap.dedent(r'''
+    import csv
+
+    _BRANCH_COLUMNS = ("BRANCH_MISSED", "BRANCH_COVERED")
+
+    def _sum_jacoco(path):
+        covered = missed = 0
+        with open(path) as handle:
+            for row in csv.DictReader(handle):
+                covered += int(row["LINE_COVERED"])
+                missed += int(row["LINE_MISSED"])
+        return covered, missed
+
+    def _sum_methods(path):
+        rows = list(csv.reader(open(path)))
+        header = rows[0]
+        return sum(int(r[header.index("METHOD_COVERED")]) for r in rows[1:]), \
+            sum(int(r[header.index("METHOD_MISSED")]) for r in rows[1:])
+''')
+
+
+class TheJacocoSummationScanIsProvedOnSyntheticSourcesTest(unittest.TestCase):
+
+    def test_every_csv_reader_call_and_counter_column_is_a_jacoco_summation(self):
+        findings = report_parse_findings(_VIOLATING_JACOCO_CLIENT, MVN_EXEMPT)
+        self.assertEqual(
+            findings,
+            sorted([
+                ("<module>", JACOCO, "BRANCH_COVERED"),
+                ("<module>", JACOCO, "BRANCH_MISSED"),
+                ("_sum_jacoco", JACOCO, "csv.DictReader"),
+                ("_sum_jacoco", JACOCO, "LINE_COVERED"),
+                ("_sum_jacoco", JACOCO, "LINE_MISSED"),
+                ("_sum_methods", JACOCO, "csv.reader"),
+                ("_sum_methods", JACOCO, "METHOD_COVERED"),
+                ("_sum_methods", JACOCO, "METHOD_MISSED"),
+            ]),
+            _lines(findings))
+
+    def test_a_client_that_sends_its_csvs_and_reads_its_pom_has_no_finding(self):
+        self.assertEqual(report_parse_findings(_CLEAN_JACOCO_CLIENT, MVN_EXEMPT), [],
+                         _lines(report_parse_findings(_CLEAN_JACOCO_CLIENT,
+                                                      MVN_EXEMPT)))
+
+    def test_the_pom_read_is_the_maven_clients_only_exemption(self):
+        # The same POM read under another name is a parse, and the shared
+        # JUnit counts, defined in a maven client, are not exempt.
+        renamed = _CLEAN_JACOCO_CLIENT.replace("def _read_declared_profile",
+                                               "def _read_pom")
+        self.assertEqual(report_parse_findings(renamed, MVN_EXEMPT),
+                         [("_read_pom", JUNIT, "ET.parse")],
+                         _lines(report_parse_findings(renamed, MVN_EXEMPT)))
+        with_count = _CLEAN_JACOCO_CLIENT + textwrap.dedent('''
+            def junit_testcase_count(paths):
+                return sum(1 for p in paths
+                           for _ in ET.parse(p).getroot().iter("testcase"))
+        ''')
+        self.assertEqual(
+            report_parse_findings(with_count, MVN_EXEMPT),
+            [("junit_testcase_count", JUNIT, ".iter('testcase')"),
+             ("junit_testcase_count", JUNIT, "ET.parse")],
+            _lines(report_parse_findings(with_count, MVN_EXEMPT)))
+
+
 class TheBunClientParsesNoReportTest(unittest.TestCase):
 
     def test_the_bun_client_module_defines_no_report_parse(self):
@@ -268,6 +374,21 @@ class ThePythonClientParsesNoReportTest(unittest.TestCase):
         self.assertEqual(
             findings, [],
             "the python client parses none of its runner's reports; found:\n"
+            + _lines(findings))
+
+
+class TheMavenClientParsesNoReportTest(unittest.TestCase):
+
+    def test_the_maven_client_module_defines_no_report_parse(self):
+        """No JUnit parse, no JaCoCo summation and no classname grouping in
+        `mvn-crucible.py`: only its POM read for a declared tier profile is
+        exempt."""
+        findings = report_parse_findings(
+            (CLIENTS / "mvn-crucible.py").read_text(encoding="utf-8"),
+            MVN_EXEMPT)
+        self.assertEqual(
+            findings, [],
+            "the maven client parses none of its runner's reports; found:\n"
             + _lines(findings))
 
 

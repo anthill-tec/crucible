@@ -45,7 +45,7 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 | 3 | `/api/agents/heartbeat` | POST | Register agent + heartbeat (same endpoint for both) | all clients |
 | 4 | `/api/agents/remove` | POST | Unregister agent | all clients |
 | 5 | `/api/agents` | GET | List agents, optional `?projectKey=` | skill tables |
-| 6 | `/api/ingest` | POST | Raw ingest — server parses (format `junit`, `data` or `dataPath`) | `_ingest_junit_axi` in `clients/rust-crucible.py`, `_ingest_junit_dir` in `clients/mvn-crucible.py` |
+| 6 | `/api/ingest` | POST | Raw ingest — server parses (format `junit`, `data` or `dataPath`) | `_ingest_junit_axi` in `clients/rust-crucible.py` |
 | 7 | `/api/ingest/parsed` | POST | Pre-parsed ingest (summary + tree + optional coverage) | all clients |
 | 8 | `/api/ingest/compile` | POST | Compile/import failure ingest (errors text, optional format) | all clients |
 | 9 | `/api/ingest/clear` | POST | Clear ingested state for a project | skill tables |
@@ -179,8 +179,8 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 | Client | Stack | Calls |
 |---|---|---|
 | `rust-crucible.py` | Rust/nextest/llvm-cov | heartbeat, remove, ingest (junit dataPath), ingest/compile (rustc), ingest/parsed (+coverage) |
-| `mvn-crucible.py` | Java/surefire/failsafe/JaCoCo | heartbeat (identity), remove, ingest (junit dir dataPath), ingest/parsed (+branches coverage), ingest/compile (no format) |
-| `python-crucible.py` | pytest/unittest/coverage.py | heartbeat, remove, ingest (junit), ingest/parsed, ingest/compile (python) |
+| `mvn-crucible.py` | Java/surefire/failsafe/JaCoCo | heartbeat (identity), remove, ingest (`/api/v2/runs`, reports inline: `junit` + `jacoco`), ingest/compile (no format) |
+| `python-crucible.py` | pytest/unittest/coverage.py | heartbeat, remove, ingest (`/api/v2/runs`, reports inline: `junit` + `lcov`), ingest/compile (python) |
 | `bun-crucible.py` | bun test/lcov | heartbeat (identity+repoPath), remove, ingest (`/api/v2/runs`, reports inline), ingest/compile (typescript) |
 | `arduino-crucible.py` | native g++/arduino-cli | **projects/add**, heartbeat, remove, ingest/parsed, ingest/compile (no format) |
 | `hw-crucible.py` | (21-line shim) | delegates |

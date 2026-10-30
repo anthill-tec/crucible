@@ -73,6 +73,7 @@ from unittest import mock
 # installed project has; the fleet census owns that helper (one fixture shape
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
 from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client.live_run_harness import get_answering_health
 
 # CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
 # this client register, and through what?", reused rather than re-derived.
@@ -93,6 +94,8 @@ PASS_SUREFIRE_XML = (
     '<testcase name="test_passes" time="0.001"/>'
     '</testsuite>'
 )
+# The `run` block a board answers an ingest of one passing case with.
+_ONE_PASSED_RUN = {"passed": 1, "failed": 0, "pending": 0, "total": 1, "files": 1}
 
 _RELAY_MARKER = "mvn-gate-axi-relay-marker-999"
 _FINAL_SNAPSHOT = (
@@ -1191,9 +1194,13 @@ class MvnCrucibleCycleBindingTest(_BaseMvnAxiTest):
 
     def test_ingest_verb_never_calls_get_and_sends_no_resolved_cycle_in_context(self):
         self._write_surefire_report()
-        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+        # Health answers as a board that decodes the reports, so the shared
+        # ingest sends; every other read is the tolerant failure.
+        with mock.patch.object(self.module, "_post",
+                                return_value={"ok": True, "run": _ONE_PASSED_RUN},
                                 create=True) as post_mock, \
-             mock.patch.object(self.module, "_get", create=True) as get_mock:
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
+                               create=True) as get_mock:
             code, out, _err = _run_main(self.module, [
                 "auto-ingest", "--agent", "CR-M-auto", "--project-dir", self.tmpdir,
             ])
@@ -1225,7 +1232,9 @@ class MvnCrucibleToolchainTest(_BaseMvnAxiTest):
         with mock.patch.object(self.module, "_post",
                                 return_value={"ok": True,
                                                "run": {"passed": 1, "failed": 0, "total": 1}},
-                                create=True) as post_mock:
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
+                               create=True):
             code, out, _err = _run_main(self.module, [
                 "test", "--project-dir", self.tmpdir, "--agent", "CR-M-toolchain",
             ])
@@ -1244,13 +1253,11 @@ class MvnCrucibleToolchainTest(_BaseMvnAxiTest):
             "client-resolved cycleId -- attachment is server-stamped",
         )
 
-    def test_regression_verb_includes_captured_runner_output_as_raw_in_parsed_payload(self):
-        """CR-CRU-038 §S2b -- the `regression` verb ALWAYS ingests through
-        `_ingest_parsed` (never the single-dir server-parse fast path). Its
+    def test_regression_verb_includes_captured_runner_output_as_raw_in_its_runs_ingest(self):
+        """The `regression` verb files through the shared ingest. Its
         `_run_logged` call captures the combined mvn stdout+stderr whenever
         `--log` (or a narrator) forces the streaming capture branch; that
-        captured output must flow into the /api/v2/runs/parsed payload as
-        `raw`. Fails today -- `_ingest_parsed` builds no `raw` key at all."""
+        captured output flows into the `/api/v2/runs` body as `raw`."""
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         marker = "MVN_RAW_CAPTURE_MARKER_5533"
         fake_mvnw_body = (
@@ -1266,31 +1273,30 @@ class MvnCrucibleToolchainTest(_BaseMvnAxiTest):
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
              mock.patch.object(self.module, "_get",
-                                return_value=self._active_cycle_plans(51),
+                                side_effect=get_answering_health(
+                                    self._active_cycle_plans(51)),
                                 create=True):
             code, out, _err = _run_main(self.module, [
                 "regression", "--project-dir", self.tmpdir, "--agent", "CR-M-raw",
                 "--log", log_path,
             ])
         self.assertEqual(code, 0, f"stdout={out!r}")
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        self.assertIsNotNone(ingest_call, "the regression run must actually be POSTed to /runs/parsed")
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+                          "the regression run is never posted to the parsed route")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
+        self.assertIsNotNone(ingest_call, "the regression run must actually be POSTed to /runs")
         payload = ingest_call[0][1]
         self.assertIn(
             marker, payload.get("raw") or "",
             f"the real captured mvn regression runner output must flow into "
-            f"the parsed ingest payload's `raw` field; got payload keys={sorted(payload)!r}",
+            f"the ingest payload's `raw` field; got payload keys={sorted(payload)!r}",
         )
 
-    def test_bare_regression_verb_without_log_flag_still_includes_raw_in_parsed_payload(self):
-        """CR-CRU-038 §S9 (VERIFY SHOULD-FIX, C6): raw capture must be UNIFORM,
-        not gated behind `--log`. `_regression_run` builds no narrator, so
-        `_run_logged` only takes the streaming-capture branch when `--log` is
-        passed; a bare `mvn regression --agent X` (no `--log`) falls through to
-        the plain `subprocess.run(...)` branch, whose CompletedProcess has
-        `stdout=None` -- so `raw` is silently omitted from the
-        /api/v2/runs/parsed payload for exactly the high-value failing-run
-        diagnostic case. Fails today for that reason."""
+    def test_bare_regression_verb_without_log_flag_still_includes_raw_in_its_runs_ingest(self):
+        """Raw capture is UNIFORM, not gated behind `--log`: a bare
+        `mvn regression --agent X` (no `--log`) still sends the real runner
+        output as `raw` on its `/api/v2/runs` body, for exactly the
+        high-value failing-run diagnostic case."""
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         marker = "MVN_RAW_CAPTURE_MARKER_9911_NO_LOG"
         fake_mvnw_body = (
@@ -1305,14 +1311,17 @@ class MvnCrucibleToolchainTest(_BaseMvnAxiTest):
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
              mock.patch.object(self.module, "_get",
-                                return_value=self._active_cycle_plans(51),
+                                side_effect=get_answering_health(
+                                    self._active_cycle_plans(51)),
                                 create=True):
             code, out, _err = _run_main(self.module, [
                 "regression", "--project-dir", self.tmpdir, "--agent", "CR-M-raw-nolog",
             ])
         self.assertEqual(code, 0, f"stdout={out!r}")
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        self.assertIsNotNone(ingest_call, "the regression run must actually be POSTed to /runs/parsed")
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+                          "the regression run is never posted to the parsed route")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
+        self.assertIsNotNone(ingest_call, "the regression run must actually be POSTed to /runs")
         payload = ingest_call[0][1]
         self.assertIn(
             marker, payload.get("raw") or "",

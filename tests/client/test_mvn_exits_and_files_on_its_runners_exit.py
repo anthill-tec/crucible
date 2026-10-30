@@ -3,10 +3,9 @@
 Every maven body that runs a test runner — `_surefire_tier_run` (`unit`,
 `module`, the declared profiles), `_failsafe_tier_run` (`integration`, `e2e`),
 `cmd_regression` (`regression`, `pre-merge-gate`) and `_test_run` (`test`) —
-sends the runner's exit as `runnerExit` on its ingest, on both the
-junit-directory route (`/api/v2/runs`, the board decodes the reports) and the
-parsed route (`/api/v2/runs/parsed`), builds its envelope's `run:` counts from
-the ingest response's `run`, and exits non-zero whenever the runner exited
+sends the runner's exit as `runnerExit` on its one `/api/v2/runs` ingest (the
+board decodes the reports the client sends inline; nothing goes to the parsed
+route), builds its envelope's `run:` counts from the ingest response's `run`, and exits non-zero whenever the runner exited
 non-zero, the ingest was not `ok`, or the run it filed has a failure. A run
 with no report exits non-zero when the runner did: the compile ingest's code
 never decides it. The board, handed a non-zero `runnerExit` over a run that
@@ -15,9 +14,8 @@ records no failure, adds one failing case — suite `runner`, case `exit <n>`.
 `MavenRunnerExitOnARealBoardTest`
     End to end against a REAL scratch board (`tests/client/real_board.py`):
     a fake `mvnw` whose build exits 1 over passing-only surefire/failsafe
-    reports, through `unit` and `test` (the junit-directory route) and
-    `module` over two report files, `integration`, `regression` and
-    `pre-merge-gate` (the parsed route) — the stored run carries the
+    reports, through `unit`, `test`, `module` over two report files,
+    `integration`, `regression` and `pre-merge-gate` — the stored run carries the
     `runner / exit 1` case, the envelope's `run` counts include it, and the
     verb exits non-zero. A build killed by SIGKILL files `exit 137`. A failing
     report makes `unit` and `module` exit non-zero even when maven itself
@@ -290,30 +288,29 @@ class MavenRunnerExitOnARealBoardTest(_FakeMavenProject, unittest.TestCase):
     # -- one verb per body and per ingest route -----------------------------
 
     def test_unit_whose_build_exits_1_over_a_passing_report_files_the_runner_case(self):
-        # The junit-directory route: the board decodes the reports.
         self.assert_filed_red_with_the_runner_case(
-            "unit", "mvn-runner-exit-unit-junit-dir")
+            "unit", "mvn-runner-exit-unit")
 
     def test_test_whose_build_exits_1_over_a_passing_report_files_the_runner_case(self):
         self.assert_filed_red_with_the_runner_case(
-            "test", "mvn-runner-exit-test-junit-dir")
+            "test", "mvn-runner-exit-test")
 
     def test_module_over_two_report_files_whose_build_exits_1_files_the_runner_case(self):
-        # Two report files pooled in the run's own directory: the parsed route.
+        # Two report files pooled in the run's own directory, both sent.
         self.assert_filed_red_with_the_runner_case(
-            "module", "mvn-runner-exit-module-parsed", classes=2)
+            "module", "mvn-runner-exit-module-pooled", classes=2)
 
     def test_integration_whose_build_exits_1_over_a_passing_report_files_the_runner_case(self):
         self.assert_filed_red_with_the_runner_case(
-            "integration", "mvn-runner-exit-integration-parsed")
+            "integration", "mvn-runner-exit-integration")
 
     def test_regression_whose_build_exits_1_over_a_passing_report_files_the_runner_case(self):
         self.assert_filed_red_with_the_runner_case(
-            "regression", "mvn-runner-exit-regression-parsed")
+            "regression", "mvn-runner-exit-regression")
 
     def test_pre_merge_gate_whose_build_exits_1_over_a_passing_report_is_not_green(self):
         self.assert_filed_red_with_the_runner_case(
-            "pre-merge-gate", "mvn-runner-exit-gate-parsed")
+            "pre-merge-gate", "mvn-runner-exit-gate")
 
     def test_a_build_killed_by_sigkill_files_exit_137(self):
         agent = "mvn-runner-exit-unit-sigkill"
@@ -379,6 +376,8 @@ class MavenRunnerExitReachesTheIngestTest(_FakeMavenProject, unittest.TestCase):
         shutil.rmtree(self.project, ignore_errors=True)
 
     def the_one_ingest(self, path, result):
+        self.assertEqual([p for p, _ in self.board.posts() if p == PARSED_INGEST], [],
+                         f"nothing goes to the parsed route; {_diagnostics(result)}")
         bodies = [b for p, b in self.board.posts() if p == path]
         self.assertEqual(len(bodies), 1,
                          f"exactly one {path} ingest; posts={self.board.posts()!r} "
@@ -400,29 +399,29 @@ class MavenRunnerExitReachesTheIngestTest(_FakeMavenProject, unittest.TestCase):
 
     # -- runnerExit on the wire ---------------------------------------------
 
-    def test_a_clean_unit_build_sends_runner_exit_0_on_the_junit_directory_ingest(self):
+    def test_a_clean_unit_build_sends_runner_exit_0_on_its_runs_ingest(self):
         self.assert_carries("unit", "mvn-carry-unit-clean", RAW_INGEST, 0,
                             FAKE_EXIT="0")
 
-    def test_a_unit_build_exiting_1_sends_runner_exit_1_on_the_junit_directory_ingest(self):
+    def test_a_unit_build_exiting_1_sends_runner_exit_1_on_its_runs_ingest(self):
         self.assert_carries("unit", "mvn-carry-unit", RAW_INGEST, 1,
                             FAKE_EXIT="1")
 
-    def test_a_test_build_exiting_1_sends_runner_exit_1_on_the_junit_directory_ingest(self):
+    def test_a_test_build_exiting_1_sends_runner_exit_1_on_its_runs_ingest(self):
         self.assert_carries("test", "mvn-carry-test", RAW_INGEST, 1,
                             FAKE_EXIT="1")
 
-    def test_a_module_build_exiting_1_sends_runner_exit_1_on_the_parsed_ingest(self):
-        self.assert_carries("module", "mvn-carry-module", PARSED_INGEST, 1,
+    def test_a_module_build_exiting_1_sends_runner_exit_1_on_its_runs_ingest(self):
+        self.assert_carries("module", "mvn-carry-module", RAW_INGEST, 1,
                             classes=2, FAKE_EXIT="1")
 
-    def test_an_integration_build_exiting_1_sends_runner_exit_1_on_the_parsed_ingest(self):
+    def test_an_integration_build_exiting_1_sends_runner_exit_1_on_its_runs_ingest(self):
         self.assert_carries("integration", "mvn-carry-integration",
-                            PARSED_INGEST, 1, FAKE_EXIT="1")
+                            RAW_INGEST, 1, FAKE_EXIT="1")
 
-    def test_a_regression_build_exiting_1_sends_runner_exit_1_on_the_parsed_ingest(self):
+    def test_a_regression_build_exiting_1_sends_runner_exit_1_on_its_runs_ingest(self):
         self.assert_carries("regression", "mvn-carry-regression",
-                            PARSED_INGEST, 1, FAKE_EXIT="1")
+                            RAW_INGEST, 1, FAKE_EXIT="1")
 
     def test_a_test_build_killed_by_sigkill_sends_runner_exit_137(self):
         self.assert_carries("test", "mvn-carry-test-sigkill", RAW_INGEST,
@@ -444,7 +443,7 @@ class MavenRunnerExitReachesTheIngestTest(_FakeMavenProject, unittest.TestCase):
 
     def test_a_refused_ingest_after_a_clean_integration_build_exits_non_zero(self):
         self.assert_refused_ingest_exits_non_zero(
-            "integration", "mvn-refused-integration", PARSED_INGEST)
+            "integration", "mvn-refused-integration", RAW_INGEST)
 
     def test_a_refused_ingest_after_a_clean_test_build_exits_non_zero(self):
         self.assert_refused_ingest_exits_non_zero(
@@ -452,7 +451,7 @@ class MavenRunnerExitReachesTheIngestTest(_FakeMavenProject, unittest.TestCase):
 
     def test_a_refused_ingest_after_a_clean_regression_build_exits_non_zero(self):
         self.assert_refused_ingest_exits_non_zero(
-            "regression", "mvn-refused-regression", PARSED_INGEST)
+            "regression", "mvn-refused-regression", RAW_INGEST)
 
     # -- no report, a build that exited non-zero ----------------------------
 

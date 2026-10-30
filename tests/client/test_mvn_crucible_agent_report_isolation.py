@@ -33,7 +33,10 @@ the python client's own subprocess seam).
 Module-loading + HTTP-mocking convention copied verbatim from
 `test_mvn_crucible_axi.py`: load `clients/mvn-crucible.py` by file path via
 `importlib`, mock the module's `_post`/`_get` HTTP transport seam so the live
-Crucible server on :3849 is NEVER touched.
+Crucible server on :3849 is NEVER touched. The mocked `_get` answers the
+board's health as a board that decodes the reports (`get_answering_health`),
+so the shared ingest sends its one `POST /api/v2/runs`, the reports' texts
+inline as `data`.
 
 Invocation:
     python3 -m pytest tests/client/test_mvn_crucible_agent_report_isolation.py -q
@@ -53,6 +56,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.live_run_harness import get_answering_health
 from tests.client.test_client_fleet_envelope_census import install_project_limits
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -175,7 +179,7 @@ class _BaseMvnIsolationTest(unittest.TestCase):
             mock.patch.object(self.module, "_post",
                               return_value=post_return or {"ok": True}, create=True),
             mock.patch.object(self.module, "_get",
-                              return_value={"ok": False}, create=True),
+                              side_effect=get_answering_health(), create=True),
         )
 
 
@@ -273,22 +277,24 @@ class AgentDirectoryReadIsolationTest(_BaseMvnIsolationTest):
                 "integration", "--project-dir", self.tmpdir, "--agent", "agent-z",
             ])
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+                          f"nothing goes to the parsed route; stdout={out!r}")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(
             ingest_call,
-            f"an integration run (>1 report dir) must ingest via "
-            f"/api/v2/runs/parsed; stdout={out!r} stderr={err!r}",
+            f"an integration run ingests via /api/v2/runs; stdout={out!r} "
+            f"stderr={err!r}",
         )
         assert ingest_call is not None
-        summary = ingest_call[0][1]["summary"]
         self.assertEqual(
-            (summary["passed"], summary["failed"], summary["total"]), (2, 0, 2),
-            f"the ingested summary must reflect ONLY this run's own fresh "
-            f"reports (2 passed, 0 failed) written under the agent's own "
-            f"directory -- the 8 stale planted failures sitting in the "
-            f"shared target/{{surefire,failsafe}}-reports/ must not be read "
-            f"at all once the agent's own directory is used; "
-            f"got summary={summary!r}",
+            ingest_call[0][1].get("data"),
+            [_junit_suite("com.acme.FixtureTest", 1, 0, "test_passes"),
+             _junit_suite("com.acme.FixtureIT", 1, 0, "test_passes_it")],
+            f"the ingest sends ONLY this run's own fresh reports, written "
+            f"under the agent's own directory -- the stale planted failures "
+            f"sitting in the shared target/{{surefire,failsafe}}-reports/ "
+            f"must not be read at all once the agent's own directory is "
+            f"used; got payload={ingest_call[0][1]!r}",
         )
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
 
@@ -327,11 +333,11 @@ class AgentDirectorySurvivesTest(_BaseMvnIsolationTest):
             len(found), 1,
             f"expected exactly one surviving TEST-*.xml under {own_dir}; found {found!r}",
         )
-        summary, _tree, _files = self.module._parse_junit([os.path.dirname(found[0])])
-        self.assertEqual(
-            (summary["passed"], summary["failed"]), (1, 0),
-            "the surviving directory must hold THIS run's real results",
-        )
+        with open(found[0]) as handle:
+            self.assertEqual(
+                handle.read(), _junit_suite("com.acme.FixtureTest", 1, 0, "test_passes"),
+                "the surviving directory must hold THIS run's real results",
+            )
 
 
 class PinnedPomReportsDirectoryFallbackTest(_BaseMvnIsolationTest):
@@ -355,7 +361,10 @@ class PinnedPomReportsDirectoryFallbackTest(_BaseMvnIsolationTest):
                     f.write(suite)
             return subprocess.CompletedProcess(cmd, 0, stdout="")
 
-        post_patch, get_patch = self._mocked_transport()
+        # The board decodes the moved reports: two passed, one failed.
+        post_patch, get_patch = self._mocked_transport(
+            {"ok": True, "run": {"passed": 2, "failed": 1, "pending": 0,
+                                 "total": 3, "files": 2}})
         with mock.patch.object(self.module, "_run_logged", side_effect=pinned_pom_run), \
              post_patch as post_mock, get_patch:
             code, out, err = _run_main(self.module, [
@@ -374,14 +383,18 @@ class PinnedPomReportsDirectoryFallbackTest(_BaseMvnIsolationTest):
                                           "TEST-*.xml"))
             self.assertEqual(left, [], f"{kind} reports must be moved, not copied")
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+                          f"nothing goes to the parsed route; stdout={out!r}")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, f"stdout={out!r} stderr={err!r}")
         assert ingest_call is not None
-        summary = ingest_call[0][1]["summary"]
         self.assertEqual(
-            (summary["passed"], summary["failed"], summary["total"]), (2, 1, 3),
-            f"the ingest must read the moved reports; got summary={summary!r}")
-        self.assertEqual(code, 1, "one planted failure makes the run red")
+            ingest_call[0][1].get("data"),
+            [_junit_suite("com.acme.FixtureTest", 1, 0, "test_passes"),
+             _junit_suite("com.acme.FixtureIT", 2, 1, "test_it")],
+            f"the ingest must send the moved reports; got "
+            f"payload={ingest_call[0][1]!r}")
+        self.assertEqual(code, 1, "the board's one failure makes the run red")
 
         toon = _load_module(REPO_ROOT / "clients" / "toon.py",
                             "toon_for_mvn_pinned_pom_fallback")
@@ -487,32 +500,24 @@ class ModuleRegressionAndTestVerbsUseTheAgentsOwnDirectoryTest(_BaseMvnIsolation
         )
 
 
-class ModuleTierMultiModuleReactorStillIngestsViaParsedTest(_BaseMvnIsolationTest):
-    """AC1/AC7 -- before this CR, a multi-module reactor's `module` tier read
-    TWO physical `target/surefire-reports/` dirs (one per module, discovered
-    by `_report_dirs`' glob) and so always ingested via
-    `POST /api/v2/runs/parsed` with `tier: module` (pinned by the bun test
-    "'module' tier: TWO reactor surefire-reports dirs" in
-    tests/clients-rust-mvn-crucible.test.ts). With `--agent`, every module's
-    surefire plugin honours the SAME `-Dsurefire.reportsDirectory=<agent dir>`
-    override -- real Maven applies one system property fleet-wide, never
-    per-module -- so a real multi-module reactor run lands ALL its
-    TEST-*.xml in that ONE agent directory. `_smart_ingest` must still
-    recognise this as a multi-source reactor run and ingest via
-    /api/v2/runs/parsed, never silently switch to the single-dir
-    /api/v2/runs junit-dir fast path just because there is now only one
-    PHYSICAL directory to read."""
+class ModuleTierMultiModuleReactorSendsEveryReportInlineTest(_BaseMvnIsolationTest):
+    """With `--agent`, every module's surefire plugin honours the SAME
+    `-Dsurefire.reportsDirectory=<agent dir>` override -- real Maven applies
+    one system property reactor-wide, never per-module -- so a real
+    multi-module reactor run lands ALL its TEST-*.xml in that ONE agent
+    directory. The `module` tier sends every one of them, sorted, inline as
+    the `data` of its one `POST /api/v2/runs` under `tier: module`."""
 
-    def test_module_tier_reactor_run_with_agent_still_ingests_via_runs_parsed_with_tier_module(self):
+    def test_module_tier_reactor_run_with_agent_sends_both_modules_reports_under_tier_module(self):
         def two_module_reactor_run(cmd, cwd, env, log_path, narrator=None):
             reports_dir = _flag_value(cmd, "-Dsurefire.reportsDirectory=")
             self.assertIsNotNone(reports_dir, f"cmd={cmd!r}")
             assert reports_dir is not None
             os.makedirs(reports_dir, exist_ok=True)
-            with open(os.path.join(reports_dir, "TEST-ModuleA.xml"), "w") as f:
-                f.write(_junit_suite("com.acme.moduleA.ModuleATest", 1, 0, "a"))
             with open(os.path.join(reports_dir, "TEST-ModuleB.xml"), "w") as f:
                 f.write(_junit_suite("com.acme.moduleB.ModuleBTest", 1, 0, "b"))
+            with open(os.path.join(reports_dir, "TEST-ModuleA.xml"), "w") as f:
+                f.write(_junit_suite("com.acme.moduleA.ModuleATest", 1, 0, "a"))
             return subprocess.CompletedProcess(cmd, 0, stdout="")
 
         post_patch, get_patch = self._mocked_transport()
@@ -524,34 +529,23 @@ class ModuleTierMultiModuleReactorStillIngestsViaParsedTest(_BaseMvnIsolationTes
             ])
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
 
-        parsed_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
-        self.assertIsNotNone(
-            parsed_call,
-            f"a multi-module reactor's `module` tier run must ingest via "
-            f"/api/v2/runs/parsed, exactly as it did before this CR's "
-            f"per-agent routing collapsed both modules' surefire output into "
-            f"ONE physical directory -- got POST calls="
-            f"{[c[0][0] for c in post_mock.call_args_list]!r}; stdout={out!r}",
-        )
-        assert parsed_call is not None
-        payload = parsed_call[0][1]
+        paths = [c[0][0] for c in post_mock.call_args_list]
+        self.assertNotIn("/api/v2/runs/parsed", paths,
+                         f"nothing goes to the parsed route; calls={paths!r}")
+        self.assertEqual(paths.count("/api/v2/runs"), 1,
+                         f"one ingest for the reactor run; calls={paths!r}")
+        payload = _post_call_for_path(post_mock, "/api/v2/runs")[0][1]
         self.assertEqual(
             payload.get("tier"), "module",
-            f"the parsed ingest must still carry tier='module'; got "
-            f"payload={payload!r}",
+            f"the ingest carries tier='module'; got payload={payload!r}",
         )
+        self.assertNotIn("dataPath", payload, f"payload={payload!r}")
         self.assertEqual(
-            (payload["summary"]["passed"], payload["summary"]["failed"],
-             payload["summary"]["total"]),
-            (2, 0, 2),
-            f"both modules' testcases must be counted; got "
-            f"summary={payload['summary']!r}",
-        )
-        self.assertFalse(
-            any(c[0][0] == "/api/v2/runs" for c in post_mock.call_args_list),
-            f"must NEVER take the single-dir junit-dir fast path once BOTH "
-            f"modules' reports land together in the agent's own directory; "
-            f"calls={[c[0][0] for c in post_mock.call_args_list]!r}",
+            payload.get("data"),
+            [_junit_suite("com.acme.moduleA.ModuleATest", 1, 0, "a"),
+             _junit_suite("com.acme.moduleB.ModuleBTest", 1, 0, "b")],
+            f"both modules' reports travel inline, sorted by file name; got "
+            f"payload={payload!r}",
         )
 
 

@@ -1,7 +1,7 @@
 # CR-CRU-206 — the maven client sends its runner's reports and parses nothing
 
 **Type** feature · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-204, CR-CRU-208, CR-CRU-218 · **Status**
-PENDING — filed 2026-10-27 (split from CR-CRU-152 at its gap analysis, user ruling; bun and python are
+DONE — merged 2026-10-30 (plan 221, cycles 806–808, gate 9631/0: bun 4226/0, python 5405/0); filed 2026-10-27 (split from CR-CRU-152 at its gap analysis, user ruling; bun and python are
 CR-CRU-204); re-scoped 2026-10-30 at its gap analysis (user ruling: the shared reporting first, CR-CRU-218,
 then one CR per client — maven here, rust CR-CRU-219, arduino CR-CRU-220; re-scored 13 → 8); spec
 pre-review 2026-10-30 (CR-CRU-206-SPEC-REVIEW, F1–F8 folded; F9, the shared module's line budget, ruled by
@@ -96,47 +96,57 @@ coverage on stderr is the `ingest:` line's `lines=`/`funcs=`.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — every verb.** The route census (`test_every_verb_that_runs_a_test_runner_is_classified.py`)
+- [x] **AC1 — every verb.** The route census (`test_every_verb_that_runs_a_test_runner_is_classified.py`)
       maven table names, for each of `test`, `unit`, `module`, `integration`, `e2e`, `regression`, `bdd`,
       `auto-ingest` and `pre-merge-gate`, the shared ingest as its only report call site (compile sites as
       today), and it passes; no maven source position posts to `/api/v2/runs/parsed` or names `dataPath`.
-- [ ] **AC2 — the reports inline, in order.** A `module` run over a two-module reactor sends one
+- [x] **AC2 — the reports inline, in order.** A `module` run over a two-module reactor sends one
       `POST /api/v2/runs` whose `data` holds every `TEST-*.xml` text of its reports directory, sorted; a
       `regression` run sends both surefire and failsafe texts; an `auto-ingest` over a two-module tree sends
       each module's surefire then failsafe texts, in that order.
-- [ ] **AC3 — coverage as its report.** A `regression --coverage` run over a two-module reactor sends
+- [x] **AC3 — coverage as its report.** A `regression --coverage` run over a two-module reactor sends
       `coverage: {codec: "jacoco", data}` holding both modules' CSV texts, on a passing run and on a failing
       one, and its stderr `ingest:` line carries the answer's `lines=`/`funcs=`; with no CSV it sends no
       `coverage` block and carries `coverage-not-measured`; `auto-ingest --coverage` does the same.
-- [ ] **AC4 — the same figures.** CR-CRU-152's mvn fixture, filed by a `regression` run through this client
+- [x] **AC4 — the same figures.** CR-CRU-152's mvn fixture, filed by a `regression` run through this client
       (a fake `mvnw` writing the fixture's five reports) against a board it spawns, stores the counts of its
       `expected.json` and each case's status, compared by `(suite, case)`; the envelope's `run.files` is the
       answer's and equals `expected.json`'s 5. The fixture is a failing run, whose coverage the board
       discards, so the stored coverage object is proven on a passing report beside the fixture's two CSVs.
-- [ ] **AC5 — no parser left.** CR-CRU-204's source scan (`test_a_client_parses_no_report.py`) gains a JaCoCo
+- [x] **AC5 — no parser left.** CR-CRU-204's source scan (`test_a_client_parses_no_report.py`) gains a JaCoCo
       summation kind — a call of `csv.reader` or `csv.DictReader`, or a string literal `LINE_COVERED`,
       `LINE_MISSED`, `METHOD_COVERED`, `METHOD_MISSED`, `BRANCH_COVERED` or `BRANCH_MISSED` — proved on a
       synthetic violating source, and covers `mvn-crucible.py` with `_read_declared_profile` its only
       exemption, and passes.
-- [ ] **AC6 — local decisions.** "Ran nothing" comes from the runner's exit code and `junit_testcase_count`,
+- [x] **AC6 — local decisions.** "Ran nothing" comes from the runner's exit code and `junit_testcase_count`,
       and the verb's exit from `verb_exit` over the runner's exit and the board's answer, asserted on a run
       that ran nothing and a run with a failure for `unit`, `integration`, `test` and `regression`;
       `auto-ingest` exits 0 on an `ok` answer and 1 otherwise.
-- [ ] **AC7 — envelope, warnings, no board, older board, too large.** CR-CRU-204's AC6–AC9 hold for the maven
+- [x] **AC7 — envelope, warnings, no board, older board, too large.** CR-CRU-204's AC6–AC9 hold for the maven
       client: the `run:` block is the answer's five counts and a board warning joins `warnings[]`; with the
       board unreachable at the health read or the ingest the envelope carries no figures and `pre-merge-gate`
       reports the suite unreported and is not green; an older board is refused naming its version and the
       0.4.0 floor; a body over the advertised limit is refused before sending, and a 413 reported, both
       naming `ingest_body_bytes`.
-- [ ] **AC8 — raw and the runner's exit.** Each verb of §S1 but `auto-ingest` sends its captured runner output
+- [x] **AC8 — raw and the runner's exit.** Each verb of §S1 but `auto-ingest` sends its captured runner output
       as `raw` and the runner's exit as `runnerExit`.
-- [ ] **AC9 — help, lines and citations.** No printed maven help names `/api/v2/runs/parsed` or a green-only
+- [x] **AC9 — help, lines and citations.** No printed maven help names `/api/v2/runs/parsed` or a green-only
       coverage rule, and the module docstring names `/api/v2/runs` (the maven cases of
       `test_every_clients_help_says_regression_coverage_is_opt_in.py`); `mvn-crucible.py` holds no string
       literal beginning `ingest junit:` or `ingest parsed:`; `tests/citations-cite-by-symbol.test.ts` passes;
       `clients/_crucible_axi.py` is no longer than it was at `develop@de4ae4a`.
-- [ ] **AC10 — the citation floor (close-out).** `PROSE_CITATIONS.clients.head` is re-measured at the close-out
+- [x] **AC10 — the citation floor (close-out).** `PROSE_CITATIONS.clients.head` is re-measured at the close-out
       and re-recorded once, in its own commit, by exactly the measured delta.
+- *Recorded at merge:* VERIFY approved with no blocking finding. Its F3 (the maven and python rows of
+  `DN-crucible-api-reconstruction.md` §4 still named the parsed route) and F4 (two test headers named maven's old
+  route without the "deleted since" note python's carried) were fixed in their own cycle (808, user ruling). F1
+  (a connection reset at the ingest escapes the shared transport, in every client) and F2 (the run emitter written
+  three times, maven's `_emit_run_axi` beside python's and bun's) move into CR-CRU-221 (user ruling). AC10:
+  `PROSE_CITATIONS.clients.head` 856 → 835, the 21 CR literals of maven's deleted and rewritten bodies.
+  `mvn-crucible.py` closed at 2,702 lines (2,914 before); `_crucible_axi.py` held at 9,997. `test` now sends
+  every surefire directory it reads, as §S1's table says (a filing run reads its own directory). VERIFY's F5
+  (Model B's `crucible-report-java` skill still describes the parsed route and green-only coverage) and F6 (the
+  plain verbs' canned help after a failed ingest, python's alike) go to the 0.4.0 notice and stand.
 
 ## Non-goals
 

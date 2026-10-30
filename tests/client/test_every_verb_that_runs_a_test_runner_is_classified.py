@@ -1117,8 +1117,6 @@ _THROUGH_THE_SHARED_INGEST = {(SHARED, SHARED_INGEST, RUNS_ROUTE)}
 _BUN_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 _PY_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 _MVN_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
-_MVN_PARSED = {("_ingest_parsed", "post_ingest", PARSED_ROUTE)}
-_MVN_JUNIT_DIR = {("_ingest_junit_dir", "post_ingest", RUNS_ROUTE)}
 _RUST_JUNIT = {("_ingest_junit_axi", "post_ingest", RUNS_ROUTE)}
 _RUST_RUSTC = {("_ingest_rustc_stderr", "post_ingest", COMPILE_ROUTE)}
 _RUST_WORKSPACE = {("_workspace_regression_run", "post_ingest", PARSED_ROUTE)}
@@ -1150,15 +1148,11 @@ ROUTE_TABLE = {
         "check": routes((), _PY_COMPILE),
     },
     "mvn": {
-        "test": routes(_MVN_JUNIT_DIR, _MVN_COMPILE),
-        "unit": routes(_MVN_JUNIT_DIR | _MVN_PARSED, _MVN_COMPILE),
-        "module": routes(_MVN_JUNIT_DIR | _MVN_PARSED, _MVN_COMPILE),
-        "bdd": routes(_MVN_JUNIT_DIR | _MVN_PARSED, _MVN_COMPILE),
-        "integration": routes(_MVN_PARSED, _MVN_COMPILE),
-        "e2e": routes(_MVN_PARSED, _MVN_COMPILE),
-        "regression": routes(_MVN_PARSED, _MVN_COMPILE),
-        "pre-merge-gate": routes(_MVN_PARSED, _MVN_COMPILE),
-        "auto-ingest": routes(_MVN_JUNIT_DIR | _MVN_PARSED, _MVN_COMPILE),
+        # Each report verb's no-report exit (no TEST-*.xml) files the compile
+        # ingest of `mvn clean test-compile`: no report.
+        **{verb: routes(_THROUGH_THE_SHARED_INGEST, _MVN_COMPILE)
+           for verb in ("test", "unit", "module", "bdd", "integration", "e2e",
+                        "regression", "pre-merge-gate", "auto-ingest")},
         "check": routes((), _MVN_COMPILE),
         "compile": routes((), _MVN_COMPILE),
     },
@@ -1215,7 +1209,7 @@ class EveryFilingVerbsRouteAndCallSiteAreTabledTest(unittest.TestCase):
     def test_every_python_report_verb_files_through_the_shared_ingest_only(self):
         self.assert_client_matches_its_table("python")
 
-    def test_every_mvn_filing_verb_sits_at_its_current_route(self):
+    def test_every_mvn_report_verb_files_through_the_shared_ingest_only(self):
         self.assert_client_matches_its_table("mvn")
 
     def test_every_rust_filing_verb_sits_at_its_current_route(self):
@@ -1245,6 +1239,20 @@ class EveryFilingVerbsRouteAndCallSiteAreTabledTest(unittest.TestCase):
         self.assertEqual(
             [text for text in live if text in (PARSED_ROUTE, "dataPath")], [],
             "the bun client never posts to the parsed route and never sends "
+            "a `dataPath`")
+
+    def test_mvn_states_neither_the_parsed_route_nor_a_data_path(self):
+        # Docstrings may name the route; no live string may.
+        tree = ast.parse(_client_source("mvn"))
+        docstrings = {id(node.value) for node in ast.walk(tree)
+                      if isinstance(node, ast.Expr)
+                      and isinstance(node.value, ast.Constant)}
+        live = [node.value for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in docstrings]
+        self.assertEqual(
+            [text for text in live if text in (PARSED_ROUTE, "dataPath")], [],
+            "the maven client never posts to the parsed route and never sends "
             "a `dataPath`")
 
 

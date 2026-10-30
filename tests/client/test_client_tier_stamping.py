@@ -41,8 +41,10 @@ nothing:
   RED  `{Bun,Mvn,Python,Rust}UnearnedTierTest` — all TWELVE methods. The
          census finds twelve unearned literal sites today: bun `cmd_test`
          (`/runs/start`, `/runs/parsed`), bun `cmd_auto_ingest` (`e2e`), mvn
-         `cmd_test` (`/runs`, `/runs/parsed`), mvn `cmd_auto_ingest` (`/runs`,
-         `/runs/parsed` `regression`), python `cmd_test` (`/runs/parsed`, since
+         `cmd_test` (`/runs`, `/runs/parsed`, since the maven client sends its
+         reports to the board `/runs`), mvn `cmd_auto_ingest` (`/runs`,
+         `/runs/parsed` `regression`, since the maven client sends its reports
+         to the board `/runs`), python `cmd_test` (`/runs/parsed`, since
          CR-CRU-204 `/runs`, and `/runs/compile`), python `cmd_auto_ingest`,
          rust `cmd_test` and rust
          `cmd_auto_ingest`.
@@ -135,7 +137,8 @@ ESCALATIONS recorded at the time of writing (see the report for the full text):
   1. AC3's own prose says "EACH of the eight unearned call sites" and then
      enumerates TEN, while §S2's census table carries TWELVE unearned rows
      (AC3's enumeration omits mvn `cmd_auto_ingest`'s `tier="regression"` site,
-     its `/runs/parsed` call, which §S2's table marks unearned and whose reason
+     its `/runs/parsed` call — since the maven client sends its reports to the
+     board, `POST /api/v2/runs` — which §S2's table marks unearned and whose reason
      — auto-ingest ran no tests — is the strongest of the four). This file
      asserts the DERIVED set, so the disagreement between the AC's "eight", its
      own list of ten and the table's twelve cannot be inherited: the count is
@@ -420,10 +423,12 @@ SITES_DRIVEN_ON_THE_WIRE = frozenset({
     ("bun", "cmd_test", "unit", RUN_START),
     ("bun", "cmd_test", "unit", RUNS),
     ("bun", "cmd_auto_ingest", "e2e", RUNS),
+    # maven's sites all reach the one /api/v2/runs ingest: the shared
+    # ingest, on its `test` and its `auto-ingest` (with or without
+    # --coverage) alike.
     ("mvn", "cmd_test", "unit", RUNS),
-    ("mvn", "cmd_test", "unit", PARSED),
     ("mvn", "cmd_auto_ingest", "unit", RUNS),
-    ("mvn", "cmd_auto_ingest", "regression", PARSED),
+    ("mvn", "cmd_auto_ingest", "regression", RUNS),
     ("python", "cmd_test", "unit", RUNS),
     ("python", "cmd_test", "unit", COMPILE),
     ("python", "cmd_auto_ingest", "unit", RUNS),
@@ -992,12 +997,12 @@ class BunUnearnedTierTest(_BunCase):
 
 
 class MvnUnearnedTierTest(_MvnCase):
-    """RED — `mvn-crucible.py` `cmd_test` (its `/runs` and `/runs/parsed`
-    calls) and `cmd_auto_ingest` (the same two)."""
+    """RED — `mvn-crucible.py` `cmd_test` and `cmd_auto_ingest`, each filing
+    through the shared ingest's one `/api/v2/runs` call."""
 
     def test_mvn_test_single_report_dir_claims_no_tier(self):
-        """AC3, mvn `cmd_test` — the fast junit-dir path
-        (`POST /api/v2/runs`, server-side codec)."""
+        """AC3, mvn `cmd_test` — its one `POST /api/v2/runs`, the board
+        decoding the reports it is sent."""
         self.write_reports()
         drive = self.drive(self.mvn_argv("test"))
         self.assertNoStatedTier(drive, RUNS, "mvn cmd_test -> POST /runs")
@@ -1010,14 +1015,15 @@ class MvnUnearnedTierTest(_MvnCase):
         self.assertNoStatedTier(drive, RUNS, "mvn cmd_auto_ingest -> POST /runs")
 
     def test_mvn_auto_ingest_coverage_path_claims_no_tier(self):
-        """AC3's auto-ingest clause, mvn `cmd_auto_ingest`'s `/runs/parsed`
-        call — the site AC3's OWN enumeration omits (ESCALATION 1) though §S2's
-        census table marks it unearned. It is the worst of the four:
-        `auto-ingest` ran nothing and calls the result a full `regression`."""
+        """AC3's auto-ingest clause, mvn `cmd_auto_ingest --coverage` — the
+        site AC3's OWN enumeration omits (ESCALATION 1) though §S2's census
+        table marks it unearned. It is the worst of the four: `auto-ingest`
+        ran nothing, and a tier on its coverage run would call the result a
+        full `regression`."""
         self.write_reports()
         drive = self.drive(self.mvn_argv("auto-ingest", ["--coverage"]))
-        self.assertNoStatedTier(drive, PARSED,
-                                "mvn cmd_auto_ingest --coverage -> POST /runs/parsed")
+        self.assertNoStatedTier(drive, RUNS,
+                                "mvn cmd_auto_ingest --coverage -> POST /runs")
 
 
 class PythonUnearnedTierTest(_PythonCase):
@@ -1155,13 +1161,13 @@ class MvnEarnedTierTest(_MvnCase):
     def test_mvn_e2e_verb_still_ingests_as_e2e(self):
         self.write_reports(kind="failsafe", name="TEST-ProbeIT.xml")
         drive = self.drive(self.mvn_argv("e2e"))
-        self.assertStatedTier(drive, PARSED, "e2e", "mvn e2e -> POST /runs/parsed")
+        self.assertStatedTier(drive, RUNS, "e2e", "mvn e2e -> POST /runs")
 
     def test_mvn_regression_verb_still_ingests_as_regression(self):
         self.write_reports()
         drive = self.drive(self.mvn_argv("regression"))
-        self.assertStatedTier(drive, PARSED, "regression",
-                              "mvn regression -> POST /runs/parsed")
+        self.assertStatedTier(drive, RUNS, "regression",
+                              "mvn regression -> POST /runs")
 
 
 class ArduinoEarnedTierTest(_ArduinoCase):

@@ -6,9 +6,6 @@ For every fixture directory under `tests/fixtures/reports/` this writes an
 TODAY, by calling the client's own parser functions (each client module is
 imported by path from `clients/`; nothing here re-implements a parse):
 
-  mvn      `_report_dirs` / `_dirs_with_xml` (surefire, then failsafe — the
-           order the regression verb reads them) + `_parse_junit` +
-           `_collect_jacoco` (the CSVs it selects under the fixture tree)
   rust     `_parse_junit` + `_parse_lcov`
   arduino  `_parse_junit` per `TEST-*.xml`, aggregated as the native-test run
            body aggregates them + `_collect_lcov`
@@ -17,11 +14,12 @@ Each `expected.json` also names its inputs — the report files in the order the
 client reads them and the coverage files and their codec — so a test can send
 the same texts to the board in the same order.
 
-bun and python are not frozen here any more: their clients send the runner's
-reports to the board and parse none of them (CR-CRU-204), so there is no
-client parse left to freeze. `bun/expected.json` and the two
-`python/*/expected.json` stay as they were frozen at CR-CRU-152's base, the
-record of what those clients computed before the board took the parse.
+bun, python and mvn are not frozen here any more: their clients send the
+runner's reports to the board and parse none of them (CR-CRU-204, and the
+maven client after it), so there is no client parse left to freeze.
+`bun/expected.json`, the two `python/*/expected.json` and `mvn/expected.json`
+stay as they were frozen at CR-CRU-152's base, the record of what those
+clients computed before the board took the parse.
 
 Run from anywhere: `python3 tests/fixtures/reports/freeze-client-parse.py`.
 """
@@ -64,29 +62,6 @@ def _write(fixture_dir, document):
         f.write("\n")
 
 
-def freeze_mvn():
-    mvn = _client("mvn")
-    d = os.path.join(HERE, "mvn")
-    dirs = []
-    for kind in ("surefire", "failsafe"):
-        dirs += mvn._report_dirs(d, None, kind)
-    dirs = mvn._dirs_with_xml(dirs)
-    reports = []
-    for report_dir in dirs:
-        reports += sorted(glob.glob(os.path.join(report_dir, "TEST-*.xml")))
-    summary, tree, files = mvn._parse_junit(dirs)
-    coverage = mvn._collect_jacoco(d)
-    csvs = sorted(set(glob.glob(os.path.join(d, "**", "target", "site", "jacoco", "jacoco.csv"),
-                                recursive=True)))
-    _write(d, {
-        "stack": "mvn",
-        "reports": _rel(d, reports),
-        "coverage": {"codec": "jacoco", "reports": _rel(d, csvs)},
-        "client": {"summary": summary, "tree": tree, "files": files,
-                   "coverage": coverage},
-    })
-
-
 def freeze_rust():
     rust = _client("rust")
     d = os.path.join(HERE, "rust")
@@ -126,7 +101,6 @@ def freeze_arduino():
 
 
 def main():
-    freeze_mvn()
     freeze_rust()
     freeze_arduino()
 

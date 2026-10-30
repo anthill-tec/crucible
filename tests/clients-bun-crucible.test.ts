@@ -1846,9 +1846,9 @@ describe("clients/bun-crucible.py — CR-CRU-056 (C5): a gated run removes only 
 // `tc.find("failure")`/`tc.find("error")`; a bare `else: passed += 1` folded
 // every `<skipped/>` testcase (bun's real shape for BOTH `test.skip` and
 // `test.todo` — probed above) into `passed`, and the summary hardcoded
-// `"pending": 0`. `_parse_junit` in `mvn-crucible.py` is the correct precedent this fixes
-// toward: `<skipped>` → `status="pending"`, `pending` incremented, `passed`
-// left untouched.
+// `"pending": 0`. The maven client's JUnit parse, before the board took the
+// parse, was the correct precedent this fixed toward: `<skipped>` →
+// `status="pending"`, `pending` incremented, `passed` left untouched.
 
 describe("clients/bun-crucible.py — CR-CRU-050 §S1/§S1b: <skipped/> (test.skip AND test.todo) count as pending, never passed", () => {
   let handle: ReturnType<typeof startServer> | undefined;

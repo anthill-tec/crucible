@@ -13,7 +13,8 @@ Every `expected.json` was frozen at CR-CRU-152's base, and is kept as the record
 of the client parse at that point. A client that sends its runner's reports to
 the board parses none of them, so the script no longer freezes its set: bun's
 `expected.json` and python's two (`python/xmlrunner/`, `python/pytest/`)
-(CR-CRU-204) are not regenerated, and are never rewritten.
+(CR-CRU-204), and maven's (`mvn/`), are not regenerated, and are never
+rewritten.
 
 `tests/real-stack-reports-decode-on-the-board.test.ts` sends each set to
 `POST /api/v2/runs` and compares the board's decode with the frozen parse.
@@ -67,8 +68,8 @@ surefire's `testFailureIgnore` set so the reactor reaches failsafe and JaCoCo's
 `report` (bound to `post-integration-test`):
 `mvn -o -B clean verify`. The reports and the CSVs keep the reactor's layout
 (`<module>/target/surefire-reports/`, `<module>/target/failsafe-reports/`,
-`<module>/target/site/jacoco/jacoco.csv`), which is where the maven client reads
-them from (`_report_dirs`, `_collect_jacoco`).
+`<module>/target/site/jacoco/jacoco.csv`), which is where the maven client finds
+them and sends them from, its reports and its CSVs alike.
 Rewritten: each report's `<properties>` block (the JVM's system properties,
 which name the machine and its user) to an empty `<properties/>`.
 
