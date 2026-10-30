@@ -51,6 +51,7 @@ import subprocess
 import sys
 import threading
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from tests.client.live_run_harness import (
@@ -69,7 +70,7 @@ TOON = load_toon()
 ARDUINO_CLIENT = CLIENTS / "arduino-crucible.py"
 TIMEOUT = 120
 NATIVE_DIR = "tests/native"
-PARSED_INGEST = "/api/v2/runs/parsed"
+RUNS_INGEST = "/api/v2/runs"
 
 REFUSED_CODE = "narrowing-refused"
 UNATTRIBUTED_CODE = "unattributed-run-refused"
@@ -166,6 +167,13 @@ def _envelope(stdout):
     except ValueError:
         return None
     return decoded.get("axi") if isinstance(decoded, dict) else None
+
+
+def sent_case_count(body):
+    """The `<testcase>` elements across the reports a `/api/v2/runs` body
+    carries inline as `data`: the cases the run was filed with."""
+    return sum(1 for text in (body or {}).get("data") or []
+               for _ in ET.fromstring(text).iter("testcase"))  # noqa: S314 - a report the test's own stand-in wrote
 
 
 def _diagnostics(result):
@@ -419,9 +427,9 @@ class _NarrowedRunFiled(_NarrowingProject):
             f"{_diagnostics(result)}")
         self.assertEqual(result.returncode, 0,  # type: ignore[attr-defined]
                          _diagnostics(result))
-        self.assertRegex(  # type: ignore[attr-defined]
-            result.stderr, r"\b4/4 passed, 0 failed\b",
-            f"the run's own summary counts only test_a's and test_b's four "
+        self.assertIn(  # type: ignore[attr-defined]
+            "ran 4 testcases (4 not skipped); runner exit 0", result.stderr,
+            f"the run's own line counts only test_a's and test_b's four "
             f"cases; {_diagnostics(result)}")
         self.assertEqual(  # type: ignore[attr-defined]
             [p for p, _ in board.posts() if p in INGEST_PATHS], [],
@@ -438,9 +446,9 @@ class _NarrowedRunFiled(_NarrowingProject):
             f"{_diagnostics(result)}")
         self.assertEqual(result.returncode, 0,  # type: ignore[attr-defined]
                          _diagnostics(result))
-        self.assertRegex(  # type: ignore[attr-defined]
-            result.stderr, r"\b3/3 passed, 0 failed\b",
-            f"the run's own summary counts only the three matching cases; "
+        self.assertIn(  # type: ignore[attr-defined]
+            "ran 3 testcases (3 not skipped); runner exit 0", result.stderr,
+            f"the run's own line counts only the three matching cases; "
             f"{_diagnostics(result)}")
         self.assertEqual(  # type: ignore[attr-defined]
             [p for p, _ in board.posts() if p in INGEST_PATHS], [],
@@ -626,12 +634,11 @@ class _NarrowedRunThatRanNothing(_NarrowingProject):
         envelope = self.envelope_of(result)
         self.assertIs(envelope.get("ok"), True,  # type: ignore[attr-defined]
                       f"envelope={envelope!r}")
-        ingests = [b for p, b in self.board.posts() if p == PARSED_INGEST]
+        ingests = [b for p, b in self.board.posts() if p == RUNS_INGEST]
         self.assertEqual(len(ingests), 1,  # type: ignore[attr-defined]
                          f"exactly one ingest; {_diagnostics(result)}")
-        summary = (ingests[0] or {}).get("summary") if ingests else {}
-        self.assertEqual((summary or {}).get("total"), 0,  # type: ignore[attr-defined]
-                         f"the zero-case run is filed as it ran; summary={summary!r}")
+        self.assertEqual(sent_case_count(ingests[0] if ingests else {}), 0,  # type: ignore[attr-defined]
+                         f"the zero-case run is filed as it ran; {_diagnostics(result)}")
         self.assertEqual(self.board.aborts(), [],  # type: ignore[attr-defined]
                          "a filed run is never aborted")
 
@@ -670,12 +677,11 @@ class AShellNarrowingVariableNeverReachesMakeTest(_NarrowingProject,
                             client_env=dict(self.SHELL_NARROWING))
         record = self.the_one_make_run(result)
         self.assert_saw_neither(record, result)
-        ingests = [b for p, b in self.board.posts() if p == PARSED_INGEST]
+        ingests = [b for p, b in self.board.posts() if p == RUNS_INGEST]
         self.assertEqual(len(ingests), 1,
                          f"exactly one ingest; {_diagnostics(result)}")
-        summary = (ingests[0] or {}).get("summary") if ingests else {}
-        self.assertEqual((summary or {}).get("total"), len(CATALOGUE),
-                         f"the run covers the whole catalogue; summary={summary!r}")
+        self.assertEqual(sent_case_count(ingests[0] if ingests else {}), len(CATALOGUE),
+                         f"the run covers the whole catalogue; {_diagnostics(result)}")
         return record
 
     def test_test_without_the_flags_runs_make_with_neither_variable(self):

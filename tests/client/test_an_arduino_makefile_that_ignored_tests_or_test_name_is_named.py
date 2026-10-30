@@ -53,9 +53,10 @@ from tests.client.live_run_harness import (
 )
 from tests.client.test_an_arduino_run_narrowed_by_tests_and_name_reaches_make import (
     CATALOGUE,
-    PARSED_INGEST,
+    RUNS_INGEST,
     _diagnostics,
     _NarrowingProject,
+    sent_case_count,
 )
 
 IGNORED_TESTS_CODE = "makefile-ignored-tests"
@@ -195,12 +196,11 @@ class _IgnoredVariableProject(_NarrowingProject, _TestCaseShape):
 
     def the_one_filed_total(self, result):
         """The one run filed, and the case count it was filed with."""
-        ingests = [b for p, b in self.board.posts() if p == PARSED_INGEST]
+        ingests = [b for p, b in self.board.posts() if p == RUNS_INGEST]
         self.assertEqual(
             len(ingests), 1,
             f"the run is filed exactly once; {_diagnostics(result)}")
-        summary = (ingests[0] or {}).get("summary") if ingests else {}
-        return (summary or {}).get("total")
+        return sent_case_count(ingests[0] if ingests else {})
 
     def assert_filed_ok(self, result, total):
         self.assertEqual(result.returncode, 0,
