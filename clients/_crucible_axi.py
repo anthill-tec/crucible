@@ -1472,9 +1472,9 @@ REGRESSION_COVERAGE_PY_HELP = (
     REGRESSION_COVERAGE_HELP + " With it, the run is under coverage.py and "
     "its lcov coverage report is sent to /api/v2/runs with its results.")
 REGRESSION_COVERAGE_JACOCO_HELP = (
-    REGRESSION_COVERAGE_HELP + " With it, the build's JaCoCo coverage is "
-    "collected on a run with no failure and posted to /api/v2/runs/parsed "
-    "with its results.")
+    REGRESSION_COVERAGE_HELP + " With it, the build's JaCoCo CSVs are sent "
+    "to /api/v2/runs with its results, on a red run as on a green one; the "
+    "board discards a red run's coverage.")
 REGRESSION_COVERAGE_LLVM_COV_HELP = (
     REGRESSION_COVERAGE_HELP + " With it, the run is `cargo llvm-cov nextest` "
     "and its lcov coverage is posted to /api/v2/runs/parsed with its "
