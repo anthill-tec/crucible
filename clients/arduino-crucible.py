@@ -818,10 +818,15 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     if not args.agent:
         # No ingest requested: the run says how many testcases it ran and
         # exits with the runner's exit, which the make contract requires to be
-        # non-zero when a test binary fails.
-        print(f"[crucible] ran {total} testcases "
-              f"({_axi().junit_non_skipped_count(reports)} not skipped); "
-              f"runner exit {runner_exit}", file=sys.stderr)
+        # non-zero when a test binary fails. A report that could not be read
+        # was already warned about by the count above, so it is not read
+        # again, and the count is said to be unknown.
+        if total is None:
+            ran = "an unknown number of testcases (a report could not be counted)"
+        else:
+            ran = (f"{total} testcases "
+                   f"({_axi().junit_non_skipped_count(reports)} not skipped)")
+        print(f"[crucible] ran {ran}; runner exit {runner_exit}", file=sys.stderr)
         return runner_exit
 
     # §S5 — past this point the run IS ingested under an agentId, so the
