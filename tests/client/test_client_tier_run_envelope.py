@@ -443,9 +443,10 @@ class _EnvelopeTierProbe:
             return super().drive(argv, response)  # type: ignore[misc]
         harness = _MODALITY._HARNESS
         calls = []
-        # The clients that send their runner's reports inline (CR-CRU-204);
-        # the others' `/api/v2/runs` bodies are answered as before.
-        inline = self.CLIENT in ("bun", "python")  # type: ignore[attr-defined]
+        # The clients that send their runner's reports inline (CR-CRU-204),
+        # maven among them; the others' `/api/v2/runs` bodies are answered as
+        # before.
+        inline = self.CLIENT in ("bun", "python", "mvn")  # type: ignore[attr-defined]
 
         def fake_post(path, payload):
             calls.append((path, copy.deepcopy(payload)))
