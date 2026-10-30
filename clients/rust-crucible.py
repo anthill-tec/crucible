@@ -342,51 +342,25 @@ def _open_plans(project_dir):
 
 def _emit_run_axi(verb, resp, project_dir, agent, *, ok=None, help_steps=None,
                   warnings=(), coverage=False):
-    """Emit the §S1 envelope for a run this client filed: its `run:` block
-    (`passed`, `failed`, `pending`, `total`, `files`) is the board's ingest
-    answer (`filed_run`) — the board decodes the reports this client sends,
-    and `files` is its distinct-source count. A run that was not filed
-    (refused, unreachable, too large) states no figures: each is null beside
-    the envelope's `error`, which says why. The answer's own `warnings[]` join
-    the caller's `warnings`, after them.
+    """Emit the envelope of a run this client filed through the shared run
+    emitter, `emit_run_axi`: its `run:` block (each figure null when the run
+    was not filed), `help`, the answer's `error` and `warnings[]` after the
+    caller's `warnings`. The context echoes the cycle the board attached the
+    run to.
 
     `coverage` asks for the envelope's `coverage:` field, the answer's
     `run.coverage` lines and functions percents; it is absent when the board
     kept none (it discards a red run's coverage).
 
-    The client resolves no cycle: a bound agent's run is stamped with its
-    registered cycle server-side (a stale binding gets a 409, surfaced via
-    `error`), and the envelope context echoes the attachment the server
-    reported (`echoed_cycle_id`); absent, the key is omitted.
-
     `ok` overrides the envelope's verdict (default: the answer's `ok`);
     `help_steps` is a state-derived next step (`run_help`) in place of the
     canned per-verb `HELP_STEPS` entry."""
-    filed = _axi().filed_run(resp)
-    run = {key: (filed.get(key) if isinstance(filed.get(key), int)
-                 and not isinstance(filed.get(key), bool) else None)
-           for key in ("passed", "failed", "pending", "total", "files")}
-    context = _axi_context(project_dir, agent_id=agent,
-                           cycle_id=_axi().echoed_cycle_id(resp))
-    result_fields = {"run": run,
-                     "help": help_steps or _axi().HELP_STEPS.get(verb, ["status"])}
-    if coverage:
-        kept = filed.get("coverage")
-        kept = kept if isinstance(kept, dict) else {}
-        percents = {axis: kept[axis].get("percent")
-                    for axis in ("lines", "functions")
-                    if isinstance(kept.get(axis), dict)
-                    and isinstance(kept[axis].get("percent"), (int, float))
-                    and not isinstance(kept[axis].get("percent"), bool)}
-        if percents:
-            result_fields["coverage"] = percents
-    err = resp.get("error")
-    if err is not None:
-        result_fields["error"] = err
-    board_warnings = [w for w in (resp.get("warnings") or [])
-                      if isinstance(w, dict)]
-    _emit_axi(verb, bool(resp.get("ok")) if ok is None else ok, result_fields,
-              context, list(warnings or []) + board_warnings)
+    return _axi().emit_run_axi(
+        verb, resp,
+        _axi_context(project_dir, agent_id=agent,
+                     cycle_id=_axi().echoed_cycle_id(resp)),
+        _emit_axi, ok=ok, help_steps=help_steps, warnings=warnings,
+        fields={}, coverage=coverage)
 
 
 def _clippy_help(ok, errors, lints, scope):

@@ -634,6 +634,55 @@ def filed_run(resp):
     return run if isinstance(run, dict) else {}
 
 
+#: The figures a run envelope's `run:` block states, in order.
+RUN_FIGURE_KEYS = ("passed", "failed", "pending", "total", "files")
+
+
+def emit_run_axi(verb, resp, context, emit_fn, *, ok=None, help_steps=None,
+                 warnings=(), fields=None, coverage=False):
+    """Emit the envelope of a run a client filed, through the client's own
+    `context` and emit function `emit_fn(verb, ok, result_fields, context,
+    warnings)`; returns what `emit_fn` returns.
+
+    Its `run:` block is the board's ingest answer (`filed_run`): `passed`,
+    `failed`, `pending`, `total` and `files`, each an int or null. A run that
+    was not filed (refused, unreachable, too large, its answer lost) states no
+    figures: each is null beside the envelope's `error`, the answer's own.
+    `help` is the caller's `help_steps` (a state-derived next step), else the
+    verb's `HELP_STEPS` entry. The caller's `fields` follow `help`, in their
+    order; with `coverage`, the answer's kept lines and functions percents
+    follow them, absent when the board kept none (it discards a red run's
+    coverage). The answer's `warnings[]` join the caller's `warnings`, after
+    them. `ok` overrides the envelope's verdict (default: the answer's `ok`).
+
+    The client builds `context`, so the cycle it echoes (`echoed_cycle_id`)
+    stays the client's."""
+    filed = filed_run(resp)
+    run = {key: (filed.get(key) if isinstance(filed.get(key), int)
+                 and not isinstance(filed.get(key), bool) else None)
+           for key in RUN_FIGURE_KEYS}
+    result_fields = {"run": run,
+                     "help": help_steps or _core.HELP_STEPS.get(verb, ["status"])}
+    result_fields.update(fields or {})
+    if coverage:
+        kept = filed.get("coverage")
+        kept = kept if isinstance(kept, dict) else {}
+        percents = {axis: kept[axis].get("percent")
+                    for axis in ("lines", "functions")
+                    if isinstance(kept.get(axis), dict)
+                    and isinstance(kept[axis].get("percent"), (int, float))
+                    and not isinstance(kept[axis].get("percent"), bool)}
+        if percents:
+            result_fields["coverage"] = percents
+    err = resp.get("error")
+    if err is not None:
+        result_fields["error"] = err
+    board_warnings = [w for w in (resp.get("warnings") or [])
+                      if isinstance(w, dict)]
+    return emit_fn(verb, bool(resp.get("ok")) if ok is None else ok,
+                   result_fields, context, list(warnings or []) + board_warnings)
+
+
 COVERAGE_NOT_MEASURED_CODE = "coverage-not-measured"
 
 
