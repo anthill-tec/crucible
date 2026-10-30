@@ -140,6 +140,13 @@ One ingest call = one immutable event on the project's timeline.
 | `name` | string? | optional run label |
 | `context` | `{git?: {branch, commit}, wave?: string, orchestrator?: "mainline" \| "track-N"}` | v2 (decided 2026-07-14) — ties runs to the exact commit and, in Model-B projects, distinguishes a track's check-run from Mainline's regression on the same timeline. **Every field optional — graceful degradation is a hard requirement**: lightweight projects send no context and the API/UI must never require or fabricate it. |
 
+**A streamed run (CR-CRU-200).** An open run may take its test stream instead of one report: batches of `crucible-events`
+lines (the JSON-lines codec, one `run-start`, a `test-end` per test, one `run-end`) are posted to
+`POST /api/v2/runs/<runId>/stream`, and the board holds them, filling the run's live state as each batch lands. The run's
+close (`POST /api/v2/runs` with `runId`, `codec: "crucible-events"` and no report) decodes the whole held stream into this
+one event, as a report would be decoded; an abort or the sweep decodes what was held into its aborted event. Either way
+the held batches and the live state are then deleted.
+
 ### 3.4 Ingest state
 Per (`projectKey`, `type ∈ unit|bdd`): pointer to the latest test event + latest compile
 event — what `/api/ingest/status` reports and `/api/ingest/clear` resets.
@@ -257,6 +264,10 @@ registry** translating each tool's native output into one **canonical RunSchema*
   version is not stamped. Coverage codecs: `lcov` and `jacoco`, rounded as the clients' Python `round`.
 - Parsed path (`/runs/parsed`): the route older clients post to — summary/tree/coverage taken as-is.
 - Both paths record a `kind:"test"` event and answer `{ok, run}`; `/runs` adds `files` and `coverage`.
+- Stream codecs (CR-CRU-200): `crucible-events` is registered with `stream: true` and decodes a JSON-lines test stream
+  by JUnit's own failure and suite-status rules. An open run's batches go to `POST /api/v2/runs/<runId>/stream`, which
+  holds them byte-offset by byte-offset and fills the run's live state; the close on `/runs` (`runId`,
+  `codec: "crucible-events"`, no report) decodes the whole held stream into the run's one event.
 
 ### 4.5 Compile ingest
 - Structured parsers per format: `rustc` (`error[EXXXX]` + `--> file:line:col`), java/
@@ -595,6 +606,17 @@ first and reads the file beside it, and a client resolves its file from the proj
 directory it was given. The `CRUCIBLE_*` prefix is reserved for Crucible's own
 configuration (§4.11). Precedence is therefore two layers, and only retention has both:
 the file, then a per-project value in the store.
+
+**A stream is bounded by the same limit (CR-CRU-200).** `ingest_body_bytes` bounds one request body
+and a stream's total: the bytes an open run's test stream may hold across all its batches. A batch that would take the stream past it is
+refused with a 413 naming the limit, and the stream is marked cut. A stream has no size limit of its own (user ruling
+2026-10-30).
+
+**The one cadence compiled into source (user ruling 2026-10-30).** `LIVE_FRAME_MS` (2000, a named constant in
+`src/store.ts`) paces the live frames: a batch that changes a run's live state emits its project's `events` change at
+most once per window, and a change inside the window is deferred to the window's end. It governs how often the screen
+repaints, not what anyone sees or how long the server waits, so it is not a limit: the server's limits stay five, and
+the cadence is not configurable.
 
 ## 5 Quality requirements
 - **E2E POV (user directive 2026-07-15): the design storyboard is the E2E acceptance
