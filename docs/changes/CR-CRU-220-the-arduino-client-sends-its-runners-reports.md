@@ -1,7 +1,7 @@
 # CR-CRU-220 — the arduino client sends its runner's reports and parses nothing
 
 **Type** feature · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-204, CR-CRU-208, CR-CRU-218, CR-CRU-221 · **Status**
-PENDING — filed 2026-10-30 (split from CR-CRU-206 at its gap analysis, user ruling: the shared reporting
+DONE — merged 2026-10-30 (plan 224, cycles 815–817, gate 9904/0: bun 4227/0, python 5677/0); filed 2026-10-30 (split from CR-CRU-206 at its gap analysis, user ruling: the shared reporting
 first, CR-CRU-218, then one CR per client; user ruling the same day: the Makefile-narrowing check reads its
 cases through a shared reader; user ruling at CR-CRU-206's pre-review: the shared module is split first,
 CR-CRU-221); spec pre-review 2026-10-30 (CR-CRU-220-SPEC-REVIEW, F1–F17 folded; user rulings: the no-`--agent`
@@ -114,15 +114,15 @@ differs when a source repeats across reports).
 
 ## Acceptance criteria
 
-- [ ] **AC1 — every verb.** The route census (`test_every_verb_that_runs_a_test_runner_is_classified.py`) arduino
+- [x] **AC1 — every verb.** The route census (`test_every_verb_that_runs_a_test_runner_is_classified.py`) arduino
       table names, for each verb §S1 lists, the shared ingest as its only report call site (the compile site as today),
       and it passes; no arduino source position posts to `/api/v2/runs/parsed`; arduino's `_file_reports` is one call
       of `_axi().ingest_reports` (`test_a_runs_ingest_helpers_live_once_in_the_shared_module.py`).
-- [ ] **AC2 — coverage as its report.** A `regression --coverage` run sends `coverage: {codec: "lcov", data}` with the
+- [x] **AC2 — coverage as its report.** A `regression --coverage` run sends `coverage: {codec: "lcov", data}` with the
       lcov text, on a passing run and on a failing one; with the lcov missing it sends no `coverage` block and carries
       `coverage-not-measured`; with coverage off it sends none and carries no such warning; a health answer lacking
       `lcov` in `codecs.coverage` refuses the coverage run.
-- [ ] **AC3 — the same figures.** CR-CRU-152's arduino fixture, filed by `unit --agent <id> --reports <dir>` through
+- [x] **AC3 — the same figures.** CR-CRU-152's arduino fixture, filed by `unit --agent <id> --reports <dir>` through
       this client (a fake `make` copying the fixture's three `TEST-*.xml` into `$REPORTS_DIR` and exiting 0) against a
       board the test spawns, stores 13 cases — 8 passed, 2 failed, 3 pending — each case's status equal to
       `expected.json`'s by `(suite, case)`; the envelope's `run.files` is the answer's 2, not `expected.json`'s
@@ -130,10 +130,10 @@ differs when a source repeats across reports).
       fixture is a failing run, whose coverage the board discards, so the stored coverage object is proven by
       `regression --coverage` on a passing one-case report beside the fixture's `lcov.info`, and equals
       `expected.json`'s coverage.
-- [ ] **AC4 — no parser left.** CR-CRU-204's source scan (`test_a_client_parses_no_report.py`) covers
+- [x] **AC4 — no parser left.** CR-CRU-204's source scan (`test_a_client_parses_no_report.py`) covers
       `arduino-crucible.py` with an empty exemption set, finds a synthetic arduino source that defines its own
       `junit_case_sources`, and passes.
-- [ ] **AC5 — the narrowing check holds.** `junit_case_sources` answers each case's `(name, stem)` as §S2 states —
+- [x] **AC5 — the narrowing check holds.** `junit_case_sources` answers each case's `(name, stem)` as §S2 states —
       `classname`, else `file`, an empty `classname` falling through, `\` as `/`, a nameless case `"?"`, no stem
       `None` — and `None`, with one warning, for an unreadable report, beside `junit_non_skipped_count`'s tests in
       `test_one_shared_ingest_reads_health_before_it_sends.py`; through the client, a Makefile that ignored `TESTS` and
@@ -142,12 +142,12 @@ differs when a source repeats across reports).
       `test_an_arduino_makefile_that_ignored_tests_or_test_name_is_named.py` and
       `test_an_arduino_run_narrowed_by_tests_and_name_reaches_make.py` pass, re-pointed only where they read the parsed
       payload's `summary.total` or the old no-`--agent` line.
-- [ ] **AC6 — local decisions.** The verb's exit is `verb_exit` over the runner's exit and the board's answer, asserted
+- [x] **AC6 — local decisions.** The verb's exit is `verb_exit` over the runner's exit and the board's answer, asserted
       on a run that ran nothing and a run with a failure; `auto-ingest` exits 0 only on an `ok` answer whose run records
       no failure; the no-`--agent` run prints §S2's line and exits with the runner's exit code, 0 on a report with a
       failure after a clean `make`; the printed make contract states that `make` exits non-zero when a test binary
       fails.
-- [ ] **AC7 — envelope, warnings, no board, older board, too large, dropped.** CR-CRU-204's AC6–AC9 hold for the
+- [x] **AC7 — envelope, warnings, no board, older board, too large, dropped.** CR-CRU-204's AC6–AC9 hold for the
       arduino client: the `run:` block is the answer's five counts, each null when the run was not filed, and a board
       warning joins `warnings[]`; a not-`ok` answer carries `error` and `ingest-failed`; with the board unreachable at
       the health read or the ingest the envelope carries no figures, and `pre-merge-gate` names its suite
@@ -155,20 +155,32 @@ differs when a source repeats across reports).
       body over the advertised limit is refused before sending, and a 413 reported, both naming `ingest_body_bytes`;
       arduino joins `test_a_dropped_connection_is_answered.py`'s shared-ingest classes (one `ingest:` line, null figures,
       `run-may-be-filed` for a run the board may hold), retiring its arduino-only class there.
-- [ ] **AC8 — one emitter, raw and the runner's exit.** Arduino's `_emit_run_axi` is one statement besides an optional
+- [x] **AC8 — one emitter, raw and the runner's exit.** Arduino's `_emit_run_axi` is one statement besides an optional
       docstring, a `return` of `_axi().emit_run_axi(...)` (it joins `RUN_EMITTERS` in
       `test_the_run_pipeline_lives_in_its_own_shared_module.py`); `_emit_ingest_summary_axi` and `filed_summary` are
       defined nowhere; each verb of §S1 but `auto-ingest` sends its captured `make` output as `raw` and the runner's exit
       as `runnerExit`.
-- [ ] **AC9 — help, lines and citations.** No printed arduino help names `/api/v2/runs/parsed`, and the module docstring
+- [x] **AC9 — help, lines and citations.** No printed arduino help names `/api/v2/runs/parsed`, and the module docstring
       names `/api/v2/runs` (the arduino cases of `test_every_clients_help_says_regression_coverage_is_opt_in.py`);
       `arduino-crucible.py` holds no string literal carrying its old result line (` passed, ` beside
       `files (ingest ok=`); `DN-crucible-api-reconstruction.md` names no arduino parsed route; `ruff check --select F` is
       clean on `arduino-crucible.py` and `_crucible_run.py`; `tests/citations-cite-by-symbol.test.ts` passes;
       `_crucible_axi.py` is no longer than 9,088 newlines, and `_crucible_run.py` no longer than its re-recorded budget
       (pinned in arduino's send-reports test as in maven's and rust's).
-- [ ] **AC10 — the citation floor (close-out).** `PROSE_CITATIONS.clients.head` is re-measured at the close-out and
+- [x] **AC10 — the citation floor (close-out).** `PROSE_CITATIONS.clients.head` is re-measured at the close-out and
       re-recorded once, in its own commit, by exactly the measured delta.
+- *Recorded at merge:* VERIFY approved with no blocking finding. Its F1 (process): §S2 has the run module's budget
+  re-recorded in the commit that grows it, but GREEN may not edit tests, so the re-record (1,123 → 1,134, in the maven,
+  rust and arduino send-reports tests) came at the close-out, and GREEN's two commits fail that budget pin at their own
+  heads — the orchestrator's brief, for the retro. The close-out also made the API reconstruction's §4 arduino row true
+  (`projects/add` gone, the compile ingest's `gcc`). VERIFY's F2 (the DN's §3.6 still listed arduino as sending no compile
+  format), F3 (a no-`--agent` run over an unreadable report printed `ran None testcases` and warned twice) and F4 (a
+  no-`--agent` `--coverage` run with no lcov said nothing) were fixed in their own cycle (817, user ruling). On nested
+  `<testsuite>` reports the reader's whole-tree walk sees cases the old parse missed (the native harness writes flat
+  reports); a malformed report, which crashed the old client with its run left open, is now warned of and sent for the
+  board to judge. AC10: `PROSE_CITATIONS.clients.head` 814 → 799. `_crucible_run.py` closed at 1,134 newlines,
+  `_crucible_axi.py` at 9,088. With this CR all five clients send their runners' reports and parse none. VERIFY's F5 —
+  Model B's `crucible-report-arduino` skill — goes to the 0.4.0 notice.
 
 ## Non-goals
 
