@@ -1390,7 +1390,9 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
  * that opened a run closes it at once, when it knows nothing will file it.
  * The same caller boundary as `handleRunStart`, the same ownership/state
  * refusals as `resolveRunClose` (400 unknown or another agent's/project's
- * run; 409 a run already settled), and a reason is required (400). Settled
+ * run; 409 a run already settled), and a reason is required (400). The
+ * settled-run 409 keeps its body bare: CR-CRU-200 §S3's `state` and `eventId`
+ * ride only the close and stream routes' refusals, never an abort's. Settled
  * by `Store#abortOpenRun` — the sweep's own store path, one run row and one
  * `status: "aborted"` event — so the timeline and live stream see it as they
  * see a run the server aborted itself.
@@ -1540,6 +1542,9 @@ function handleRunLive(store: Store, runId: string, url: URL): Response {
   });
 }
 
+/** The outcome of a close's refusal: what the closing ingest routes did NOT do. */
+const CLOSE_REFUSED = "run NOT stored";
+
 /**
  * CR-CRU-017 §S1 — the OPTIONAL `runId` seam every ingest route shares.
  *
@@ -1562,7 +1567,7 @@ function resolveRunClose(
   projectKey: string,
   agentId: string,
   body: V2Body,
-  outcome = "run NOT stored",
+  outcome = CLOSE_REFUSED,
 ): {
   fail?: Response;
   /** The settled run a 409 refused, for a caller that answers its state. */
@@ -1594,14 +1599,16 @@ function resolveRunClose(
     };
   }
   if (run.state !== "open") {
-    // CR-CRU-200 §S3 — the 409 carries the run's state and the event that
-    // settled it, so a client tells its own lost answer from a refusal.
+    // CR-CRU-200 §S3 — a resent close's 409 carries the run's state and the
+    // event that settled it, so a client tells its own lost answer from a
+    // refusal. Only a close's: the abort route's 409 keeps its pre-CR body,
+    // and the stream route answers `settled` with its own refusal.
     const settled = { state: run.state, ...(run.eventId !== undefined ? { eventId: run.eventId } : {}) };
     return {
       fail: fail(
         409,
         `run ${runId} is already ${run.state} — a settled run cannot be closed twice; ${outcome}`,
-        settled,
+        outcome === CLOSE_REFUSED ? settled : undefined,
       ),
       settled,
     };
