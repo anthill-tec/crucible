@@ -396,12 +396,12 @@ function writeArduinoEnvFile(dir: string, projectKey: string, projectName: strin
   );
 }
 
-/** Minimal JUnit XML (`<testsuite><testcase>...`) — the shape both
- * the board's junit codec reads for python-crucible and arduino-crucible's
- * `_parse_junit` parses (both use xml.etree.ElementTree over testsuite/testcase/failure).
- * CR-CRU-050 §S1/§S1b — `skip` emits a bare `<skipped/>` child (xmlrunner's
- * and the native-harness's real shape for a skipped testcase), which the
- * defective parsers fold into `passed` today via a bare `else:`. */
+/** Minimal JUnit XML (`<testsuite><testcase>...`) — the shape the board's
+ * junit codec reads in the reports python-crucible and arduino-crucible send
+ * it inline (neither client parses them: the board decodes testsuite/testcase/
+ * failure). CR-CRU-050 §S1/§S1b — `skip` emits a bare `<skipped/>` child
+ * (xmlrunner's and the native-harness's real shape for a skipped testcase),
+ * which the board counts as pending, never passed. */
 function junitXmlString(
   suiteName: string,
   cases: Array<{ name: string; fail?: boolean; skip?: boolean }>,
@@ -1581,7 +1581,7 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
     return { dir, path };
   }
 
-  test("posts to /api/v2/runs/parsed (never v1 /api/ingest/parsed) with tier:'unit' and the parsed summary", async () => {
+  test("sends its report to /api/v2/runs (never /api/v2/runs/parsed or v1 /api/ingest/parsed) and the board stores tier:'unit' and the decoded summary", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-unit-tier");
@@ -1607,7 +1607,8 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
     expect(event.summary?.total).toBe(2);
     expect(event.summary?.passed).toBe(1);
     expect(event.summary?.failed).toBe(1);
-    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed")).toBe(true);
+    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs")).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/v2/runs/parsed")).toBe(false);
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
@@ -1793,7 +1794,7 @@ describe("clients/arduino-crucible.py — regression subcommand: tier:'regressio
     return { dir, path };
   }
 
-  test("'regression' (no --coverage) posts to /api/v2/runs/parsed (never v1 /api/ingest/parsed) with tier:'regression'", async () => {
+  test("'regression' (no --coverage) sends its report to /api/v2/runs (never /api/v2/runs/parsed or v1 /api/ingest/parsed) with tier:'regression'", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-regression-tier");
@@ -1820,9 +1821,8 @@ describe("clients/arduino-crucible.py — regression subcommand: tier:'regressio
     expect(event.summary?.passed).toBe(2);
     expect(event.summary?.failed).toBe(0);
     expect(event.coverage).toBeUndefined();
-    expect(
-      proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed"),
-    ).toBe(true);
+    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs")).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/v2/runs/parsed")).toBe(false);
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
@@ -1867,7 +1867,7 @@ describe("clients/arduino-crucible.py — pre-merge-gate: check (arduino-cli com
     scratch.cleanup();
   });
 
-  test("a PASSING fake ARDUINO_CLI compile + fake no-op make regression run → posts tier:'regression' to /api/v2/runs/parsed with coverage attached, stdout carries the ok:true TOON-AXI envelope, exits 0", async () => {
+  test("a PASSING fake ARDUINO_CLI compile + fake no-op make regression run → sends tier:'regression' to /api/v2/runs with coverage attached, stdout carries the ok:true TOON-AXI envelope, exits 0", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-pre-merge-gate-pass");
@@ -1976,7 +1976,7 @@ describe("clients/arduino-crucible.py — auto-ingest subcommand: behavioral, no
     scratch.cleanup();
   });
 
-  test("ingests a PRE-EXISTING tests/native/reports JUnit fixture with NO toolchain invoked (no fake make/arduino-cli on PATH) → posts to /api/v2/runs/parsed (never v1 /api/ingest/parsed) with tier:'unit'; with an active cycle seeded server-side (plan-file → cycle-activate), context.cycleId AUTO-ATTACHES", async () => {
+  test("ingests a PRE-EXISTING tests/native/reports JUnit fixture with NO toolchain invoked (no fake make/arduino-cli on PATH) → sends its report to /api/v2/runs (never /api/v2/runs/parsed or v1 /api/ingest/parsed) and the board stores tier:'unit'; with an active cycle seeded server-side (plan-file → cycle-activate), context.cycleId AUTO-ATTACHES", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-auto-ingest-behavioral");
@@ -2038,7 +2038,8 @@ describe("clients/arduino-crucible.py — auto-ingest subcommand: behavioral, no
     expect(event.summary?.passed).toBe(2);
     expect(event.summary?.failed).toBe(0);
     expect(event.context?.cycleId).toBe(activeCycleId);
-    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed")).toBe(true);
+    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs")).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/v2/runs/parsed")).toBe(false);
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 });
@@ -2070,16 +2071,14 @@ describe("clients/arduino-crucible.py — byte-compatible CLI surface (existing 
   });
 });
 
-// CR-CRU-050 §S1/§S1b/§S2 — `_parse_junit` (arduino-crucible.py)
-// today checks only `tc.find("failure")`/`tc.find("error")`; a bare
-// `else: passed += 1` folds every `<skipped/>` testcase into `passed`, and
-// the summary hardcodes `"pending": 0`. `_emit_ingest_summary_axi`
-// (arduino-crucible.py) also drops `pending` from the printed
-// `run:` TOON block, and the plain "[crucible] <verb> -> '<name>': N/M
-// passed, F failed" stderr lines (two in `_run_native_tests_body`, one in
-// `cmd_auto_ingest`, both in arduino-crucible.py) drop
-// it too — three separate print call sites (the no-`--agent` report path,
-// the `--agent` ingest path, and `auto-ingest`), all §S2 surfaces.
+// CR-CRU-050 §S1/§S1b/§S2 — arduino's JUnit parse once folded every
+// `<skipped/>` testcase into `passed` and hardcoded `"pending": 0`; the
+// client now sends the native harness's reports to the board, whose codec
+// counts a skipped case as pending. The printed `run:` TOON block and the one
+// stderr `ingest:` line both state the board's answer, pending included, on
+// the `--agent` path and on `auto-ingest`; a run without `--agent` files
+// nothing and prints how many testcases it ran and how many were not
+// skipped — all §S2 surfaces.
 describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> testcases count as pending, never passed (fake no-op make)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
@@ -2109,7 +2108,7 @@ describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/>
     return { dir, path };
   }
 
-  test("§S1/§S1b/§S2: with --agent, 'unit' counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), the real pass/fail leaves are unaffected, and BOTH the TOON run: block and the plain '[crucible] unit -> ...' stderr line (`_run_native_tests_body` in clients/arduino-crucible.py) carry pending=1", async () => {
+  test("§S1/§S1b/§S2: with --agent, 'unit' counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), the real pass/fail leaves are unaffected, and BOTH the TOON run: block and the one stderr ingest line carry pending=1", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-cr050-pending");
@@ -2157,15 +2156,13 @@ describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/>
     expect(block).toContain("total: 3");
     expect(block).toContain("pending: 1");
 
-    // §S2 (extended) — the `--agent` ingest path's plain stderr line in
-    // `_run_native_tests_body` (arduino-crucible.py) too. That
-    // line's own sentence style is "X/Y passed, Z failed" (not key=value),
-    // so the natural parallel extension is "W pending", matching "Z failed".
-    expect(res.stderr).toContain("passed,");
-    expect(res.stderr).toContain("1 pending");
+    // §S2 (extended) — the plain stderr ingest line too, read from the
+    // board's answer; arduino's own "X/Y passed, Z failed" line is gone.
+    expect(res.stderr).not.toMatch(/\d+\/\d+ passed,/);
+    expect(res.stderr).toContain("pending=1");
   });
 
-  test("§S2 (extended): WITHOUT --agent, the no-ingest report line (`_run_native_tests_body` in clients/arduino-crucible.py) also carries 1 pending", async () => {
+  test("§S2 (extended): WITHOUT --agent, the no-ingest run line counts the testcases it ran and the one not skipped, and the run exits with make's exit", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-cr050-no-agent-report");
@@ -2180,12 +2177,12 @@ describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/>
       env: { PATH: path },
     });
 
-    expect(res.code).toBe(0); // no real failures — only a pass and a skip
-    expect(res.stderr).toContain("passed,");
-    expect(res.stderr).toContain("1 pending");
+    expect(res.code).toBe(0); // the no-op make exited 0
+    expect(res.stderr).toContain("ran 2 testcases (1 not skipped); runner exit 0");
+    expect(res.stderr).not.toMatch(/\d+\/\d+ passed,/);
   });
 
-  test("§S2 (extended): 'auto-ingest' (`cmd_auto_ingest` in clients/arduino-crucible.py) also carries 1 pending in its stderr line, alongside pending=1 in the ingested summary", async () => {
+  test("§S2 (extended): 'auto-ingest' (`cmd_auto_ingest` in clients/arduino-crucible.py) also carries pending=1 in its one stderr ingest line, alongside pending=1 in the stored summary", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-cr050-auto-ingest");
@@ -2212,7 +2209,7 @@ describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/>
     expect(event.summary?.passed).toBe(1);
     expect(event.summary?.pending).toBe(1);
     expect(res.code).toBe(0);
-    expect(res.stderr).toContain("passed,");
-    expect(res.stderr).toContain("1 pending");
+    expect(res.stderr).not.toMatch(/\d+\/\d+ passed,/);
+    expect(res.stderr).toContain("pending=1");
   });
 });
