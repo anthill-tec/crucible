@@ -306,3 +306,30 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     Then the page matches the coarse-pointer media query
     And Now's → Runs pill for that cycle is at least 44px tall with horizontal padding on each side of at least half that height
 
+
+  # CR-CRU-223 — an open run with a live state on the phone band. The run is
+  # real (POST /api/v2/runs/start); only its two live reads are stubbed
+  # (run-live-mock.ts), because the live state is filled by CR-CRU-200. At
+  # 390px the card keeps its failure count and timer in view and truncates its
+  # file on the one line it shares with the count, the card keeps the 44px
+  # touch floor, and the live drill-in fills the viewport.
+  Scenario: CR-CRU-223 — at the phone band a running card with a live state keeps its failure count and timer in view, truncates its file, and opens a live drill-in that fills the viewport
+    Given a project named "MOB Live Run Project" is registered
+    And an online agent "mob-live-runner" with message "streaming run" is registered on that project
+    And a run is started for agent "mob-live-runner" on that project
+    And the board holds a live state for that run: 412 of 1280 finished in "tests/integration/relay/a_rather_long_directory_name/test_relay_acknowledges_every_batch.py" with 3 failures
+    And the viewport is 390x844
+    When I open the workspace for that project
+    And I click the "Runs" workspace tab
+    Then a running card for "mob-live-runner" becomes visible within 2 seconds
+    And that running card's failure count and timer stay inside the card
+    And that running card's file truncates on one line beside its count
+    And that running card is at least 44px tall
+    And the page body does not scroll horizontally
+    When I open that running card's live drill-in
+    Then the URL is the live drill-in of that run in the workspace
+    And the run overlay is visible
+    And the live drill-in's header reads "live · 412/1280 · 409 ✓ 3 ✗"
+    And the live drill-in lists the failures "test_acks_each_batch", "test_close_sends_the_rest" and "test_run_end_totals" in order
+    And the run overlay's bounding box spans at least 95% of the viewport height
+    And the page body does not scroll horizontally

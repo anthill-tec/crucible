@@ -8,9 +8,20 @@ Feature: CR-CRU-017 §S3 — the run lifecycle on the timeline: a live running c
   reason + whatever partial context exists. Workflow tab: an active cycle's
   open span shows its currently-running run live."
 
+  CR-CRU-223 narrows that rule to a running card WITHOUT a live state, which
+  is still not clickable (default cursor, no drill-down). A running card whose
+  open run has a live state shows the run's progress — a bar at done of total,
+  the current file, the failures so far — has the pointer cursor, and opens
+  the live drill-in at /run/<runId>, which fills in as tests finish and, when
+  the run settles, replaces its URL with the settled run's /run/<eventId>.
+
   Every scenario drives the REAL server through the same API a wrapped client
   uses (POST /api/v2/runs/start, then an ingest carrying that runId) and asserts
-  the SPA's own DOM — never a fixture stubbed into the page. The abort path uses
+  the SPA's own DOM. The CR-CRU-017 scenarios stub nothing; the CR-CRU-223
+  scenarios stub ONLY the two live reads (the open-run brief's `live` and
+  GET /api/v2/runs/<runId>/live, through `page.route`, as
+  burndown-analytics-mock.ts does), because the live state they answer is
+  filled by CR-CRU-200. The abort path uses
   the §S1 auto-abort the server already owns (an open run whose agent has
   tombstoned is aborted `agent died`); §S2's explicit abort ROUTE is a later
   cycle and is deliberately not exercised here.
@@ -69,3 +80,67 @@ Feature: CR-CRU-017 §S3 — the run lifecycle on the timeline: a live running c
     And I click the "Workflow" workspace tab
     Then the active cycle's open span shows a running entry for "rl-workflow" within 3 seconds
     And that open-span running entry's elapsed timer advances within 3 seconds
+
+  Scenario: CR-CRU-223 — a running card whose run has a live state shows the run's progress and has the pointer cursor
+    Given a project named "RL Live Card" is registered
+    And an online agent "rl-live-card" with message "streaming run" is registered on that project
+    And a run is started for agent "rl-live-card" on that project
+    And the board holds a live state for that run: 412 of 1280 finished in "test_relay.py" with 3 failures
+    When I open the home page
+    Then a running card for "rl-live-card" becomes visible within 2 seconds
+    And that running card shows a progress bar at 32 percent, "412/1280", "test_relay.py" and "3 ✗"
+    And that running card's elapsed timer advances within 3 seconds
+    And that running card shows no ratio pill at all
+    And that running card has the pointer cursor
+
+  Scenario: CR-CRU-223 — clicking the live card opens the live drill-in at /run/<runId>, and a reload lands on the same live view
+    Given a project named "RL Live Drill" is registered
+    And an online agent "rl-live-drill" with message "streaming run" is registered on that project
+    And a run is started for agent "rl-live-drill" on that project
+    And the board holds a live state for that run: 412 of 1280 finished in "test_relay.py" with 3 failures
+    And I have opened the home page
+    And a running card for "rl-live-drill" becomes visible within 2 seconds
+    When I open that running card's live drill-in
+    Then the URL is the live drill-in of that run
+    And the run overlay is visible
+    And the live drill-in's header reads "live · 412/1280 · 409 ✓ 3 ✗"
+    And the live drill-in lists the failures "test_acks_each_batch", "test_close_sends_the_rest" and "test_run_end_totals" in order
+    And the live drill-in's passed row reads "409"
+    When I reload the page
+    Then the URL is the live drill-in of that run
+    And the live drill-in's header reads "live · 412/1280 · 409 ✓ 3 ✗"
+    And the live drill-in lists the failures "test_acks_each_batch", "test_close_sends_the_rest" and "test_run_end_totals" in order
+
+  Scenario: CR-CRU-223 — after a change frame the live drill-in reads only the new failures and shows a fourth one without a reload
+    Given a project named "RL Live Frame" is registered
+    And an online agent "rl-live-frame" with message "streaming run" is registered on that project
+    And an online agent "rl-live-bystander" with message "another run" is registered on that project
+    And a run is started for agent "rl-live-frame" on that project
+    And the board holds a live state for that run: 412 of 1280 finished in "test_relay.py" with 3 failures
+    And I have opened the live drill-in of that run
+    And the live drill-in lists the failures "test_acks_each_batch", "test_close_sends_the_rest" and "test_run_end_totals" in order
+    And I mark the page so a reload would be detectable
+    When the board's live state for that run gains the failure "test_resume_after_restart"
+    And a change frame reaches the page when agent "rl-live-bystander" opens a run on that project
+    Then the live drill-in lists "test_resume_after_restart" as its fourth failure within 3 seconds
+    And the refresh read only the failures after the first 3
+    And the live drill-in's header reads "live · 413/1280 · 409 ✓ 4 ✗"
+    And the page was never reloaded
+
+  Scenario: CR-CRU-223 — when the run settles the live drill-in replaces its URL with the settled run's, shows its detail, and Back leaves the run detail
+    Given a project named "RL Live Settle" is registered
+    And an online agent "rl-live-settle" with message "streaming run" is registered on that project
+    And a run is started for agent "rl-live-settle" on that project
+    And the board holds a live state for that run: 412 of 1280 finished in "test_relay.py" with 3 failures
+    And I have opened the home page
+    And a running card for "rl-live-settle" becomes visible within 2 seconds
+    And I open that running card's live drill-in
+    And the URL is the live drill-in of that run
+    When the started run is ingested as a passing 1-test run for agent "rl-live-settle"
+    Then the URL becomes the settled run's drill-in within 3 seconds
+    And the run overlay is visible and contains the event id
+    And the live drill-in's rows are gone
+    When I go back in the browser
+    Then the URL is the home page with no run path
+    And an event card for "rl-live-settle" becomes visible within 2 seconds
+    And the running card for "rl-live-settle" disappears within 3 seconds
