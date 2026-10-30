@@ -438,6 +438,8 @@
           slices.has("events") ? refetchEvents() : null,
           slices.has("health") ? refetchHealth() : null,
         ]);
+        // CR-CRU-223 §S3 — an open live drill-in reads what finished since.
+        if (slices.has("events") && !scopeMoved()) await refetchLive();
         if (slices.has("events") && !scopeMoved()) {
           if (state.runsRelease !== null) await refetchReleaseRuns();
           await refetchPlans();
@@ -456,6 +458,47 @@
         refreshStale = null;
         refetch(next);
       }
+    }
+
+    // CR-CRU-223 §S3 — the live drill-in's read: GET /api/v2/runs/<runId>/live
+    // ?from=<n>, n the failures already shown. An answer that lands after the
+    // route has moved off this drill-in (closed, Back, settled) is discarded.
+    // `ended` / `aborted` settles the drill-in; an open answer is applied.
+    async function readLive(body) {
+      const runId = body.runId;
+      const from = body.failures.val.length;
+      let answer;
+      try {
+        answer = await getJson(`/api/v2/runs/${encodeURIComponent(runId)}/live?from=${from}`);
+      } catch (err) {
+        // Nothing shown yet: say why; otherwise keep the last-known live view.
+        if (body.counts.val === null && openDetailBody === body) {
+          body.loadError.val = `live run unavailable — ${String(err)}`;
+        }
+        return;
+      }
+      if (state.route.overlay !== runId || openDetailBody !== body) return;
+      if (answer.state === "ended" || answer.state === "aborted") settleLive(answer.eventId);
+      else if (answer.state === "open") body.apply(answer);
+    }
+
+    // A refresh's live read: only while a live drill-in is open.
+    async function refetchLive() {
+      const runId = state.route.overlay;
+      if (!isLiveRunId(runId) || openDetailKey !== runId || openDetailBody?.live !== true) return;
+      await readLive(openDetailBody);
+    }
+
+    // CR-CRU-223 §S3 — the run settled: the drill-in REPLACES its history entry
+    // with the settled run's /run/<eventId> (so Back never returns to a dead
+    // live view) and the run detail opens on that event.
+    function settleLive(eventId) {
+      if (typeof eventId !== "string" || eventId.length === 0) return;
+      openDetailKey = undefined;
+      openDetailBody = null;
+      const path = location.pathname.replace(/\/run\/[^/]+\/?$/, `/run/${encodeURIComponent(eventId)}`);
+      history.replaceState(null, "", path + location.search);
+      state.route = L.routeParse(path);
     }
 
     // A slice read landed: the server answered.
@@ -1328,18 +1371,47 @@
         () => fmtCycleTimer(runTickNow.val - startedAt),
       );
 
+    // CR-CRU-223 §S1 — a live state's done-of-total: `412/1280`, or `412 done`
+    // when the runner gave no total (or gave 0), shared by the running card
+    // and the live drill-in's header.
+    const liveHasTotal = (live) => typeof live.total === "number" && live.total > 0;
+    const liveCountText = (live) =>
+      liveHasTotal(live) ? `${live.completed}/${live.total}` : `${live.completed} done`;
+
+    // CR-CRU-223 §S2 — the progress bar at completed/total, clamped at 100 %
+    // (a runner can finish more tests than it announced); none without a total.
+    const RunningProgress = (live) =>
+      liveHasTotal(live)
+        ? div(
+            { "data-testid": "running-progress", class: "app-running-progress" },
+            div({
+              "data-testid": "running-progress-fill",
+              class: "app-running-progress-fill",
+              style: `width:${Math.min(100, (live.completed / live.total) * 100)}%;`,
+            }),
+          )
+        : null;
+
     // §S3 — the open run's card: pulsing, elapsed timer off the SERVER's
-    // `startedAt`, and NOT CLICKABLE (user rule). "Not clickable" is enforced
-    // where it cannot drift: there is NO `onclick` handler at all, so no
-    // drill-in exists to fire, and the card's own class carries the default
-    // cursor. It resolves in place because the next refetch drops this run from
-    // `state.openRuns` in the same tick the settled event enters `state.events`.
-    const RunningCard = (run) =>
-      div(
+    // `startedAt`. CR-CRU-223 §S2 narrows CR-CRU-017's "not clickable" rule to
+    // a run with NO live state: that card has NO `onclick` handler at all, so
+    // no drill-in exists to fire, and its class carries the default cursor. A
+    // run whose brief carries `live` shows its progress — the failures so far
+    // beside the agent id, the bar, then done of total, the current file and
+    // the timer on one line — and opens its live drill-in at /run/<runId>
+    // with the pointer cursor (`app-evt-running-live`). Either resolves in
+    // place because the next refetch drops this run from `state.openRuns` in
+    // the same tick the settled event enters `state.events`. A live card's
+    // progress line ends, after the timer, in F25's faint `› open` hint; the
+    // card's own click opens the drill-in, so the hint carries no handler.
+    const RunningCard = (run) => {
+      const live = run.live !== undefined && run.live !== null ? run.live : null;
+      return div(
         {
           "data-testid": "running-card",
           "data-run-id": run.runId,
-          class: "app-evt app-evt-running",
+          class: `app-evt app-evt-running${live !== null ? " app-evt-running-live" : ""}`,
+          ...(live !== null ? { onclick: () => openDrillin(run.runId) } : {}),
         },
         span(
           eventIconProps(run),
@@ -1357,14 +1429,29 @@
             run.tier !== undefined && run.tier !== null
               ? span({ "data-testid": "tier-badge", class: "app-pill app-tier-badge" }, run.tier)
               : null,
+            live !== null && live.failed > 0
+              ? span({ "data-testid": "running-failed", class: "app-running-failed" }, `${live.failed} ✗`)
+              : null,
           ),
-          div(
-            { class: "app-evt-line app-card-meta" },
-            span({ "data-testid": "running-label", class: "app-running-label" }, "running…"),
-            RunningElapsed(run.startedAt),
-          ),
+          live !== null ? RunningProgress(live) : null,
+          live !== null
+            ? div(
+                { class: "app-evt-line app-card-meta app-running-line" },
+                span({ "data-testid": "running-count", class: "app-running-count" }, liveCountText(live)),
+                live.currentFile !== undefined
+                  ? span({ "data-testid": "running-file", class: "app-running-file" }, live.currentFile)
+                  : null,
+                RunningElapsed(run.startedAt),
+                span({ "data-testid": "running-open-hint", class: "app-running-open-hint" }, "› open"),
+              )
+            : div(
+                { class: "app-evt-line app-card-meta" },
+                span({ "data-testid": "running-label", class: "app-running-label" }, "running…"),
+                RunningElapsed(run.startedAt),
+              ),
         ),
       );
+    };
 
     // §S3 — the ABORTED run's card: struck/grey, carrying the reason, and
     // clickable (its drill-in shows that reason plus whatever partial context
@@ -1823,6 +1910,14 @@
     // (retired from the body's FailuresFooter). Absent for headers with no
     // body handle (the visible home band); the drill-in suites scope the
     // controls to the overlay's inhead copy / the workspace header.
+    // CR-CRU-223 §S3 — the live drill-in's header:
+    // `← · Run detail · live · <done of total> · <passed> ✓ <failed> ✗`, with
+    // `<pending> ⏭` when above zero, following each live read.
+    const LiveHeadContent = (body) => [
+      button({ class: "app-chip", onclick: () => closeDetail() }, () => backChipLabel()),
+      span({ class: "app-rail-title" }, () => body.title()),
+    ];
+
     const DetailHeadContent = (eventId, controls) => [
       button({ class: "app-chip", onclick: () => closeDetail() }, () => backChipLabel()),
       span({ class: "app-rail-title" }, `Run detail · ${eventId}`),
@@ -1913,13 +2008,21 @@
     // body. closeDetail() clears it so a reopen builds fresh.
     let openDetailKey;
     let openDetailBody = null;
+    // CR-CRU-223 §S3 — an open run's id (`run-` prefix; an event id never
+    // carries it) opens the run detail in its LIVE mode (`LiveRunBody`).
     const detailBodyFor = (eventId) => {
       if (openDetailBody === null || openDetailKey !== eventId) {
         openDetailKey = eventId;
-        openDetailBody = RunDetailBody(eventId);
+        openDetailBody = isLiveRunId(eventId) ? LiveRunBody(eventId) : RunDetailBody(eventId);
       }
       return openDetailBody;
     };
+
+    // The detail header for either mode: the live one names its counts.
+    const DetailHead = (eventId) =>
+      isLiveRunId(eventId)
+        ? LiveHeadContent(detailBodyFor(eventId))
+        : DetailHeadContent(eventId, detailBodyFor(eventId).headerControls);
 
     // CR-CRU-016 §S1 header-always-visible — with a detail open, home pins
     // the detail header ABOVE the timeline pane's scroller in its own band;
@@ -1934,10 +2037,7 @@
                 // CR-CRU-038 §S3 — thread the SHARED body's headerControls
                 // into the VISIBLE band (failure-jump + raw-toggle sit beside
                 // the density chip here, not only in the hidden inhead copy).
-                DetailHeadContent(
-                  state.route.overlay,
-                  detailBodyFor(state.route.overlay).headerControls,
-                ),
+                DetailHead(state.route.overlay),
               )
             : "",
         Timeline(),
@@ -7333,12 +7433,15 @@
       // vertical scroll AND sources §S4.4 virtualization (onscroll).
       // CR-CRU-038 §S3 — build the body FIRST so the header can mount its
       // failure-jump + raw-toggle controls (wired to this body's state).
-      const detailBody = RunDetailBody(eventId);
+      // CR-CRU-223 §S3 — an open run's live body is the shared cached one, so
+      // a re-render keeps what the live reads have filled in.
+      const live = isLiveRunId(eventId);
+      const detailBody = live ? detailBodyFor(eventId) : RunDetailBody(eventId);
       return div(
         { "data-testid": "run-overlay", class: "app-drillin app-inpane app-detail-col" },
         div(
           { class: "app-drillin-head app-top" },
-          ...DetailHeadContent(eventId, detailBody.headerControls),
+          ...(live ? LiveHeadContent(detailBody) : DetailHeadContent(eventId, detailBody.headerControls)),
         ),
         div(
           { "data-testid": "workspace-runs", class: greyed("app-center") },
@@ -7449,6 +7552,109 @@
     // suite-row + leaf-row nodes stay well under 200 at any leaf count.
     const VIRT_ROW_HEIGHT = 28;
     const VIRT_WINDOW = 120;
+    // CR-CRU-223 §S3 — a live failure row's fixed height (name line + message
+    // line), which drives its window exactly as VIRT_ROW_HEIGHT drives a tree's.
+    const LIVE_ROW_HEIGHT = 40;
+
+    /** CR-CRU-223 §S3 — an open run's id carries the `run-` prefix; an event id never does. */
+    function isLiveRunId(id) {
+      return typeof id === "string" && id.startsWith("run-");
+    }
+
+    // A live failure's one explaining line: its message's first line, else its type.
+    const liveFailureLine = (f) =>
+      typeof f.message === "string" && f.message.length > 0 ? f.message.split("\n")[0] : (f.type ?? "");
+
+    const LiveFailureRow = (f) =>
+      div(
+        { "data-testid": "live-failure-row", class: "app-live-failure" },
+        div(
+          { class: "app-live-failure-head" },
+          span({ class: "app-live-glyph" }, "✗"),
+          span({ "data-testid": "live-failure-name", class: "app-live-failure-name" }, f.name),
+          span({ class: "app-live-failure-file" }, f.file),
+        ),
+        div({ "data-testid": "live-failure-message", class: "app-live-failure-message" }, liveFailureLine(f)),
+      );
+
+    // CR-CRU-223 §S3 — the run detail's LIVE mode, for an open run: every
+    // failure so far, oldest first, through the same VIRT_WINDOW windowing as
+    // the run detail's tree, then ONE passed row with its count (it does not
+    // expand). Filled by `readLive` — on open, and on each refresh after it.
+    const LiveRunBody = (runId) => {
+      const counts = van.state(null);
+      const failures = van.state([]);
+      const loadError = van.state(null);
+      const windowStart = van.state(0);
+
+      const title = () => {
+        const c = counts.val;
+        if (c === null) return "Run detail · live";
+        const pending = c.pending > 0 ? ` ${c.pending} ⏭` : "";
+        return `Run detail · live · ${liveCountText(c)} · ${c.passed} ✓ ${c.failed} ✗${pending}`;
+      };
+
+      // An open answer: the counts replace the held ones, and the failures
+      // from `failuresFrom` replace what is held from there on (an answer
+      // repeating rows already shown never shows them twice).
+      const apply = (answer) => {
+        const from = typeof answer.failuresFrom === "number" ? answer.failuresFrom : 0;
+        const held = failures.val;
+        if (from <= held.length) {
+          failures.val = held.slice(0, from).concat(Array.isArray(answer.failures) ? answer.failures : []);
+        }
+        if (answer.live !== null && typeof answer.live === "object") counts.val = answer.live;
+        loadError.val = null;
+      };
+
+      const body = div({ class: "app-drillin-body app-live-body" }, () => {
+        const c = counts.val;
+        if (c === null) {
+          return loadError.val !== null
+            ? div({ class: "app-empty" }, loadError.val)
+            : div({ class: "app-empty" }, Spinner(), " loading live run…");
+        }
+        const list = failures.val;
+        const total = list.length;
+        const start = Math.max(0, Math.min(windowStart.val, Math.max(0, total - VIRT_WINDOW)));
+        const end = Math.min(total, start + VIRT_WINDOW);
+        return div(
+          div(
+            { "data-testid": "live-failure-list", class: "app-live-failures" },
+            div({ class: "app-virt-spacer", style: `height:${start * LIVE_ROW_HEIGHT}px;` }),
+            list.slice(start, end).map(LiveFailureRow),
+            div({ class: "app-virt-spacer", style: `height:${(total - end) * LIVE_ROW_HEIGHT}px;` }),
+          ),
+          div({ "data-testid": "live-passed-row", class: "app-live-passed" }, `✓ ${c.passed} passed`),
+        );
+      });
+
+      // The pane scroller moves the window, as the tree's handlePaneScroll does.
+      const handlePaneScroll = (e) => {
+        const pane = e.target;
+        if (pane === null || pane === undefined) return;
+        const list = pane.querySelector('[data-testid="live-failure-list"]');
+        if (list === null) return;
+        const into = (pane.scrollTop ?? 0) - (list.offsetTop ?? 0);
+        const start = Math.max(0, Math.floor(into / LIVE_ROW_HEIGHT));
+        if (windowStart.val !== start) windowStart.val = start;
+      };
+
+      const handle = {
+        live: true,
+        runId,
+        counts,
+        failures,
+        loadError,
+        apply,
+        title,
+        body,
+        handlePaneScroll,
+        headerControls: [],
+      };
+      void readLive(handle);
+      return handle;
+    };
 
     // "A scenario's identity is (name, browser)": a playwright scenario run
     // under two browsers is two same-named nodes, each with its own steps, so
@@ -8568,10 +8774,7 @@
       const detailBody = detailBodyFor(eventId);
       return div(
         { "data-testid": "run-overlay", class: "app-drillin app-inpane" },
-        div(
-          { class: "app-drillin-inhead" },
-          DetailHeadContent(eventId, detailBody.headerControls),
-        ),
+        div({ class: "app-drillin-inhead" }, DetailHead(eventId)),
         // CR-CRU-023 §S1 — same shared pane-content wrapper as the
         // workspace's WorkspaceRunDetail form: the run detail is one of the
         // seven floored pane surfaces wherever it renders. Post CR-CRU-029

@@ -73,6 +73,7 @@ import type {
   QueueLifecycle,
   RunContext,
   RunEvent,
+  RunLive,
   RunSchema,
   RunSummary,
   SuiteNode,
@@ -1413,6 +1414,37 @@ async function handleRunAbort(store: Store, runId: string, req: Request): Promis
     return fail(409, `run ${runId} settled before it could be aborted — run NOT aborted`);
   }
   return json({ ok: true, changed: true, runId, status: "aborted", reason });
+}
+
+/** CR-CRU-223 §S1 — the open run's live read: `/api/v2/runs/<runId>/live`. */
+const RUN_LIVE_RE = /^\/api\/v2\/runs\/([^/]+)\/live$/;
+
+/**
+ * CR-CRU-223 §S1 — GET /api/v2/runs/<runId>/live[?from=<n>]: what the live
+ * drill-in reads.
+ *  - a settled run → `{state: "ended" | "aborted", eventId}`, whatever live
+ *    state is still held, so the view moves to the settled run's detail;
+ *  - an open run with a live state → `{state: "open", live, failures,
+ *    failuresFrom}`, `failures` from index `from` (default 0), oldest first;
+ *  - an open run with no live state, or a run never issued → 404.
+ */
+function handleRunLive(store: Store, runId: string, url: URL): Response {
+  const run = store.getRun(runId);
+  if (run === null) return fail(404, `unknown runId: ${runId}`);
+  if (run.state !== "open") {
+    return json({ ok: true, state: run.state, eventId: run.eventId });
+  }
+  const live = store.runLive(runId);
+  if (live === null) return fail(404, `no live state held for open run ${runId}`);
+  const rawFrom = Number(url.searchParams.get("from") ?? "0");
+  const from = Number.isInteger(rawFrom) && rawFrom > 0 ? rawFrom : 0;
+  return json({
+    ok: true,
+    state: "open",
+    live: liveCounts(live),
+    failures: live.failures.slice(from),
+    failuresFrom: from,
+  });
 }
 
 /**
@@ -5153,9 +5185,13 @@ function eventBrief(event: RunEvent) {
  * NOT an event brief — an open run has no counts, no duration and no id in the
  * events table, and fabricating those keys is exactly what would let a running
  * card be mistaken for a finished one. `state` is omitted for the same reason
- * it cannot vary: everything here is open by construction.
+ * it cannot vary: everything here is open by construction. CR-CRU-223
+ * §S1 adds `live`, the run's counts so far, nested and never top-level.
  */
-function openRunBrief(run: RunRecord) {
+function openRunBrief(store: Store, run: RunRecord) {
+  // CR-CRU-223 §S1 — `live`, the run's counts so far, only when the board
+  // holds a live state for it; never its failures (the drill-in reads those).
+  const live = store.runLive(run.runId);
   return {
     runId: run.runId,
     projectKey: run.projectKey,
@@ -5164,8 +5200,24 @@ function openRunBrief(run: RunRecord) {
     ...(run.tier !== undefined ? { tier: run.tier } : {}),
     ...(run.stack !== undefined ? { stack: run.stack } : {}),
     ...(run.context !== undefined ? { context: run.context } : {}),
+    ...(live !== null ? { live: liveCounts(live) } : {}),
   };
 }
+
+/** CR-CRU-223 §S1 — the wire counts of a live state: its six keys, `total`
+ *  absent when the runner gave none or gave 0, `currentFile` absent with none. */
+function liveCounts(live: RunLive): LiveCountsWire {
+  return {
+    completed: live.completed,
+    ...(live.total !== undefined && live.total > 0 ? { total: live.total } : {}),
+    passed: live.passed,
+    failed: live.failed,
+    pending: live.pending,
+    ...(live.currentFile !== undefined ? { currentFile: live.currentFile } : {}),
+  };
+}
+
+type LiveCountsWire = Omit<RunLive, "failures">;
 
 function handleEventsList(store: Store, req: Request, url: URL): Response {
   const project = url.searchParams.get("project") ?? undefined;
@@ -5217,7 +5269,7 @@ function handleEventsList(store: Store, req: Request, url: URL): Response {
   return reply(req, url, {
     ok: true,
     events: withDecisionSummaries(store, store.listEvents(project, limit)),
-    openRuns: store.listOpenRuns(project).map(openRunBrief),
+    openRuns: store.listOpenRuns(project).map((run) => openRunBrief(store, run)),
   });
 }
 
@@ -5586,6 +5638,10 @@ export function handleV2(
   const abortRunId = RUN_ABORT_RE.exec(pathname)?.[1];
   if (req.method === "POST" && abortRunId !== undefined) {
     return handleRunAbort(store, decodeURIComponent(abortRunId), req);
+  }
+  const liveRunId = RUN_LIVE_RE.exec(pathname)?.[1];
+  if (req.method === "GET" && liveRunId !== undefined) {
+    return handleRunLive(store, decodeURIComponent(liveRunId), url);
   }
   // CR-CRU-013 §S1+§S4b — flat top-level gate/milestone routes (next to
   // /runs, NOT under /projects/).
