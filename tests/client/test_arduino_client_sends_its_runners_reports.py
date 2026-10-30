@@ -106,7 +106,10 @@ def _report(stem, cases):
 
 # The reports the fake writes, `{file name: text}`: one passing case in each
 # of two test files (`pass`), the same with the second failing (`fail`) or
-# skipped (`skip`), or one report that holds no case at all (`zero`).
+# skipped (`skip`), one report that holds no case at all (`zero`), or the
+# passing first report beside a second that is not well-formed XML
+# (`malformed`), whose results cannot be counted.
+MALFORMED_REPORT = "TEST-test_pid.xml"
 REPORTS = {
     "pass": {"TEST-test_motor.xml": _report("test_motor", [("test_spins_up", "pass")]),
              "TEST-test_pid.xml": _report("test_pid", [("test_tunes", "pass")])},
@@ -117,6 +120,9 @@ REPORTS = {
     "zero": {"TEST-test_motor.xml": ('<?xml version="1.0" encoding="UTF-8"?>\n'
                                      '<testsuites>\n  <testsuite name="test_motor" '
                                      'tests="0" failures="0"/>\n</testsuites>\n')},
+    "malformed": {"TEST-test_motor.xml": _report("test_motor", [("test_spins_up", "pass")]),
+                  MALFORMED_REPORT: ('<?xml version="1.0" encoding="UTF-8"?>\n'
+                                     '<testsuites>\n  <testsuite name="test_pid"\n')},
 }
 
 
@@ -140,7 +146,7 @@ _FAKE_KEYS = ("FAKE_EXIT", "FAKE_VARIANT", "FAKE_NO_LCOV")
 
 # A fake `make`. Whatever the target, it prints OUTPUT_MARKER and Unity's
 # verdict line on stdout, writes the FAKE_VARIANT reports (`pass` by default;
-# `fail`, `skip`, `zero`, or `none` for no report) into REPORTS_DIR (else
+# `fail`, `skip`, `zero`, `malformed`, or `none` for no report) into REPORTS_DIR (else
 # `reports/` under its cwd), and, when COVERAGE_DIR is set, the lcov there as
 # `lcov.info` unless FAKE_NO_LCOV=1. It exits FAKE_EXIT (default 0).
 _FAKE_MAKE = r'''
@@ -663,6 +669,68 @@ class ARunWithoutAgentExitsWithItsRunnersExitTest(_ArduinoProject, unittest.Test
         self.the_run_line(result, "ran 2 testcases (1 not skipped); runner exit 0")
         self.assertEqual(result.returncode, 0, self.diagnostics(result))
         self.assert_nothing_filed(result)
+
+
+class ARunWithoutAgentOverAnUnreadableReportSaysItsCountIsUnknownTest(
+        _ArduinoProject, unittest.TestCase):
+    """No `--agent`, and one of the reports `make` wrote is not well-formed:
+    the run's line says its count is unknown (never a literal `None`), still
+    ends with `make`'s exit, the run exits with that exit, and the warning
+    that the report's results could not be counted is printed once."""
+
+    UNKNOWN = re.compile(r"unknown|could not be counted", re.IGNORECASE)
+
+    assert_nothing_filed = ARunWithoutAgentExitsWithItsRunnersExitTest.assert_nothing_filed
+
+    def setUp(self):
+        self.make()
+
+    def tearDown(self):
+        self.cleanup()
+
+    def the_unknown_count_line(self, result, runner_exit):
+        lines = [line for line in result.stderr.splitlines()
+                 if "runner exit" in line]
+        self.assertEqual(len(lines), 1,
+                         f"the run prints its one `runner exit` line; "
+                         f"{self.diagnostics(result)}")
+        line = lines[0] if lines else ""
+        self.assertNotIn("None", line,
+                         f"a count the run could not take is never printed as "
+                         f"`None`; line={line!r}")
+        self.assertRegex(line, self.UNKNOWN,
+                         f"the line says the count is unknown; line={line!r}")
+        self.assertTrue(line.endswith(f"runner exit {runner_exit}"),
+                        f"the line still ends with make's exit; line={line!r}")
+
+    def could_not_count_lines(self, result):
+        return [line for line in result.stderr.splitlines()
+                if "could not count" in line]
+
+    def test_a_clean_make_over_an_unreadable_report_says_the_count_is_unknown(self):
+        result = self.drive("unit", None, FAKE_VARIANT="malformed", FAKE_EXIT="0")
+        self.the_unknown_count_line(result, 0)
+        self.assertEqual(result.returncode, 0,
+                         f"the run exits with make's exit; {self.diagnostics(result)}")
+        self.assert_nothing_filed(result)
+
+    def test_a_make_exiting_two_over_an_unreadable_report_exits_two(self):
+        result = self.drive("unit", None, FAKE_VARIANT="malformed", FAKE_EXIT="2")
+        self.the_unknown_count_line(result, 2)
+        self.assertEqual(result.returncode, 2,
+                         f"the run exits with make's exit; {self.diagnostics(result)}")
+        self.assert_nothing_filed(result)
+
+    def test_the_could_not_count_warning_for_the_report_is_printed_once(self):
+        result = self.drive("unit", None, FAKE_VARIANT="malformed", FAKE_EXIT="0")
+        warned = self.could_not_count_lines(result)
+        self.assertEqual(
+            [line for line in warned if MALFORMED_REPORT in line], warned,
+            f"only the unreadable report is warned about; "
+            f"{self.diagnostics(result)}")
+        self.assertEqual(len(warned), 1,
+                         f"the report whose results could not be counted is "
+                         f"warned about exactly once; {self.diagnostics(result)}")
 
 
 # ── AC7 — the envelope reads the answer ─────────────────────────────────────
