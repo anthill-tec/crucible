@@ -23,7 +23,7 @@ What is asserted here:
   * both shared modules are clean under `ruff check --select F`, and the run
     module imports only the standard library;
   * one emitter: the run module defines `emit_run_axi`, it builds the
-    envelope the four clients' emitters built, and each of those emitters is
+    envelope the clients' own emitters built, and each client's emitter is
     one `return _axi().emit_run_axi(...)` passing the context built with
     `cycle_id=_axi().echoed_cycle_id(resp)`.
 
@@ -92,7 +92,8 @@ GATED_BOOKKEEPING = ("_gated_trap", "_gated_open_run", "_gated_held",
 RUN_EMITTERS = (("bun-crucible.py", "_emit_ingest_axi"),
                 ("python-crucible.py", "_emit_ingest_axi"),
                 ("mvn-crucible.py", "_emit_run_axi"),
-                ("rust-crucible.py", "_emit_run_axi"))
+                ("rust-crucible.py", "_emit_run_axi"),
+                ("arduino-crucible.py", "_emit_run_axi"))
 
 COUNT_KEYS = ("passed", "failed", "pending", "total", "files")
 
