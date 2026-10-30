@@ -1067,8 +1067,13 @@
         ),
         // Between runs the server serves the agent's composed idle line (role,
         // binding, last run and its age); while a run is open it serves none,
-        // and the row reads the agent's own message.
-        span({ class: "app-agent-msg" }, agent.idleLine ?? (agent.message || "—")),
+        // and the row reads the agent's own message. CR-CRU-200 §S4 — while
+        // the agent's newest live-carrying open run streams, the row reads its
+        // `running …` line instead, re-read as `events` frames move the slice.
+        span(
+          { class: "app-agent-msg" },
+          () => agentLiveLine(agent) ?? agent.idleLine ?? (agent.message || "—"),
+        ),
         // CR-CRU-011 §S2 — server-computed runtime: live rows tick with each
         // refetched runtime_ms; tombstoned rows render the sealed value.
         typeof agent.runtime_ms === "number"
@@ -1532,6 +1537,24 @@
         (run) =>
           run.projectKey === state.route.projectKey && run.agentId === agent.agentId,
       );
+    }
+
+    // CR-CRU-200 §S4 — the agent's line while it streams, composed here from
+    // `state.openRuns`: the newest open run of the agent in this project that
+    // carries `live` (a newer run without it is passed over) reads
+    // `running <done of total> · <currentFile>`, the file part absent without
+    // one. Null when no such run is open, and the row reads its own line.
+    function agentLiveLine(agent) {
+      let newest = null;
+      for (const run of state.openRuns) {
+        if (run.projectKey !== state.route.projectKey || run.agentId !== agent.agentId) continue;
+        if (run.live === undefined || run.live === null) continue;
+        if (newest === null || run.startedAt > newest.startedAt) newest = run;
+      }
+      if (newest === null) return null;
+      const live = newest.live;
+      const file = typeof live.currentFile === "string" && live.currentFile !== "" ? ` · ${live.currentFile}` : "";
+      return `running ${liveCountText(live)}${file}`;
     }
 
     // ── §S2 (CR-CRU-007) — RED→GREEN transition markers (= Cycles) ──────
