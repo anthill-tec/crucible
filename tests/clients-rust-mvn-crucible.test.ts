@@ -1447,7 +1447,7 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     expect(proxy.calls.some((c) => c.path === "/api/ingest")).toBe(false);
   });
 
-  test("'module' tier: TWO reactor surefire-reports dirs → POST /api/v2/runs/parsed (never v1), tier:'module'", async () => {
+  test("'module' tier: TWO reactor surefire-reports dirs → one POST /api/v2/runs (never the parsed route, never v1), tier:'module'", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-module-tier");
@@ -1472,13 +1472,12 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     expect(event.tier).toBe("module");
     expect(event.summary?.total).toBe(2);
     expect(event.summary?.passed).toBe(2);
-    expect(
-      proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed"),
-    ).toBe(true);
+    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs")).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/v2/runs/parsed")).toBe(false);
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
-  test("'e2e' tier: surefire + failsafe dirs → POST /api/v2/runs/parsed, tier:'e2e'", async () => {
+  test("'e2e' tier: surefire + failsafe dirs → one POST /api/v2/runs (never the parsed route), tier:'e2e'", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-e2e-tier");
@@ -1503,13 +1502,12 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     expect(event.tier).toBe("e2e");
     expect(event.summary?.total).toBe(2);
     expect(event.summary?.failed).toBe(1);
-    expect(
-      proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed"),
-    ).toBe(true);
+    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs")).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/v2/runs/parsed")).toBe(false);
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
-  test("'regression' tier: surefire + failsafe (all-green) + jacoco.csv → POST /api/v2/runs/parsed, tier:'regression', coverage attached", async () => {
+  test("'regression' tier: surefire + failsafe (all-green) + jacoco.csv → one POST /api/v2/runs (never the parsed route), tier:'regression', the CSV decoded on the board as its coverage", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-regression-tier");
@@ -1520,7 +1518,7 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     Bun.spawnSync({ cmd: ["mkdir", "-p", surefireDir] });
     Bun.spawnSync({ cmd: ["mkdir", "-p", failsafeDir] });
     Bun.spawnSync({ cmd: ["mkdir", "-p", jacocoDir] });
-    // Coverage is only ever published when the reactor is all-green.
+    // The client sends the CSV as it stands; the board sums it.
     writeJunitXml(join(surefireDir, "TEST-Unit.xml"), "Unit", [{ name: "u1" }, { name: "u2" }]);
     writeJunitXml(join(failsafeDir, "TEST-Foo.xml"), "FooIT", [{ name: "it1" }]);
     writeJacocoCsv(join(jacocoDir, "jacoco.csv"), {
@@ -1554,9 +1552,8 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     expect(event.coverage?.functions?.covered).toBe(4);
     expect(event.coverage?.branches?.total).toBe(10);
     expect(event.coverage?.branches?.covered).toBe(6);
-    expect(
-      proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed"),
-    ).toBe(true);
+    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs")).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/v2/runs/parsed")).toBe(false);
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
@@ -1660,7 +1657,7 @@ describe("clients/mvn-crucible.py — auto-ingest: JaCoCo coverage passthrough w
     scratch.cleanup();
   });
 
-  test("auto-ingest --coverage on an all-green surefire dir + jacoco.csv → POST /api/v2/runs/parsed (never v1 /api/ingest/parsed) with coverage attached; NO mvnw present anywhere in the fixture", async () => {
+  test("auto-ingest --coverage on an all-green surefire dir + jacoco.csv → one POST /api/v2/runs (never the parsed route, never v1 /api/ingest/parsed) with the CSV decoded as its coverage; NO mvnw present anywhere in the fixture", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-auto-ingest-coverage");
@@ -1699,9 +1696,8 @@ describe("clients/mvn-crucible.py — auto-ingest: JaCoCo coverage passthrough w
     expect(event.summary?.failed).toBe(0);
     expect(event.coverage?.lines?.total).toBe(10);
     expect(event.coverage?.lines?.covered).toBe(8);
-    expect(
-      proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed"),
-    ).toBe(true);
+    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs")).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/v2/runs/parsed")).toBe(false);
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 });
@@ -1732,21 +1728,13 @@ describe("clients/mvn-crucible.py — byte-compatible CLI surface (existing flag
   });
 });
 
-// CR-CRU-050 §S1/§S1b/§S3/§S2 — `_parse_junit` (mvn-crucible.py) is the
-// REFERENCE implementation this whole CR fixed the other four clients
-// toward, and MUST NOT CHANGE. `regression` (cmd_regression → _regression_run)
-// ALWAYS routes through `_parse_junit` regardless of report-dir count, so it
-// is the deterministic way to pin that reference behaviour directly. mvn's
-// COUNTING was therefore already correct before this CR; what this CR DID
-// change on mvn, per the dispatch's Part C, is purely its PRINT surfaces: the
-// TOON `run:` block (`_emit_ingest_summary_axi` in mvn-crucible.py)
-// dropped `pending` from the printed envelope even though the summary it's
-// built from already carried the real count, and — separately — the
-// single-report-dir path's OWN TOON block (`_emit_ingest_axi_resp` in
-// mvn-crucible.py) and its "ingest junit: ..." stderr line
-// (printed by `_ingest_junit_dir`) did the same for the SERVER-parsed junit-dir path.
-// All three now carry `pending`, which is what the tests below pin.
-describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (`_parse_junit` in clients/mvn-crucible.py) is CONFIRMED correct (counts AND leaf status) — pinned, not assumed; its TOON run: block carries pending (fake mvnw)", () => {
+// CR-CRU-050 §S1/§S1b/§S3/§S2 — a skipped surefire testcase is `pending`,
+// never folded into `passed`, and every print surface carries `pending`. The
+// maven client parses no report: it sends its runner's reports to the board,
+// whose junit codec decodes them, and its envelope's `run:` block and its one
+// stderr `ingest:` line read the board's answer. `regression` reads the
+// surefire and failsafe reports; `test` reads surefire's alone.
+describe("clients/mvn-crucible.py — CR-CRU-050: a skipped surefire testcase is pending on the board, in the TOON run: block and on the ingest: line (fake mvnw)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
 
@@ -1763,7 +1751,7 @@ describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (`_parse_junit` i
     return dir;
   }
 
-  test("'regression' (client-side _parse_junit, the reference impl): a skipped surefire testcase is CONFIRMED pending=1 (never folded into passed), and its leaf CONFIRMED status 'pending' (not 'pass') — mvn's counting was already correct and is UNCHANGED, not assumed; the TOON run: block (§S2) now carries pending too", async () => {
+  test("'regression': a skipped surefire testcase is pending=1 on the board (never folded into passed), its leaf status 'pending' (not 'pass'); the TOON run: block and the one 'ingest:' line carry pending too", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-cr050-regression-reference");
@@ -1787,7 +1775,8 @@ describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (`_parse_junit` i
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
-    // CONFIRMATION (not a RED) — `_parse_junit` (mvn-crucible.py) already gets this right.
+    // The board decoded the report the client sent.
+    expect(event.codec).toBe("junit");
     expect(event.summary?.total).toBe(3);
     expect(event.summary?.failed).toBe(1);
     expect(event.summary?.passed).toBe(1);
@@ -1799,20 +1788,21 @@ describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (`_parse_junit` i
     expect(skipLeaf?.status).toBe("pending");
     expect(skipLeaf?.status).not.toBe("pass");
 
-    // §S2 — the TOON run: block (_emit_ingest_summary_axi) now carries pending.
+    // §S2 — the TOON run: block carries the board's pending.
     const block = extractRunBlock(res.stdout);
     expect(block).toBeDefined();
     expect(block).toContain("pending: 1");
 
-    // CONFIRMATION — mvn's OWN "ingest parsed: ..." stderr line (mvn:752-754)
-    // already prints pending — it was never broken, unlike the other clients'
-    // equivalent lines.
-    expect(res.stderr).toContain("ingest parsed:");
-    expect(res.stderr).toContain("pending=1");
+    // The run's one stderr ingest line is the shared `ingest:` line, and it
+    // carries pending; the maven-only `ingest parsed:` line is gone.
+    const ingestLines = res.stderr.split("\n").filter((line) => line.startsWith("ingest: "));
+    expect(ingestLines.length).toBe(1);
+    expect(ingestLines[0]).toContain("pending=1");
+    expect(res.stderr).not.toContain("ingest parsed:");
   });
 });
 
-describe("clients/mvn-crucible.py — CR-CRU-050 §S2: the single-surefire-dir path ('test', server-parsed via the junit codec) carries pending in its TOON run: block and its 'ingest junit: ...' print line (fake mvnw)", () => {
+describe("clients/mvn-crucible.py — CR-CRU-050 §S2: 'test' carries pending in its TOON run: block and its one 'ingest:' line (fake mvnw)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
 
@@ -1822,7 +1812,7 @@ describe("clients/mvn-crucible.py — CR-CRU-050 §S2: the single-surefire-dir p
     scratch.cleanup();
   });
 
-  test("event.summary.pending=1 is already correct (server-side junit codec, confirmed not assumed); the TOON run: block and the plain 'ingest junit: ...' stderr line both carry pending=1 too", async () => {
+  test("event.summary.pending=1 (the board's junit codec); the TOON run: block and the one 'ingest:' stderr line both carry pending=1 too", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-cr050-unit-junit-dir");
@@ -1847,21 +1837,23 @@ describe("clients/mvn-crucible.py — CR-CRU-050 §S2: the single-surefire-dir p
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
-    // Positive pin — the server's junit codec already gets this right.
+    // Positive pin — the server's junit codec decodes the report it was sent.
     expect(event.summary?.total).toBe(2);
     expect(event.summary?.passed).toBe(1);
     expect(event.summary?.failed).toBe(0);
     expect(event.summary?.pending).toBe(1);
     expect(res.code).toBe(0);
 
-    // §S2 — the TOON run: block (_emit_ingest_axi_resp).
+    // §S2 — the TOON run: block.
     const block = extractRunBlock(res.stdout);
     expect(block).toBeDefined();
     expect(block).toContain("pending: 1");
 
-    // §S2 (extended) — the plain "ingest junit: ..." stderr line
-    // (`_ingest_junit_dir` in mvn-crucible.py).
-    expect(res.stderr).toContain("ingest junit:");
-    expect(res.stderr).toContain("pending=1");
+    // §S2 (extended) — the run's one stderr ingest line, the shared
+    // `ingest:` line; the maven-only `ingest junit:` line is gone.
+    const ingestLines = res.stderr.split("\n").filter((line) => line.startsWith("ingest: "));
+    expect(ingestLines.length).toBe(1);
+    expect(ingestLines[0]).toContain("pending=1");
+    expect(res.stderr).not.toContain("ingest junit:");
   });
 });
