@@ -190,6 +190,7 @@ RUN_ABORT_PATH = "/api/v2/runs/{run_id}/abort"
 RUN_LIFECYCLE_UNAVAILABLE_CODE = "run-lifecycle-unavailable"
 RUN_LEFT_OPEN_CODE = "run-left-open"
 RUN_ABORTED_CODE = "run-aborted"
+RUN_MAY_BE_FILED_CODE = "run-may-be-filed"
 INGESTING_MESSAGE = "ingesting\u2026"
 NARRATION_LABEL_JOINER = " \u00b7 "
 
@@ -388,12 +389,34 @@ def run_aborted_warning(run_id, reason):
     }
 
 
+#: The board's refusal of an abort for a run that is no longer open, as its
+#: run-close answer words it (`resolveRunClose`, src/v2.ts).
+_SETTLED_ABORT_REFUSAL = re.compile(r"\bHTTP 409\b.*a settled run cannot be closed twice")
+
+
+def run_may_be_filed_warning(run_id, error):
+    """The structured warning for a run whose ingest answer was lost with its
+    connection and whose abort the board refused because the run is already
+    settled: the board may have filed the run before the connection dropped,
+    so it is not left open, and the client never saw its figures."""
+    return {
+        "code": RUN_MAY_BE_FILED_CODE,
+        "detail": (f"the connection to the board was lost before it answered "
+                   f"the ingest, and it refused the abort because the run is "
+                   f"already settled ({error}) \u2014 the board may hold the run, "
+                   f"filed before the connection dropped; read it back with "
+                   f"`run {run_id}` or `runs --cycle <id>`. This envelope's "
+                   f"figures are null because the client never saw the answer"),
+    }
+
+
 def run_abort_path(run_id):
     """`RUN_ABORT_PATH` for ONE run."""
     return RUN_ABORT_PATH.format(run_id=urllib.parse.quote(str(run_id), safe=""))
 
 
-def abort_run(post_fn, project_key, agent_id, run_id, reason):
+def abort_run(post_fn, project_key, agent_id, run_id, reason, *,
+              answer_lost=False):
     """Close a run this client opened and can no longer file: ONE `POST
     /api/v2/runs/<runId>/abort {projectKey, agentId, reason}` through the
     client's own `post_fn`, `reason` naming the exit that reached it.
@@ -401,7 +424,12 @@ def abort_run(post_fn, project_key, agent_id, run_id, reason):
     Returns the ONE warning that exit's envelope carries for the run:
     `run-aborted` when the board settled it, else `run-left-open` (the abort
     was refused or never reached the board, so the server's own sweep still
-    settles the run). The fleet's every abort goes through here."""
+    settles the run). The fleet's every abort goes through here.
+
+    `answer_lost` says the ingest's connection was lost before its answer
+    arrived: a board that then refuses the abort because the run is already
+    settled may have filed it, and the warning says so instead
+    (`run_may_be_filed_warning`)."""
     resp = post_fn(run_abort_path(run_id),
                    {"projectKey": project_key, "agentId": agent_id,
                     "reason": reason}) or {}
@@ -410,6 +438,11 @@ def abort_run(post_fn, project_key, agent_id, run_id, reason):
         print(f"[crucible] run {run_id} aborted: {reason}", file=sys.stderr)
         return run_aborted_warning(run_id, reason)
     error = resp.get("error") or "the board did not settle it"
+    if answer_lost and _SETTLED_ABORT_REFUSAL.search(error):
+        print(f"[crucible] WARN: run {run_id} is already settled on the board "
+              f"\u2014 it may have filed the run before the connection dropped",
+              file=sys.stderr)
+        return run_may_be_filed_warning(run_id, error)
     print(f"[crucible] WARN: the abort of run {run_id} was not accepted "
           f"({error}) \u2014 it is left to the server's auto-abort", file=sys.stderr)
     return run_left_open_warning(

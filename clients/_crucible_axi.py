@@ -30,6 +30,7 @@ import collections
 import contextlib
 import datetime
 import functools
+import http.client
 import importlib.util
 import io
 import json
@@ -665,7 +666,13 @@ def http_request(base_url, method, path, payload=None, timeout=None):
             response.close()
     # pi-lens-ignore: unreachable-except — HTTPError is caught before its base URLError, so both clauses are reached
     except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="replace")
+        try:
+            detail = e.read().decode(errors="replace")
+        except (ConnectionError, http.client.HTTPException) as unreadable:
+            # The status arrived, so the board was reached; only its body was
+            # cut short, and the status is all there is to report.
+            return {"ok": False, "error": f"HTTP {e.code}: <body unreadable: "
+                                          f"{type(unreadable).__name__}>"}
         failure = {"ok": False, "error": f"HTTP {e.code}: {detail}"}
         # CR-CRU-129 §S4 — a client-class status can carry a STRUCTURED answer,
         # not merely a sentence: the release route REFUSES a lossy replay with
@@ -710,8 +717,22 @@ def http_request(base_url, method, path, payload=None, timeout=None):
         return {"ok": False, "error": f"request timed out after {timeout}s "
                                       f"(is Crucible at {base_url} overloaded? "
                                       f"{BOARD_SOURCE})"}
+    except (ConnectionError, http.client.HTTPException) as e:
+        # A board that drops the connection while answering: `urllib` wraps
+        # only the request's send in a `URLError`, so a close after reading
+        # (`RemoteDisconnected`), a reset, a body cut short of its length
+        # (`IncompleteRead`) or a status line that is not HTTP
+        # (`BadStatusLine`) arrives here unwrapped. It is answered as an
+        # unreachable board is. A bare `OSError` is still not caught.
+        return {"ok": False, "error": f"{CONNECTION_LOST_PREFIX}{e!r} "
+                                      f"(is Crucible at {base_url} reachable? "
+                                      f"{BOARD_SOURCE})"}
     return json.loads(body) if body else {"ok": True}
 
+
+#: How `http_request` begins the error of a connection the board dropped while
+#: answering: the board may have acted on the request before it dropped.
+CONNECTION_LOST_PREFIX = "connection lost: "
 
 
 # A write the board refused because it holds no project under the key the
@@ -6652,10 +6673,14 @@ def post_ingest(post_fn, path, payload, *, stack, release=None):
                     and run_id not in _refused_ingest_runs):
                 _refused_ingest_runs.add(run_id)
                 error = (resp or {}).get("error") or "no reason given"
+                answer_lost = str(error).startswith(CONNECTION_LOST_PREFIX)
                 refused = abort_run(
                     post_fn, payload.get("projectKey"), payload.get("agentId"),
                     run_id,
-                    f"the board refused the ingest that carried it ({error})")
+                    (f"the ingest that carried it got no answer ({error})"
+                     if answer_lost else
+                     f"the board refused the ingest that carried it ({error})"),
+                    answer_lost=answer_lost)
                 _refused_ingest_warnings.append(refused)
             if path in RUN_INGEST_PATHS:
                 _note_filed_run(resp)
