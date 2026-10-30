@@ -15,6 +15,8 @@ import { parsePlaywright, parsePlaywrightPath } from "./playwright.ts";
 export interface DecodeOptions {
   stack?: string;
   onSkip?: (report: string, error: string) => void;
+  /** CR-CRU-200 §S1 — a stream codec's stream was cut at `ingest_body_bytes`. */
+  cut?: boolean;
 }
 
 /**
@@ -23,6 +25,8 @@ export interface DecodeOptions {
  */
 export interface DecodedRun extends RunSchema {
   files?: string[];
+  /** CR-CRU-200 §S1 — a stream codec's reasons its stream cannot be trusted; absent when none. */
+  incomplete?: string;
 }
 
 export interface Codec {
@@ -64,7 +68,13 @@ export const codecs: Map<string, Codec> = new Map<string, Codec>([
       parsePath: (path: string) => parsePlaywrightPath(path),
     },
   ],
-  ["crucible-events", { parse: (data: string) => parseCrucibleEvents(data), stream: true }],
+  [
+    "crucible-events",
+    {
+      parse: (data: string, options?: DecodeOptions) => parseCrucibleEvents(data, options?.cut === true),
+      stream: true,
+    },
+  ],
 ]);
 
 /** The names this board decodes, for health: test and coverage codecs, sorted. */
@@ -222,32 +232,38 @@ export async function parseRunBody(
 }
 
 /**
- * CR-CRU-200 §S3 — a stream close's run: the run's held `stream` decoded by
+ * CR-CRU-200 §S3 — a stream close's run: the run's held stream decoded by
  * the stream codec, SYNCHRONOUSLY so the store can decode it inside the
  * close's transaction, then read as `parseRunBody` reads a report — the
- * body's `raw` and `coverage` as today.
+ * body's `raw` and `coverage` as today. `cut` tells the codec the board
+ * refused a batch at `ingest_body_bytes`; `incomplete` is the codec's
+ * reasons the stream cannot be trusted, absent when it states none.
  */
 export function parseStreamBody(
   codec: Codec,
-  stream: string,
+  held: { text: string; cut: boolean },
   body: { raw?: unknown; coverage?: unknown },
   codecName: string,
   stack?: string,
-): { run: RunSchema; warnings: IngestWarning[]; files: number } | { error: string } {
+): { run: RunSchema; warnings: IngestWarning[]; files: number; incomplete?: string } | { error: string } {
   const coverageBlock = readCoverageBlock(body.coverage);
   if ("error" in coverageBlock) return coverageBlock;
   const warnings: IngestWarning[] = [];
-  const options: DecodeOptions = stack !== undefined ? { stack } : {};
+  const options: DecodeOptions = { ...(stack !== undefined ? { stack } : {}), cut: held.cut };
   let decoded: DecodedRun | Promise<DecodedRun>;
   try {
-    decoded = codec.parse(stream, options);
+    decoded = codec.parse(held.text, options);
   } catch (cause) {
     return { error: `${errorText(cause)} — run NOT stored` };
   }
   if (decoded instanceof Promise) {
     return { error: `codec ${codecName} does not decode a stream synchronously — run NOT stored` };
   }
-  return { ...assembleRun(codec, [decoded], body, options, coverageBlock.block, warnings), warnings };
+  return {
+    ...assembleRun(codec, [decoded], body, options, coverageBlock.block, warnings),
+    warnings,
+    ...(decoded.incomplete !== undefined ? { incomplete: decoded.incomplete } : {}),
+  };
 }
 
 /**

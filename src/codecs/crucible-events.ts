@@ -182,10 +182,11 @@ function figures(counts: Omit<RunSummary, "duration_ms">): string {
  * one suite node per distinct suite in first-seen order, one leaf per
  * `test-end` in stream order, counts from the leaves, the duration the last
  * `run-end`'s, else the leaves' sum. `incomplete` states, in §S1's order and
- * joined by "; ", why the stream cannot be trusted; it is absent when nothing
- * is wrong.
+ * joined by "; ", why the stream cannot be trusted — `cut` (a batch the board
+ * refused at `ingest_body_bytes`) being the last reason; it is absent when
+ * nothing is wrong.
  */
-export function parseCrucibleEvents(text: string): DecodedStream {
+export function parseCrucibleEvents(text: string, cut = false): DecodedStream {
   const suites = new Map<string, TestLeaf[]>();
   const leaves: TestLeaf[] = [];
   const files = new Set<string>();
@@ -224,6 +225,7 @@ export function parseCrucibleEvents(text: string): DecodedStream {
   }
   if (afterRunEnd) reasons.push("a test after run-end");
   if (undecodable > 0) reasons.push(`${undecodable} undecodable ${undecodable === 1 ? "line" : "lines"}`);
+  if (cut) reasons.push("cut at ingest_body_bytes");
   return {
     summary,
     tree,

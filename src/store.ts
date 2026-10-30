@@ -5,15 +5,16 @@ import { renameSync } from "node:fs";
 import { configuredRetention, resolveLimit } from "./limits.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import {
+  abortedStreamRecord,
   appendRunStream,
   createRunStreamTables,
   deleteProjectRunStreams,
   deleteRunStream,
-  heldStream,
+  heldStreamOf,
   RUN_STREAM_TABLES,
   runLiveOf,
 } from "./run-stream.ts";
-import type { StreamBatch, StreamBatchOutcome } from "./run-stream.ts";
+import type { HeldStream, StreamBatch, StreamBatchOutcome } from "./run-stream.ts";
 import { DEFAULT_LIVENESS } from "./types.ts";
 import type {
   Agent,
@@ -891,6 +892,12 @@ export interface RecordEventMeta {
    * (declared, and never beside a cycle). Omitting it stores NULL.
    */
   release?: string;
+  /**
+   * CR-CRU-200 §S3 — why a streamed run's record cannot be trusted, stored on
+   * its event as `incomplete`. Omitting it stores none: a complete run carries
+   * no such key.
+   */
+  incomplete?: string;
 }
 
 export type ChangeKind = "projects" | "agents" | "events";
@@ -4200,6 +4207,7 @@ export class Store {
       ...(meta?.lifecycle !== undefined
         ? { startedAt: meta.lifecycle.startedAt, runtimeMs: meta.lifecycle.runtimeMs }
         : {}),
+      ...(meta?.incomplete !== undefined ? { incomplete: meta.incomplete } : {}),
     };
     this.insertEvent(event);
     return event;
@@ -5149,18 +5157,24 @@ export class Store {
 
   /**
    * CR-CRU-200 §S3 — the close of a streamed run, in ONE transaction that
-   * re-reads the run's open state inside it: `close` is handed the whole held
-   * stream and does the decode, `recordTestEvent` and `endRun` (which deletes
-   * the batches and live state). A racing batch, abort or sweep lands before
-   * it or is refused after it. Null when the run is no longer open; a throw
-   * from `close` rolls everything back.
+   * re-reads the run's open state inside it: `close` is handed the run's held
+   * stream (null when it streamed nothing) and does the decode,
+   * `recordTestEvent` and `endRun` (which deletes the batches and live state).
+   * A racing batch, abort or sweep lands before it or is refused after it.
+   * Null when the run is no longer open; a throw from `close` rolls everything
+   * back.
    */
-  closeStreamedRun<T>(runId: string, close: (stream: string) => T): T | null {
+  closeStreamedRun<T>(runId: string, close: (held: HeldStream | null) => T): T | null {
     return this.db.transaction((): T | null => {
       const run = this.getRun(runId);
       if (run === null || run.state !== "open") return null;
-      return close(heldStream(this.db, runId));
+      return close(heldStreamOf(this.db, runId));
     })();
+  }
+
+  /** CR-CRU-200 §S3 — the stream codec an open run's first batch fixed, or null when it streamed nothing. */
+  runStreamCodec(runId: string): string | null {
+    return heldStreamOf(this.db, runId)?.codec ?? null;
   }
 
   /**
@@ -5261,8 +5275,14 @@ export class Store {
    * in ONE transaction: the run row and its event can never disagree, and a
    * second sweep can never emit a duplicate abort.
    *
-   * The event stays `kind: "test"` — an aborted run is still a run (§S2's
-   * rollup guard is what will read `status`, by VALUE, in a later cycle).
+   * The event stays `kind: "test"` — an aborted run is still a run; its
+   * readers skip `status: "aborted"` (§S2's rollup guard, `foldIntoRollup`).
+   *
+   * CR-CRU-200 §S3 — a run that streamed keeps what it streamed: its held
+   * stream, read inside the same transaction, is decoded with the
+   * `crucible-events` codec (`abortedStreamRecord`), and the event carries the
+   * tree, the counts and `incomplete`. A run that streamed nothing is aborted
+   * exactly as before. The batches and live state are deleted with it.
    */
   private abortRun(
     run: RunRecord,
@@ -5270,25 +5290,28 @@ export class Store {
     at: number,
     role?: AgentRole,
   ): RunEvent {
-    const event: RunEvent = {
-      id: this.nextEventId(),
-      projectKey: run.projectKey,
-      agentId: run.agentId,
-      kind: "test",
-      tier: run.tier ?? "unit",
-      timestamp: at,
-      startedAt: run.startedAt,
-      runtimeMs: at - run.startedAt,
-      status: "aborted",
-      abortReason: reason,
-      ...(run.stack !== undefined ? { stack: run.stack } : {}),
-      ...(run.context !== undefined ? { context: run.context } : {}),
-      // An aborted verification run stays filed under its release.
-      ...(run.release !== undefined ? { release: run.release } : {}),
-      // CR-CRU-057 §S1 — the declared role off the agent row, when it survives.
-      ...(role !== undefined ? { role, roleInferred: false } : {}),
-    };
-    this.db.transaction(() => {
+    return this.db.transaction((): RunEvent => {
+      const held = heldStreamOf(this.db, run.runId);
+      const kept = held !== null ? abortedStreamRecord(held) : undefined;
+      const event: RunEvent = {
+        id: this.nextEventId(),
+        projectKey: run.projectKey,
+        agentId: run.agentId,
+        kind: "test",
+        tier: run.tier ?? "unit",
+        timestamp: at,
+        startedAt: run.startedAt,
+        runtimeMs: at - run.startedAt,
+        status: "aborted",
+        abortReason: reason,
+        ...(kept !== undefined ? { summary: kept.summary, tree: kept.tree, incomplete: kept.incomplete } : {}),
+        ...(run.stack !== undefined ? { stack: run.stack } : {}),
+        ...(run.context !== undefined ? { context: run.context } : {}),
+        // An aborted verification run stays filed under its release.
+        ...(run.release !== undefined ? { release: run.release } : {}),
+        // CR-CRU-057 §S1 — the declared role off the agent row, when it survives.
+        ...(role !== undefined ? { role, roleInferred: false } : {}),
+      };
       this.db
         .query(
           `UPDATE runs SET run_state = 'aborted', settled_at = ?, abort_reason = ?, event_id = ?
@@ -5298,8 +5321,8 @@ export class Store {
       this.insertEvent(event);
       // CR-CRU-200 §S2 — a settled run holds no stream and no live state.
       deleteRunStream(this.db, run.runId);
+      return event;
     })();
-    return event;
   }
 
   private static toRun(row: RunRow): RunRecord {
@@ -5949,6 +5972,8 @@ export class Store {
       // CR-CRU-017 §S1 — the RUN-abort reason rides the generic payload blob
       // (no fourth column: §S0 pins exactly three).
       ...(event.abortReason !== undefined ? { abortReason: event.abortReason } : {}),
+      // CR-CRU-200 §S3 — an untrusted stream's reason rides the same blob.
+      ...(event.incomplete !== undefined ? { incomplete: event.incomplete } : {}),
       // CR-CRU-038 §S2b — run-level raw output rides the generic payload blob.
       ...(event.raw !== undefined ? { raw: event.raw } : {}),
       // CR-CRU-073 §S1 — the gated release version rides the generic payload
@@ -6352,6 +6377,8 @@ export class Store {
       ...(typeof payload.abortReason === "string"
         ? { abortReason: payload.abortReason }
         : {}),
+      // CR-CRU-200 §S3 — ABSENT on a complete run (never null).
+      ...(typeof payload.incomplete === "string" ? { incomplete: payload.incomplete } : {}),
       // CR-CRU-073 §S1 — the gated version (payload) and the retirement marker
       // (column); each ABSENT when its stored value is (never fabricated).
       ...(typeof payload.version === "string" ? { version: payload.version } : {}),
@@ -6446,6 +6473,9 @@ export class Store {
   }
 
   private foldIntoRollup(row: EventRow): void {
+    // CR-CRU-200 §S3 — an aborted run's counts are not a verdict: it folds
+    // into no rollup or trend.
+    if (row.status === "aborted") return;
     // Bucket key: ALWAYS the event's UTC day (CR-033 §S1 / DN §6 — the wave key
     // served no consumer and broke date bucketing).
     const bucket = new Date(row.timestamp).toISOString().slice(0, 10);

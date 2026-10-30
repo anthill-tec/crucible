@@ -10,9 +10,9 @@
 //   the run's first batch fixed.
 // - `run_live_failures`: the run's failures so far, in order.
 import type { Database } from "bun:sqlite";
-import { leafNameOf, readStreamLine, suiteNameOf } from "./codecs/crucible-events.ts";
+import { leafNameOf, parseCrucibleEvents, readStreamLine, suiteNameOf } from "./codecs/crucible-events.ts";
 import { failureOf, nonBlank } from "./codecs/junit.ts";
-import type { RunLive, RunLiveFailure } from "./types.ts";
+import type { RunLive, RunLiveFailure, RunSchema } from "./types.ts";
 
 /** The tables a run's stream and live state are held in. */
 export const RUN_STREAM_TABLES = ["run_stream_batches", "run_live", "run_live_failures"] as const;
@@ -121,13 +121,41 @@ function heldBytesFrom(db: Database, runId: string, offset: number): Buffer {
   return bytes.subarray(offset - rows[0]!.start_offset);
 }
 
-/** The whole stream the run holds, as text; empty when it holds none. */
-export function heldStream(db: Database, runId: string): string {
-  return db
+/**
+ * A run's held stream: the stream codec its first batch fixed, the whole text
+ * held, and whether a batch was refused at `ingest_body_bytes` (the stream was
+ * cut).
+ */
+export interface HeldStream {
+  codec: string;
+  text: string;
+  cut: boolean;
+}
+
+/** The stream the run holds, or null when it has streamed nothing. */
+export function heldStreamOf(db: Database, runId: string): HeldStream | null {
+  const live = liveRow(db, runId);
+  if (live === null) return null;
+  const text = db
     .query<{ text: string }, [string]>(`SELECT text FROM run_stream_batches WHERE run_id = ? ORDER BY start_offset`)
     .all(runId)
     .map((row) => row.text)
     .join("");
+  return { codec: live.codec, text, cut: live.cut === 1 };
+}
+
+/** Why an aborted run's stream is not trusted when the codec states no reason of its own. */
+export const ABORTED_BEFORE_CLOSE = "aborted before its close";
+
+/**
+ * §S3 — what an aborted streamed run keeps: its held stream decoded with the
+ * `crucible-events` codec — the tree and counts — and why it cannot be
+ * trusted. An aborted streamed run is always incomplete: when the stream is
+ * otherwise whole, the reason is that it was aborted before its close.
+ */
+export function abortedStreamRecord(held: HeldStream): Pick<RunSchema, "summary" | "tree"> & { incomplete: string } {
+  const decoded = parseCrucibleEvents(held.text, held.cut);
+  return { summary: decoded.summary, tree: decoded.tree, incomplete: decoded.incomplete ?? ABORTED_BEFORE_CLOSE };
 }
 
 function createLiveRow(db: Database, runId: string, codec: string): void {

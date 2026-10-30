@@ -3,7 +3,7 @@
 // response carries `changed: true|false` (§S5). Shares the ONE store instance
 // with the v1 shim — src/server.ts wires handleV2 into its dispatcher.
 import { codecs, parseRunBody, parseStreamBody } from "./codecs/index.ts";
-import type { IngestWarning } from "./codecs/index.ts";
+import type { Codec, IngestWarning } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
@@ -1590,12 +1590,16 @@ function resolveRunClose(
     };
   }
   if (run.state !== "open") {
+    // CR-CRU-200 §S3 — the 409 carries the run's state and the event that
+    // settled it, so a client tells its own lost answer from a refusal.
+    const settled = { state: run.state, ...(run.eventId !== undefined ? { eventId: run.eventId } : {}) };
     return {
       fail: fail(
         409,
         `run ${runId} is already ${run.state} — a settled run cannot be closed twice; ${outcome}`,
+        settled,
       ),
-      settled: { state: run.state, ...(run.eventId !== undefined ? { eventId: run.eventId } : {}) },
+      settled,
     };
   }
   const stated = runMeta(body);
@@ -1637,6 +1641,8 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   if (badStack !== null) return badStack;
   const badExit = refuseBadRunnerExit(body);
   if (badExit !== null) return badExit;
+  const badStreamUse = refuseStreamCodecUse(codec, codecName, body);
+  if (badStreamUse !== null) return badStreamUse;
 
   // The run's effective stack (the ingest's, else its start's) is told to the
   // codec before it decodes.
@@ -1644,7 +1650,7 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   // CR-CRU-200 §S3 — a stream codec closing a run decodes the run's held
   // stream, at the close and inside its transaction; every other ingest
   // decodes its body here.
-  const streamed = codec.stream === true && typeof body.runId === "string" && body.runId.length > 0;
+  const streamed = codec.stream === true;
   const parsed = streamed ? null : await parseRunBody(codec, body, codecName, stack);
   if (parsed !== null && "error" in parsed) return fail(400, parsed.error);
 
@@ -1667,7 +1673,7 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   const close = resolveRunClose(store, pk.key, agentId, body);
   if (close.fail !== undefined) return close.fail;
 
-  const fileRun = (decoded: { run: RunSchema; warnings: IngestWarning[]; files: number }) => {
+  const fileRun = (decoded: { run: RunSchema; warnings: IngestWarning[]; files: number }, incomplete?: string) => {
     const run = fileRunnerExit(decoded.run, body.runnerExit);
     const event = store.recordTestEvent(pk.key, agentId, run, {
       codec: codecName,
@@ -1679,6 +1685,7 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
       ...(attach.role !== undefined ? { role: attach.role } : {}),
       ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
       ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
+      ...(incomplete !== undefined ? { incomplete } : {}),
     });
     // The run is settled by the event that closed it — recorded after the write,
     // so a failed ingest leaves the run OPEN (and sweepable) rather than lost.
@@ -1689,6 +1696,10 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   };
   let filed: ReturnType<typeof fileRun>;
   if (parsed !== null) {
+    // CR-CRU-200 §S3 — a run that streams its record closes only with its
+    // stream codec.
+    const streamedRun = refuseStreamedRunClose(store, close.runId);
+    if (streamedRun !== null) return streamedRun;
     filed = fileRun(parsed);
   } else {
     // CR-CRU-200 §S3 — the decode, the event, `endRun` and the deletion of the
@@ -1696,11 +1707,29 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     // state inside it.
     const runId = close.runId ?? String(body.runId);
     const closed = store.closeStreamedRun(runId, (held) => {
+      if (held === null) {
+        return {
+          error: `run ${runId} holds no stream — codec ${codecName} closes a run's held stream; run NOT stored`,
+        };
+      }
       const decoded = parseStreamBody(codec, held, body, codecName, stack);
-      return "error" in decoded ? decoded : fileRun(decoded);
+      if ("error" in decoded) return decoded;
+      const incomplete = streamIncompleteness(decoded, body.runnerExit, runId);
+      if (typeof incomplete === "object") return incomplete;
+      if (incomplete !== undefined) {
+        decoded.warnings.push({
+          code: "stream-incomplete",
+          detail: `the stream cannot be trusted: ${incomplete} — the run is stored flagged incomplete`,
+        });
+      }
+      return fileRun(decoded, incomplete);
     });
     if (closed === null) {
-      return fail(409, `run ${runId} settled before it could be closed — run NOT stored`);
+      const settled = store.getRun(runId);
+      return fail(409, `run ${runId} settled before it could be closed — run NOT stored`, {
+        ...(settled !== null ? { state: settled.state } : {}),
+        ...(settled?.eventId !== undefined ? { eventId: settled.eventId } : {}),
+      });
     }
     if ("error" in closed) return fail(400, closed.error);
     filed = closed;
@@ -1723,6 +1752,58 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     files,
     event.coverage,
   );
+}
+
+/**
+ * CR-CRU-200 §S1/§S3 — a stream codec is never a report: sent with `data` or
+ * `dataPath` it is refused, and with no `runId` there is no held stream for
+ * it to close (400, nothing stored).
+ */
+function refuseStreamCodecUse(codec: Codec, codecName: string, body: V2Body): Response | null {
+  if (codec.stream !== true) return null;
+  if (body.data !== undefined || body.dataPath !== undefined) {
+    return fail(
+      400,
+      `codec ${codecName} is a stream codec — it closes a run's held stream and is never sent as a report; send no data or dataPath; run NOT stored`,
+    );
+  }
+  if (typeof body.runId !== "string" || body.runId.length === 0) {
+    return fail(400, `codec ${codecName} is a stream codec — it closes an open run's held stream; send its runId; run NOT stored`);
+  }
+  return null;
+}
+
+/**
+ * CR-CRU-200 §S3 — a run holding a stream is closed only with its stream
+ * codec: `/runs` naming another codec, `/runs/parsed` and `/runs/compile`
+ * are refused (400), nothing stored and the run left open.
+ */
+function refuseStreamedRunClose(store: Store, runId: string | undefined): Response | null {
+  if (runId === undefined) return null;
+  const codec = store.runStreamCodec(runId);
+  if (codec === null) return null;
+  return fail(400, `run ${runId} streams its record; close it with codec \`${codec}\` — run NOT stored`);
+}
+
+/** Why a streamed run that held no test is flagged, when its codec states no reason of its own. */
+const NO_TEST_HELD = "no test held";
+
+/**
+ * CR-CRU-200 §S3 — what a stream close stores as `incomplete`: the codec's
+ * reasons. A stream that held no test is filed red, flagged, when the runner
+ * exited above 0 (`fileRunnerExit` files it), and refused otherwise (400,
+ * the run left open for the sweep or the client's abort).
+ */
+function streamIncompleteness(
+  decoded: { run: RunSchema; incomplete?: string },
+  runnerExit: unknown,
+  runId: string,
+): string | undefined | { error: string } {
+  if (decoded.run.summary.total > 0) return decoded.incomplete;
+  if (typeof runnerExit === "number" && runnerExit > 0) return decoded.incomplete ?? NO_TEST_HELD;
+  return {
+    error: `run ${runId} holds no test in its stream and states no runnerExit above 0 — run NOT stored; the run stays open`,
+  };
 }
 
 /**
@@ -1792,6 +1873,9 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   // write so a refused close (400/409) stores nothing.
   const close = resolveRunClose(store, pk.key, agentId, body);
   if (close.fail !== undefined) return close.fail;
+  // CR-CRU-200 §S3 — a run that streams its record closes only with its stream codec.
+  const streamedRun = refuseStreamedRunClose(store, close.runId);
+  if (streamedRun !== null) return streamedRun;
 
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: "parsed",
@@ -1855,6 +1939,9 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   // CR-CRU-017 §S1 — the optional run this compile ingest CLOSES.
   const close = resolveRunClose(store, pk.key, agentId, body);
   if (close.fail !== undefined) return close.fail;
+  // CR-CRU-200 §S3 — a run that streams its record closes only with its stream codec.
+  const streamedRun = refuseStreamedRunClose(store, close.runId);
+  if (streamedRun !== null) return streamedRun;
   const event = store.recordCompileEvent(pk.key, agentId, report, {
     codec: report.format,
     ...close.started,
@@ -5294,6 +5381,8 @@ function eventBrief(event: RunEvent) {
     ...(event.runtimeMs !== undefined ? { runtime_ms: event.runtimeMs } : {}),
     ...(event.status !== undefined ? { status: event.status } : {}),
     ...(event.abortReason !== undefined ? { abortReason: event.abortReason } : {}),
+    // CR-CRU-200 §S3 — an untrusted stream's reason; key ABSENT on a complete run.
+    ...(event.incomplete !== undefined ? { incomplete: event.incomplete } : {}),
   };
 }
 
