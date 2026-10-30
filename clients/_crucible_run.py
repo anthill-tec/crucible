@@ -42,7 +42,7 @@ _core = None
 # ── CR-CRU-111 §S4 — a `unit` run that WAITS says so (AC6b) ───────────────
 #
 # `unit` is the one tier of the six whose MEANING forbids waiting ("no wait on
-# the clock", `TIER_MEANINGS` above), so a run of it that spends its wall clock
+# the clock", the core's `TIER_MEANINGS`), so a run of it that spends its wall clock
 # not computing has taken a dependency its tier does not name. The check is
 # scoped to that tier alone and it is deliberate: `integration`, `e2e`,
 # `regression` and `bdd` name real elapsed time as a dependency by definition,
