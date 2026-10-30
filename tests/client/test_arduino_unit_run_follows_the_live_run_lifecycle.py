@@ -73,6 +73,8 @@ import time
 import unittest
 from pathlib import Path
 
+from tests.client.live_run_harness import HEALTH_PATHS, board_health
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARDUINO_SCRIPT = REPO_ROOT / "clients" / "arduino-crucible.py"
 SHIPPED_TOML = REPO_ROOT / "clients" / "crucible.toml"
@@ -139,7 +141,10 @@ with open(os.path.join(reports_dir, "TEST-native.xml"), "w") as f:
 class _RecordingBoard:
     """Identical in shape to the sibling run-lifecycle tests' `_RecordingBoard`:
     a real `http.server.ThreadingHTTPServer` on loopback, recording every
-    request in wire order with its receipt wall-clock time."""
+    request in wire order with its receipt wall-clock time. Its health is a
+    board's that decodes the reports the client sends (`board_health`), and
+    it answers the ingest with the `run` block of the passing run it was
+    sent."""
 
     def __init__(self):
         self.events = []  # [(wall_clock_received_at, method, path, body)]
@@ -169,7 +174,9 @@ class _RecordingBoard:
             def do_GET(self):
                 with board._lock:
                     board.events.append((time.time(), "GET", self.path, None))
-                if "/plans" in self.path:
+                if self.path in HEALTH_PATHS:
+                    self._reply(board_health())
+                elif "/plans" in self.path:
                     self._reply({"ok": True, "plans": []})
                 else:
                     self._reply({"ok": True, "agents": []})
@@ -184,6 +191,13 @@ class _RecordingBoard:
                         run_id = f"run-arduino-lifecycle-{board._run_seq}"
                     self._reply({"ok": True, "changed": True, "runId": run_id,
                                  "startedAt": int(time.time() * 1000)})
+                elif self.path == "/api/v2/runs":
+                    data = (body or {}).get("data") if isinstance(body, dict) else None
+                    sent = sum(text.count("<testcase") for text in data or []
+                               if isinstance(text, str))
+                    self._reply({"ok": True, "changed": True,
+                                 "run": {"passed": sent, "failed": 0, "pending": 0,
+                                         "total": sent, "files": 1}})
                 else:
                     self._reply({"ok": True, "changed": True})
 
@@ -296,7 +310,7 @@ class NarratedArduinoUnitRunFinalizesThroughTheSharedPathTest(unittest.TestCase)
 
         # -- AC1: run opens before the suite, in request order --------------
         start_idx = _first_matching_index(posts, lambda p, b: p == "/api/v2/runs/start")
-        ingest_idx = _first_matching_index(posts, lambda p, b: p == "/api/v2/runs/parsed")
+        ingest_idx = _first_matching_index(posts, lambda p, b: p == "/api/v2/runs")
         self.assertIsNotNone(
             start_idx, f"AC1: must POST /api/v2/runs/start; got paths={paths!r}")
         self.assertIsNotNone(
