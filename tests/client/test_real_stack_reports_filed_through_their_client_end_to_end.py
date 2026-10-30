@@ -14,7 +14,7 @@ nextest writes it, compared by `(suite, case)`) run a faithful fake runner
 that writes the fixture's own report bytes where the client tells it to (and,
 for bun, prints the fixture's captured console as its output), exits non-zero
 as the fixture's run did, and the client sends what it found to the board
-(`ingest_reports`, clients/_crucible_axi.py). The stored run is then read back
+(`ingest_reports`, clients/_crucible_run.py). The stored run is then read back
 over the board's own `GET /api/v2/events/<id>`.
 
   - the stored `total`, `passed`, `failed` and `pending`, and every case's
