@@ -13,8 +13,8 @@ Every `expected.json` was frozen at CR-CRU-152's base, and is kept as the record
 of the client parse at that point. A client that sends its runner's reports to
 the board parses none of them, so the script no longer freezes its set: bun's
 `expected.json` and python's two (`python/xmlrunner/`, `python/pytest/`)
-(CR-CRU-204), and maven's (`mvn/`), are not regenerated, and are never
-rewritten.
+(CR-CRU-204), maven's (`mvn/`) and rust's (`rust/`), are not regenerated, and
+are never rewritten.
 
 `tests/real-stack-reports-decode-on-the-board.test.ts` sends each set to
 `POST /api/v2/runs` and compares the board's decode with the frozen parse.

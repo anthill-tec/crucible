@@ -72,7 +72,10 @@ code, and every drive in this file is built from them:
   mvn      unit               `_emit_tier_run_axi`      surefire report with
                                                         tests="0" → ingested
   rust     unit               `_emit_ingest_axi`        junit with 0 testcases
-                                                        → ingested
+                              (replaced since by        → ingested
+                              `_emit_run_axi`, as the
+                              rust client sends its
+                              reports to the board)
   arduino  unit               `_emit_ingest_summary_axi` TEST-*.xml tests="0"
                                                         → ingested
 
@@ -350,7 +353,7 @@ _JUNIT_SUITE_ZERO = (
 _PY_ZERO_DISCOVERY_OUTPUT = "\n----------------------------------------------------------------------\nRan 0 tests in 0.000s\n\nOK\n"
 
 # The server answer for a run whose suite FAILED. rust's envelope reads its
-# counts from the RESPONSE (`_emit_ingest_axi` in `rust-crucible.py`), not from
+# counts from the RESPONSE (`_emit_run_axi` in `rust-crucible.py`), not from
 # a client-side parse, so a failing rust run needs the server to say so — this
 # is the honest transcription of what the junit written above would parse to.
 _FAILED_RESPONSE = {"ok": True,
@@ -444,9 +447,9 @@ class _EnvelopeTierProbe:
         harness = _MODALITY._HARNESS
         calls = []
         # The clients that send their runner's reports inline (CR-CRU-204),
-        # maven among them; the others' `/api/v2/runs` bodies are answered as
-        # before.
-        inline = self.CLIENT in ("bun", "python", "mvn")  # type: ignore[attr-defined]
+        # maven and rust among them; the others' `/api/v2/runs` bodies are
+        # answered as before.
+        inline = self.CLIENT in ("bun", "python", "mvn", "rust")  # type: ignore[attr-defined]
 
         def fake_post(path, payload):
             calls.append((path, copy.deepcopy(payload)))

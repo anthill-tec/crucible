@@ -2725,10 +2725,56 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
 // file in its child `bun test`, fired for the right reason, and gets no
 // change.
+//
+// UPDATED 2026-10-30 by CR-CRU-219's CLOSE-OUT (the FIX round, cycle 809).
+// `clients` moves 835 -> 821 (-14). MEASURED with this file's own machinery
+// on the feature branch AFTER the branch's last content edit: the recorded
+// head 835 against a measured 821, and `src` (830) and `public` (514)
+// re-measure at their recorded heads.
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show 16dd05e:<path>` (the merge-base with `develop`),
+// attributes all fourteen. Every one is a REMOVAL, and every classified
+// file the branch touches is listed:
+//
+//   clients -14:
+//     clients/rust-crucible.py 128 -> 114 (-14): the client sends nextest's
+//       reports inline to /api/v2/runs and parses nothing, so the parsers
+//       and envelope it deletes take their docstring and comment citations
+//       with them. `_emit_ingest_axi` (-3: `CR-CRU-050`, `CR-CRU-056`,
+//       `CR-CRU-094`); `_parse_junit` (-4: `CR-CRU-058`, `CR-CRU-051`,
+//       `CR-CRU-047`, `CR-CRU-050`); `_run_block` (-1: `CR-CRU-051`). The
+//       surviving bodies are reworded for the one runs ingest and drop the
+//       citations of the reading they no longer do: `_regression_ingest_run`
+//       (-3: `CR-CRU-051`, `CR-CRU-047`, `CR-CRU-038`),
+//       `_workspace_regression_run` (-2: `CR-CRU-051`, `CR-CRU-047`) and
+//       `_smoke_run` (-1: `CR-CRU-111`). `_parse_lcov` and
+//       `_ingest_junit_axi` are deleted too but carried no citation, and the
+//       added `_emit_run_axi` and `_file_reports` carry none.
+//     clients/_crucible_axi.py 221 -> 221 (0): its changed lines carry no
+//       citation, and none drops one.
+//
+//   src 0, public 0: the branch changes no file under `src/` or `public/`,
+//     so `src` (830) and `public` (514) could not have moved.
+//
+// A NET LOSS, and stated as one: `clients` goes DOWN in this re-record. It is
+// not lineage shed from living code. The fourteen citations sat on the
+// rust parsers, ingest envelope and parse-route prose this CR DELETES or
+// rewords, and they left with them; the reading they explained now lives in
+// the board's codecs. No CR-CRU-219 citation is added under a classified
+// tree. `clients` (821) is still far above its 601 floor, so the directional
+// half holds.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the branch's last content edit, so
+// these are its final figures and not a mid-cycle reading. It clears the
+// CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
+// file in its child `bun test`, fired for the right reason, and gets no
+// change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 830 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 514 },
-  clients: { exts: [".py"], develop: 601, head: 835 },
+  clients: { exts: [".py"], develop: 601, head: 821 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

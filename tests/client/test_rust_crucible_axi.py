@@ -71,6 +71,7 @@ from unittest import mock
 # installed project has; the fleet census owns that helper (one fixture shape
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
 from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client.live_run_harness import get_answering_health
 
 # CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
 # this client register, and through what?", reused rather than re-derived.
@@ -91,6 +92,8 @@ PASS_JUNIT_XML = (
     '<testcase name="test_passes" time="0.001"/>'
     '</testsuite></testsuites>'
 )
+# The `run` block a board answers an ingest of one passing case with.
+_ONE_PASSED_RUN = {"passed": 1, "failed": 0, "pending": 0, "total": 1, "files": 1}
 
 _RELAY_MARKER = "rust-gate-axi-relay-marker-888"
 _FINAL_SNAPSHOT = (
@@ -1152,11 +1155,13 @@ class RustCrucibleCycleBindingTest(_BaseRustAxiTest):
 
     def test_ingest_verb_never_calls_get_and_sends_no_resolved_cycle_in_context(self):
         self._write_ci_junit()
+        # Health answers as a board that decodes the reports, so the shared
+        # ingest sends; every other read is the tolerant failure.
         with mock.patch.object(self.module, "_post",
-                                return_value={"ok": True,
-                                               "run": {"passed": 1, "failed": 0, "total": 1}},
+                                return_value={"ok": True, "run": _ONE_PASSED_RUN},
                                 create=True) as post_mock, \
-             mock.patch.object(self.module, "_get", create=True) as get_mock:
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
+                               create=True) as get_mock:
             code, out, _err = _run_main(self.module, [
                 "auto-ingest", "--agent", "CR-Y-auto", "--project-dir", self.tmpdir,
                 "--crate", "some-crate",
@@ -1204,7 +1209,9 @@ class RustCrucibleToolchainTest(_BaseRustAxiTest):
              mock.patch.object(self.module, "_post",
                                 return_value={"ok": True,
                                                "run": {"passed": 1, "failed": 0, "total": 1}},
-                                create=True) as post_mock:
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
+                               create=True):
             code, out, _err = _run_main(self.module, [
                 "test", "--project-dir", self.tmpdir, "--crate", "some-crate",
                 "--agent", "CR-Y-toolchain",
@@ -1224,15 +1231,11 @@ class RustCrucibleToolchainTest(_BaseRustAxiTest):
             "cycleId -- attachment is server-stamped",
         )
 
-    def test_regression_ingest_verb_includes_captured_runner_output_as_raw_in_parsed_payload(self):
-        """CR-CRU-038 §S2b -- `regression-ingest` is the rust verb that
-        ALWAYS ingests through `_ingest_parsed`/POST /api/v2/runs/parsed
-        (the `test` verb instead uses the server-side codec=junit /api/v2/runs
-        path, which the server does not extend with `raw`). Its `cargo
+    def test_regression_ingest_verb_includes_captured_runner_output_as_raw_in_its_runs_ingest(self):
+        """`regression-ingest` files through the shared ingest. Its `cargo
         llvm-cov nextest` subprocess call is captured with
-        `capture_output=True`; that captured output must flow into the
-        parsed-ingest payload as `raw`. Fails today -- the payload built in
-        `_regression_ingest_run` has no `raw` key at all."""
+        `capture_output=True`; that captured output flows into the
+        `/api/v2/runs` body as `raw`."""
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         nextest_dir = os.path.join(self.tmpdir, "target", "nextest", "ci")
         os.makedirs(nextest_dir, exist_ok=True)
@@ -1252,21 +1255,24 @@ class RustCrucibleToolchainTest(_BaseRustAxiTest):
              mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
              mock.patch.object(self.module, "_get",
-                                return_value=self._active_cycle_plans(51),
+                                side_effect=get_answering_health(
+                                    self._active_cycle_plans(51)),
                                 create=True):
             code, out, _err = _run_main(self.module, [
                 "regression-ingest", "--project-dir", self.tmpdir,
                 "--crates", "some-crate", "--agent", "CR-Y-raw",
             ])
         self.assertEqual(code, 0, f"stdout={out!r}")
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+                          "the regression-ingest run is never posted to the parsed route")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call,
-                             "the regression-ingest run must actually be POSTed to /runs/parsed")
+                             "the regression-ingest run must actually be POSTed to /runs")
         payload = ingest_call[0][1]
         self.assertIn(
             marker, payload.get("raw") or "",
             f"the real captured cargo llvm-cov nextest output must flow into "
-            f"the parsed ingest payload's `raw` field; got payload keys={sorted(payload)!r}",
+            f"the ingest payload's `raw` field; got payload keys={sorted(payload)!r}",
         )
 
     def test_check_verb_runs_cargo_check_and_ingests_compile_errors(self):

@@ -213,8 +213,8 @@ class _IngestHeldSignalCase(unittest.TestCase):
                              f"{label}: the report travels inline; got {body!r}")
             self.assertNotIn("summary", body,
                              f"{label}: the client parses nothing; got {body!r}")
-        elif "summary" in body:
-            summary = body["summary"]
+        else:
+            summary = body.get("summary") or {}
             self.assertEqual(
                 summary.get("total"), 3,
                 f"{label}: the filed run must carry the runner's own "
@@ -222,15 +222,6 @@ class _IngestHeldSignalCase(unittest.TestCase):
             self.assertEqual(
                 summary.get("failed"), 0,
                 f"{label}: got summary={summary!r}")
-        else:
-            self.assertEqual(
-                body.get("codec"), "junit",
-                f"{label}: a junit-dir ingest must still name its codec; "
-                f"got {body!r}")
-            self.assertTrue(
-                body.get("dataPath"),
-                f"{label}: a junit-dir ingest must still name a real "
-                f"reports path; got {body!r}")
         aborts = self.board.aborts()
         self.assertEqual(
             aborts, [],
@@ -276,8 +267,9 @@ INGEST_HELD_SITES = (
 # The clients that send their runner's reports inline through the shared
 # ingest (CR-CRU-204), each with the number of report files its fake runner
 # writes for the 3-case run: their ingest body carries `data`, never a parse.
-# bun and python write one report; maven's surefire writes one per class.
-INLINE_REPORT_CLIENTS = {"bun": 1, "python": 1, "mvn": 3}
+# bun, python and rust write one report; maven's surefire writes one per
+# class.
+INLINE_REPORT_CLIENTS = {"bun": 1, "python": 1, "mvn": 3, "rust": 1}
 
 
 class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):

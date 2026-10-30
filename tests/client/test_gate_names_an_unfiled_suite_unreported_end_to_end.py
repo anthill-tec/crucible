@@ -8,7 +8,7 @@ counts that run cannot say what it covered. It names the suite
 `gate-suite-unreported`, never `gate-suite-failed` (nothing was filed to have
 failed), states no counts for it, and exits non-zero.
 
-Both gate shapes, for both clients:
+Both gate shapes, for each of three clients:
 
   - **bun, a declared suite** — `package.json` declares `test:unit` (an
     own-stack target the whole-suite run covers), so the gate composes;
@@ -19,7 +19,12 @@ Both gate shapes, for both clients:
     has;
   - **python, a declared suite** — the one way a python suite is a DECLARED
     suite: a bun project's `test:python` script invoking the python client,
-    which bun's gate dispatches to it.
+    which bun's gate dispatches to it;
+  - **rust, no declared suite** — no `.config/nextest.toml`: the gate's one
+    whole-suite regression IS the gate;
+  - **rust, a declared suite** — `.config/nextest.toml` declares a `unit`
+    profile (an own-stack target the whole-suite run covers), so the gate
+    composes.
 
 The board is a scratch `bun run src/server.ts` (never :3850/:3849/39877),
 booted once for the module, each test filing under a project of its own. The
@@ -66,6 +71,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 BUN_CLIENT = CLIENTS_DIR / "bun-crucible.py"
 PYTHON_CLIENT = CLIENTS_DIR / "python-crucible.py"
+RUST_CLIENT = CLIENTS_DIR / "rust-crucible.py"
 TIMEOUT = 180
 TOON = load_toon()
 
@@ -79,7 +85,8 @@ _SCRUBBED = ("BUN_CRUCIBLE_PACKAGE_DIR", "BUN_CRUCIBLE_PROJECT_DIR",
              "PY_CRUCIBLE_PYTHON", "PY_CRUCIBLE_PROJECT_DIR",
              "PYTHON_CRUCIBLE_PROJECT_DIR", "CRUCIBLE_AGENT_ID",
              "CRUCIBLE_PROJECT_KEY", "CRUCIBLE_URL", "PYTEST_ADDOPTS",
-             "COVERAGE_RCFILE", "COVERAGE_PROCESS_START")
+             "COVERAGE_RCFILE", "COVERAGE_PROCESS_START",
+             "RUST_CRUCIBLE_PROJECT_DIR", "CARGO_TARGET_DIR")
 
 # A passing run in each runner's report shape: a gate that filed it would be
 # green, so a gate that is not green is so for the unfiled run alone.
@@ -99,6 +106,15 @@ GREEN_PYTHON_JUNIT = (
     'name="test_passes" time="0.001" file="tests/test_green.py"/></testsuite>\n')
 GREEN_LCOV = ("TN:\nSF:src/green.ts\nFNF:1\nFNH:1\nDA:1,1\nDA:2,1\n"
               "LF:2\nLH:2\nend_of_record\n")
+GREEN_NEXTEST_JUNIT = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<testsuites name="nextest-run" tests="1" failures="0" errors="0">\n'
+    '  <testsuite name="green" tests="1" disabled="0" errors="0" '
+    'failures="0">\n'
+    '    <testcase name="tests::passes" classname="green" time="0.001">'
+    '</testcase>\n'
+    '  </testsuite>\n'
+    '</testsuites>\n')
 
 # The fake runners' shared tail: the cut this runner was told to make, as a
 # GET of the proxy's control path, made while the suite is still running.
@@ -173,6 +189,46 @@ out_dir = argv[len(argv) - 1 - argv[::-1].index("-o") + 1]
 write(os.path.join(out_dir, "TEST-test_green.GreenTest.xml"), JUNIT)
 sys.stderr.write("test_passes (test_green.GreenTest.test_passes) ... ok\n")
 sys.stdout.write("fake python ran\n")
+sys.stdout.flush()
+''' + _CUT + r'''
+sys.exit(0)
+'''
+
+# `cargo`'s stand-in: anything but a run naming `nextest` (the gate's
+# `cargo clean`) exits 0; a `nextest` run (bare, or under `llvm-cov`) writes
+# GREEN_NEXTEST_JUNIT to `target/nextest/<-P profile>/junit.xml`, GREEN_LCOV to
+# its `--output-path` when given one, makes the cut FAKE_CARGO_CUT names, and
+# exits 0.
+_FAKE_CARGO = r'''
+import os
+import sys
+import urllib.request
+
+CUT_VAR = "FAKE_CARGO_CUT"
+JUNIT, LCOV = ''' + repr((GREEN_NEXTEST_JUNIT, GREEN_LCOV)) + r'''
+
+def write(path, text):
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "w") as handle:
+        handle.write(text)
+
+argv = sys.argv[1:]
+if "nextest" not in argv:
+    sys.exit(0)
+profile = "default"
+lcov = None
+for i, arg in enumerate(argv):
+    if arg == "-P" and i + 1 < len(argv):
+        profile = argv[i + 1]
+    if arg == "--output-path" and i + 1 < len(argv):
+        lcov = argv[i + 1]
+write(os.path.join(os.getcwd(), "target", "nextest", profile, "junit.xml"), JUNIT)
+if lcov:
+    write(os.path.join(os.getcwd(), lcov), LCOV)
+sys.stdout.write("    Starting 1 test across 1 binary\n"
+                 "        PASS [   0.001s] green tests::passes\n")
 sys.stdout.flush()
 ''' + _CUT + r'''
 sys.exit(0)
@@ -399,6 +455,9 @@ class _GateAgainstABoardThatGoesAway(unittest.TestCase):
                                           _FAKE_BUN)
         self.fake_python = _write_executable(
             os.path.join(self.scratch, "fake_python.py"), _FAKE_PYTHON)
+        self.bin_dir = os.path.join(self.scratch, "bin")
+        os.makedirs(self.bin_dir)
+        _write_executable(os.path.join(self.bin_dir, "cargo"), _FAKE_CARGO)
 
     def manifest(self, scripts=None):
         manifest = {"name": "gate-unreported", "private": True}
@@ -411,7 +470,7 @@ class _GateAgainstABoardThatGoesAway(unittest.TestCase):
 
     def env(self, **fake):
         env = scrubbed_env(None, **fake)
-        for key in _SCRUBBED + ("FAKE_BUN_CUT", "FAKE_PYTHON_CUT"):
+        for key in _SCRUBBED + ("FAKE_BUN_CUT", "FAKE_PYTHON_CUT", "FAKE_CARGO_CUT"):
             if key not in fake:
                 env.pop(key, None)
         return env
@@ -428,11 +487,30 @@ class _GateAgainstABoardThatGoesAway(unittest.TestCase):
             "--python", self.fake_python, "--project-dir", self.project,
             "--reports", "reports"], **fake)
 
-    def _drive(self, client, argv, **fake):
+    def _drive(self, client, argv, path_prefix=None, **fake):
+        env = self.env(**fake)
+        if path_prefix:
+            env["PATH"] = path_prefix + os.pathsep + env.get("PATH", "")
         return subprocess.run([sys.executable, str(client), *argv],
-                              cwd=self.project, env=self.env(**fake),
+                              cwd=self.project, env=env,
                               capture_output=True, text=True, timeout=TIMEOUT,
                               check=False)
+
+    def rust_gate(self, agent, **fake):
+        """The rust gate, its clippy step skipped and its disk guard and
+        reclaim kept off the host, over the fake `cargo` first on PATH."""
+        return self._drive(RUST_CLIENT, [
+            "pre-merge-gate", "--agent", agent, "--skip-clippy",
+            "--min-free-g", "0", "--keep-target", "--project-dir", self.project],
+            path_prefix=self.bin_dir, **fake)
+
+    def declare_nextest_profile(self, tier):
+        """A `.config/nextest.toml` declaring `<tier>` whole: the profile and
+        the junit sub-table that makes nextest write its report."""
+        config = Path(self.project, ".config", "nextest.toml")
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(f'[profile.{tier}]\n[profile.{tier}.junit]\n'
+                          f'path = "junit.xml"\n', encoding="utf-8")
 
     @staticmethod
     def diagnostics(result):
@@ -565,6 +643,48 @@ class DeclaredPythonSuiteDispatchedByTheBunGateEndToEndTest(
 
     def test_bun_gate_dispatching_a_python_suite_whose_health_read_finds_no_board_names_it_unreported(self):
         self.drive("health", "bun-gate-python-health-gone")
+
+
+class RustGateWithNoDeclaredSuiteEndToEndTest(_GateAgainstABoardThatGoesAway):
+    """No `.config/nextest.toml`: the rust gate's one whole-suite regression
+    is the gate, and its envelope is that run's own."""
+
+    def drive(self, when, agent):
+        result = self.rust_gate(agent, FAKE_CARGO_CUT=self.cut(when))
+        envelope = self.assert_unreported_and_not_green(result, names="rust")
+        self.assert_the_cut_landed(when, result)
+        self.assertEqual(_figures(envelope.get("run")), {},
+                         f"the gate states no figures for the unfiled suite; "
+                         f"envelope={envelope!r}")
+
+    def test_rust_gate_with_no_declared_suite_whose_ingest_finds_no_board_names_it_unreported(self):
+        self.drive("ingest", "rust-gate-whole-ingest-gone")
+
+    def test_rust_gate_with_no_declared_suite_whose_health_read_finds_no_board_names_it_unreported(self):
+        self.drive("health", "rust-gate-whole-health-gone")
+
+
+class RustGateWithADeclaredSuiteEndToEndTest(_GateAgainstABoardThatGoesAway):
+    """A `unit` nextest profile declared: the gate composes, and its
+    whole-suite run, which covers `unit`, is the suite it could not file."""
+
+    def drive(self, when, agent):
+        self.declare_nextest_profile("unit")
+        result = self.rust_gate(agent, FAKE_CARGO_CUT=self.cut(when))
+        envelope = self.assert_unreported_and_not_green(result, names="unit")
+        self.assert_the_cut_landed(when, result)
+        rows = [r for r in envelope.get("suites") or []
+                if isinstance(r, dict) and r.get("suite") == "unit"]
+        self.assertEqual(len(rows), 1, f"envelope={envelope!r}")
+        self.assertEqual(_figures(rows[0] if rows else {}), {},
+                         f"the gate states no figures for the unfiled suite; "
+                         f"envelope={envelope!r}")
+
+    def test_rust_gate_with_a_declared_suite_whose_ingest_finds_no_board_names_it_unreported(self):
+        self.drive("ingest", "rust-gate-declared-ingest-gone")
+
+    def test_rust_gate_with_a_declared_suite_whose_health_read_finds_no_board_names_it_unreported(self):
+        self.drive("health", "rust-gate-declared-health-gone")
 
 
 if __name__ == "__main__":

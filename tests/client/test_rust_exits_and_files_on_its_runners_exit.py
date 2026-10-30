@@ -5,9 +5,9 @@ Every rust body that runs a test runner — `_test_run` (reached through
 profiles), `_smoke_test` (`smoke-test`, `docker-e2e-gate`),
 `_workspace_regression_run` (`workspace-regression`, `regression`,
 `pre-merge-gate`) and `_regression_ingest_run` (`regression-ingest`) — sends
-the runner's exit as `runnerExit` on its ingest, on both the `dataPath` route
-(`/api/v2/runs`, the board decodes nextest's JUnit) and the parsed route
-(`/api/v2/runs/parsed`), builds its envelope's `run:` counts from the ingest
+the runner's exit as `runnerExit` on its one `/api/v2/runs` ingest (the shared
+ingest: nextest's JUnit travels inline and the board decodes it), builds its
+envelope's `run:` counts from the ingest
 response's `run`, and exits non-zero whenever the runner exited non-zero, the
 ingest was not `ok`, or the run it filed has a failure. The board, handed a
 non-zero `runnerExit` over a run that records no failure, adds one failing
@@ -16,9 +16,9 @@ case — suite `runner`, case `exit <n>`.
 `RustRunnerExitOnARealBoardTest`
     End to end against a REAL scratch board (`tests/client/real_board.py`):
     a fake `cargo` whose nextest (or `llvm-cov nextest`) exits 1 over a
-    passing-only JUnit report, through `test`, `unit` and `smoke-test` (the
-    `dataPath` route) and `workspace-regression`, `regression-ingest` and
-    `pre-merge-gate` (the parsed route) — the stored run carries the
+    passing-only JUnit report, through `test`, `unit`, `smoke-test`,
+    `workspace-regression`, `regression-ingest` and `pre-merge-gate` — the
+    stored run carries the
     `runner / exit 1` case, the envelope's `run` counts include it, and the
     verb exits non-zero. A runner killed by SIGKILL files `exit 137`. A failing
     report makes `workspace-regression`, `regression-ingest` and the gate exit
@@ -62,7 +62,7 @@ TOON = load_toon()
 RUST_CLIENT = CLIENTS / "rust-crucible.py"
 TIMEOUT = 120
 
-RAW_INGEST = "/api/v2/runs"
+RUNS_INGEST = "/api/v2/runs"
 PARSED_INGEST = "/api/v2/runs/parsed"
 
 # Keys that would let the shell running this suite decide what the client
@@ -291,30 +291,28 @@ class RustRunnerExitOnARealBoardTest(_FakeCargoProject, unittest.TestCase):
     # -- one verb per body and per ingest route -----------------------------
 
     def test_test_whose_runner_exits_1_over_a_passing_report_files_the_runner_case(self):
-        # The `dataPath` route: the board decodes nextest's JUnit.
         self.assert_filed_red_with_the_runner_case(
-            "test", "rust-runner-exit-test-data-path")
+            "test", "rust-runner-exit-test")
 
     def test_unit_whose_runner_exits_1_over_a_passing_report_files_the_runner_case(self):
         self.assert_filed_red_with_the_runner_case(
-            "unit", "rust-runner-exit-unit-data-path")
+            "unit", "rust-runner-exit-unit")
 
     def test_smoke_test_whose_runner_exits_1_over_a_passing_report_files_the_runner_case(self):
         self.assert_filed_red_with_the_runner_case(
-            "smoke-test", "rust-runner-exit-smoke-data-path")
+            "smoke-test", "rust-runner-exit-smoke")
 
     def test_workspace_regression_whose_runner_exits_1_over_a_passing_report_files_the_runner_case(self):
-        # The parsed route: the client parses the JUnit and posts the tree.
         self.assert_filed_red_with_the_runner_case(
-            "workspace-regression", "rust-runner-exit-workspace-parsed")
+            "workspace-regression", "rust-runner-exit-workspace")
 
     def test_regression_ingest_whose_runner_exits_1_over_a_passing_report_files_the_runner_case(self):
         self.assert_filed_red_with_the_runner_case(
-            "regression-ingest", "rust-runner-exit-regression-ingest-parsed")
+            "regression-ingest", "rust-runner-exit-regression-ingest")
 
     def test_pre_merge_gate_whose_runner_exits_1_over_a_passing_report_is_not_green(self):
         self.assert_filed_red_with_the_runner_case(
-            "pre-merge-gate", "rust-runner-exit-gate-parsed")
+            "pre-merge-gate", "rust-runner-exit-gate")
 
     def test_a_runner_killed_by_sigkill_files_exit_137(self):
         agent = "rust-runner-exit-test-sigkill"
@@ -380,6 +378,8 @@ class RustRunnerExitReachesTheIngestTest(_FakeCargoProject, unittest.TestCase):
         shutil.rmtree(self.project, ignore_errors=True)
 
     def the_one_ingest(self, path, result):
+        self.assertEqual([b for p, b in self.board.posts() if p == PARSED_INGEST], [],
+                         f"nothing is posted to {PARSED_INGEST}; {_diagnostics(result)}")
         bodies = [b for p, b in self.board.posts() if p == path]
         self.assertEqual(len(bodies), 1,
                          f"exactly one {path} ingest; posts={self.board.posts()!r} "
@@ -401,32 +401,32 @@ class RustRunnerExitReachesTheIngestTest(_FakeCargoProject, unittest.TestCase):
 
     # -- runnerExit on the wire ---------------------------------------------
 
-    def test_a_clean_test_runner_sends_runner_exit_0_on_the_data_path_ingest(self):
-        self.assert_carries("test", "rust-carry-test-clean", RAW_INGEST, 0,
+    def test_a_clean_test_runner_sends_runner_exit_0_on_the_runs_ingest(self):
+        self.assert_carries("test", "rust-carry-test-clean", RUNS_INGEST, 0,
                             FAKE_EXIT="0")
 
-    def test_a_test_runner_exiting_1_sends_runner_exit_1_on_the_data_path_ingest(self):
-        self.assert_carries("test", "rust-carry-test", RAW_INGEST, 1,
+    def test_a_test_runner_exiting_1_sends_runner_exit_1_on_the_runs_ingest(self):
+        self.assert_carries("test", "rust-carry-test", RUNS_INGEST, 1,
                             FAKE_EXIT="1")
 
-    def test_a_smoke_test_runner_exiting_1_sends_runner_exit_1_on_the_data_path_ingest(self):
-        self.assert_carries("smoke-test", "rust-carry-smoke", RAW_INGEST, 1,
+    def test_a_smoke_test_runner_exiting_1_sends_runner_exit_1_on_the_runs_ingest(self):
+        self.assert_carries("smoke-test", "rust-carry-smoke", RUNS_INGEST, 1,
                             FAKE_EXIT="1")
 
-    def test_a_docker_e2e_gate_runner_exiting_1_sends_runner_exit_1_on_the_data_path_ingest(self):
+    def test_a_docker_e2e_gate_runner_exiting_1_sends_runner_exit_1_on_the_runs_ingest(self):
         self.assert_carries("docker-e2e-gate", "rust-carry-docker-e2e",
-                            RAW_INGEST, 1, FAKE_EXIT="1")
+                            RUNS_INGEST, 1, FAKE_EXIT="1")
 
-    def test_a_workspace_regression_runner_exiting_1_sends_runner_exit_1_on_the_parsed_ingest(self):
+    def test_a_workspace_regression_runner_exiting_1_sends_runner_exit_1_on_the_runs_ingest(self):
         self.assert_carries("workspace-regression", "rust-carry-workspace",
-                            PARSED_INGEST, 1, FAKE_EXIT="1")
+                            RUNS_INGEST, 1, FAKE_EXIT="1")
 
-    def test_a_regression_ingest_runner_exiting_1_sends_runner_exit_1_on_the_parsed_ingest(self):
+    def test_a_regression_ingest_runner_exiting_1_sends_runner_exit_1_on_the_runs_ingest(self):
         self.assert_carries("regression-ingest", "rust-carry-regression-ingest",
-                            PARSED_INGEST, 1, FAKE_EXIT="1")
+                            RUNS_INGEST, 1, FAKE_EXIT="1")
 
     def test_a_test_runner_killed_by_sigkill_sends_runner_exit_137(self):
-        self.assert_carries("test", "rust-carry-test-sigkill", RAW_INGEST,
+        self.assert_carries("test", "rust-carry-test-sigkill", RUNS_INGEST,
                             128 + int(signal.SIGKILL), FAKE_SIGNAL="KILL")
 
     # -- a refused ingest after a clean runner -------------------------------
@@ -441,19 +441,19 @@ class RustRunnerExitReachesTheIngestTest(_FakeCargoProject, unittest.TestCase):
 
     def test_a_refused_ingest_after_a_clean_test_runner_exits_non_zero(self):
         self.assert_refused_ingest_exits_non_zero(
-            "test", "rust-refused-test", RAW_INGEST)
+            "test", "rust-refused-test", RUNS_INGEST)
 
     def test_a_refused_ingest_after_a_clean_smoke_test_runner_exits_non_zero(self):
         self.assert_refused_ingest_exits_non_zero(
-            "smoke-test", "rust-refused-smoke", RAW_INGEST)
+            "smoke-test", "rust-refused-smoke", RUNS_INGEST)
 
     def test_a_refused_ingest_after_a_clean_workspace_regression_exits_non_zero(self):
         self.assert_refused_ingest_exits_non_zero(
-            "workspace-regression", "rust-refused-workspace", PARSED_INGEST)
+            "workspace-regression", "rust-refused-workspace", RUNS_INGEST)
 
     def test_a_refused_ingest_after_a_clean_regression_ingest_exits_non_zero(self):
         self.assert_refused_ingest_exits_non_zero(
-            "regression-ingest", "rust-refused-regression-ingest", PARSED_INGEST)
+            "regression-ingest", "rust-refused-regression-ingest", RUNS_INGEST)
 
     # -- no report, a runner that exited non-zero ---------------------------
 
@@ -464,7 +464,7 @@ class RustRunnerExitReachesTheIngestTest(_FakeCargoProject, unittest.TestCase):
             f"a runner that exited 1 and wrote no report exits non-zero; "
             f"{_diagnostics(result)}")
         test_ingests = [p for p, _ in self.board.posts()
-                        if p in (RAW_INGEST, PARSED_INGEST)]
+                        if p in (RUNS_INGEST, PARSED_INGEST)]
         self.assertEqual(test_ingests, [],
                          "a run with no report files no test result")
 

@@ -10,7 +10,9 @@ report's result count, until that report retires). The python client has no
 raw report, so its scan exempts the two JUnit counts and nothing else. The
 maven client calls the shared counts and defines none, so its scan exempts one
 function alone, `_read_declared_profile`: its read of the project's own
-`pom.xml` for a tier profile is not a report parse.
+`pom.xml` for a tier profile is not a report parse. The rust client calls the
+shared counts and defines none, and its read of `.config/nextest.toml` is a
+TOML parse, so its scan exempts nothing at all.
 
 The scan reads a module's syntax tree, never its text, so a docstring or a
 comment that names a report shape is not a parse:
@@ -55,6 +57,8 @@ EXEMPT = ("junit_testcase_count", "junit_non_skipped_count",
 PYTHON_EXEMPT = ("junit_testcase_count", "junit_non_skipped_count")
 # The maven client's one exemption: its POM read for a declared tier profile.
 MVN_EXEMPT = ("_read_declared_profile",)
+# The rust client's exemptions: none.
+RUST_EXEMPT = ()
 
 XML_MODULES = ("ET", "ElementTree", "etree", "minidom")
 XML_PARSERS = ("parse", "fromstring", "iterparse", "XML", "parseString")
@@ -389,6 +393,45 @@ class TheMavenClientParsesNoReportTest(unittest.TestCase):
         self.assertEqual(
             findings, [],
             "the maven client parses none of its runner's reports; found:\n"
+            + _lines(findings))
+
+
+_RUST_CLIENT_WITH_ITS_OWN_COUNT = textwrap.dedent(r'''
+    """A rust client that sends nextest's JUnit and llvm-cov's lcov, and
+    counts the report's cases itself."""
+    import tomllib
+    import xml.etree.ElementTree as ET
+
+    def _read_declared_nextest_profile(config, target):
+        with open(config, "rb") as handle:
+            return (tomllib.load(handle).get("profile") or {}).get(target)
+
+    def junit_testcase_count(paths):
+        return sum(1 for p in paths for _ in ET.parse(p).getroot().iter("testcase"))
+''')
+
+
+class TheRustClientParsesNoReportTest(unittest.TestCase):
+
+    def test_a_rust_client_defining_its_own_testcase_count_is_found(self):
+        # Under rust's empty exemption set the shared count, defined in the
+        # client itself, is a parse; the nextest profile read is not.
+        self.assertEqual(
+            report_parse_findings(_RUST_CLIENT_WITH_ITS_OWN_COUNT, RUST_EXEMPT),
+            [("junit_testcase_count", JUNIT, ".iter('testcase')"),
+             ("junit_testcase_count", JUNIT, "ET.parse")],
+            _lines(report_parse_findings(_RUST_CLIENT_WITH_ITS_OWN_COUNT,
+                                         RUST_EXEMPT)))
+
+    def test_the_rust_client_module_defines_no_report_parse(self):
+        """No JUnit parse, no lcov summation and no classname grouping in
+        `rust-crucible.py`: nothing is exempt."""
+        findings = report_parse_findings(
+            (CLIENTS / "rust-crucible.py").read_text(encoding="utf-8"),
+            RUST_EXEMPT)
+        self.assertEqual(
+            findings, [],
+            "the rust client parses none of its runner's reports; found:\n"
             + _lines(findings))
 
 

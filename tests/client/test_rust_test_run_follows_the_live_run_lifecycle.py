@@ -65,6 +65,8 @@ import time
 import unittest
 from pathlib import Path
 
+from tests.client.live_run_harness import HEALTH_PATHS, board_health
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUST_SCRIPT = REPO_ROOT / "clients" / "rust-crucible.py"
 SHIPPED_TOML = REPO_ROOT / "clients" / "crucible.toml"
@@ -143,7 +145,10 @@ sys.exit(0)
 class _RecordingBoard:
     """Identical in shape to the sibling run-lifecycle tests' `_RecordingBoard`:
     a real `http.server.ThreadingHTTPServer` on loopback, recording every
-    request in wire order with its receipt wall-clock time."""
+    request in wire order with its receipt wall-clock time. Its health is a
+    board's that decodes the reports the client sends (`board_health`), and
+    it answers the ingest with the `run` block of the passing run it was
+    sent."""
 
     def __init__(self):
         self.events = []  # [(wall_clock_received_at, method, path, body)]
@@ -173,7 +178,9 @@ class _RecordingBoard:
             def do_GET(self):
                 with board._lock:
                     board.events.append((time.time(), "GET", self.path, None))
-                if "/plans" in self.path:
+                if self.path in HEALTH_PATHS:
+                    self._reply(board_health())
+                elif "/plans" in self.path:
                     self._reply({"ok": True, "plans": []})
                 else:
                     self._reply({"ok": True, "agents": []})
@@ -188,6 +195,11 @@ class _RecordingBoard:
                         run_id = f"run-rust-lifecycle-{board._run_seq}"
                     self._reply({"ok": True, "changed": True, "runId": run_id,
                                  "startedAt": int(time.time() * 1000)})
+                elif self.path == "/api/v2/runs":
+                    sent = len((body or {}).get("data") or []) if isinstance(body, dict) else 0
+                    self._reply({"ok": True, "changed": True,
+                                 "run": {"passed": sent, "failed": 0, "pending": 0,
+                                         "total": sent, "files": sent}})
                 else:
                     self._reply({"ok": True, "changed": True})
 

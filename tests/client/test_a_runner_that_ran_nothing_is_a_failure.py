@@ -528,6 +528,11 @@ class EveryReportIngestingVerbWithZeroResultsAbortsTheRunTest(_ZeroResultCase):
         self.assert_aborted_never_filed(
             self._rust("smoke-test", exit_code=101), 101)
 
+    def test_rust_regression_ingest(self):
+        self.assert_aborted_never_filed(
+            self._rust("regression-ingest", "--crates", "fake-crate",
+                       exit_code=101), 101)
+
     def test_mvn_unit(self):
         self.assert_aborted_never_filed(self._mvn("unit", 1), 1)
 

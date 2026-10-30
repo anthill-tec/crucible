@@ -36,7 +36,9 @@ TOTAL_BELOW = 1500
 
 
 def client_percent(covered, total):
-    """The clients' rounding, verbatim (`_parse_lcov`, `_collect_jacoco`)."""
+    """The clients' rounding, verbatim (rust's lcov summation and maven's
+    JaCoCo summation, both since deleted as those clients send their coverage
+    to the board unparsed)."""
     return round(covered / total * 100, 1) if total else 0
 
 

@@ -1117,9 +1117,7 @@ _THROUGH_THE_SHARED_INGEST = {(SHARED, SHARED_INGEST, RUNS_ROUTE)}
 _BUN_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 _PY_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 _MVN_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
-_RUST_JUNIT = {("_ingest_junit_axi", "post_ingest", RUNS_ROUTE)}
 _RUST_RUSTC = {("_ingest_rustc_stderr", "post_ingest", COMPILE_ROUTE)}
-_RUST_WORKSPACE = {("_workspace_regression_run", "post_ingest", PARSED_ROUTE)}
 _ARDUINO_NATIVE = {("_run_native_tests_body", "post_ingest", PARSED_ROUTE)}
 _ARDUINO_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 
@@ -1157,17 +1155,24 @@ ROUTE_TABLE = {
         "compile": routes((), _MVN_COMPILE),
     },
     "rust": {
-        **{verb: routes(_RUST_JUNIT, _RUST_RUSTC)
+        # Each `cargo nextest` verb's no-report exit (no junit.xml) files the
+        # rustc compile ingest of `cargo check --tests`: no report.
+        **{verb: routes(_THROUGH_THE_SHARED_INGEST, _RUST_RUSTC)
            for verb in ("test", "unit", "integration", "e2e", "module", "bdd")},
-        "smoke-test": routes({("_smoke_run", "post_ingest", RUNS_ROUTE)}),
-        "docker-e2e-gate": routes({("_smoke_run", "post_ingest", RUNS_ROUTE)}),
-        "workspace-regression": routes(_RUST_WORKSPACE),
-        "regression": routes(_RUST_WORKSPACE),
-        "pre-merge-gate": routes(_RUST_WORKSPACE, _RUST_RUSTC),
-        "regression-ingest": routes(
-            {("_regression_ingest_run", "post_ingest", PARSED_ROUTE)}),
+        "smoke-test": routes(_THROUGH_THE_SHARED_INGEST),
+        "docker-e2e-gate": routes(_THROUGH_THE_SHARED_INGEST),
+        "workspace-regression": routes(_THROUGH_THE_SHARED_INGEST),
+        "regression": routes(_THROUGH_THE_SHARED_INGEST),
+        # The gate's clippy step files a rustc compile ingest: no report. Its
+        # declared profiles (`_test_run`) and its whole suite
+        # (`_workspace_regression_run`) both file through the shared ingest.
+        "pre-merge-gate": routes(_THROUGH_THE_SHARED_INGEST, _RUST_RUSTC),
+        "regression-ingest": routes(_THROUGH_THE_SHARED_INGEST),
+        # With no junit.xml it runs `cargo check` and files its stderr: no
+        # report.
         "auto-ingest": routes(
-            _RUST_JUNIT, {("cmd_auto_ingest", "post_ingest", COMPILE_ROUTE)}),
+            _THROUGH_THE_SHARED_INGEST,
+            {("cmd_auto_ingest", "post_ingest", COMPILE_ROUTE)}),
         "check": routes((), _RUST_RUSTC),
         "clippy": routes((), _RUST_RUSTC),
         "workspace-clippy": routes((), _RUST_RUSTC),
@@ -1212,7 +1217,7 @@ class EveryFilingVerbsRouteAndCallSiteAreTabledTest(unittest.TestCase):
     def test_every_mvn_report_verb_files_through_the_shared_ingest_only(self):
         self.assert_client_matches_its_table("mvn")
 
-    def test_every_rust_filing_verb_sits_at_its_current_route(self):
+    def test_every_rust_report_verb_files_through_the_shared_ingest_only(self):
         self.assert_client_matches_its_table("rust")
 
     def test_every_arduino_filing_verb_sits_at_its_current_route(self):
@@ -1253,6 +1258,20 @@ class EveryFilingVerbsRouteAndCallSiteAreTabledTest(unittest.TestCase):
         self.assertEqual(
             [text for text in live if text in (PARSED_ROUTE, "dataPath")], [],
             "the maven client never posts to the parsed route and never sends "
+            "a `dataPath`")
+
+    def test_rust_states_neither_the_parsed_route_nor_a_data_path(self):
+        # Docstrings may name the route; no live string may.
+        tree = ast.parse(_client_source("rust"))
+        docstrings = {id(node.value) for node in ast.walk(tree)
+                      if isinstance(node, ast.Expr)
+                      and isinstance(node.value, ast.Constant)}
+        live = [node.value for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in docstrings]
+        self.assertEqual(
+            [text for text in live if text in (PARSED_ROUTE, "dataPath")], [],
+            "the rust client never posts to the parsed route and never sends "
             "a `dataPath`")
 
 

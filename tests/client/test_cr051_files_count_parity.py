@@ -1,7 +1,9 @@
 """CR-CRU-051 C1 RED -- propagate the run-envelope `files` (distinct test-FILE)
 count from `bun-crucible.py` (the reference, CR-CRU-047 §S2) to python, mvn and
-arduino. rust is C2 (its two parse sites + the server-parsed `_ingest_junit_axi`
-distinction have their own complications) and is deliberately OUT of this file.
+arduino. rust was C2 (its two parse sites and its server-parsed junit ingest
+had their own complications; the rust client has since sent its reports to the
+board unparsed, and its envelope states the board's `files`) and is
+deliberately OUT of this file.
 
 Contract pinned VERBATIM from
 docs/changes/CR-CRU-051-files-count-fleet-parity.md:

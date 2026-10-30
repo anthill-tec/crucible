@@ -660,11 +660,11 @@ class PythonStatesItsStackOnEveryIngestTest(_ClientIngestCase):
 
 
 class RustStatesItsStackOnEveryIngestTest(_ClientIngestCase):
-    """rust: `_start_run`, then `_ingest_rustc_stderr` / `_ingest_junit_axi`
-    with whatever runId came back; `/runs/parsed` through the regression body
-    `_regression_ingest_run`, which opens the run itself (its `cargo clean`
-    and `cargo llvm-cov nextest` replaced by fakes that write one passing
-    report)."""
+    """rust: the `test` and `regression-ingest` verbs (`main`), which open
+    the run themselves and send their reports through the shared ingest (their
+    `cargo` replaced by fakes, nextest's by one that writes one passing
+    report), and `_start_run` then `_ingest_rustc_stderr` with whatever runId
+    came back."""
 
     CLIENT = "rust"
 
@@ -673,16 +673,7 @@ class RustStatesItsStackOnEveryIngestTest(_ClientIngestCase):
                                          "error[E0425]: cannot find value `x`",
                                          run_id=run_id)
 
-    def _junit(self, run_id):
-        junit = self.write_junit(os.path.join(
-            self.project_dir, "target", "nextest", "ci", "junit.xml"))
-        self.module._ingest_junit_axi(self.project_dir, AGENT, junit,
-                                      run_id=run_id)
-
-    def _regression(self):
-        args = argparse.Namespace(project_dir=self.project_dir, crates="probe",
-                                  features=None, agent=AGENT, release=None,
-                                  reports=None, cycle=None)
+    def _verb(self, verb, *extra):
         real_run = subprocess.run
 
         def no_cargo(cmd, *a, **kw):
@@ -696,10 +687,20 @@ class RustStatesItsStackOnEveryIngestTest(_ClientIngestCase):
             return subprocess.CompletedProcess(cmd, 0, stdout="PASS [ 0.001s]\n",
                                                stderr="")
 
-        with mock.patch.object(self.module.subprocess, "run", side_effect=no_cargo), \
+        argv = ["rust-crucible.py", verb, "--project-dir", self.project_dir,
+                "--agent", AGENT, *extra]
+        with mock.patch.object(sys, "argv", argv), \
+                mock.patch.object(self.module.subprocess, "run", side_effect=no_cargo), \
                 mock.patch.object(self.module, "_run_logged",
                                   side_effect=fake_nextest):
-            self.module._regression_ingest_run(args)
+            self.module.main()
+
+    def assert_report_ingest_states_the_stack(self, verb, extra, start_reply):
+        recorder = self.drive(start_reply, lambda: self._verb(verb, *extra))
+        self.assert_ingest_states_the_stack(recorder, RUNS, start_reply)
+        self.assertEqual(recorder.bodies(PARSED), [],
+                         f"rust files no report on {PARSED}; posted to "
+                         f"{recorder.paths()!r}")
 
     def test_a_compile_ingest_states_the_rust_stack_when_its_start_was_accepted(self):
         recorder = self.start_then(START_ACCEPTED, self._compile)
@@ -709,21 +710,21 @@ class RustStatesItsStackOnEveryIngestTest(_ClientIngestCase):
         recorder = self.start_then(START_REFUSED, self._compile)
         self.assert_ingest_states_the_stack(recorder, COMPILE, START_REFUSED)
 
-    def test_a_parsed_ingest_states_the_rust_stack_when_its_start_was_accepted(self):
-        recorder = self.drive(START_ACCEPTED, self._regression)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_ACCEPTED)
+    def test_a_test_report_ingest_states_the_rust_stack_when_its_start_was_accepted(self):
+        self.assert_report_ingest_states_the_stack(
+            "test", ("--crate", "probe"), START_ACCEPTED)
 
-    def test_a_parsed_ingest_states_the_rust_stack_when_its_start_was_refused(self):
-        recorder = self.drive(START_REFUSED, self._regression)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_REFUSED)
+    def test_a_test_report_ingest_states_the_rust_stack_when_its_start_was_refused(self):
+        self.assert_report_ingest_states_the_stack(
+            "test", ("--crate", "probe"), START_REFUSED)
 
-    def test_a_raw_run_ingest_states_the_rust_stack_when_its_start_was_accepted(self):
-        recorder = self.start_then(START_ACCEPTED, self._junit)
-        self.assert_ingest_states_the_stack(recorder, RUNS, START_ACCEPTED)
+    def test_a_regression_ingest_report_states_the_rust_stack_when_its_start_was_accepted(self):
+        self.assert_report_ingest_states_the_stack(
+            "regression-ingest", ("--crates", "probe"), START_ACCEPTED)
 
-    def test_a_raw_run_ingest_states_the_rust_stack_when_its_start_was_refused(self):
-        recorder = self.start_then(START_REFUSED, self._junit)
-        self.assert_ingest_states_the_stack(recorder, RUNS, START_REFUSED)
+    def test_a_regression_ingest_report_states_the_rust_stack_when_its_start_was_refused(self):
+        self.assert_report_ingest_states_the_stack(
+            "regression-ingest", ("--crates", "probe"), START_REFUSED)
 
 
 if __name__ == "__main__":
