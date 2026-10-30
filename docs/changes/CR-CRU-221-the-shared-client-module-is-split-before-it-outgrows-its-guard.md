@@ -7,7 +7,9 @@ VERIFY: its F1, a connection reset at the ingest, and its F2, the run emitter wr
 CR); gap analysis 2026-10-30 (user rulings: the run and ingest pipeline moves; the core re-exports it; the transport
 answers connection-level errors); spec pre-review 2026-10-30 (CR-CRU-221-SPEC-REVIEW, F1–F14 folded; user rulings:
 the gated-run bookkeeping stays in the core; a run the board may hold says so; a truncated error body is answered;
-one CR at 13). The file keeps its first slug.
+one CR at 13); AC7 corrected 2026-10-30 at RED (a gap-analysis miss: AC7 said every dropped-connection answer names the
+board, §S3 gave the truncated HTTP-error body a format naming none; user ruling: an HTTP status needs no board). The file
+keeps its first slug.
 
 ## Problem
 
@@ -146,7 +148,8 @@ module's prose may) and re-recorded once, in its own commit.
       existing envelope tests pass unedited.
 - [ ] **AC7 — a dropped connection is answered.** `http_request` against a server that closes after reading the request,
       one that resets, one that sends a truncated body, one that sends a garbled status line, and one that answers an
-      HTTP error with a truncated body, answers `{ok: false, error}` naming the board, with no exception; a non-JSON body
+      HTTP error with a truncated body, answers `{ok: false, error}` with no exception — naming the board, except the
+      HTTP error, whose status shows the board was reached (`HTTP <code>: <body unreadable: <Type>>`); a non-JSON body
       and a bare `OSError` still raise. Through the bun, python, maven and rust clients against a board that drops the
       connection at the ingest POST: one `ingest:` line with no figures, an envelope with null figures and the error,
       exit 1, no traceback; against a board that filed the run and then dropped the connection: the envelope says the
