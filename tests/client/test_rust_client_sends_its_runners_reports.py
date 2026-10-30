@@ -945,11 +945,12 @@ class NoBoardNoFiguresTest(_RustProject, unittest.TestCase):
 
 # ── AC9 — one ingest line, and the shared module does not grow ─────────────
 
-# Each shared module's line budget: the core's is the headroom the split of
-# the run pipeline into its own module left it under the citation guard's
-# threshold, the run module's is under that threshold. The rust client's move
-# to the shared ingest adds nothing to either.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9200, "_crucible_run.py": 9999}
+# Each shared module's line budget is that module's size (its newline count,
+# as the test below counts it) recorded when the run pipeline was split out of
+# the core into its own module, so neither shared module grows unnoticed. The
+# rust client's move to the shared ingest adds nothing to either. A change
+# that grows a shared module re-records its budget here, in the same change.
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9088, "_crucible_run.py": 1123}
 _OWN_RESULT_LINES = ("ingest junit:", "regression: ok=",
                      "workspace regression: ok=", "smoke-test: ok=")
 
