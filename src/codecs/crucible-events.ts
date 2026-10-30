@@ -52,11 +52,6 @@ export type StreamLine =
   | { event: "unknown" }
   | { event: "undecodable" };
 
-/** A decoded stream: the run, plus the reasons it cannot be trusted. */
-export interface DecodedStream extends DecodedRun {
-  incomplete?: string;
-}
-
 const STATUSES: ReadonlySet<string> = new Set(["pass", "fail", "pending"]);
 
 function isCount(value: unknown): value is number {
@@ -186,7 +181,7 @@ function figures(counts: Omit<RunSummary, "duration_ms">): string {
  * refused at `ingest_body_bytes`) being the last reason; it is absent when
  * nothing is wrong.
  */
-export function parseCrucibleEvents(text: string, cut = false): DecodedStream {
+export function parseCrucibleEvents(text: string, cut = false): DecodedRun {
   const suites = new Map<string, TestLeaf[]>();
   const leaves: TestLeaf[] = [];
   const files = new Set<string>();
