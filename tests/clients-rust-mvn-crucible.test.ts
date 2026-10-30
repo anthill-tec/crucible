@@ -658,7 +658,7 @@ describe("clients/rust-crucible.py — auto-ingest: /api/v2/runs, tier:'unit', f
     return dir;
   }
 
-  test("posts to /api/v2/runs (never v1 /api/ingest) with tier:'unit' and the parsed summary", async () => {
+  test("posts to /api/v2/runs (never the parsed route, never v1 /api/ingest) with tier:'unit' and the summary the board decoded from the report it was sent", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-auto-ingest-unit");
@@ -678,10 +678,12 @@ describe("clients/rust-crucible.py — auto-ingest: /api/v2/runs, tier:'unit', f
 
     expect(res.code).not.toBe(0); // 1 of 3 fixture tests fails
     expect(event.tier).toBe("unit");
+    expect(event.codec).toBe("junit");
     expect(event.summary?.total).toBe(3);
     expect(event.summary?.passed).toBe(2);
     expect(event.summary?.failed).toBe(1);
     expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs")).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/v2/runs/parsed")).toBe(false);
     expect(proxy.calls.some((c) => c.path === "/api/ingest")).toBe(false);
   });
 
@@ -763,7 +765,7 @@ describe("clients/rust-crucible.py — auto-ingest: /api/v2/runs, tier:'unit', f
   });
 });
 
-describe("clients/rust-crucible.py — regression-ingest: /api/v2/runs/parsed, tier:'regression', lcov coverage passthrough (fake cargo stub, CR-CRU-008 §S2)", () => {
+describe("clients/rust-crucible.py — regression-ingest: one POST /api/v2/runs, tier:'regression', the lcov decoded on the board as its coverage (fake cargo stub, CR-CRU-008 §S2)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   let proxy: ReturnType<typeof startCapturingProxy> | undefined;
   const scratch = makeScratchTracker();
@@ -793,7 +795,7 @@ describe("clients/rust-crucible.py — regression-ingest: /api/v2/runs/parsed, t
     return { dir, path };
   }
 
-  test("records tier:'regression' via POST /api/v2/runs/parsed only (never v1 /api/ingest/parsed)", async () => {
+  test("records tier:'regression' via one POST /api/v2/runs (never the parsed route, never v1 /api/ingest/parsed)", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-regression-ingest-tier");
@@ -813,15 +815,15 @@ describe("clients/rust-crucible.py — regression-ingest: /api/v2/runs/parsed, t
 
     expect(res.code).toBe(0);
     expect(event.tier).toBe("regression");
+    expect(event.codec).toBe("junit");
     expect(event.summary?.total).toBe(2);
     expect(event.summary?.passed).toBe(2);
-    expect(
-      proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed"),
-    ).toBe(true);
+    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs")).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/v2/runs/parsed")).toBe(false);
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
-  test("lcov coverage passthrough: event.coverage carries the fixture's line/function totals", async () => {
+  test("the lcov sent as the run's coverage report: event.coverage carries the fixture's line/function totals, decoded on the board", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-regression-ingest-coverage");
@@ -836,6 +838,7 @@ describe("clients/rust-crucible.py — regression-ingest: /api/v2/runs/parsed, t
 
     const events = await nonLifecycleEvents(baseUrl, key);
     const event = await getFullEvent(baseUrl, events[0]!.id);
+    expect(event.codec).toBe("junit");
     expect(event.coverage?.lines?.total).toBe(10);
     expect(event.coverage?.lines?.covered).toBe(8);
     expect(event.coverage?.functions?.total).toBe(5);
@@ -869,15 +872,16 @@ describe("clients/rust-crucible.py — byte-compatible CLI surface (existing fla
   });
 });
 
-// CR-CRU-050 §S1/§S1b — rust has TWO client-side JUnit parse sites, both
-// with the identical unguarded `status = "fail" if fail else "pass"` / bare
-// `else: passed += 1` and a hardcoded `"pending": 0`:
+// CR-CRU-050 §S1/§S1b — a skipped nextest testcase is `pending`, never
+// folded into `passed`, on rust's two regression bodies:
 //   site 1: `_regression_ingest_run` (rust-crucible.py), driving the
 //           `regression-ingest` verb.
 //   site 2: `_workspace_regression_run` (rust-crucible.py), driving
 //           `workspace-regression` — the ORCHESTRATOR PRE-MERGE-GATE path.
-// A fix touching only site 1 is the likely partial fix the CR calls out —
-// both are covered here, each with its own fixture and its own assertions.
+// The rust client parses no report: each body sends nextest's junit.xml to
+// the board, whose junit codec decodes it, and its envelope's `run:` block
+// and its one stderr `ingest:` line read the board's answer. Both sites are
+// covered here, each with its own fixture and its own assertions.
 describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 1 (regression-ingest): <skipped/> counts as pending, never passed (fake cargo stub)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
@@ -903,7 +907,7 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 1 (regres
     return { dir, path };
   }
 
-  test("§S1/§S1b: counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), pass/fail leaves unaffected; §S2 (extended), CR-CRU-058 §S3 re-point: the §S1 TOON envelope's run: block on stdout (the 'regression: ...' prose moved to stderr when regression-ingest got a shared-emitter call) also carries pending=1", async () => {
+  test("§S1/§S1b: the board counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), pass/fail leaves unaffected; §S2: the TOON envelope's run: block on stdout and the one 'ingest:' stderr line carry pending=1", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-cr050-regression-ingest");
@@ -924,6 +928,9 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 1 (regres
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
+    // The board decoded the report the client sent.
+    expect(event.codec).toBe("junit");
+
     // §S1 — counts.
     expect(event.summary?.total).toBe(3);
     expect(event.summary?.failed).toBe(1);
@@ -943,15 +950,18 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 1 (regres
     expect(passLeaf?.status).toBe("pass");
     expect(failLeaf?.status).toBe("fail");
 
-    // §S2 (extended), CR-CRU-058 §S3 re-point: regression-ingest now emits a
-    // real §S1 TOON envelope on stdout (C3 GREEN-a gave it a shared-emitter
-    // call; the "regression: ..." prose narration moved to stderr, §S3
-    // purity) — the CR-CRU-050 substance this test guards (pending=1) rides
-    // the STRUCTURED run: block now, never silently dropped.
+    // §S2 — the TOON run: block carries the board's pending.
     expect(res.stdout).toContain("verb: regression-ingest");
     const runBlock = extractRunBlock(res.stdout);
     expect(runBlock).toBeDefined();
     expect(runBlock).toContain("pending: 1");
+
+    // The run's one stderr ingest line is the shared `ingest:` line, and it
+    // carries pending; rust's own `regression: ok=` line is gone.
+    const ingestLines = res.stderr.split("\n").filter((line) => line.startsWith("ingest: "));
+    expect(ingestLines.length).toBe(1);
+    expect(ingestLines[0]).toContain("pending=1");
+    expect(res.stderr).not.toContain("regression: ok=");
   });
 });
 
@@ -965,7 +975,7 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (worksp
     scratch.cleanup();
   });
 
-  test("§S1/§S1b: counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), pass/fail leaves unaffected; §S2 (extended), CR-CRU-058 §S3 re-point: the §S1 TOON envelope's run: block on stdout (the 'workspace regression: ...' prose moved to stderr when workspace-regression got a shared-emitter call) also carries pending=1", async () => {
+  test("§S1/§S1b: the board counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), pass/fail leaves unaffected; §S2: the TOON envelope's run: block on stdout and the one 'ingest:' stderr line carry pending=1", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-cr050-workspace-regression");
@@ -1030,6 +1040,9 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (worksp
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
+    // The board decoded the report the client sent.
+    expect(event.codec).toBe("junit");
+
     // §S1 — counts; CR-CRU-215 AC2: exactly the staged report's counts, the
     // report the fake `cargo` wrote during the run.
     expect(event.summary?.total).toBe(3);
@@ -1050,31 +1063,28 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (worksp
     expect(passLeaf?.status).toBe("pass");
     expect(failLeaf?.status).toBe("fail");
 
-    // §S2 (extended), CR-CRU-058 §S3 re-point: workspace-regression now
-    // emits a real §S1 TOON envelope on stdout (C3 GREEN-a gave it a
-    // shared-emitter call; the "workspace regression: ..." prose narration
-    // moved to stderr, §S3 purity) — the CR-CRU-050 substance this test
-    // guards (pending=1) rides the STRUCTURED run: block now, never
-    // silently dropped.
+    // §S2 — the TOON run: block carries the board's pending.
     expect(res.stdout).toContain("verb: workspace-regression");
     const runBlock = extractRunBlock(res.stdout);
     expect(runBlock).toBeDefined();
     expect(runBlock).toContain("pending: 1");
+
+    // The run's one stderr ingest line is the shared `ingest:` line, and it
+    // carries pending; rust's own `workspace regression: ok=` line is gone.
+    const ingestLines = res.stderr.split("\n").filter((line) => line.startsWith("ingest: "));
+    expect(ingestLines.length).toBe(1);
+    expect(ingestLines[0]).toContain("pending=1");
+    expect(res.stderr).not.toContain("workspace regression: ok=");
   });
 });
 
-// CR-CRU-050 §S2 — the auto-ingest / test verbs' SINGLE-report-dir path
-// (`_ingest_junit_axi` in rust-crucible.py) hands the junit XML to the
-// SERVER's codec (POST /api/v2/runs) rather than the client's own
-// `_parse_junit` — the server already classifies `<skipped/>` as pending
-// correctly (§S4 — no server change in this CR's scope), so the counts here
-// are a POSITIVE pin, never a RED. What this CR DID fix client-side is purely
-// the PRINTING: the TOON `run:` block (`_emit_ingest_axi` in
-// rust-crucible.py) and the plain "ingest junit: ..." stderr line
-// (printed by `_ingest_junit_axi` itself) both build from `resp.get("run")` — which the
-// server response already carried `pending` on — yet dropped the key when
-// printing. Both now carry it, which is what the test below pins.
-describe("clients/rust-crucible.py — CR-CRU-050 §S2: auto-ingest's junit-dir path (server-parsed, correct counts) carries pending in the TOON run: block and the 'ingest junit:' print line", () => {
+// CR-CRU-050 §S2 — `auto-ingest` sends the junit.xml a previous nextest run
+// left to the board's junit codec (POST /api/v2/runs), which classifies
+// `<skipped/>` as pending, so the counts here are a POSITIVE pin. Its print
+// surfaces read the board's answer: the TOON `run:` block and the run's one
+// stderr `ingest:` line both carry `pending`, which is what the test below
+// pins.
+describe("clients/rust-crucible.py — CR-CRU-050 §S2: auto-ingest (decoded on the board, correct counts) carries pending in the TOON run: block and its one 'ingest:' line", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
   const branch = "cr-cru-050-rust-auto-ingest-fixture-branch";
@@ -1085,7 +1095,7 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S2: auto-ingest's junit-dir 
     scratch.cleanup();
   });
 
-  test("event.summary.pending=1 is already correct (server-side junit codec, confirmed not assumed); the TOON run: block and the plain stderr print both carry pending=1 too", async () => {
+  test("event.summary.pending=1 (the board's junit codec); the TOON run: block and the one 'ingest:' stderr line both carry pending=1 too", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-cr050-auto-ingest-pending");
@@ -1114,7 +1124,8 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S2: auto-ingest's junit-dir 
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
-    // Positive pin — the server's junit codec already gets this right.
+    // Positive pin — the server's junit codec decodes the report it was sent.
+    expect(event.codec).toBe("junit");
     expect(event.summary?.total).toBe(2);
     expect(event.summary?.passed).toBe(1);
     expect(event.summary?.failed).toBe(0);
@@ -1126,13 +1137,16 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S2: auto-ingest's junit-dir 
     expect(block).toBeDefined();
     expect(block).toContain("pending: 1");
 
-    // §S2 (extended) — the plain "ingest junit: ..." stderr line.
-    expect(res.stderr).toContain("ingest junit:");
-    expect(res.stderr).toContain("pending=1");
+    // §S2 (extended) — the run's one stderr ingest line, the shared
+    // `ingest:` line; rust's own `ingest junit:` line is gone.
+    const ingestLines = res.stderr.split("\n").filter((line) => line.startsWith("ingest: "));
+    expect(ingestLines.length).toBe(1);
+    expect(ingestLines[0]).toContain("pending=1");
+    expect(res.stderr).not.toContain("ingest junit:");
   });
 });
 
-describe("clients/rust-crucible.py — CR-CRU-050 §S2 (extended), CR-CRU-058 §S3 re-point: smoke-test's §S1 TOON envelope run: block on stdout (the inline 'smoke-test: ...' prose moved to stderr when smoke-test got a shared-emitter call) also carries pending", () => {
+describe("clients/rust-crucible.py — CR-CRU-050 §S2 (extended): smoke-test's TOON envelope run: block on stdout and its one 'ingest:' stderr line carry pending", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
 
@@ -1177,15 +1191,18 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S2 (extended), CR-CRU-058 §
     expect(event.summary?.pending).toBe(1);
     expect(res.code).toBe(0);
 
-    // CR-CRU-058 §S3 re-point: smoke-test now emits a real §S1 TOON
-    // envelope on stdout (C3 GREEN-a gave it a shared-emitter call; the
-    // "smoke-test: ..." prose narration moved to stderr, §S3 purity) — the
-    // CR-CRU-050 substance this test guards (pending=1) rides the
-    // STRUCTURED run: block now, never silently dropped.
+    // The TOON run: block carries the board's pending.
     expect(res.stdout).toContain("verb: smoke-test");
     const runBlock = extractRunBlock(res.stdout);
     expect(runBlock).toBeDefined();
     expect(runBlock).toContain("pending: 1");
+
+    // The run's one stderr ingest line is the shared `ingest:` line, and it
+    // carries pending; rust's own `smoke-test: ok=` line is gone.
+    const ingestLines = res.stderr.split("\n").filter((line) => line.startsWith("ingest: "));
+    expect(ingestLines.length).toBe(1);
+    expect(ingestLines[0]).toContain("pending=1");
+    expect(res.stderr).not.toContain("smoke-test: ok=");
   });
 });
 
