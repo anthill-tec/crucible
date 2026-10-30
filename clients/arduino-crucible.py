@@ -827,6 +827,11 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
             ran = (f"{total} testcases "
                    f"({_axi().junit_non_skipped_count(reports)} not skipped)")
         print(f"[crucible] ran {ran}; runner exit {runner_exit}", file=sys.stderr)
+        # With no envelope, `coverage-not-measured` reaches no one: a coverage
+        # run that found no lcov says so here, naming where it looked.
+        if want_coverage and not coverage_paths:
+            print(f"[crucible] WARN: --coverage set but no lcov at {lcov} "
+                  f"\u2014 the run measured no coverage", file=sys.stderr)
         return runner_exit
 
     # §S5 — past this point the run IS ingested under an agentId, so the
