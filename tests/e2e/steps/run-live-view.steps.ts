@@ -176,6 +176,33 @@ Step("the URL is the home page with no run path", async ({ page }) => {
 
 // ── the phone band ────────────────────────────────────────────────────────
 
+// F25 option A ends the live card's progress line with a faint `› open`
+// after the timer. On the phone band the hint must sit on that same line,
+// after the timer and inside the card; the next step then holds the failure
+// count and the timer inside the card with the hint present.
+Step(
+  "that running card's open hint {string} follows its timer on the same line, inside the card",
+  async ({ world }, hintText: string) => {
+    const card = world.runningCard as Locator;
+    const hint = card.getByTestId("running-open-hint");
+    await expect(hint).toBeVisible();
+    await expect(hint).toHaveText(hintText);
+    const cardBox = await card.boundingBox();
+    const hintBox = await hint.boundingBox();
+    const timerBox = await card.getByTestId("running-elapsed").boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(hintBox, "running-open-hint has no box").not.toBeNull();
+    expect(timerBox, "running-elapsed has no box").not.toBeNull();
+    expect(hintBox!.width).toBeGreaterThan(0);
+    // Inside the card.
+    expect(hintBox!.x).toBeGreaterThanOrEqual(cardBox!.x - 0.5);
+    expect(hintBox!.x + hintBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width + 0.5);
+    // On the timer's line, and after it.
+    expect(Math.abs(hintBox!.y + hintBox!.height / 2 - (timerBox!.y + timerBox!.height / 2))).toBeLessThan(4);
+    expect(hintBox!.x).toBeGreaterThanOrEqual(timerBox!.x + timerBox!.width - 0.5);
+  },
+);
+
 Step("that running card's failure count and timer stay inside the card", async ({ world }) => {
   const card = world.runningCard as Locator;
   const cardBox = await card.boundingBox();

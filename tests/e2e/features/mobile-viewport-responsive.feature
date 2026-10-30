@@ -311,8 +311,9 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
   # real (POST /api/v2/runs/start); only its two live reads are stubbed
   # (run-live-mock.ts), because the live state is filled by CR-CRU-200. At
   # 390px the card keeps its failure count and timer in view and truncates its
-  # file on the one line it shares with the count, the card keeps the 44px
-  # touch floor, and the live drill-in fills the viewport.
+  # file on the one line it shares with the count, ends that line with F25's
+  # `› open` hint after the timer without pushing either out of the card, the
+  # card keeps the 44px touch floor, and the live drill-in fills the viewport.
   Scenario: CR-CRU-223 — at the phone band a running card with a live state keeps its failure count and timer in view, truncates its file, and opens a live drill-in that fills the viewport
     Given a project named "MOB Live Run Project" is registered
     And an online agent "mob-live-runner" with message "streaming run" is registered on that project
@@ -322,6 +323,7 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     When I open the workspace for that project
     And I click the "Runs" workspace tab
     Then a running card for "mob-live-runner" becomes visible within 2 seconds
+    And that running card's open hint "› open" follows its timer on the same line, inside the card
     And that running card's failure count and timer stay inside the card
     And that running card's file truncates on one line beside its count
     And that running card is at least 44px tall

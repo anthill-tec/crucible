@@ -27,13 +27,21 @@ const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");
 
+/** The integer `const <name> = <n>;` declares in the script `src`; throws when
+ *  `src` declares no such constant, so a renamed constant can never read as 0. */
+export function jsConstIn(src: string, name: string): number {
+  const m = new RegExp(`const ${name} = (\\d+);`).exec(src);
+  if (m === null) throw new Error(`live-run-harness: const ${name} not found`);
+  return Number(m[1]);
+}
+
 /** The run detail's existing virtualisation window (`VIRT_WINDOW` in
  *  public/app.js), read off the source so the bound follows the real one. */
-export const VIRT_WINDOW: number = (() => {
-  const m = /const VIRT_WINDOW = (\d+);/.exec(APP_JS_SRC);
-  if (m === null) throw new Error("live-run-harness: VIRT_WINDOW not found in public/app.js");
-  return Number(m[1]);
-})();
+export const VIRT_WINDOW: number = jsConstIn(APP_JS_SRC, "VIRT_WINDOW");
+
+/** A live failure row's height in the script (`LIVE_ROW_HEIGHT` in
+ *  public/app.js) — the number `LiveRunBody`'s window divides scrollTop by. */
+export const LIVE_ROW_HEIGHT: number = jsConstIn(APP_JS_SRC, "LIVE_ROW_HEIGHT");
 
 export interface LiveCounts {
   completed: number;
@@ -387,7 +395,27 @@ function parseRules(css: string): CssRule[] {
   return rules;
 }
 
-const RULES = parseRules(STYLES_SRC);
+/**
+ * The px value the top-level rule(s) for exactly `selector` give `prop` in the
+ * stylesheet `css` — the last one winning, as the cascade does for a tie. A
+ * rule inside an at-rule (@media) is not top-level and is never read. Throws
+ * when no top-level rule for `selector` declares `prop`, or when the value it
+ * declares is not a px length, so a missing rule can never read as a number.
+ */
+export function cssPxIn(css: string, selector: string, prop: string): number {
+  let value: string | undefined;
+  for (const rule of parseRules(css)) {
+    if (rule.selector === selector) value = rule.decls.get(prop) ?? value;
+  }
+  if (value === undefined) throw new Error(`live-run-harness: no top-level \`${selector}\` rule declares ${prop}`);
+  const m = /^(\d+(?:\.\d+)?)px$/.exec(value);
+  if (m === null) throw new Error(`live-run-harness: \`${selector}\` ${prop} is ${value}, not a px length`);
+  return Number(m[1]);
+}
+
+/** A live failure row's height in the stylesheet (`.app-live-failure`'s
+ *  `height` in public/styles.css) — the height each row is drawn at. */
+export const LIVE_ROW_CSS_HEIGHT: number = cssPxIn(STYLES_SRC, ".app-live-failure", "height");
 
 /** Shorthands that set a longhand this resolver is asked about. */
 const SHORTHANDS: Record<string, string[]> = {
@@ -401,25 +429,53 @@ const SHORTHANDS: Record<string, string[]> = {
 
 const INHERITED = new Set(["white-space", "cursor", "color"]);
 
-function declaredOn(el: Element, prop: string): string | null {
+/** Why the DOM cannot parse `selector`, or null when it can. */
+type SelectorCheck = (selector: string, doc: Document) => string | null;
+
+/**
+ * A memoised selector check. It asks a FRESH element every time it meets a new
+ * selector, because happy-dom's `Element.matches` caches a selector per
+ * element BEFORE parsing it: an unparseable selector throws on that element's
+ * first `matches` only, and every later call on the same element answers a
+ * quiet `false`. Asking `el.matches` alone would therefore fail loudly once
+ * and then read as "no match" forever after.
+ */
+function selectorCheck(): SelectorCheck {
+  const known = new Map<string, string | null>();
+  return (selector, doc) => {
+    if (!known.has(selector)) {
+      try {
+        doc.createElement("div").matches(selector);
+        known.set(selector, null);
+      } catch (err) {
+        known.set(selector, err instanceof Error ? err.message : String(err));
+      }
+    }
+    return known.get(selector) ?? null;
+  };
+}
+
+function declaredOn(rules: readonly CssRule[], check: SelectorCheck, el: Element, prop: string): string | null {
   const names = SHORTHANDS[prop] ?? [prop];
   const inline = (el as HTMLElement).style?.getPropertyValue?.(prop) ?? "";
   if (inline !== "") return inline.trim();
   let best: CssRule | null = null;
   let bestValue: string | null = null;
-  for (const rule of RULES) {
+  // A selector the DOM cannot parse is collected, never read as "no match":
+  // a rule silently skipped would let the cascade answer the wrong value.
+  const unparseable: string[] = [];
+  for (const rule of rules) {
     // Interaction states never apply to a resting element.
     if (/::|:hover|:focus|:active|:visited/.test(rule.selector)) continue;
     let value: string | undefined;
     for (const name of names) value = rule.decls.get(name) ?? value;
     if (value === undefined) continue;
-    let matches = false;
-    try {
-      matches = el.matches(rule.selector);
-    } catch {
-      matches = false;
+    const parseError = check(rule.selector, el.ownerDocument);
+    if (parseError !== null) {
+      unparseable.push(`${rule.selector} (${parseError})`);
+      continue;
     }
-    if (!matches) continue;
+    if (!el.matches(rule.selector)) continue;
     if (
       best === null ||
       rule.specificity[0] > best.specificity[0] ||
@@ -432,21 +488,35 @@ function declaredOn(el: Element, prop: string): string | null {
       bestValue = value;
     }
   }
+  if (unparseable.length > 0) {
+    throw new Error(
+      `live-run-harness: the cascade cannot evaluate ${unparseable.length} selector(s) declaring ${prop}: ${unparseable.join("; ")}`,
+    );
+  }
   return bestValue;
+}
+
+/** The cascade over the stylesheet `css`: the value it (plus the inline
+ *  style) gives `prop` on `el`, "" when nothing declares it. Throws when a
+ *  rule declaring `prop` has a selector the DOM cannot parse. */
+export function cascadeOver(css: string): (el: Element, prop: string) => string {
+  const rules = parseRules(css);
+  const check = selectorCheck();
+  return (el, prop) => {
+    let node: Element | null = el;
+    while (node !== null) {
+      const v = declaredOn(rules, check, node, prop);
+      if (v !== null) return v.replace(/\s+/g, " ").trim();
+      if (!INHERITED.has(prop)) return "";
+      node = node.parentElement;
+    }
+    return "";
+  };
 }
 
 /** The value public/styles.css (plus the inline style) gives `prop` on `el`;
  *  "" when nothing declares it. */
-export function cascaded(el: Element, prop: string): string {
-  let node: Element | null = el;
-  while (node !== null) {
-    const v = declaredOn(node, prop);
-    if (v !== null) return v.replace(/\s+/g, " ").trim();
-    if (!INHERITED.has(prop)) return "";
-    node = node.parentElement;
-  }
-  return "";
-}
+export const cascaded: (el: Element, prop: string) => string = cascadeOver(STYLES_SRC);
 
 /** True when `el` truncates on one line: no wrapping, its overflow clipped,
  *  and an ellipsis marking the cut. */

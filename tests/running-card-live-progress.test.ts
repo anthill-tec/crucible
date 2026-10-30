@@ -3,14 +3,16 @@
 //
 //   CR-CRU-224-830-GREEN  unit                         3 ✗
 //   ████████░░░░░░░░░░░░░░░░░░░░░░░░  (32 %)
-//   412/1280 · test_relay.py  ⏱ 0m 41s
+//   412/1280 · test_relay.py  ⏱ 0m 41s  › open
 //
 // When the open run's brief carries `live`, `RunningCard` (public/app.js)
 // gains a progress bar at completed/total (clamped at 100 %, none without a
 // total), `<completed>/<total>` or `<completed> done`, the current file
 // (truncated on one line), `<failed> ✗` in the fail colour when failed > 0,
 // and the timer as today — and it becomes clickable, opening /run/<runId>
-// with the pointer cursor. Without `live` it is today's card: no handler.
+// with the pointer cursor, its progress line ending, after the timer, in the
+// faint `› open` hint F25 draws there. Without `live` it is today's card: no
+// handler, no hint.
 //
 // Drives the REAL public/app.js through tests/helpers/live-run-harness.ts; the
 // brief's `live` is fixture data on the events feed (a stubbed read — filling
@@ -23,9 +25,11 @@
 //   running-count          `412/1280` or `412 done`
 //   running-file           the current file
 //   running-failed         `3 ✗` (absent when nothing has failed)
+//   running-open-hint      `› open`, last on the progress line (absent without `live`)
 import { describe, test, expect, afterEach } from "bun:test";
 import {
   cascaded,
+  cascadeOver,
   liveReads,
   mountLive,
   settle,
@@ -207,5 +211,93 @@ describe("RunningCard WITHOUT `live` — today's card, unchanged, not clickable"
     expect(page.pushed).toEqual([]);
     expect(liveReads(page.fetchLog, RUN_ID)).toEqual([]);
     expect(document.querySelector('[data-testid="run-overlay"]')).toBeNull();
+  });
+});
+
+describe("RunningCard's open hint — F25 option A ends a live card's progress line with a faint `› open`", () => {
+  test("a card with `live` shows `› open` as the LAST thing on its progress line, straight after the timer, in the faint ink of the card's meta line", async () => {
+    await mountLive(homeWithRun(F25_LIVE));
+    const card = theCard();
+    const hints = card.querySelectorAll('[data-testid="running-open-hint"]');
+    expect(hints).toHaveLength(1);
+    const hint = hints[0] as HTMLElement;
+
+    expect(text(hint)).toBe("› open");
+    // On the one progress line, with the count, the file and the timer…
+    const elapsed = part(card, "running-elapsed");
+    expect(elapsed).not.toBeNull();
+    expect(hint.parentElement).toBe(elapsed!.parentElement);
+    expect(hint.parentElement).toBe(part(card, "running-count")!.parentElement);
+    // …directly after the timer, and nothing after it.
+    expect(hint.previousElementSibling).toBe(elapsed);
+    expect(hint.nextElementSibling).toBeNull();
+    // F25 draws it as the timer's faint caption (`agent-ts`: --ink-faint).
+    expect(cascaded(hint, "color")).toBe("var(--ink-faint)");
+    // Exactly once on the card.
+    expect(text(card).split("› open")).toHaveLength(2);
+  });
+
+  test("the hint shows on every live card — with no total and nothing failed it still ends the line after the timer", async () => {
+    await mountLive(homeWithRun({ completed: 412, passed: 412, failed: 0, pending: 0, currentFile: "test_relay.py" }));
+    const card = theCard();
+    const hint = part(card, "running-open-hint");
+
+    expect(text(hint)).toBe("› open");
+    expect(hint!.previousElementSibling).toBe(part(card, "running-elapsed"));
+    expect(hint!.nextElementSibling).toBeNull();
+  });
+
+  test("clicking the hint opens the live drill-in, as the card does", async () => {
+    const page = await mountLive(homeWithRun(F25_LIVE));
+    const hint = part(theCard(), "running-open-hint");
+    expect(hint).not.toBeNull();
+    hint!.click();
+    await settle();
+
+    expect(location.pathname).toBe(`/run/${RUN_ID}`);
+    expect(page.pushed).toEqual([`/run/${RUN_ID}`]);
+  });
+
+  test("a card WITHOUT `live` has no open hint — it opens nothing, so it offers nothing", async () => {
+    await mountLive(homeWithRun(undefined));
+    const card = theCard();
+
+    expect(part(card, "running-open-hint")).toBeNull();
+    expect(text(card)).not.toContain("›");
+    expect(text(card)).not.toContain("open");
+    // Today's line is untouched: `running…` then the timer, and nothing after it.
+    expect(part(card, "running-elapsed")!.previousElementSibling).toBe(part(card, "running-label"));
+    expect(part(card, "running-elapsed")!.nextElementSibling).toBeNull();
+  });
+});
+
+describe("the harness cascade fails loudly on a selector it cannot evaluate", () => {
+  async function probe(): Promise<HTMLElement> {
+    await mountLive(homeWithRun(undefined));
+    const el = document.createElement("div");
+    el.className = "probe";
+    document.body.appendChild(el);
+    return el;
+  }
+
+  test("a stylesheet whose rule for the asked property has an unparseable selector throws EVERY time it is asked of the same element, naming that selector — it never reads as `no match`", async () => {
+    const el = await probe();
+    const resolve = cascadeOver(".probe { color: red; }\n.probe[data-state { color: blue; }\n.probe:: { color: green; }");
+
+    expect(() => resolve(el, "color")).toThrow(".probe[data-state");
+    // happy-dom's Element.matches throws on an unparseable selector only the
+    // first time an element is asked; the cascade must not go quiet after it.
+    expect(() => resolve(el, "color")).toThrow("cannot evaluate 1 selector(s) declaring color");
+    expect(() => resolve(el, "color")).toThrow(".probe[data-state");
+  });
+
+  test("a clean stylesheet resolves by the cascade, and an unparseable selector on ANOTHER property does not touch this one", async () => {
+    const el = await probe();
+    const clean = cascadeOver(".probe { color: red; }\n.other { color: blue; }\ndiv.probe { color: teal; }");
+    expect(clean(el, "color")).toBe("teal");
+
+    const elsewhere = cascadeOver(".probe { color: red; }\n.probe[data-state { cursor: pointer; }");
+    expect(elsewhere(el, "color")).toBe("red");
+    expect(() => elsewhere(el, "cursor")).toThrow(".probe[data-state");
   });
 });

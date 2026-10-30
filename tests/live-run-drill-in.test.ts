@@ -31,6 +31,10 @@
 // The header is the run detail's existing `.app-drillin-head`.
 import { describe, test, expect, afterEach } from "bun:test";
 import {
+  cssPxIn,
+  jsConstIn,
+  LIVE_ROW_CSS_HEIGHT,
+  LIVE_ROW_HEIGHT,
   liveFrom,
   liveReads,
   mountLive,
@@ -471,5 +475,113 @@ describe("the live drill-in is bounded", () => {
     expect(rows.length).toBeLessThanOrEqual(VIRT_WINDOW);
     expect(rowName(rows[0]!)).toBe("test_case_0000");
     expect(header()).toMatch(/live\s*·\s*6000\/6000\s*·\s*1000\s*✓\s*5000\s*✗/);
+  });
+});
+
+/** The name of the bulk fixture's failure at `index`. */
+const bulkName = (index: number): string => `test_case_${String(index).padStart(4, "0")}`;
+
+/** A drill-in at /run/<runId> holding `count` failures, named by `bulkName`. */
+function bulkFixture(count: number): LiveMountOpts {
+  const opts = fixture(`/run/${RUN_ID}`);
+  const failures: LiveFailureFixture[] = Array.from({ length: count }, (_, i) => ({
+    id: `f-${i}`,
+    name: bulkName(i),
+    suite: "BulkSuite",
+    file: "test_bulk.py",
+    message: `AssertionError: case ${i}`,
+  }));
+  const live: LiveCounts = { completed: count + 1000, total: count + 1000, passed: 1000, failed: count, pending: 0 };
+  opts.live[RUN_ID] = { state: "open", live, failures };
+  opts.openRuns[0]!.live = live;
+  return opts;
+}
+
+/** The live drill-in's one scroll container: the run overlay's pane-scroll box. */
+function livePane(): HTMLElement {
+  const panes = document.querySelectorAll('[data-testid="run-overlay"] [data-testid="pane-scroll"]');
+  expect(panes.length).toBe(1);
+  return panes[0] as HTMLElement;
+}
+
+/** Scroll the pane to `scrollTop` the way a user does: move it, then fire `scroll`. */
+async function scrollPaneTo(scrollTop: number): Promise<void> {
+  const pane = livePane();
+  pane.scrollTop = scrollTop;
+  pane.dispatchEvent(new Event("scroll"));
+  await settle();
+}
+
+describe("the live drill-in's window follows the pane's scroll", () => {
+  test("with 5,000 failures, scrolling the pane moves the window: the first mounted row is the failure at floor(scrollTop / LIVE_ROW_HEIGHT), the rows run on in order from it, and no more than the window are mounted", async () => {
+    await mountLive(bulkFixture(5000));
+    expect(rowName(failureRows()[0]!)).toBe(bulkName(0));
+
+    // Partway into row 200 — well past the first window of rows 0..119.
+    const scrollTop = 200 * LIVE_ROW_HEIGHT + 17;
+    const first = Math.floor(scrollTop / LIVE_ROW_HEIGHT);
+    expect(first).toBe(200);
+    await scrollPaneTo(scrollTop);
+
+    const rows = failureRows();
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThanOrEqual(VIRT_WINDOW);
+    expect(rows.map(rowName)).toEqual(Array.from({ length: rows.length }, (_, i) => bulkName(first + i)));
+    // A failure past row 120 is reachable, and the window left the top behind.
+    expect(rowName(rows[0]!)).toBe("test_case_0200");
+    expect(rows.map(rowName)).not.toContain(bulkName(0));
+    expect(rows.map(rowName)).not.toContain(bulkName(VIRT_WINDOW - 1));
+    // The header and the one passed row stay as they were.
+    expect(header()).toMatch(/live\s*·\s*6000\/6000\s*·\s*1000\s*✓\s*5000\s*✗/);
+    expect(passedRows()).toHaveLength(1);
+  });
+
+  test("scrolled to the end of 5,000 failures the window holds the LAST failure, and scrolled back to the top it holds the first again — never more than the window either way", async () => {
+    await mountLive(bulkFixture(5000));
+
+    await scrollPaneTo(5000 * LIVE_ROW_HEIGHT);
+    const atEnd = failureRows();
+    expect(atEnd.length).toBeGreaterThan(0);
+    expect(atEnd.length).toBeLessThanOrEqual(VIRT_WINDOW);
+    expect(rowName(atEnd.at(-1)!)).toBe(bulkName(4999));
+    expect(atEnd.map(rowName)).toEqual(
+      Array.from({ length: atEnd.length }, (_, i) => bulkName(5000 - atEnd.length + i)),
+    );
+
+    await scrollPaneTo(0);
+    const atTop = failureRows();
+    expect(atTop.length).toBeLessThanOrEqual(VIRT_WINDOW);
+    expect(rowName(atTop[0]!)).toBe(bulkName(0));
+    expect(atTop.map(rowName)).not.toContain(bulkName(4999));
+  });
+});
+
+describe("a live failure row is as tall in the script as in the stylesheet", () => {
+  test("LIVE_ROW_HEIGHT in public/app.js equals `.app-live-failure`'s height in public/styles.css — the window divides scrollTop by the height each row is drawn at", () => {
+    expect(LIVE_ROW_CSS_HEIGHT).toBe(LIVE_ROW_HEIGHT);
+  });
+
+  test("the two readers, on a synthetic script and stylesheet: an equal pair reads equal, an unequal pair reads unequal, and a decoy or an @media rule is never read", () => {
+    const script = "const VIRT_ROW_HEIGHT = 28;\nconst LIVE_ROW_HEIGHT = 40;\n";
+    const equalCss = [
+      ".app-live-failure-head { height: 99px; }",
+      ".app-live-failure {\n  box-sizing: border-box;\n  height: 40px;\n}",
+      "@media (width <= 640px) { .app-live-failure { height: 56px; } }",
+    ].join("\n");
+    const unequalCss = ".app-live-failure { height: 44px; padding: 3px 0; }";
+
+    expect(jsConstIn(script, "LIVE_ROW_HEIGHT")).toBe(40);
+    expect(cssPxIn(equalCss, ".app-live-failure", "height")).toBe(40);
+    expect(cssPxIn(unequalCss, ".app-live-failure", "height")).toBe(44);
+    expect(cssPxIn(equalCss, ".app-live-failure", "height")).toBe(jsConstIn(script, "LIVE_ROW_HEIGHT"));
+    expect(cssPxIn(unequalCss, ".app-live-failure", "height")).not.toBe(jsConstIn(script, "LIVE_ROW_HEIGHT"));
+    // Nothing to read is an error, never a number.
+    expect(() => jsConstIn(script, "LIVE_ROW_GAP")).toThrow("const LIVE_ROW_GAP not found");
+    expect(() => cssPxIn(".app-live-failure-head { height: 40px; }", ".app-live-failure", "height")).toThrow(
+      "no top-level `.app-live-failure` rule declares height",
+    );
+    expect(() => cssPxIn(".app-live-failure { height: 2.5rem; }", ".app-live-failure", "height")).toThrow(
+      "not a px length",
+    );
   });
 });

@@ -140,20 +140,31 @@ function stubRunLive(handle: ServerHandle, answers: Record<string, RunLive>): st
   return asked;
 }
 
+/**
+ * GET the live read and its JSON body. Every answer the route gives (the
+ * 200s and the 404s alike) is a JSON object, so an answer that is not one
+ * fails here with its status and its raw text, never quietly as a null body.
+ */
 async function liveOf(
   handle: ServerHandle,
   runId: string,
   query = "",
-): Promise<{ status: number; body: Record<string, unknown> | null }> {
-  const res = await fetch(`${base(handle)}/api/v2/runs/${encodeURIComponent(runId)}/live${query}`);
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const path = `/api/v2/runs/${encodeURIComponent(runId)}/live${query}`;
+  const res = await fetch(`${base(handle)}${path}`);
   const text = await res.text();
-  let body: Record<string, unknown> | null = null;
+  let body: unknown;
   try {
-    body = JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    body = null;
+    body = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`GET ${path} answered ${res.status} with a body that is not JSON: ${JSON.stringify(text)}`, {
+      cause: err,
+    });
   }
-  return { status: res.status, body };
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    throw new Error(`GET ${path} answered ${res.status} with JSON that is not an object: ${text}`);
+  }
+  return { status: res.status, body: body as Record<string, unknown> };
 }
 
 interface OpenRunBriefWire {
