@@ -59,6 +59,7 @@ PROJECT_NAME = "arduino-env-firmware"
 NATIVE_CASES = 3
 COMPILE_EXIT = 3
 COMPILE_ERROR = "sketch.ino:4:1: error: 'undeclared_thing' was not declared"
+RUNS_INGEST = "/api/v2/runs"
 
 # What a stub child reports about the AGENT_ID in its own environment. The
 # stub classifies the value against the two ids this file uses and records
@@ -268,12 +269,15 @@ class ArduinoMainNeverWritesItsOwnEnvironmentTest(_ArduinoProjectCase):
             seen["agent_id"], "flag",
             "the native runner arduino spawned must see AGENT_ID set to the "
             "--agent value in its own environment (class seen shown)")
-        ingests = self._posts_under("/api/v2/runs/parsed", AGENT)
+        ingests = self._posts_under(RUNS_INGEST, AGENT)
         self.assertEqual(len(ingests), 1,
                          f"a filed run ingests exactly once under {AGENT!r}; "
                          f"posted paths: {self._post_paths()!r}")
-        self.assertEqual(ingests[0]["summary"]["total"], NATIVE_CASES)
-        self.assertEqual(ingests[0]["summary"]["passed"], NATIVE_CASES)
+        self.assertEqual(ingests[0].get("codec"), "junit")
+        data = ingests[0].get("data") or []
+        self.assertEqual(len(data), 1, "the run's one report is sent inline")
+        self.assertEqual(data[0].count("<testcase "), NATIVE_CASES,
+                         "the report sent is the one the runner wrote")
         self.assertFalse(
             left_behind,
             "main() wrote AGENT_ID into its own process environment while "
@@ -330,7 +334,7 @@ class ArduinoChildProcessSeesTheAgentIdTest(_ArduinoProjectCase):
             seen["agent_id"], "flag",
             "the native runner must see AGENT_ID set to the --agent value "
             "(class seen shown)")
-        self.assertEqual(len(self._posts_under("/api/v2/runs/parsed", AGENT)), 1,
+        self.assertEqual(len(self._posts_under(RUNS_INGEST, AGENT)), 1,
                          f"posted paths: {self._post_paths()!r}")
 
     def test_native_runner_sees_the_agent_flag_over_an_ambient_agent_id(self):
@@ -342,9 +346,9 @@ class ArduinoChildProcessSeesTheAgentIdTest(_ArduinoProjectCase):
             seen["agent_id"], "flag",
             "--agent decides the child's AGENT_ID, never an ambient one "
             "(class seen shown)")
-        self.assertEqual(len(self._posts_under("/api/v2/runs/parsed", AGENT)), 1,
+        self.assertEqual(len(self._posts_under(RUNS_INGEST, AGENT)), 1,
                          f"posted paths: {self._post_paths()!r}")
-        self.assertEqual(self._posts_under("/api/v2/runs/parsed", AMBIENT_AGENT), [],
+        self.assertEqual(self._posts_under(RUNS_INGEST, AMBIENT_AGENT), [],
                          "nothing may be filed under the ambient AGENT_ID")
 
 
@@ -376,8 +380,9 @@ class AnAmbientAgentIdIsNotARequestToFileTest(_ArduinoProjectCase):
             f"an unfiled run with no failures exits 0; got "
             f"{result.returncode}; stdout={result.stdout!r} "
             f"stderr={result.stderr[-1500:]!r}")
-        self.assertIn(f"{NATIVE_CASES}/{NATIVE_CASES} passed", result.stderr,
-                      "the unfiled run reports its own outcome")
+        self.assertIn(f"ran {NATIVE_CASES} testcases ({NATIVE_CASES} not skipped); "
+                      f"runner exit 0", result.stderr,
+                      "the unfiled run reports what it ran and the runner's exit")
         self.assertEqual(self._post_paths(), [],
                          "an unfiled run posts nothing to the board")
 
