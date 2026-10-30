@@ -3,18 +3,18 @@
 Each directory holds what a stack's runner wrote on a real run of a small scratch
 project with passing, failing and skipped cases, invoked the way that stack's
 client invokes it (`clients/<stack>-crucible.py`). Beside the reports,
-`expected.json` holds that client's own parse of them, frozen by
-`freeze-client-parse.py` (it imports each client by path and calls its parser
-functions; rerun it with `python3 tests/fixtures/reports/freeze-client-parse.py`).
-`expected.json` also names its inputs: the report files in the order the client
-reads them, the coverage files and their codec, and for bun the console.
+`expected.json` holds that client's own parse of them, frozen by a script that
+imported each client by path and called its parser functions. `expected.json`
+also names its inputs: the report files in the order the client reads them,
+the coverage files and their codec, and for bun the console.
 
 Every `expected.json` was frozen at CR-CRU-152's base, and is kept as the record
-of the client parse at that point. A client that sends its runner's reports to
-the board parses none of them, so the script no longer freezes its set: bun's
-`expected.json` and python's two (`python/xmlrunner/`, `python/pytest/`)
-(CR-CRU-204), maven's (`mvn/`) and rust's (`rust/`), are not regenerated, and
-are never rewritten.
+of the client parse at that point. Every client now sends its runner's reports
+to the board and parses none of them, so there is no client parse left to
+freeze and the script is retired: bun's `expected.json` and python's two
+(`python/xmlrunner/`, `python/pytest/`) (CR-CRU-204), maven's (`mvn/`), rust's
+(`rust/`) and arduino's (`arduino/`) are not regenerated, and are never
+rewritten.
 
 `tests/real-stack-reports-decode-on-the-board.test.ts` sends each set to
 `POST /api/v2/runs` and compares the board's decode with the frozen parse.
