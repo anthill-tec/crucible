@@ -444,9 +444,9 @@ class _EnvelopeTierProbe:
         harness = _MODALITY._HARNESS
         calls = []
         # The clients that send their runner's reports inline (CR-CRU-204),
-        # maven among them; the others' `/api/v2/runs` bodies are answered as
-        # before.
-        inline = self.CLIENT in ("bun", "python", "mvn")  # type: ignore[attr-defined]
+        # maven and rust among them; the others' `/api/v2/runs` bodies are
+        # answered as before.
+        inline = self.CLIENT in ("bun", "python", "mvn", "rust")  # type: ignore[attr-defined]
 
         def fake_post(path, payload):
             calls.append((path, copy.deepcopy(payload)))
