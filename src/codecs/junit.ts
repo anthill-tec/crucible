@@ -123,7 +123,7 @@ const MESSAGE_LIMIT = 1000;
 const TRACE_LIMIT = 8000;
 
 /** The value when it holds more than whitespace, else undefined. */
-function nonBlank(value: string | undefined): string | undefined {
+export function nonBlank(value: string | undefined): string | undefined {
   return value !== undefined && value.trim().length > 0 ? value : undefined;
 }
 
@@ -132,21 +132,44 @@ function nameOf(el: XmlElement): string {
   return nonBlank(el.attrs["name"]) ?? "?";
 }
 
+/** A failure's parts as a report or a stream states them, each optional. */
+export interface FailureParts {
+  message?: string;
+  type?: string;
+  trace?: string;
+}
+
 /**
- * A failure's text: the message is the non-empty `message` attribute,
- * trimmed, else the first non-empty line of the text; the trace is the text; the type is
- * the `type` attribute. Each part is present only when non-empty.
+ * A failure as the board stores it: the message is the non-blank `message`,
+ * trimmed, else the first non-blank line of the trace, cut to
+ * `MESSAGE_LIMIT`; the trace is the trimmed trace, cut to `TRACE_LIMIT`; the
+ * type is the non-blank `type`. Each part is present only when non-empty.
+ * JUnit's `toFailure` and the `crucible-events` codec both read through it.
  */
-function toFailure(failureEl: XmlElement): NonNullable<TestLeaf["failure"]> {
-  const trace = failureEl.text.trim();
+export function failureOf(parts: FailureParts): NonNullable<TestLeaf["failure"]> {
+  const trace = (parts.trace ?? "").trim();
   const firstLine = trace.split("\n").find((line) => line.trim().length > 0)?.trim();
-  const message = nonBlank(failureEl.attrs["message"])?.trim() ?? firstLine;
-  const type = nonBlank(failureEl.attrs["type"]);
+  const message = nonBlank(parts.message)?.trim() ?? firstLine;
+  const type = nonBlank(parts.type);
   return {
     ...(message !== undefined ? { message: message.slice(0, MESSAGE_LIMIT) } : {}),
     ...(type !== undefined ? { type } : {}),
     ...(trace.length > 0 ? { trace: trace.slice(0, TRACE_LIMIT) } : {}),
   };
+}
+
+/** A suite's status from its leaves: `fail` when one failed, else `pass`. */
+export function suiteStatus(children: readonly TestLeaf[]): SuiteNode["status"] {
+  return children.some((c) => c.status === "fail") ? "fail" : "pass";
+}
+
+/** A `<failure>` / `<error>` element, read through `failureOf`. */
+function toFailure(failureEl: XmlElement): NonNullable<TestLeaf["failure"]> {
+  return failureOf({
+    message: failureEl.attrs["message"],
+    type: failureEl.attrs["type"],
+    trace: failureEl.text,
+  });
 }
 
 function toLeaf(testcase: XmlElement): TestLeaf {
@@ -163,11 +186,7 @@ function toLeaf(testcase: XmlElement): TestLeaf {
 
 function toNode(name: string, cases: XmlElement[]): SuiteNode {
   const children = cases.map(toLeaf);
-  return {
-    name,
-    status: children.some((c) => c.status === "fail") ? "fail" : "pass",
-    children,
-  };
+  return { name, status: suiteStatus(children), children };
 }
 
 function casesOf(testsuite: XmlElement): XmlElement[] {

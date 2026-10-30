@@ -2913,9 +2913,35 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
 // file in its child `bun test`, fired for the right reason, and gets no
 // change.
+//
+// UPDATED 2026-10-30 by CR-CRU-200's CLOSE-OUT (the FIX round, cycle 825,
+// AC14). TWO heads move: `src` 840 -> 883 (+43) and `public` 532 -> 538 (+6).
+// MEASURED with this file's own machinery on the feature branch AFTER the
+// branch's last content edit (`3bd8ee8`): the recorded heads 840/532 against
+// a measured 882/538, and `clients` (799) re-measures at its recorded head.
+// The pre-merge gate's fix `cd4a7d2` then added one citation in `src/v2.ts`,
+// so `src` was re-measured at 883 after it, one above the 882 first recorded.
+// The merge-base with `develop` is `b25853f`.
+//
+// TOTALS ONLY, and stated as such: this re-record was taken from this test's
+// own failure output and its junit report, which give each tree's total and
+// no per-file or per-id split. No split by file or by CR id is recorded
+// here, because none was measured.
+//
+//   src +43, public +6: per-tree totals, attributed to no file and no id.
+//
+// A NET GAIN of forty-nine, and stated as one. `src` (883) and `public`
+// (538) stay above their 512 and 378 floors, so the directional half holds.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the branch's last content edit, so
+// these are its final figures and not a mid-cycle reading. It clears the
+// CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
+// file in its child `bun test`, fired for the right reason, and gets no
+// change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 840 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 532 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 883 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 538 },
   clients: { exts: [".py"], develop: 601, head: 799 },
 };
 

@@ -21,7 +21,9 @@ Feature: CR-CRU-017 §S3 — the run lifecycle on the timeline: a live running c
   scenarios stub ONLY the two live reads (the open-run brief's `live` and
   GET /api/v2/runs/<runId>/live, through `page.route`, as
   burndown-analytics-mock.ts does), because the live state they answer is
-  filled by CR-CRU-200. The abort path uses
+  filled by CR-CRU-200. The CR-CRU-200 scenario stubs nothing: it streams a
+  real run's tests through POST /api/v2/runs/<runId>/stream, and the page
+  moves on the board's own throttled `events` frames. The abort path uses
   the §S1 auto-abort the server already owns (an open run whose agent has
   tombstoned is aborted `agent died`); §S2's explicit abort ROUTE is a later
   cycle and is deliberately not exercised here.
@@ -144,3 +146,33 @@ Feature: CR-CRU-017 §S3 — the run lifecycle on the timeline: a live running c
     Then the URL is the home page with no run path
     And an event card for "rl-live-settle" becomes visible within 2 seconds
     And the running card for "rl-live-settle" disappears within 3 seconds
+
+  @CR-CRU-200
+  Scenario: CR-CRU-200 — a run streaming through the real route moves its running card, its live drill-in and its agent's line without a reload, then closes into its settled card
+    Given a project named "RL Stream" is registered
+    And an online agent "rl-stream" with message "streaming run" is registered on that project
+    And a run is started for agent "rl-stream" on that project
+    And agent "rl-stream" is the run's streaming agent
+    And the run streams batch 1 of its test stream through the stream route
+    When I open the workspace for that project
+    And I click the "Runs" workspace tab
+    Then a running card for "rl-stream" becomes visible within 2 seconds
+    And the running card for "rl-stream" reads "2/4" in "src/gap.test.ts" within 6 seconds
+    And the project pane's agent row for "rl-stream" reads "running 2/4 · src/gap.test.ts" within 6 seconds
+    And I mark the page so a reload would be detectable
+    When the run streams batch 2 of its test stream through the stream route
+    Then the running card for "rl-stream" reads "3/4" in "src/resend.test.ts" within 6 seconds
+    And the project pane's agent row for "rl-stream" reads "running 3/4 · src/resend.test.ts" within 6 seconds
+    When I open that running card's live drill-in
+    Then the live drill-in lists the failures "rejects a gap" in order within 6 seconds
+    When the run streams batch 3 of its test stream through the stream route
+    Then the live drill-in lists the failures "rejects a gap | closes twice" in order within 6 seconds
+    And the page was never reloaded
+    When I open the workspace for that project
+    And I click the "Runs" workspace tab
+    Then a running card for "rl-stream" becomes visible within 2 seconds
+    When the run is closed through POST /api/v2/runs naming the crucible-events codec
+    Then the running card for "rl-stream" disappears within 3 seconds
+    And an event card for "rl-stream" becomes visible within 2 seconds
+    And that card's ratio pill contains "2 ✗ of 4"
+    And the project pane's agent row for "rl-stream" no longer reads a running line within 6 seconds

@@ -1,9 +1,9 @@
 // Health (`/api/health`, `/api/v2/health`) carries
 // `codecs: {test: [...], coverage: [...]}` — the names this board decodes —
 // so a client can tell a board that predates server-side decoding before it
-// sends. This board decodes `junit` and `playwright` test reports and `jacoco`
-// and `lcov` coverage. Driven through the real production HTTP surface
-// (`startServer`, in-memory store).
+// sends. This board decodes `junit` and `playwright` test reports, the
+// `crucible-events` test stream, and `jacoco` and `lcov` coverage. Driven
+// through the real production HTTP surface (`startServer`, in-memory store).
 import { describe, test, expect, afterEach } from "bun:test";
 import { startServer } from "../src/server.ts";
 import type { ServerHandle } from "../src/server.ts";
@@ -22,10 +22,10 @@ async function health(route: string): Promise<Record<string, unknown>> {
   return (await res.json()) as Record<string, unknown>;
 }
 
-const CODECS = { test: ["junit", "playwright"], coverage: ["jacoco", "lcov"] };
+const CODECS = { test: ["crucible-events", "junit", "playwright"], coverage: ["jacoco", "lcov"] };
 
 describe("health names the codecs the board decodes", () => {
-  test("GET /api/health carries codecs {test: [junit, playwright], coverage: [jacoco, lcov]}", async () => {
+  test("GET /api/health carries codecs {test: [crucible-events, junit, playwright], coverage: [jacoco, lcov]}", async () => {
     const body = await health("/api/health");
     expect(body.ok).toBe(true);
     expect(body.codecs).toEqual(CODECS);
@@ -40,7 +40,7 @@ describe("health names the codecs the board decodes", () => {
   test("the codec lists hold exactly these names — no compile format, no parsed pseudo-codec", async () => {
     const body = await health("/api/v2/health");
     const codecs = body.codecs as { test?: string[]; coverage?: string[] } | undefined;
-    expect(codecs?.test?.length).toBe(2);
+    expect(codecs?.test?.length).toBe(3);
     expect(codecs?.coverage?.length).toBe(2);
     expect(codecs?.test ?? []).not.toContain("parsed");
     expect(codecs?.coverage ?? []).not.toContain("junit");

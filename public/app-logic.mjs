@@ -484,8 +484,10 @@ export function pairTransitions(events) {
   const CYCLE_WINDOW_MS = 24 * 60 * 60 * 1000;
   const stemRaw = (agentId) => String(agentId).replace(/-(RED|GREEN|FIX)$/i, "");
   const stemKey = (agentId) => stemRaw(agentId).toLowerCase();
+  // CR-CRU-200 §S3 — an aborted run's counts are not a verdict: it opens no
+  // streak and closes none.
   const sorted = events
-    .filter(isTestRun)
+    .filter((event) => isTestRun(event) && event.status !== "aborted")
     .slice()
     .sort((a, b) => a.timestamp - b.timestamp);
   const markers = [];
@@ -992,7 +994,10 @@ export function workflowLens({ plans, events }) {
   }
   for (const raw of inferred.values()) {
     const cycles = [...raw.cycleRuns.entries()].map(([label, cycleRuns]) => {
-      const ordered = [...cycleRuns].sort((a, b) => a.timestamp - b.timestamp);
+      // CR-CRU-200 §S3 — an aborted run marks no cycle done and reopens none.
+      const ordered = cycleRuns
+        .filter((run) => run.status !== "aborted")
+        .sort((a, b) => a.timestamp - b.timestamp);
       const last = ordered[ordered.length - 1];
       return {
         label,

@@ -138,6 +138,13 @@ CR-CRU-224:
 
 Go's stream lands with its client (CR-CRU-195), which therefore also depends on CR-CRU-200.
 
+What CR-CRU-200 leaves to later CRs (its non-goals):
+
+- Playwright's steps in the live state are CR-CRU-201's, with its shipped Playwright reporter; CR-CRU-200's live state
+  holds the counts, the current file and the failures.
+- A stream that only feeds the view, and is never the run's record (`bun-console`, maven's console), is CR-CRU-201's
+  and CR-CRU-203's to define, with its codec.
+
 ## Open for CR-CRU-200's gap analysis
 
 - The board's live view — settled (storyboard F25, option A; CR-CRU-223): the running card

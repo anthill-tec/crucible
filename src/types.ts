@@ -397,6 +397,12 @@ export interface RunEvent {
   status?: "aborted";
   /** CR-CRU-017 §S1 — why the RUN was aborted; present exactly when `status` is. */
   abortReason?: string;
+  /**
+   * CR-CRU-200 §S3 — why a streamed run's record cannot be trusted (its
+   * stream had no `run-end`, disagreed with it, held undecodable lines, was
+   * cut, or the run was aborted). ABSENT — never null — on a complete run.
+   */
+  incomplete?: string;
 }
 
 /** CR-CRU-162 §G2 — the three answers `no-mistakes axi respond` accepts. */

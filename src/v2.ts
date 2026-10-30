@@ -2,8 +2,8 @@
 // project rollups (PRD §4.2), agent lifecycle verbs (PRD §4.3). Every write
 // response carries `changed: true|false` (§S5). Shares the ONE store instance
 // with the v1 shim — src/server.ts wires handleV2 into its dispatcher.
-import { codecs, parseRunBody } from "./codecs/index.ts";
-import type { IngestWarning } from "./codecs/index.ts";
+import { codecs, parseRunBody, parseStreamBody } from "./codecs/index.ts";
+import type { Codec, IngestWarning } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
@@ -161,6 +161,8 @@ interface V2Body {
   // CR-CRU-017 §S1 — the OPEN run this ingest closes (optional: no runId is
   // the unchanged single-shot path).
   runId?: unknown;
+  // CR-CRU-200 §S2 — the UTF-8 byte offset a stream batch starts at.
+  from?: unknown;
   // CR-CRU-014 §S1 — the queue full-replace payload.
   entries?: unknown;
   // CR-CRU-091 §S8 — the roadmap-registration verb bodies. `cr`, `title`,
@@ -1388,7 +1390,9 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
  * that opened a run closes it at once, when it knows nothing will file it.
  * The same caller boundary as `handleRunStart`, the same ownership/state
  * refusals as `resolveRunClose` (400 unknown or another agent's/project's
- * run; 409 a run already settled), and a reason is required (400). Settled
+ * run; 409 a run already settled), and a reason is required (400). The
+ * settled-run 409 keeps its body bare: CR-CRU-200 §S3's `state` and `eventId`
+ * ride only the close and stream routes' refusals, never an abort's. Settled
  * by `Store#abortOpenRun` — the sweep's own store path, one run row and one
  * `status: "aborted"` event — so the timeline and live stream see it as they
  * see a run the server aborted itself.
@@ -1419,6 +1423,97 @@ async function handleRunAbort(store: Store, runId: string, req: Request): Promis
 /** CR-CRU-223 §S1 — the open run's live read: `/api/v2/runs/<runId>/live`. */
 const RUN_LIVE_RE = /^\/api\/v2\/runs\/([^/]+)\/live$/;
 
+/** CR-CRU-200 §S2 — an open run's test stream: `/api/v2/runs/<runId>/stream`. */
+const RUN_STREAM_RE = /^\/api\/v2\/runs\/([^/]+)\/stream$/;
+
+/** What every refusal of the stream route ends with. */
+const STREAM_REFUSED = "nothing stored";
+
+/** The stream codec a batch naming none is read under. */
+const STREAM_CODEC = "crucible-events";
+
+/**
+ * A UTF-16 surrogate standing alone: text no UTF-8 stream can hold. Under the
+ * `u` flag a paired surrogate reads as one astral code point, so only a lone
+ * one is a code point of category Cs.
+ */
+const LONE_SURROGATE = /\p{Cs}/u;
+
+/**
+ * CR-CRU-200 §S2 — POST /api/v2/runs/<runId>/stream {projectKey, agentId,
+ * codec, from, data}: one batch of an open run's test stream, appended at the
+ * UTF-8 byte offset `from` states, answered `200 {ok, runId, held}`.
+ *  - the caller rules of every ingest: `readIngestBody` (413),
+ *    `requireProject` (404), `requireRegisteredCaller` (409);
+ *  - the run rules of `resolveRunClose`: an unknown run or another project's
+ *    or agent's is a 400, a settled one a 409 carrying `state` and `eventId`;
+ *  - the shape: `from` a non-negative integer, `data` a string with no lone
+ *    surrogate, `codec` a stream codec (400);
+ *  - the batch (`Store#appendRunStream`): a codec differing from the run's
+ *    first is a 400, a gap or a differing overlap a 409 carrying `held`, a
+ *    total past `ingest_body_bytes` a 413 carrying `held`.
+ * Every refusal stores nothing.
+ */
+async function handleRunStream(store: Store, runId: string, req: Request): Promise<Response> {
+  const body = await readIngestBody(req);
+  if (body instanceof Response) return body;
+  if (body === null) return fail(400, `malformed JSON body — ${STREAM_REFUSED}`);
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const close = resolveRunClose(store, pk.key, caller.agentId, { runId }, STREAM_REFUSED);
+  if (close.settled !== undefined) return settledStreamRefusal(runId, close.settled);
+  if (close.fail !== undefined) return close.fail;
+  const { from, data } = body;
+  // An absent codec is the stream codec, as an absent one is `junit` on `/runs`.
+  const codec = body.codec === undefined ? STREAM_CODEC : body.codec;
+  if (typeof from !== "number" || !Number.isInteger(from) || from < 0) {
+    return fail(400, `from must be a non-negative integer byte offset — ${STREAM_REFUSED}`);
+  }
+  if (typeof data !== "string") return fail(400, `data must be the stream's text — ${STREAM_REFUSED}`);
+  if (LONE_SURROGATE.test(data)) {
+    return fail(400, `data holds a lone surrogate, which is no UTF-8 text — ${STREAM_REFUSED}`);
+  }
+  if (typeof codec !== "string" || codecs.get(codec)?.stream !== true) {
+    return fail(400, `codec ${String(codec)} is not a stream codec — ${STREAM_REFUSED}`);
+  }
+  const limit = ingestBodyBytes();
+  const outcome = store.appendRunStream(runId, { codec, from, data, limit });
+  if (outcome.ok) return json({ ok: true, runId, held: outcome.held });
+  switch (outcome.refused) {
+    case "settled":
+      return settledStreamRefusal(runId, outcome.run ?? { state: "ended" });
+    case "codec":
+      return fail(
+        400,
+        `codec ${codec} differs from the stream codec ${outcome.codec} this run's first batch fixed — ${STREAM_REFUSED}`,
+      );
+    case "gap":
+      return fail(409, `a batch from ${from} leaves a gap after the ${outcome.held} bytes held — ${STREAM_REFUSED}`, {
+        held: outcome.held,
+      });
+    case "overlap":
+      return fail(409, `a batch from ${from} differs from the bytes held across its overlap — ${STREAM_REFUSED}`, {
+        held: outcome.held,
+      });
+    case "size":
+      return fail(
+        413,
+        `the stream would pass ingest_body_bytes (${limit} bytes) — batch not stored; the run's stream is marked cut`,
+        { held: outcome.held },
+      );
+  }
+}
+
+/** A batch for a run already settled: a 409 carrying its state and the event that settled it. */
+function settledStreamRefusal(runId: string, settled: Pick<RunRecord, "state" | "eventId">): Response {
+  return fail(409, `run ${runId} is already ${settled.state} — a settled run takes no stream; ${STREAM_REFUSED}`, {
+    state: settled.state,
+    ...(settled.eventId !== undefined ? { eventId: settled.eventId } : {}),
+  });
+}
+
 /**
  * CR-CRU-223 §S1 — GET /api/v2/runs/<runId>/live[?from=<n>]: what the live
  * drill-in reads.
@@ -1447,6 +1542,9 @@ function handleRunLive(store: Store, runId: string, url: URL): Response {
   });
 }
 
+/** The outcome of a close's refusal: what the closing ingest routes did NOT do. */
+const CLOSE_REFUSED = "run NOT stored";
+
 /**
  * CR-CRU-017 §S1 — the OPTIONAL `runId` seam every ingest route shares.
  *
@@ -1469,9 +1567,11 @@ function resolveRunClose(
   projectKey: string,
   agentId: string,
   body: V2Body,
-  outcome = "run NOT stored",
+  outcome = CLOSE_REFUSED,
 ): {
   fail?: Response;
+  /** The settled run a 409 refused, for a caller that answers its state. */
+  settled?: Pick<RunRecord, "state" | "eventId">;
   runId?: string;
   lifecycle?: { startedAt: number; runtimeMs: number };
   started?: Pick<RecordEventMeta, "stack" | "tier">;
@@ -1499,11 +1599,18 @@ function resolveRunClose(
     };
   }
   if (run.state !== "open") {
+    // CR-CRU-200 §S3 — a resent close's 409 carries the run's state and the
+    // event that settled it, so a client tells its own lost answer from a
+    // refusal. Only a close's: the abort route's 409 keeps its pre-CR body,
+    // and the stream route answers `settled` with its own refusal.
+    const settled = { state: run.state, ...(run.eventId !== undefined ? { eventId: run.eventId } : {}) };
     return {
       fail: fail(
         409,
         `run ${runId} is already ${run.state} — a settled run cannot be closed twice; ${outcome}`,
+        outcome === CLOSE_REFUSED ? settled : undefined,
       ),
+      settled,
     };
   }
   const stated = runMeta(body);
@@ -1545,13 +1652,18 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   if (badStack !== null) return badStack;
   const badExit = refuseBadRunnerExit(body);
   if (badExit !== null) return badExit;
+  const badStreamUse = refuseStreamCodecUse(codec, codecName, body);
+  if (badStreamUse !== null) return badStreamUse;
 
   // The run's effective stack (the ingest's, else its start's) is told to the
   // codec before it decodes.
-  const parsed = await parseRunBody(codec, body, codecName, effectiveStack(store, body));
-  if ("error" in parsed) return fail(400, parsed.error);
-  const { warnings, files } = parsed;
-  const run = fileRunnerExit(parsed.run, body.runnerExit);
+  const stack = effectiveStack(store, body);
+  // CR-CRU-200 §S3 — a stream codec closing a run decodes the run's held
+  // stream, at the close and inside its transaction; every other ingest
+  // decodes its body here.
+  const streamed = codec.stream === true;
+  const parsed = streamed ? null : await parseRunBody(codec, body, codecName, stack);
+  if (parsed !== null && "error" in parsed) return fail(400, parsed.error);
 
   // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
   // BEFORE any touchAgent/record — no agent row is created or resurrected);
@@ -1572,22 +1684,74 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   const close = resolveRunClose(store, pk.key, agentId, body);
   if (close.fail !== undefined) return close.fail;
 
-  const event = store.recordTestEvent(pk.key, agentId, run, {
-    codec: codecName,
-    // The ingest's stack/tier when stated, else the start's.
-    ...close.started,
-    ...runMeta(body),
-    ...(attach.context !== undefined ? { context: attach.context } : {}),
-    // CR-CRU-057 §S1 — the declared role off the same seam read.
-    ...(attach.role !== undefined ? { role: attach.role } : {}),
-    ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
-    ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
-  });
-  // The run is settled by the event that closed it — recorded after the write,
-  // so a failed ingest leaves the run OPEN (and sweepable) rather than lost.
-  if (close.runId !== undefined && close.lifecycle !== undefined) {
-    store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
+  const fileRun = (decoded: { run: RunSchema; warnings: IngestWarning[]; files: number }, incomplete?: string) => {
+    const run = fileRunnerExit(decoded.run, body.runnerExit);
+    const event = store.recordTestEvent(pk.key, agentId, run, {
+      codec: codecName,
+      // The ingest's stack/tier when stated, else the start's.
+      ...close.started,
+      ...runMeta(body),
+      ...(attach.context !== undefined ? { context: attach.context } : {}),
+      // CR-CRU-057 §S1 — the declared role off the same seam read.
+      ...(attach.role !== undefined ? { role: attach.role } : {}),
+      ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
+      ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
+      ...(incomplete !== undefined ? { incomplete } : {}),
+    });
+    // The run is settled by the event that closed it — recorded after the write,
+    // so a failed ingest leaves the run OPEN (and sweepable) rather than lost.
+    if (close.runId !== undefined && close.lifecycle !== undefined) {
+      store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
+    }
+    return { run, event, warnings: decoded.warnings, files: decoded.files };
+  };
+  let filed: ReturnType<typeof fileRun>;
+  if (parsed !== null) {
+    // CR-CRU-200 §S3 — a run that streams its record closes only with its
+    // stream codec.
+    const streamedRun = refuseStreamedRunClose(store, close.runId);
+    if (streamedRun !== null) return streamedRun;
+    filed = fileRun(parsed);
+  } else {
+    // CR-CRU-200 §S3 — the decode, the event, `endRun` and the deletion of the
+    // batches and live state are one transaction that re-reads the run's open
+    // state inside it.
+    const runId = close.runId ?? String(body.runId);
+    const closed = store.closeStreamedRun(runId, (held) => {
+      if (held === null) {
+        return {
+          error: `run ${runId} holds no stream — codec ${codecName} closes a run's held stream; run NOT stored`,
+        };
+      }
+      // The close names the stream codec the run's first batch fixed.
+      if (held.codec !== codecName) {
+        return {
+          error: `run ${runId} streams its record with codec \`${held.codec}\`; close it with that codec, not ${codecName} — run NOT stored`,
+        };
+      }
+      const decoded = parseStreamBody(codec, held, body, codecName, stack);
+      if ("error" in decoded) return decoded;
+      const incomplete = streamIncompleteness(decoded, body.runnerExit, runId);
+      if (typeof incomplete === "object") return incomplete;
+      if (incomplete !== undefined) {
+        decoded.warnings.push({
+          code: "stream-incomplete",
+          detail: `the stream cannot be trusted: ${incomplete} — the run is stored flagged incomplete`,
+        });
+      }
+      return fileRun(decoded, incomplete);
+    });
+    if (closed === null) {
+      const settled = store.getRun(runId);
+      return fail(409, `run ${runId} settled before it could be closed — run NOT stored`, {
+        ...(settled !== null ? { state: settled.state } : {}),
+        ...(settled?.eventId !== undefined ? { eventId: settled.eventId } : {}),
+      });
+    }
+    if ("error" in closed) return fail(400, closed.error);
+    filed = closed;
   }
+  const { run, event, warnings, files } = filed;
   // §S3 — a RED ingest carries the transition hint; §S7 adds the stale note.
   // Decoded coverage the store discarded (a failing run) says so in help too,
   // as on the parsed route.
@@ -1605,6 +1769,58 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     files,
     event.coverage,
   );
+}
+
+/**
+ * CR-CRU-200 §S1/§S3 — a stream codec is never a report: sent with `data` or
+ * `dataPath` it is refused, and with no `runId` there is no held stream for
+ * it to close (400, nothing stored).
+ */
+function refuseStreamCodecUse(codec: Codec, codecName: string, body: V2Body): Response | null {
+  if (codec.stream !== true) return null;
+  if (body.data !== undefined || body.dataPath !== undefined) {
+    return fail(
+      400,
+      `codec ${codecName} is a stream codec — it closes a run's held stream and is never sent as a report; send no data or dataPath; run NOT stored`,
+    );
+  }
+  if (typeof body.runId !== "string" || body.runId.length === 0) {
+    return fail(400, `codec ${codecName} is a stream codec — it closes an open run's held stream; send its runId; run NOT stored`);
+  }
+  return null;
+}
+
+/**
+ * CR-CRU-200 §S3 — a run holding a stream is closed only with its stream
+ * codec: `/runs` naming another codec, `/runs/parsed` and `/runs/compile`
+ * are refused (400), nothing stored and the run left open.
+ */
+function refuseStreamedRunClose(store: Store, runId: string | undefined): Response | null {
+  if (runId === undefined) return null;
+  const codec = store.runStreamCodec(runId);
+  if (codec === null) return null;
+  return fail(400, `run ${runId} streams its record; close it with codec \`${codec}\` — run NOT stored`);
+}
+
+/** Why a streamed run that held no test is flagged, when its codec states no reason of its own. */
+const NO_TEST_HELD = "no test held";
+
+/**
+ * CR-CRU-200 §S3 — what a stream close stores as `incomplete`: the codec's
+ * reasons. A stream that held no test is filed red, flagged, when the runner
+ * exited above 0 (`fileRunnerExit` files it), and refused otherwise (400,
+ * the run left open for the sweep or the client's abort).
+ */
+function streamIncompleteness(
+  decoded: { run: RunSchema; incomplete?: string },
+  runnerExit: unknown,
+  runId: string,
+): string | undefined | { error: string } {
+  if (decoded.run.summary.total > 0) return decoded.incomplete;
+  if (typeof runnerExit === "number" && runnerExit > 0) return decoded.incomplete ?? NO_TEST_HELD;
+  return {
+    error: `run ${runId} holds no test in its stream and states no runnerExit above 0 — run NOT stored; the run stays open`,
+  };
 }
 
 /**
@@ -1674,6 +1890,9 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   // write so a refused close (400/409) stores nothing.
   const close = resolveRunClose(store, pk.key, agentId, body);
   if (close.fail !== undefined) return close.fail;
+  // CR-CRU-200 §S3 — a run that streams its record closes only with its stream codec.
+  const streamedRun = refuseStreamedRunClose(store, close.runId);
+  if (streamedRun !== null) return streamedRun;
 
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: "parsed",
@@ -1737,6 +1956,9 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   // CR-CRU-017 §S1 — the optional run this compile ingest CLOSES.
   const close = resolveRunClose(store, pk.key, agentId, body);
   if (close.fail !== undefined) return close.fail;
+  // CR-CRU-200 §S3 — a run that streams its record closes only with its stream codec.
+  const streamedRun = refuseStreamedRunClose(store, close.runId);
+  if (streamedRun !== null) return streamedRun;
   const event = store.recordCompileEvent(pk.key, agentId, report, {
     codec: report.format,
     ...close.started,
@@ -5176,6 +5398,8 @@ function eventBrief(event: RunEvent) {
     ...(event.runtimeMs !== undefined ? { runtime_ms: event.runtimeMs } : {}),
     ...(event.status !== undefined ? { status: event.status } : {}),
     ...(event.abortReason !== undefined ? { abortReason: event.abortReason } : {}),
+    // CR-CRU-200 §S3 — an untrusted stream's reason; key ABSENT on a complete run.
+    ...(event.incomplete !== undefined ? { incomplete: event.incomplete } : {}),
   };
 }
 
@@ -5638,6 +5862,10 @@ export function handleV2(
   const abortRunId = RUN_ABORT_RE.exec(pathname)?.[1];
   if (req.method === "POST" && abortRunId !== undefined) {
     return handleRunAbort(store, decodeURIComponent(abortRunId), req);
+  }
+  const streamRunId = RUN_STREAM_RE.exec(pathname)?.[1];
+  if (req.method === "POST" && streamRunId !== undefined) {
+    return handleRunStream(store, decodeURIComponent(streamRunId), req);
   }
   const liveRunId = RUN_LIVE_RE.exec(pathname)?.[1];
   if (req.method === "GET" && liveRunId !== undefined) {

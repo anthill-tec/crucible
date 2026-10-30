@@ -4,6 +4,19 @@ import { Database } from "bun:sqlite";
 import { renameSync } from "node:fs";
 import { configuredRetention, resolveLimit } from "./limits.ts";
 import type { CompileReport } from "./codecs/compile.ts";
+import {
+  abortedStreamRecord,
+  appendRunStream,
+  createRunStreamTables,
+  deleteProjectRunStreams,
+  deleteRunStream,
+  heldStreamOf,
+  liveStateToken,
+  projectHasStreamingRun,
+  RUN_STREAM_TABLES,
+  runLiveOf,
+} from "./run-stream.ts";
+import type { HeldStream, StreamBatch, StreamBatchOutcome } from "./run-stream.ts";
 import { DEFAULT_LIVENESS } from "./types.ts";
 import type {
   Agent,
@@ -881,6 +894,12 @@ export interface RecordEventMeta {
    * (declared, and never beside a cycle). Omitting it stores NULL.
    */
   release?: string;
+  /**
+   * CR-CRU-200 §S3 — why a streamed run's record cannot be trusted, stored on
+   * its event as `incomplete`. Omitting it stores none: a complete run carries
+   * no such key.
+   */
+  incomplete?: string;
 }
 
 export type ChangeKind = "projects" | "agents" | "events";
@@ -1141,7 +1160,44 @@ export interface StoreOpenOpts {
    * included, always use the one-argument form.
    */
   migrations?: readonly MigrationStep[];
+  /**
+   * CR-CRU-200 §S4 — the clock and the timer the live frames' window is
+   * measured and armed on. A test seam, not configuration: production callers
+   * omit it, and the Store uses the real clock and timers.
+   */
+  scheduler?: LiveFrameScheduler;
 }
+
+/**
+ * CR-CRU-200 §S4 — the window of the live frames: a batch that changes a live
+ * state emits its project's `events` change at most once per window, and a
+ * change inside the window is deferred to its end. The one cadence compiled
+ * into source (user ruling 2026-10-30) — not a server limit.
+ */
+export const LIVE_FRAME_MS = 2000;
+
+/**
+ * CR-CRU-200 §S4 — the Store's clock and timer. `setTimeout` answers an
+ * opaque handle the Store only ever hands back to `clearTimeout`.
+ */
+export interface LiveFrameScheduler {
+  now(): number;
+  setTimeout(fn: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
+
+/** The real clock and timers; the timer is `unref`'d, so a pending frame never holds the process open. */
+const REAL_SCHEDULER: LiveFrameScheduler = {
+  now: () => Date.now(),
+  setTimeout: (fn, ms) => {
+    const timer = setTimeout(fn, ms);
+    timer.unref();
+    return timer;
+  },
+  clearTimeout: (handle) => {
+    clearTimeout(handle as ReturnType<typeof setTimeout>);
+  },
+};
 
 /**
  * CR-CRU-071 AC5 — the store is from the future. A NARROW, deliberate
@@ -3018,6 +3074,16 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       );
     },
   },
+  {
+    description:
+      "run streams: CR-CRU-200 §S2/§S4 — an open run's test stream is held in batches, and its live state and failures in tables of their own. A CREATE only: no run streamed before this CR",
+    apply(db) {
+      createRunStreamTables(db);
+    },
+    satisfiedBy(db) {
+      return RUN_STREAM_TABLES.every((table) => tableExists(db, table));
+    },
+  },
 ];
 
 /**
@@ -3205,8 +3271,15 @@ export class Store {
    * downtime.
    */
   private readonly epochCheckpointAt = new Map<string, number>();
+  /** CR-CRU-200 §S4 — the clock and timer the live frames' window runs on. */
+  private readonly scheduler: LiveFrameScheduler;
+  /** CR-CRU-200 §S4 — per project, when its last live frame went out. */
+  private readonly lastLiveFrameAt = new Map<string, number>();
+  /** CR-CRU-200 §S4 — per project, the timer armed for its window's end. */
+  private readonly pendingLiveFrame = new Map<string, unknown>();
 
   constructor(path: string, opts?: StoreOpenOpts) {
+    this.scheduler = opts?.scheduler ?? REAL_SCHEDULER;
     this.bootedAt = Date.now();
     this.db = new Database(path, { create: true });
     // §S5 — bun:sqlite may defer an open failure past `new Database`; force it
@@ -3627,6 +3700,8 @@ export class Store {
     createGateDecisionsTable(this.db);
     // A run's detail rows, by the same base pass for the same reason.
     createRunDetailTables(this.db);
+    // CR-CRU-200 §S2/§S4 — a run's held stream and live state, likewise.
+    createRunStreamTables(this.db);
   }
 
   /**
@@ -3916,6 +3991,9 @@ export class Store {
         .query(`DELETE FROM plan_cycles WHERE project_key = ?`)
         .run(key).changes;
       counts.rollups = this.db.query(`DELETE FROM rollups WHERE project_key = ?`).run(key).changes;
+      // CR-CRU-200 §S2 — its runs' held streams and live state go first,
+      // while the runs that name them remain.
+      deleteProjectRunStreams(this.db, key);
       // CR-CRU-017 §S1 — issued runs die with their project. Not a reported
       // count: `ProjectDeleteCounts` is the CR-CRU-052 wire shape and stays it.
       this.db.query(`DELETE FROM runs WHERE project_key = ?`).run(key);
@@ -4175,6 +4253,7 @@ export class Store {
       ...(meta?.lifecycle !== undefined
         ? { startedAt: meta.lifecycle.startedAt, runtimeMs: meta.lifecycle.runtimeMs }
         : {}),
+      ...(meta?.incomplete !== undefined ? { incomplete: meta.incomplete } : {}),
     };
     this.insertEvent(event);
     return event;
@@ -5090,13 +5169,106 @@ export class Store {
   }
 
   /**
-   * CR-CRU-223 §S1 — the live state the board holds for an OPEN run, or null
-   * when it holds none. This CR fixes only the read's contract and answers
-   * null for every run; CR-CRU-200 gives it a body, filled from the run's test
-   * stream.
+   * CR-CRU-223 §S1 / CR-CRU-200 §S4 — the live state the board holds for an
+   * OPEN run, filled from its test stream batch by batch, or null when it
+   * holds none.
    */
-  runLive(_runId: string): RunLive | null {
-    return null;
+  runLive(runId: string): RunLive | null {
+    return runLiveOf(this.db, runId);
+  }
+
+  /**
+   * CR-CRU-200 §S2 — one batch of an open run's test stream, in ONE
+   * transaction that re-reads the run's open state inside it (as
+   * `abortOpenRun` does): appended at the byte offset it states, the live
+   * state filled, and the agent's `lastSeen` touched quietly — no `agents`
+   * frame. A run that settled meanwhile is answered `settled`, nothing stored.
+   */
+  appendRunStream(
+    runId: string,
+    batch: StreamBatch,
+  ): StreamBatchOutcome | { ok: false; refused: "settled"; run: RunRecord | null } {
+    let changed: string | null = null;
+    const answer = this.db.transaction(() => {
+      const run = this.getRun(runId);
+      if (run === null || run.state !== "open") return { ok: false as const, refused: "settled" as const, run };
+      const before = liveStateToken(this.db, runId);
+      const outcome = appendRunStream(this.db, runId, batch);
+      if (outcome.ok) {
+        this.db
+          .query(`UPDATE agents SET last_seen = ? WHERE project_key = ? AND agent_id = ?`)
+          .run(Date.now(), run.projectKey, run.agentId);
+        if (liveStateToken(this.db, runId) !== before) changed = run.projectKey;
+      }
+      return outcome;
+    })();
+    // After the commit: a frame never announces a batch that rolled back.
+    if (changed !== null) this.liveFrame(changed);
+    return answer;
+  }
+
+  /**
+   * CR-CRU-200 §S4 — a live state of the project changed: its `events` change
+   * goes out at once when no live frame went out in the last `LIVE_FRAME_MS`,
+   * else it is deferred to that window's end (one timer per project), so the
+   * last batch is always shown.
+   */
+  private liveFrame(projectKey: string): void {
+    if (this.pendingLiveFrame.has(projectKey)) return;
+    const now = this.scheduler.now();
+    const last = this.lastLiveFrameAt.get(projectKey);
+    if (last === undefined || now - last >= LIVE_FRAME_MS) {
+      this.lastLiveFrameAt.set(projectKey, now);
+      this.emit("events", projectKey);
+      return;
+    }
+    const handle = this.scheduler.setTimeout(() => {
+      this.pendingLiveFrame.delete(projectKey);
+      this.lastLiveFrameAt.set(projectKey, this.scheduler.now());
+      this.emit("events", projectKey);
+    }, last + LIVE_FRAME_MS - now);
+    this.pendingLiveFrame.set(projectKey, handle);
+  }
+
+  /**
+   * CR-CRU-200 §S4 — a run of the project settled: when no open run of it
+   * still streams, its deferred live frame is disarmed (the settling emits its
+   * own `events` change) and its window forgotten.
+   */
+  private settleLiveFrames(projectKey: string): void {
+    if (projectHasStreamingRun(this.db, projectKey)) return;
+    const handle = this.pendingLiveFrame.get(projectKey);
+    if (handle !== undefined) this.scheduler.clearTimeout(handle);
+    this.pendingLiveFrame.delete(projectKey);
+    this.lastLiveFrameAt.delete(projectKey);
+  }
+
+  /** CR-CRU-200 §S4 — disarm every deferred live frame, so none fires after it. Safe with none pending. */
+  dispose(): void {
+    for (const handle of this.pendingLiveFrame.values()) this.scheduler.clearTimeout(handle);
+    this.pendingLiveFrame.clear();
+  }
+
+  /**
+   * CR-CRU-200 §S3 — the close of a streamed run, in ONE transaction that
+   * re-reads the run's open state inside it: `close` is handed the run's held
+   * stream (null when it streamed nothing) and does the decode,
+   * `recordTestEvent` and `endRun` (which deletes the batches and live state).
+   * A racing batch, abort or sweep lands before it or is refused after it.
+   * Null when the run is no longer open; a throw from `close` rolls everything
+   * back.
+   */
+  closeStreamedRun<T>(runId: string, close: (held: HeldStream | null) => T): T | null {
+    return this.db.transaction((): T | null => {
+      const run = this.getRun(runId);
+      if (run === null || run.state !== "open") return null;
+      return close(heldStreamOf(this.db, runId));
+    })();
+  }
+
+  /** CR-CRU-200 §S3 — the stream codec an open run's first batch fixed, or null when it streamed nothing. */
+  runStreamCodec(runId: string): string | null {
+    return heldStreamOf(this.db, runId)?.codec ?? null;
   }
 
   /**
@@ -5132,13 +5304,21 @@ export class Store {
    * has already refused the second close with a 409).
    */
   endRun(runId: string, eventId: string, endedAt: number): boolean {
-    const { changes } = this.db
-      .query(
-        `UPDATE runs SET run_state = 'ended', settled_at = ?, event_id = ?
-         WHERE run_id = ? AND run_state = 'open'`,
-      )
-      .run(endedAt, eventId, runId);
-    return changes > 0;
+    return this.db.transaction((): boolean => {
+      const { changes } = this.db
+        .query(
+          `UPDATE runs SET run_state = 'ended', settled_at = ?, event_id = ?
+           WHERE run_id = ? AND run_state = 'open'`,
+        )
+        .run(endedAt, eventId, runId);
+      // CR-CRU-200 §S2 — a settled run holds no stream and no live state.
+      if (changes > 0) {
+        deleteRunStream(this.db, runId);
+        const projectKey = this.getRun(runId)?.projectKey;
+        if (projectKey !== undefined) this.settleLiveFrames(projectKey);
+      }
+      return changes > 0;
+    })();
   }
 
   /**
@@ -5193,8 +5373,14 @@ export class Store {
    * in ONE transaction: the run row and its event can never disagree, and a
    * second sweep can never emit a duplicate abort.
    *
-   * The event stays `kind: "test"` — an aborted run is still a run (§S2's
-   * rollup guard is what will read `status`, by VALUE, in a later cycle).
+   * The event stays `kind: "test"` — an aborted run is still a run; its
+   * readers skip `status: "aborted"` (§S2's rollup guard, `foldIntoRollup`).
+   *
+   * CR-CRU-200 §S3 — a run that streamed keeps what it streamed: its held
+   * stream, read inside the same transaction, is decoded with the
+   * `crucible-events` codec (`abortedStreamRecord`), and the event carries the
+   * tree, the counts and `incomplete`. A run that streamed nothing is aborted
+   * exactly as before. The batches and live state are deleted with it.
    */
   private abortRun(
     run: RunRecord,
@@ -5202,25 +5388,28 @@ export class Store {
     at: number,
     role?: AgentRole,
   ): RunEvent {
-    const event: RunEvent = {
-      id: this.nextEventId(),
-      projectKey: run.projectKey,
-      agentId: run.agentId,
-      kind: "test",
-      tier: run.tier ?? "unit",
-      timestamp: at,
-      startedAt: run.startedAt,
-      runtimeMs: at - run.startedAt,
-      status: "aborted",
-      abortReason: reason,
-      ...(run.stack !== undefined ? { stack: run.stack } : {}),
-      ...(run.context !== undefined ? { context: run.context } : {}),
-      // An aborted verification run stays filed under its release.
-      ...(run.release !== undefined ? { release: run.release } : {}),
-      // CR-CRU-057 §S1 — the declared role off the agent row, when it survives.
-      ...(role !== undefined ? { role, roleInferred: false } : {}),
-    };
-    this.db.transaction(() => {
+    return this.db.transaction((): RunEvent => {
+      const held = heldStreamOf(this.db, run.runId);
+      const kept = held !== null ? abortedStreamRecord(held) : undefined;
+      const event: RunEvent = {
+        id: this.nextEventId(),
+        projectKey: run.projectKey,
+        agentId: run.agentId,
+        kind: "test",
+        tier: run.tier ?? "unit",
+        timestamp: at,
+        startedAt: run.startedAt,
+        runtimeMs: at - run.startedAt,
+        status: "aborted",
+        abortReason: reason,
+        ...(kept !== undefined ? { summary: kept.summary, tree: kept.tree, incomplete: kept.incomplete } : {}),
+        ...(run.stack !== undefined ? { stack: run.stack } : {}),
+        ...(run.context !== undefined ? { context: run.context } : {}),
+        // An aborted verification run stays filed under its release.
+        ...(run.release !== undefined ? { release: run.release } : {}),
+        // CR-CRU-057 §S1 — the declared role off the agent row, when it survives.
+        ...(role !== undefined ? { role, roleInferred: false } : {}),
+      };
       this.db
         .query(
           `UPDATE runs SET run_state = 'aborted', settled_at = ?, abort_reason = ?, event_id = ?
@@ -5228,8 +5417,11 @@ export class Store {
         )
         .run(at, reason, event.id, run.runId);
       this.insertEvent(event);
+      // CR-CRU-200 §S2 — a settled run holds no stream and no live state.
+      deleteRunStream(this.db, run.runId);
+      this.settleLiveFrames(run.projectKey);
+      return event;
     })();
-    return event;
   }
 
   private static toRun(row: RunRow): RunRecord {
@@ -5879,6 +6071,8 @@ export class Store {
       // CR-CRU-017 §S1 — the RUN-abort reason rides the generic payload blob
       // (no fourth column: §S0 pins exactly three).
       ...(event.abortReason !== undefined ? { abortReason: event.abortReason } : {}),
+      // CR-CRU-200 §S3 — an untrusted stream's reason rides the same blob.
+      ...(event.incomplete !== undefined ? { incomplete: event.incomplete } : {}),
       // CR-CRU-038 §S2b — run-level raw output rides the generic payload blob.
       ...(event.raw !== undefined ? { raw: event.raw } : {}),
       // CR-CRU-073 §S1 — the gated release version rides the generic payload
@@ -6282,6 +6476,8 @@ export class Store {
       ...(typeof payload.abortReason === "string"
         ? { abortReason: payload.abortReason }
         : {}),
+      // CR-CRU-200 §S3 — ABSENT on a complete run (never null).
+      ...(typeof payload.incomplete === "string" ? { incomplete: payload.incomplete } : {}),
       // CR-CRU-073 §S1 — the gated version (payload) and the retirement marker
       // (column); each ABSENT when its stored value is (never fabricated).
       ...(typeof payload.version === "string" ? { version: payload.version } : {}),
@@ -6376,6 +6572,9 @@ export class Store {
   }
 
   private foldIntoRollup(row: EventRow): void {
+    // CR-CRU-200 §S3 — an aborted run's counts are not a verdict: it folds
+    // into no rollup or trend.
+    if (row.status === "aborted") return;
     // Bucket key: ALWAYS the event's UTC day (CR-033 §S1 / DN §6 — the wave key
     // served no consumer and broke date bucketing).
     const bucket = new Date(row.timestamp).toISOString().slice(0, 10);

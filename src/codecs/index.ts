@@ -3,6 +3,7 @@
 import type { Coverage, RunSchema, SuiteNode } from "../types.ts";
 import { coverageCodecs, decodeCoverage } from "./coverage.ts";
 import type { CoverageCodec } from "./coverage.ts";
+import { parseCrucibleEvents } from "./crucible-events.ts";
 import { parseJunit, parseJunitPath, readJunitRawOutput } from "./junit.ts";
 import { parsePlaywright, parsePlaywrightPath } from "./playwright.ts";
 
@@ -14,6 +15,8 @@ import { parsePlaywright, parsePlaywrightPath } from "./playwright.ts";
 export interface DecodeOptions {
   stack?: string;
   onSkip?: (report: string, error: string) => void;
+  /** CR-CRU-200 §S1 — a stream codec's stream was cut at `ingest_body_bytes`. */
+  cut?: boolean;
 }
 
 /**
@@ -22,6 +25,8 @@ export interface DecodeOptions {
  */
 export interface DecodedRun extends RunSchema {
   files?: string[];
+  /** CR-CRU-200 §S1 — a stream codec's reasons its stream cannot be trusted; absent when none. */
+  incomplete?: string;
 }
 
 export interface Codec {
@@ -32,6 +37,11 @@ export interface Codec {
    * returns the files the reading filed cases for, counted in the run's files.
    */
   readRaw?(tree: SuiteNode[], raw: string, options?: DecodeOptions): string[];
+  /**
+   * CR-CRU-200 §S1 — a STREAM codec: it decodes an open run's held stream
+   * (`POST /api/v2/runs/<runId>/stream`), synchronously, at the run's close.
+   */
+  stream?: true;
 }
 
 /** One `warnings[]` entry of an ingest response, the shape the client envelopes use. */
@@ -56,6 +66,13 @@ export const codecs: Map<string, Codec> = new Map<string, Codec>([
     {
       parse: (data: string) => parsePlaywright(data),
       parsePath: (path: string) => parsePlaywrightPath(path),
+    },
+  ],
+  [
+    "crucible-events",
+    {
+      parse: (data: string, options?: DecodeOptions) => parseCrucibleEvents(data, options?.cut === true),
+      stream: true,
     },
   ],
 ]);
@@ -211,6 +228,57 @@ export async function parseRunBody(
   } catch (cause) {
     return { error: errorText(cause) };
   }
+  return { ...assembleRun(codec, decoded, body, options, coverageBlock.block, warnings), warnings };
+}
+
+/**
+ * CR-CRU-200 §S3 — a stream close's run: the run's held stream decoded by
+ * the stream codec, SYNCHRONOUSLY so the store can decode it inside the
+ * close's transaction, then read as `parseRunBody` reads a report — the
+ * body's `raw` and `coverage` as today. `cut` tells the codec the board
+ * refused a batch at `ingest_body_bytes`; `incomplete` is the codec's
+ * reasons the stream cannot be trusted, absent when it states none.
+ */
+export function parseStreamBody(
+  codec: Codec,
+  held: { text: string; cut: boolean },
+  body: { raw?: unknown; coverage?: unknown },
+  codecName: string,
+  stack?: string,
+): { run: RunSchema; warnings: IngestWarning[]; files: number; incomplete?: string } | { error: string } {
+  const coverageBlock = readCoverageBlock(body.coverage);
+  if ("error" in coverageBlock) return coverageBlock;
+  const warnings: IngestWarning[] = [];
+  const options: DecodeOptions = { ...(stack !== undefined ? { stack } : {}), cut: held.cut };
+  let decoded: DecodedRun | Promise<DecodedRun>;
+  try {
+    decoded = codec.parse(held.text, options);
+  } catch (cause) {
+    return { error: `${errorText(cause)} — run NOT stored` };
+  }
+  if (decoded instanceof Promise) {
+    return { error: `codec ${codecName} does not decode a stream synchronously — run NOT stored` };
+  }
+  return {
+    ...assembleRun(codec, [decoded], body, options, coverageBlock.block, warnings),
+    warnings,
+    ...(decoded.incomplete !== undefined ? { incomplete: decoded.incomplete } : {}),
+  };
+}
+
+/**
+ * The decoded reports as the run an ingest stores: merged, the raw output
+ * read into the tree, and the coverage block decoded (a failure to decode it
+ * is a warning). `files` is the count of distinct files the reports name.
+ */
+function assembleRun(
+  codec: Codec,
+  decoded: DecodedRun[],
+  body: { raw?: unknown },
+  options: DecodeOptions,
+  coverageBlock: CoverageBlock | undefined,
+  warnings: IngestWarning[],
+): { run: RunSchema; files: number } {
   const merged = mergeRuns(decoded);
   const raw = joinRaw(body.raw, decoded.map((report) => report.raw));
   const files = new Set(decoded.flatMap((report) => report.files ?? []));
@@ -220,12 +288,12 @@ export async function parseRunBody(
     summary = recount(merged.tree, summary.duration_ms);
   }
   const coverage =
-    coverageBlock.block !== undefined ? decodeCoverageBlock(coverageBlock.block, warnings) : merged.coverage;
+    coverageBlock !== undefined ? decodeCoverageBlock(coverageBlock, warnings) : merged.coverage;
   const run: RunSchema = {
     summary,
     tree: merged.tree,
     ...(coverage !== undefined ? { coverage } : {}),
     ...(raw !== undefined ? { raw } : {}),
   };
-  return { run, warnings, files: files.size };
+  return { run, files: files.size };
 }
