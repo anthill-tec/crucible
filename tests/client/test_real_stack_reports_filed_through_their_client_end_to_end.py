@@ -5,8 +5,11 @@ CR-CRU-152 froze one real run per stack under `tests/fixtures/reports/<stack>/`
 with its client's parse beside it (`expected.json`).
 `tests/real-stack-reports-decode-on-the-board.test.ts` proves the board's
 decode of those reports by POSTing them itself. This suite proves the same
-figures through the CLIENT VERB: `bun-crucible.py test` and
-`python-crucible.py test` (unittest and pytest) run a faithful fake runner
+figures through the CLIENT VERB: `bun-crucible.py test`,
+`python-crucible.py test` (unittest and pytest) and `mvn-crucible.py
+regression` (a two-module reactor's surefire and failsafe reports, compared
+by `(suite, case)`, since the client reads them from one pooled directory in
+name order) run a faithful fake runner
 that writes the fixture's own report bytes where the client tells it to (and,
 for bun, prints the fixture's captured console as its output), exits non-zero
 as the fixture's run did, and the client sends what it found to the board
@@ -167,6 +170,54 @@ else:
     for src in reports:
         place(src, os.path.join(out_dir, os.path.basename(src)))
 sys.stdout.write(os.environ.get("FAKE_OUTPUT", "fake python ran") + "\n")
+sys.stdout.flush()
+sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
+'''
+
+
+MVN_CLIENT = CLIENTS_DIR / "mvn-crucible.py"
+_MVN_SCRUBBED = ("MVN_CRUCIBLE_PROJECT_DIR", "MVN_CRUCIBLE_MAVEN_DIR",
+                 "MVN_CRUCIBLE_COMPOSE_FILE", "CRUCIBLE_COVERAGE_PROFILE")
+
+# A passing surefire report: the run the board keeps a coverage report on.
+GREEN_SUREFIRE_JUNIT = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<testsuite name="com.acme.GreenTest" tests="1" failures="0" errors="0" '
+    'skipped="0"><testcase name="passes" classname="com.acme.GreenTest" '
+    'time="0.001"/></testsuite>\n')
+
+# A `mvnw` stand-in, faithful to how the maven client drives the reactor: it
+# copies every FAKE_SUREFIRE report into the directory the client named for
+# surefire (`-Dsurefire.reportsDirectory=`) and every FAKE_FAILSAFE report
+# into failsafe's, each by its own name; copies each FAKE_JACOCO path (relative
+# to FAKE_JACOCO_ROOT) to the same relative path under the maven directory, as
+# JaCoCo's `report` goal writes `<module>/target/site/jacoco/jacoco.csv`; and
+# exits FAKE_EXIT.
+_FAKE_MVNW = r'''
+import os
+import shutil
+import sys
+
+def place(src, dst):
+    directory = os.path.dirname(dst)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    shutil.copyfile(src, dst)
+
+args = sys.argv[1:]
+if "test-compile" in args:
+    sys.stdout.write("[INFO] BUILD SUCCESS\n")
+    sys.exit(0)
+sys.stdout.write("[INFO] Scanning for projects... (fake mvnw)\n")
+for plugin in ("surefire", "failsafe"):
+    flag = "-D%s.reportsDirectory=" % plugin
+    target = [a[len(flag):] for a in args if a.startswith(flag)]
+    reports = [p for p in os.environ.get("FAKE_" + plugin.upper(), "").split(os.pathsep) if p]
+    for src in reports:
+        place(src, os.path.join(target[0], os.path.basename(src)))
+root = os.environ.get("FAKE_JACOCO_ROOT")
+for rel in [p for p in os.environ.get("FAKE_JACOCO", "").split(os.pathsep) if p]:
+    place(os.path.join(root, rel), rel)
 sys.stdout.flush()
 sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 '''
@@ -460,6 +511,90 @@ class PythonFixturesFiledThroughThePythonClientEndToEndTest(_FiledThroughTheClie
             FAKE_LCOV=str(FIXTURES / "python" / "pytest" / "lcov.info"),
             FAKE_EXIT="0")
         self.assert_coverage_stored("python/pytest", agent, result)
+
+
+def _cases(tree):
+    """Every case of a stored or frozen tree as `(suite, case, status)`,
+    sorted: the comparison by `(suite, case)` a run whose reports are read in
+    another order than the frozen parse read them still passes."""
+    return sorted((suite.get("name"), case.get("name"), case.get("status"))
+                  for suite in tree or [] for case in suite.get("children") or [])
+
+
+class MavenFixtureFiledThroughTheMavenClientEndToEndTest(_FiledThroughTheClient):
+    """The mvn fixture's five reports, written by a fake `mvnw` where the
+    client tells surefire and failsafe to write them, filed by `regression`."""
+
+    client_label = "mvn-crucible.py"
+
+    def setUp(self):
+        super().setUp()
+        _write_executable(os.path.join(self.project, "mvnw"), _FAKE_MVNW)
+        self.bin_dir = os.path.join(self.scratch, "bin")
+        os.makedirs(self.bin_dir)
+        _write_executable(os.path.join(self.bin_dir, "docker"),
+                          "import sys\nsys.exit(0)\n")
+
+    def env(self, **fake):
+        env = super().env(**fake)
+        for key in _MVN_SCRUBBED:
+            env.pop(key, None)
+        env["PATH"] = self.bin_dir + os.pathsep + env.get("PATH", "")
+        return env
+
+    def argv(self, verb, agent, *extra):
+        return [verb, "--agent", agent, "--project-dir", self.project, *extra]
+
+    @staticmethod
+    def fixture_reports(plugin):
+        return os.pathsep.join(
+            str(FIXTURES / "mvn" / name) for name in _expected("mvn")["reports"]
+            if f"/target/{plugin}-reports/" in name)
+
+    def test_the_mvn_fixture_filed_by_regression_stores_its_expected_counts_and_statuses(self):
+        agent = "real-mvn-through-client"
+        expected = _expected("mvn")["client"]
+        result = self.drive(MVN_CLIENT, self.argv("regression", agent),
+                            FAKE_SUREFIRE=self.fixture_reports("surefire"),
+                            FAKE_FAILSAFE=self.fixture_reports("failsafe"),
+                            FAKE_EXIT="1")
+        event = self.stored_run(agent, result)
+        where = f"event={json.dumps(event)[:3000]} {self.diagnostics(result)}"
+        self.assertEqual(event.get("codec"), "junit",
+                         f"the board decoded the reports the client sent; {where}")
+        self.assertEqual(_counts(event.get("summary")), _counts(expected["summary"]),
+                         f"the stored counts are the fixture's; {where}")
+        self.assertEqual(_cases(event.get("tree")), _cases(expected["tree"]),
+                         f"every case is stored with the fixture's status, by "
+                         f"(suite, case); {where}")
+        envelope = _envelope(result.stdout) or {}
+        self.assertEqual(_counts(envelope.get("run")), _counts(event.get("summary")),
+                         f"the envelope's run: counts are the stored ones; {where}")
+        self.assertEqual((envelope.get("run") or {}).get("files"), expected["files"],
+                         f"the envelope's run.files is the answer's, the "
+                         f"fixture's {expected['files']}; {where}")
+        self.assertEqual(expected["files"], 5, "fixture sanity")
+        self.assertNotEqual(result.returncode, 0,
+                            f"a run with failures is not green; {where}")
+
+    def test_the_mvn_fixtures_csvs_filed_by_regression_coverage_store_its_expected_coverage(self):
+        agent = "real-mvn-coverage-through-client"
+        green = Path(self.scratch, "green", "TEST-com.acme.GreenTest.xml")
+        green.parent.mkdir(parents=True)
+        green.write_text(GREEN_SUREFIRE_JUNIT, encoding="utf-8")
+        csvs = _expected("mvn")["coverage"]["reports"]
+        self.assertEqual(len(csvs), 2, "fixture sanity: the two modules' CSVs")
+        result = self.drive(MVN_CLIENT, self.argv("regression", agent, "--coverage"),
+                            FAKE_SUREFIRE=str(green),
+                            FAKE_JACOCO_ROOT=str(FIXTURES / "mvn"),
+                            FAKE_JACOCO=os.pathsep.join(csvs),
+                            FAKE_EXIT="0")
+        self.assert_coverage_stored("mvn", agent, result)
+        event = self.stored_run(agent, result)
+        self.assertEqual(event.get("codec"), "junit",
+                         f"the board decoded the report and the CSVs the client "
+                         f"sent; event={json.dumps(event)[:3000]} "
+                         f"{self.diagnostics(result)}")
 
 
 if __name__ == "__main__":
