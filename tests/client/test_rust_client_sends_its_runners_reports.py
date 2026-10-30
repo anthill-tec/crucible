@@ -3,7 +3,7 @@
 Every rust verb that files a report (`test`, `unit`, `smoke-test`,
 `docker-e2e-gate`, `workspace-regression`, `regression`, `pre-merge-gate`,
 `regression-ingest` and `auto-ingest`) files it through the shared ingest
-(`ingest_reports`, clients/_crucible_axi.py): the board's health is read
+(`ingest_reports`, clients/_crucible_run.py): the board's health is read
 first, then ONE `POST /api/v2/runs` goes out carrying `codec: "junit"`,
 `data` (the text of the nextest `junit.xml` the verb reads),
 `coverage: {codec: "lcov", data}` on a run that measured coverage and found
