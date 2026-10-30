@@ -3,7 +3,7 @@
 Every maven verb that files a report (`test`, `unit`, `module`, `bdd`,
 `integration`, `e2e`, `regression`, the regression step `pre-merge-gate`
 runs, and `auto-ingest`) files it through the shared ingest
-(`ingest_reports`, clients/_crucible_axi.py): the board's health is read
+(`ingest_reports`, clients/_crucible_run.py): the board's health is read
 first, then ONE `POST /api/v2/runs` goes out carrying `codec: "junit"`,
 `data` (the text of every `TEST-*.xml` in the directories the verb reads, in
 the order of those directories, each directory's reports sorted),
