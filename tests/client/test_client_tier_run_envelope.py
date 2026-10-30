@@ -350,7 +350,7 @@ _JUNIT_SUITE_ZERO = (
 _PY_ZERO_DISCOVERY_OUTPUT = "\n----------------------------------------------------------------------\nRan 0 tests in 0.000s\n\nOK\n"
 
 # The server answer for a run whose suite FAILED. rust's envelope reads its
-# counts from the RESPONSE (`_emit_ingest_axi` in `rust-crucible.py`), not from
+# counts from the RESPONSE (`_emit_run_axi` in `rust-crucible.py`), not from
 # a client-side parse, so a failing rust run needs the server to say so — this
 # is the honest transcription of what the junit written above would parse to.
 _FAILED_RESPONSE = {"ok": True,
