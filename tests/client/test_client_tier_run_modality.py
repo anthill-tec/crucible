@@ -223,6 +223,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.live_run_harness import get_answering_health
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 HARNESS_PATH = Path(__file__).resolve().parent / "test_client_tier_stamping.py"
@@ -504,8 +506,10 @@ class _ModalityCase(_ClientDriveCase):
         stream (`subprocess.run(..., stdout=sys.stderr)`), and an `io.StringIO`
         has no `fileno()`, so the inherited harness drive raises
         `UnsupportedOperation` before the run happens — a harness artefact that
-        would masquerade as a finding. Identical `_post` recording; the streams
-        are files this fixture reads back."""
+        would masquerade as a finding. Identical `_post` recording, and `_get`
+        answers the board's health as a board that decodes the reports, as
+        the inherited drive's does; the streams are files this fixture reads
+        back."""
         calls = []
 
         def fake_post(path, payload):
@@ -517,8 +521,9 @@ class _ModalityCase(_ClientDriveCase):
         with open(out_path, "w") as out, open(err_path, "w") as err:
             with mock.patch.object(self.module, "_post", side_effect=fake_post,
                                    create=True), \
-                    mock.patch.object(self.module, "_get", return_value=None,
-                                      create=True), \
+                    mock.patch.object(self.module, "_get", create=True,
+                                      side_effect=get_answering_health(
+                                          lambda _p: None)), \
                     mock.patch.object(self.module, "_patch",
                                       return_value={"ok": True}, create=True), \
                     mock.patch.object(sys, "argv",
