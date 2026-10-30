@@ -30,7 +30,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.client.live_run_harness import get_answering_health, write_fake_bun
+from tests.client.live_run_harness import (
+    get_answering_health,
+    write_fake_bun,
+    write_fake_mvnw,
+)
 from tests.client.test_client_fleet_envelope_census import (
     declare_board,
     install_project_limits,
@@ -77,8 +81,6 @@ JUNIT_ONE_PASS = (
 
 SUMMARY_ONE_PASS = {"total": 1, "passed": 1, "failed": 0, "pending": 0,
                     "duration_ms": 1}
-TREE_ONE_PASS = [{"name": "probe", "status": "pass",
-                  "children": [{"name": "it_passes", "status": "pass"}]}]
 
 
 def _load(path, name):
@@ -541,41 +543,43 @@ class BunStatesItsStackOnEveryIngestTest(_ClientIngestCase):
 
 
 class MvnStatesItsStackOnEveryIngestTest(_ClientIngestCase):
-    """mvn: `_start_run`, then `_ingest_junit_dir` / `_ingest_parsed` /
+    """mvn: the `test` and `regression` verbs (`main`), which open the run
+    themselves and send their reports through the shared ingest over a fake
+    `mvnw` writing one passing report, and `_start_run` then
     `_ingest_compile` with whatever runId came back."""
 
     CLIENT = "mvn"
 
-    def _junit_dir(self, run_id):
-        report_dir = os.path.dirname(self.write_junit(os.path.join(
-            self.project_dir, "target", "surefire-reports", "TEST-probe.xml")))
-        self.module._ingest_junit_dir(self.project_dir, AGENT, report_dir,
-                                      context={}, run_id=run_id)
-
-    def _parsed(self, run_id):
-        self.module._ingest_parsed(self.project_dir, AGENT, dict(SUMMARY_ONE_PASS),
-                                   list(TREE_ONE_PASS), context={}, run_id=run_id)
+    def _verb(self, verb):
+        write_fake_mvnw(self.project_dir)
+        argv = ["mvn-crucible.py", verb, "--project-dir", self.project_dir,
+                "--agent", AGENT]
+        with mock.patch.object(sys, "argv", argv):
+            self.module.main()
 
     def _compile(self, run_id):
         self.module._ingest_compile(self.project_dir, AGENT,
                                     "[ERROR] /src/A.java:[1,1] boom",
                                     context={}, run_id=run_id)
 
-    def test_a_raw_run_ingest_states_the_mvn_stack_when_its_start_was_accepted(self):
-        recorder = self.start_then(START_ACCEPTED, self._junit_dir)
-        self.assert_ingest_states_the_stack(recorder, RUNS, START_ACCEPTED)
+    def assert_report_ingest_states_the_stack(self, verb, start_reply):
+        recorder = self.drive(start_reply, lambda: self._verb(verb))
+        self.assert_ingest_states_the_stack(recorder, RUNS, start_reply)
+        self.assertEqual(recorder.bodies(PARSED), [],
+                         f"mvn files no report on {PARSED}; posted to "
+                         f"{recorder.paths()!r}")
 
-    def test_a_raw_run_ingest_states_the_mvn_stack_when_its_start_was_refused(self):
-        recorder = self.start_then(START_REFUSED, self._junit_dir)
-        self.assert_ingest_states_the_stack(recorder, RUNS, START_REFUSED)
+    def test_a_test_report_ingest_states_the_mvn_stack_when_its_start_was_accepted(self):
+        self.assert_report_ingest_states_the_stack("test", START_ACCEPTED)
 
-    def test_a_parsed_ingest_states_the_mvn_stack_when_its_start_was_accepted(self):
-        recorder = self.start_then(START_ACCEPTED, self._parsed)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_ACCEPTED)
+    def test_a_test_report_ingest_states_the_mvn_stack_when_its_start_was_refused(self):
+        self.assert_report_ingest_states_the_stack("test", START_REFUSED)
 
-    def test_a_parsed_ingest_states_the_mvn_stack_when_its_start_was_refused(self):
-        recorder = self.start_then(START_REFUSED, self._parsed)
-        self.assert_ingest_states_the_stack(recorder, PARSED, START_REFUSED)
+    def test_a_regression_report_ingest_states_the_mvn_stack_when_its_start_was_accepted(self):
+        self.assert_report_ingest_states_the_stack("regression", START_ACCEPTED)
+
+    def test_a_regression_report_ingest_states_the_mvn_stack_when_its_start_was_refused(self):
+        self.assert_report_ingest_states_the_stack("regression", START_REFUSED)
 
     def test_a_compile_ingest_states_the_mvn_stack_when_its_start_was_accepted(self):
         recorder = self.start_then(START_ACCEPTED, self._compile)
