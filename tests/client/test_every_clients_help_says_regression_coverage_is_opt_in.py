@@ -507,5 +507,58 @@ class PythonPrintedHelpNamesTheRouteItsReportsTakeTest(unittest.TestCase):
                       "take")
 
 
+# Phrases that state a green-only coverage rule: the maven client sends its
+# JaCoCo CSVs on every coverage run, and the board discards a red run's.
+_GREEN_ONLY_COVERAGE = ("no failure", "known-green")
+
+
+class MavenPrintedHelpNamesTheRouteItsReportsTakeTest(unittest.TestCase):
+    """maven sends every report and every JaCoCo CSV to /api/v2/runs for the
+    board to decode, on a red run as on a green one, so neither its printed
+    help nor its module docstring names /api/v2/runs/parsed, and no printed
+    help says coverage is collected only from a run with no failure."""
+
+    def _printed_texts(self):
+        root = _root_parser("mvn")
+        texts = {"<root>": [root.description or "", root.epilog or ""]}
+        for pseudo in _subparsers_action("mvn")._choices_actions:
+            texts["<root>"].append(pseudo.help or "")
+        for verb in _subparsers_action("mvn").choices:
+            texts[verb] = _verb_help_texts("mvn", verb)
+        return texts
+
+    def test_no_printed_maven_help_names_the_parsed_route(self):
+        naming = sorted(verb for verb, found in self._printed_texts().items()
+                        if any(PARSED_ROUTE in text for text in found))
+        self.assertEqual(naming, [],
+                         f"maven's printed help names {PARSED_ROUTE} in: {naming}")
+
+    def test_no_printed_maven_help_states_a_green_only_coverage_rule(self):
+        stating = sorted(
+            (verb, phrase) for verb, found in self._printed_texts().items()
+            for phrase in _GREEN_ONLY_COVERAGE
+            if any(phrase in _plain(text) for text in found))
+        self.assertEqual(stating, [],
+                         f"maven's printed help states a green-only coverage "
+                         f"rule in: {stating}")
+
+    def test_the_maven_regression_and_auto_ingest_coverage_help_names_jacoco(self):
+        for verb in ("regression", "auto-ingest"):
+            with self.subTest(verb=verb):
+                text = _plain(_flag_help("mvn", verb, "--coverage"))
+                self.assertIn("jacoco", text, f"{verb}: {text!r}")
+
+    def test_the_maven_module_docstring_names_the_runs_route_and_not_the_parsed_one(self):
+        module = _load_module(CLIENTS_DIR / "mvn-crucible.py",
+                              "mvn_crucible_docstring_route_under_test")
+        doc = module.__doc__ or ""
+        self.assertNotIn(PARSED_ROUTE, doc,
+                         "the maven client's docstring still says it posts to "
+                         "the parsed route")
+        self.assertIn(RUNS_ROUTE, doc,
+                      "the maven client's docstring names the route its reports "
+                      "take")
+
+
 if __name__ == "__main__":
     unittest.main()
