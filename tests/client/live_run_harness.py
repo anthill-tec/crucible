@@ -18,7 +18,9 @@ import os
 import platform
 import shutil
 import signal
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -48,6 +50,8 @@ HEALTH_CODECS = {"test": ["junit", "playwright"], "coverage": ["jacoco", "lcov"]
 DEFAULT_INGEST_BODY_BYTES = 128 * 1024 * 1024
 # The `run` block `/api/v2/runs` answers with until a test scripts its own.
 DEFAULT_RUN_BLOCK = {"total": 0, "passed": 0, "failed": 0}
+# The ways `RecordingBoard.drop_next` can break a connection it has read.
+DROP_SHAPES = ("close", "reset", "truncate", "truncate-error", "garble")
 
 
 def board_health(ingest_body_bytes=DEFAULT_INGEST_BODY_BYTES):
@@ -147,6 +151,12 @@ class RecordingBoard:
         # refusals above.
         self._hold_path = None
         self._hold_released = threading.Event()
+        # Scripted DROPPED connections: the next POST to a path (and, when a
+        # stack is named, carrying that body `stack`) is recorded as usual and
+        # then answered with a broken connection of one shape \u2014 see
+        # `drop_next`. None by default, like the scripted refusals above.
+        self._drops = []
+        self._refuse_abort_error = "abort refused"
         board = self
 
         class _Handler(http.server.BaseHTTPRequestHandler):
@@ -196,6 +206,34 @@ class RecordingBoard:
                 else:
                     self._reply({"ok": True, "agents": []})
 
+            def _drop_connection(self, shape):
+                """Break this connection in one of `DROP_SHAPES`, after the
+                request has been read in full."""
+                if shape == "close":
+                    self.close_connection = True
+                elif shape == "reset":
+                    # SO_LINGER 0 turns the close into a TCP reset.
+                    self.connection.setsockopt(
+                        socket.SOL_SOCKET, socket.SO_LINGER,
+                        struct.pack("ii", 1, 0))
+                    self.connection.close()
+                elif shape in ("truncate", "truncate-error"):
+                    body = json.dumps({"ok": True, "changed": True,
+                                       "run": DEFAULT_RUN_BLOCK}).encode()
+                    self.send_response(200 if shape == "truncate" else 500)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body) + 64))
+                    self.end_headers()
+                    self.wfile.write(body[: len(body) // 2])
+                    self.wfile.flush()
+                    self.close_connection = True
+                elif shape == "garble":
+                    self.wfile.write(b"GARBLED STATUS\r\n\r\n")
+                    self.wfile.flush()
+                    self.close_connection = True
+                else:
+                    raise ValueError(f"unknown drop shape {shape!r}")
+
             def do_POST(self):
                 body = self._body()
                 with board._lock:
@@ -203,6 +241,14 @@ class RecordingBoard:
                     held = board._hold_path == self.path
                     if held:
                         board._hold_path = None
+                    stack = body.get("stack") if isinstance(body, dict) else None
+                    drop = next((d for d in board._drops if d[0] == self.path
+                                 and d[2] in (None, stack)), None)
+                    if drop is not None:
+                        board._drops.remove(drop)
+                if drop is not None:
+                    self._drop_connection(drop[1])
+                    return
                 if held:
                     board._hold_released.wait(timeout=30)
                 if self.path == START:
@@ -226,7 +272,8 @@ class RecordingBoard:
                             board._refuse_abort_remaining -= 1
                             refuse, status = True, board._refuse_abort_status
                     if refuse:
-                        self._reply_status(status, {"ok": False, "error": "abort refused"})
+                        self._reply_status(status, {"ok": False,
+                                                    "error": board._refuse_abort_error})
                     else:
                         run_id = (body or {}).get("runId") if isinstance(body, dict) else None
                         reason = (body or {}).get("reason") if isinstance(body, dict) else None
@@ -344,7 +391,21 @@ class RecordingBoard:
             return [(p, b) for _, m, p, b in self.events
                    if m == "POST" and p.startswith("/api/v2/runs/") and p.endswith("/abort")]
 
-    def refuse_next_abort(self, times=1, status=409):
+    def drop_next(self, path, shape, stack=None):
+        """Record the next `POST path` as usual, then break its connection
+        instead of answering it, in one of `DROP_SHAPES`: `close` (closed
+        after the request is read, no answer), `reset` (a TCP reset),
+        `truncate` (a 200 whose body stops short of its `Content-Length`),
+        `truncate-error` (the same, as a 500) or `garble` (a status line that
+        is not HTTP). With `stack`, only a POST whose body carries that
+        `stack` is dropped. Only the NEXT such call is dropped; each call
+        scripts one more drop."""
+        if shape not in DROP_SHAPES:
+            raise ValueError(f"unknown drop shape {shape!r}")
+        with self._lock:
+            self._drops.append((path, shape, stack))
+
+    def refuse_next_abort(self, times=1, status=409, error="abort refused"):
         """CR-CRU-170 \u00a7S2 \u2014 script the next `times` `POST .../abort` calls to
         answer non-ok (`{ok: False}`, HTTP `status`) instead of settling the
         run \u2014 the board REFUSING the client's own close, so a RED test can
@@ -354,6 +415,7 @@ class RecordingBoard:
         with self._lock:
             self._refuse_abort_remaining = times
             self._refuse_abort_status = status
+            self._refuse_abort_error = error
 
     def refuse_next_start(self, times=1, error="run refused"):
         """CR-CRU-171 \u00a7S2 \u2014 script the next `times` `POST /api/v2/runs/start`
