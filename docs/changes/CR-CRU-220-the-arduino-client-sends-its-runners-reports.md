@@ -1,9 +1,10 @@
 # CR-CRU-220 — the arduino client sends its runner's reports and parses nothing
 
-**Type** feature · **Points** 5 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-204, CR-CRU-208, CR-CRU-218 · **Status**
+**Type** feature · **Points** 5 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-204, CR-CRU-208, CR-CRU-218, CR-CRU-221 · **Status**
 PENDING — filed 2026-10-30 (split from CR-CRU-206 at its gap analysis, user ruling: the shared reporting
 first, CR-CRU-218, then one CR per client; user ruling the same day: the Makefile-narrowing check reads its
-cases through a shared reader the no-parse scan exempts)
+cases through a shared reader the no-parse scan exempts; user ruling at CR-CRU-206's pre-review: the shared
+module, one line under its 10,000-line guard, is split first, CR-CRU-221)
 
 ## Problem
 
