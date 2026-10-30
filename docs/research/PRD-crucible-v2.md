@@ -607,10 +607,10 @@ directory it was given. The `CRUCIBLE_*` prefix is reserved for Crucible's own
 configuration (§4.11). Precedence is therefore two layers, and only retention has both:
 the file, then a per-project value in the store.
 
-**A stream is bounded by the same limit (CR-CRU-200).** `ingest_body_bytes` bounds one request body
-and a stream's total: the bytes an open run's test stream may hold across all its batches. A batch that would take the stream past it is
-refused with a 413 naming the limit, and the stream is marked cut. A stream has no size limit of its own (user ruling
-2026-10-30).
+**A stream is bounded by the same limit (CR-CRU-200).** `ingest_body_bytes` bounds one request body and a
+stream's total: the bytes an open run's test stream may hold across all its batches. A batch that would take the
+stream past it is refused with a 413 naming the limit, and the stream is marked cut. A stream has no size limit
+of its own (user ruling 2026-10-30).
 
 **The one cadence compiled into source (user ruling 2026-10-30).** `LIVE_FRAME_MS` (2000, a named constant in
 `src/store.ts`) paces the live frames: a batch that changes a run's live state emits its project's `events` change at
