@@ -11,12 +11,17 @@ RED PHASE: `_resolve_junit_path` (unit/integration/`test` tier) always
 resolves one of the FIXED `target/nextest/{ci,default,<profile>}/junit.xml`
 candidates (confirmed by reading the source); `_regression_ingest_run`
 hardcodes `junit_path = f"{project_dir}/target/nextest/ci/junit.xml"` and
-`coverage = _parse_lcov(f"{project_dir}/target/lcov.info")` -- there is no
-`--agent`-aware directory anywhere in this client, no move step, and no
-`test-reports/` concept at all. Every test below fails: the moved file never
-appears under `test-reports/<agent>/`, the fixed tool-written path is never
-even touched (nothing moves it away), and the ingest reads/posts the
-ORIGINAL fixed-path content untouched by any per-agent isolation.
+read its lcov from `target/lcov.info` -- there is no `--agent`-aware
+directory anywhere in this client, no move step, and no `test-reports/`
+concept at all. Every test below fails: the moved file never appears under
+`test-reports/<agent>/`, the fixed tool-written path is never even touched
+(nothing moves it away), and the ingest reads/posts the ORIGINAL fixed-path
+content untouched by any per-agent isolation.
+
+The client sends what it moved: the junit.xml and lcov.info texts travel
+inline on its one `POST /api/v2/runs` (the shared ingest, which reads the
+board's health first), so each case below reads the moved file's text off
+that body.
 
 Toolchain: the real `cargo`/`nextest`/`llvm-cov` toolchain is never spawned
 (mirrors the established convention in `test_rust_crucible_axi.py`) --
@@ -31,7 +36,8 @@ never a flag the tool happens to honour.
 Module-loading + HTTP-mocking convention copied verbatim from
 `test_rust_crucible_axi.py`: load `clients/rust-crucible.py` by file path via
 `importlib`, mock the module's `_post`/`_get` HTTP transport seam so the live
-Crucible server on :3849 is NEVER touched.
+Crucible server on :3849 is NEVER touched; `_get` answers the board's health
+as a board that decodes the reports (`get_answering_health`).
 
 Invocation:
     python3 -m pytest tests/client/test_rust_crucible_agent_report_isolation.py -q
@@ -51,6 +57,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.live_run_harness import get_answering_health
 from tests.client.test_client_fleet_envelope_census import install_project_limits
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -144,7 +151,7 @@ class _BaseRustIsolationTest(unittest.TestCase):
             mock.patch.object(self.module, "_post",
                               return_value=post_return or {"ok": True}, create=True),
             mock.patch.object(self.module, "_get",
-                              return_value={"ok": False}, create=True),
+                              side_effect=get_answering_health(), create=True),
         )
 
 
@@ -198,18 +205,21 @@ class AgentDirectoryJunitMoveAndReadTest(_BaseRustIsolationTest):
             f"between the tool writing it and the client reading it",
         )
 
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+                          "the run is never posted to the parsed route")
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, "the moved junit.xml must be ingested")
         assert ingest_call is not None
-        posted_path = ingest_call[0][1].get("dataPath")
-        self.assertIsNotNone(posted_path)
-        with open(posted_path) as f:
-            posted_content = f.read()
+        body = ingest_call[0][1]
+        self.assertNotIn("dataPath", body, f"the report travels inline; body={body!r}")
+        sent = body.get("data") or []
+        self.assertEqual(len(sent), 1, f"one junit.xml text is sent; body={body!r}")
+        posted_content = sent[0] if sent else ""
         self.assertNotIn(
             "stale_0", posted_content,
             f"the STALE junit already sitting in the agent's own directory "
             f"from a prior run must be WIPED before this run's fresh moved "
-            f"junit lands there; {posted_path} still carries stale content",
+            f"junit lands there; the sent text still carries stale content",
         )
         self.assertIn(
             "test_passes", posted_content,
@@ -261,17 +271,16 @@ class AgentDirectoryCoverageMoveAndReadTest(_BaseRustIsolationTest):
             "target/lcov.info, not merely copied",
         )
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+                          "the run is never posted to the parsed route")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, "the coverage-bearing run must be ingested")
         assert ingest_call is not None
-        coverage = ingest_call[0][1].get("coverage")
-        self.assertIsNotNone(
-            coverage,
-            "the ingested payload must carry the coverage parsed from the "
-            "MOVED lcov.info, not an absent/fixed-path read",
+        self.assertEqual(
+            ingest_call[0][1].get("coverage"), {"codec": "lcov", "data": [LCOV_FIXTURE]},
+            "the ingested body must carry the MOVED lcov.info's text as its "
+            "coverage report, not an absent/fixed-path read",
         )
-        self.assertEqual(coverage["lines"]["total"], 2)
-        self.assertEqual(coverage["lines"]["covered"], 2)
 
 
 class AgentDirectorySurvivesTest(_BaseRustIsolationTest):
@@ -307,9 +316,8 @@ class AgentDirectorySurvivesTest(_BaseRustIsolationTest):
             len(found), 1,
             f"expected exactly one surviving junit.xml under {own_dir}; found {found!r}",
         )
-        summary, _tree, _files = self.module._parse_junit(found[0])
         self.assertEqual(
-            (summary["passed"], summary["failed"]), (1, 0),
+            Path(found[0]).read_text(), GOOD_JUNIT_XML,
             "the surviving directory must hold THIS run's real results",
         )
 
@@ -371,19 +379,19 @@ class WorkspaceRegressionAndSmokeTestMoveOutputsIntoAgentDirectoryTest(_BaseRust
         self.assertFalse(os.path.exists(fixed_lcov),
                          "lcov.info must be MOVED out of llvm-cov's fixed path, not copied")
 
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+                          "the run is never posted to the parsed route")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, f"stdout={out!r} stderr={err!r}")
         assert ingest_call is not None
         payload = ingest_call[0][1]
         self.assertEqual(payload.get("tier"), "regression")
-        coverage = payload.get("coverage")
-        self.assertIsNotNone(
-            coverage,
-            "the ingested payload must carry coverage parsed from the MOVED "
-            "lcov.info, not an absent/fixed-path read",
+        self.assertEqual(payload.get("data"), [GOOD_JUNIT_XML], f"payload={payload!r}")
+        self.assertEqual(
+            payload.get("coverage"), {"codec": "lcov", "data": [LCOV_FIXTURE]},
+            "the ingested body must carry the MOVED lcov.info's text as its "
+            "coverage report, not an absent/fixed-path read",
         )
-        assert coverage is not None
-        self.assertEqual((coverage["lines"]["total"], coverage["lines"]["covered"]), (2, 2))
 
     def test_smoke_test_moves_nextests_fixed_junit_into_the_agents_directory_before_ingesting(self):
         fixed_junit = os.path.join(self.tmpdir, "target", "nextest", "ci", "junit.xml")
@@ -419,12 +427,12 @@ class WorkspaceRegressionAndSmokeTestMoveOutputsIntoAgentDirectoryTest(_BaseRust
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, f"stdout={out!r} stderr={err!r}")
         assert ingest_call is not None
-        posted_path = ingest_call[0][1].get("dataPath")
+        body = ingest_call[0][1]
+        self.assertNotIn("dataPath", body, f"the report travels inline; body={body!r}")
         self.assertEqual(
-            os.path.normpath(posted_path) if posted_path else posted_path,
-            os.path.normpath(moved[0]),
-            f"smoke-test must ingest the MOVED junit.xml, not the original "
-            f"fixed-path one; got dataPath={posted_path!r}",
+            body.get("data"), [Path(moved[0]).read_text()],
+            f"smoke-test must send the MOVED junit.xml's text, not the "
+            f"original fixed-path one; body={body!r}",
         )
 
 
