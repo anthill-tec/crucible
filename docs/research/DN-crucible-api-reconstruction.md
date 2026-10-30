@@ -151,8 +151,13 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 ```json
 {"projectKey": "<uuid>", "agentId": "<id>", "format": "rustc", "errors": "<raw compiler output>"}
 ```
-- `format` values sent: `rustc` (rust), `python` (python), `typescript` (bun),
-  **absent** (mvn, arduino, vscode) — so format is OPTIONAL; absent implies javac/generic.
+- `format` values sent: `rustc` (rust — `_ingest_rustc_stderr` and `cmd_auto_ingest` in
+  `clients/rust-crucible.py`), `python` (python — `_ingest_compile` in
+  `clients/python-crucible.py`), `typescript` (bun — `_ingest_compile` in
+  `clients/bun-crucible.py`), `gcc` (arduino — `_ingest_compile` in
+  `clients/arduino-crucible.py`), **absent** (mvn — `_ingest_compile` in
+  `clients/mvn-crucible.py`; vscode, per its skill, with no client in this repo) — so format
+  is OPTIONAL; absent implies javac/generic.
 - Server parses errors into structured per-file entries; raw text kept as fallback:
   - java: `[ERROR] /path/File.java:[line,col] message` (crucible-report-java §Compile Failure)
   - rustc: `error[EXXXX]:` blocks with ` --> path:line:col`
