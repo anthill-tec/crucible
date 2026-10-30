@@ -788,6 +788,7 @@ body {
   cursor: pointer;
 }
 .app-suite-row .app-suite-name { flex: 1; }
+.app-suite-row.fail { color: var(--fail); }
 /* CR-CRU-223 §S3 — the run detail's live mode (storyboard F25, option A):
    one row per failure so far, its name and file on one line and the first
    line of its message (or its type) beneath, each truncating on its line.
@@ -830,7 +831,6 @@ body {
   color: var(--ink-faint);
   font: 10px var(--mono);
 }
-.app-suite-row.fail { color: var(--fail); }
 .app-tree-toggle { color: var(--ink-dim); width: 12px; }
 .app-suite-counts { white-space: pre; }
 .app-count-fail { color: var(--fail); }
