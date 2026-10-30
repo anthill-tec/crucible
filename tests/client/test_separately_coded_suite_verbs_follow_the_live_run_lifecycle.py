@@ -229,24 +229,44 @@ class RustGateVerbsFollowTheLiveRunLifecycleTest(_LiveVerbCase):
                "--agent", AGENT]
         return drive_live(cmd, self.project, self.env(), self.scratch, MARKER)
 
+    def assert_report_rode_inline(self):
+        """rust sends its runner's report: the run's ingest is its one
+        `/api/v2/runs` post, nextest's one junit.xml inline."""
+        paths = [p for p, _ in self.board.posts()]
+        self.assertNotIn("/api/v2/runs/parsed", paths, f"paths={paths!r}")
+        body = next(b for p, b in self.board.posts() if p == "/api/v2/runs")
+        self.assertEqual(body.get("codec"), "junit", f"body={body!r}")
+        self.assertNotIn("dataPath", body, f"body={body!r}")
+        data = body.get("data")
+        self.assertTrue(
+            isinstance(data, list) and len(data) == 1
+            and data[0].count("<testcase") == TOTAL,
+            f"the run's one junit.xml, holding its {TOTAL} cases, rides "
+            f"inline; body={body!r}")
+        self.assertIn(MARKER, body.get("raw") or "",
+                      f"the captured runner output rides as `raw`; body={body!r}")
+
     def test_rust_smoke_test(self):
         drive = self._drive("smoke-test")
         self.assert_live_lifecycle(drive, "/api/v2/runs",
                                    rf"^running \d+/{TOTAL}$",
                                    f"ran {TOTAL}/{TOTAL}", with_log=False)
+        self.assert_report_rode_inline()
 
     def test_rust_workspace_regression(self):
         drive = self._drive("workspace-regression", "--min-free-g", "0",
                             "--keep-target")
-        self.assert_live_lifecycle(drive, "/api/v2/runs/parsed",
+        self.assert_live_lifecycle(drive, "/api/v2/runs",
                                    rf"^running \d+/{TOTAL}$",
                                    f"ran {TOTAL}/{TOTAL}", with_log=False)
+        self.assert_report_rode_inline()
 
     def test_rust_regression_ingest(self):
         drive = self._drive("regression-ingest", "--crates", "fake-crate")
-        self.assert_live_lifecycle(drive, "/api/v2/runs/parsed",
+        self.assert_live_lifecycle(drive, "/api/v2/runs",
                                    rf"^running \d+/{TOTAL}$",
                                    f"ran {TOTAL}/{TOTAL}", with_log=False)
+        self.assert_report_rode_inline()
 
 
 if __name__ == "__main__":
