@@ -123,11 +123,15 @@ excludes nothing it should count.
 ## Where it lands (user ruling)
 
 In 0.4.0, wave 8, after CR-CRU-152 moves every stack's report decoding onto the board (user ruling:
-split by available number, all in the current wave, the date unchanged):
+split by available number, all in the current wave, the date unchanged). CR-CRU-200 was split by layer at its gap analysis
+(user ruling 2026-10-30): the board's live view first, CR-CRU-223; then the board, CR-CRU-200; then the client,
+CR-CRU-224:
 
 | CR | Lands | Depends on |
 |---|---|---|
-| CR-CRU-200 | the stream route, the `crucible-events` codec, the client relay, the stream as the record and its completeness check, the board's live view; proven on the python runner Crucible owns | 152 |
+| CR-CRU-223 | the board's live view (storyboard F25, option A): the running card's progress, the live drill-in at `/run/<runId>`, the `RunLive` contract, `Store#runLive`'s signature, the open-run brief's `live` and the `/live` route | — |
+| CR-CRU-200 | the stream route, the `crucible-events` codec, the stream as the record and its completeness check, the body of `Store#runLive` and the change frames that move the live view | 152, 206, 219, 220, 223 |
+| CR-CRU-224 | the python client relays its runner's test stream; proven on the python runner Crucible owns | 200 |
 | CR-CRU-201 | bun's one-table declaration (clean break), the `bun-console` codec, the shipped Vitest and Playwright reporters; Playwright's JSON report and codec retire | 200 |
 | CR-CRU-202 | rust streams through nextest's libtest JSON | 200 |
 | CR-CRU-203 | the arduino runner streams; maven's console live view | 200 |
@@ -136,8 +140,9 @@ Go's stream lands with its client (CR-CRU-195), which therefore also depends on 
 
 ## Open for CR-CRU-200's gap analysis
 
-- The board's live view: where the open run's progress and early failures show (a storyboard frame
-  before RED).
+- The board's live view — settled (storyboard F25, option A; CR-CRU-223): the running card
+  (`RunningCard`) shows the open run's progress and opens the run detail's live mode (`LiveRunBody`) at
+  `/run/<runId>`, which reads `GET /api/v2/runs/<runId>/live` (`handleRunLive`) through `Store#runLive`.
 - nextest's libtest JSON is marked experimental: measure what it needs to run and how stable it is.
 - How often the relay sends, and what the board keeps of a stream once the final report closes the
   run.
