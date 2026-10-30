@@ -4,19 +4,19 @@
     all-green build whose project `.env` names a coverage profile
     (`CRUCIBLE_COVERAGE_PROFILE`) and whose build writes
     `target/jacoco-report/jacoco.csv`, runs maven with no `-P` profile at
-    all, collects no JaCoCo, prints no "no jacoco.csv found" warning, and
-    files a `regression` run whose `/api/v2/runs/parsed` body carries no
-    `coverage` key. The fixture is green on purpose: a run with a failure
+    all, sends no JaCoCo, carries no `coverage-not-measured` warning, and
+    files a `regression` run whose `/api/v2/runs` body carries no `coverage`
+    key. The fixture is green on purpose: a run with a failure
     already withholds JaCoCo, so a red fixture would prove nothing.
 
   * Coverage when asked — `regression --coverage` keeps the coverage run:
     the profile from `--coverage-profile`, else the `.env`'s
     `CRUCIBLE_COVERAGE_PROFILE`, else no `-P` with the build's own
-    `jacoco.csv` collected; either way the run's JaCoCo totals ride the
-    ingest.
+    `jacoco.csv` sent; either way the run's JaCoCo CSV text rides the
+    ingest as its `coverage` block (`codec: jacoco`), for the board to sum.
 
   * The gate still measures coverage — `pre-merge-gate` on a green build
-    files the run's JaCoCo coverage under the `.env` profile, because its
+    sends the run's JaCoCo CSV under the `.env` profile, because its
     regression asks for coverage explicitly.
 
   * The refusal — `regression --coverage-profile X` without `--coverage` is
@@ -69,21 +69,25 @@ TOON = load_toon()
 MVN_CLIENT = CLIENTS / "mvn-crucible.py"
 TIMEOUT = 120
 
+RUNS_INGEST = "/api/v2/runs"
 PARSED_INGEST = "/api/v2/runs/parsed"
 REFUSED_CODE = "coverage-flag-refused"
 UNATTRIBUTED_CODE = "unattributed-run-refused"
-MISSING_JACOCO_WARNING = "no jacoco.csv found"
-# What the client prints to stderr each time it collects a JaCoCo csv.
-JACOCO_COLLECTED = "[crucible] jacoco:"
+COVERAGE_NOT_MEASURED = "coverage-not-measured"
 
 # Test data: the coverage profile a fixture's `.env` names, and the one a
 # test hands to `--coverage-profile`.
 ENV_PROFILE = "jacoco-from-dotenv"
 FLAG_PROFILE = "jacoco-from-flag"
 
-# The JaCoCo totals the fake build writes (one csv row): lines 8/10,
-# methods 4/5, branches 6/10.
-EXPECTED_COVERAGE = {"lines": (10, 8), "functions": (5, 4), "branches": (10, 6)}
+# The JaCoCo CSV the fake build writes, byte for byte (one row: lines 8/10,
+# methods 4/5, branches 6/10): what a coverage run's ingest sends as its
+# `coverage` block's one text.
+JACOCO_CSV = ("GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,"
+              "BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,"
+              "COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,"
+              "METHOD_COVERED\n"
+              "acme,com.acme,Adder,3,17,4,6,2,8,1,5,1,4\n")
 
 # Keys that would let the shell running this suite decide what the client
 # resolves or how it files: scrubbed from every drive.
@@ -98,6 +102,7 @@ _SCRUBBED = ("CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY",
 # (`-D<plugin>.reportsDirectory=<dir>`), and the quarkus-jacoco extension's
 # `target/jacoco-report/jacoco.csv` under the working directory.
 _RECORDING_MVN = r'''
+JACOCO_CSV = ''' + repr(JACOCO_CSV) + r'''
 import json
 import os
 import sys
@@ -128,11 +133,7 @@ for plugin, directory in reports:
 jacoco = os.path.join("target", "jacoco-report")
 os.makedirs(jacoco, exist_ok=True)
 with open(os.path.join(jacoco, "jacoco.csv"), "w") as handle:
-    handle.write("GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,"
-                 "BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,"
-                 "COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,"
-                 "METHOD_COVERED\n"
-                 "acme,com.acme,Adder,3,17,4,6,2,8,1,5,1,4\n")
+    handle.write(JACOCO_CSV)
 sys.stdout.write("[INFO] BUILD SUCCESS\n")
 sys.exit(0)
 '''
@@ -249,9 +250,9 @@ class _MavenProject:
             f"exactly one ingest; paths={[p for p, _ in board.posts()]!r} "
             f"{_diagnostics(result)}")
         path, body = ingests[0] if ingests else (None, {})
-        self.assertEqual(path, PARSED_INGEST,  # type: ignore[attr-defined]
-                         f"the regression files through {PARSED_INGEST}; "
-                         f"{_diagnostics(result)}")
+        self.assertEqual(path, RUNS_INGEST,  # type: ignore[attr-defined]
+                         f"the regression files through {RUNS_INGEST}, never "
+                         f"{PARSED_INGEST}; {_diagnostics(result)}")
         return body if isinstance(body, dict) else {}
 
     def assert_green_run_with_jacoco_written(self, result):
@@ -270,20 +271,10 @@ class _MavenProject:
             f"{_diagnostics(result)}")
 
     def assert_carries_the_builds_coverage(self, body):
-        coverage = body.get("coverage")
-        self.assertIsInstance(coverage, dict,  # type: ignore[attr-defined]
-                              f"the ingest carries the run's JaCoCo coverage; "
-                              f"body={body!r}")
-        got = {metric: ((coverage or {}).get(metric) or {}).get("total")
-               for metric in EXPECTED_COVERAGE}
-        got_covered = {metric: ((coverage or {}).get(metric) or {}).get("covered")
-                       for metric in EXPECTED_COVERAGE}
         self.assertEqual(  # type: ignore[attr-defined]
-            (got, got_covered),
-            ({m: t for m, (t, _) in EXPECTED_COVERAGE.items()},
-             {m: c for m, (_, c) in EXPECTED_COVERAGE.items()}),
-            f"the coverage is the build's own jacoco.csv totals; "
-            f"coverage={coverage!r}")
+            body.get("coverage"), {"codec": "jacoco", "data": [JACOCO_CSV]},
+            f"the ingest carries the build's own jacoco.csv, its text inline, "
+            f"for the board to sum; body={body!r}")
 
 
 # ── without `--coverage`: no profile, no JaCoCo ─────────────────────────────
@@ -319,13 +310,11 @@ class MavenRegressionWithoutCoverageIsCoverageFreeTest(_MavenProject,
             f"without --coverage the build's jacoco.csv is never sent; "
             f"body={body!r}")
         self.assertNotIn(
-            JACOCO_COLLECTED, result.stderr or "",
-            f"without --coverage no jacoco.csv is collected; "
-            f"{_diagnostics(result)}")
-        self.assertNotIn(
-            MISSING_JACOCO_WARNING, result.stderr or "",
-            f"a run that measures no coverage does not warn about a missing "
-            f"jacoco.csv; {_diagnostics(result)}")
+            COVERAGE_NOT_MEASURED,
+            [w.get("code") for w in (_envelope(result.stdout) or {}).get("warnings") or []
+             if isinstance(w, dict)],
+            f"a run that asks for no coverage does not warn that none was "
+            f"measured; {_diagnostics(result)}")
 
 
 # ── with `--coverage`: the profile, else the .env's, else none ─────────────
@@ -371,8 +360,8 @@ class MavenRegressionWithCoverageTest(_MavenProject, unittest.TestCase):
         self.make_project(self.board.url, "mvn-regression-coverage-builds-own")
         result = self.drive("regression", "--coverage",
                             agent="mvn-regression-coverage-builds-own")
-        # The ingest's coverage is the build's own jacoco.csv totals: it was
-        # collected with no profile applied.
+        # The ingest's coverage is the build's own jacoco.csv: it was written
+        # with no profile applied.
         self.assert_coverage_run(result, [])
 
 
@@ -388,7 +377,7 @@ class MavenPreMergeGateFilesCoverageTest(_MavenProject, unittest.TestCase):
         self.make_project(self.board.url, "mvn-gate-coverage",
                           env_profile=ENV_PROFILE)
 
-    def test_guard_pre_merge_gate_on_a_green_build_files_jacoco_coverage_under_the_dotenv_profile(self):
+    def test_guard_pre_merge_gate_on_a_green_build_sends_its_jacoco_csv_under_the_dotenv_profile(self):
         """GUARD — holds today; it fails if the gate's regression stops asking
         for coverage once `regression` is coverage-free by default."""
         result = self.drive("pre-merge-gate", agent="mvn-gate-coverage")
