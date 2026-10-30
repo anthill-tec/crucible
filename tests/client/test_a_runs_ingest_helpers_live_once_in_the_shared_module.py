@@ -24,6 +24,10 @@ The bun and python clients keep no copy. A source scan of each asserts:
   * `_file_reports`'s only statement besides an optional docstring is
     `return _axi().ingest_reports(...)`, with the arguments it passes today.
 
+The rust client files through the same seam: it keeps no copy of the
+helpers, and its `_file_reports` is that one statement, passing the shared
+ingest the same seams and keywords.
+
 The scanner reads a module's syntax tree, never its text, and is proved on
 synthetic sources (a client still holding its own copies, and one that reads
 the shared module) before it is pointed at a real client.
@@ -375,6 +379,37 @@ class TheBunClientReadsTheSharedIngestHelpersTest(_ClientScan, unittest.TestCase
 
 class ThePythonClientReadsTheSharedIngestHelpersTest(_ClientScan, unittest.TestCase):
     CLIENT = "python-crucible.py"
+
+
+class TheRustClientFilesThroughOneSharedIngestCallTest(unittest.TestCase):
+    """rust held no copy of the helpers to call in their place, so it has no
+    former call site; its `_file_reports` is the one shared ingest call."""
+
+    CLIENT = "rust-crucible.py"
+
+    def source(self):
+        return (CLIENTS / self.CLIENT).read_text(encoding="utf-8")
+
+    def test_the_rust_client_keeps_no_copy_of_the_shared_ingest_helpers(self):
+        findings = own_copy_findings(self.source())
+        self.assertEqual(
+            findings, [],
+            f"{self.CLIENT} reads the ingest helpers from the shared module and "
+            f"leaves the ingest line to `ingest_reports`; found:\n" + _lines(findings))
+
+    def test_rust_file_reports_is_one_call_of_the_shared_ingest(self):
+        findings = file_reports_findings(self.source())
+        self.assertEqual(
+            findings, [],
+            f"{self.CLIENT} `_file_reports` is `return _axi().ingest_reports(...)` "
+            f"and nothing else; it holds:\n" + "\n".join(f"  {s}" for s in findings))
+
+    def test_rust_file_reports_passes_the_shared_ingest_the_fleets_seams_and_keywords(self):
+        self.assertEqual(
+            file_reports_ingest_arguments(self.source()),
+            (INGEST_POSITIONAL, INGEST_KEYWORDS),
+            f"{self.CLIENT} `_file_reports` passes `ingest_reports` the same "
+            f"seams and keywords as the other clients' do")
 
 
 class TheSharedModuleDefinesTheIngestHelpersOnceTest(unittest.TestCase):
