@@ -1430,8 +1430,12 @@ const STREAM_REFUSED = "nothing stored";
 /** The stream codec a batch naming none is read under. */
 const STREAM_CODEC = "crucible-events";
 
-/** A UTF-16 surrogate standing alone: text no UTF-8 stream can hold. */
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+/**
+ * A UTF-16 surrogate standing alone: text no UTF-8 stream can hold. Under the
+ * `u` flag a paired surrogate reads as one astral code point, so only a lone
+ * one is a code point of category Cs.
+ */
+const LONE_SURROGATE = /\p{Cs}/u;
 
 /**
  * CR-CRU-200 §S2 — POST /api/v2/runs/<runId>/stream {projectKey, agentId,
