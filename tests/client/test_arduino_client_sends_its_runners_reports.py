@@ -142,13 +142,15 @@ LCOV_BLOCK = {"codec": "lcov", "data": [LCOV]}
 
 _SCRUBBED = ("ARDUINO_CRUCIBLE_PROJECT_DIR", "CRUCIBLE_AGENT_ID",
              "CRUCIBLE_PROJECT_KEY", "AGENT_ID", "TESTS", "TEST_NAME")
-_FAKE_KEYS = ("FAKE_EXIT", "FAKE_VARIANT", "FAKE_NO_LCOV")
+_FAKE_KEYS = ("FAKE_EXIT", "FAKE_VARIANT", "FAKE_NO_LCOV", "FAKE_OWN_COVERAGE")
 
 # A fake `make`. Whatever the target, it prints OUTPUT_MARKER and Unity's
 # verdict line on stdout, writes the FAKE_VARIANT reports (`pass` by default;
-# `fail`, `skip`, `zero`, `malformed`, or `none` for no report) into REPORTS_DIR (else
-# `reports/` under its cwd), and, when COVERAGE_DIR is set, the lcov there as
-# `lcov.info` unless FAKE_NO_LCOV=1. It exits FAKE_EXIT (default 0).
+# `fail`, `skip`, `zero`, `malformed`, or `none` for no report) into
+# REPORTS_DIR (else `reports/` under its cwd), and, when COVERAGE_DIR is set,
+# the lcov there as `lcov.info` unless FAKE_NO_LCOV=1; with COVERAGE_DIR unset
+# and FAKE_OWN_COVERAGE=1 it writes the lcov to its own `coverage/` under its
+# cwd, as a Makefile given no directory does. It exits FAKE_EXIT (default 0).
 _FAKE_MAKE = r'''
 import os
 import sys
@@ -168,6 +170,8 @@ if variant != "none":
     for name, text in REPORTS[variant].items():
         write(os.environ.get("REPORTS_DIR") or "reports", name, text)
 coverage_dir = os.environ.get("COVERAGE_DIR")
+if not coverage_dir and os.environ.get("FAKE_OWN_COVERAGE") == "1":
+    coverage_dir = "coverage"
 if coverage_dir and os.environ.get("FAKE_NO_LCOV") != "1":
     write(coverage_dir, "lcov.info", LCOV)
 sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
@@ -731,6 +735,77 @@ class ARunWithoutAgentOverAnUnreadableReportSaysItsCountIsUnknownTest(
         self.assertEqual(len(warned), 1,
                          f"the report whose results could not be counted is "
                          f"warned about exactly once; {self.diagnostics(result)}")
+
+
+class ACoverageRunWithoutAgentThatFoundNoLcovSaysSoTest(
+        _ArduinoProject, unittest.TestCase):
+    """No `--agent` means no envelope, so `coverage-not-measured` reaches no
+    one: a `regression --coverage` run whose `make` wrote its reports but no
+    `lcov.info` says on stderr, once, that `--coverage` was asked and no lcov
+    coverage report was found, naming where it looked. A run that wrote its
+    lcov says nothing of the kind, and a filed run still carries
+    `coverage-not-measured` on its envelope."""
+
+    assert_nothing_filed = ARunWithoutAgentExitsWithItsRunnersExitTest.assert_nothing_filed
+
+    def setUp(self):
+        self.make()
+
+    def tearDown(self):
+        self.cleanup()
+
+    @staticmethod
+    def no_lcov_lines(result):
+        return [line for line in result.stderr.splitlines()
+                if "--coverage" in line and "lcov" in line.lower()]
+
+    def coverage_dirs(self):
+        """The Makefile's own coverage directory a run given no directory
+        reads its lcov from, as given and resolved."""
+        coverage = os.path.join(self.native_dir, "coverage")
+        return {coverage, os.path.realpath(coverage)}
+
+    def test_a_coverage_run_that_wrote_no_lcov_says_so_once_naming_where_it_looked(self):
+        result = self.drive("regression", None, *COVERAGE_REGRESSION,
+                            FAKE_NO_LCOV="1", FAKE_OWN_COVERAGE="1")
+        lines = self.no_lcov_lines(result)
+        self.assertEqual(len(lines), 1,
+                         f"the run says once that --coverage was asked and no "
+                         f"lcov coverage report was found; "
+                         f"{self.diagnostics(result)}")
+        line = lines[0] if lines else ""
+        self.assertTrue(any(where in line for where in self.coverage_dirs()),
+                        f"the line names the coverage directory it looked in "
+                        f"({sorted(self.coverage_dirs())!r}); line={line!r}")
+        self.assertEqual(result.returncode, 0,
+                         f"the run still exits with make's exit; "
+                         f"{self.diagnostics(result)}")
+        self.assert_nothing_filed(result)
+
+    def test_a_coverage_run_that_wrote_its_lcov_says_nothing_is_missing(self):
+        result = self.drive("regression", None, *COVERAGE_REGRESSION,
+                            FAKE_OWN_COVERAGE="1")
+        self.assertTrue(
+            os.path.exists(os.path.join(self.native_dir, "coverage", "lcov.info")),
+            f"the fake wrote its lcov where the run reads it; "
+            f"{self.diagnostics(result)}")
+        self.assertEqual(self.no_lcov_lines(result), [],
+                         f"an lcov was found, so nothing is missing; "
+                         f"{self.diagnostics(result)}")
+        self.assertEqual(result.returncode, 0, self.diagnostics(result))
+        self.assert_nothing_filed(result)
+
+    def test_a_filed_coverage_run_with_no_lcov_still_carries_coverage_not_measured(self):
+        self.board.script_run(passed=2, total=2, files=2)
+        result = self.drive("regression", "arduino-no-lcov-still-on-envelope",
+                            *COVERAGE_REGRESSION, FAKE_NO_LCOV="1")
+        body = self.the_one_runs_ingest(result)
+        self.assertNotIn("coverage", body, f"body={body!r}")
+        self.assertEqual(_codes(self.envelope_of(result)).count("coverage-not-measured"),
+                         1,
+                         f"the filed run's envelope still says the coverage "
+                         f"was not measured, once; {self.diagnostics(result)}")
+        self.assertEqual(result.returncode, 0, self.diagnostics(result))
 
 
 # ── AC7 — the envelope reads the answer ─────────────────────────────────────
