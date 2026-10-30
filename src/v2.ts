@@ -1716,6 +1716,12 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
           error: `run ${runId} holds no stream — codec ${codecName} closes a run's held stream; run NOT stored`,
         };
       }
+      // The close names the stream codec the run's first batch fixed.
+      if (held.codec !== codecName) {
+        return {
+          error: `run ${runId} streams its record with codec \`${held.codec}\`; close it with that codec, not ${codecName} — run NOT stored`,
+        };
+      }
       const decoded = parseStreamBody(codec, held, body, codecName, stack);
       if ("error" in decoded) return decoded;
       const incomplete = streamIncompleteness(decoded, body.runnerExit, runId);
