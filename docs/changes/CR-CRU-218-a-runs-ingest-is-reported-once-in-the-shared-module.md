@@ -1,7 +1,7 @@
 # CR-CRU-218 — a run's ingest is reported once, in the shared module
 
-**Type** refactor · **Points** 3 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-204 · **Status** PENDING — filed
-2026-10-30 (split from CR-CRU-206 at its gap analysis, user ruling: the F2 hoist first, then one CR per client);
+**Type** refactor · **Points** 3 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-204 · **Status** DONE — merged 2026-10-30 (plan 220, cycles 804–805,
+gate 9559/0: bun 4226/0, python 5333/0); filed 2026-10-30 (split from CR-CRU-206 at its gap analysis, user ruling: the F2 hoist first, then one CR per client);
 spec pre-review 2026-10-30 (CR-CRU-218-SPEC-REVIEW, F1–F11 folded; user ruling on F10: the line is printed
 inside `ingest_reports`)
 
@@ -58,17 +58,17 @@ The new code sits beside `ingest_reports`, after the citations the tripwire's pr
 
 ## Acceptance criteria
 
-- [ ] **AC1 — defined once.** `_crucible_axi.py` defines `filed_run`, `coverage_not_measured_warning` and
+- [x] **AC1 — defined once.** `_crucible_axi.py` defines `filed_run`, `coverage_not_measured_warning` and
       `COVERAGE_NOT_MEASURED_CODE`. In each of `bun-crucible.py` and `python-crucible.py` a source scan
       asserts: no definition of `_filed_run`, `_coverage_not_measured_warning` or
       `COVERAGE_NOT_MEASURED_CODE`; no string literal (a `Constant`, or a `JoinedStr`'s first part) that
       begins with `ingest:` and a space; and bun's `cmd_regression` and `_emit_ingest_axi`, and python's `_emit_ingest_axi`
       and `_regression_run`, each call `_axi().filed_run` or `_axi().coverage_not_measured_warning` where
       they called the client's own.
-- [ ] **AC2 — `_file_reports` is one call.** In each of the two clients, `_file_reports`'s only statement
+- [x] **AC2 — `_file_reports` is one call.** In each of the two clients, `_file_reports`'s only statement
       besides an optional docstring is `return _axi().ingest_reports(...)`; the route census's bun and
       python tables are unchanged and pass as they stand.
-- [ ] **AC3 — one line on every path.** Driven through `ingest_reports` with stubbed transport, exactly one
+- [x] **AC3 — one line on every path.** Driven through `ingest_reports` with stubbed transport, exactly one
       `ingest:` line reaches stderr, and it is the last line `ingest_reports` prints, for each of:
       a run the board filed with coverage (the line carries `files=` and `lines=`/`funcs=`, the answer's);
       a run filed without coverage (no `lines=`);
@@ -78,13 +78,21 @@ The new code sits beside `ingest_reports`, after the citations the tripwire's pr
       a 413 (`error=` naming `ingest_body_bytes`);
       and a board that answers health but cannot be reached at the POST (`ok=False`, `error=` the
       transport's).
-- [ ] **AC4 — the clients' runs read as before.** `tests.client.test_bun_client_sends_its_runners_reports`
+- [x] **AC4 — the clients' runs read as before.** `tests.client.test_bun_client_sends_its_runners_reports`
       and `tests.client.test_python_client_sends_its_runners_reports` pass with no existing assertion
       edited, and each gains one assertion that its client's `ingest:` line carries `files=<n>`, the
       figure of the answer it scripted.
-- [ ] **AC5 — the citation floor (close-out).** `PROSE_CITATIONS.clients.head` in
+- [x] **AC5 — the citation floor (close-out).** `PROSE_CITATIONS.clients.head` in
       `tests/project-namespace-tripwire.test.ts` is re-measured at the close-out and, if the CR literals this
       CR adds under `clients/` moved it (the deleted bodies carry none), re-recorded once, in its own commit.
+- *Recorded at merge:* VERIFY approved with no blocking finding, and no FIX cycle was run (user ruling). AC5
+  needed no re-record: the CR added and removed no CR literal under `clients/`, so `PROSE_CITATIONS.clients`
+  holds. F1: `_crucible_axi.py` closed at 9,997 lines, one line under `tests/citations-cite-by-symbol.test.ts`'s
+  10,000-line cutoff (`BARE_LINE_IMPLAUSIBLE_THRESHOLD`); CR-CRU-206, CR-CRU-219 and CR-CRU-220 add to it, so
+  splitting the module or moving the cutoff is put to the user at CR-CRU-206's spec pre-review. F2: a health
+  read that raises, or a run abandoned during its ingest, leaves `ingest_reports` by an exception and prints no
+  `ingest:` line — the line belongs to the answers it returns, as the clients' line did. F3: the new test
+  module separates its top-level definitions by one blank line.
 
 ## Non-goals
 
