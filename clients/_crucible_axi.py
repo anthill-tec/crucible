@@ -1477,8 +1477,8 @@ REGRESSION_COVERAGE_JACOCO_HELP = (
     "board discards a red run's coverage.")
 REGRESSION_COVERAGE_LLVM_COV_HELP = (
     REGRESSION_COVERAGE_HELP + " With it, the run is `cargo llvm-cov nextest` "
-    "and its lcov coverage is posted to /api/v2/runs/parsed with its "
-    "results.")
+    "and its lcov is sent to /api/v2/runs with its results, on a red run as "
+    "on a green one; the board discards a red run's coverage.")
 
 
 # CR-CRU-121 §S2 — the ONE `--release` help text for `plan-file`, so all five

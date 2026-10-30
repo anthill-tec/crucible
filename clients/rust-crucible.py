@@ -22,8 +22,8 @@ Subcommands:
   auto-ingest           Ingest only: if JUnit XML exists fresh, ingest as junit;
                         otherwise run `cargo check` and ingest as compile.
                         For when caller has already run `cargo nextest` separately.
-  regression-ingest     cargo clean -p ... → llvm-cov nextest -p ... → parse junit
-                        + lcov → /api/v2/runs/parsed with coverage. Per-crate scope.
+  regression-ingest     cargo clean -p ... → llvm-cov nextest -p ... → junit + lcov
+                        sent to /api/v2/runs for the board to decode. Per-crate scope.
   workspace-regression  cargo clean → cargo llvm-cov nextest --workspace
                         --all-features -P <profile> → ingest. ORCHESTRATOR
                         pre-merge gate path (no docker).
@@ -51,8 +51,9 @@ Project + Crucible endpoint:
   containing the current directory. No project is hardcoded — works in ANY Cargo repo.
   Posts to the board the project's `crucible.toml` declares (`[client] url`,
   shipped default http://localhost:3849), v2 endpoints ONLY:
-  /api/v2/agents/register|unregister, /api/v2/runs (codec junit),
-  /api/v2/runs/parsed, /api/v2/runs/compile.
+  /api/v2/agents/register|unregister, /api/v2/runs (codec junit, coverage
+  codec lcov), /api/v2/runs/compile. Every report travels inline, as its
+  text; the client parses none of them.
 
 Examples:
   # Run targeted tests + ingest in one call
@@ -88,7 +89,6 @@ import subprocess
 import sys
 import time
 import tomllib
-import xml.etree.ElementTree as ET
 
 STALE_THRESHOLD_S = 60
 # The STACK this client's runs belong to — the name its sibling clients address
@@ -218,7 +218,7 @@ def _request(method, path, payload=None, timeout=None):
     """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error.
 
     CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
-    (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
+    (`/api/v2/runs`) for a large regression/coverage run can legitimately
     take the server >10s, and a short bound there is a false-negative. The short
     hook-safe bound is applied ONLY on the status/plans read path via `_get`.
 
@@ -340,29 +340,53 @@ def _open_plans(project_dir):
     return _axi().open_plans(_get, _plans_path(project_dir))
 
 
-def _emit_ingest_axi(verb, resp, project_dir, agent, warnings=None):
-    """Emit the §S1 envelope for an ingest verb:
-    run{passed,failed,pending,total} (from the SERVER-parsed response).
-    CR-CRU-050 §S2 — the server's junit codec already classifies `<skipped/>`
-    as pending; the key was simply dropped when printing. CR-CRU-056 §S3 — the
-    client RESOLVES no cycle: a bound agent's run is server-stamped with its
-    registered cycle (a stale binding gets a 409, surfaced via `error`). C5 —
-    the envelope context ECHOES the attachment the SERVER reported
-    (`context.cycleId` on the ingest response), so the agent sees which cycle
-    absorbed its evidence without a second `GET /api/v2/events`; absent → the
-    key is omitted. CR-CRU-094 §S3 — `warnings` carries the run's pre-flight
-    finding onto the envelope, so the stderr line and `warnings[]` say the
-    same thing."""
-    s = resp.get("run", {}) or {}
-    run = {"passed": s.get("passed"), "failed": s.get("failed"),
-           "pending": s.get("pending", 0), "total": s.get("total")}
+def _emit_run_axi(verb, resp, project_dir, agent, *, ok=None, help_steps=None,
+                  warnings=(), coverage=False):
+    """Emit the §S1 envelope for a run this client filed: its `run:` block
+    (`passed`, `failed`, `pending`, `total`, `files`) is the board's ingest
+    answer (`filed_run`) — the board decodes the reports this client sends,
+    and `files` is its distinct-source count. A run that was not filed
+    (refused, unreachable, too large) states no figures: each is null beside
+    the envelope's `error`, which says why. The answer's own `warnings[]` join
+    the caller's `warnings`, after them.
+
+    `coverage` asks for the envelope's `coverage:` field, the answer's
+    `run.coverage` lines and functions percents; it is absent when the board
+    kept none (it discards a red run's coverage).
+
+    The client resolves no cycle: a bound agent's run is stamped with its
+    registered cycle server-side (a stale binding gets a 409, surfaced via
+    `error`), and the envelope context echoes the attachment the server
+    reported (`echoed_cycle_id`); absent, the key is omitted.
+
+    `ok` overrides the envelope's verdict (default: the answer's `ok`);
+    `help_steps` is a state-derived next step (`run_help`) in place of the
+    canned per-verb `HELP_STEPS` entry."""
+    filed = _axi().filed_run(resp)
+    run = {key: (filed.get(key) if isinstance(filed.get(key), int)
+                 and not isinstance(filed.get(key), bool) else None)
+           for key in ("passed", "failed", "pending", "total", "files")}
     context = _axi_context(project_dir, agent_id=agent,
                            cycle_id=_axi().echoed_cycle_id(resp))
-    result_fields = {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])}
+    result_fields = {"run": run,
+                     "help": help_steps or _axi().HELP_STEPS.get(verb, ["status"])}
+    if coverage:
+        kept = filed.get("coverage")
+        kept = kept if isinstance(kept, dict) else {}
+        percents = {axis: kept[axis].get("percent")
+                    for axis in ("lines", "functions")
+                    if isinstance(kept.get(axis), dict)
+                    and isinstance(kept[axis].get("percent"), (int, float))
+                    and not isinstance(kept[axis].get("percent"), bool)}
+        if percents:
+            result_fields["coverage"] = percents
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
+    board_warnings = [w for w in (resp.get("warnings") or [])
+                      if isinstance(w, dict)]
+    _emit_axi(verb, bool(resp.get("ok")) if ok is None else ok, result_fields,
+              context, list(warnings or []) + board_warnings)
 
 
 def _clippy_help(ok, errors, lints, scope):
@@ -443,125 +467,6 @@ def _clippy_gate_abort_warning():
         "detail": ("the pre-merge gate stopped at its fail-fast clippy "
                    "-D warnings step — the coverage regression never ran, so "
                    "this gate says NOTHING about the test suite"),
-    }
-
-
-def _parse_junit(junit_path):
-    """CR-CRU-058 §S1 — parse a nextest JUnit report CLIENT-side into
-    `(summary, tree_nodes, files)`.
-
-    ONE parse for the three rust sites that need client-side counts
-    (`_regression_ingest_run`, `_workspace_regression_run`, `_smoke_test`) —
-    the envelope's `run:` block cannot come from the ingest response, which
-    carries no counts when the server is unreachable.
-
-    `files` is the CR-CRU-051 §S3 distinct-source count via bun's fallback
-    chain (`file` → `classname` → suite name), so it can never collapse to 0.
-    RESOLVED GRANULARITY FOR THIS CLIENT: **per test BINARY, which is per-FILE
-    only for the common `tests/*.rs` layout.** Measured against the real
-    cargo-nextest 0.9.130, not assumed: nextest stamps `classname`
-    (`crate::test-file-stem`, the test-binary id) on every `<testcase>` and
-    NEVER a `file` attribute, so rung 1 of the chain never fires today. Each
-    `tests/*.rs` integration file compiles to its own binary, so classname
-    coincides with the source file there; several `src/`-embedded unit-test
-    modules SHARE one lib test binary and therefore one classname, so the count
-    is coarser than per-file for those. Named honestly rather than claiming
-    blanket per-file precision. It rides the printed/enveloped line only — it
-    never enters `summary`/`payload` (CR-CRU-047 §S2)."""
-    # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
-    root = ET.parse(junit_path).getroot()  # noqa: S314
-    tree_nodes = []
-    total = passed = failed = pending = 0
-    duration_ms = 0
-    files = set()
-    # A JUnit root can be <testsuites> (nextest's wrapper) OR a bare
-    # <testsuite> — handle both, like the server's junit codec.
-    suites = ([root] if root.tag == "testsuite" else []) + root.findall(".//testsuite")
-    for suite in suites:
-        children = []
-        suite_fail = False
-        for tc in suite.findall("testcase"):
-            source = tc.get("file") or tc.get("classname") or suite.get("name")
-            if source:
-                files.add(source.replace("\\", "/"))
-            tc_time = int(float(tc.get("time", 0)) * 1000)
-            fail = tc.find("failure") is not None or tc.find("error") is not None
-            # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase (nextest emits it
-            # for `#[ignore]`d tests) is PENDING, never passed. Order matters:
-            # failure/error first, then skipped, then pass. A skip does NOT
-            # fail its suite. Mirrors `_parse_junit` in
-            # `clients/mvn-crucible.py`, the reference.
-            if fail:
-                status = "fail"
-                failed += 1
-                suite_fail = True
-            elif tc.find("skipped") is not None:
-                status = "pending"
-                pending += 1
-            else:
-                status = "pass"
-                passed += 1
-            total += 1
-            duration_ms += tc_time
-            children.append({
-                "name": tc.get("name", "?"),
-                "status": status,
-                "duration_ms": tc_time,
-            })
-        tree_nodes.append({
-            "name": suite.get("name", "?"),
-            "status": "fail" if suite_fail else "pass",
-            "children": children,
-        })
-    summary = {
-        "total": total, "passed": passed, "failed": failed,
-        "pending": pending, "duration_ms": duration_ms,
-    }
-    return summary, tree_nodes, files
-
-
-def _run_block(summary, files=None):
-    """The §S1 `run:` result field an ingest/regression envelope carries. `files`
-    (CR-CRU-051) is included ONLY where §S1 names it — the two regression
-    verbs — never fabricated for the verbs that have no such count.
-
-    `summary` None — a run the board decoded, whose ingest response carries no
-    counts (no board reached): the block carries no figures."""
-    summary = summary or {}
-    run = {
-        "passed": summary.get("passed"), "failed": summary.get("failed"),
-        "pending": summary.get("pending"), "total": summary.get("total"),
-    }
-    if files is not None:
-        run["files"] = len(files)
-    return run
-
-
-def _parse_lcov(lcov_path):
-    """Aggregate line/function coverage out of an lcov report, or None when the
-    report is absent."""
-    if not os.path.exists(lcov_path):
-        return None
-    lf = lh = ff = fh = 0
-    with open(lcov_path) as f:
-        for line in f:
-            if line.startswith("LF:"):
-                lf += int(line[3:].strip())
-            elif line.startswith("LH:"):
-                lh += int(line[3:].strip())
-            elif line.startswith("FNF:"):
-                ff += int(line[4:].strip())
-            elif line.startswith("FNH:"):
-                fh += int(line[4:].strip())
-    return {
-        "lines": {
-            "total": lf, "covered": lh,
-            "percent": round(lh / lf * 100, 1) if lf else 0,
-        },
-        "functions": {
-            "total": ff, "covered": fh,
-            "percent": round(fh / ff * 100, 1) if ff else 0,
-        },
     }
 
 
@@ -917,13 +822,14 @@ def cmd_auto_ingest(args):
     if junit_path:
         # CR-CRU-111 §S2/AC3 — this verb runs NO tests: it ingests whatever junit
         # an earlier run left in `target/nextest/<profile>/`, so it cannot know
-        # that run's tier by construction and states none.
-        resp = _ingest_junit_axi(project_dir, args.agent, junit_path,
-                                 context=filing_context)
-        _emit_ingest_axi("auto-ingest", resp, project_dir, args.agent,
-                         preflight_warnings)
-        s = resp.get("run", {}) or {}
-        return 0 if (resp.get("ok") and (s.get("failed") or 0) == 0) else 1
+        # that run's tier by construction and states none. It ran no runner
+        # either, so it sends neither `raw` nor `runnerExit`.
+        resp = _file_reports(project_dir, args.agent, [junit_path],
+                             context=filing_context)
+        _emit_run_axi("auto-ingest", resp, project_dir, args.agent,
+                      warnings=preflight_warnings)
+        failed = _axi().filed_run(resp).get("failed")
+        return 0 if (resp.get("ok") and not failed) else 1
 
     # No junit — compile failure path
     cmd = ["cargo", "check", "-p", args.crate]
@@ -950,7 +856,7 @@ def cmd_auto_ingest(args):
     # and the branch carries the envelope its junit sibling already emitted.
     #
     # `ok` means the same thing on BOTH branches of this one verb — did the
-    # evidence reach the board — matching `_emit_ingest_axi` above and this
+    # evidence reach the board — matching `_emit_run_axi` above and this
     # function's own return code; the BUILD outcome rides `exit`, the shape
     # `cmd_check` and `mvn cmd_compile` already use for a compile envelope.
     # `help[]` is derived from the state ACTUALLY reached (CR-CRU-048's rule),
@@ -1008,7 +914,9 @@ def cmd_regression_ingest(args):
 
 
 def _regression_ingest_run(args, preflight_warnings=(), identity=None):
-    """Full regression: cargo clean → llvm-cov nextest → parse junit + lcov → /api/v2/runs/parsed.
+    """Full regression: cargo clean → llvm-cov nextest → the junit and lcov
+    texts sent to /api/v2/runs for the board to decode. The lcov is sent on a
+    red run as on a green one; the board discards a red run's coverage.
 
     CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight finding,
     decided BEFORE the sweep started; it rides every envelope this body can
@@ -1075,81 +983,38 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
                   "[crucible] ERROR: no junit.xml after llvm-cov nextest")
         return 1
 
-    # CR-CRU-051 §S3 — the distinct-source `files` count and its resolved
-    # GRANULARITY for this client (per test BINARY; per-FILE only for the
-    # common `tests/*.rs` layout) are documented in full on `_parse_junit`,
-    # the one parse this site shares with `_workspace_regression_run` and the
-    # smoke path. It rides the printed/enveloped line only — never
-    # `summary`/`payload` (CR-CRU-047 §S2).
-    summary, tree_nodes, files = _parse_junit(junit_path)
+    if _axi().ran_nothing(result.returncode,
+                          _axi().junit_testcase_count([junit_path])):
+        return _axi().emit_ran_nothing(
+            "regression-ingest", "junit.xml", result.returncode,
+            result.stdout or "", run_id, preflight_warnings, post_fn=_post,
+            project_key=_project_key(project_dir), agent_id=args.agent)
 
-    coverage = _parse_lcov(lcov_path)
-
-    payload = {
-        "projectKey": _project_key(project_dir),
-        "agentId": args.agent,
-        "summary": summary,
-        "tree": tree_nodes,
-    }
-    if coverage:
-        payload["coverage"] = coverage
-    payload["tier"] = "regression"
-    # The runner's exit, so the board files a runner that failed over a clean
-    # report as failed.
-    payload["runnerExit"] = runner_exit
-    context = _run_context()
-    if context:
-        payload["context"] = context
-    # CR-CRU-038 §S2b — the captured llvm-cov nextest output rides along as
-    # `raw` so the server-stored run carries real output for the run-detail
-    # raw-toggle to reveal.
-    raw = result.stdout or ""
-    if raw:
-        payload["raw"] = raw
-    # The runId of the OPEN run this ingest closes; absent, the single-shot body.
-    if run_id:
-        payload["runId"] = run_id
+    # The lcov is sent passing or failing: the board discards a red run's
+    # coverage. A run that left none is filed with no coverage, and says so.
+    coverage_paths = [lcov_path] if lcov_path and os.path.exists(lcov_path) else []
+    if not coverage_paths:
+        preflight_warnings.append(_axi().coverage_not_measured_warning(
+            f"llvm-cov wrote no lcov at {lcov_path}"))
 
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
-                              release=release)
-    # The envelope states the run as the board filed it.
-    filed = _axi().filed_summary(resp, summary)
-    failed = filed["failed"]
+    resp = _file_reports(project_dir, args.agent, [junit_path],
+                         raw=result.stdout, coverage_paths=coverage_paths,
+                         tier="regression", context=_run_context(),
+                         run_id=run_id, release=release,
+                         runner_exit=runner_exit)
     # The exit carries the runner's verdict and the filed run's, and a refused
-    # ingest is never green.
-    exit_code = _axi().verb_exit(runner_exit, {**resp, "run": filed})
-    ok = bool(resp.get("ok"))
-    cov_line = ""
-    if coverage:
-        cov_line = (
-            f" lines={coverage['lines']['percent']}% "
-            f"funcs={coverage['functions']['percent']}%"
-        )
-    result_fields = {
-        "run": _run_block(filed, files),
-        "help": _axi().run_help("regression-ingest", exit_code == 0, failed,
-                                _base_url()),
-    }
-    if coverage:
-        result_fields["coverage"] = {
-            "lines": coverage["lines"]["percent"],
-            "functions": coverage["functions"]["percent"],
-        }
-    err = resp.get("error")
-    if err is not None:
-        result_fields["error"] = err
-    _emit_axi("regression-ingest", ok, result_fields,
-              _axi_context(project_dir, agent_id=args.agent,
-                           cycle_id=_axi().echoed_cycle_id(resp)),
-              preflight_warnings if ok
-              else preflight_warnings + [_axi().ingest_failed_warning(
-                  "regression-ingest", _base_url())],
-              f"regression: ok={resp.get('ok')} "
-              f"passed={filed['passed']} failed={failed} "
-              f"pending={filed['pending']} total={filed['total']} "
-              f"files={len(files)}{cov_line}")
+    # ingest is never green. A run that was not filed has no failure count.
+    exit_code = _axi().verb_exit(runner_exit, resp)
+    _emit_run_axi("regression-ingest", resp, project_dir, args.agent,
+                  help_steps=_axi().run_help(
+                      "regression-ingest", exit_code == 0,
+                      _axi().filed_run(resp).get("failed"), _base_url()),
+                  warnings=preflight_warnings + (
+                      [] if resp.get("ok") else [_axi().ingest_failed_warning(
+                          "regression-ingest", _base_url())]),
+                  coverage=True)
     return exit_code
 
 
@@ -1166,39 +1031,25 @@ def _resolve_junit_path(project_dir, profile=None):
     return next((p for p in candidates if os.path.exists(p)), None)
 
 
-def _ingest_junit_axi(project_dir, agent_id, junit_path, tier=None, context=None,
-                      run_id=None, release=None, runner_exit=None):
-    """Ingest a junit XML to /api/v2/runs (server-side codec=junit parse) and return
-    the parsed response dict (the caller emits the §S1 envelope). The human-readable
-    ingest line is interactive-only (stderr) — stdout is the machine channel.
-    `run_id` is the OPEN run this ingest closes; absent, the single-shot body."""
-    payload = {
-        "projectKey": _project_key(project_dir),
-        "codec": "junit",
-        "dataPath": junit_path,
-        "agentId": agent_id,
-    }
-    if tier:
-        payload["tier"] = tier
-    if context:
-        payload["context"] = context
-    if run_id:
-        payload["runId"] = run_id
-    # The runner's exit, so the board files a runner that failed over a clean
-    # report as failed. Absent (`auto-ingest`, which runs no runner): unsent.
-    if runner_exit is not None:
-        payload["runnerExit"] = runner_exit
-    resp = _axi().post_ingest(_post, "/api/v2/runs", payload, stack=_STACK,
-                              release=release)
-    s = resp.get("run", {}) or {}
-    print(
-        f"ingest junit: ok={resp.get('ok')} "
-        f"passed={s.get('passed')} failed={s.get('failed')} "
-        f"pending={s.get('pending', 0)} total={s.get('total')}"
-        + (f" error={resp.get('error')}" if resp.get("error") else ""),
-        file=sys.stderr,
-    )
-    return resp
+JUNIT_CODEC = "junit"
+LCOV_CODEC = "lcov"
+
+
+def _file_reports(project_dir, agent_id, report_paths, *, raw=None,
+                  coverage_paths=(), tier=None, context=None, run_id=None,
+                  release=None, runner_exit=None):
+    """Send a run's nextest JUnit report to the board for it to decode: the
+    shared `ingest_reports`, which reads the board's health first and, unless
+    it refuses, makes ONE `POST /api/v2/runs` carrying `codec: "junit"`, the
+    report's text inline, llvm-cov's lcov as `coverage` when any is given,
+    `raw` and `runnerExit`. This client parses none of them. Returns the
+    board's answer. The stack rides on the body through the shared ingest."""
+    return _axi().ingest_reports(
+        _post, _get, stack=_STACK, project_key=_project_key(project_dir),
+        agent_id=agent_id, codec=JUNIT_CODEC, report_paths=report_paths,
+        raw=raw, coverage_codec=LCOV_CODEC if coverage_paths else None,
+        coverage_paths=coverage_paths, tier=tier, context=context,
+        run_id=run_id, release=release, runner_exit=runner_exit)
 
 
 def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check", run_id=None,
@@ -1335,13 +1186,15 @@ def _test_run(args, tier, select, profile, project_dir, identity):
                     run_id, preflight_warnings, post_fn=_post,
                     project_key=_project_key(project_dir),
                     agent_id=args.agent)
-            resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier=tier,
-                                     context=_run_context(), run_id=run_id,
-                                     release=release, runner_exit=runner_exit)
-            _emit_ingest_axi(verb, resp, project_dir, args.agent,
-                             list(preflight_warnings)
-                             + _axi().unit_run_wall_vs_cpu_warnings(
-                                 tier, "rust", timing))
+            resp = _file_reports(project_dir, args.agent, [junit_path],
+                                 raw=result.stdout, tier=tier,
+                                 context=_run_context(), run_id=run_id,
+                                 release=release, runner_exit=runner_exit)
+            # The envelope states the run as the board filed it.
+            _emit_run_axi(verb, resp, project_dir, args.agent,
+                          warnings=list(preflight_warnings)
+                          + _axi().unit_run_wall_vs_cpu_warnings(
+                              tier, "rust", timing))
             # The exit carries the runner's verdict and the filed run's, and
             # a refused ingest is never green.
             return _axi().verb_exit(runner_exit, resp)
@@ -1620,7 +1473,8 @@ def cmd_smoke_test(args):
 
     Steps: (optional cargo clean) → (optional docker-up) → cargo nextest run
     --workspace [--all-features|--features X] -P <profile> --no-fail-fast →
-    parse junit → /api/v2/runs with `codec: junit`. NO coverage.
+    the junit text sent to /api/v2/runs (`codec: junit`) for the board to
+    decode. NO coverage.
     """
     project_dir = _resolve_project_dir(args.project_dir)
     _refuse_unattributed(args, project_dir)
@@ -1821,55 +1675,27 @@ def _smoke_run(args, verb, project_dir, identity=None):
                 run_id, run_warnings, post_fn=_post,
                 project_key=_project_key(project_dir), agent_id=args.agent)
 
-        payload = {
-            "projectKey": _project_key(project_dir),
-            "codec": "junit",
-            "dataPath": junit_path,
-            "agentId": args.agent,
-            # CR-CRU-111 §S3/AC12 — this run EARNS its tier: it is stated by
-            # the verb the caller drove and the profile it ran under, never
-            # assumed from a path.
-            "tier": tier,
-            # The runner's exit, so the board files a runner that failed over
-            # a clean report as failed.
-            "runnerExit": runner_exit,
-        }
-        if context:
-            payload["context"] = context
-        # The runId of the OPEN run this ingest closes; absent, single-shot.
-        if run_id:
-            payload["runId"] = run_id
         # The final count, then `ingesting…`, both ahead of the ingest below.
         _axi().close_narration(narrator)
-        resp = _axi().post_ingest(_post, "/api/v2/runs", payload, stack=_STACK,
-                                  release=release)
-        s = resp.get("run", {}) or {}
-        # The `run:` block is the run as the BOARD filed it (its response's
-        # `run`, with any case it added): the board decoded the report, so a
-        # response with no counts (no board reached) leaves the block with no
-        # figures. The `files` count is named for the two REGRESSION verbs
-        # only, so it is not fabricated here.
-        summary = _axi().filed_summary(resp)
+        # This run EARNS its tier: it is stated by the verb the caller drove
+        # and the profile it ran under, never assumed from a path.
+        resp = _file_reports(project_dir, args.agent, [junit_path],
+                             raw=result.stdout, tier=tier, context=context,
+                             run_id=run_id, release=release,
+                             runner_exit=runner_exit)
         # The exit carries the runner's verdict and the filed run's, and a
         # refused ingest is never green.
         smoke_rc = _axi().verb_exit(runner_exit, resp)
         ok = smoke_rc == 0
-        result_fields = {
-            "run": _run_block(summary),
-            "help": _axi().run_help(verb, ok, (summary or {}).get("failed") or 0,
-                                    _base_url()),
-        }
-        err = resp.get("error")
-        if err is not None:
-            result_fields["error"] = err
-        _emit_axi(verb, ok, result_fields,
-                  _axi_context(project_dir, agent_id=args.agent,
-                               cycle_id=_axi().echoed_cycle_id(resp)),
-                  run_warnings + ([] if resp.get("ok")
-                                  else [_axi().ingest_failed_warning(verb, _base_url())]),
-                  f"smoke-test: ok={resp.get('ok')} "
-                  f"passed={s.get('passed')} failed={s.get('failed')} "
-                  f"pending={s.get('pending', 0)} total={s.get('total')}")
+        # The envelope states the run as the board filed it; a run that was
+        # not filed has no failure count.
+        _emit_run_axi(verb, resp, project_dir, args.agent, ok=ok,
+                      help_steps=_axi().run_help(
+                          verb, ok, _axi().filed_run(resp).get("failed"),
+                          _base_url()),
+                      warnings=run_warnings + (
+                          [] if resp.get("ok")
+                          else [_axi().ingest_failed_warning(verb, _base_url())]))
     finally:
         if docker_brought_up:
             down_args = argparse.Namespace(
@@ -1882,12 +1708,15 @@ def _smoke_run(args, verb, project_dir, identity=None):
     return smoke_rc
 
 
-def cmd_workspace_regression(args, verb="workspace-regression", coverage=True):
+def cmd_workspace_regression(args, verb="workspace-regression", coverage=True,
+                             name_unfiled=False):
     """Full workspace coverage regression — orchestrator pre-merge gate path.
 
     Steps: cargo clean → DISK GUARD (decide/abort) → cargo llvm-cov nextest --workspace
     [--all-features|--features X] -P <profile> [--ignore-run-fail] --lcov --output-path
-    <lcov-output> → parse junit + lcov → /api/v2/runs/parsed → POST-RUN RECLAIM.
+    <lcov-output> → junit + lcov texts sent to /api/v2/runs for the board to
+    decode (the lcov on a red run as on a green one; the board discards a red
+    run's coverage) → POST-RUN RECLAIM.
 
     Disk hygiene (user-directed 2026-05-31): clean FIRST, then `_disk_guard` measures
     real post-clean headroom and HARD-ABORTS (rc 2) if a full coverage run can't fit —
@@ -1901,7 +1730,11 @@ def cmd_workspace_regression(args, verb="workspace-regression", coverage=True):
     With `coverage` off (a `regression` run without `--coverage`) the same run
     is coverage-free: no `cargo clean`, no llvm-cov and no post-run reclaim;
     the disk guard applies only to an `--all-features` build. The gate lock,
-    the pre-flight, the gated identity and the parsed ingest are the same.
+    the pre-flight, the gated identity and the ingest are the same.
+
+    `name_unfiled` is set when this run IS the gate's whole answer (a gate
+    that composes no declared suites): its envelope then names the run
+    unreported when it was not filed. A composing gate names it itself.
     """
     project_dir = _resolve_project_dir(args.project_dir)
     _refuse_unattributed(args, project_dir)
@@ -1940,7 +1773,8 @@ def cmd_workspace_regression(args, verb="workspace-regression", coverage=True):
                               open_fn=_open_gate_identity,
                               close_fn=_close_gate_identity) as identity:
             return _workspace_regression_run(args, project_dir, verb, identity,
-                                             coverage=coverage)
+                                             coverage=coverage,
+                                             name_unfiled=name_unfiled)
     finally:
         if coverage and not getattr(args, "keep_target", False):
             _reclaim_disk(project_dir, "workspace-regression")
@@ -1976,7 +1810,7 @@ def _workspace_regression_cmd(args, coverage):
 
 
 def _workspace_regression_run(args, project_dir, verb="workspace-regression",
-                              identity=None, coverage=True):
+                              identity=None, coverage=True, name_unfiled=False):
     """Build + run + ingest body (wrapped by cmd_workspace_regression's disk guard +
     post-run reclaim). With `coverage` on it assumes the workspace was already
     `cargo clean`ed; with it off nothing cleaned `target/`, so the profile's
@@ -2059,77 +1893,41 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression",
             run_id, run_warnings, post_fn=_post,
             project_key=_project_key(project_dir), agent_id=args.agent)
 
-    # CR-CRU-051 §S3 — the pre-merge-gate site's own distinct-source `files`
-    # count, and its resolved GRANULARITY for this client (per test BINARY;
-    # per-FILE only for the common `tests/*.rs` layout), are documented in full
-    # on `_parse_junit`, the one parse this site now shares with
-    # `_regression_ingest_run`. It rides the printed/enveloped line only —
-    # never `summary`/`payload` (CR-CRU-047 §S2).
-    summary, tree_nodes, files = _parse_junit(junit_path)
-
-    # A coverage-free run reads no lcov, so its ingest carries no coverage.
-    lcov = _parse_lcov(lcov_path) if lcov_path else None
-
-    payload = {
-        "projectKey": _project_key(project_dir),
-        "agentId": args.agent,
-        "summary": summary,
-        "tree": tree_nodes,
-    }
-    if lcov:
-        payload["coverage"] = lcov
-    # §S6 ruling 3 — this body runs the WHOLE workspace under nextest, which is
-    # what `regression` means, and it was the one regression path that stated
-    # nothing at all and let the server's default apply. Classification is by
-    # the tier of the RUN, never by the enclosing verb's name, so a gate verb
-    # that drives this body ingests a regression too.
-    payload["tier"] = "regression"
-    # The runner's exit, so the board files a runner that failed over a clean
-    # report as failed.
-    payload["runnerExit"] = runner_exit
-    context = _run_context()
-    if context:
-        payload["context"] = context
-    # The runId of the OPEN run this ingest closes; absent, the single-shot body.
-    if run_id:
-        payload["runId"] = run_id
+    # A coverage run sends the lcov llvm-cov wrote, passing or failing: the
+    # board discards a red run's coverage. A coverage run that left none is
+    # filed with no coverage, and says so; a coverage-free run reads none.
+    coverage_paths = ([lcov_path] if lcov_path and os.path.exists(lcov_path)
+                      else [])
+    if coverage and not coverage_paths:
+        run_warnings = list(run_warnings) + [_axi().coverage_not_measured_warning(
+            f"llvm-cov wrote no lcov at {lcov_path}")]
 
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload, stack=_STACK,
-                              release=release)
-    # The envelope states the run as the board filed it.
-    filed = _axi().filed_summary(resp, summary)
-    failed = filed["failed"]
+    # This body runs the WHOLE workspace under nextest, which is what
+    # `regression` means: classification is by the tier of the RUN, never by
+    # the enclosing verb's name, so a gate verb that drives this body ingests
+    # a regression too.
+    resp = _file_reports(project_dir, args.agent, [junit_path],
+                         raw=result.stdout, coverage_paths=coverage_paths,
+                         tier="regression", context=_run_context(),
+                         run_id=run_id, release=release,
+                         runner_exit=runner_exit)
     # The exit carries the runner's verdict and the filed run's, and a refused
-    # ingest is never green.
-    exit_code = _axi().verb_exit(runner_exit, {**resp, "run": filed})
-    ok = exit_code == 0
+    # ingest is never green. A run that was not filed has no failure count.
+    exit_code = _axi().verb_exit(runner_exit, resp)
     ingest_ok = bool(resp.get("ok"))
-    cov_line = ""
-    if lcov:
-        cov_line = f" lines={lcov['lines']['percent']}% funcs={lcov['functions']['percent']}%"
-    result_fields = {
-        "run": _run_block(filed, files),
-        "help": _axi().run_help(verb, ok, failed, _base_url()),
-    }
-    if lcov:
-        result_fields["coverage"] = {
-            "lines": lcov["lines"]["percent"],
-            "functions": lcov["functions"]["percent"],
-        }
-    err = resp.get("error")
-    if err is not None:
-        result_fields["error"] = err
-    _emit_axi(verb, ingest_ok, result_fields,
-              _axi_context(project_dir, agent_id=args.agent,
-                           cycle_id=_axi().echoed_cycle_id(resp)),
-              run_warnings + ([] if ingest_ok
-                              else [_axi().ingest_failed_warning(verb, _base_url())]),
-              f"workspace regression: ok={resp.get('ok')} "
-              f"passed={filed['passed']} failed={failed} "
-              f"pending={filed['pending']} total={filed['total']} "
-              f"files={len(files)}{cov_line}")
+    warnings = list(run_warnings) + (
+        [] if ingest_ok else [_axi().ingest_failed_warning(verb, _base_url())])
+    # A gate whose one whole-suite run was not filed cannot say what it
+    # covered: it names that suite unreported, as a composed gate does.
+    if name_unfiled:
+        warnings += _axi().whole_suite_unreported_warnings(_STACK, resp)
+    _emit_run_axi(verb, resp, project_dir, args.agent, ok=ingest_ok,
+                  help_steps=_axi().run_help(
+                      verb, exit_code == 0,
+                      _axi().filed_run(resp).get("failed"), _base_url()),
+                  warnings=warnings, coverage=True)
     return exit_code
 
 
@@ -2331,6 +2129,10 @@ def cmd_pre_merge_gate(args):
         dispatch=None,
         whole_suite=lambda: cmd_workspace_regression(ws_args,
                                                      verb="pre-merge-gate"),
+        # With no declared suite that run IS the gate: its envelope names it
+        # unreported when it was not filed (the composition names it itself).
+        whole_suite_alone=lambda: cmd_workspace_regression(
+            ws_args, verb="pre-merge-gate", name_unfiled=True),
         context=_axi_context(project_dir, agent_id=args.agent),
         crucible_url=_base_url())
 
@@ -2897,8 +2699,10 @@ def _add_regression_tier_args(p):
                    help="lcov output path relative to project root (default: "
                         "target/lcov.info). Applies only with --coverage.")
     p.add_argument("--ignore-run-fail", action="store_true", default=None,
-                   help="Pass --ignore-run-fail to llvm-cov so coverage is published "
-                        "even on test failures (default: on). Applies only with "
+                   help="Pass --ignore-run-fail to llvm-cov so a failing test does not "
+                        "stop the run; its lcov is sent on a red run as on a green "
+                        "one, and the board discards a red run's coverage "
+                        "(default: on). Applies only with "
                         "--coverage; the coverage-free run never fails fast.")
     p.add_argument("--min-free-g", type=int, default=80,
                    help="Disk-guard floor in GB: hard-abort if free /home is below "
@@ -3062,7 +2866,8 @@ def main():
 
     g = sub.add_parser(
         "regression-ingest",
-        help="Per-crate coverage regression: clean + llvm-cov nextest + ingest parsed.",
+        help="Per-crate coverage regression: clean + llvm-cov nextest + junit and "
+             "lcov sent to the board.",
     )
     g.add_argument("--agent", required=True,
                    help="Agent id to ingest under — REQUIRED. A free-form identifier that "
@@ -3170,7 +2975,9 @@ def main():
         "--ignore-run-fail",
         action="store_true",
         default=True,
-        help="Pass --ignore-run-fail to llvm-cov so coverage is published even on test failures",
+        help="Pass --ignore-run-fail to llvm-cov so a failing test does not stop "
+             "the run; its lcov is sent on a red run as on a green one, and the "
+             "board discards a red run's coverage",
     )
     w.add_argument(
         "--min-free-g", type=int, default=80,
