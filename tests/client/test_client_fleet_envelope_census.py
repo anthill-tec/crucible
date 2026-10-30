@@ -1311,6 +1311,9 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
 
         cls.tmp_dir = Path(tempfile.mkdtemp(prefix="cr058-s4-real-copy-"))
         shutil.copy(CLIENTS_DIR / "_crucible_axi.py", cls.tmp_dir / "_crucible_axi.py")
+        # The shared module loads its run pipeline by path from its own
+        # directory, so the run module travels with it.
+        shutil.copy(CLIENTS_DIR / "_crucible_run.py", cls.tmp_dir / "_crucible_run.py")
         shutil.copy(TOON_PATH, cls.tmp_dir / "toon.py")
         # CR-CRU-131 §S1c — the limit declarations travel as PACKAGE DATA beside
         # `_crucible_axi.py`, so a copy of the module without them is a broken
