@@ -19,8 +19,9 @@
 //
 // Every expected coverage object below is what the clients computed on the
 // same text: the bun client's lcov summation (before the board's `lcov` codec,
-// `src/codecs/coverage.ts`, took it over) and `_collect_jacoco`
-// (clients/mvn-crucible.py), run on these exact texts. Driven through the real
+// `src/codecs/coverage.ts`, took it over) and the maven client's JaCoCo
+// summation (before the board's `jacoco` codec took that over too), run on
+// these exact texts. Driven through the real
 // production HTTP surface (`startServer`, in-memory store); every stored
 // outcome is read back through the board's own reads — the run detail
 // `GET /api/v2/events/<id>` and the events list.
