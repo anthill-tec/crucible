@@ -71,6 +71,7 @@ from tests.client.live_run_harness import (
     CLIENTS,
     ENV_KEYS_TO_SCRUB,
     RecordingBoard,
+    junit_sent,
     load_client,
 )
 from tests.client.test_client_fleet_envelope_census import (
@@ -79,6 +80,7 @@ from tests.client.test_client_fleet_envelope_census import (
 
 RUST_CLIENT = CLIENTS / "rust-crucible.py"
 GATE_LOCK_FILE = "nai-gate.lock"
+RUNS_INGEST = "/api/v2/runs"
 PARSED_INGEST = "/api/v2/runs/parsed"
 PROJECT_KEY = "rust-gate-lock-outside-git-key"
 AGENT = "rust-gate-lock-outside-git-agent"
@@ -587,20 +589,23 @@ class _InProcessGatedRun(unittest.TestCase):
         return code, Path(out_path).read_text(), Path(err_path).read_text()
 
     def assert_the_run_filed(self, code, stdout, stderr):
-        ingests = [(p, b) for p, b in self.board.posts() if p == PARSED_INGEST]
+        ingests = [(p, b) for p, b in self.board.posts() if p == RUNS_INGEST]
         diagnostics = (f"exit={code} posts={[p for p, _ in self.board.posts()]!r} "
                        f"stdout={stdout[-1500:]!r} stderr={stderr[-2500:]!r}")
+        self.assertEqual([p for p, _ in self.board.posts() if p == PARSED_INGEST], [],
+                         f"nothing is posted to {PARSED_INGEST}; {diagnostics}")
         self.assertEqual(len(ingests), 1,
-                         f"exactly one ingest to {PARSED_INGEST}; {diagnostics}")
-        body = ingests[0][1] if isinstance(ingests[0][1], dict) else {}
+                         f"exactly one ingest to {RUNS_INGEST}; {diagnostics}")
+        body = (ingests[0][1] if ingests and isinstance(ingests[0][1], dict)
+                else {})
         self.assertEqual(body.get("agentId"), AGENT,
                          f"the ingest is this run's own; body={body!r}")
-        summary = body.get("summary") or {}
+        summary = (junit_sent(body) or {}).get("summary") or {}
         self.assertEqual(
             (summary.get("total"), summary.get("passed"), summary.get("failed")),
             (len(_CASES), len(_CASES), 0),
             f"the filed run carries the report the stand-in cargo wrote during "
-            f"the run; summary={summary!r}")
+            f"the run, its text sent inline; summary={summary!r}")
         self.assertEqual(code, 0, f"an all-green run exits 0; {diagnostics}")
 
 
