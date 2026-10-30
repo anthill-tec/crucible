@@ -31,6 +31,7 @@ import type {
   QueueStatus,
   RunContext,
   RunEvent,
+  RunLive,
   RunSchema,
   SuiteNode,
   TestLeaf,
@@ -5086,6 +5087,16 @@ export class Store {
       .query<RunRow, [string]>(`SELECT * FROM runs WHERE run_id = ?`)
       .get(runId);
     return row === null ? null : Store.toRun(row);
+  }
+
+  /**
+   * CR-CRU-223 §S1 — the live state the board holds for an OPEN run, or null
+   * when it holds none. This CR fixes only the read's contract and answers
+   * null for every run; CR-CRU-200 gives it a body, filled from the run's test
+   * stream.
+   */
+  runLive(_runId: string): RunLive | null {
+    return null;
   }
 
   /**

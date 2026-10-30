@@ -152,6 +152,36 @@ export interface RunSchema {
   raw?: string;
 }
 
+/**
+ * CR-CRU-223 §S1 — one failure an OPEN run has reported so far, as its live
+ * state holds it: the test's id, name, suite and file, and the first thing that
+ * explains it — its message, or its type when it gave none.
+ */
+export interface RunLiveFailure {
+  id: string;
+  name: string;
+  suite: string;
+  file: string;
+  message?: string;
+  type?: string;
+}
+
+/**
+ * CR-CRU-223 §S1 — the live state of an OPEN run: the tests finished so far by
+ * status, the runner's own total (absent when it gave none), the file of the
+ * last finished test, and every failure so far, oldest first. Read through
+ * `Store#runLive`; CR-CRU-200 fills it from the run's test stream.
+ */
+export interface RunLive {
+  completed: number;
+  total?: number;
+  passed: number;
+  failed: number;
+  pending: number;
+  currentFile?: string;
+  failures: RunLiveFailure[];
+}
+
 export interface RunContext {
   git?: {
     branch: string;
