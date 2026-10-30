@@ -32,7 +32,7 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 | Base URL | `http://localhost:3849` (override: `CRUCIBLE_BASE`) | every script/skill; the v1 `arduino-crucible.py` base-URL constant (successor: `_base_url` in `clients/arduino-crucible.py`) |
 | Content type | `application/json` both directions | all clients |
 | Success shape | `{"ok": true, ...}` — clients branch on `resp.ok` | `_ingest_rustc_stderr` in `clients/rust-crucible.py` etc. |
-| Error shape | `{"ok": false, "error": "<actionable message>"}` | the shared `ingest_reports` in `clients/_crucible_axi.py` prints `resp['error']` on its ingest line; skills: "Read error responses — they tell you exactly what's wrong" |
+| Error shape | `{"ok": false, "error": "<actionable message>"}` | the shared `ingest_reports` in `clients/_crucible_run.py` prints `resp['error']` on its ingest line; skills: "Read error responses — they tell you exactly what's wrong" |
 | Project key type | **UUID string, mandatory** — non-UUID rejected with HTTP 400 | crucible-report-java/bun Rules: "`projectKey` must be a valid UUID — string keys are rejected with 400" |
 | Client env contract | `CRUCIBLE_PROJECT_KEY` (+ `CRUCIBLE_PROJECT_NAME` for arduino) read from the SUT project's `.env` | all scripts' `_project_key()`; `arduino-crucible.py:_load_env` |
 
@@ -45,7 +45,7 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 | 3 | `/api/agents/heartbeat` | POST | Register agent + heartbeat (same endpoint for both) | all clients |
 | 4 | `/api/agents/remove` | POST | Unregister agent | all clients |
 | 5 | `/api/agents` | GET | List agents, optional `?projectKey=` | skill tables |
-| 6 | `/api/ingest` | POST | v1 raw ingest — server parses (format `junit`, `data` or `dataPath`); the clients no longer send this shape | v1 shape: crucible-register table ("format + data or dataPath"). Today the rust, java, python and bun clients send their reports inline to `/api/v2/runs` through `ingest_reports` in `clients/_crucible_axi.py`; rust no longer posts a report path |
+| 6 | `/api/ingest` | POST | v1 raw ingest — server parses (format `junit`, `data` or `dataPath`); the clients no longer send this shape | v1 shape: crucible-register table ("format + data or dataPath"). Today the rust, java, python and bun clients send their reports inline to `/api/v2/runs` through `ingest_reports` in `clients/_crucible_run.py`; rust no longer posts a report path |
 | 7 | `/api/ingest/parsed` | POST | Pre-parsed ingest (summary + tree + optional coverage) | all clients |
 | 8 | `/api/ingest/compile` | POST | Compile/import failure ingest (errors text, optional format) | all clients |
 | 9 | `/api/ingest/clear` | POST | Clear ingested state for a project | skill tables |
@@ -113,7 +113,7 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 - `dataPath` may be a **file** or a **directory** — directory means all `TEST-*.xml` inside
   (crucible-report-java: "directory is preferred for surefire").
 - Response: `{"ok": true, "summary": {"total": N, "passed": N, "failed": N, ...}}` —
-  clients print `passed/failed/total` from it (`_print_ingest_line` in `clients/_crucible_axi.py`).
+  clients print `passed/failed/total` from it (`_print_ingest_line` in `clients/_crucible_run.py`).
 - JUnit semantics (mirrors every client-side parser): testcase with `<failure>` or
   `<error>` → fail; `<skipped>` → pending; else pass. `time` attr (seconds) → duration_ms.
   Root may be `<testsuites>` or a bare `<testsuite>`.

@@ -70,7 +70,7 @@ from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# §S1 -- the packaged fleet, exactly. Five clients plus the two shared modules
+# §S1 -- the packaged fleet, exactly. Five clients plus the shared modules
 # they load BY FILE PATH from their own directory plus the status contract the
 # manifest publishes as `status` plus (CR-CRU-138 §S4) the distribution's own
 # limit declarations, which travel as package data beside the module that
@@ -82,6 +82,9 @@ EXPECTED_FLEET_FILES = frozenset({
     "mvn-crucible.py",
     "arduino-crucible.py",
     "_crucible_axi.py",
+    # The run pipeline `_crucible_axi.py` loads BY FILE PATH from its own
+    # directory and re-exports.
+    "_crucible_run.py",
     "toon.py",
     "STATUS-CONTRACT.md",
     # CR-CRU-138 §S4 -- the distribution's own limit declarations, package
@@ -281,8 +284,9 @@ class _CliInstallCase(unittest.TestCase):
         landed = set(os.listdir(clients_dir))
         self.assertEqual(
             EXPECTED_FLEET_FILES, landed,
-            f"AC2/AC8 -- <target-dir>/clients/ must hold EXACTLY the ten "
-            f"packaged fleet files after `cli.main install`. "
+            f"AC2/AC8 -- <target-dir>/clients/ must hold EXACTLY the "
+            f"{len(EXPECTED_FLEET_FILES)} packaged fleet files after "
+            f"`cli.main install`. "
             f"missing={sorted(EXPECTED_FLEET_FILES - landed)} "
             f"unexpected={sorted(landed - EXPECTED_FLEET_FILES)}. "
             f"envelope:\n{stdout}")

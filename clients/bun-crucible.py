@@ -1938,48 +1938,26 @@ _HELP_STEPS = {
 
 def _emit_ingest_axi(verb, resp, project_dir, agent, help_steps=None,
                      warnings=None, run_id=None, name=None, script=None):
-    """Emit the §S1 envelope for an ingest verb
-    (test/regression/auto-ingest): run{passed,failed,pending,total,files}, each
-    figure read from the board's ingest answer (its `run` block). A run that
-    was not filed (refused, unreachable, too large) states no figures: each is
-    null beside the envelope's `error`. The answer's own `warnings[]` join the
-    envelope's. CR-CRU-056 §S3 — the client RESOLVES
-    no cycle: a bound agent's run is server-stamped with its registered cycle
-    (a stale binding gets a 409, surfaced via `error`). C5 — the envelope
-    context ECHOES the attachment the SERVER reported (`context.cycleId` on the
-    ingest response), so the agent sees which cycle absorbed its evidence
-    without a second `GET /api/v2/events`; absent → the key is omitted.
+    """Emit the envelope of an ingest verb (test/regression/auto-ingest)
+    through the shared run emitter, `emit_run_axi`: its `run:` block, `help`
+    (the caller's state-derived `help_steps`, else this client's `_HELP_STEPS`
+    entry), the answer's `error` and `warnings[]` after the caller's
+    `warnings`. The context echoes the cycle the board attached the run to.
 
-    CR-CRU-017 §S4 — a WRAPPED run also names the `runId` its ingest closed (so
-    the caller can correlate the stored span) and carries any lifecycle
-    `warnings` the run accumulated; a single-shot run adds neither key.
-
-    `name` is the test-name filter the run was narrowed by; an unfiltered run
-    adds no key."""
-    filed = _axi().filed_run(resp)
-    run = {key: (filed.get(key) if isinstance(filed.get(key), int)
-                 and not isinstance(filed.get(key), bool) else None)
-           for key in ("passed", "failed", "pending", "total", "files")}
-    context = _axi_context(project_dir, agent_id=agent,
-                           cycle_id=_axi().echoed_cycle_id(resp))
-    # §S15 — the ingest envelope names the next step (mark the cycle done once
-    # the run is green, else re-list the queue). CR-CRU-058 §S2 — `help_steps`
-    # lets a GATE caller supply the STATE-DERIVED next step for the run it just
-    # made (`_axi().run_help`); unset keeps today's behaviour exactly.
-    result_fields = {"run": run, "help": help_steps or _HELP_STEPS.get(verb, ["status"])}
-    if run_id:
-        result_fields["runId"] = run_id
-    if name is not None:
-        result_fields["name"] = name
-    if script:
-        result_fields["script"] = script
-    err = resp.get("error")
-    if err is not None:
-        result_fields["error"] = err
-    board_warnings = [w for w in (resp.get("warnings") or [])
-                      if isinstance(w, dict)]
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context,
-              list(warnings or []) + board_warnings)
+    A wrapped run also names the `runId` its ingest closed; `name` is the
+    test-name filter the run was narrowed by and `script` the declared suite
+    it ran; each is absent when unset."""
+    return _axi().emit_run_axi(
+        verb, resp,
+        _axi_context(project_dir, agent_id=agent,
+                     cycle_id=_axi().echoed_cycle_id(resp)),
+        _emit_axi, ok=None,
+        help_steps=help_steps or _HELP_STEPS.get(verb, ["status"]),
+        warnings=warnings,
+        fields={**({"runId": run_id} if run_id else {}),
+                **({"name": name} if name is not None else {}),
+                **({"script": script} if script else {})},
+        coverage=False)
 
 
 def _agent_id(args):

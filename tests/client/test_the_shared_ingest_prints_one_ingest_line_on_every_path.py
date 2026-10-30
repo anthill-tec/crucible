@@ -1,6 +1,6 @@
 """The shared ingest prints a run's one ingest line, on every path it returns by.
 
-`ingest_reports` (`clients/_crucible_axi.py`) prints ONE line on stderr, the
+`ingest_reports` (`clients/_crucible_run.py`) prints ONE line on stderr, the
 last line it prints before it returns:
 
     ingest: ok=<ok> codec=<codec> passed=<p> failed=<f> pending=<n> total=<t> files=<files>

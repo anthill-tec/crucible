@@ -4,7 +4,7 @@ Every python verb that files a report (`test` under unittest and under
 pytest, the declared tier verbs `unit`, `module`, `integration`, `e2e` and
 `bdd`, `regression`, `auto-ingest`, and the regression step
 `pre-merge-gate` runs) files it through the shared ingest (`ingest_reports`,
-clients/_crucible_axi.py): the board's health is read first, then ONE
+clients/_crucible_run.py): the board's health is read first, then ONE
 `POST /api/v2/runs` goes out carrying `codec: "junit"`, `data` (every
 `TEST-*.xml` report's text, inline, in path order), `coverage: {codec:
 "lcov", data}` when the run measured coverage (`coverage lcov`'s report),

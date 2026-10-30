@@ -4,7 +4,7 @@ Every bun verb that files a report (`test`, a `test` run through a declared
 test script, `regression`, the declared tier verbs `unit`, `module`,
 `integration`, `e2e` and `bdd`, `auto-ingest`, and the regression step
 `pre-merge-gate` runs) files it through the shared ingest
-(`ingest_reports`, clients/_crucible_axi.py): the board's health is read
+(`ingest_reports`, clients/_crucible_run.py): the board's health is read
 first, then ONE `POST /api/v2/runs` goes out carrying `codec` (`junit`, or a
 `crucible.rawReport` target's declared codec), `data` (the report texts,
 inline), `coverage: {codec: "lcov", data}` when the run measured coverage,

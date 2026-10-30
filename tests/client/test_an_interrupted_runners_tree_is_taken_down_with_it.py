@@ -1,4 +1,4 @@
-"""§S3 RED — `run_streamed` (`clients/_crucible_axi.py`) starts the test
+"""§S3 RED — `run_streamed` (`clients/_crucible_run.py`) starts the test
 runner in the CLIENT's own process group and, on an interrupt, kills only
 that ONE direct child (its `except BaseException: proc.kill(); proc.wait();
 raise` in the teed `Popen` branch; nothing at all in the inherited-stdio

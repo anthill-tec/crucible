@@ -1925,7 +1925,7 @@ describe("clients/bun-crucible.py — CR-CRU-050 §S1/§S1b: <skipped/> (test.sk
   });
 
   // §S2 (extended after C1 GREEN) — the plain human-readable "ingest: ..."
-  // stderr line (printed by the shared `ingest_reports` in _crucible_axi.py) prints passed/failed/total but NOT
+  // stderr line (printed by the shared `ingest_reports` in clients/_crucible_run.py) prints passed/failed/total but NOT
   // pending. C1 GREEN correctly declined to touch this untested surface and
   // escalated it instead — this is that RED. Post-fix the line must read
   // "passed=1 failed=1 pending=2 total=4"; today it omits pending entirely,

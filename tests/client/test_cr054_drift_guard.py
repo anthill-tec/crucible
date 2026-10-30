@@ -61,6 +61,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
+# The run pipeline the shared module loads by path and re-exports: a
+# shared module too, where the fleet's shared code is supposed to live.
+RUN_MODULE_PATH = CLIENTS_DIR / "_crucible_run.py"
+SHARED_MODULE_NAMES = (AXI_MODULE_PATH.name, RUN_MODULE_PATH.name)
 
 CLIENT_FILES = {
     "bun": CLIENTS_DIR / "bun-crucible.py",
@@ -482,11 +486,11 @@ class NoClientDefinesItsOwnNoReportHelperTest(unittest.TestCase):
     still inlines the `no-test-reports` literal."""
 
     def _non_shared_client_sources(self):
-        """Every `clients/*.py` EXCEPT the shared module itself -- the shared
-        module is where all of this is supposed to live."""
+        """Every `clients/*.py` EXCEPT the shared modules themselves -- the
+        shared modules are where all of this is supposed to live."""
         return {path.name: path.read_text()
                 for path in sorted(CLIENTS_DIR.glob("*.py"))
-                if path.name != AXI_MODULE_PATH.name}
+                if path.name not in SHARED_MODULE_NAMES}
 
     def test_no_client_defines_a_local_no_report_help_builder(self):
         offenders = {}
@@ -593,7 +597,7 @@ class NoClientReimplementsNoReportCompositionTest(unittest.TestCase):
     def _non_shared_client_sources(self):
         return {path.name: path.read_text()
                 for path in sorted(CLIENTS_DIR.glob("*.py"))
-                if path.name != AXI_MODULE_PATH.name}
+                if path.name not in SHARED_MODULE_NAMES}
 
     def test_selection_may_be_local_but_composition_stays_shared(self):
         # The analyser has teeth AND is discriminating: a scratch client that

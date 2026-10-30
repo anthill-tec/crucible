@@ -609,40 +609,18 @@ def _open_plans(project_dir):
 
 def _emit_ingest_axi(verb, resp, project_dir, agent, help_steps=None,
                      warnings=None):
-    """Emit the §S1 envelope for an ingest verb:
-    run{passed,failed,pending,total,files}, each figure read from the board's
-    ingest answer (its `run` block) -- the board decodes the reports this
-    client sends, `files` (CR-CRU-051 §S2) included. A run that was not filed
-    (refused, unreachable, too large) states no figures: each is null beside
-    the envelope's `error`. The answer's own `warnings[]` join the envelope's.
-    CR-CRU-056 §S3 -- the client RESOLVES no cycle: a bound agent's run is
-    stamped with its registered cycle SERVER-side (a stale binding gets a 409,
-    surfaced via `error`). C5 -- the envelope context ECHOES the attachment
-    the SERVER reported (`context.cycleId` on the ingest response); absent,
-    the key is omitted.
-
-    CR-CRU-058 §S2 -- `help_steps` lets a GATE caller supply the STATE-DERIVED
-    next step for the run it just made (`_axi().run_help`), instead of the
-    canned per-verb `HELP_STEPS` entry; unset keeps today's behaviour exactly.
-    CR-CRU-094 §S3 -- `warnings` carries the run's pre-flight finding onto the
-    envelope, so the stderr line and `warnings[]` say the same thing."""
-    filed = _axi().filed_run(resp)
-    run = {key: (filed.get(key) if isinstance(filed.get(key), int)
-                 and not isinstance(filed.get(key), bool) else None)
-           for key in ("passed", "failed", "pending", "total", "files")}
-    context = _axi_context(project_dir, agent_id=agent,
-                           cycle_id=_axi().echoed_cycle_id(resp))
-    result_fields = {"run": run,
-                     "help": help_steps or _axi().HELP_STEPS.get(verb, ["status"])}
-    err = resp.get("error")
-    if err is not None:
-        # Faithful pass-through: a 409 (stale binding / unregistered poster)
-        # carries the server's structured envelope inside the HTTP error body.
-        result_fields["error"] = err
-    board_warnings = [w for w in (resp.get("warnings") or [])
-                      if isinstance(w, dict)]
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context,
-              list(warnings or []) + board_warnings)
+    """Emit the envelope of an ingest verb through the shared run emitter,
+    `emit_run_axi`: its `run:` block, `help` (a gate caller's state-derived
+    `help_steps`, else the verb's `HELP_STEPS` entry), the answer's `error`
+    and `warnings[]` after the caller's `warnings` (the run's pre-flight
+    finding among them). The context echoes the cycle the board attached the
+    run to."""
+    return _axi().emit_run_axi(
+        verb, resp,
+        _axi_context(project_dir, agent_id=agent,
+                     cycle_id=_axi().echoed_cycle_id(resp)),
+        _emit_axi, ok=None, help_steps=help_steps, warnings=warnings,
+        fields={}, coverage=False)
 
 
 def cmd_register(args):

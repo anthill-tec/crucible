@@ -99,6 +99,10 @@ EXPECTED_FLEET_FILES = frozenset({
     "mvn-crucible.py",
     "arduino-crucible.py",
     "_crucible_axi.py",
+    # The run pipeline `_crucible_axi.py` loads BY FILE PATH from its own
+    # directory and re-exports: a fleet landed without it cannot load its
+    # shared module at all.
+    "_crucible_run.py",
     "toon.py",
     "STATUS-CONTRACT.md",
     # CR-CRU-138 §S4 -- the distribution's own limit declarations. They are
@@ -348,10 +352,10 @@ class FleetStageLandsThePackagedFilesTest(_ScratchInstallCase):
         landed = set(os.listdir(self.clients_dir()))
         self.assertEqual(
             landed, set(EXPECTED_FLEET_FILES),
-            f"AC2 -- <target-dir>/clients/ must hold EXACTLY the ten "
-            f"packaged files (five clients + the two shared modules they load "
-            f"by path + STATUS-CONTRACT.md + the shipped crucible.toml + "
-            f"subtest_runner.py), no extras. "
+            f"AC2 -- <target-dir>/clients/ must hold EXACTLY the "
+            f"{len(EXPECTED_FLEET_FILES)} packaged files (five clients + the "
+            f"shared modules they load by path + STATUS-CONTRACT.md + the "
+            f"shipped crucible.toml + subtest_runner.py), no extras. "
             f"missing={sorted(set(EXPECTED_FLEET_FILES) - landed)} "
             f"unexpected={sorted(landed - set(EXPECTED_FLEET_FILES))}")
 
@@ -1094,10 +1098,14 @@ COPIED_CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino")
 # AC4's literal subject: `python3 <target-dir>/clients/python-crucible.py --help`.
 AC4_CLIENT_STACK = "python"
 
-# The two shared modules the five load BY FILE PATH from their own directory
+# The shared modules the five load BY FILE PATH from their own directory
 # (`os.path.dirname(os.path.abspath(__file__))`), reached through each client's
-# own `_axi()` / `_toon()` loader.
-SHARED_MODULE_LOADERS = (("_axi", "_crucible_axi.py"), ("_toon", "toon.py"))
+# own `_axi()` / `_toon()` loader -- and the run pipeline the shared module
+# itself loads BY FILE PATH from ITS own directory, reached through `_axi()`
+# (`RUN_MODULE_LOADER`, resolved by the probe below).
+RUN_MODULE_LOADER = "_axi_run"
+SHARED_MODULE_LOADERS = (("_axi", "_crucible_axi.py"), ("_toon", "toon.py"),
+                         (RUN_MODULE_LOADER, "_crucible_run.py"))
 
 # Bounded so a wedged interpreter fails the test instead of hanging the suite.
 # `--help` is argparse-only work; a second would do, 60 is slack for a loaded
@@ -1107,7 +1115,10 @@ CLIENT_SUBPROCESS_TIMEOUT_SECONDS = 60
 # The copied client must load its shared modules THROUGH ITS OWN LOADER, from
 # the directory it was copied into. Printed on stdout as `<key>:<path>` so a
 # failure names the resolved path, which is what distinguishes "loaded from the
-# copy" (correct) from "loaded from the repo checkout" (a false pass).
+# copy" (correct) from "loaded from the repo checkout" (a false pass). The run
+# module has no client loader of its own: the path printed for it is the file
+# the shared module's moved `ingest_reports` runs from (its globals are the run
+# module's namespace).
 _SHARED_MODULE_PROBE = """\
 import importlib.util, sys
 
@@ -1117,8 +1128,11 @@ spec = importlib.util.spec_from_file_location("copied_client_under_test",
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 for loader_name, _filename in %(loaders)r:
-    resolved = getattr(module, loader_name)()
-    sys.stdout.write("%%s:%%s\\n" %% (loader_name, resolved.__file__))
+    if loader_name == %(run_loader)r:
+        path = module._axi().ingest_reports.__globals__["__file__"]
+    else:
+        path = getattr(module, loader_name)().__file__
+    sys.stdout.write("%%s:%%s\\n" %% (loader_name, path))
 """
 
 
@@ -1147,7 +1161,8 @@ class CopiedClientsActuallyRunTest(_ScratchInstallCase):
       the scratch target so nothing can touch the real `~/.crucible`.
 
     Nothing here contacts the Crucible server or registers anything: `--help`
-    is argparse-only, and the shared-module probe only imports two modules.
+    is argparse-only, and the shared-module probe only imports the shared
+    modules.
     """
 
     def setUp(self):
@@ -1267,7 +1282,8 @@ class CopiedClientsActuallyRunTest(_ScratchInstallCase):
         COPIED clients dir. Bare importability is not enough -- a module
         resolved out of the repo checkout would import fine and still mean the
         install laid nothing down."""
-        probe = _SHARED_MODULE_PROBE % {"loaders": SHARED_MODULE_LOADERS}
+        probe = _SHARED_MODULE_PROBE % {"loaders": SHARED_MODULE_LOADERS,
+                                        "run_loader": RUN_MODULE_LOADER}
         expected_dir = os.path.realpath(self.clients_dir())
         broken = []
         for stack in COPIED_CLIENT_STACKS:
@@ -1296,10 +1312,16 @@ class CopiedClientsActuallyRunTest(_ScratchInstallCase):
                         f"{stack}: {loader_name}() loaded {filename} from "
                         f"{path!r}, OUTSIDE the copied fleet dir "
                         f"{expected_dir!r}")
+                elif os.path.basename(path) != filename:
+                    broken.append(
+                        f"{stack}: {loader_name}() resolved {path!r}, not "
+                        f"{filename}")
         self.assertEqual(
             [], broken,
-            f"AC4/§S1 -- every copied client must load `_crucible_axi.py` AND "
-            f"`toon.py` from {expected_dir!r} through its own by-path loader; "
+            f"AC4/§S1 -- every copied client must load `_crucible_axi.py`, "
+            f"`toon.py` and the run module `_crucible_axi.py` loads, "
+            f"`_crucible_run.py`, from {expected_dir!r} through the by-path "
+            f"loaders; "
             f"{len(broken)} problem(s):\n" + "\n".join(broken))
 
 

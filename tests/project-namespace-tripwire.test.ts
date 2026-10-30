@@ -2771,10 +2771,56 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
 // file in its child `bun test`, fired for the right reason, and gets no
 // change.
+//
+// UPDATED 2026-10-30 by CR-CRU-221's CLOSE-OUT (cycle 812).
+// `clients` moves 821 -> 814 (-7). MEASURED with this file's own machinery
+// on the feature branch AFTER the branch's last content edit: the recorded
+// head 821 against a measured 814, and `src` (830) and `public` (514)
+// re-measure at their recorded heads. `listFiles` picks up the new
+// clients/_crucible_run.py on its own.
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show 898e8d0:<path>` (the merge-base with `develop`),
+// attributes all seven. Every classified file the branch touches is listed:
+//
+//   clients -7:
+//     clients/_crucible_axi.py 221 -> 215 (-6) and clients/_crucible_run.py
+//       (new) -> 6 (+6): a MOVE, net 0. The run pipeline leaves the core
+//       with its prose, and the six citations land in the run module on the
+//       same constructs: the `unit`-run wait section (`CR-CRU-111`),
+//       `narration_poster` (`CR-CRU-056`), `run_left_open_warning`
+//       (`CR-CRU-097`, `CR-CRU-017`), `run_left_open_help` (`CR-CRU-048`)
+//       and `emit_run_abandoned` (`CR-CRU-094`).
+//     clients/bun-crucible.py 145 -> 142 (-3): `_emit_ingest_axi` emits
+//       through the shared run emitter, and its docstring drops the
+//       citations of the envelope it no longer builds (`CR-CRU-056`,
+//       `CR-CRU-017`, `CR-CRU-058`).
+//     clients/python-crucible.py 115 -> 111 (-4): `_emit_ingest_axi`, the
+//       same (`CR-CRU-051`, `CR-CRU-056`, `CR-CRU-058`, `CR-CRU-094`).
+//     clients/mvn-crucible.py 116 -> 116 (0) and clients/rust-crucible.py
+//       114 -> 114 (0): their changed lines carry no citation, and none
+//       drops one.
+//
+//   src 0, public 0: the branch changes no file under `src/` or `public/`,
+//     so `src` (830) and `public` (514) could not have moved.
+//
+// A NET LOSS of seven, and stated as one. The six the core sheds are not
+// lost: they moved with their constructs. The seven that leave sat on the
+// bun and python emitter docstrings, which now describe a call into the
+// shared run emitter instead of the envelope it builds. No CR-CRU-221
+// citation is added under a classified tree. `clients` (814) is still far
+// above its 601 floor, so the directional half holds.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the branch's last content edit, so
+// these are its final figures and not a mid-cycle reading. It clears the
+// CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
+// file in its child `bun test`, fired for the right reason, and gets no
+// change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 830 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 514 },
-  clients: { exts: [".py"], develop: 601, head: 821 },
+  clients: { exts: [".py"], develop: 601, head: 814 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

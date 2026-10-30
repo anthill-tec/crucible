@@ -3,7 +3,7 @@
 Every rust verb that files a report (`test`, `unit`, `smoke-test`,
 `docker-e2e-gate`, `workspace-regression`, `regression`, `pre-merge-gate`,
 `regression-ingest` and `auto-ingest`) files it through the shared ingest
-(`ingest_reports`, clients/_crucible_axi.py): the board's health is read
+(`ingest_reports`, clients/_crucible_run.py): the board's health is read
 first, then ONE `POST /api/v2/runs` goes out carrying `codec: "junit"`,
 `data` (the text of the nextest `junit.xml` the verb reads),
 `coverage: {codec: "lcov", data}` on a run that measured coverage and found
@@ -945,9 +945,12 @@ class NoBoardNoFiguresTest(_RustProject, unittest.TestCase):
 
 # ── AC9 — one ingest line, and the shared module does not grow ─────────────
 
-# `clients/_crucible_axi.py`'s length, in lines, at `develop@850e8a0`: the rust
-# client's move to the shared ingest adds nothing to it.
-SHARED_MODULE_LINE_BUDGET = 9997
+# Each shared module's line budget is that module's size (its newline count,
+# as the test below counts it) recorded when the run pipeline was split out of
+# the core into its own module, so neither shared module grows unnoticed. The
+# rust client's move to the shared ingest adds nothing to either. A change
+# that grows a shared module re-records its budget here, in the same change.
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9088, "_crucible_run.py": 1123}
 _OWN_RESULT_LINES = ("ingest junit:", "regression: ok=",
                      "workspace regression: ok=", "smoke-test: ok=")
 
@@ -988,13 +991,15 @@ class TheRustClientPrintsOnlyTheSharedIngestLineTest(unittest.TestCase):
                          f"line; rust-crucible.py still prints {found!r}")
 
     def test_the_shared_module_is_no_longer_than_its_line_budget(self):
-        text = (CLIENTS / "_crucible_axi.py").read_text(encoding="utf-8")
-        lines = text.count("\n")
-        self.assertLessEqual(
-            lines, SHARED_MODULE_LINE_BUDGET,
-            f"clients/_crucible_axi.py is {lines} lines, over the "
-            f"{SHARED_MODULE_LINE_BUDGET} it held before the rust client moved "
-            f"to the shared ingest")
+        for name, budget in SHARED_MODULE_LINE_BUDGETS.items():
+            with self.subTest(module=name):
+                path = CLIENTS / name
+                self.assertTrue(path.is_file(), f"the shared module {name} exists")
+                lines = path.read_text(encoding="utf-8").count("\n")
+                self.assertLessEqual(
+                    lines, budget,
+                    f"clients/{name} is {lines} lines, over its budget of "
+                    f"{budget}")
 
 
 # ── the no-report exit, unchanged ──────────────────────────────────────────

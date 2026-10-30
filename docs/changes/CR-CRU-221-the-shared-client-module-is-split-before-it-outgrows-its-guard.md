@@ -1,7 +1,8 @@
 # CR-CRU-221 — the shared client module is split, its run emitter is shared, and a reset board is answered
 
 **Type** refactor · **Points** 13 (re-scored at its gap analysis, 8 → 13) · **Wave** 8 (0.4.0) · **Depends on**
-CR-CRU-206, CR-CRU-218 · **Status** PENDING — filed 2026-10-30 (user ruling at CR-CRU-206's spec pre-review, F9:
+CR-CRU-206, CR-CRU-218 · **Status** DONE — merged 2026-10-30 (plan 223, cycles 812–814, gate 9786/0: bun 4227/0, python
+5559/0); filed 2026-10-30 (user ruling at CR-CRU-206's spec pre-review, F9:
 split `clients/_crucible_axi.py` in its own CR, ahead of CR-CRU-220); widened 2026-10-30 (user ruling at CR-CRU-206's
 VERIFY: its F1, a connection reset at the ingest, and its F2, the run emitter written once per client, join this
 CR); gap analysis 2026-10-30 (user rulings: the run and ingest pipeline moves; the core re-exports it; the transport
@@ -126,27 +127,27 @@ module's prose may) and re-recorded once, in its own commit.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — headroom.** `_crucible_axi.py` is no longer than 9,200 lines and `_crucible_run.py` under 10,000 by the
+- [x] **AC1 — headroom.** `_crucible_axi.py` is no longer than 9,200 lines and `_crucible_run.py` under 10,000 by the
       guard's count, and `tests/citations-cite-by-symbol.test.ts` passes.
-- [ ] **AC2 — the split is invisible.** Every top-level name `_crucible_run.py` defines (its imports and its core view
+- [x] **AC2 — the split is invisible.** Every top-level name `_crucible_run.py` defines (its imports and its core view
       aside) is an attribute of the loaded core, and `RunAbandoned` is the same class on both; a census asserts that each
       client calls none of them except through `_axi()`; a patch of the core's `post_ingest` is reached by the moved
       `ingest_reports`; two clients loaded in one process each get their own run module; `crucible_axi/cli.py` loads the
       core and reaches the run module.
-- [ ] **AC3 — the gated run still files.** A run signalled while its ingest is held inside `gated_run` is still filed
+- [x] **AC3 — the gated run still files.** A run signalled while its ingest is held inside `gated_run` is still filed
       (`test_a_run_signalled_during_its_ingest_still_gets_filed.py` passes unedited), and the gated-run bookkeeping
       (`_gated_trap`, `_gated_open_run` and the four functions) is defined in `_crucible_axi.py` and nowhere else.
-- [ ] **AC4 — it ships.** `crucible_axi/install.py` lays `_crucible_run.py` down beside the clients
+- [x] **AC4 — it ships.** `crucible_axi/install.py` lays `_crucible_run.py` down beside the clients
       (`test_cr090_fleet_stage.py`, `test_cr090_cli_install_integration.py`), the wheel carries it
       (`test_crucible_axi_wheel_packaging.py`), and a copied client loads its run module from the copy
       (`CopiedClientsActuallyRunTest` gains the probe).
-- [ ] **AC5 — clean.** `ruff check --select F` is clean on both shared modules, and `_crucible_run.py` imports only the
+- [x] **AC5 — clean.** `ruff check --select F` is clean on both shared modules, and `_crucible_run.py` imports only the
       standard library.
-- [ ] **AC6 — one emitter.** `_crucible_run.py` defines `emit_run_axi`; bun's and python's `_emit_ingest_axi` and maven's
+- [x] **AC6 — one emitter.** `_crucible_run.py` defines `emit_run_axi`; bun's and python's `_emit_ingest_axi` and maven's
       and rust's `_emit_run_axi` each have one statement besides an optional docstring, a `return` of
       `_axi().emit_run_axi(...)` passing the context built with `cycle_id=_axi().echoed_cycle_id(resp)`; each client's
       existing envelope tests pass unedited.
-- [ ] **AC7 — a dropped connection is answered.** `http_request` against a server that closes after reading the request,
+- [x] **AC7 — a dropped connection is answered.** `http_request` against a server that closes after reading the request,
       one that resets, one that sends a truncated body, one that sends a garbled status line, and one that answers an
       HTTP error with a truncated body, answers `{ok: false, error}` with no exception — naming the board, except the
       HTTP error, whose status shows the board was reached (`HTTP <code>: <body unreadable: <Type>>`); a non-JSON body
@@ -157,11 +158,25 @@ module's prose may) and re-recorded once, in its own commit.
       `/api/v2/runs/parsed` until CR-CRU-220): its envelope `ok: false` naming the board, exit 1, no traceback. A
       `pre-merge-gate` whose project declares suites (bun, python), when one suite's POST is dropped by a truncated body,
       names that suite `gate-suite-unreported` and is not green.
-- [ ] **AC8 — nothing else changes.** The full gate (bun and python suites) passes with no test's assertion edited beyond
+- [x] **AC8 — nothing else changes.** The full gate (bun and python suites) passes with no test's assertion edited beyond
       what reads a moved definition's file, copies or lists the fleet's files, pins a shared module's line budget, or pins
       the call shape of the four emitters AC6 rewrites.
-- [ ] **AC9 — the citation floor (close-out).** `PROSE_CITATIONS.clients.head` is re-measured at the close-out and
+- [x] **AC9 — the citation floor (close-out).** `PROSE_CITATIONS.clients.head` is re-measured at the close-out and
       re-recorded once, in its own commit, by exactly the measured delta.
+- *Recorded at merge:* GREEN was stopped mid-work by the user and resumed. Its re-exports of the five moved names the
+  core uses are assigned inside `_reexport_run_module` (under `global`), since RED's defined-once scan reads a top-level
+  assignment as a definition. Six by-symbol citations of `ingest_reports`, `_print_ingest_line` and `run_streamed` still
+  named `_crucible_axi.py`; GREEN had made the guard pass by naming them in the core's comment, and the user ruled they
+  be re-pointed instead — RED re-pointed eight test files, FIX the DN, and the comment no longer lists them. AC9:
+  `PROSE_CITATIONS.clients.head` 821 → 814 (bun's and python's emitter docstrings; the moved block nets 0). VERIFY's F1
+  (the two `SHARED_MODULE_LINE_BUDGETS` pinned at the ceilings, not the sizes — the orchestrator's RED brief) was fixed in
+  its own cycle (814, user ruling), with F2 (the README's fleet sentence, now the whole of `FLEET_FILES`), F3 (a moved
+  comment pointing at the core's `TIER_MEANINGS`) and F5 (user ruling: the settled-run refusal the client keys on is
+  pinned by a test against a live board and against the board's source; RED found `handleRunAbort`'s second settled
+  wording, which the pre-review's prototype had received, and FIX widened `_SETTLED_ABORT_REFUSAL` to it). The shared
+  modules closed at 9,088 (core, from 9,997) and 1,123 (`_crucible_run.py`) newlines. VERIFY's F4 — `run-may-be-filed` is
+  a new warning code — goes to the 0.4.0 release notes; its F6 (arduino's envelope keeps its own figures on a dropped
+  ingest) is CR-CRU-220's.
 
 ## Non-goals
 

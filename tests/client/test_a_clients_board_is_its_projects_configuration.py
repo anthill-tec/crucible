@@ -418,9 +418,11 @@ def _board_drives():
 
 
 def _scratch_fleet(root):
-    """The five clients plus the two modules and the package data they read,
+    """The five clients plus the three modules and the package data they read,
     copied into `<root>/clients/` so `<root>` becomes the INSTALL dir the
-    running module derives from its own location.
+    running module derives from its own location. The shared module reads its
+    run pipeline (`_crucible_run.py`) by path from its own directory, so the
+    run module travels with it.
 
     A module copied without its declarations can resolve nothing at all, which
     is why the shipped `crucible.toml` travels with it -- the same fleet list
@@ -428,7 +430,7 @@ def _scratch_fleet(root):
     """
     clients = Path(root) / "clients"
     clients.mkdir(parents=True)
-    for name in ("_crucible_axi.py", "toon.py", CONFIG_NAME):
+    for name in ("_crucible_axi.py", "_crucible_run.py", "toon.py", CONFIG_NAME):
         shutil.copyfile(CLIENTS_DIR / name, clients / name)
     scripts = {}
     for client, script_path in CLIENT_FILES.items():

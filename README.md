@@ -41,8 +41,10 @@ fails outright with that remedy), provisions the server user-scoped via
 `bun add -g @anthill-tec/crucible-server@<pinned>` — Bun's global prefix lives
 under `$HOME`, so there is no system-permission problem — then creates its
 target directory (`--target-dir`, default `~/.crucible`), lays the
-`*-crucible.py` **client fleet** (the five clients, the two shared modules they
-load by path, and `STATUS-CONTRACT.md`) down in `<target-dir>/clients/`, and
+`*-crucible.py` **client fleet** (the five clients, the three shared modules
+they load by path — `_crucible_axi.py`, `_crucible_run.py` and `toon.py` — the
+`subtest_runner.py` the Python client runs, `STATUS-CONTRACT.md` and the
+shipped `crucible.toml` limit defaults) down in `<target-dir>/clients/`, and
 writes the client discovery **manifest** naming those paths into it. Those
 three stages — `server`, `fleet`, `manifest`, in that order, so the manifest is
 written only after the paths it names exist — are the whole install. It reports

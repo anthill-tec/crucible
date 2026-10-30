@@ -105,9 +105,11 @@ CONFIG_NAME = "crucible.toml"
 #: suite's outcome. Named so a failure can say so; never read, never written.
 CHECKOUT_CONFIG = REPO_ROOT / CONFIG_NAME
 
-#: The scratch fleet: the module under test plus the package data it reads.
-#: A module copied without its declarations can resolve nothing at all.
-_SCRATCH_FLEET = (CLIENTS_DIR / "_crucible_axi.py", CLIENTS_DIR / CONFIG_NAME)
+#: The scratch fleet: the module under test, the run module it reads by path
+#: from its own directory, and the package data it reads. A module copied
+#: without its declarations can resolve nothing at all.
+_SCRATCH_FLEET = (CLIENTS_DIR / "_crucible_axi.py", CLIENTS_DIR / "_crucible_run.py",
+                  CLIENTS_DIR / CONFIG_NAME)
 
 CLIENT_LIMITS = ("truncate_field_chars", "error_detail_chars", "roadmap_list_rows")
 
