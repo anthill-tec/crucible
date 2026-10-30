@@ -26,7 +26,8 @@ docs/changes/CR-CRU-051-files-count-fleet-parity.md:
   (already correct) -- confirmed, not assumed."
 
 RED phase: python's JUnit parser (deleted since by CR-CRU-204, which sends
-python's reports to the board unparsed), `mvn-crucible.py::_parse_junit`
+python's reports to the board unparsed), maven's JUnit parser (deleted since,
+as the maven client sends its reports to the board unparsed)
 and `arduino-crucible.py::_parse_junit` all returned a bare `(summary, tree)`
 2-tuple then (confirmed by reading the source) -- unpacking a third `files`
 element raises `ValueError: not enough values to unpack`, a real behavioral
@@ -34,9 +35,10 @@ failure. Their `run:` envelopes (`_emit_ingest_axi` / `_emit_ingest_summary_axi`
 build `run = {"passed", "failed", "pending", "total"}` with no `files` key at
 all. Neither parser's docstring/comment mentions "granularity" anywhere
 (confirmed by grep). Every test below against these three clients therefore
-fails now for the right reason. The bun and python clients' parser pins are
-retired: they parse no report any more, and the board answers their run's
-`files` count, which python's envelope states as the board answered it.
+fails now for the right reason. The bun, python and maven clients' parser pins
+are retired: they parse no report any more, and the board answers their run's
+`files` count, which python's and maven's envelopes state as the board answered
+it.
 
 Module-loading + HTTP-mocking convention copied verbatim from the sibling
 `test_python_crucible_axi.py` / `test_mvn_crucible_axi.py` /

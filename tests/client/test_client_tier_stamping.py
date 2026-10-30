@@ -41,8 +41,10 @@ nothing:
   RED  `{Bun,Mvn,Python,Rust}UnearnedTierTest` — all TWELVE methods. The
          census finds twelve unearned literal sites today: bun `cmd_test`
          (`/runs/start`, `/runs/parsed`), bun `cmd_auto_ingest` (`e2e`), mvn
-         `cmd_test` (`/runs`, `/runs/parsed`), mvn `cmd_auto_ingest` (`/runs`,
-         `/runs/parsed` `regression`), python `cmd_test` (`/runs/parsed`, since
+         `cmd_test` (`/runs`, `/runs/parsed`, since the maven client sends its
+         reports to the board `/runs`), mvn `cmd_auto_ingest` (`/runs`,
+         `/runs/parsed` `regression`, since the maven client sends its reports
+         to the board `/runs`), python `cmd_test` (`/runs/parsed`, since
          CR-CRU-204 `/runs`, and `/runs/compile`), python `cmd_auto_ingest`,
          rust `cmd_test` and rust
          `cmd_auto_ingest`.
@@ -135,7 +137,8 @@ ESCALATIONS recorded at the time of writing (see the report for the full text):
   1. AC3's own prose says "EACH of the eight unearned call sites" and then
      enumerates TEN, while §S2's census table carries TWELVE unearned rows
      (AC3's enumeration omits mvn `cmd_auto_ingest`'s `tier="regression"` site,
-     its `/runs/parsed` call, which §S2's table marks unearned and whose reason
+     its `/runs/parsed` call — since the maven client sends its reports to the
+     board, `POST /api/v2/runs` — which §S2's table marks unearned and whose reason
      — auto-ingest ran no tests — is the strongest of the four). This file
      asserts the DERIVED set, so the disagreement between the AC's "eight", its
      own list of ten and the table's twelve cannot be inherited: the count is
