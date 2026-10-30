@@ -389,9 +389,9 @@ def run_aborted_warning(run_id, reason):
     }
 
 
-#: The board's refusal of an abort for a run that is no longer open, as its
-#: run-close answer words it (`resolveRunClose`, src/v2.ts).
-_SETTLED_ABORT_REFUSAL = re.compile(r"\bHTTP 409\b.*a settled run cannot be closed twice")
+#: The board's refusals of an abort for a run that is no longer open, as its
+#: run-close and abort answers word them (`resolveRunClose`, `handleRunAbort`, src/v2.ts).
+_SETTLED_ABORT_REFUSAL = re.compile(r"\bHTTP 409\b.*(?:a settled run cannot be closed twice|settled before it could be aborted)")
 
 
 def run_may_be_filed_warning(run_id, error):
