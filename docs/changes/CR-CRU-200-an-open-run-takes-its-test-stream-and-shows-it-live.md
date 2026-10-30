@@ -1,6 +1,6 @@
 # CR-CRU-200 — an open run takes its test stream, and the board keeps it as the run's record
 
-**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152, CR-CRU-223 · **Status** PENDING — filed
+**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152, CR-CRU-206, CR-CRU-219, CR-CRU-220, CR-CRU-223 · **Status** PENDING — filed
 2026-10-20 (user ruling: live progress designed after CR-CRU-194, split from CR-CRU-152; design in
 `DN-crucible-live-test-progress.md`); re-scoped 2026-10-30 at its gap analysis (user rulings: split by layer — the live view
 first, CR-CRU-223, then this CR, the board, then the client, CR-CRU-224; a stream's batches persist and the run is decoded
