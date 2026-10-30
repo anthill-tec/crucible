@@ -72,7 +72,10 @@ code, and every drive in this file is built from them:
   mvn      unit               `_emit_tier_run_axi`      surefire report with
                                                         tests="0" → ingested
   rust     unit               `_emit_ingest_axi`        junit with 0 testcases
-                                                        → ingested
+                              (replaced since by        → ingested
+                              `_emit_run_axi`, as the
+                              rust client sends its
+                              reports to the board)
   arduino  unit               `_emit_ingest_summary_axi` TEST-*.xml tests="0"
                                                         → ingested
 
