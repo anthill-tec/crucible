@@ -21,7 +21,8 @@ The same parse feeds the check that names a Makefile which ignored `TESTS` or `T
   figure and warning comes from the board's response; reports travel inline; an oversized body is refused
   before sending; with no board there are no figures.
 - The narrowing check is a local decision made before the ingest, as bun's filter check is: it reads each
-  case's name and file stem through one shared reader in `_crucible_axi.py`, beside the two counts, and the
+  case's name and file stem through one shared reader in the shared run module (`_crucible_run.py`, CR-CRU-221),
+  beside the two counts, and the
   no-parse scan exempts it as it exempts them.
 
 ## Steps
@@ -42,7 +43,7 @@ Every verb but `auto-ingest` sends its captured `make` output as `raw` and the r
 ### §S2 — the client parsers go; the narrowing check reads through the shared reader
 
 - `_parse_junit`, `_collect_lcov` and `_file_stem` are deleted.
-- `_crucible_axi.py` gains `junit_case_sources(paths)`: each `<testcase>`'s `(name, file stem)` across the
+- The shared run module (`clients/_crucible_run.py`, CR-CRU-221) gains `junit_case_sources(paths)`: each `<testcase>`'s `(name, file stem)` across the
   reports at `paths`, in report order — the stem the basename without extension of the case's `classname`,
   else its `file`, `None` when it carries neither — and `None` when a report cannot be read or parsed, as
   `junit_testcase_count` answers. `_ignored_narrowing_warnings` reads its cases from it; when it answers
