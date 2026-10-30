@@ -321,6 +321,9 @@ class ADroppedIngestIsReportedAsAnUnfiledRunTest(_DroppedIngestCase):
     def test_rust_test_whose_ingest_is_dropped_reports_an_unfiled_run(self):
         self.drive(self.rust_test)
 
+    def test_arduino_unit_whose_ingest_is_dropped_reports_an_unfiled_run(self):
+        self.drive(self.arduino_unit)
+
     def test_python_test_whose_ingest_and_abort_are_both_dropped_leaves_the_run_open(self):
         self.board.drop_next(RUNS, "close")
         self.board.drop_next(f"/api/v2/runs/{RUN_ID}/abort", "close")
@@ -356,6 +359,9 @@ class ARunTheBoardMayHoldSaysSoTest(_DroppedIngestCase):
 
     def test_rust_test_whose_filed_run_lost_its_answer_says_the_board_may_hold_it(self):
         self.drive(self.rust_test)
+
+    def test_arduino_unit_whose_filed_run_lost_its_answer_says_the_board_may_hold_it(self):
+        self.drive(self.arduino_unit)
 
 
 class TheArduinoClientAnswersADroppedIngestTest(_DroppedIngestCase):
