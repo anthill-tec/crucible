@@ -4,6 +4,16 @@ import { Database } from "bun:sqlite";
 import { renameSync } from "node:fs";
 import { configuredRetention, resolveLimit } from "./limits.ts";
 import type { CompileReport } from "./codecs/compile.ts";
+import {
+  appendRunStream,
+  createRunStreamTables,
+  deleteProjectRunStreams,
+  deleteRunStream,
+  heldStream,
+  RUN_STREAM_TABLES,
+  runLiveOf,
+} from "./run-stream.ts";
+import type { StreamBatch, StreamBatchOutcome } from "./run-stream.ts";
 import { DEFAULT_LIVENESS } from "./types.ts";
 import type {
   Agent,
@@ -3018,6 +3028,16 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       );
     },
   },
+  {
+    description:
+      "run streams: CR-CRU-200 §S2/§S4 — an open run's test stream is held in batches, and its live state and failures in tables of their own. A CREATE only: no run streamed before this CR",
+    apply(db) {
+      createRunStreamTables(db);
+    },
+    satisfiedBy(db) {
+      return RUN_STREAM_TABLES.every((table) => tableExists(db, table));
+    },
+  },
 ];
 
 /**
@@ -3627,6 +3647,8 @@ export class Store {
     createGateDecisionsTable(this.db);
     // A run's detail rows, by the same base pass for the same reason.
     createRunDetailTables(this.db);
+    // CR-CRU-200 §S2/§S4 — a run's held stream and live state, likewise.
+    createRunStreamTables(this.db);
   }
 
   /**
@@ -3916,6 +3938,9 @@ export class Store {
         .query(`DELETE FROM plan_cycles WHERE project_key = ?`)
         .run(key).changes;
       counts.rollups = this.db.query(`DELETE FROM rollups WHERE project_key = ?`).run(key).changes;
+      // CR-CRU-200 §S2 — its runs' held streams and live state go first,
+      // while the runs that name them remain.
+      deleteProjectRunStreams(this.db, key);
       // CR-CRU-017 §S1 — issued runs die with their project. Not a reported
       // count: `ProjectDeleteCounts` is the CR-CRU-052 wire shape and stays it.
       this.db.query(`DELETE FROM runs WHERE project_key = ?`).run(key);
@@ -5090,13 +5115,52 @@ export class Store {
   }
 
   /**
-   * CR-CRU-223 §S1 — the live state the board holds for an OPEN run, or null
-   * when it holds none. This CR fixes only the read's contract and answers
-   * null for every run; CR-CRU-200 gives it a body, filled from the run's test
-   * stream.
+   * CR-CRU-223 §S1 / CR-CRU-200 §S4 — the live state the board holds for an
+   * OPEN run, filled from its test stream batch by batch, or null when it
+   * holds none.
    */
-  runLive(_runId: string): RunLive | null {
-    return null;
+  runLive(runId: string): RunLive | null {
+    return runLiveOf(this.db, runId);
+  }
+
+  /**
+   * CR-CRU-200 §S2 — one batch of an open run's test stream, in ONE
+   * transaction that re-reads the run's open state inside it (as
+   * `abortOpenRun` does): appended at the byte offset it states, the live
+   * state filled, and the agent's `lastSeen` touched quietly — no `agents`
+   * frame. A run that settled meanwhile is answered `settled`, nothing stored.
+   */
+  appendRunStream(
+    runId: string,
+    batch: StreamBatch,
+  ): StreamBatchOutcome | { ok: false; refused: "settled"; run: RunRecord | null } {
+    return this.db.transaction(() => {
+      const run = this.getRun(runId);
+      if (run === null || run.state !== "open") return { ok: false as const, refused: "settled" as const, run };
+      const outcome = appendRunStream(this.db, runId, batch);
+      if (outcome.ok) {
+        this.db
+          .query(`UPDATE agents SET last_seen = ? WHERE project_key = ? AND agent_id = ?`)
+          .run(Date.now(), run.projectKey, run.agentId);
+      }
+      return outcome;
+    })();
+  }
+
+  /**
+   * CR-CRU-200 §S3 — the close of a streamed run, in ONE transaction that
+   * re-reads the run's open state inside it: `close` is handed the whole held
+   * stream and does the decode, `recordTestEvent` and `endRun` (which deletes
+   * the batches and live state). A racing batch, abort or sweep lands before
+   * it or is refused after it. Null when the run is no longer open; a throw
+   * from `close` rolls everything back.
+   */
+  closeStreamedRun<T>(runId: string, close: (stream: string) => T): T | null {
+    return this.db.transaction((): T | null => {
+      const run = this.getRun(runId);
+      if (run === null || run.state !== "open") return null;
+      return close(heldStream(this.db, runId));
+    })();
   }
 
   /**
@@ -5132,13 +5196,17 @@ export class Store {
    * has already refused the second close with a 409).
    */
   endRun(runId: string, eventId: string, endedAt: number): boolean {
-    const { changes } = this.db
-      .query(
-        `UPDATE runs SET run_state = 'ended', settled_at = ?, event_id = ?
-         WHERE run_id = ? AND run_state = 'open'`,
-      )
-      .run(endedAt, eventId, runId);
-    return changes > 0;
+    return this.db.transaction((): boolean => {
+      const { changes } = this.db
+        .query(
+          `UPDATE runs SET run_state = 'ended', settled_at = ?, event_id = ?
+           WHERE run_id = ? AND run_state = 'open'`,
+        )
+        .run(endedAt, eventId, runId);
+      // CR-CRU-200 §S2 — a settled run holds no stream and no live state.
+      if (changes > 0) deleteRunStream(this.db, runId);
+      return changes > 0;
+    })();
   }
 
   /**
@@ -5228,6 +5296,8 @@ export class Store {
         )
         .run(at, reason, event.id, run.runId);
       this.insertEvent(event);
+      // CR-CRU-200 §S2 — a settled run holds no stream and no live state.
+      deleteRunStream(this.db, run.runId);
     })();
     return event;
   }
