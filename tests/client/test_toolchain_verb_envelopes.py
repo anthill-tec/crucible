@@ -324,49 +324,43 @@ class RustEnvelopeLessVerbContractTest(_EnvelopeContractMixin, unittest.TestCase
             f"floor must not trip the disk guard; got "
             f"warnings={axi.get('warnings')!r}")
 
-    def test_regression_ingest_emits_envelope_with_exact_run_counts_and_files(self):
-        """§S1: 'the two regression verbs carry their run: block (passed/
-        failed/pending/total/files)'. The fixture's pre-seeded
-        `target/nextest/ci/junit.xml` (`_JUNIT_ONE_PASS`, one passing
-        testcase `classname="detector"`) is what the fake cargo tool ALSO
-        (re)writes for a `nextest` invocation -- so the exact counts are
-        deterministic, not a >=1 guess: passed=1, failed=0, pending=0,
-        total=1, files=1 (one distinct classname)."""
-        emits, axi, result = self._drive("regression-ingest")
-        self._assert_full_envelope("rust", "regression-ingest", emits, axi, result,
-                                   required_fields=("run",))
-        run = axi.get("run", {})
-        self.assertEqual(run.get("passed"), 1, f"run={run!r}")
-        self.assertEqual(run.get("failed"), 0, f"run={run!r}")
-        self.assertEqual(run.get("pending"), 0, f"run={run!r}")
-        self.assertEqual(run.get("total"), 1, f"run={run!r}")
-        self.assertEqual(run.get("files"), 1, f"run={run!r}")
-
-    def test_workspace_regression_emits_envelope_with_exact_run_counts_and_files(self):
-        emits, axi, result = self._drive("workspace-regression",
-                                         extra_argv=["--min-free-g", "1"])
-        self._assert_full_envelope("rust", "workspace-regression", emits, axi, result,
-                                   required_fields=("run",))
-        run = axi.get("run", {})
-        self.assertEqual(run.get("passed"), 1, f"run={run!r}")
-        self.assertEqual(run.get("failed"), 0, f"run={run!r}")
-        self.assertEqual(run.get("pending"), 0, f"run={run!r}")
-        self.assertEqual(run.get("total"), 1, f"run={run!r}")
-        self.assertEqual(run.get("files"), 1, f"run={run!r}")
-
-    def test_smoke_test_emits_envelope_with_run_block(self):
-        """§S1 names only the two regression verbs for `files`. smoke-test's
-        run is decoded by the board, and this drive's board is unreachable:
-        there are no counts to state, so its run: block carries no figures,
-        and a run that reached no board never exits green."""
-        emits, axi, result = self._drive("smoke-test")
-        self._assert_full_envelope("rust", "smoke-test", emits, axi, result,
+    def assert_run_block_without_figures(self, verb, emits, axi, result):
+        """The rust client sends its reports for the board to decode, and
+        this drive's board is unreachable: there are no counts to state, so
+        the verb's run: block carries no figures, and a run that reached no
+        board never exits green."""
+        self._assert_full_envelope("rust", verb, emits, axi, result,
                                    required_fields=("run",))
         run = axi.get("run") or {}
-        for key in ("passed", "failed", "total"):
-            self.assertIsNone(run.get(key), f"run={run!r}")
+        for key in ("passed", "failed", "pending", "total", "files"):
+            self.assertIsNone(run.get(key), f"{verb}: run={run!r}")
         self.assertNotEqual(result.returncode, 0,
-                            f"exit={result.returncode} run={run!r}")
+                            f"{verb}: exit={result.returncode} run={run!r}")
+
+    def test_regression_ingest_emits_a_run_block_with_no_figures_when_no_board_answers(self):
+        """§S1: 'the two regression verbs carry their run: block (passed/
+        failed/pending/total/files)' -- the board's figures. The fixture's
+        pre-seeded `target/nextest/ci/junit.xml` (`_JUNIT_ONE_PASS`, one
+        passing testcase) is what the fake cargo tool ALSO (re)writes for a
+        `nextest` invocation, so a client counting that report itself would
+        state passed=1 total=1 files=1."""
+        emits, axi, result = self._drive("regression-ingest")
+        self.assert_run_block_without_figures("regression-ingest", emits, axi,
+                                              result)
+
+    def test_workspace_regression_emits_a_run_block_with_no_figures_when_no_board_answers(self):
+        emits, axi, result = self._drive("workspace-regression",
+                                         extra_argv=["--min-free-g", "1"])
+        self.assert_run_block_without_figures("workspace-regression", emits,
+                                              axi, result)
+
+    def test_smoke_test_emits_envelope_with_run_block(self):
+        """smoke-test's run is decoded by the board, and this drive's board
+        is unreachable: there are no counts to state, so its run: block
+        carries no figures, and a run that reached no board never exits
+        green."""
+        emits, axi, result = self._drive("smoke-test")
+        self.assert_run_block_without_figures("smoke-test", emits, axi, result)
 
 
 # ── mvn's 7 toolchain-local verbs (pre-merge-gate gets its own class) ──────
