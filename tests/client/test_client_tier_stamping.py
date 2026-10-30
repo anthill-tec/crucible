@@ -179,7 +179,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.client.live_run_harness import get_answering_health  # noqa: E402
+from tests.client.live_run_harness import (  # noqa: E402
+    get_answering_health,
+    junit_sent,
+)
 from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
     declare_and_require_board,
 )
@@ -454,8 +457,10 @@ EARNED_SITES_DRIVEN_ON_THE_WIRE = frozenset({
     ("arduino", "cmd_unit", "unit", PARSED),
     ("arduino", "cmd_regression", "regression", PARSED),
     ("arduino", "cmd_pre_merge_gate", "regression", PARSED),
-    ("rust", "_workspace_regression_run", "regression", PARSED),
-    ("rust", "_regression_ingest_run", "regression", PARSED),
+    # rust's two regression bodies reach the one /api/v2/runs ingest: the
+    # shared ingest, since the rust client sends its reports to the board.
+    ("rust", "_workspace_regression_run", "regression", RUNS),
+    ("rust", "_regression_ingest_run", "regression", RUNS),
 })
 
 
@@ -1242,26 +1247,30 @@ class RustEarnedTierTest(_RustCase):
             f"AC2 — nothing may exist at {report} when the client is started; "
             f"the report must be written by the fake `cargo` during the run.")
         drive = self.drive_with_real_std(self.rust_argv("regression", (), crate=False))
-        self.assertStatedTier(drive, PARSED, "regression",
-                              "rust regression -> POST /runs/parsed")
-        payload = self._ingest_payload(drive, PARSED,
-                                       "rust regression -> POST /runs/parsed")
-        summary = payload.get("summary") or {}
+        self.assertStatedTier(drive, RUNS, "regression",
+                              "rust regression -> POST /runs")
+        payload = self._ingest_payload(drive, RUNS,
+                                       "rust regression -> POST /runs")
+        summary = (junit_sent(payload) or {}).get("summary") or {}
         self.assertEqual(
             {k: summary.get(k) for k in ("total", "passed", "failed", "pending")},
             {"total": 3, "passed": 2, "failed": 1, "pending": 0},
-            f"AC2 — the filed run must carry the counts of the report the fake "
-            f"`cargo` wrote (3 run, 2 passed, 1 failed); summary={summary!r}")
-        self.assertEqual(len(drive.payloads(PARSED)), 1,
+            f"AC2 — the filed run must carry the report the fake `cargo` wrote "
+            f"(3 run, 2 passed, 1 failed), its text sent inline; "
+            f"summary={summary!r}")
+        self.assertEqual(len(drive.payloads(RUNS)), 1,
                          f"exactly one ingest per run; paths={drive.paths()!r}")
+        self.assertEqual(drive.payloads(PARSED), [],
+                         f"nothing is posted to the parsed route; "
+                         f"paths={drive.paths()!r}")
 
     def test_rust_regression_ingest_carries_the_per_crate_regression_tier(self):
         """§S2's converse, rust `_regression_ingest_run` — the per-crate body,
         which has posted `tier="regression"` since before this CR was cut."""
         self.write_nextest_junit()
         drive = self.drive_with_real_std(self.rust_argv("regression-ingest"))
-        self.assertStatedTier(drive, PARSED, "regression",
-                              "rust regression-ingest -> POST /runs/parsed")
+        self.assertStatedTier(drive, RUNS, "regression",
+                              "rust regression-ingest -> POST /runs")
 
 
 # ── AC13a: a compile ingest is not a test tier ─────────────────────────────
