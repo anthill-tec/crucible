@@ -266,6 +266,31 @@ function fillRunLive(db: Database, runId: string): void {
   );
 }
 
+/**
+ * §S4 — a token of what the run's live state shows: its counts, total and
+ * current file, and how many failures it holds (failures are only appended).
+ * Two equal tokens show the same live state; null when the run holds none.
+ */
+export function liveStateToken(db: Database, runId: string): string | null {
+  const live = liveRow(db, runId);
+  if (live === null) return null;
+  const failures = db
+    .query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM run_live_failures WHERE run_id = ?`)
+    .get(runId)!.n;
+  return JSON.stringify([live.completed, live.total, live.passed, live.failed, live.pending, live.current_file, failures]);
+}
+
+/** §S4 — whether any OPEN run of the project still holds a stream. */
+export function projectHasStreamingRun(db: Database, projectKey: string): boolean {
+  const row = db
+    .query<{ n: number }, [string]>(
+      `SELECT 1 AS n FROM run_live JOIN runs ON runs.run_id = run_live.run_id
+        WHERE runs.project_key = ? AND runs.run_state = 'open' LIMIT 1`,
+    )
+    .get(projectKey);
+  return row !== null;
+}
+
 /** §S4 — the run's live state, or null when it holds none. */
 export function runLiveOf(db: Database, runId: string): RunLive | null {
   const live = liveRow(db, runId);

@@ -11,6 +11,8 @@ import {
   deleteProjectRunStreams,
   deleteRunStream,
   heldStreamOf,
+  liveStateToken,
+  projectHasStreamingRun,
   RUN_STREAM_TABLES,
   runLiveOf,
 } from "./run-stream.ts";
@@ -1158,7 +1160,44 @@ export interface StoreOpenOpts {
    * included, always use the one-argument form.
    */
   migrations?: readonly MigrationStep[];
+  /**
+   * CR-CRU-200 §S4 — the clock and the timer the live frames' window is
+   * measured and armed on. A test seam, not configuration: production callers
+   * omit it, and the Store uses the real clock and timers.
+   */
+  scheduler?: LiveFrameScheduler;
 }
+
+/**
+ * CR-CRU-200 §S4 — the window of the live frames: a batch that changes a live
+ * state emits its project's `events` change at most once per window, and a
+ * change inside the window is deferred to its end. The one cadence compiled
+ * into source (user ruling 2026-10-30) — not a server limit.
+ */
+export const LIVE_FRAME_MS = 2000;
+
+/**
+ * CR-CRU-200 §S4 — the Store's clock and timer. `setTimeout` answers an
+ * opaque handle the Store only ever hands back to `clearTimeout`.
+ */
+export interface LiveFrameScheduler {
+  now(): number;
+  setTimeout(fn: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
+
+/** The real clock and timers; the timer is `unref`'d, so a pending frame never holds the process open. */
+const REAL_SCHEDULER: LiveFrameScheduler = {
+  now: () => Date.now(),
+  setTimeout: (fn, ms) => {
+    const timer = setTimeout(fn, ms);
+    timer.unref();
+    return timer;
+  },
+  clearTimeout: (handle) => {
+    clearTimeout(handle as ReturnType<typeof setTimeout>);
+  },
+};
 
 /**
  * CR-CRU-071 AC5 — the store is from the future. A NARROW, deliberate
@@ -3232,8 +3271,15 @@ export class Store {
    * downtime.
    */
   private readonly epochCheckpointAt = new Map<string, number>();
+  /** CR-CRU-200 §S4 — the clock and timer the live frames' window runs on. */
+  private readonly scheduler: LiveFrameScheduler;
+  /** CR-CRU-200 §S4 — per project, when its last live frame went out. */
+  private readonly lastLiveFrameAt = new Map<string, number>();
+  /** CR-CRU-200 §S4 — per project, the timer armed for its window's end. */
+  private readonly pendingLiveFrame = new Map<string, unknown>();
 
   constructor(path: string, opts?: StoreOpenOpts) {
+    this.scheduler = opts?.scheduler ?? REAL_SCHEDULER;
     this.bootedAt = Date.now();
     this.db = new Database(path, { create: true });
     // §S5 — bun:sqlite may defer an open failure past `new Database`; force it
@@ -5142,17 +5188,65 @@ export class Store {
     runId: string,
     batch: StreamBatch,
   ): StreamBatchOutcome | { ok: false; refused: "settled"; run: RunRecord | null } {
-    return this.db.transaction(() => {
+    let changed: string | null = null;
+    const answer = this.db.transaction(() => {
       const run = this.getRun(runId);
       if (run === null || run.state !== "open") return { ok: false as const, refused: "settled" as const, run };
+      const before = liveStateToken(this.db, runId);
       const outcome = appendRunStream(this.db, runId, batch);
       if (outcome.ok) {
         this.db
           .query(`UPDATE agents SET last_seen = ? WHERE project_key = ? AND agent_id = ?`)
           .run(Date.now(), run.projectKey, run.agentId);
+        if (liveStateToken(this.db, runId) !== before) changed = run.projectKey;
       }
       return outcome;
     })();
+    // After the commit: a frame never announces a batch that rolled back.
+    if (changed !== null) this.liveFrame(changed);
+    return answer;
+  }
+
+  /**
+   * CR-CRU-200 §S4 — a live state of the project changed: its `events` change
+   * goes out at once when no live frame went out in the last `LIVE_FRAME_MS`,
+   * else it is deferred to that window's end (one timer per project), so the
+   * last batch is always shown.
+   */
+  private liveFrame(projectKey: string): void {
+    if (this.pendingLiveFrame.has(projectKey)) return;
+    const now = this.scheduler.now();
+    const last = this.lastLiveFrameAt.get(projectKey);
+    if (last === undefined || now - last >= LIVE_FRAME_MS) {
+      this.lastLiveFrameAt.set(projectKey, now);
+      this.emit("events", projectKey);
+      return;
+    }
+    const handle = this.scheduler.setTimeout(() => {
+      this.pendingLiveFrame.delete(projectKey);
+      this.lastLiveFrameAt.set(projectKey, this.scheduler.now());
+      this.emit("events", projectKey);
+    }, last + LIVE_FRAME_MS - now);
+    this.pendingLiveFrame.set(projectKey, handle);
+  }
+
+  /**
+   * CR-CRU-200 §S4 — a run of the project settled: when no open run of it
+   * still streams, its deferred live frame is disarmed (the settling emits its
+   * own `events` change) and its window forgotten.
+   */
+  private settleLiveFrames(projectKey: string): void {
+    if (projectHasStreamingRun(this.db, projectKey)) return;
+    const handle = this.pendingLiveFrame.get(projectKey);
+    if (handle !== undefined) this.scheduler.clearTimeout(handle);
+    this.pendingLiveFrame.delete(projectKey);
+    this.lastLiveFrameAt.delete(projectKey);
+  }
+
+  /** CR-CRU-200 §S4 — disarm every deferred live frame, so none fires after it. Safe with none pending. */
+  dispose(): void {
+    for (const handle of this.pendingLiveFrame.values()) this.scheduler.clearTimeout(handle);
+    this.pendingLiveFrame.clear();
   }
 
   /**
@@ -5218,7 +5312,11 @@ export class Store {
         )
         .run(endedAt, eventId, runId);
       // CR-CRU-200 §S2 — a settled run holds no stream and no live state.
-      if (changes > 0) deleteRunStream(this.db, runId);
+      if (changes > 0) {
+        deleteRunStream(this.db, runId);
+        const projectKey = this.getRun(runId)?.projectKey;
+        if (projectKey !== undefined) this.settleLiveFrames(projectKey);
+      }
       return changes > 0;
     })();
   }
@@ -5321,6 +5419,7 @@ export class Store {
       this.insertEvent(event);
       // CR-CRU-200 §S2 — a settled run holds no stream and no live state.
       deleteRunStream(this.db, run.runId);
+      this.settleLiveFrames(run.projectKey);
       return event;
     })();
   }
