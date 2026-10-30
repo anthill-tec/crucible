@@ -21,7 +21,8 @@ Contract pinned here:
     1. `python -m build --wheel` completes with returncode 0 and emits
        exactly one `.whl`.
     2. The wheel carries the full client fleet under `crucible_axi/clients/`:
-       `_crucible_axi.py`, `toon.py`, `STATUS-CONTRACT.md`, and all five
+       `_crucible_axi.py`, `_crucible_run.py`, `toon.py`,
+       `STATUS-CONTRACT.md`, and all five
        `{arduino,bun,mvn,python,rust}-crucible.py`.
     3. The wheel carries NO `skills/` entry -- CR-CRU-042 retired the
        `[skills]` installer stage and deleted `clients/skills/`; the
@@ -66,6 +67,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # installed `crucible-axi` orchestrator carries the clients it lays down.
 EXPECTED_CLIENT_PAYLOAD = (
     "crucible_axi/clients/_crucible_axi.py",
+    "crucible_axi/clients/_crucible_run.py",
     "crucible_axi/clients/toon.py",
     "crucible_axi/clients/STATUS-CONTRACT.md",
     "crucible_axi/clients/arduino-crucible.py",
