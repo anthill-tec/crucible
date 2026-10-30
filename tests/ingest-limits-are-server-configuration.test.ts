@@ -76,7 +76,7 @@ const EARLIER_SERVER_LIMITS = ["run_abandon_ms", "project_inactive_ms", "retenti
 const SPECIFIED: Record<(typeof INGEST_LIMITS)[number], LimitDeclaration> = {
   ingest_body_bytes: {
     description:
-      "Bytes of request body the server reads on an ingest route; a larger body is drained and refused with a JSON 413 naming this limit. Raise it when a project's reports and captured output legitimately exceed it; lower it to refuse oversized ingests sooner.",
+      "Bytes of request body the server reads on an ingest route, and the most a run's test stream may hold — a stream's total. A larger body is drained and refused with a JSON 413 naming this limit, and a batch that would take a stream past it is refused the same way. Raise it when a project's reports, captured output or streams legitimately exceed it; lower it to refuse oversized ingests sooner.",
     // 128 MiB — Bun's default body limit, the one the server ran at before.
     recommended: 134217728,
     min: 1048576,
