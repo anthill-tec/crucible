@@ -148,6 +148,22 @@ class MvnRegressionAndTestFollowTheLiveRunLifecycleTest(_LiveVerbCase):
         super().setUp()
         write_fake_mvnw(self.project)
 
+    def assert_reports_rode_inline(self):
+        """maven sends its runner's reports: the run's ingest is its one
+        `/api/v2/runs` post, every surefire report (one per class) inline."""
+        paths = [p for p, _ in self.board.posts()]
+        self.assertNotIn("/api/v2/runs/parsed", paths, f"paths={paths!r}")
+        body = next(b for p, b in self.board.posts() if p == "/api/v2/runs")
+        self.assertEqual(body.get("codec"), "junit", f"body={body!r}")
+        self.assertNotIn("dataPath", body, f"body={body!r}")
+        data = body.get("data")
+        self.assertTrue(
+            isinstance(data, list) and len(data) == TOTAL
+            and sum(text.count("<testcase") for text in data) == TOTAL,
+            f"the run's {TOTAL} surefire reports ride inline; body={body!r}")
+        self.assertIn(MARKER, body.get("raw") or "",
+                      f"the captured runner output rides as `raw`; body={body!r}")
+
     def test_mvn_regression(self):
         cmd = [sys.executable, str(CLIENTS / "mvn-crucible.py"), "regression",
                "--project-dir", self.project, "--reports", "reports",
@@ -155,8 +171,9 @@ class MvnRegressionAndTestFollowTheLiveRunLifecycleTest(_LiveVerbCase):
         drive = drive_live(cmd, self.project, self.env(), self.scratch, MARKER,
                            self.log_path)
         self.assert_live_lifecycle(
-            drive, "/api/v2/runs/parsed", rf"^running \d+/{TOTAL} classes$",
+            drive, "/api/v2/runs", rf"^running \d+/{TOTAL} classes$",
             f"ran {TOTAL}/{TOTAL} classes", with_log=True)
+        self.assert_reports_rode_inline()
 
     def test_mvn_test(self):
         cmd = [sys.executable, str(CLIENTS / "mvn-crucible.py"), "test",
@@ -167,6 +184,7 @@ class MvnRegressionAndTestFollowTheLiveRunLifecycleTest(_LiveVerbCase):
         self.assert_live_lifecycle(
             drive, "/api/v2/runs", rf"^running \d+/{TOTAL} classes$",
             f"ran {TOTAL}/{TOTAL} classes", with_log=True)
+        self.assert_reports_rode_inline()
 
 
 class PythonRegressionFollowsTheLiveRunLifecycleTest(_LiveVerbCase):
