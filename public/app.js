@@ -8475,6 +8475,16 @@
             "toggle raw output",
           );
         },
+        // CR-CRU-200 §S3 — a run whose stream could not be trusted states why,
+        // in the fail colour, beside an aborted run's abort banner.
+        () => {
+          const d = detail.val;
+          if (d === null || typeof d.incomplete !== "string") return "";
+          return span(
+            { "data-testid": "run-incomplete", class: "app-run-incomplete" },
+            `incomplete — ${d.incomplete}`,
+          );
+        },
       ];
 
       // One suite (a spec run's scenario) row + its leaves. The plain tree and

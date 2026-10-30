@@ -1404,6 +1404,10 @@ body {
   border-color: var(--line);
   white-space: nowrap;
 }
+/* CR-CRU-200 §S3 — an incomplete stream's statement in the run detail's header. */
+.app-run-incomplete {
+  color: var(--fail);
+}
 .app-drillin-abort {
   display: flex;
   align-items: center;
