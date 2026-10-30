@@ -608,5 +608,50 @@ class RustPrintedHelpNamesTheRouteItsReportsTakeTest(unittest.TestCase):
                       "take")
 
 
+# The reports route named as itself, not as the prefix of another route
+# (`/api/v2/runs/compile`, which arduino's docstring names for its compile
+# gate).
+_RUNS_ROUTE_ITSELF = re.compile(re.escape(RUNS_ROUTE) + r"(?![/\w])")
+
+
+class ArduinoPrintedHelpNamesTheRouteItsReportsTakeTest(unittest.TestCase):
+    """arduino sends its native harness's reports and its lcov to
+    /api/v2/runs for the board to decode, so neither its printed help nor its
+    module docstring names /api/v2/runs/parsed, and its docstring names the
+    reports route itself."""
+
+    def _printed_texts(self):
+        root = _root_parser("arduino")
+        texts = {"<root>": [root.description or "", root.epilog or ""]}
+        for pseudo in _subparsers_action("arduino")._choices_actions:
+            texts["<root>"].append(pseudo.help or "")
+        for verb in _subparsers_action("arduino").choices:
+            texts[verb] = _verb_help_texts("arduino", verb)
+        return texts
+
+    def test_no_printed_arduino_help_names_the_parsed_route(self):
+        naming = sorted(verb for verb, found in self._printed_texts().items()
+                        if any(PARSED_ROUTE in text for text in found))
+        self.assertEqual(naming, [],
+                         f"arduino's printed help names {PARSED_ROUTE} in: {naming}")
+
+    def test_the_runs_route_is_told_from_a_route_it_prefixes(self):
+        self.assertIsNone(_RUNS_ROUTE_ITSELF.search(
+            "check -> /api/v2/runs/compile; test -> /api/v2/runs/parsed"))
+        self.assertIsNotNone(_RUNS_ROUTE_ITSELF.search("test -> /api/v2/runs."))
+        self.assertIsNotNone(_RUNS_ROUTE_ITSELF.search("`/api/v2/runs` (inline)"))
+
+    def test_the_arduino_module_docstring_names_the_runs_route_and_not_the_parsed_one(self):
+        module = _load_module(CLIENTS_DIR / "arduino-crucible.py",
+                              "arduino_crucible_docstring_route_under_test")
+        doc = module.__doc__ or ""
+        self.assertNotIn(PARSED_ROUTE, doc,
+                         "the arduino client's docstring still says it posts to "
+                         "the parsed route")
+        self.assertIsNotNone(_RUNS_ROUTE_ITSELF.search(doc),
+                             "the arduino client's docstring names the route its "
+                             "reports take")
+
+
 if __name__ == "__main__":
     unittest.main()
