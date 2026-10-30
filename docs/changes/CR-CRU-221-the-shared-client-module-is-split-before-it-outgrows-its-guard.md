@@ -14,10 +14,11 @@ The file keeps its first slug.
    (`BARE_LINE_IMPLAUSIBLE_THRESHOLD`). The module has one line left. CR-CRU-220 adds `junit_case_sources` to it
    (about 25–30 lines, user ruling: the reader is shared), and every later shared helper would cross the guard
    too.
-2. **The run emitter is written three times** (CR-CRU-206 VERIFY F2). The envelope emitter that reads the board's
-   ingest answer — the `run:` block from `filed_run`, the answer's `warnings[]` joined, no figures for a run not
-   filed — is maven's `_emit_run_axi` and python's and bun's `_emit_ingest_axi`, one copy per client. The rust and
-   arduino moves (CR-CRU-219, CR-CRU-220) would add two more. Lifting it was blocked by the line budget.
+2. **The run emitter is written four times** (CR-CRU-206 VERIFY F2; CR-CRU-219's pre-review). The envelope emitter
+   that reads the board's ingest answer — the `run:` block from `filed_run`, the answer's `warnings[]` joined, no
+   figures for a run not filed — is maven's `_emit_run_axi`, python's and bun's `_emit_ingest_axi`, and rust's
+   (CR-CRU-219, shaped as maven's with a coverage option), one copy per client. Lifting it was blocked by the line
+   budget.
 3. **A connection reset escapes the ingest** (CR-CRU-206 VERIFY F1, present before CR-CRU-206, in every client).
    The shared transport, `http_request`, catches `HTTPError`, `URLError` and `TimeoutError` only. A board that
    resets the connection after taking the request raises `RemoteDisconnected` or `ConnectionResetError` out of
@@ -55,8 +56,8 @@ Written at its gap analysis, and at least:
 
 - [ ] **AC1 — headroom.** Every in-scope file stays under the 10,000-line guard, with the shared modules leaving
       room for CR-CRU-220's reader.
-- [ ] **AC2 — one emitter.** The bun, python and maven clients reach one shared run emitter, and none keeps its
-      own.
+- [ ] **AC2 — one emitter.** The bun, python, maven and rust clients reach one shared run emitter, and none keeps
+      its own.
 - [ ] **AC3 — a reset is answered.** A board that resets the connection at the ingest POST gives the verb an
       `ok: false` answer naming the board: one `ingest:` line, no figures, exit 1, and a gate's suite named
       `gate-suite-unreported`, in each of the five clients.
