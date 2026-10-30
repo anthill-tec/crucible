@@ -417,8 +417,11 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
     store,
     storeResolution,
     listenerResolution,
+    // CR-CRU-200 §S4 — the board's shutdown disposes its store, so no
+    // deferred live frame fires after the board has stopped.
     stop: () => {
       server.stop(true);
+      store.dispose();
     },
   };
 }
