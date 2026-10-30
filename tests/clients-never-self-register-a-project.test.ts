@@ -21,6 +21,10 @@ const CLIENT_SCRIPTS = [
   "arduino-crucible.py",
 ];
 
+// The shared modules every client loads: the core, and the run pipeline the
+// core loads by path and re-exports.
+const SHARED_MODULES = ["_crucible_axi.py", "_crucible_run.py"];
+
 function readClientSource(fileName: string): string {
   return readFileSync(join(CLIENTS_DIR, fileName), "utf8");
 }
@@ -33,7 +37,7 @@ function readClientSource(fileName: string): string {
 const PROJECT_CREATE_ENDPOINT_LITERAL = /(?:"|')\/api\/v2\/projects(?:"|')/;
 
 describe("no client posts to POST /api/v2/projects (project registration stays an explicit act)", () => {
-  for (const fileName of [...CLIENT_SCRIPTS, "_crucible_axi.py"]) {
+  for (const fileName of [...CLIENT_SCRIPTS, ...SHARED_MODULES]) {
     test(`clients/${fileName} never names the bare project-creation endpoint`, () => {
       const src = readClientSource(fileName);
       expect(src).not.toMatch(PROJECT_CREATE_ENDPOINT_LITERAL);
