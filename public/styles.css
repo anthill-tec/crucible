@@ -1254,10 +1254,12 @@ body {
    RUNNING, and a run that was ABORTED (ended for non-test reasons — never a
    plan's abort, §S2). Neither borrows the pass/fail palette. */
 
-/* Running: pulsing ember edge, and — the user rule — the DEFAULT cursor with
-   no hover affordance, because a running card has no drill-in to offer until
-   it resolves. This overrides `.app-evt`'s pointer above, so the rule holds
-   for the running card wherever `.app-evt` is reused. */
+/* Running: pulsing ember edge. A running card with NO live state keeps the
+   DEFAULT cursor with no hover affordance (CR-CRU-017's user rule), because it
+   has no drill-in to offer until it resolves; this overrides `.app-evt`'s
+   pointer above, so the rule holds for the running card wherever `.app-evt`
+   is reused. A running card WITH a live state opens its live drill-in
+   (CR-CRU-223 §S2) and takes the pointer back: `.app-evt-running-live`. */
 .app-evt-running {
   cursor: default;
   border-color: rgba(251, 146, 60, 0.45);
@@ -1275,6 +1277,43 @@ body {
 .app-running-elapsed {
   color: var(--heat);
   font: 600 9.5px var(--mono);
+}
+
+/* CR-CRU-223 §S2 — a running card with a live state (storyboard F25, option
+   A): clickable, the failures so far beside the agent id in the fail colour,
+   a progress bar, then done of total, the current file (truncated on one
+   line) and the timer on ONE line, which never wraps. */
+.app-evt-running.app-evt-running-live { cursor: pointer; }
+.app-running-failed {
+  margin-left: auto;
+  color: var(--fail);
+  font: 600 10px var(--mono);
+  white-space: nowrap;
+}
+.app-running-progress {
+  height: 4px;
+  margin: 4px 0 2px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+.app-running-progress-fill {
+  height: 100%;
+  background: var(--pass);
+}
+.app-running-line { flex-wrap: nowrap; min-width: 0; }
+.app-running-count { flex: 0 0 auto; color: var(--ink); white-space: nowrap; }
+.app-running-file {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.app-running-line > .app-running-elapsed { flex: 0 0 auto; white-space: nowrap; }
+/* The phone band's 44px touch floor (CR-CRU-018) for the now-clickable card. */
+@media (width <= 640px) {
+  .app-evt-running-live { min-height: 44px; }
 }
 @keyframes app-run-pulse {
   0%,

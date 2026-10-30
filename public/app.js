@@ -1328,18 +1328,45 @@
         () => fmtCycleTimer(runTickNow.val - startedAt),
       );
 
+    // CR-CRU-223 §S1 — a live state's done-of-total: `412/1280`, or `412 done`
+    // when the runner gave no total (or gave 0), shared by the running card
+    // and the live drill-in's header.
+    const liveHasTotal = (live) => typeof live.total === "number" && live.total > 0;
+    const liveCountText = (live) =>
+      liveHasTotal(live) ? `${live.completed}/${live.total}` : `${live.completed} done`;
+
+    // CR-CRU-223 §S2 — the progress bar at completed/total, clamped at 100 %
+    // (a runner can finish more tests than it announced); none without a total.
+    const RunningProgress = (live) =>
+      liveHasTotal(live)
+        ? div(
+            { "data-testid": "running-progress", class: "app-running-progress" },
+            div({
+              "data-testid": "running-progress-fill",
+              class: "app-running-progress-fill",
+              style: `width:${Math.min(100, (live.completed / live.total) * 100)}%;`,
+            }),
+          )
+        : null;
+
     // §S3 — the open run's card: pulsing, elapsed timer off the SERVER's
-    // `startedAt`, and NOT CLICKABLE (user rule). "Not clickable" is enforced
-    // where it cannot drift: there is NO `onclick` handler at all, so no
-    // drill-in exists to fire, and the card's own class carries the default
-    // cursor. It resolves in place because the next refetch drops this run from
-    // `state.openRuns` in the same tick the settled event enters `state.events`.
-    const RunningCard = (run) =>
-      div(
+    // `startedAt`. CR-CRU-223 §S2 narrows CR-CRU-017's "not clickable" rule to
+    // a run with NO live state: that card has NO `onclick` handler at all, so
+    // no drill-in exists to fire, and its class carries the default cursor. A
+    // run whose brief carries `live` shows its progress — the failures so far
+    // beside the agent id, the bar, then done of total, the current file and
+    // the timer on one line — and opens its live drill-in at /run/<runId>
+    // with the pointer cursor (`app-evt-running-live`). Either resolves in
+    // place because the next refetch drops this run from `state.openRuns` in
+    // the same tick the settled event enters `state.events`.
+    const RunningCard = (run) => {
+      const live = run.live !== undefined && run.live !== null ? run.live : null;
+      return div(
         {
           "data-testid": "running-card",
           "data-run-id": run.runId,
-          class: "app-evt app-evt-running",
+          class: `app-evt app-evt-running${live !== null ? " app-evt-running-live" : ""}`,
+          ...(live !== null ? { onclick: () => openDrillin(run.runId) } : {}),
         },
         span(
           eventIconProps(run),
@@ -1357,14 +1384,28 @@
             run.tier !== undefined && run.tier !== null
               ? span({ "data-testid": "tier-badge", class: "app-pill app-tier-badge" }, run.tier)
               : null,
+            live !== null && live.failed > 0
+              ? span({ "data-testid": "running-failed", class: "app-running-failed" }, `${live.failed} ✗`)
+              : null,
           ),
-          div(
-            { class: "app-evt-line app-card-meta" },
-            span({ "data-testid": "running-label", class: "app-running-label" }, "running…"),
-            RunningElapsed(run.startedAt),
-          ),
+          live !== null ? RunningProgress(live) : null,
+          live !== null
+            ? div(
+                { class: "app-evt-line app-card-meta app-running-line" },
+                span({ "data-testid": "running-count", class: "app-running-count" }, liveCountText(live)),
+                live.currentFile !== undefined
+                  ? span({ "data-testid": "running-file", class: "app-running-file" }, live.currentFile)
+                  : null,
+                RunningElapsed(run.startedAt),
+              )
+            : div(
+                { class: "app-evt-line app-card-meta" },
+                span({ "data-testid": "running-label", class: "app-running-label" }, "running…"),
+                RunningElapsed(run.startedAt),
+              ),
         ),
       );
+    };
 
     // §S3 — the ABORTED run's card: struck/grey, carrying the reason, and
     // clickable (its drill-in shows that reason plus whatever partial context
