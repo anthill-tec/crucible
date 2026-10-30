@@ -3,7 +3,7 @@
 //
 //   CR-CRU-224-830-GREEN  unit                         3 ✗
 //   ████████░░░░░░░░░░░░░░░░░░░░░░░░  (32 %)
-//   412/1280 · test_relay.py  ⏱ 0m 41s  › open
+//   412/1280 · <the fixture's currentFile>  ⏱ 0m 41s  › open
 //
 // When the open run's brief carries `live`, `RunningCard` (public/app.js)
 // gains a progress bar at completed/total (clamped at 100 %, none without a
