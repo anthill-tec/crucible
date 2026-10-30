@@ -7581,9 +7581,8 @@ def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
 # globals. Once it has run, it is bound to `_CoreView` over this namespace: a
 # core name it uses is read at call time, so a patch of the core reaches it.
 # The gated-run bookkeeping stays below, beside `gated_run`, which rebinds it.
-# Every name it defines is re-exported here (`_reexport_run_module`), so
-# `ingest_reports`, `_print_ingest_line`, `run_streamed` and the rest are this
-# module's attributes as before: `_axi().ingest_reports` is unchanged.
+# Every name it defines is re-exported here (`_reexport_run_module`), so each
+# is still this module's attribute: a client's `_axi().<name>` is unchanged.
 
 
 class _CoreView:
