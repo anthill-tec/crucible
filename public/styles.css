@@ -1353,6 +1353,10 @@ body {
   text-overflow: ellipsis;
 }
 .app-running-line > .app-running-elapsed { flex: 0 0 auto; white-space: nowrap; }
+/* F25's faint `› open` hint ends the line after the timer, in the meta line's
+   ink; it never shrinks or wraps, so on the phone band the file gives way and
+   the timer and the hint stay in view. */
+.app-running-line > .app-running-open-hint { flex: 0 0 auto; white-space: nowrap; }
 /* The phone band's 44px touch floor (CR-CRU-018) for the now-clickable card. */
 @media (width <= 640px) {
   .app-evt-running-live { min-height: 44px; }

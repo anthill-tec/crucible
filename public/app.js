@@ -1401,7 +1401,9 @@
     // the timer on one line — and opens its live drill-in at /run/<runId>
     // with the pointer cursor (`app-evt-running-live`). Either resolves in
     // place because the next refetch drops this run from `state.openRuns` in
-    // the same tick the settled event enters `state.events`.
+    // the same tick the settled event enters `state.events`. A live card's
+    // progress line ends, after the timer, in F25's faint `› open` hint; the
+    // card's own click opens the drill-in, so the hint carries no handler.
     const RunningCard = (run) => {
       const live = run.live !== undefined && run.live !== null ? run.live : null;
       return div(
@@ -1440,6 +1442,7 @@
                   ? span({ "data-testid": "running-file", class: "app-running-file" }, live.currentFile)
                   : null,
                 RunningElapsed(run.startedAt),
+                span({ "data-testid": "running-open-hint", class: "app-running-open-hint" }, "› open"),
               )
             : div(
                 { class: "app-evt-line app-card-meta" },
