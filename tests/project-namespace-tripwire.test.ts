@@ -2817,10 +2817,59 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
 // file in its child `bun test`, fired for the right reason, and gets no
 // change.
+//
+// UPDATED 2026-10-30 by CR-CRU-220's CLOSE-OUT (cycle 815).
+// `clients` moves 814 -> 799 (-15). MEASURED with this file's own machinery
+// on the feature branch AFTER the branch's last content edit: the recorded
+// head 814 against a measured 799, and `src` (830) and `public` (514)
+// re-measure at their recorded heads.
+//
+// The same `extractCitableText` + `CR_LITERAL` classifier, run per FILE and
+// per ID against `git show 013885a:<path>` (the merge-base with `develop`),
+// attributes all fifteen. Every one is a REMOVAL, and every classified
+// file the branch touches is listed:
+//
+//   clients -15:
+//     clients/arduino-crucible.py 109 -> 94 (-15): the client sends its
+//       runner's reports inline to /api/v2/runs and parses nothing, so the
+//       parsers, envelope and aggregation it deletes take their docstring
+//       and comment citations with them. `_emit_ingest_summary_axi` (-4:
+//       `CR-CRU-051`, `CR-CRU-056`, `CR-CRU-058`, `CR-CRU-094`);
+//       `_parse_junit` (-4: `CR-CRU-051`, `CR-CRU-047` twice, `CR-CRU-050`).
+//       The surviving bodies are reworded for the one runs ingest and drop
+//       the citations of the reading and payload-building they no longer
+//       do: `_run_native_tests_body` (-5: `CR-CRU-050`, `CR-CRU-051`,
+//       `CR-CRU-111`, `CR-CRU-038`, `CR-CRU-058`) and `cmd_auto_ingest` (-2:
+//       `CR-CRU-050`, `CR-CRU-051`). `_file_stem` and `_collect_lcov` are
+//       deleted too but carried no citation, and the added `_emit_run_axi`
+//       and `_file_reports` carry none. Per id: `CR-CRU-051` -4,
+//       `CR-CRU-050` -3, `CR-CRU-047` -2, `CR-CRU-058` -2, `CR-CRU-038` -1,
+//       `CR-CRU-056` -1, `CR-CRU-094` -1, `CR-CRU-111` -1.
+//     clients/_crucible_axi.py 215 -> 215 (0) and clients/_crucible_run.py
+//       6 -> 6 (0): their changed lines carry no citation, and none drops
+//       one.
+//
+//   src 0, public 0: the branch changes no file under `src/` or `public/`,
+//     so `src` (830) and `public` (514) could not have moved.
+//
+// A NET LOSS of fifteen, and stated as one: `clients` goes DOWN in this
+// re-record. It is not lineage shed from living code. The fifteen citations
+// sat on the arduino parsers, ingest envelope and aggregation this CR DELETES
+// or rewords, and they left with them; the reading they explained now lives
+// in the board's codecs. No CR-CRU-220 citation is added under a classified
+// tree. `clients` (799) is still far above its 601 floor, so the directional
+// half holds.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the branch's last content edit, so
+// these are its final figures and not a mid-cycle reading. It clears the
+// CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
+// file in its child `bun test`, fired for the right reason, and gets no
+// change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 830 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 514 },
-  clients: { exts: [".py"], develop: 601, head: 814 },
+  clients: { exts: [".py"], develop: 601, head: 799 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
