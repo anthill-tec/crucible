@@ -86,6 +86,7 @@ const READING_SITES = [
   "bin/crucible-server.mjs",
   "public/app.js",
   "clients/_crucible_axi.py",
+  "clients/_crucible_run.py",
   "clients/arduino-crucible.py",
   "clients/bun-crucible.py",
   "clients/mvn-crucible.py",
