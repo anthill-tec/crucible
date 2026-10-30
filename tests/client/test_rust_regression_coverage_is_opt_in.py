@@ -4,10 +4,11 @@
     whole workspace under plain nextest, exactly
     `cargo nextest run --workspace [--all-features | --features X]
     -P <profile> --no-fail-fast`: no `cargo llvm-cov`, no `cargo clean`
-    (neither before the run nor as a post-run reclaim). It files through
-    `/api/v2/runs/parsed` a `regression` run whose envelope states `files`
-    and whose ingest body carries no `coverage` key, and it does so under
-    `--cycle` and under `--release` alike.
+    (neither before the run nor as a post-run reclaim). It files its junit
+    text through `/api/v2/runs` (the shared ingest) as a `regression` run
+    whose envelope states the board's `files` and whose ingest body carries
+    no `coverage` key, and it does so under `--cycle` and under `--release`
+    alike.
 
   * Stale reports — because nothing cleans `target/`, the run clears the
     profile's stale `target/nextest/<profile>/junit.xml` before it starts: a
@@ -19,8 +20,9 @@
 
   * Coverage when asked — `regression --coverage` keeps today's coverage
     run: `cargo clean`, then `cargo llvm-cov … nextest` writing lcov, the
-    lcov coverage on the ingest, and the post-run reclaim; `--lcov-output`
-    and `--keep-target` take effect with it.
+    lcov text sent as the ingest's `coverage: {codec: "lcov", data}`, and the
+    post-run reclaim; `--lcov-output` and `--keep-target` take effect with
+    it.
 
   * The refusals — `--lcov-output X`, `--ignore-run-fail` and
     `--keep-target`, each without `--coverage`, are the typed
@@ -65,6 +67,7 @@ from tests.client.live_run_harness import (
     INGEST_PATHS,
     RecordingBoard,
     install_project,
+    junit_sent,
     load_toon,
     new_scratch,
     scrubbed_env,
@@ -77,6 +80,7 @@ TOON = load_toon()
 RUST_CLIENT = CLIENTS / "rust-crucible.py"
 TIMEOUT = 120
 
+RUNS_INGEST = "/api/v2/runs"
 PARSED_INGEST = "/api/v2/runs/parsed"
 REFUSED_CODE = "coverage-flag-refused"
 UNATTRIBUTED_CODE = "unattributed-run-refused"
@@ -89,11 +93,14 @@ CYCLE = 7
 FEATURES = "alpha,beta"
 
 # What the recording cargo's suite run reports: three passing cases over two
-# test binaries (two distinct `classname`s), so `files` is 2.
+# test binaries (two distinct `classname`s), so `files` is 2. The board the
+# drives file to answers the ingest with that run (`_answering_board`): the
+# envelope's figures are the board's.
 EXPECTED_TOTAL = 3
 EXPECTED_FILES = 2
-# The lcov the recording cargo writes when llvm-cov names `--output-path`.
-EXPECTED_LCOV = {"lines": (10, 8), "functions": (2, 1)}
+# The lcov the recording cargo writes when llvm-cov names `--output-path`,
+# byte for byte: the coverage report the ingest sends.
+EXPECTED_LCOV_TEXT = "SF:src/lib.rs\nFNF:2\nFNH:1\nLF:10\nLH:8\nend_of_record\n"
 
 # The free figure the `df` stand-in reports for `/home` by default — far
 # above the client's default floor, so no run here is refused for disk unless
@@ -161,9 +168,18 @@ if lcov:
     target = os.path.join(os.getcwd(), lcov)
     os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target, "w") as handle:
-        handle.write("SF:src/lib.rs\nFNF:2\nFNH:1\nLF:10\nLH:8\nend_of_record\n")
+        handle.write(''' + repr(EXPECTED_LCOV_TEXT) + r''')
 sys.exit(0)
 '''
+
+
+def _answering_board():
+    """A RecordingBoard that answers the ingest with the recording cargo's
+    suite run: three passing cases over two test binaries."""
+    board = RecordingBoard()
+    board.script_run(passed=EXPECTED_TOTAL, total=EXPECTED_TOTAL,
+                     files=EXPECTED_FILES)
+    return board
 
 
 def _write_script(path, body, interpreter=None):
@@ -278,15 +294,15 @@ class _RustProject:
             f"exactly one ingest; paths={[p for p, _ in board.posts()]!r} "
             f"{_diagnostics(result)}")
         path, body = ingests[0] if ingests else (None, {})
-        self.assertEqual(path, PARSED_INGEST,  # type: ignore[attr-defined]
-                         f"the regression files through {PARSED_INGEST}; "
-                         f"{_diagnostics(result)}")
+        self.assertEqual(path, RUNS_INGEST,  # type: ignore[attr-defined]
+                         f"the regression files through {RUNS_INGEST}, never "
+                         f"{PARSED_INGEST}; {_diagnostics(result)}")
         return body if isinstance(body, dict) else {}
 
     def assert_coverage_free_regression_filed(self, board, result):
         """The run exited 0 and filed one coverage-free `regression` run
-        through the parsed route, its envelope stating `files`. Returns the
-        ingest body."""
+        through the runs route, its envelope stating the board's `files`.
+        Returns the ingest body."""
         self.assertEqual(result.returncode, 0,  # type: ignore[attr-defined]
                          f"an all-green run exits 0; {_diagnostics(result)}")
         self.assertEqual(_envelope_count(result.stdout), 1,  # type: ignore[attr-defined]
@@ -299,8 +315,8 @@ class _RustProject:
         self.assertEqual(  # type: ignore[attr-defined]
             (run.get("total"), run.get("failed"), run.get("files")),
             (EXPECTED_TOTAL, 0, EXPECTED_FILES),
-            f"the envelope's run states the suite's three cases over two "
-            f"binaries, files included; run={run!r}")
+            f"the envelope's run states the board's answer: the suite's three "
+            f"cases over two binaries, files included; run={run!r}")
         self.assertNotIn("coverage", envelope,  # type: ignore[attr-defined]
                          f"a coverage-free run states no coverage; "
                          f"envelope={envelope!r}")
@@ -310,11 +326,13 @@ class _RustProject:
         self.assertNotIn("coverage", body,  # type: ignore[attr-defined]
                          f"without --coverage the ingest carries no coverage; "
                          f"body={body!r}")
-        summary = body.get("summary") or {}
+        self.assertNotIn("summary", body,  # type: ignore[attr-defined]
+                         f"the client sends no parse of its own; body={body!r}")
+        sent = (junit_sent(body) or {}).get("summary") or {}
         self.assertEqual(  # type: ignore[attr-defined]
-            (summary.get("total"), summary.get("passed")),
+            (sent.get("total"), sent.get("passed")),
             (EXPECTED_TOTAL, EXPECTED_TOTAL),
-            f"the ingest's summary is this run's own junit; body={body!r}")
+            f"the junit text sent inline is this run's own; body={body!r}")
         return body
 
 
@@ -326,7 +344,7 @@ class RustRegressionWithoutCoverageRunsPlainNextestTest(_RustProject,
     nextest and files a coverage-free `regression` run."""
 
     def setUp(self):
-        self.board = RecordingBoard()
+        self.board = _answering_board()
         self.addCleanup(self.board.close)
         self.make_project(self.board.url, "rust-regression-coverage-free")
 
@@ -392,7 +410,7 @@ class RustRegressionWithoutCoverageClearsStaleJunitTest(_RustProject,
     here writes no report, so a stale one still in place would be ingested."""
 
     def setUp(self):
-        self.board = RecordingBoard()
+        self.board = _answering_board()
         self.addCleanup(self.board.close)
         self.make_project(self.board.url, "rust-regression-stale-junit")
 
@@ -443,7 +461,7 @@ class RustRegressionFilesOnlyItsOwnReportTest(_RustProject, unittest.TestCase):
     AGE_S = 5
 
     def setUp(self):
-        self.board = RecordingBoard()
+        self.board = _answering_board()
         self.addCleanup(self.board.close)
         self.make_project(self.board.url, "rust-regression-own-report")
 
@@ -494,7 +512,7 @@ class RustRegressionWithoutCoverageKeepsTheDiskGuardTest(_RustProject,
     FREE_G = 20
 
     def setUp(self):
-        self.board = RecordingBoard()
+        self.board = _answering_board()
         self.addCleanup(self.board.close)
         self.make_project(self.board.url, "rust-regression-disk-guard",
                           free_g=self.FREE_G)
@@ -546,7 +564,7 @@ class RustRegressionWithCoverageTest(_RustProject, unittest.TestCase):
     lcov coverage and reclaims — today's coverage run."""
 
     def setUp(self):
-        self.board = RecordingBoard()
+        self.board = _answering_board()
         self.addCleanup(self.board.close)
         self.make_project(self.board.url, "rust-regression-coverage")
 
@@ -560,19 +578,10 @@ class RustRegressionWithCoverageTest(_RustProject, unittest.TestCase):
         body = self.the_one_ingest(self.board, result)
         self.assertEqual(body.get("tier"), "regression",
                          f"a regression run is filed; body={body!r}")
-        coverage = body.get("coverage")
-        self.assertIsInstance(coverage, dict,
-                              f"the ingest carries llvm-cov's lcov coverage; "
-                              f"body={body!r}")
-        got = {metric: ((coverage or {}).get(metric) or {}).get("total")
-               for metric in EXPECTED_LCOV}
-        got_covered = {metric: ((coverage or {}).get(metric) or {}).get("covered")
-                       for metric in EXPECTED_LCOV}
         self.assertEqual(
-            (got, got_covered),
-            ({m: t for m, (t, _) in EXPECTED_LCOV.items()},
-             {m: c for m, (_, c) in EXPECTED_LCOV.items()}),
-            f"the coverage is the run's own lcov totals; coverage={coverage!r}")
+            body.get("coverage"), {"codec": "lcov", "data": [EXPECTED_LCOV_TEXT]},
+            f"the ingest sends the run's own lcov text as its coverage report; "
+            f"body={body!r}")
 
     def test_coverage_cleans_runs_llvm_cov_nextest_and_reclaims(self):
         result = self.drive("--coverage", agent="rust-regression-coverage-run")
