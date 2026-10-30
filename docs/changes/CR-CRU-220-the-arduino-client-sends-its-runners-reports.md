@@ -63,8 +63,9 @@ Every verb but `auto-ingest` sends its captured `make` output as `raw` and the r
 
 ### §S3 — the envelope's figures and warnings come from the board
 
-As CR-CRU-204 §S4: the envelope's `run:` block (`passed`, `failed`, `pending`, `total`, `files`) is the ingest
-answer's; the answer's `warnings[]` join the envelope's; a run whose ingest fails, is refused or cannot
+As CR-CRU-204 §S4, through the shared run emitter (`_axi().emit_run_axi`, CR-CRU-221), never a fifth copy: the
+envelope's `run:` block (`passed`, `failed`, `pending`, `total`, `files`) is the ingest answer's; the answer's
+`warnings[]` join the envelope's; a run whose ingest fails, is refused or cannot
 reach the board carries no figures and says why. The `files` count is the board's: distinct sources
 across all of the run's reports (the client summed each report's distinct sources, which differs only when
 a source repeats across reports).
