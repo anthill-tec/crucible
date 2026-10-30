@@ -3,6 +3,7 @@
 import type { Coverage, RunSchema, SuiteNode } from "../types.ts";
 import { coverageCodecs, decodeCoverage } from "./coverage.ts";
 import type { CoverageCodec } from "./coverage.ts";
+import { parseCrucibleEvents } from "./crucible-events.ts";
 import { parseJunit, parseJunitPath, readJunitRawOutput } from "./junit.ts";
 import { parsePlaywright, parsePlaywrightPath } from "./playwright.ts";
 
@@ -32,6 +33,11 @@ export interface Codec {
    * returns the files the reading filed cases for, counted in the run's files.
    */
   readRaw?(tree: SuiteNode[], raw: string, options?: DecodeOptions): string[];
+  /**
+   * CR-CRU-200 §S1 — a STREAM codec: it decodes an open run's held stream
+   * (`POST /api/v2/runs/<runId>/stream`), synchronously, at the run's close.
+   */
+  stream?: true;
 }
 
 /** One `warnings[]` entry of an ingest response, the shape the client envelopes use. */
@@ -58,6 +64,7 @@ export const codecs: Map<string, Codec> = new Map<string, Codec>([
       parsePath: (path: string) => parsePlaywrightPath(path),
     },
   ],
+  ["crucible-events", { parse: (data: string) => parseCrucibleEvents(data), stream: true }],
 ]);
 
 /** The names this board decodes, for health: test and coverage codecs, sorted. */
@@ -211,6 +218,51 @@ export async function parseRunBody(
   } catch (cause) {
     return { error: errorText(cause) };
   }
+  return { ...assembleRun(codec, decoded, body, options, coverageBlock.block, warnings), warnings };
+}
+
+/**
+ * CR-CRU-200 §S3 — a stream close's run: the run's held `stream` decoded by
+ * the stream codec, SYNCHRONOUSLY so the store can decode it inside the
+ * close's transaction, then read as `parseRunBody` reads a report — the
+ * body's `raw` and `coverage` as today.
+ */
+export function parseStreamBody(
+  codec: Codec,
+  stream: string,
+  body: { raw?: unknown; coverage?: unknown },
+  codecName: string,
+  stack?: string,
+): { run: RunSchema; warnings: IngestWarning[]; files: number } | { error: string } {
+  const coverageBlock = readCoverageBlock(body.coverage);
+  if ("error" in coverageBlock) return coverageBlock;
+  const warnings: IngestWarning[] = [];
+  const options: DecodeOptions = stack !== undefined ? { stack } : {};
+  let decoded: DecodedRun | Promise<DecodedRun>;
+  try {
+    decoded = codec.parse(stream, options);
+  } catch (cause) {
+    return { error: `${errorText(cause)} — run NOT stored` };
+  }
+  if (decoded instanceof Promise) {
+    return { error: `codec ${codecName} does not decode a stream synchronously — run NOT stored` };
+  }
+  return { ...assembleRun(codec, [decoded], body, options, coverageBlock.block, warnings), warnings };
+}
+
+/**
+ * The decoded reports as the run an ingest stores: merged, the raw output
+ * read into the tree, and the coverage block decoded (a failure to decode it
+ * is a warning). `files` is the count of distinct files the reports name.
+ */
+function assembleRun(
+  codec: Codec,
+  decoded: DecodedRun[],
+  body: { raw?: unknown },
+  options: DecodeOptions,
+  coverageBlock: CoverageBlock | undefined,
+  warnings: IngestWarning[],
+): { run: RunSchema; files: number } {
   const merged = mergeRuns(decoded);
   const raw = joinRaw(body.raw, decoded.map((report) => report.raw));
   const files = new Set(decoded.flatMap((report) => report.files ?? []));
@@ -220,12 +272,12 @@ export async function parseRunBody(
     summary = recount(merged.tree, summary.duration_ms);
   }
   const coverage =
-    coverageBlock.block !== undefined ? decodeCoverageBlock(coverageBlock.block, warnings) : merged.coverage;
+    coverageBlock !== undefined ? decodeCoverageBlock(coverageBlock, warnings) : merged.coverage;
   const run: RunSchema = {
     summary,
     tree: merged.tree,
     ...(coverage !== undefined ? { coverage } : {}),
     ...(raw !== undefined ? { raw } : {}),
   };
-  return { run, warnings, files: files.size };
+  return { run, files: files.size };
 }
