@@ -174,7 +174,7 @@ class _IngestHeldSignalCase(unittest.TestCase):
     # ── the shared assertion ────────────────────────────────────────────
 
     def _assert_ingest_signal_filed_the_run(self, label, signum, code, stdout,
-                                            stderr, ingest_path, inline=False):
+                                            stderr, ingest_path, inline=None):
         signame = signal.Signals(signum).name
         run_ids = self.board.run_ids_opened()
         self.assertEqual(
@@ -203,9 +203,10 @@ class _IngestHeldSignalCase(unittest.TestCase):
                                   f"{label}: `data` carries the report texts; "
                                   f"got {body!r}")
             self.assertEqual(
-                len(data), 1, f"{label}: one JUnit report; got {body!r}")
+                len(data), inline,
+                f"{label}: {inline} JUnit report(s); got {body!r}")
             self.assertEqual(
-                data[0].count("<testcase"), 3,
+                sum(text.count("<testcase") for text in data), 3,
                 f"{label}: the filed run must carry the runner's own report "
                 f"(3 cases); got {body!r}")
             self.assertNotIn("dataPath", body,
@@ -273,8 +274,10 @@ INGEST_HELD_SITES = (
     ("arduino", "_arduino_test_cmd", "/api/v2/runs/parsed"),
 )
 # The clients that send their runner's reports inline through the shared
-# ingest (CR-CRU-204): their ingest body carries `data`, never a parse.
-INLINE_REPORT_CLIENTS = frozenset({"bun", "python"})
+# ingest (CR-CRU-204), each with the number of report files its fake runner
+# writes for the 3-case run: their ingest body carries `data`, never a parse.
+# bun and python write one report; maven's surefire writes one per class.
+INLINE_REPORT_CLIENTS = {"bun": 1, "python": 1, "mvn": 3}
 
 
 class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):
@@ -294,7 +297,7 @@ class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):
                     cmd, ingest_path, signal.SIGTERM)
                 self._assert_ingest_signal_filed_the_run(
                     f"{key} test", signal.SIGTERM, code, stdout, stderr,
-                    ingest_path, inline=key in INLINE_REPORT_CLIENTS)
+                    ingest_path, inline=INLINE_REPORT_CLIENTS.get(key))
 
 
 if __name__ == "__main__":
