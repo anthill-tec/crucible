@@ -182,7 +182,7 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 | `mvn-crucible.py` | Java/surefire/failsafe/JaCoCo | heartbeat (identity), remove, ingest (`/api/v2/runs`, reports inline: `junit` + `jacoco`), ingest/compile (no format) |
 | `python-crucible.py` | pytest/unittest/coverage.py | heartbeat, remove, ingest (`/api/v2/runs`, reports inline: `junit` + `lcov`), ingest/compile (python) |
 | `bun-crucible.py` | bun test/lcov | heartbeat (identity+repoPath), remove, ingest (`/api/v2/runs`, reports inline), ingest/compile (typescript) |
-| `arduino-crucible.py` | native g++/arduino-cli | **projects/add**, heartbeat, remove, ingest (`/api/v2/runs`, reports inline: `junit` + `lcov`), ingest/compile (no format) |
+| `arduino-crucible.py` | native g++/arduino-cli | heartbeat, remove, ingest (`/api/v2/runs`, reports inline: `junit` + `lcov`), ingest/compile (gcc) |
 | `hw-crucible.py` | (21-line shim) | delegates |
 | skills `crucible-report-*` | all stacks | curl/urllib/fetch equivalents of the above + events delete/clear/list |
 | skill `crucible-register` / `agent-protocol` / `heartbeat.sh` | lifecycle | heartbeat, remove |
