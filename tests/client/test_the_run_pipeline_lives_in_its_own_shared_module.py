@@ -75,7 +75,7 @@ MOVED_NAMES = (
     "open_run", "abort_run",
     "junit_testcase_count", "junit_non_skipped_count", "ingest_reports",
     "_print_ingest_line", "filed_run", "coverage_not_measured_warning",
-    "ran_nothing", "runner_exit_code", "verb_exit", "filed_summary",
+    "ran_nothing", "runner_exit_code", "verb_exit",
     "emit_ran_nothing",
     "RunAbandoned", "AbandonTrap", "abandon_trap", "_emit_abandoned",
     "emit_bracket_abandoned", "emit_run_abandoned",
