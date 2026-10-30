@@ -572,8 +572,8 @@ class AClientsAlreadyGuardedSuiteVerbRunsUnfiledAndPostsNothingTest(unittest.Tes
                                 capture_output=True, text=True, timeout=TIMEOUT)
         self.assertEqual(
             result.returncode, 0,
-            f"arduino derives 0/1 from the JUnit summary even when "
-            f"unfiled; a run with no failures must exit 0; "
+            f"arduino exits with the runner's exit when unfiled; a clean "
+            f"`make` must exit 0; "
             f"stderr={result.stderr[-800:]!r}")
         self.assertEqual(_run_filing_posts(self.board.posts()), [])
 
