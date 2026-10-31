@@ -20,7 +20,7 @@
 
 The file keeps its first slug.
 
-**PROPOSED, awaiting the user's ruling** (Rule 19):
+**Approved by the user 2026-11-01**, with P1–P10 as proposed (no longer open):
 
 - **P1 — the framework vocabulary.** `bun-test`, `vitest`, `playwright` and `playwright-bdd` for bun. `pytest`,
   `unittest`, `nextest`, `surefire`, `go-test` and `arduino-native` are reserved for the other stacks.
