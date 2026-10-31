@@ -6644,17 +6644,11 @@ def post_ingest(post_fn, path, payload, *, stack, release=None, framework=None):
     `stack` (the calling client's own stack, required) rides as the body's
     TOP-LEVEL `stack` on EVERY ingest sent here — raw, parsed or compile,
     with or without a runId, whether or not the board accepted a start for
-    the run — so no ingest leaves the board to guess its stack.
-
-    `framework` (the run's declared test framework) rides as the body's
-    TOP-LEVEL `framework` when given; a client that names none sends the body
-    unchanged."""
+    the run — so no ingest leaves the board to guess its stack. `framework`
+    (the run's declared test framework) rides beside it when given."""
     global _ingested_run_tier, _ingested_compile
-    payload = {**(payload or {}), "stack": stack}
-    if framework:
-        payload["framework"] = framework
-    if release:
-        payload = {**(payload or {}), "release": release}
+    payload = {**(payload or {}), "stack": stack, **({"framework": framework}
+               if framework else {}), **({"release": release} if release else {})}
     if path in RUN_INGEST_PATHS:
         _ingested_run_tier = (payload or {}).get("tier")
     elif path == COMPILE_INGEST_PATH:
