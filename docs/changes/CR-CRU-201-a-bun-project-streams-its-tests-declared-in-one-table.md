@@ -24,7 +24,7 @@
 
 The file keeps its first slug.
 
-**PROPOSED, awaiting the user's ruling** (Rule 19):
+**Approved by the user 2026-10-31**, with P3–P5 as proposed (no longer open):
 
 - **P3:** the client tees the runner's console into `<reports dir>/bun-console.log`, and the relay follows that file.
 - **P4:** a view-only streamed run that is aborted is stored as today: no tree, no summary, no `incomplete`. The console
