@@ -228,7 +228,8 @@ STORE_DIR_NAME = "crucible"
 # aliasing is what let an operator's edit redefine the build's own
 # recommendations, and what made an ordinary purge crash every verb.
 # And `subtest_runner.py`, the runner `python-crucible.py` spawns BY FILE PATH
-# from its own directory in place of `-m xmlrunner`, so every subtest counts.
+# from its own directory: stdlib unittest with every subtest counted, the run
+# streamed as Crucible events (CR-CRU-224 retired its JUnit reporter).
 # And `_crucible_run.py`, the run and ingest pipeline `_crucible_axi.py` reads
 # BY FILE PATH from its own directory as it loads, so an install that omits it
 # lays down a shared module that cannot load at all.

@@ -4,17 +4,19 @@
 # dependencies = []
 # ///
 """Python + unittest Crucible CLI — single entry point for orchestrator + RED/GREEN/
-FIX/VERIFY agent lifecycle ops AND for running Python test targets (unittest via
-xmlrunner → JUnit XML, optional coverage.py). Replaces inline python / loose curl so
-each invocation has a stable command signature.
+FIX/VERIFY agent lifecycle ops AND for running Python test targets (unittest through
+Crucible's own runner, which streams the run as Crucible events; optional
+coverage.py). Replaces inline python / loose curl so each invocation has a stable
+command signature.
 
 Modelled exactly on bun-crucible.py / rust-crucible.py (same agent lifecycle,
 .env project-key resolution, /api/v2/* ingest contract, and — CR-CRU-030 §S1/§S2 —
 the shared TOON-AXI envelope module clients/_crucible_axi.py) — only the toolchain
 differs: Cargo/nextest/llvm-cov or bun test → a venv Python interpreter +
-unittest-xml-reporting (xmlrunner) + coverage.py, with py_compile as the syntax gate.
+clients/subtest_runner.py (stdlib unittest) + coverage.py, with py_compile as the
+syntax gate.
 
-This script is tool-specific (unittest via xmlrunner by default, or pytest when the
+This script is tool-specific (unittest streamed by default, or pytest when the
 project's `[python] runner` or --runner chooses it / JUnit-XML / coverage.py), not
 project-specific — the project path and interpreter are parameterizable.
 
@@ -29,18 +31,21 @@ an unbound agent's runs attach only via an explicit `context.cycleId`.
 
 Subcommands:
   register, unregister  Agent lifecycle.
-  test                  Run a TARGETED test (dotted path) or discover, via xmlrunner →
-                        JUnit XML, and send every JUnit report, inline and unparsed,
-                        with the captured output, to /api/v2/runs for the board to
-                        decode (no tier claimed). The per-cycle RED/GREEN workhorse.
-                        The reports dir is wiped first so only THIS run's XML is
-                        ingested. If --agent omitted, just runs (exit code only). If
-                        NO XML is produced (import/collection failure), the CAPTURED
-                        runner output is ingested to /api/v2/runs/compile.
-  regression            Run the FULL suite (discover) via xmlrunner (tier regression)
-                        and send its JUnit reports to /api/v2/runs. With --coverage
-                        (coverage.py) the `coverage lcov` report travels with them,
-                        for the board to decode. Orchestrator pre-merge gate path.
+  test                  Run a TARGETED test (dotted path) or discover. Under unittest
+                        the runner writes its event stream to
+                        <reports>/crucible-events.ndjson (CRUCIBLE_STREAM), the relay
+                        sends it to the open run while it works, and the run is
+                        closed with codec crucible-events; under pytest every JUnit
+                        report is sent inline. No tier claimed. The per-cycle
+                        RED/GREEN workhorse. The reports dir is wiped first so only
+                        THIS run's record is ingested. If --agent omitted, just runs
+                        (exit code only). If the runner exits non-zero having written
+                        no test (import/collection failure), the CAPTURED runner
+                        output is ingested to /api/v2/runs/compile.
+  regression            Run the FULL suite (discover; tier regression), streamed as
+                        `test` is. With --coverage (coverage.py) the `coverage lcov`
+                        report travels with the close, for the board to decode.
+                        Orchestrator pre-merge gate path.
   auto-ingest           Ingest only: send an already-produced reports dir's JUnit
                         reports to /api/v2/runs.
   check                 python -m py_compile over given paths (default app/ + tests/);
@@ -64,9 +69,9 @@ Project + Crucible endpoint:
   Project path resolution: --project-dir > $PY_CRUCIBLE_PROJECT_DIR > the git repo
   containing the current directory > CWD. No project is hardcoded.
   Interpreter resolution: --python > $PY_CRUCIBLE_PYTHON > <project-dir>/.venv/bin/python
-  (if present) > the interpreter running this script. The venv must have xmlrunner
-  under the unittest runner, or pytest under the pytest runner (and, for --coverage,
-  coverage.py) plus any imports the code-under-test needs.
+  (if present) > the interpreter running this script. The unittest runner needs
+  only the standard library (Python 3.12 or later); the pytest runner needs pytest
+  (and, for --coverage, coverage.py) plus any imports the code-under-test needs.
   Posts to the board the project's `crucible.toml` declares (`[client] url`,
   shipped default http://localhost:3849), v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs, /api/v2/runs/compile,
@@ -151,8 +156,8 @@ def _project_key(project_dir):
 def _resolve_python(arg_value, project_dir):
     """--python > $PY_CRUCIBLE_PYTHON > <project-dir>/.venv/bin/python > this interpreter.
 
-    The chosen interpreter must have xmlrunner importable (and coverage.py for
-    --coverage). A project venv is the norm so test-only deps never touch the runtime.
+    The chosen interpreter runs the stdlib unittest runner (pytest needs pytest
+    importable; coverage.py for --coverage). A project venv is the norm so test-only deps never touch the runtime.
     """
     if arg_value:
         return arg_value
@@ -396,7 +401,7 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None):
 
 
 # unittest's verbose (`-v`) verdict for one finished test: the line ends
-# `<description> ... <verdict>` (xmlrunner adds ` (<elapsed>s)`), or the
+# `<description> ... <verdict>` (maybe followed by ` (<elapsed>s)`), or the
 # verdict starts its own line when the test printed after the ` ... `.
 _UNITTEST_VERDICT_LINE = re.compile(
     r"(?:\s\.\.\.\s+|^)"
@@ -498,7 +503,7 @@ class _FallbackWatch:
 
 
 def _start_run(project_dir, agent_id, tier=None, context=None, release=None):
-    """Open the run BEFORE xmlrunner is spawned, through the shared
+    """Open the run BEFORE the runner is spawned, through the shared
     `open_run`. Returns `(run_id, warnings)`; a refusal degrades to a
     single-shot ingest with a warning naming the fallback."""
     return _axi().open_run(_post, _project_key(project_dir), agent_id, _STACK,
@@ -628,7 +633,7 @@ def cmd_unregister(args):
                                  unregister_fn=_unregister_agent)
 
 
-# ── Toolchain: unittest/xmlrunner test + regression + auto-ingest + check ────
+# ── Toolchain: unittest/pytest test + regression + auto-ingest + check ──────
 
 
 def _reports_dir(project_dir, arg_value, agent_id=None):
@@ -985,7 +990,7 @@ def _erase_coverage_data(python, project_dir, env, data_file=None):
 
 
 def cmd_test(args, tier=None, verb="test"):
-    """Targeted/discover unittest via xmlrunner → JUnit XML → /api/v2/runs.
+    """Targeted/discover unittest (streamed) or pytest (JUnit XML) → /api/v2/runs.
     With --agent the result is ingested (regardless of pass/fail); a bound agent's
     run is server-stamped with its registered cycle. Exit code reflects the runner.
 
@@ -1031,7 +1036,7 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     env.pop(STREAM_VAR, None)
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
-    # CR-CRU-094 §S3 — PRE-FLIGHT, before xmlrunner spawns and while `--cycle`
+    # CR-CRU-094 §S3 — PRE-FLIGHT, before the runner spawns and while `--cycle`
     # can still be supplied: ask the board whether this agent is bound and say
     # so on both channels if it is not. Best-effort — a failed lookup warns
     # about nothing and never delays the run. One implementation, shared.
@@ -1164,8 +1169,10 @@ def cmd_regression(args, verb="regression", runner=None, carried_warnings=()):
 
 def _regression_run(args, verb="regression", preflight_warnings=(), identity=None,
                     runner=_UNITTEST):
-    """Full-suite discover via xmlrunner (tier regression). With --coverage: run under
-    coverage.py and send its lcov report to /api/v2/runs with the JUnit reports. A bound agent's run is
+    """Full-suite discover (tier regression): a unittest run with --agent is
+    streamed (`_streamed_run`), a pytest run files its JUnit reports. With
+    --coverage: run under coverage.py and send its lcov report to
+    /api/v2/runs with the run's record. A bound agent's run is
     server-stamped with its registered cycle. `verb` (CR-CRU-058 §S1) names the
     envelope — see `cmd_regression`.
 
@@ -2090,9 +2097,9 @@ def _add_python_arg(p):
     p.add_argument(
         "--python",
         help="Interpreter to run tests with (default: $PY_CRUCIBLE_PYTHON, else "
-             "<project>/.venv/bin/python if present, else this interpreter). Must have "
-             "xmlrunner, or pytest when pytest is the runner (and coverage.py for "
-             "--coverage).",
+             "<project>/.venv/bin/python if present, else this interpreter). Under "
+             "unittest it needs only the standard library (Python 3.12 or later); "
+             "under pytest it must have pytest (and coverage.py for --coverage).",
     )
 
 
@@ -2259,12 +2266,12 @@ def cmd_dashboard():
 _CLI_DESCRIPTION = (
     "Python Crucible CLI — one entry point for the orchestrator and for the\n"
     "RED/GREEN/FIX/VERIFY agent lifecycle, and for running Python test targets\n"
-    "under unittest (via xmlrunner → JUnit XML, the default) or pytest (its own\n"
+    "under unittest (streamed as Crucible events, the default) or pytest (its own\n"
     "JUnit XML) — the project's `[python] runner` in its crucible.toml, or\n"
     "--runner, chooses — optional coverage.py, with the result ingested to\n"
     "Crucible.\n"
     "\n"
-    "Tool-specific (unittest via xmlrunner, or pytest / JUnit-XML / coverage.py),\n"
+    "Tool-specific (unittest streamed, or pytest / JUnit-XML / coverage.py),\n"
     "never "
     "project-specific: the project path and the interpreter are parameterizable.\n"
     "Run `<verb> --help` for a verb's own flags.\n"
@@ -2367,7 +2374,7 @@ def main():
         dict(regression=tier_verb(  # noqa: C408
             cmd_regression,
             "Runs the full suite under the declared runner — unittest discovery "
-            "via xmlrunner by default, or pytest when the project's "
+            "streamed by default, or pytest when the project's "
             "`[python] runner` or --runner chooses it — and ingests it; "
             "--coverage adds coverage.py.",
             (_add_regression_tier_args, _add_gate_cycle_arg,

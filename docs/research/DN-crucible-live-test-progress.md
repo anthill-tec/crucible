@@ -113,6 +113,9 @@ A bun project declares, per `package.json` script, one table:
   the table that replaces them, as `--phase` was when it became `--role`.
 - The other stacks declare the same three facts in their own place (`crucible.toml` for cargo,
   python, maven, arduino, go); the vocabulary is the same.
+- **Python unittest declares no stream** (CR-CRU-224 amends this paragraph for that case): its
+  runner is Crucible's own (`clients/subtest_runner.py`), which always writes the
+  `crucible-events` stream to the file `CRUCIBLE_STREAM` names, so there is nothing to declare.
 
 ### Totals
 

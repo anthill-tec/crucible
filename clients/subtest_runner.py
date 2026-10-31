@@ -4,9 +4,9 @@
 interpreter (optionally under ``coverage run``). It takes unittest's own
 command line (``discover -s <dir> -p <pattern> -v``, or dotted targets plus
 ``-v``) and runs ``unittest`` through ``unittest.TextTestRunner`` with a
-subclass of ``unittest.TextTestResult`` (CR-CRU-224 §S1). xmlrunner left this
-runner with CR-CRU-224: it writes no JUnit report. An ``-o <dir>`` it is
-still given is accepted and dropped.
+subclass of ``unittest.TextTestResult`` (CR-CRU-224 §S1). It writes no JUnit
+report. An ``-o <dir>`` (the reports option of the command line before
+CR-CRU-224) is accepted and dropped.
 
 The counting rule is CR-CRU-189's:
 
@@ -56,8 +56,8 @@ _ErrorHolder: Any = unittest.suite._ErrorHolder  # pyright: ignore[reportAttribu
 # The environment variable naming the stream file.
 STREAM_VAR = "CRUCIBLE_STREAM"
 
-# The reports-dir option the python client still passes until it streams;
-# accepted and dropped.
+# The reports-dir option of the command line before CR-CRU-224; accepted and
+# dropped.
 _REPORTS_OPTION = "-o"
 
 # The suite prefix a test run as a script carries, stripped from `suite`.

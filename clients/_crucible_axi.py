@@ -2103,7 +2103,7 @@ def gate_step_abort_warning(verb, step, detail):
 def _last_non_empty_line(output):
     """The last line of a captured runner stream that carries anything — the
     CAUSE line of a starved run (`ModuleNotFoundError: No module named
-    'xmlrunner'`), which trailing blank/whitespace lines would otherwise hide.
+    'app'`), which trailing blank/whitespace lines would otherwise hide.
     Empty string when the capture holds nothing at all."""
     for line in reversed((output or "").splitlines()):
         stripped = line.strip()
