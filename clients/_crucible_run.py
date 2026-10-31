@@ -669,6 +669,38 @@ def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
     return resp
 
 
+def close_stream(post_fn, *, stack, project_key, agent_id, run_id, codec,
+                 raw=None, coverage_codec=None, coverage_paths=(), tier=None,
+                 context=None, release=None, runner_exit=None):
+    """Close an open run whose record is the stream its relay sent: ONE `POST
+    /api/v2/runs` through `post_ingest` carrying `runId`, `codec` and no
+    `data`, with the coverage report inline when one is given, `raw`, `tier`,
+    `context`, `release` and `runnerExit`. A close the board refuses is
+    followed by the abort `post_ingest` makes. Prints the run's ingest line
+    and returns the board's answer."""
+    payload = {"projectKey": project_key, "agentId": agent_id,
+               "codec": codec, "runId": run_id}
+    if coverage_codec is not None and coverage_paths:
+        coverage_data, unreadable = _read_report_texts(coverage_paths)
+        if unreadable is None:
+            payload["coverage"] = {"codec": coverage_codec, "data": coverage_data}
+        else:
+            print(f"[crucible] WARN: {unreadable}; the run is closed with no "
+                  f"coverage", file=sys.stderr)
+    optional = (("raw", raw), ("tier", tier), ("context", context),
+                ("runnerExit", runner_exit))
+    payload.update({key: value for key, value in optional if value is not None})
+    resp = _core.post_ingest(post_fn, INGEST_RUNS_PATH, payload, stack=stack,
+                             release=release)
+    error = resp.get("error") if isinstance(resp, dict) else None
+    if isinstance(error, str) and _HTTP_413.match(error):
+        resp = {**resp, "error": (
+            f"{error} — the body was larger than the board's "
+            f"{INGEST_BODY_LIMIT_KEY} limit")}
+    _print_ingest_line(resp, codec)
+    return resp
+
+
 def _print_ingest_line(resp, codec):
     """Print a run's human ingest line on stderr from the board's answer: its
     `run` block's figures (`None` without one), the coverage axes it kept,
@@ -774,15 +806,24 @@ def runner_exit_code(returncode):
     return 128 - returncode if returncode < 0 else returncode
 
 
+#: The board's warning on a stream close whose record cannot be trusted
+#: (CR-CRU-200): a run so flagged never exits green.
+STREAM_INCOMPLETE_CODE = "stream-incomplete"
+
+
 def verb_exit(runner_exit, response):
     """(PURE) The exit of a verb that ran a test runner and filed its run:
     1 when the runner exited non-zero, when the ingest `response` is not `ok`
-    (refused, unreachable, too large), or when the run it filed
-    (`response["run"]`) records a failure; 0 only when none of the three
-    holds. Pending cases alone never make it non-zero."""
+    (refused, unreachable, too large), when its `warnings[]` carry
+    `stream-incomplete`, or when the run it filed (`response["run"]`)
+    records a failure; 0 only when none of these holds. Pending cases alone
+    never make it non-zero."""
     if runner_exit:
         return 1
     if not (response or {}).get("ok"):
+        return 1
+    if any(isinstance(w, dict) and w.get("code") == STREAM_INCOMPLETE_CODE
+           for w in response.get("warnings") or []):
         return 1
     run = response.get("run")
     failed = run.get("failed") if isinstance(run, dict) else None

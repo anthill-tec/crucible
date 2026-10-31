@@ -289,8 +289,8 @@ def _request(method, path, payload=None, timeout=None):
     return _axi().http_request(_base_url(), method, path, payload, timeout)
 
 
-def _post(path, payload):
-    return _request("POST", path, payload)
+def _post(path, payload, timeout=None):
+    return _request("POST", path, payload, timeout=timeout)
 
 
 def _get(path, timeout=10):
@@ -411,13 +411,17 @@ def _recognise_completion(line):
     return _UNITTEST_VERDICT_LINE.search(line.rstrip("\r\n")) is not None
 
 
-def _narrator(project_dir, agent_id, identity=None, runner=None):
+def _narrator(project_dir, agent_id, identity=None, runner=None, streamed=False):
     """This client's `RunNarrator`: python's recogniser, an unknown total
     (`running N`, then `ran N/N`), and the shared role-optional heartbeat
     tick (`narration_poster`), observed by a gated `identity` when there is one.
-    Under pytest the recogniser is pytest's, against the total it selected."""
+    Under pytest the recogniser is pytest's, against the total it selected.
+    A `streamed` run counts nothing in flight (the board shows its stream's
+    count): its narrator only says the closing messages."""
     post = _axi().narration_poster(_post, _project_key(project_dir), agent_id,
                                    identity)
+    if streamed:
+        return _axi().RunNarrator(post, lambda _line: False)
     if runner == _PYTEST:
         progress = _PytestProgress()
         return _axi().RunNarrator(post, progress.recognise,
@@ -454,13 +458,6 @@ class _PytestProgress:
         return _PYTEST_VERDICT_LINE.match(text) is not None
 
 
-# The subtest runner's one line stating that it fell back to xmlrunner's own
-# entry point (`subtest_runner.FALLBACK_SIGNAL`), printed before any test runs
-# and ending with the xmlrunner version it found, or `none declared`.
-_FALLBACK_SIGNAL_LINE = re.compile(
-    r"^\[subtest-runner\] subtests-uncounted: .*"
-    r"\(xmlrunner version: (?P<version>.*)\)\s*$")
-
 # pytest's report of a passing subtest: a `SUBPASSED` verdict line, or the
 # closing summary's `N subtests passed`.
 _PYTEST_SUBTESTS_PASSED = re.compile(r"\sSUBPASSED\b|\b[1-9]\d* subtests? passed\b")
@@ -472,50 +469,32 @@ _PYTEST_SUBTESTS_DETAIL = ("pytest writes no test case for a passing subtest "
 
 class _FallbackWatch:
     """Watches the runner's output for a sign that passing subtests went
-    uncounted, passing every line on to the run's narrator (if any). Under
-    unittest that is the subtest runner's fallback line, read only ahead of
-    the first test verdict since the runner states it before any test runs;
-    under pytest it is any report of a passing subtest, read through the whole
-    output. What it saw rides every envelope the run produces as one
-    `subtests-uncounted` warning."""
+    uncounted, passing every line on to the run's narrator (if any). Only
+    pytest can leave them uncounted: any report of a passing subtest, read
+    through the whole output. What it saw rides every envelope the run
+    produces as one `subtests-uncounted` warning. A unittest run counts every
+    subtest (its runner is Crucible's own), so it never warns."""
 
     def __init__(self, narrator=None, runner=None):
         self._narrator = narrator
         self._pytest = runner == _PYTEST
         self._watching = True
-        self.version = None
 
     def observe(self, line):
         """Feed one line of the runner's output."""
-        if self._watching:
-            if self._pytest:
-                if _PYTEST_SUBTESTS_PASSED.search(line):
-                    self._watching = False
-            elif _recognise_completion(line):
-                self._watching = False
-            else:
-                found = _FALLBACK_SIGNAL_LINE.match(line.rstrip("\r\n"))
-                if found:
-                    self.version = found.group("version")
-                    self._watching = False
+        if (self._watching and self._pytest
+                and _PYTEST_SUBTESTS_PASSED.search(line)):
+            self._watching = False
         if self._narrator is not None:
             self._narrator.observe(line)
 
     def warnings(self):
         """`[{code: subtests-uncounted, detail}]` when passing subtests went
         uncounted, else `[]`."""
-        if self._pytest:
-            if self._watching:
-                return []
-            return [{"code": "subtests-uncounted",
-                     "detail": _PYTEST_SUBTESTS_DETAIL}]
-        if self.version is None:
+        if not self._pytest or self._watching:
             return []
         return [{"code": "subtests-uncounted",
-                 "detail": (f"xmlrunner (version: {self.version}) offers no "
-                            f"result class to extend, so the run used "
-                            f"xmlrunner's own entry point and passing "
-                            f"subtests were not counted")}]
+                 "detail": _PYTEST_SUBTESTS_DETAIL}]
 
 
 def _start_run(project_dir, agent_id, tier=None, context=None, release=None):
@@ -658,17 +637,19 @@ def _reports_dir(project_dir, arg_value, agent_id=None):
 
 
 def _wipe(reports_dir):
-    """Remove stale TEST-*.xml so only the current run's results get ingested."""
+    """Remove stale TEST-*.xml and a stale stream file, so only the current
+    run's results get ingested."""
     if os.path.isdir(reports_dir):
         for entry in os.listdir(reports_dir):
-            if entry.startswith("TEST-") and entry.endswith(".xml"):
+            if entry == STREAM_FILE or (entry.startswith("TEST-")
+                                        and entry.endswith(".xml")):
                 with contextlib.suppress(OSError):
                     os.remove(os.path.join(reports_dir, entry))
 
 
 def _subtest_runner_path():
-    """The sibling clients/subtest_runner.py: xmlrunner with every subtest
-    counted, run by path in place of `-m xmlrunner`."""
+    """The sibling clients/subtest_runner.py: unittest with every subtest
+    counted, streaming the run to the file `CRUCIBLE_STREAM` names."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "subtest_runner.py")
 
@@ -679,22 +660,21 @@ _UNITTEST_START_DIR = "tests"
 _UNITTEST_PATTERN = "test_*.py"
 
 
-def _runner_args(targets, start_dir, pattern, reports_dir):
-    """The runner's arguments, xmlrunner's own: targeted (dotted paths) or
+def _runner_args(targets, start_dir, pattern):
+    """The runner's arguments, unittest's own: targeted (dotted paths) or
     discover, an unstated start dir or pattern taking unittest's defaults.
-    `-v` makes unittest print one verdict line per test, which is what the
-    run's narration counts."""
+    `-v` makes unittest print one verdict line per test."""
     if targets:
-        return list(targets) + ["-o", reports_dir, "-v"]
+        return list(targets) + ["-v"]
     return ["discover", "-s", start_dir or _UNITTEST_START_DIR,
-            "-p", pattern or _UNITTEST_PATTERN, "-o", reports_dir, "-v"]
+            "-p", pattern or _UNITTEST_PATTERN, "-v"]
 
 
-def _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir):
+def _unittest_cmd(python, targets, start_dir, pattern):
     """Build the suite invocation: the project's interpreter running the
-    subtest runner by path, with xmlrunner's arguments."""
+    subtest runner by path, with unittest's arguments."""
     return [python, _subtest_runner_path(),
-            *_runner_args(targets, start_dir, pattern, reports_dir)]
+            *_runner_args(targets, start_dir, pattern)]
 
 
 def _pytest_args(targets, start_dir, pattern, reports_dir):
@@ -722,7 +702,7 @@ def _suite_cmd(python, runner, targets, start_dir, pattern, reports_dir):
     if runner == _PYTEST:
         return [python, "-m", _PYTEST,
                 *_pytest_args(targets, start_dir, pattern, reports_dir)]
-    return _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir)
+    return _unittest_cmd(python, targets, start_dir, pattern)
 
 
 def _report_paths(reports_dir):
@@ -747,12 +727,19 @@ def _no_xml_errors_text(result, runner=_UNITTEST):
     if runner == _PYTEST:
         return (f"{_PYTEST} produced no JUnit XML "
                 f"(collection/usage failure, no output captured)")
-    return "xmlrunner produced no JUnit XML (import/syntax failure, no output captured)"
+    return (f"{_UNITTEST} wrote no event stream ({STREAM_FILE}) "
+            f"(import/syntax failure, no output captured)")
 
 
 def _runner_label(runner):
     """The name the printed text gives the runner that ran."""
-    return _PYTEST if runner == _PYTEST else "xmlrunner"
+    return _PYTEST if runner == _PYTEST else _UNITTEST
+
+
+def _no_report_artifact(runner):
+    """What the runner writes as its record: pytest's JUnit reports, or the
+    unittest runner's event stream."""
+    return "TEST-*.xml" if runner == _PYTEST else STREAM_FILE
 
 
 # pytest's exit codes for a run it could not carry out as a runner: an
@@ -791,7 +778,8 @@ def _no_report_warning(verb, runner, result):
     """The shared no-report warning for a run that produced no report to
     file. Under pytest it names pytest and carries pytest's own error line."""
     cause = _pytest_error_line(result.stdout) if runner == _PYTEST else None
-    return _axi().no_report_warning(_no_report_subject(verb, runner), "TEST-*.xml",
+    return _axi().no_report_warning(_no_report_subject(verb, runner),
+                                    _no_report_artifact(runner),
                                     result.returncode, result.stdout or "",
                                     cause=cause)
 
@@ -817,6 +805,16 @@ def _is_zero_discovery(result):
 
 JUNIT_CODEC = "junit"
 LCOV_CODEC = "lcov"
+# CR-CRU-224 §S3 — a unittest run's record is its runner's event stream: the
+# runner writes it to `<reports dir>/crucible-events.ndjson`, named through
+# `CRUCIBLE_STREAM`, and the shared relay sends it to the open run.
+STREAM_CODEC = "crucible-events"
+STREAM_FILE = "crucible-events.ndjson"
+STREAM_VAR = "CRUCIBLE_STREAM"
+# How long the relay's `finish` may take once the runner exited, and once a
+# signal interrupted the run.
+_STREAM_FINISH_SECONDS = 60.0
+_INTERRUPTED_FINISH_SECONDS = 5.0
 
 
 def _file_reports(project_dir, agent_id, report_paths, *, raw=None,
@@ -1029,6 +1027,8 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
     cmd = _suite_cmd(python, runner, getattr(args, "tests", None), args.start_dir,
                      args.pattern, reports_dir)
     env = os.environ.copy()
+    # Only a streamed run hands its runner a stream (`_streamed_run`).
+    env.pop(STREAM_VAR, None)
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
     # CR-CRU-094 §S3 — PRE-FLIGHT, before xmlrunner spawns and while `--cycle`
@@ -1040,10 +1040,16 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
         cycle_id=getattr(args, "cycle", None),
         context=_run_context(), release=release)
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
+    if args.agent and runner == _UNITTEST:
+        # CR-CRU-224 §S3 — a unittest run's record is its runner's stream.
+        return _streamed_run(verb, args, project_dir, args.agent, identity,
+                             cmd, env, reports_dir=reports_dir, tier=tier,
+                             release=release, warnings=preflight_warnings,
+                             measure_wall=True)
     narrator, run_id = None, None
     if args.agent:
         # The shared run path: narrate per-test progress, and open the run
-        # BEFORE xmlrunner is spawned so the board shows it running.
+        # BEFORE the runner is spawned so the board shows it running.
         narrator = _narrator(project_dir, args.agent, identity, runner)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
                                           context=_run_context(),
@@ -1177,6 +1183,8 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     os.makedirs(reports_dir, exist_ok=True)
     _wipe(reports_dir)
     env = os.environ.copy()
+    # Only a streamed run hands its runner a stream (`_streamed_run`).
+    env.pop(STREAM_VAR, None)
 
     run_cmd = _suite_cmd(python, runner, None, args.start_dir, args.pattern,
                          reports_dir)
@@ -1215,6 +1223,21 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         # Deliberately left unguarded.
 
     print(f"[crucible] running: {' '.join(run_cmd)}", file=sys.stderr)
+    if agent and runner == _UNITTEST:
+        # CR-CRU-224 §S3 — a unittest run's record is its runner's stream.
+        def collect():
+            if not coverage_on:
+                return [], []
+            lcov_path = _collect_coverage(python, project_dir, env, data_file)
+            if lcov_path:
+                return [lcov_path], []
+            return [], [_axi().coverage_not_measured_warning(
+                "`coverage lcov` left no lcov coverage report")]
+        return _streamed_run(verb, args, project_dir, agent, identity, run_cmd,
+                             env, reports_dir=reports_dir, tier="regression",
+                             release=release, warnings=preflight_warnings,
+                             collect_coverage=collect,
+                             gate=verb != "regression")
     narrator, run_id = None, None
     if agent:
         # The shared run path: narrate per-test progress, and open the run
@@ -1326,6 +1349,231 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         envelope_warnings += _axi().whole_suite_unreported_warnings(_STACK, resp)
     _emit_ingest_axi(verb, resp, project_dir, args.agent,
                      help_steps=help_steps, warnings=envelope_warnings)
+    return exit_code
+
+
+def _stream_health(coverage):
+    """The board's health, read before a streamed run opens: `(health,
+    refusal, unreachable)`. `refusal` names why a readable board cannot take
+    the stream (no `crucible-events`, or no `lcov` for a `coverage` run);
+    `unreachable` names the board whose health could not be read."""
+    health = _get(_axi().INGEST_HEALTH_PATH)
+    if not isinstance(health, dict) or health.get("ok") is False:
+        error = health.get("error") if isinstance(health, dict) else None
+        return None, None, (f"the board at {_base_url()} could not be reached "
+                            f"({error or 'its health could not be read'}); the "
+                            f"suite ran with no stream and nothing was filed")
+    refusal = _axi()._ingest_health_refusal(
+        health, STREAM_CODEC, LCOV_CODEC if coverage else None)
+    return health, refusal, None
+
+
+def _open_streamed_run(project_dir, agent, tier, release):
+    """Open the streamed run: `(run_id, None, [])`, or `(None, why,
+    warnings)` naming the board when it opened none, with `open_run`'s own
+    warnings (a refused start's `run-lifecycle-unavailable`; none when the
+    board simply opened no run)."""
+    run_id, warnings = _start_run(project_dir, agent, tier=tier,
+                                  context=_run_context(), release=release)
+    if run_id:
+        return run_id, None, []
+    cause = (warnings[0].get("detail") if warnings and isinstance(warnings[0], dict)
+             else None) or "it answered no runId"
+    return None, (f"the board at {_base_url()} opened no run ({cause}); the "
+                  f"suite ran with no stream and nothing was filed"), warnings
+
+
+def _stream_counts(path):
+    """The client's one reading of the stream file: `(test_ends,
+    run_end_total)`, the second None when the stream holds no `run-end`."""
+    count, total = 0, None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                if event.get("event") == "test-end":
+                    count += 1
+                elif event.get("event") == "run-end":
+                    stated = event.get("total")
+                    total = (stated if isinstance(stated, int)
+                             and not isinstance(stated, bool) else count)
+    except FileNotFoundError:
+        return 0, None
+    except OSError as exc:
+        print(f"[crucible] WARN: could not read the stream {path} ({exc}) — "
+              f"it counts as holding no test", file=sys.stderr)
+        return 0, None
+    return count, total
+
+
+def _finish_relay(relay, deadline_seconds):
+    """Stop the relay (when one runs), sending what the board has not
+    acknowledged within `deadline_seconds`."""
+    if relay is not None:
+        relay.finish(deadline_seconds)
+
+
+_ZERO_DISCOVERY_HELP = ("check --start-dir / --pattern; ensure the test dir "
+                        "is a package (has __init__.py)")
+
+
+def _zero_discovery_warning(args):
+    """CR-CRU-039 §S2 — the `no-tests-discovered` warning, said on stderr."""
+    detail = (f"0 tests discovered — "
+              f"start_dir={args.start_dir or _UNITTEST_START_DIR!r} "
+              f"pattern={args.pattern or _UNITTEST_PATTERN!r} matched nothing")
+    print(f"[crucible] ERROR: no-tests-discovered — {detail}", file=sys.stderr)
+    return {"code": "no-tests-discovered", "detail": detail}
+
+
+def _emit_zero_discovery(verb, args, project_dir, agent, warnings, run_id,
+                         artifact):
+    """CR-CRU-039 §S2 — a discovery that collected zero tests is a
+    definitive `no-tests-discovered` error, never a compile ingest; the run
+    this verb opened is aborted. Returns the exit code."""
+    _emit_axi(verb, False, {"help": [_ZERO_DISCOVERY_HELP]},
+              _axi_context(project_dir, agent_id=agent),
+              list(warnings) + [_zero_discovery_warning(args)]
+              + _axi().no_report_left_open_warnings(
+                  run_id, artifact, post_fn=_post,
+                  project_key=_project_key(project_dir), agent_id=agent))
+    return 1
+
+
+def _emit_unfiled(verb, args, project_dir, agent, unfiled, warnings, result,
+                  gate):
+    """The exit of a unittest run whose board could not be reached or opened
+    no run: the suite ran and nothing was filed. The envelope is `ok: false`
+    naming the board, carries `warnings` (`run-lifecycle-unavailable` when
+    the board could not be reached or refused the run), and says what the
+    runner did: a discovery that found nothing, or a runner that exited
+    non-zero having written no test. Returns the exit code."""
+    print(f"[crucible] ERROR: {unfiled}", file=sys.stderr)
+    found = list(warnings)
+    help_steps = [f"re-run {verb} --agent <agentId> once the board answers",
+                  "status"]
+    if _is_zero_discovery(result):
+        found.append(_zero_discovery_warning(args))
+        help_steps = [_ZERO_DISCOVERY_HELP, *help_steps]
+    elif result.returncode:
+        found.append(_no_report_warning(verb, _UNITTEST, result))
+        help_steps = _axi().no_report_help(verb, STREAM_FILE)
+    if gate:
+        found += _axi().whole_suite_unreported_warnings(
+            _STACK, {"ok": False, "error": unfiled})
+    _emit_axi(verb, False, {"error": unfiled, "help": help_steps},
+              _axi_context(project_dir, agent_id=agent), found,
+              f"{verb}: ok=False — {unfiled}")
+    return result.returncode or 1
+
+
+def _streamed_run(verb, args, project_dir, agent, identity, cmd, env, *,
+                  reports_dir, tier, release, warnings, collect_coverage=None,
+                  gate=False, measure_wall=False):
+    """CR-CRU-224 §S3 — a unittest run with `--agent`, its record its
+    runner's event stream. The board's health is read first: a board that
+    decodes no `crucible-events` refuses the run before it is opened or
+    spawned; one that cannot be reached, or opens no run, runs the suite
+    with no stream and files nothing. Otherwise the runner is handed
+    `CRUCIBLE_STREAM`, the relay sends what it writes, and once it exits the
+    stream file decides: zero discovery, ran nothing, no test written (the
+    compile ingest), or the stream's close. Returns the exit code."""
+    key = _project_key(project_dir)
+    warnings = list(warnings)
+    health, refusal, unfiled = _stream_health(collect_coverage is not None)
+    if refusal is not None:
+        print(f"[crucible] ERROR: {refusal}", file=sys.stderr)
+        _emit_axi(verb, False, {"error": refusal,
+                                "help": ["status", f"re-run {verb} on a board that "
+                                         f"decodes `{STREAM_CODEC}`"]},
+                  _axi_context(project_dir, agent_id=agent), warnings,
+                  f"{verb}: ok=False — {refusal}")
+        return 1
+    run_id, relay, narrator = None, None, None
+    if unfiled is None:
+        run_id, unfiled, lifecycle = _open_streamed_run(project_dir, agent,
+                                                        tier, release)
+    else:
+        lifecycle = [{"code": _axi().RUN_LIFECYCLE_UNAVAILABLE_CODE,
+                      "detail": unfiled}]
+    stream_path = os.path.join(reports_dir, STREAM_FILE)
+    if run_id:
+        env[STREAM_VAR] = stream_path
+        narrator = _narrator(project_dir, agent, identity, streamed=True)
+        relay = _axi().StreamRelay(_post, key, agent, run_id, stream_path,
+                                   STREAM_CODEC, _axi()._ingest_body_limit(health))
+        relay.start()
+    try:
+        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
+            result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
+    except _axi().RunAbandoned as abandoned:
+        # The tests the runner wrote before the signal reach the board
+        # before the run is aborted.
+        _finish_relay(relay, _INTERRUPTED_FINISH_SECONDS)
+        return _axi().emit_run_abandoned(verb, key, agent, run_id, abandoned,
+                                         warnings, post_fn=_post)
+    except BaseException:
+        _finish_relay(relay, 0)
+        raise
+    _finish_relay(relay, _STREAM_FINISH_SECONDS)
+    print(f"[crucible] {_runner_label(_UNITTEST)} exit={result.returncode}",
+          file=sys.stderr)
+    if run_id is None:
+        return _emit_unfiled(verb, args, project_dir, agent, unfiled,
+                             warnings + lifecycle, result, gate)
+    count, total = _stream_counts(stream_path)
+    if count == 0 and _is_zero_discovery(result):
+        return _emit_zero_discovery(verb, args, project_dir, agent, warnings,
+                                    run_id, STREAM_FILE)
+    if _axi().ran_nothing(result.returncode, count if total is not None else None):
+        return _axi().emit_ran_nothing(
+            verb, STREAM_FILE, result.returncode, result.stdout or "", run_id,
+            warnings, post_fn=_post, project_key=key, agent_id=agent,
+            subject=_no_report_subject(verb, _UNITTEST))
+    wrote_no_test = bool(result.returncode) and count == 0
+    coverage_paths = []
+    if collect_coverage is not None and not wrote_no_test:
+        coverage_paths, missing = collect_coverage()
+        warnings += missing
+    if narrator is not None:
+        # The final count, then `ingesting…`, both ahead of the close.
+        narrator.say(f"ran {count}/{count if total is None else total}")
+        narrator.say(_axi().INGESTING_MESSAGE)
+    if wrote_no_test:
+        # No test written and a failed runner: its captured output is filed
+        # as a compile failure, closing the run (a compile ingest states no
+        # tier).
+        _ingest_compile(project_dir, agent, _no_xml_errors_text(result, _UNITTEST),
+                        run_id=run_id, release=release)
+        _emit_axi(verb, False,
+                  {"help": _axi().no_report_help(verb, STREAM_FILE)},
+                  _axi_context(project_dir, agent_id=agent),
+                  warnings + [_no_report_warning(verb, _UNITTEST, result)],
+                  f"{verb}: ok=False — no {STREAM_FILE} test, ingested as compile")
+        return result.returncode or 1
+    runner_exit = _axi().runner_exit_code(result.returncode)
+    resp = _axi().close_stream(
+        _post, stack=_STACK, project_key=key, agent_id=agent, run_id=run_id,
+        codec=STREAM_CODEC, raw=result.stdout,
+        coverage_codec=LCOV_CODEC if coverage_paths else None,
+        coverage_paths=coverage_paths, tier=tier, context=_run_context(),
+        release=release, runner_exit=runner_exit)
+    exit_code = _axi().verb_exit(runner_exit, resp)
+    if measure_wall:
+        warnings += _axi().unit_run_wall_vs_cpu_warnings(tier, "python", timing)
+    help_steps = None
+    if gate:
+        help_steps = _axi().run_help(verb, exit_code == 0,
+                                     _axi().filed_run(resp).get("failed"),
+                                     _base_url())
+        warnings += _axi().whole_suite_unreported_warnings(_STACK, resp)
+    _emit_ingest_axi(verb, resp, project_dir, agent, help_steps=help_steps,
+                     warnings=warnings)
     return exit_code
 
 
