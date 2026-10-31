@@ -2,7 +2,9 @@
 the spec's own language: a run made with `--agent <id>` and no `--reports`
 writes, reads and ingests its results under `test-reports/<id>/` in the
 project; only that directory is ever cleared before the run; the directory
-survives the run; a run without `--agent` keeps today's shared location; an
+survives the run; a pytest run without `--agent` keeps writing its JUnit
+report directly into the shared `test-reports/` root (a unittest run without
+`--agent` sets no stream and leaves nothing there); an
 explicit `--reports <dir>` is honoured verbatim; coverage follows the run into
 the same directory; and the `--reports` help text states the per-agent
 default.
@@ -12,7 +14,8 @@ entirely today -- `rd = arg_value or DEFAULT_REPORTS` -- so every agent's run
 writes into the SAME `test-reports/` no matter who ran it, and `_wipe` clears
 whatever is there regardless of who put it there. Every test below drives the
 real toolchain (the client's real unittest runner, which writes the run's
-Crucible event stream into the reports dir (CR-CRU-224), and real
+Crucible event stream into the reports dir (CR-CRU-224), real pytest, which
+writes its JUnit report there, and real
 `coverage.py`) through the CLI and
 asserts on the FILESYSTEM PATHS the client actually used and on the payload
 the client actually POSTed, never on an assumed internal helper signature --
@@ -310,10 +313,43 @@ class AgentDirectorySurvivesTest(_BaseIsolationTest):
 
 
 class UnchangedLocationsTest(_BaseIsolationTest):
-    """AC4/§S2 -- an explicit
+    """AC4/§S2 -- a pytest run without `--agent` keeps the shared reports
+    root; an explicit
     `--reports` is honoured verbatim, agent id or not; `auto-ingest` of a
     caller-produced directory reads exactly that directory. (An agentless
     unittest run writes no stream at all: the client sets none.)"""
+
+    def test_run_without_an_agent_id_writes_directly_into_the_shared_reports_root(self):
+        # PIN, holds today: an agentless pytest run still writes its JUnit
+        # report straight into `test-reports/`, never an agent's directory.
+        pkg = self._write_fixture_pkg()
+        argv = ["test", "--project-dir", self.tmpdir, "--python", sys.executable,
+                "--runner", "pytest", "--tests", f"{pkg}/test_fixture.py"]
+        os.environ.pop("CRUCIBLE_STREAM", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                               create=True) as post_mock, \
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
+                               create=True):
+            code, _out, err = _run_main(self.module, argv)
+        self.assertEqual(code, 0, f"stderr={err!r}")
+
+        top = os.path.join(self.tmpdir, "test-reports")
+        self.assertEqual(
+            _files_under(top), ["TEST-pytest.xml"],
+            f"an agentless pytest run writes its one JUnit report directly into "
+            f"{top}, in no agent's directory; found {_files_under(top)!r}",
+        )
+        report = Path(top, "TEST-pytest.xml").read_text(encoding="utf-8")
+        read = junit_sent({"codec": "junit", "data": [report]})
+        assert read is not None
+        self.assertEqual(
+            read["summary"], {"total": 1, "passed": 1, "failed": 0, "pending": 0},
+            f"the shared root holds THIS run's report; report={report!r}",
+        )
+        self.assertIsNone(
+            _post_call_for_path(post_mock, "/api/v2/runs"),
+            "a run without --agent files nothing",
+        )
 
     def test_explicit_reports_flag_is_honoured_verbatim_even_with_an_agent_id(self):
         code, _out, err, post_mock = self._run_test_verb(

@@ -894,6 +894,8 @@ sys.exit(0)
 # its JUnit report. FAKE_FAIL_COUNT fails the last N tests (exit 1), and
 # FAKE_QUIET=1 prints no verdict line. FAKE_ENV_CAPTURE=<path> records the
 # `CRUCIBLE_STREAM` the runner was handed, before it takes it out.
+# FAKE_DIE_AFTER_RUN_START=1 writes the `run-start` and then dies, exit 1,
+# before any `test-end`: a runner that started its stream and crashed.
 FAKE_PYTHON = "#!{python}\n" + _PROLOGUE + """
 import json
 
@@ -953,6 +955,12 @@ if zero_report:
     write_junit([])
     sys.exit(zero_report_exit_code)
 emit(event="run-start", total=total)
+if os.environ.get("FAKE_DIE_AFTER_RUN_START") == "1":
+    if stream is not None:
+        stream.close()
+    sys.stderr.write("Traceback (most recent call last):\\n"
+                     "RuntimeError: the runner died after its run-start\\n")
+    sys.exit(1)
 cases = []
 counted = passed = failed = 0
 for i in range(1, total + 1):

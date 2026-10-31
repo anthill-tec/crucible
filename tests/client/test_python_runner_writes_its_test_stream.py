@@ -7,12 +7,14 @@ file, it writes one JSON object per line to it: a `run-start` carrying
 `run-end` whose totals are the `test-end` counts. Each line is written with
 `json.dumps`' default `ensure_ascii`, and flushed as it is written.
 
-Every check here runs the REAL runner as a subprocess on a scratch copy of
-the committed fixture `tests/fixtures/unittest-project` (or on a scratch
-project this file writes), and asserts what the run observably did: the
+Every check here but one runs the REAL runner as a subprocess on a scratch
+copy of the committed fixture `tests/fixtures/unittest-project` (or on a
+scratch project this file writes), and asserts what the run observably did: the
 stream file, the exit code, the console, and what the fixture's own witness
 tests recorded from inside the run (`test_witness.py`, see the fixture's
-README). The stream's cases are compared with `expected.json`, frozen from
+README). The one exception drives the runner's result in process on a
+stand-in clock, to pin how a duration is rounded. The stream's cases are
+compared with `expected.json`, frozen from
 xmlrunner 4.0.0's report of the same cases before xmlrunner was removed,
 under the same path normalisation and failure digest.
 
@@ -20,19 +22,37 @@ Pins, which hold before §S1 lands:
 - `test_the_fixture_run_exits_1` guards against a runner that answers 0 or 5
   for a run with failing cases.
 
+Three rules this file pins beside the stream's shape:
+- every `duration_ms` is a whole number of milliseconds, rounded half up as
+  the board's JUnit reading rounds a duration (`toDurationMs`,
+  src/codecs/junit.ts), so a streamed run's durations read as its JUnit
+  record's did;
+- a case's `file` is relative to the directory the runner was started in,
+  even when the case ends while its test has moved the working directory
+  elsewhere, as xmlrunner's report named it (it resolved every file once, at
+  the end of the run);
+- the runner takes unittest's own command line, so an `-o <dir>` (the
+  reports option of the command line before CR-CRU-224) is refused as
+  `python -m unittest` refuses it: argparse's usage error, exit 2, no test
+  run.
+
 Checker self-tests, which pass by design: the two synthetic-source tests of
 `xmlrunner_imports` prove the import check both ways before it reads the
 real runner's source.
 """
 
 import ast
+import importlib.util
+import io
 import json
+import math
 import re
 import resource
 import signal
 import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tests.client.live_run_harness import new_scratch
 from tests.client.unittest_project_fixture import (
@@ -156,6 +176,17 @@ class TheFixtureStreamHoldsEveryCountedCaseTest(unittest.TestCase):
         self.assertEqual(stated, counts)
         self.assertEqual(stated, self.expected["summary"])
         self.assertTrue(is_duration(run_end.get("duration_ms")), run_end)
+
+    def test_every_duration_the_stream_states_is_a_whole_number_of_milliseconds(self):
+        events = events_of(self._stream())
+        stated = [(e.get("event"), e.get("id"), e.get("duration_ms")) for e in events
+                  if e.get("event") in ("test-end", "run-end")]
+        self.assertEqual(len(stated), self.expected["caseCount"] + 1,
+                         f"one duration per test-end and one for the run-end: {stated!r}")
+        not_whole = [s for s in stated if type(s[2]) is not int or s[2] < 0]
+        self.assertEqual(not_whole, [],
+                         "every duration_ms is a whole number of milliseconds (an int "
+                         ">= 0), as the JUnit reading of the same run stored it")
 
     def test_each_line_is_in_the_file_before_the_next_test_starts(self):
         lines = stream_lines(self._stream())
@@ -474,6 +505,163 @@ class WithoutCrucibleStreamTheRunnerWritesNoStreamTest(unittest.TestCase):
                          "with no CRUCIBLE_STREAM the runner writes no stream and no report")
         self.assertEqual(len(re.findall(rf" \.\.\. {VERDICT}", output)), expected()["caseCount"],
                          f"output={output[-4000:]!r}")
+
+
+def _load_runner():
+    """The runner module, loaded by path under a private name, for the
+    in-process duration check."""
+    spec = importlib.util.spec_from_file_location("subtest_runner_in_process", RUNNER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _junit_ms(milliseconds):
+    """A duration in milliseconds rounded as the board's JUnit reading rounds
+    one (`toDurationMs`, src/codecs/junit.ts: `Math.round`, a half rounded
+    up)."""
+    return math.floor(milliseconds + 0.5)
+
+
+def _clocked_cases(clock):
+    """Two cases whose bodies move `clock` (the stand-in `perf_counter`'s
+    reading): one that takes 4.5 ms, and one whose single passing subtest
+    ends 2.5 ms after its test started. Built in a function so discovery
+    never collects them."""
+
+    class Clocked(unittest.TestCase):
+
+        def takes_four_and_a_half_ms(self):
+            clock[0] = 0.0045
+
+        def ends_a_subtest_after_two_and_a_half_ms(self):
+            clock[0] = 0.0025
+            with self.subTest(n=1):
+                pass
+
+    return Clocked("takes_four_and_a_half_ms"), Clocked("ends_a_subtest_after_two_and_a_half_ms")
+
+
+class EveryDurationIsRoundedAsTheJunitReadingRoundsItTest(unittest.TestCase):
+    """The runner's result, driven in process on a stand-in clock: a test's
+    `addDuration` time, a subtest's time since its test started, and the
+    run's time are each written as whole milliseconds, a half rounded up.
+    Python's own `round` (a half to even) and truncation both write 4, 2 and
+    12 here, where the JUnit reading stores 5, 3 and 13."""
+
+    def test_each_duration_is_written_as_whole_milliseconds_rounded_half_up(self):
+        runner = _load_runner()
+        stream = Path(new_scratch("unittest-runner-durations-")) / "crucible-events.ndjson"
+        clock = [0.0]
+        plain, parent = _clocked_cases(clock)
+        events = runner.EventStream(str(stream))
+        result = runner.StreamingTestResult(io.StringIO(), True, 0)
+        result.events = events
+        result.total = 2
+        with mock.patch.object(runner.time, "perf_counter", side_effect=lambda: clock[0]):
+            result.startTestRun()
+            plain.run(result)
+            clock[0] = 0.0
+            parent.run(result)
+            clock[0] = 0.0125
+            result.stopTestRun()
+        events.close()
+        written = events_of(stream_text(stream) or "")
+        durations = [(e.get("event"), e.get("name"), e.get("duration_ms")) for e in written
+                     if e.get("event") in ("test-end", "run-end")]
+        self.assertEqual(durations, [
+            ("test-end", "takes_four_and_a_half_ms", _junit_ms(4.5)),
+            ("test-end", "ends_a_subtest_after_two_and_a_half_ms (n=1)", _junit_ms(2.5)),
+            ("run-end", None, _junit_ms(12.5)),
+        ], f"stream={written!r}")
+        self.assertEqual([d[2] for d in durations], [5, 3, 13])
+        self.assertEqual([type(d[2]) for d in durations], [int, int, int],
+                         f"each duration_ms is an int, not a float: {durations!r}")
+
+
+# A test that moves the working directory away (restoring it in a cleanup)
+# and ends two subtests while it is away: one passes, one fails.
+_MOVES_AWAY_MODULE = (
+    "import os\n"
+    "import shutil\n"
+    "import tempfile\n"
+    "import unittest\n\n\n"
+    "class MovesAwayTest(unittest.TestCase):\n\n"
+    "    def test_stays_where_the_run_started(self):\n"
+    "        pass\n\n"
+    "    def test_its_subtests_end_while_it_works_elsewhere(self):\n"
+    "        elsewhere = tempfile.mkdtemp()\n"
+    "        self.addCleanup(shutil.rmtree, elsewhere, True)\n"
+    "        self.addCleanup(os.chdir, os.getcwd())\n"
+    "        os.chdir(elsewhere)\n"
+    "        with self.subTest(n=1):\n"
+    "            pass\n"
+    "        with self.subTest(n=2):\n"
+    "            self.fail('a failing subtest, elsewhere')\n"
+)
+
+
+class ACaseFileIsRelativeToWhereTheRunStartedTest(unittest.TestCase):
+    """A test that moves the working directory away still names its own
+    module's file relative to the directory the runner was started in, for
+    every case it ends, as xmlrunner's report named it. One file is one
+    file: the board counts the distinct `file` values a stream states."""
+
+    def test_subtests_ended_while_the_test_works_elsewhere_name_the_same_relative_file(self):
+        scratch = Path(new_scratch("unittest-runner-moves-away-"))
+        (scratch / "tests").mkdir()
+        (scratch / "tests" / "test_moves_away.py").write_text(_MOVES_AWAY_MODULE,
+                                                              encoding="ascii")
+        stream = scratch / "crucible-events.ndjson"
+        result = run_runner(scratch, ["discover", "-s", "tests", "-p", "test_*.py", "-v"],
+                            runner_env(stream))
+        self.assertEqual(result.returncode, 1, f"output={output_of(result)[-3000:]!r}")
+        ends = _test_ends(events_of(stream_text(stream) or ""))
+        files = {e.get("name"): e.get("file") for e in ends}
+        self.assertEqual(files, {
+            "test_stays_where_the_run_started": "tests/test_moves_away.py",
+            "test_its_subtests_end_while_it_works_elsewhere (n=1)": "tests/test_moves_away.py",
+            "test_its_subtests_end_while_it_works_elsewhere (n=2)": "tests/test_moves_away.py",
+        }, f"test-ends: {ends!r}")
+        self.assertEqual(len({e.get("file") for e in ends}), 1,
+                         "one module is one distinct file in the stream")
+
+
+class TheRunnerTakesUnittestsOwnCommandLineTest(unittest.TestCase):
+    """`-o <reports>` is gone from the runner's command line. unittest's own
+    command line (`unittest.main`'s argparse parsers, discover's and the
+    dotted targets') knows no `-o`, so `python -m unittest` answers one with
+    argparse's usage error, `unrecognized arguments: -o`, exit 2, before any
+    test runs. The runner answers it the same way."""
+
+    def _assert_refused_as_unittest_refuses_it(self, result, stream):
+        output = output_of(result)
+        self.assertEqual(result.returncode, 2,
+                         f"argparse's usage error exits 2; output={output[-3000:]!r}")
+        self.assertIn("error: unrecognized arguments: -o", result.stderr,
+                      f"stderr={result.stderr[-3000:]!r}")
+        self.assertEqual(re.findall(rf" \.\.\. {VERDICT}", output), [],
+                         f"no test runs; output={output[-3000:]!r}")
+        self.assertNotIn('"test-end"', stream_text(stream) or "",
+                         "a refused command line streams no test")
+
+    def test_discover_with_an_o_option_is_refused_as_unittest_refuses_it(self):
+        project = copy_fixture("unittest-runner-o-discover-")
+        stream = project.parent / "crucible-events.ndjson"
+        reports = project.parent / "reports"
+        result = run_runner(project, [*DISCOVER_WITNESSES, "-o", str(reports)],
+                            runner_env(stream))
+        self._assert_refused_as_unittest_refuses_it(result, stream)
+
+    def test_dotted_targets_with_an_o_option_are_refused_as_unittest_refuses_them(self):
+        project = copy_fixture("unittest-runner-o-dotted-")
+        stream = project.parent / "crucible-events.ndjson"
+        reports = project.parent / "reports"
+        result = run_runner(project / "tests",
+                            ["test_witness.WitnessTest", "-v", "-o", str(reports)],
+                            runner_env(stream))
+        self._assert_refused_as_unittest_refuses_it(result, stream)
 
 
 if __name__ == "__main__":

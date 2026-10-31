@@ -267,7 +267,8 @@ class AStreamedUnittestRunClosesThroughItsStreamTest(StreamedRunCase):
 
 class ARunThatRanNothingOrWroteNoStreamTest(StreamedRunCase):
     """AC5 — a zero-test run is caught first, from the local count, and
-    aborted; a runner that wrote no stream is ingested as a compile failure."""
+    aborted; a runner that wrote no stream is ingested as a compile failure;
+    a runner that wrote a `run-start` and died is closed as a stream."""
 
     def test_a_zero_test_discovery_keeps_no_tests_discovered_and_is_aborted_unclosed(self):
         for verb in ("test", "regression"):
@@ -303,6 +304,33 @@ class ARunThatRanNothingOrWroteNoStreamTest(StreamedRunCase):
         self.assertEqual(self.posts_to(CLOSE), [], "no stream close for a run with no stream")
         self.assertEqual(self.data_batches(), [])
         self.assertNotEqual(result.returncode, 0)
+
+    def test_a_runner_that_dies_after_its_run_start_is_closed_as_a_stream_not_a_compile(self):
+        # The no-stream compile path needs all three: no `test-end` in the
+        # local stream, a confirmed `held` of 0, and a non-zero exit. A
+        # runner that wrote its `run-start` has a stream the board holds, so
+        # its run is closed as a stream the board flags incomplete.
+        self.board.script_run(warnings=[{
+            "code": "stream-incomplete",
+            "detail": "the stream cannot be trusted: no run-end — the run is stored "
+                      "flagged incomplete"}])
+        result = self.drive(FAKE_TOTAL=2, FAKE_DIE_AFTER_RUN_START="1")
+        self.assertEqual(self.stream_seen(), self.expected_stream_path(), self.diag(result))
+        self.assertEqual(kinds(stream_events(self.board.held_stream(RUN_ID))), ["run-start"],
+                         f"the board holds the run-start the runner wrote; {self.diag(result)}")
+        self.assertEqual(self.posts_to(COMPILE), [],
+                         f"a stream the board holds is never filed as a compile failure; "
+                         f"{self.diag(result)}")
+        closes = self.posts_to(CLOSE)
+        self.assertEqual(len(closes), 1, self.diag(result))
+        body = closes[0]
+        self.assertEqual(body.get("codec"), "crucible-events")
+        self.assertEqual(body.get("runId"), RUN_ID)
+        self.assertNotIn("data", body, "a stream close sends no data")
+        self.assertEqual(body.get("runnerExit"), 1)
+        self.assertIn("stream-incomplete", warning_codes(envelope(result.stdout)),
+                      self.diag(result))
+        self.assertNotEqual(result.returncode, 0, self.diag(result))
 
 
 class WhenTheBoardCannotStreamTest(StreamedRunCase):
@@ -545,6 +573,79 @@ class AStreamedRunIsIsolatedTest(StreamedRunCase):
                      if e.get("event") == "test-end"]
         self.assertEqual(inner_ids, ["test_inner.InnerCase.test_inner_only"],
                          "the nested run streams its own record to its own run")
+
+
+# A stand-in interpreter that records, per launch, its argv and the
+# `CRUCIBLE_STREAM` it was handed, to `interpreter_runs.jsonl` beside it. A
+# suite run (the client's `subtest_runner.py`) writes one passing case as a
+# Crucible event stream to the file that variable names; `coverage lcov -o
+# <file>` writes a small lcov; anything else exits 0.
+ENV_RECORDING_PYTHON = r'''
+import json
+import os
+import sys
+
+here = os.path.dirname(os.path.abspath(__file__))
+argv = sys.argv[1:]
+with open(os.path.join(here, "interpreter_runs.jsonl"), "a") as handle:
+    handle.write(json.dumps({"argv": argv,
+                             "stream": os.environ.get("CRUCIBLE_STREAM")}) + "\n")
+if "lcov" in argv and "-o" in argv[:-1]:
+    with open(argv[argv.index("-o") + 1], "w") as handle:
+        handle.write("SF:pkg_under_measure/mod.py\nLF:1\nLH:1\nend_of_record\n")
+    sys.exit(0)
+stream = os.environ.pop("CRUCIBLE_STREAM", None)
+if any(os.path.basename(arg) == "subtest_runner.py" for arg in argv):
+    sys.stderr.write("test_case_1 (fake_module.FakeCase.test_case_1) ... ok\n")
+    if stream:
+        with open(stream, "w", encoding="utf-8") as handle:
+            for event in (dict(event="run-start", total=1),
+                          dict(event="test-end", id="fake_module.FakeCase.test_case_1",
+                               name="test_case_1", suite="fake_module.FakeCase",
+                               file="fake_module.py", status="pass", duration_ms=1),
+                          dict(event="run-end", total=1, passed=1, failed=0,
+                               pending=0, duration_ms=1)):
+                handle.write(json.dumps(event) + "\n")
+                handle.flush()
+sys.exit(0)
+'''
+
+
+class OnlyTheRunnerIsHandedTheStreamTest(StreamedRunCase):
+    """AC9 — `CRUCIBLE_STREAM` is set in the runner's environment alone:
+    the `coverage lcov` child a `regression --coverage` run starts once the
+    runner has exited is handed none."""
+
+    def interpreter_runs(self):
+        path = self.project / "interpreter_runs.jsonl"
+        if not path.is_file():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()]
+
+    def test_the_coverage_lcov_child_of_a_streamed_regression_inherits_no_stream(self):
+        fake = self.project / "recording_python.py"
+        fake.write_text(f"#!{sys.executable}\n" + ENV_RECORDING_PYTHON, encoding="utf-8")
+        fake.chmod(0o755)
+        result = subprocess.run(
+            self.command("regression", "--coverage", "--cov-source", "pkg_under_measure",
+                         python=str(fake)),
+            cwd=str(self.project), env=self.environment(), capture_output=True,
+            text=True, timeout=RUN_TIMEOUT, check=False)
+        runs = self.interpreter_runs()
+        suite_runs = [r for r in runs if r["argv"][:3] == ["-m", "coverage", "run"]]
+        lcov_runs = [r for r in runs if r["argv"][:3] == ["-m", "coverage", "lcov"]]
+        self.assertEqual(len(suite_runs), 1, f"runs={runs!r} {self.diag(result)}")
+        self.assertEqual(suite_runs[0]["stream"], self.expected_stream_path(),
+                         "the runner, under `coverage run`, is handed the stream")
+        self.assertEqual(len(lcov_runs), 1, f"runs={runs!r} {self.diag(result)}")
+        self.assertIsNone(lcov_runs[0]["stream"],
+                          f"the `coverage lcov` child is handed no CRUCIBLE_STREAM; "
+                          f"runs={runs!r}")
+        self.assertEqual([r["argv"][:3] for r in runs if r["stream"] is not None],
+                         [["-m", "coverage", "run"]],
+                         f"only the runner's launch carries the stream; runs={runs!r}")
+        self.assertEqual(result.returncode, 0, self.diag(result))
 
 
 class PytestAndAutoIngestKeepTheirJunitRecordTest(StreamedRunCase):
