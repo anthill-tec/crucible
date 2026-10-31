@@ -1122,14 +1122,13 @@ _ARDUINO_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 
 ROUTE_TABLE = {
     "bun": {
-        # `test` with no junit.xml files the synthetic compile ingest: no report.
-        "test": routes(_THROUGH_THE_SHARED_INGEST, _BUN_COMPILE),
-        "regression": routes(_THROUGH_THE_SHARED_INGEST),
-        "unit": routes(_THROUGH_THE_SHARED_INGEST),
-        "module": routes(_THROUGH_THE_SHARED_INGEST),
-        "integration": routes(_THROUGH_THE_SHARED_INGEST),
-        "e2e": routes(_THROUGH_THE_SHARED_INGEST),
-        "bdd": routes(_THROUGH_THE_SHARED_INGEST),
+        # `test` with no junit.xml files the synthetic compile ingest: no
+        # report. A declared tier verb, and `regression` through a declared
+        # script, run a stream target; one whose runner wrote nothing is
+        # closed by the compile ingest: no report.
+        **{verb: routes(_THROUGH_THE_SHARED_INGEST, _BUN_COMPILE)
+           for verb in ("test", "regression", "unit", "module", "integration",
+                        "e2e", "bdd")},
         # Its tsc step files a compile ingest: no report.
         "pre-merge-gate": routes(_THROUGH_THE_SHARED_INGEST, _BUN_COMPILE),
         "auto-ingest": routes(_THROUGH_THE_SHARED_INGEST),

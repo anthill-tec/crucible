@@ -73,6 +73,9 @@ INGEST_POSITIONAL = ("_post", "_get")
 INGEST_KEYWORDS = ("agent_id", "codec", "context", "coverage_codec",
                    "coverage_paths", "project_key", "raw", "release",
                    "report_paths", "run_id", "runner_exit", "stack", "tier")
+# bun also names the runner framework its reports came from, so the run is
+# filed under it.
+BUN_INGEST_KEYWORDS = tuple(sorted(INGEST_KEYWORDS + ("framework",)))
 
 DEFINITION, OWN_CALL, INGEST_LITERAL = ("definition", "own call",
                                         "ingest line literal")
@@ -340,6 +343,7 @@ class TheOwnCopyScanIsProvedOnSyntheticSourcesTest(unittest.TestCase):
 
 class _ClientScan:
     CLIENT = None  # the client module's file name
+    INGEST_KEYWORDS = INGEST_KEYWORDS  # the keywords its `_file_reports` passes
 
     def source(self):
         return (CLIENTS / self.CLIENT).read_text(encoding="utf-8")
@@ -371,13 +375,14 @@ class _ClientScan:
     def test_file_reports_passes_the_shared_ingest_the_arguments_it_passed_before(self):
         self.assertEqual(
             file_reports_ingest_arguments(self.source()),
-            (INGEST_POSITIONAL, INGEST_KEYWORDS),
+            (INGEST_POSITIONAL, self.INGEST_KEYWORDS),
             f"{self.CLIENT} `_file_reports` passes `ingest_reports` the same "
             f"seams and keywords")
 
 
 class TheBunClientReadsTheSharedIngestHelpersTest(_ClientScan, unittest.TestCase):
     CLIENT = "bun-crucible.py"
+    INGEST_KEYWORDS = BUN_INGEST_KEYWORDS
 
 
 class ThePythonClientReadsTheSharedIngestHelpersTest(_ClientScan, unittest.TestCase):
