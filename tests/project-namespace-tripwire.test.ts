@@ -2967,7 +2967,7 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 883 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 538 },
-  clients: { exts: [".py"], develop: 601, head: 810 },
+  clients: { exts: [".py"], develop: 601, head: 816 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
