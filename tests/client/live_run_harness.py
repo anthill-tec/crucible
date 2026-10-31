@@ -16,6 +16,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import socket
@@ -26,6 +27,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -45,7 +47,12 @@ INGEST_PATHS = ("/api/v2/runs", "/api/v2/runs/parsed", "/api/v2/runs/compile")
 # version. Both health routes answer it.
 HEALTH_PATHS = ("/api/health", "/api/v2/health")
 HEALTH_VERSION = "0.4.0"
-HEALTH_CODECS = {"test": ["junit", "playwright"], "coverage": ["jacoco", "lcov"]}
+HEALTH_CODECS = {"test": ["crucible-events", "junit", "playwright"],
+                 "coverage": ["jacoco", "lcov"]}
+# The stream codec a python unittest run's record is written in (CR-CRU-224),
+# and the open run's stream route a client relays it to (CR-CRU-200 §S2).
+STREAM_CODEC = "crucible-events"
+STREAM_ROUTE = re.compile(r"^/api/v2/runs/([^/]+)/stream$")
 # The shipped recommendation for `ingest_body_bytes` (128 MiB).
 DEFAULT_INGEST_BODY_BYTES = 128 * 1024 * 1024
 # The `run` block `/api/v2/runs` answers with until a test scripts its own.
@@ -54,11 +61,21 @@ DEFAULT_RUN_BLOCK = {"total": 0, "passed": 0, "failed": 0}
 DROP_SHAPES = ("close", "reset", "truncate", "truncate-error", "garble")
 
 
-def board_health(ingest_body_bytes=DEFAULT_INGEST_BODY_BYTES):
+def _health_codecs(stream_codec=True):
+    """A copy of `HEALTH_CODECS`, without the stream codec when the board is
+    one that decodes no stream."""
+    codecs = json.loads(json.dumps(HEALTH_CODECS))
+    if not stream_codec:
+        codecs["test"] = [name for name in codecs["test"] if name != STREAM_CODEC]
+    return codecs
+
+
+def board_health(ingest_body_bytes=DEFAULT_INGEST_BODY_BYTES, stream_codec=True):
     """The health a board that decodes the clients' reports answers: what
-    `RecordingBoard` answers unscripted, for an in-process `_get` stub."""
+    `RecordingBoard` answers unscripted, for an in-process `_get` stub. With
+    `stream_codec` False it is a board that decodes no `crucible-events`."""
     return {"ok": True, "status": "healthy", "version": HEALTH_VERSION,
-            "codecs": json.loads(json.dumps(HEALTH_CODECS)),
+            "codecs": _health_codecs(stream_codec),
             "limits": {"ingest_body_bytes": ingest_body_bytes}}
 
 
@@ -107,11 +124,27 @@ class RecordingBoard:
     (`ingest_body_bytes`, the shipped 128 MiB unless a test names its own) \u2014
     unless a test scripts another answer (`script_health`) or a failure
     (`fail_health`). `/api/v2/runs` answers with the `run` block a test
-    scripts (`script_run`); the board decodes nothing it is sent."""
+    scripts (`script_run`); the board decodes nothing it is sent.
 
-    def __init__(self, ingest_body_bytes=DEFAULT_INGEST_BODY_BYTES):
+    An open run's stream (`POST /api/v2/runs/<runId>/stream`) is held as the
+    real board holds it (`appendRunStream`, src/run-stream.ts): a batch is
+    appended at the UTF-8 byte offset its `from` states and answered `200
+    {ok, runId, held}`; a gap or an overlap that differs from the held bytes
+    is a 409 carrying `held`; a total past `stream_limit` (default
+    `ingest_body_bytes`) is a 413 carrying `held`. `stream_codec=False` is a
+    board whose health lists no `crucible-events`; `stream_route=False` is a
+    board with no stream route at all (every batch a 404)."""
+
+    def __init__(self, ingest_body_bytes=DEFAULT_INGEST_BODY_BYTES,
+                 stream_codec=True, stream_route=True, stream_limit=None):
         self.events = []  # [(received_at, method, path, body)]
         self.ingest_body_bytes = ingest_body_bytes
+        self.stream_codec = stream_codec
+        self.stream_route = stream_route
+        self.stream_limit = (ingest_body_bytes if stream_limit is None
+                             else stream_limit)
+        # Each open run's held stream, as the UTF-8 bytes the board holds.
+        self._streams = {}
         # Scripted health: a whole answer that replaces the default one, or a
         # non-200 failure `(status, error)`. Both default off.
         self._health_override = None
@@ -251,7 +284,15 @@ class RecordingBoard:
                     return
                 if held:
                     board._hold_released.wait(timeout=30)
-                if self.path == START:
+                streamed = STREAM_ROUTE.match(self.path)
+                if streamed is not None:
+                    status, answer = board._append_stream(
+                        urllib.parse.unquote(streamed.group(1)), body)
+                    if status == 200:
+                        self._reply(answer)
+                    else:
+                        self._reply_status(status, answer)
+                elif self.path == START:
                     refuse, error = False, None
                     with board._lock:
                         if board._refuse_start_remaining > 0:
@@ -325,8 +366,46 @@ class RecordingBoard:
         if self._health_override is not None:
             return json.loads(json.dumps(self._health_override))
         return {"ok": True, "status": "healthy", "version": HEALTH_VERSION,
-                "codecs": json.loads(json.dumps(HEALTH_CODECS)),
+                "codecs": _health_codecs(self.stream_codec),
                 "limits": {"ingest_body_bytes": self.ingest_body_bytes}}
+
+    def _append_stream(self, run_id, body):
+        """One stream batch, held as the real board holds it. Returns
+        `(status, answer)`."""
+        if not self.stream_route:
+            return 404, {"ok": False, "error": f"no route: /api/v2/runs/{run_id}/stream"}
+        body = body if isinstance(body, dict) else {}
+        start, data = body.get("from"), body.get("data")
+        if (isinstance(start, bool) or not isinstance(start, int) or start < 0
+                or not isinstance(data, str)):
+            return 400, {"ok": False, "error": "malformed stream batch — nothing stored"}
+        if body.get("codec", STREAM_CODEC) != STREAM_CODEC:
+            return 400, {"ok": False, "error": "not a stream codec — nothing stored"}
+        incoming = data.encode("utf-8")
+        with self._lock:
+            held = self._streams.setdefault(run_id, bytearray())
+            size = len(held)
+            if start > size:
+                return 409, {"ok": False, "held": size,
+                             "error": f"a batch from {start} leaves a gap after the {size} bytes held"}
+            overlap = min(size - start, len(incoming))
+            if bytes(held[start:start + overlap]) != incoming[:overlap]:
+                return 409, {"ok": False, "held": size,
+                             "error": f"a batch from {start} differs from the bytes held across its overlap"}
+            if start + len(incoming) > self.stream_limit:
+                return 413, {"ok": False, "held": size,
+                             "error": "the stream would pass ingest_body_bytes — the run's stream is marked cut"}
+            held.extend(incoming[overlap:])
+            return 200, {"ok": True, "runId": run_id, "held": len(held)}
+
+    def held_stream(self, run_id):
+        """The text the board holds as `run_id`'s stream (`""` for none)."""
+        with self._lock:
+            return bytes(self._streams.get(run_id, b"")).decode("utf-8")
+
+    def stream_posts(self):
+        """`[(path, body), ...]` for every stream batch, in wire order."""
+        return [(p, b) for p, b in self.posts() if STREAM_ROUTE.match(p)]
 
     def default_health(self):
         """A copy of the health this board answers unscripted, for a test to
@@ -737,40 +816,109 @@ sys.stdout.write("[INFO] BUILD SUCCESS\\n")
 sys.exit(0)
 """
 
+# The python runner's stand-in. A unittest drive (CR-CRU-224) writes the
+# Crucible event stream to the file `CRUCIBLE_STREAM` names, which it takes out
+# of its own environment first, as `clients/subtest_runner.py` does: one
+# `run-start` (`total` = FAKE_TOTAL), one `test-end` per counted case (with
+# FAKE_SUBTESTS=k, k subtests per test, each its own case), one `run-end`
+# (none with FAKE_NO_RUN_END=1; its total FAKE_RUN_END_TOTAL when set), each
+# line flushed as it is written. A pytest drive (`--junitxml=<path>`) keeps
+# its JUnit report. FAKE_FAIL_COUNT fails the last N tests (exit 1), and
+# FAKE_QUIET=1 prints no verdict line. FAKE_ENV_CAPTURE=<path> records the
+# `CRUCIBLE_STREAM` the runner was handed, before it takes it out.
 FAKE_PYTHON = "#!{python}\n" + _PROLOGUE + """
+import json
+
+env_capture = os.environ.get("FAKE_ENV_CAPTURE")
+if env_capture:
+    with open(env_capture, "w") as f:
+        json.dump(dict(stream=os.environ.get("CRUCIBLE_STREAM"), argv=sys.argv[1:]), f)
 argv = sys.argv[1:]
 verbose = "-v" in argv
-outdir = None
-for i, a in enumerate(argv):
-    if a == "-o" and i + 1 < len(argv):
-        outdir = argv[i + 1]
+junitxml = None
+for a in argv:
+    if a.startswith("--junitxml="):
+        junitxml = a.split("=", 1)[1]
+stream_path = os.environ.pop("CRUCIBLE_STREAM", None)
+fail_count = _env_int("FAKE_FAIL_COUNT", "0")
+subtests = _env_int("FAKE_SUBTESTS", "0")
+quiet = os.environ.get("FAKE_QUIET") == "1"
+no_run_end = os.environ.get("FAKE_NO_RUN_END") == "1"
+run_end_total = os.environ.get("FAKE_RUN_END_TOTAL")
+stream = None
+if junitxml is None and stream_path and not no_report:
+    stream = open(stream_path, "w", encoding="utf-8")
+
+def emit(**event):
+    if stream is not None:
+        stream.write(json.dumps(event) + "\\n")
+        stream.flush()
+
+def run_end(counted, passed, failed):
+    if not no_run_end:
+        emit(event="run-end",
+             total=int(run_end_total) if run_end_total else counted,
+             passed=passed, failed=failed, pending=0, duration_ms=1)
+    if stream is not None:
+        stream.close()
+
+def write_junit(cases):
+    if junitxml is None or no_report:
+        return
+    parent = os.path.dirname(junitxml)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(junitxml, "w") as f:
+        f.write('<?xml version="1.0" encoding="UTF-8"?>\\n<testsuites><testsuite '
+                'name="pytest" tests="%d">%s</testsuite></testsuites>\\n'
+                % (len(cases), "".join(cases)))
+
 if os.environ.get("FAKE_ZERO_DISCOVERY") == "1":
+    emit(event="run-start", total=0)
+    run_end(0, 0, 0)
     sys.stderr.write("\\n----------------------------------------------------------------------\\n"
                      "Ran 0 tests in 0.000s\\n\\nNO TESTS RAN\\n")
     sys.exit(5)
 if zero_report:
-    if outdir and not no_report:
-        os.makedirs(outdir, exist_ok=True)
-        with open(os.path.join(outdir, "TEST-fake_module.FakeCase.xml"), "w") as f:
-            f.write('<?xml version="1.0" encoding="UTF-8"?>\\n<testsuite '
-                    'name="fake_module.FakeCase" tests="0" errors="0" failures="0" '
-                    'skipped="0"></testsuite>\\n')
+    emit(event="run-start", total=0)
+    run_end(0, 0, 0)
+    write_junit([])
     sys.exit(zero_report_exit_code)
+emit(event="run-start", total=total)
 cases = []
+counted = passed = failed = 0
 for i in range(1, total + 1):
     maybe_block(i)
-    if verbose:
-        sys.stderr.write("test_case_%d (fake_module.FakeCase.test_case_%d) ... ok\\n" % (i, i))
+    fails = i > total - fail_count
+    name = "test_case_%d" % i
+    test_id = "fake_module.FakeCase." + name
+    if verbose and not quiet:
+        sys.stderr.write("%s (%s) ... %s\\n" % (name, test_id, "FAIL" if fails else "ok"))
         sys.stderr.flush()
-    cases.append('<testcase classname="fake_module.FakeCase" name="test_case_%d" '
-                 'time="0.001"></testcase>' % i)
-if outdir and not no_report:
-    os.makedirs(outdir, exist_ok=True)
-    with open(os.path.join(outdir, "TEST-fake_module.FakeCase.xml"), "w") as f:
-        f.write('<?xml version="1.0" encoding="UTF-8"?>\\n<testsuite '
-                'name="fake_module.FakeCase" tests="%d" errors="0" failures="0" '
-                'skipped="0">%s</testsuite>\\n' % (total, "".join(cases)))
-sys.exit(0)
+    shapes = ([(test_id + " (i=%d)" % k, name + " (i=%d)" % k) for k in range(subtests)]
+              or [(test_id, name)])
+    for case_id, case_name in shapes:
+        counted += 1
+        event = dict(event="test-end", id=case_id, name=case_name,
+                     suite="fake_module.FakeCase", file="fake_module.py",
+                     status="fail" if fails else "pass", duration_ms=1)
+        if fails:
+            failed += 1
+            event["failure"] = dict(
+                message="planted failure", type="AssertionError",
+                trace=('Traceback (most recent call last):\\n'
+                       '  File "fake_module.py", line 1, in %s\\n'
+                       'AssertionError: planted failure' % name))
+        else:
+            passed += 1
+        emit(**event)
+    failure = ('<failure message="planted failure">planted failure</failure>'
+               if fails else "")
+    cases.append('<testcase classname="fake_module.FakeCase" name="%s" '
+                  'file="fake_module.py" time="0.001">%s</testcase>' % (name, failure))
+run_end(counted, passed, failed)
+write_junit(cases)
+sys.exit(1 if failed else 0)
 """
 
 FAKE_CARGO = "#!{python}\n" + _PROLOGUE + """
