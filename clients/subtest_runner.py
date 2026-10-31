@@ -5,8 +5,9 @@ interpreter (optionally under ``coverage run``). It takes unittest's own
 command line (``discover -s <dir> -p <pattern> -v``, or dotted targets plus
 ``-v``) and runs ``unittest`` through ``unittest.TextTestRunner`` with a
 subclass of ``unittest.TextTestResult`` (CR-CRU-224 §S1). It writes no JUnit
-report. An ``-o <dir>`` (the reports option of the command line before
-CR-CRU-224) is accepted and dropped.
+report. Its command line goes to ``unittest.main`` unchanged, so an
+``-o <dir>`` is refused as ``python -m unittest`` refuses it: argparse's
+usage error, exit 2, and no test runs.
 
 The counting rule is CR-CRU-189's:
 
@@ -56,10 +57,6 @@ _ErrorHolder: Any = unittest.suite._ErrorHolder  # pyright: ignore[reportAttribu
 # The environment variable naming the stream file.
 STREAM_VAR = "CRUCIBLE_STREAM"
 
-# The reports-dir option of the command line before CR-CRU-224; accepted and
-# dropped.
-_REPORTS_OPTION = "-o"
-
 # The suite prefix a test run as a script carries, stripped from `suite`.
 _MAIN_PREFIX = "__main__."
 
@@ -85,20 +82,6 @@ def _restore_module_search_path() -> None:
     own_dir = os.path.dirname(os.path.abspath(__file__))
     if sys.path and os.path.abspath(sys.path[0] or os.curdir) == own_dir:
         sys.path[0] = os.getcwd()
-
-
-def _without_reports_option(args: list) -> list:
-    """``args`` with any ``-o <dir>`` dropped."""
-    kept: list = []
-    skip = False
-    for arg in args:
-        if skip:
-            skip = False
-        elif arg == _REPORTS_OPTION:
-            skip = True
-        else:
-            kept.append(arg)
-    return kept
 
 
 def _params_maps(subtest: Any) -> tuple:
@@ -408,7 +391,7 @@ def main() -> None:
     path = os.environ.pop(STREAM_VAR, None) or None
     events = EventStream(path)
     try:
-        unittest.main(module=None, argv=[sys.argv[0], *_without_reports_option(sys.argv[1:])],
+        unittest.main(module=None, argv=sys.argv,
                       testRunner=streaming_runner_class(events))
     finally:
         events.close()
