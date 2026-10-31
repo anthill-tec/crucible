@@ -298,6 +298,7 @@ describe("health states that the board records a gate's scope and suites", () =>
         test: ["crucible-events", "junit", "playwright"],
         coverage: ["jacoco", "lcov"],
         view: ["bun-console"],
+        stream: ["crucible-events"],
       });
     });
   }

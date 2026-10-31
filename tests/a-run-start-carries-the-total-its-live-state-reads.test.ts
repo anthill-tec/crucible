@@ -13,8 +13,9 @@
 //    state, and `/live` answers 404 as today — its first batch then reads the
 //    start's total;
 //  - the schema: migration v22 adds `runs.total` and `run_live.reader_state`,
-//    a store walked back to v21 is migrated to v22, and RUNBOOK's schema
-//    figures read v22.
+//    and a store walked back to v21 is migrated through it to this build's
+//    v23. The build's schema version and RUNBOOK's schema figures are pinned
+//    in a-run-carries-the-framework-it-ran-under.test.ts, which v23 belongs to.
 //
 // A reading this file takes of §S2 that the orchestrator rules on: a stream
 // `run-start` stating total 0 "gives no total", so the start's total stands.
@@ -30,7 +31,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ServerHandle } from "../src/server.ts";
-import { SCHEMA_VERSION, Store } from "../src/store.ts";
+import { Store } from "../src/store.ts";
 import {
   bootOn,
   eventLine,
@@ -191,7 +192,8 @@ describe("an open run with a start total and no batch has no live state", () => 
 // ── Migration v22 ───────────────────────────────────────────────────────────
 
 const PRE_TOTAL_VERSION = 21;
-const TOTAL_VERSION = 22;
+/** The version a migrated store reaches: the end of the chain, past v22's step. */
+const BUILD_VERSION = 23;
 
 function scratchDbPath(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crucible-run-total-v22-"));
@@ -232,11 +234,7 @@ function makeV21Store(): string {
 }
 
 describe("migration v22 adds runs.total and run_live.reader_state", () => {
-  test("the schema version this build declares is 22", () => {
-    expect(SCHEMA_VERSION).toBe(TOTAL_VERSION);
-  });
-
-  test("a v21 store is migrated 21 → 22: it gains runs.total and run_live.reader_state, both nullable, and is stamped 22", () => {
+  test("a v21 store is migrated 21 → 23: it gains runs.total and run_live.reader_state, both nullable, and is stamped 23", () => {
     const dbPath = makeV21Store();
     const before = new Database(dbPath);
     try {
@@ -250,10 +248,10 @@ describe("migration v22 adds runs.total and run_live.reader_state", () => {
     const store = Store.open(dbPath);
     stores.push(store);
     expect(store.migration?.from).toBe(PRE_TOTAL_VERSION);
-    expect(store.migration?.to).toBe(TOTAL_VERSION);
-    expect(store.schemaVersion).toBe(TOTAL_VERSION);
+    expect(store.migration?.to).toBe(BUILD_VERSION);
+    expect(store.schemaVersion).toBe(BUILD_VERSION);
     const db = dbOf(store);
-    expect(rawUserVersion(db)).toBe(TOTAL_VERSION);
+    expect(rawUserVersion(db)).toBe(BUILD_VERSION);
     expect(columnsOf(db, "runs").find((c) => c.name === "total")).toEqual(expect.objectContaining({ notnull: 0 }));
     expect(columnsOf(db, "run_live").find((c) => c.name === "reader_state")).toEqual(
       expect.objectContaining({ notnull: 0 }),
@@ -276,16 +274,5 @@ describe("migration v22 adds runs.total and run_live.reader_state", () => {
       .get(runId);
     expect(row).not.toBeNull();
     expect(Object.keys(row ?? {})).toContain("reader_state");
-  });
-});
-
-describe("RUNBOOK's schema figures read v22", () => {
-  test("docs/RUNBOOK.md states schema v22, the migration banner reaching v22 and the health figure schemaVersion 22, and names no v21 figure", () => {
-    const runbook = fs.readFileSync(path.join(import.meta.dir, "..", "docs", "RUNBOOK.md"), "utf8");
-    expect(runbook).toContain(`schema v${TOTAL_VERSION})`);
-    expect(runbook).toContain(`-> v${TOTAL_VERSION} (`);
-    expect(runbook).toContain(`"schemaVersion":${TOTAL_VERSION}`);
-    expect(runbook).not.toContain(`schema v${PRE_TOTAL_VERSION})`);
-    expect(runbook).not.toContain(`"schemaVersion":${PRE_TOTAL_VERSION}`);
   });
 });

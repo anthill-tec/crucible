@@ -28,16 +28,17 @@ const CODECS = {
   test: ["crucible-events", "junit", "playwright"],
   coverage: ["jacoco", "lcov"],
   view: ["bun-console"],
+  stream: ["crucible-events"],
 };
 
 describe("health names the codecs the board decodes", () => {
-  test("GET /api/health carries codecs {test: [crucible-events, junit, playwright], coverage: [jacoco, lcov], view: [bun-console]}", async () => {
+  test("GET /api/health carries codecs {test: [crucible-events, junit, playwright], coverage: [jacoco, lcov], view: [bun-console], stream: [crucible-events]}", async () => {
     const body = await health("/api/health");
     expect(body.ok).toBe(true);
     expect(body.codecs).toEqual(CODECS);
   });
 
-  test("GET /api/v2/health carries the same codecs", async () => {
+  test("GET /api/v2/health carries the same codecs, stream: [crucible-events] among them", async () => {
     const body = await health("/api/v2/health");
     expect(body.ok).toBe(true);
     expect(body.codecs).toEqual(CODECS);
