@@ -112,7 +112,22 @@ EXPECTED_FLEET_FILES = frozenset({
     # the operator's editable `<install>/crucible.toml` is absent.
     "crucible.toml",
     "subtest_runner.py",
+    # The shipped Vitest reporter, in the `reporters/` subdirectory the client
+    # hands a runner as `CRUCIBLE_REPORTERS`. Named by its path under
+    # `clients/`.
+    "reporters/vitest-crucible.ts",
 })
+
+
+def _landed_fleet_listing(clients_dir):
+    """Every regular file under `clients_dir`, recursively, as a path relative
+    to it with `/` separators -- the shape `EXPECTED_FLEET_FILES` names."""
+    listing = set()
+    for directory, _, files in os.walk(clients_dir):
+        for name in files:
+            relative = os.path.relpath(os.path.join(directory, name), clients_dir)
+            listing.add(Path(relative).as_posix())
+    return listing
 
 # The MERGED four-stage pipeline (CR-CRU-090 §S1 `[fleet]` + CR-CRU-070
 # `[unit]`): `fleet` strictly before `manifest`, `unit` last. Asserted as the
@@ -349,7 +364,7 @@ class FleetStageLandsThePackagedFilesTest(_ScratchInstallCase):
                 f"AC2 -- {self.clients_dir()!r} does not exist at all, so the "
                 f"fleet never landed; ok={self.ok} stages={self.stages} "
                 f"warnings={self.warnings}")
-        landed = set(os.listdir(self.clients_dir()))
+        landed = _landed_fleet_listing(self.clients_dir())
         self.assertEqual(
             landed, set(EXPECTED_FLEET_FILES),
             f"AC2 -- <target-dir>/clients/ must hold EXACTLY the "
@@ -1402,8 +1417,9 @@ class FleetStageConfinementAndModeTest(_FleetConvergenceCase):
         source_dir = os.path.join(self.outside, "stand-in-source")
         os.makedirs(source_dir, exist_ok=True)
         for name in sorted(EXPECTED_FLEET_FILES):
-            shutil.copyfile(str(SOURCE_CLIENTS_DIR / name),
-                            os.path.join(source_dir, name))
+            destination = os.path.join(source_dir, name)
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            shutil.copyfile(str(SOURCE_CLIENTS_DIR / name), destination)
         for name, mode in (MODE_STAND_IN_EXECUTABLE, MODE_STAND_IN_PRIVATE):
             os.chmod(os.path.join(source_dir, name), mode)
         return source_dir
