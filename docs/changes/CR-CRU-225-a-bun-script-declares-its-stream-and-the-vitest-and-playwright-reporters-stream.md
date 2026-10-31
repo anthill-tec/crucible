@@ -186,7 +186,8 @@ inherits the start's.
 - **The install** (F9). `crucible_axi/install.py` lays down `reporters/`:
   - `FLEET_FILES` gains the reporter;
   - `run_fleet_stage` creates the subdirectory;
-  - the symlink-confinement rule covers the directory as well as the file;
+  - the symlink-confinement rule covers the directory as it covers a file: a symlinked `reporters/` is replaced by a
+    real directory, and nothing is ever written through the link (RED 837 ruling);
   - the pinned fleets follow: `EXPECTED_FLEET_FILES` in `tests/client/test_cr090_fleet_stage.py`, and
     `tests/client/test_cr090_cli_install_integration.py` and `tests/client/test_cr090_one_source_resolver.py`.
 - **The fixture** (F10). `tests/fixtures/vitest-project/vitest.config.ts` adds the reporter from `CRUCIBLE_REPORTERS` when
@@ -258,7 +259,8 @@ inherits the start's.
   - The fixture's config runs unchanged with `CRUCIBLE_REPORTERS` unset, writing no stream.
   - The reporter loads from a directory with no `node_modules` above it.
   - `check` typechecks it.
-  - The installer lays down `reporters/`, refuses a symlinked directory, and the three fleet tests follow.
+  - The installer lays down `reporters/`, replaces a symlinked `reporters/` with a real directory without writing through
+    the link, and the three fleet tests follow.
 - [ ] **AC5 — the shared close.**
   - Python-crucible's streamed runs behave exactly as before through the extracted close: its existing streamed-run
     tests pass unchanged.
