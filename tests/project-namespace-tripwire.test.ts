@@ -2939,10 +2939,35 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
 // file in its child `bun test`, fired for the right reason, and gets no
 // change.
+//
+// UPDATED 2026-10-31 by CR-CRU-224's CLOSE-OUT (the FIX round, cycle 830,
+// §S6/AC13). ONE head moves: `clients` 799 -> 810 (+11), for the python
+// client's stream relay. MEASURED with this file's own machinery on the
+// feature branch at `44639d9`, after the branch's last content edit: the
+// recorded head 799 against a measured 810, and `src` (883) and `public`
+// (538) re-measure at their recorded heads. The merge-base with `develop` is
+// `fd92ea6`.
+//
+// TOTALS ONLY, and stated as such: this re-record was taken from this test's
+// own failure output, which gives each tree's total and no per-file or per-id
+// split. No split by file or by CR id is recorded here, because none was
+// measured.
+//
+//   clients +11: a per-tree total, attributed to no file and no id.
+//
+// A NET GAIN of eleven, and stated as one. `clients` (810) stays above its
+// 601 floor, so the directional half holds.
+//
+// The three `develop` floors stay at 512/378/601, unchanged, as always for a
+// re-record. TAKEN AT CLOSE-OUT, after the branch's last content edit, so
+// these are its final figures and not a mid-cycle reading. It clears the
+// CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
+// file in its child `bun test`, fired for the right reason, and gets no
+// change.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 883 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 538 },
-  clients: { exts: [".py"], develop: 601, head: 799 },
+  clients: { exts: [".py"], develop: 601, head: 810 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

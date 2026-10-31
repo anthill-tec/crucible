@@ -10,7 +10,7 @@ invocation has a stable command signature.
 
 Modelled exactly on python-crucible.py / rust-crucible.py (same agent lifecycle,
 .env project-key resolution, /api/* ingest contract) — only the toolchain differs:
-xmlrunner/coverage.py → `bun test --reporter=junit` (+ `--coverage --coverage-reporter=lcov`)
+unittest/coverage.py → `bun test --reporter=junit` (+ `--coverage --coverage-reporter=lcov`)
 and `tsc --noEmit` for the syntax gate.
 
 This script is tool-specific (bun test / JUnit-XML / lcov / tsc), not project-specific —

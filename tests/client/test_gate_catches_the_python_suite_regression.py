@@ -46,8 +46,9 @@ difference between the two drives being the presence of the fix:
 FAILING FOR THE ORIGINAL REASON, not a proxy. A reverted fix that made the
 suite fail for some OTHER reason (an import error, a missing path, a stray
 exception) would satisfy every envelope assertion above while proving nothing
-about CR-CRU-107/108. So each half also reads the JUnit XML the DISPATCHED
-python client actually produced and asserts WHICH test failed and WITH WHAT:
+about CR-CRU-107/108. So each half also reads the stream the DISPATCHED
+python client relayed to the board (CR-CRU-224) and asserts WHICH test failed
+and WITH WHAT:
 exactly `test_the_next_envelope_help_hands_back_the_repeatable_flag`, carrying
 `queue-track-fact-unpublished`. That is the historical failure by name.
 
@@ -91,8 +92,8 @@ Invocation:
 
 import ast
 import importlib.util
+import json
 import unittest
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 TESTS_CLIENT_DIR = Path(__file__).resolve().parent
@@ -276,17 +277,23 @@ class GateCatchesTheHistoricalPythonSuiteRegressionTest(_OUTCOME._OutcomeCase):
             "reverted fix must exist ONLY in the scratch copy")
 
     def python_suite_failures(self):
-        """`(test name, text)` for every failure and error in the JUnit XML the
-        DISPATCHED python client actually produced — read so that WHICH test
+        """`(test name, text)` for every failing case of the stream the
+        DISPATCHED python client relayed to the board (CR-CRU-224) — read so that WHICH test
         failed and WITH WHAT is asserted, not merely that something did."""
         found = []
-        for report in sorted(Path(self.tmpdir, "reports").glob("TEST-*.xml")):
-            # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
-            root = ET.parse(report).getroot()  # noqa: S314
-            for case in root.iter("testcase"):
-                for bad in list(case.findall("failure")) + list(case.findall("error")):
-                    found.append((case.get("name") or "",
-                                  (bad.get("message") or "") + (bad.text or "")))
+        for path, payload in self.board.posts():
+            if (path != "/api/v2/runs" or not isinstance(payload, dict)
+                    or payload.get("codec") != "crucible-events"):
+                continue
+            held = self.board.held_stream(str(payload.get("runId") or ""))
+            # The failing cases of the stream — the board holds for the run this close names.
+            for line in held.splitlines():
+                event = json.loads(line) if line.strip() else {}
+                if event.get("event") == "test-end" and event.get("status") == "fail":
+                    failure = event.get("failure") or {}
+                    found.append((event.get("name") or "",
+                                  (failure.get("message") or "")
+                                  + (failure.get("trace") or "")))
         return found
 
     def assertPythonSuiteAttributed(self, envelope, passed, failed):

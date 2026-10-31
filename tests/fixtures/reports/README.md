@@ -53,6 +53,11 @@ then `python3 -m coverage lcov --data-file=.coverage -o lcov.info`. One
 `TEST-*.xml` per test class.
 Rewritten: the scratch project's absolute path in the tracebacks to `/project/`.
 
+**python/xmlrunner/** stays frozen for the `junit` codec and `auto-ingest`: it
+was produced before CR-CRU-224 by `clients/subtest_runner.py` on xmlrunner, a
+runner that no longer writes JUnit (a python unittest run now streams
+`crucible-events`). It is never regenerated.
+
 **python/pytest/** — the same package, two pytest modules (module-level tests
 and test classes, a failure, an error, `skip`, `xfail`, a parametrized test):
 `python3 -m coverage run --source pkg --data-file=.coverage-pytest -m pytest -v -o junit_family=xunit1 --junitxml=TEST-pytest.xml -p no:cacheprovider ptests`,

@@ -21,6 +21,7 @@ import unittest
 from tests.client.live_run_harness import (
     CLIENTS,
     START,
+    STREAM_CODEC,
     RecordingBoard,
     drive_live,
     first_index,
@@ -28,6 +29,7 @@ from tests.client.live_run_harness import (
     install_project,
     new_scratch,
     scrubbed_env,
+    stream_sent,
     write_fake_bun,
     write_fake_cargo,
     write_fake_mvnw,
@@ -95,12 +97,19 @@ class _LiveVerbCase(unittest.TestCase):
         self.assertEqual(ingest_body.get("runId"), "run-live-1",
                          f"the ingest must CLOSE the run it opened; body={ingest_body!r}")
 
-        # Narration in the stack's shape, while in flight.
+        # Narration in the stack's shape, while in flight. A streamed run
+        # (`running_re` None) posts no in-run `running N` at all: the board
+        # shows the stream's count (CR-CRU-224).
         running = [m for m in messages
                    if isinstance(m, str) and m.startswith("running")]
-        self.assertTrue(running, f"no running heartbeat; messages={messages!r}")
+        if running_re is None:
+            self.assertEqual(running, [],
+                             f"a streamed run posts no running heartbeat; "
+                             f"messages={messages!r}")
+        else:
+            self.assertTrue(running, f"no running heartbeat; messages={messages!r}")
         for m in running:
-            self.assertRegex(m, running_re)
+            self.assertRegex(m, running_re or "")
 
         # The final count, then `ingesting…`, then the ingest.
         final_idx = heartbeat_index(posts, final)
@@ -196,22 +205,24 @@ class PythonRegressionFollowsTheLiveRunLifecycleTest(_LiveVerbCase):
                "--reports", "reports", "--agent", AGENT, "--log", self.log_path]
         drive = drive_live(cmd, self.project, self.env(), self.scratch, MARKER,
                            self.log_path)
-        # unittest states no total up front: `running N`, then `ran N/N`.
-        # python sends its runner's reports: the run's ingest is its one
-        # `/api/v2/runs` post, the report inline (CR-CRU-204).
+        # unittest states no total up front, and a streamed run narrates no
+        # in-run count (CR-CRU-224): `ran N/N`, then the ingesting heartbeat.
+        # python closes its run from its runner's stream: the run's one
+        # `/api/v2/runs` post carries `codec: "crucible-events"` and no
+        # `data`, and the board holds every case the runner wrote.
         self.assert_live_lifecycle(
-            drive, "/api/v2/runs", r"^running \d+$",
+            drive, "/api/v2/runs", None,
             f"ran {TOTAL}/{TOTAL}", with_log=True)
         paths = [p for p, _ in self.board.posts()]
         self.assertNotIn("/api/v2/runs/parsed", paths, f"paths={paths!r}")
         body = next(b for p, b in self.board.posts() if p == "/api/v2/runs")
-        self.assertEqual(body.get("codec"), "junit", f"body={body!r}")
-        data = body.get("data")
-        self.assertTrue(
-            isinstance(data, list) and len(data) == 1
-            and data[0].count("<testcase") == TOTAL,
-            f"the regression's JUnit report ({TOTAL} cases) rides inline; "
-            f"body={body!r}")
+        self.assertEqual((body.get("codec"), "data" in body), (STREAM_CODEC, False),
+                         f"body={body!r}")
+        self.assertEqual(
+            stream_sent(self.board)["summary"],
+            {"total": TOTAL, "passed": TOTAL, "failed": 0, "pending": 0},
+            f"the board holds the regression's {TOTAL} cases from its stream; "
+            f"held={self.board.held_stream('run-live-1')!r}")
         self.assertIn(MARKER, body.get("raw") or "",
                       f"the captured runner output rides as `raw`; body={body!r}")
 

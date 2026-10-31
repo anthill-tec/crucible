@@ -205,7 +205,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.client.live_run_harness import get_answering_health, junit_sent
+from tests.client.live_run_harness import (
+    START,
+    STREAM_CODEC,
+    STREAM_ROUTE,
+    StreamingPost,
+    get_answering_health,
+    junit_sent,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
@@ -367,20 +374,35 @@ _EMPTY_RESPONSE = {"ok": True,
 
 # ── the one toolchain addition: a python runner that can be told what to say ─
 #
-# Cycle 379's `_PY_RUNNER_TAIL` prints a fixed collection failure when no junit
-# content is set, so its no-XML drive can only ever reach the COMPILE branch.
-# Python's zero-discovery branch needs the other capture, so the tail is
-# re-spliced here to read `FAKE_PY_OUTPUT` (cycle 378's own spelling — the
+# Cycle 379's `_PY_RUNNER_TAIL` prints a fixed collection failure when no
+# stream is asked for, so its no-report drive can only ever reach the COMPILE
+# branch. Python's zero-discovery branch needs the other capture, so the tail
+# is re-spliced here to read `FAKE_PY_OUTPUT` (cycle 378's own spelling — the
 # variable is already in the harness's env-reset list). Everything else in the
 # bin dir is cycle 379's, byte for byte.
+#
+# The runner it stands in for writes a unittest run's record as a Crucible
+# event stream to the file `CRUCIBLE_STREAM` names, taking the variable out of
+# its own environment first, and writes no JUnit (CR-CRU-224 §S1). With
+# FAKE_PY_STREAM set to `pass` or `fail` it writes one such case.
 _PY_RUNNER_TAIL = """
-argv = sys.argv[1:]
-reports = argv[argv.index("-o") + 1] if "-o" in argv else None
-content = os.environ.get("FAKE_PY_JUNIT_CONTENT", "")
-if content and reports:
-    os.makedirs(reports, exist_ok=True)
-    with open(os.path.join(reports, "TEST-tier.probe.xml"), "w") as f:
-        f.write(content)
+stream = os.environ.pop("CRUCIBLE_STREAM", None)
+verdict = os.environ.get("FAKE_PY_STREAM", "")
+if verdict in ("pass", "fail") and stream:
+    case = dict(event="test-end", id="tier.probe.TierProbeTest.probe",
+                name="probe", suite="tier.probe.TierProbeTest",
+                file="tests/probe.py", status=verdict, duration_ms=1)
+    if verdict == "fail":
+        case["failure"] = dict(message="probe failed", type="AssertionError",
+                               trace="AssertionError: expected 1 to be 2")
+    with open(stream, "w", encoding="utf-8") as f:
+        for event in (dict(event="run-start", total=1), case,
+                      dict(event="run-end", total=1,
+                           passed=int(verdict == "pass"),
+                           failed=int(verdict == "fail"), pending=0,
+                           duration_ms=1)):
+            f.write(json.dumps(event) + "\\n")
+            f.flush()
     sys.exit(int(os.environ.get("FAKE_PY_EXIT_CODE", "0")))
 sys.stdout.write(os.environ.get(
     "FAKE_PY_OUTPUT",
@@ -444,7 +466,12 @@ class _EnvelopeTierProbe:
         counts it was sent -- a parsed `summary`, or the JUnit reports a
         `/api/v2/runs` body carries, read as the board's codec reads them
         (`junit_sent`) -- as the board answers a run it stored. A `response`
-        the test hands in is answered as given."""
+        the test hands in is answered as given.
+
+        For python the board also opens the run and holds its stream
+        (`StreamingPost`): a unittest run is closed from the stream its
+        runner wrote (CR-CRU-224), and that close is answered with the
+        counts of the stream held."""
         if response is not None:
             return super().drive(argv, response)  # type: ignore[misc]
         harness = _MODALITY._HARNESS
@@ -453,11 +480,18 @@ class _EnvelopeTierProbe:
         # maven, rust and arduino among them; the others' `/api/v2/runs`
         # bodies are answered as before.
         inline = self.CLIENT in ("bun", "python", "mvn", "rust", "arduino")  # type: ignore[attr-defined]
+        streams = self.CLIENT == "python"  # type: ignore[attr-defined]
+        stream = StreamingPost()
 
-        def fake_post(path, payload):
+        def fake_post(path, payload, *_args, **_kwargs):
             calls.append((path, copy.deepcopy(payload)))
+            if streams and (path == START or STREAM_ROUTE.match(path)):
+                return stream(path, payload)
             answer = copy.deepcopy(harness._OK_RESPONSE)
             summary = (payload or {}).get("summary")
+            if (not isinstance(summary, dict) and streams
+                    and (payload or {}).get("codec") == STREAM_CODEC):
+                summary = stream.summary()
             if not isinstance(summary, dict) and inline:
                 summary = (junit_sent(payload) or {}).get("summary")
             if isinstance(summary, dict):
@@ -717,19 +751,32 @@ class PythonIngestedTierEnvelopeTest(_EnvelopeTierProbe,
                              "--start-dir", "tests",
                              "--pattern", "test_*.py"] + list(extra))
 
+    def assertClosedFromItsStream(self, drive, where):
+        """CR-CRU-224 §S3: a unittest run is closed through one
+        `/api/v2/runs` carrying `codec: "crucible-events"` and no `data`."""
+        closes = [payload for path, payload in drive.calls if path == RUNS]
+        self.assertEqual(
+            [(c.get("codec"), "data" in c) for c in closes],
+            [(STREAM_CODEC, False)],
+            f"{where}: a unittest run is closed once, from its runner's "
+            f"stream, carrying no report. posted={[p for p, _ in drive.calls]!r} "
+            f"exit={drive.code} stderr={drive.err[-800:]!r}")
+
     def test_a_successful_tiered_run_states_the_tier_it_ingested(self):
         where = "python regression / success"
-        os.environ["FAKE_PY_JUNIT_CONTENT"] = _JUNIT_SUITE_ONE_PASS
+        os.environ["FAKE_PY_STREAM"] = "pass"
         drive = self.drive(self.py_tier_argv())
         self.assertVerbAcceptedTheInvocation(drive, where)
+        self.assertClosedFromItsStream(drive, where)
         self.assertReachedSuccess(drive, where)
         self.assertEnvelopeStatesIngestedTier(drive, where)
 
     def test_a_failing_suite_still_states_the_tier_it_ingested(self):
         where = "python regression / failing suite"
-        os.environ["FAKE_PY_JUNIT_CONTENT"] = _JUNIT_SUITE_ONE_FAIL
+        os.environ["FAKE_PY_STREAM"] = "fail"
         os.environ["FAKE_PY_EXIT_CODE"] = "1"
         drive = self.drive(self.py_tier_argv())
+        self.assertClosedFromItsStream(drive, where)
         self.assertReachedFailingSuite(drive, where)
         self.assertEnvelopeStatesIngestedTier(drive, where)
 
@@ -1039,8 +1086,10 @@ class PythonTierLessEnvelopeTest(_TierLessProbe, _MODALITY._PythonModalityCase):
         Path(reports_dir, "TEST-tier.probe.xml").write_text(_JUNIT_SUITE_ONE_PASS)
 
     def tier_less_drives(self):
+        """`test` runs the runner, which writes its stream (CR-CRU-224);
+        `auto-ingest` still files a JUnit dir."""
         def via_runner():
-            os.environ["FAKE_PY_JUNIT_CONTENT"] = _JUNIT_SUITE_ONE_PASS
+            os.environ["FAKE_PY_STREAM"] = "pass"
 
         base = ["--agent", AGENT, "--project-dir", self.tmpdir,
                 "--reports", "reports"]

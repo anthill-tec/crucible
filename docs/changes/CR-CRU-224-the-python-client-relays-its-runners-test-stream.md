@@ -106,13 +106,13 @@ or nested run inherits it. With it set, the runner:
   - **`suite`:** the case's `module.Class`, with a leading `__main__.` stripped. A load error's suite is its `module.Class`,
     `unittest.loader._FailedTest`.
   - **`file`:** the module's source file, relative to the working directory when it lies under it, else absolute (and absolute
-    when no relative path exists), with `\` read as `/`.
+    when no relative path exists), with `\` read as `/`. A `setUpClass` error holder takes the file of the class it set up.
   - **`status`:**
 
     | Outcome | `status` |
     |---|---|
     | success | `pass` |
-    | expected failure | `pass` |
+    | expected failure | `pending` (as xmlrunner's JUnit record reads it on the board: a skipped `XFAIL`) |
     | failure | `fail` |
     | error | `fail` |
     | unexpected success | `fail` |

@@ -215,6 +215,12 @@ class NoReportExitAbortsTheRunTest(_RunAbortCase):
         axi = self.axi(result.stdout)
         self.assert_left_open_after_refused_abort(axi, "regression", RUN_ID, "junit.xml")
 
+    # PIN (CR-CRU-224): a unittest run's zero discovery is aborted with its
+    # reason "as today"; which artifact that reason names for a streamed run
+    # (`TEST-*.xml` or `crucible-events.ndjson`) is not this pin's to fix, so
+    # it reads the part of the reason both spellings share.
+    PYTHON_NO_REPORT_REASON = "so there was nothing to ingest"
+
     def test_python_regression_with_zero_tests_discovered_aborts_the_run(self):
         fake = write_fake_python(self.project)
         result = self.run_client(
@@ -224,7 +230,8 @@ class NoReportExitAbortsTheRunTest(_RunAbortCase):
             self.env(FAKE_ZERO_DISCOVERY="1"))
         self.assertNotEqual(result.returncode, 0)
         axi = self.axi(result.stdout)
-        self.assert_aborted_cleanly(axi, "regression", RUN_ID, "TEST-*.xml")
+        self.assert_aborted_cleanly(axi, "regression", RUN_ID,
+                                    self.PYTHON_NO_REPORT_REASON)
 
     def test_python_regression_with_zero_tests_discovered_and_a_refused_abort_leaves_the_run_open(self):
         fake = write_fake_python(self.project)
@@ -236,7 +243,8 @@ class NoReportExitAbortsTheRunTest(_RunAbortCase):
             self.env(FAKE_ZERO_DISCOVERY="1"))
         self.assertNotEqual(result.returncode, 0)
         axi = self.axi(result.stdout)
-        self.assert_left_open_after_refused_abort(axi, "regression", RUN_ID, "TEST-*.xml")
+        self.assert_left_open_after_refused_abort(axi, "regression", RUN_ID,
+                                                  self.PYTHON_NO_REPORT_REASON)
 
     def _rust(self, verb, *extra, refuse=False):
         write_fake_cargo(self.bin_dir)

@@ -43,6 +43,7 @@ from tests.client.python_coverage_project import (  # noqa: E402
     coverage_run_lines,
     drive,
     make_project,
+    sent_stream_counts,
     source_values,
     warnings_with_code,
 )
@@ -104,8 +105,8 @@ class _FailureCauseCase(unittest.TestCase):
     def setUp(self):
         self.assertTrue(
             REAL_VENV_PYTHON.exists(),
-            f"these tests need the repo's interpreter with coverage.py and "
-            f"unittest-xml-reporting installed, at {REAL_VENV_PYTHON}")
+            f"these tests need the repo's interpreter with coverage.py "
+            f"installed, at {REAL_VENV_PYTHON}")
 
     def _assert_no_probe_source(self, label, err):
         leaked = [line for line in err.splitlines()
@@ -182,19 +183,17 @@ class AFailedEraseNamesItsCauseTest(_FailureCauseCase):
                     f"{label}: the erase's line names its cause, coverage.py's "
                     f"IsADirectoryError; got {erase_lines[0]!r}")
                 # The run went ahead and was filed: its one `/api/v2/runs`
-                # ingest carries the runner's JUnit reports, holding the
-                # fixture's three tests and no failure (the client parses
-                # none of it; the board decodes it).
+                # close is from the runner's stream (CR-CRU-224), which the
+                # board holds with the fixture's three tests and no failure
+                # (the client counts none of it; the board decodes it).
                 sent = [body for path, body in board.posts()
                         if path == "/api/v2/runs"]
                 self.assertEqual(
                     len(sent), 1,
                     f"{label}: a failed erase never stops the run being filed; "
                     f"{result.describe()}")
-                data = "".join((sent[0] or {}).get("data") or []) if sent else ""
                 self.assertEqual(
-                    (data.count("<testcase"), data.count("<failure"),
-                     data.count("<error")), (3, 0, 0),
+                    sent_stream_counts(board), (3, 0),
                     f"{label}: a failed erase never fails the run; "
                     f"{result.describe()}")
 

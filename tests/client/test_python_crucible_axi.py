@@ -37,7 +37,7 @@ structured-errors/idempotency, the no-arg dashboard, `help[]`) are already
 exhaustively tested against the shared module + the bun reference
 (`test_crucible_axi_shared.py`, `test_bun_crucible_*`); this file only
 proves python-crucible.py is correctly WIRED to that shared behavior plus
-its own toolchain (xmlrunner / py_compile).
+its own toolchain (its unittest runner's stream / py_compile).
 
 Module-loading + HTTP-mocking convention copied verbatim from the sibling
 bun test harnesses (`test_bun_crucible_auto_attach.py`,
@@ -69,7 +69,7 @@ from unittest import mock
 # CR-CRU-131 §S1b — the project fixture carries the `crucible.toml` an
 # installed project has; the fleet census owns that helper (one fixture shape
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
-from tests.client.live_run_harness import get_answering_health, junit_sent
+from tests.client.live_run_harness import StreamingPost, get_answering_health
 from tests.client.test_client_fleet_envelope_census import install_project_limits
 
 # CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
@@ -1194,7 +1194,7 @@ class PythonCrucibleCycleBindingTest(_BasePythonAxiTest):
             "the printed envelope must not echo a client-resolved cycleId either")
 
 
-# ── Toolchain-specific: real xmlrunner / py_compile still work ─────────────
+# ── Toolchain-specific: the real unittest runner's stream / py_compile ──────
 
 
 class PythonCrucibleToolchainTest(_BasePythonAxiTest):
@@ -1219,19 +1219,16 @@ class PythonCrucibleToolchainTest(_BasePythonAxiTest):
 
     def test_test_verb_runs_real_unittest_and_ingests_with_run_summary(self):
         """CR-CRU-056 §S3 retarget: attachment is server-stamped now, not
-        client-resolved -- this pin keeps proving the real unittest/xmlrunner
-        toolchain wiring still ingests correctly, dropping the dead
-        client-side active-cycle-plans fixture and cycleId assertion."""
+        client-resolved -- this pin keeps proving the real unittest runner's
+        wiring still files correctly: the run is closed from the stream the
+        runner wrote (CR-CRU-224), with no client-resolved cycleId."""
         self._write_fixture_test_module()
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        os.environ.pop("CRUCIBLE_STREAM", None)
         # The board's decoded run: figures the fixture's one passing test
         # does not give, so an envelope stating the client's own count fails.
         board_run = {"passed": 4, "failed": 0, "pending": 0, "total": 4, "files": 1}
-
-        def post(path, payload):
-            if path == "/api/v2/runs":
-                return {"ok": True, "changed": True, "run": dict(board_run)}
-            return {"ok": True}
+        post = StreamingPost(board_run)
 
         with mock.patch.object(self.module, "_post", side_effect=post,
                                 create=True) as post_mock, \
@@ -1250,20 +1247,23 @@ class PythonCrucibleToolchainTest(_BasePythonAxiTest):
                          f"the envelope states the board's run; stdout={out!r}")
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call)
-        sent = junit_sent(ingest_call[0][1]) if ingest_call else None
-        self.assertEqual((sent or {}).get("summary"),
-                         {"total": 1, "passed": 1, "failed": 0, "pending": 0},
-                         "the real xmlrunner report is sent as it stands")
+        body = ingest_call[0][1] if ingest_call else {}
+        self.assertEqual((body.get("codec"), body.get("runId")),
+                         ("crucible-events", StreamingPost.RUN_ID),
+                         "the run is closed from its stream")
+        self.assertNotIn("data", body)
+        self.assertEqual([e.get("status") for e in post.test_ends()], ["pass"],
+                         "the real runner's stream is sent as it stands")
         self.assertNotIn(
-            "cycleId", ingest_call[0][1].get("context", {}),
+            "cycleId", body.get("context", {}),
             "the real unittest run's ingest payload must send no "
             "client-resolved cycleId -- attachment is server-stamped",
         )
 
     def test_test_verb_includes_captured_runner_output_as_raw_in_its_runs_payload(self):
         """CR-CRU-038 §S2b -- `_run_logged` (python-crucible.py)
-        ALWAYS captures the real xmlrunner combined stdout+stderr; that
-        captured output must flow into the /api/v2/runs payload as
+        ALWAYS captures the real runner's combined stdout+stderr; that
+        captured output must flow into the /api/v2/runs close as
         `raw` so the server-stored run carries real output for the
         run-detail raw-toggle to reveal."""
         marker = "PYTHON_RAW_CAPTURE_MARKER_4471"
@@ -1278,7 +1278,8 @@ class PythonCrucibleToolchainTest(_BasePythonAxiTest):
         with open(os.path.join(pkg_dir, "test_fixture.py"), "w") as f:
             f.write(marker_module)
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+        os.environ.pop("CRUCIBLE_STREAM", None)
+        with mock.patch.object(self.module, "_post", side_effect=StreamingPost(),
                                 create=True) as post_mock, \
              mock.patch.object(self.module, "_get",
                                 side_effect=get_answering_health(
@@ -1292,11 +1293,12 @@ class PythonCrucibleToolchainTest(_BasePythonAxiTest):
         self.assertEqual(code, 0, f"stdout={out!r}")
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, "the real unittest run must actually be POSTed")
-        payload = ingest_call[0][1]
+        payload = ingest_call[0][1] if ingest_call else {}
+        self.assertEqual(payload.get("codec"), "crucible-events")
         self.assertIn(
             marker, payload.get("raw") or "",
-            f"the real captured xmlrunner output must flow into the "
-            f"ingest payload's `raw` field; got payload keys={sorted(payload)!r}",
+            f"the real runner's captured output must flow into the "
+            f"close's `raw` field; got payload keys={sorted(payload)!r}",
         )
 
     def test_check_verb_runs_py_compile_and_ingests_compile_errors(self):

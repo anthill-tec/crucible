@@ -2,7 +2,9 @@
 the spec's own language: a run made with `--agent <id>` and no `--reports`
 writes, reads and ingests its results under `test-reports/<id>/` in the
 project; only that directory is ever cleared before the run; the directory
-survives the run; a run without `--agent` keeps today's shared location; an
+survives the run; a pytest run without `--agent` keeps writing its JUnit
+report directly into the shared `test-reports/` root (a unittest run without
+`--agent` sets no stream and leaves nothing there); an
 explicit `--reports <dir>` is honoured verbatim; coverage follows the run into
 the same directory; and the `--reports` help text states the per-agent
 default.
@@ -11,7 +13,10 @@ RED PHASE: `_reports_dir` (`clients/python-crucible.py`) ignores the agent id
 entirely today -- `rd = arg_value or DEFAULT_REPORTS` -- so every agent's run
 writes into the SAME `test-reports/` no matter who ran it, and `_wipe` clears
 whatever is there regardless of who put it there. Every test below drives the
-real toolchain (real `xmlrunner`, real `coverage.py`) through the CLI and
+real toolchain (the client's real unittest runner, which writes the run's
+Crucible event stream into the reports dir (CR-CRU-224), real pytest, which
+writes its JUnit report there, and real
+`coverage.py`) through the CLI and
 asserts on the FILESYSTEM PATHS the client actually used and on the payload
 the client actually POSTed, never on an assumed internal helper signature --
 so a correct fix can land its own shape and still satisfy every assertion
@@ -30,6 +35,7 @@ Fallback:
 
 import importlib.util
 import io
+import json
 import os
 import contextlib
 import shutil
@@ -39,7 +45,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.client.live_run_harness import get_answering_health, junit_sent
+from tests.client.live_run_harness import StreamingPost, get_answering_health, junit_sent
 from tests.client.test_client_fleet_envelope_census import install_project_limits
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -53,7 +59,11 @@ class FixtureTest(unittest.TestCase):
         self.assertTrue(True)
 """
 
-# A hand-written JUnit fixture in the bare `<testsuite>` shape xmlrunner
+# The stream file a streamed unittest run writes into its reports dir.
+STREAM_FILE = "crucible-events.ndjson"
+
+
+# A hand-written JUnit fixture in the bare `<testsuite>` shape a JUnit writer
 # writes -- used to plant "already there before this
 # run" files a real run never wrote, so a test can prove whether the client
 # read/cleared them without needing a second real subprocess run per case.
@@ -108,11 +118,28 @@ def _post_call_for_path(post_mock, path):
 
 def _sent_summary(call):
     """`{total, passed, failed, pending}` over the JUnit report texts one
-    `/api/v2/runs` POST carried, read as the board's `junit` codec reads
-    them -- the client parses none of them."""
+    `/api/v2/runs` POST carried (`auto-ingest`), read as the board's `junit`
+    codec reads them -- the client parses none of them."""
     read = junit_sent(call[0][1]) if call is not None else None
     assert read is not None, f"not a junit ingest: {call!r}"
     return read["summary"]
+
+
+def _stream_summary(call, post):
+    """`{total, passed, failed, pending}` over the stream `post` holds, once
+    the `/api/v2/runs` close `call` is checked to be a stream close."""
+    assert call is not None and call[0][1].get("codec") == "crucible-events", (
+        f"not a stream close: {call!r}")
+    return post.summary()
+
+
+def _stream_file_summary(path):
+    """`{total, passed, failed}` over the `test-end` lines of a stream file."""
+    statuses = [json.loads(line).get("status")
+                for line in Path(path).read_text(encoding="utf-8").splitlines()
+                if '"test-end"' in line]
+    return {"total": len(statuses), "passed": statuses.count("pass"),
+            "failed": statuses.count("fail")}
 
 
 def _files_under(root):
@@ -158,11 +185,14 @@ class _BaseIsolationTest(unittest.TestCase):
         if reports:
             argv += ["--reports", reports]
         argv += list(extra)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+        post = StreamingPost()
+        os.environ.pop("CRUCIBLE_STREAM", None)
+        with mock.patch.object(self.module, "_post", side_effect=post,
                                 create=True) as post_mock, \
              mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
                                 create=True):
             code, out, err = _run_main(self.module, argv)
+        self.post = post
         return code, out, err, post_mock
 
 
@@ -174,10 +204,9 @@ class AgentDefaultDirectoryTest(_BaseIsolationTest):
         self.assertEqual(code, 0, f"stderr={err!r}")
 
         own_dir = os.path.join(self.tmpdir, "test-reports", "agent-alpha")
-        self.assertTrue(
-            any(name.startswith("TEST-") and name.endswith(".xml")
-                for name in _files_under(own_dir)),
-            f"expected a TEST-*.xml under {own_dir}; found {_files_under(own_dir)!r}",
+        self.assertIn(
+            STREAM_FILE, _files_under(own_dir),
+            f"expected the run's stream under {own_dir}; found {_files_under(own_dir)!r}",
         )
         shared_root_files = [
             name for name in _files_under(os.path.join(self.tmpdir, "test-reports"))
@@ -190,9 +219,9 @@ class AgentDefaultDirectoryTest(_BaseIsolationTest):
         )
 
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
-        self.assertIsNotNone(ingest_call, "the real unittest run must be ingested")
+        self.assertIsNotNone(ingest_call, "the real unittest run must be closed")
         assert ingest_call is not None
-        summary = _sent_summary(ingest_call)
+        summary = _stream_summary(ingest_call, self.post)
         self.assertEqual(summary["passed"], 1)
         self.assertEqual(summary["failed"], 0)
 
@@ -222,7 +251,7 @@ class AgentDirectoryIsolationTest(_BaseIsolationTest):
 
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         assert ingest_call is not None
-        summary = _sent_summary(ingest_call)
+        summary = _stream_summary(ingest_call, self.post)
         self.assertEqual(
             summary["failed"], 0,
             f"agent-alpha's ingested summary must reflect ONLY its own real "
@@ -237,13 +266,17 @@ class AgentDirectoryIsolationTest(_BaseIsolationTest):
         stale_path = os.path.join(own_dir, "TEST-stale.xml")
         with open(stale_path, "w") as f:
             f.write(_junit_suite("alpha.stale", 42, "STALE_FROM_A_PRIOR_RUN"))
+        stale_stream = os.path.join(own_dir, STREAM_FILE)
+        with open(stale_stream, "w") as f:
+            f.write(json.dumps({"event": "test-end", "name": "STALE_FROM_A_PRIOR_RUN",
+                                "status": "fail"}) + "\n")
 
         code, _out, err, post_mock = self._run_test_verb(agent="agent-alpha")
         self.assertEqual(code, 0, f"stderr={err!r}")
 
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         assert ingest_call is not None
-        summary = _sent_summary(ingest_call)
+        summary = _stream_summary(ingest_call, self.post)
         self.assertEqual(
             (summary["passed"], summary["failed"], summary["total"]), (1, 0, 1),
             f"the stale planted failures (42) must be GONE from the ingested "
@@ -268,30 +301,54 @@ class AgentDirectorySurvivesTest(_BaseIsolationTest):
 
         own_dir = os.path.join(self.tmpdir, "test-reports", "agent-alpha")
         self.assertTrue(os.path.isdir(own_dir), f"{own_dir} must still exist")
-        reports = [Path(own_dir, name).read_text() for name in sorted(os.listdir(own_dir))
-                   if name.startswith("TEST-") and name.endswith(".xml")]
-        summary = junit_sent({"codec": "junit", "data": reports})["summary"]
+        stream_path = os.path.join(own_dir, STREAM_FILE)
+        self.assertTrue(os.path.isfile(stream_path),
+                        f"the run's stream must survive in {own_dir}; found "
+                        f"{_files_under(own_dir)!r}")
+        summary = _stream_file_summary(stream_path)
         self.assertEqual(
             (summary["passed"], summary["failed"]), (1, 0),
-            "the surviving directory must hold THIS run's real results",
+            "the surviving directory must hold THIS run's real stream",
         )
 
 
 class UnchangedLocationsTest(_BaseIsolationTest):
-    """AC4/§S2 -- no `--agent` keeps today's shared location; an explicit
+    """AC4/§S2 -- a pytest run without `--agent` keeps the shared reports
+    root; an explicit
     `--reports` is honoured verbatim, agent id or not; `auto-ingest` of a
-    caller-produced directory reads exactly that directory."""
+    caller-produced directory reads exactly that directory. (An agentless
+    unittest run writes no stream at all: the client sets none.)"""
 
     def test_run_without_an_agent_id_writes_directly_into_the_shared_reports_root(self):
-        code, _out, err, _post_mock = self._run_test_verb(agent=None)
+        # PIN, holds today: an agentless pytest run still writes its JUnit
+        # report straight into `test-reports/`, never an agent's directory.
+        pkg = self._write_fixture_pkg()
+        argv = ["test", "--project-dir", self.tmpdir, "--python", sys.executable,
+                "--runner", "pytest", "--tests", f"{pkg}/test_fixture.py"]
+        os.environ.pop("CRUCIBLE_STREAM", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                               create=True) as post_mock, \
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
+                               create=True):
+            code, _out, err = _run_main(self.module, argv)
         self.assertEqual(code, 0, f"stderr={err!r}")
 
         top = os.path.join(self.tmpdir, "test-reports")
-        top_files = [name for name in _files_under(top) if os.sep not in name]
-        self.assertTrue(
-            any(name.startswith("TEST-") for name in top_files),
-            f"an agentless run must keep writing directly into {top} "
-            f"(today's behaviour); found {top_files!r}",
+        self.assertEqual(
+            _files_under(top), ["TEST-pytest.xml"],
+            f"an agentless pytest run writes its one JUnit report directly into "
+            f"{top}, in no agent's directory; found {_files_under(top)!r}",
+        )
+        report = Path(top, "TEST-pytest.xml").read_text(encoding="utf-8")
+        read = junit_sent({"codec": "junit", "data": [report]})
+        assert read is not None
+        self.assertEqual(
+            read["summary"], {"total": 1, "passed": 1, "failed": 0, "pending": 0},
+            f"the shared root holds THIS run's report; report={report!r}",
+        )
+        self.assertIsNone(
+            _post_call_for_path(post_mock, "/api/v2/runs"),
+            "a run without --agent files nothing",
         )
 
     def test_explicit_reports_flag_is_honoured_verbatim_even_with_an_agent_id(self):
@@ -301,8 +358,8 @@ class UnchangedLocationsTest(_BaseIsolationTest):
 
         custom = os.path.join(self.tmpdir, "custom-reports-dir")
         custom_files = [name for name in _files_under(custom) if os.sep not in name]
-        self.assertTrue(
-            any(name.startswith("TEST-") for name in custom_files),
+        self.assertIn(
+            STREAM_FILE, custom_files,
             f"an explicit --reports must be used AS GIVEN; found "
             f"{_files_under(custom)!r} under {custom}",
         )
@@ -375,7 +432,8 @@ class RegressionCoverageFollowsTheAgentTest(_BaseIsolationTest):
 
     def test_regression_coverage_writes_and_ingests_coverage_from_the_agents_own_directory(self):
         self._write_coverage_fixture()
-        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+        os.environ.pop("CRUCIBLE_STREAM", None)
+        with mock.patch.object(self.module, "_post", side_effect=StreamingPost(),
                                 create=True) as post_mock, \
              mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
                                 create=True):

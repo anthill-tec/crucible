@@ -1441,12 +1441,14 @@ _STARVED_PYTHON_BODY = r'''#!/usr/bin/env python3
 import os
 import sys
 
-# A REAL interpreter that genuinely cannot produce a JUnit report: `-S`
-# drops site-packages from sys.path entirely and `-E` drops PYTHONPATH, so
-# `-m xmlrunner` / `-m coverage` raise the interpreter's own "No module
-# named ..." and exit non-zero. No fake xmlrunner package, no stubbed
-# subprocess.
-os.execv(sys.executable, [sys.executable, "-S", "-E"] + sys.argv[1:])
+# A fake interpreter that runs no test and writes nothing -- no stream, no
+# report -- and exits 1. The runner needs only the stdlib since CR-CRU-224,
+# so re-executing the real interpreter with `-S -E` no longer starves it.
+# `-m py_compile` alone is handed to the real interpreter.
+if sys.argv[1:3] == ["-m", "py_compile"]:
+    os.execv(sys.executable, [sys.executable] + sys.argv[1:])
+sys.stderr.write("starved-python: this interpreter runs no test and writes no stream\n")
+sys.exit(1)
 '''
 
 _FAIL_BUN_NO_JUNIT_BODY = r'''#!/usr/bin/env python3
@@ -1473,6 +1475,10 @@ sys.exit(2)
 '''
 
 NO_REPORT_WARNING_CODE = "no-test-reports"
+
+# The artifact a starved unittest run's `no-test-reports` names: the stream
+# its runner never wrote (CR-CRU-224, orchestrator ruling cycle 826).
+PYTHON_UNITTEST_NO_REPORT_ARTIFACT = "crucible-events.ndjson"
 
 
 def _build_bin_dir_with_override(tool_name, body):
@@ -1608,6 +1614,22 @@ class SevenNoReportSitesStarvedCensusTest(unittest.TestCase):
             f"{NO_REPORT_WARNING_CODE!r} warning code specifically -- a "
             f"future client that emits SOME envelope but drops the "
             f"specific warning code must still fail HERE: {offenders!r}")
+
+    def test_the_starved_python_unittest_sites_name_the_stream_they_never_wrote(self):
+        offenders = {}
+        for client, verb in (("python", "test"), ("python", "regression")):
+            _emits, axi, result = _get_starved_seven_site(client, verb)
+            details = [w.get("detail") or "" for w in ((axi or {}).get("warnings") or [])
+                       if isinstance(w, dict) and w.get("code") == NO_REPORT_WARNING_CODE]
+            if (len(details) != 1
+                    or PYTHON_UNITTEST_NO_REPORT_ARTIFACT not in details[0]
+                    or "TEST-*.xml" in details[0]):
+                offenders[(client, verb)] = details or result.stdout
+        self.assertEqual(
+            offenders, {},
+            f"a starved python unittest run's one {NO_REPORT_WARNING_CODE!r} "
+            f"names {PYTHON_UNITTEST_NO_REPORT_ARTIFACT!r}, never TEST-*.xml: "
+            f"{offenders!r}")
 
 
 # ── CR-CRU-091 §S10 / AC19 -- the 25 (verb x client) roadmap pairs ─────────

@@ -198,7 +198,6 @@ AGENT = _MODALITY.AGENT
 TIER_VOCABULARY = _MODALITY.TIER_VOCABULARY
 TIER_RUN_UNDECLARED_CODE = _MODALITY.TIER_RUN_UNDECLARED_CODE
 TEST_INGEST_ENDPOINTS = _MODALITY.TEST_INGEST_ENDPOINTS
-_JUNIT_SUITE_ONE_PASS = _MODALITY._JUNIT_SUITE_ONE_PASS
 _JUNIT_SUITES_ONE_PASS = _MODALITY._JUNIT_SUITES_ONE_PASS
 
 
@@ -643,6 +642,19 @@ class _PythonDeclarationCase(_PythonModalityCase, _DeclarationProbe):
 
     TOOL = "fake-python-runner"
 
+    def assertIngestedVerbTier(self, drive, tier, cell):
+        """The shared check, and the run's close: a unittest run is closed
+        once from its runner's stream (CR-CRU-224), under the verb's tier."""
+        super().assertIngestedVerbTier(drive, tier, cell)
+        closes = [payload for path, payload in drive.calls
+                  if path == _MODALITY.RUNS and payload.get("agentId") == AGENT]
+        self.assertEqual(
+            [(payload.get("codec"), payload.get("tier")) for payload in closes],
+            [("crucible-events", tier)],
+            f"AC14, {cell}: the run is closed once from its runner's stream "
+            f"under the verb's tier; posted={[p for p, _ in drive.calls]!r} "
+            f"exit={drive.code} stderr={drive.err[-1000:]!r}")
+
     def setUp(self):
         super().setUp()
         self.start_dir = None
@@ -664,7 +676,8 @@ class _PythonDeclarationCase(_PythonModalityCase, _DeclarationProbe):
             "class TierProbeTest(unittest.TestCase):\n"
             "    def test_probe(self):\n"
             "        self.assertTrue(True)\n")
-        os.environ["FAKE_PY_JUNIT_CONTENT"] = _JUNIT_SUITE_ONE_PASS
+        # The runner writes the run as a stream (CR-CRU-224).
+        os.environ["FAKE_PY_STREAM"] = "1"
 
     def _declare(self, start_dir, pattern):
         self.start_dir, self.pattern = start_dir, pattern

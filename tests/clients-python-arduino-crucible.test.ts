@@ -26,49 +26,17 @@
 // (`startCapturingProxy`) that pins the EXACT URLs the spawned script hit
 // (v2-only, NEVER the v1 shim) without reading the script's source.
 //
-// FIXTURE-ROUTE DECISION (read before touching this file — a real
-// environmental finding, not a workaround of convenience):
-//   `python3 -c "import xmlrunner"` FAILS on this machine (and presumably
-//   in CI/GREEN's sandbox too) — `unittest-xml-reporting` is not installed
-//   system-wide, and installing it is a network dependency we will NOT bake
-//   into a committed test's runtime behavior. Two consequences:
-//
-//   1. For the SUCCESS paths (v2 endpoint pinning, tier map, context
-//      enrichment, coverage passthrough) we cannot spawn a REAL xmlrunner/
-//      coverage.py and get real JUnit XML out of it. So — mirroring C3's
-//      "fake cargo"/"fake mvnw" NOOP_SCRIPT trick, adapted for tools
-//      invoked via `python -m <module>` rather than a PATH executable — we
-//      drop two tiny FAKE PYTHON PACKAGES (`xmlrunner`, `coverage`) on
-//      PYTHONPATH ahead of the real ones. `xmlrunner/__main__.py` reads a
-//      `-o <reports_dir>` flag (works for BOTH `discover -s .. -o dir` and
-//      a targeted `tests.foo -o dir` invocation — the two shapes
-//      python-crucible.py's `_xmlrunner_cmd` builds) and writes a
-//      caller-scripted JUnit XML there (`$FAKE_XMLRUNNER_JUNIT_XML`,
-//      `$FAKE_XMLRUNNER_EXIT_CODE`) — this is necessary (not just
-//      convenient) because python-crucible's `cmd_test`/`cmd_regression`
-//      unconditionally `_wipe()` the reports dir immediately before running,
-//      so a pre-placed (not written-at-invocation-time) XML fixture would
-//      be deleted before a no-op runner ever got to preserve it. The fake
-//      `coverage/__main__.py` handles `run --source X -m xmlrunner ...` by
-//      re-invoking `python -m xmlrunner ...` as a subprocess (inheriting
-//      PYTHONPATH, so it hits the fake xmlrunner too) and `lcov -o <path>`
-//      by writing a caller-scripted LCOV (`$FAKE_COVERAGE_LCOV`). Verified
-//      empirically end-to-end before writing these tests (both invocation
-//      shapes, both subcommands, real `coverage` package correctly shadowed
-//      by the PYTHONPATH-first fake).
-//   2. For the HEADLINE no-XML-fallback bug itself, we do NOT need any
-//      fixture at all: the real, already-true absence of `xmlrunner` on
-//      this interpreter IS the no-XML scenario — `python3 -m xmlrunner ...`
-//      exits 1 with stderr `No module named xmlrunner` (a ModuleNotFoundError,
-//      an ImportError subtype — "tests fail to collect" in the most literal
-//      possible sense) and produces zero `TEST-*.xml` files, deterministically
-//      and portably, with ZERO setup. This is arguably a MORE faithful
-//      real-world reproduction of the bug in this repo's own dev/CI sandbox
-//      than a synthetic fixture module would be. We assert the resulting
-//      `/api/v2/runs/compile` event's `compile.raw` contains the real
-//      captured "No module named" text (never the dead placeholder string
-//      `xmlrunner produced no JUnit XML (import/syntax failure)`, and never
-//      an empty string that the server would 400 on).
+// FIXTURE-ROUTE DECISION (read before touching this file):
+//   python's unittest runner is the client's own `clients/subtest_runner.py`,
+//   which needs only the standard library and writes the Crucible event
+//   stream the run is filed from (CR-CRU-224). So the success paths (v2
+//   endpoint pinning, tier map, context enrichment, coverage passthrough) run
+//   a REAL unittest `tests` package each test writes (`writeUnittestCases`):
+//   its passing, failing and skipped methods are the cases the board stores.
+//   coverage.py is still faked: one tiny FAKE `coverage` package on
+//   PYTHONPATH ahead of the real one, whose `run` re-invokes the runner as a
+//   subprocess and whose `lcov -o <path>` writes a caller-scripted LCOV
+//   (`$FAKE_COVERAGE_LCOV`).
 //
 // arduino-crucible.py needs no such fixture gymnastics: `unit` shells to a
 // real `make` binary (faked as a no-op PATH executable, exactly like C3's
@@ -436,45 +404,18 @@ function extractRunBlock(stdout: string): string | undefined {
 }
 
 /**
- * Two FAKE python packages (`xmlrunner`, `coverage`) dropped into their own
- * directory so a caller can prepend it onto PYTHONPATH ahead of the real
- * (here: absent for xmlrunner, present for coverage) packages. See the
- * file-header FIXTURE-ROUTE DECISION for why this exists and was verified.
+ * A FAKE `coverage` python package dropped into its own directory so a caller
+ * can prepend it onto PYTHONPATH ahead of the real one. See the file-header
+ * FIXTURE-ROUTE DECISION.
  *
- * `xmlrunner/__main__.py`: finds the trailing `-o <reports_dir>` flag
- * (present in BOTH the `discover -s .. -p .. -o dir` and the targeted
- * `tests.foo -o dir` invocation python-crucible.py's `_xmlrunner_cmd`
- * builds), writes `$FAKE_XMLRUNNER_JUNIT_XML` there as `TEST-fake_fixture.xml`
- * when set, and exits with `$FAKE_XMLRUNNER_EXIT_CODE` (default 0).
- *
- * `coverage/__main__.py`: `run --source X -m xmlrunner ...` re-invokes
- * `python -m xmlrunner ...` as a real subprocess (inherits PYTHONPATH, so it
- * hits the fake xmlrunner above); `lcov -o <path>` writes
+ * `coverage/__main__.py`: `run --source X <runner> ...` re-invokes
+ * `python <runner> ...` as a real subprocess (the client's own unittest
+ * runner, which streams the run); `lcov -o <path>` writes
  * `$FAKE_COVERAGE_LCOV` (or a small default) to `<path>`.
  */
 function writeFakePyModules(rootDir: string): string {
-  const xmlrunnerDir = join(rootDir, "xmlrunner");
   const coverageDir = join(rootDir, "coverage");
-  mkdirSync(xmlrunnerDir, { recursive: true });
   mkdirSync(coverageDir, { recursive: true });
-  writeFileSync(join(xmlrunnerDir, "__init__.py"), "");
-  writeFileSync(
-    join(xmlrunnerDir, "__main__.py"),
-    `import os, sys
-reports_dir = None
-argv = sys.argv[1:]
-for i, a in enumerate(argv):
-    if a == "-o" and i + 1 < len(argv):
-        reports_dir = argv[i + 1]
-if reports_dir:
-    os.makedirs(reports_dir, exist_ok=True)
-    content = os.environ.get("FAKE_XMLRUNNER_JUNIT_XML")
-    if content:
-        with open(os.path.join(reports_dir, "TEST-fake_fixture.xml"), "w") as f:
-            f.write(content)
-sys.exit(int(os.environ.get("FAKE_XMLRUNNER_EXIT_CODE", "0")))
-`,
-  );
   writeFileSync(join(coverageDir, "__init__.py"), "");
   writeFileSync(
     join(coverageDir, "__main__.py"),
@@ -515,6 +456,35 @@ main()
 `,
   );
   return rootDir;
+}
+
+/**
+ * A REAL unittest `tests` package in `projectDir`, its one module holding a
+ * `test_<name>` method per case: passing, failing (`fail`) or skipped
+ * (`skip`). The client's own runner discovers it and streams its record
+ * (CR-CRU-224).
+ */
+function writeUnittestCases(
+  projectDir: string,
+  cases: Array<{ name: string; fail?: boolean; skip?: boolean }>,
+): void {
+  const testsDir = join(projectDir, "tests");
+  mkdirSync(testsDir, { recursive: true });
+  writeFileSync(join(testsDir, "__init__.py"), "");
+  const methods = cases
+    .map((c) => {
+      const body = c.skip
+        ? 'self.skipTest("skipped on purpose")'
+        : c.fail
+          ? 'self.fail("boom")'
+          : "self.assertTrue(True)";
+      return `    def test_${c.name}(self):\n        ${body}\n`;
+    })
+    .join("\n");
+  writeFileSync(
+    join(testsDir, "test_fixture.py"),
+    `import unittest\n\n\nclass FixtureTest(unittest.TestCase):\n${methods}`,
+  );
 }
 
 function makeScratchTracker(): { dir(prefix: string): string; cleanup(): void } {
@@ -724,6 +694,7 @@ describe("clients/python-crucible.py — a key no project holds is refused by ev
     writeEnvFile(dir, UNKNOWN_PROJECT_KEY);
     const envPath = join(dir, ".env");
     const pythonPath = writeFakePyModules(scratch.dir("python-crucible-unknown-key-fakepy-"));
+    writeUnittestCases(dir, [{ name: "one" }]);
 
     const res = await runScript(
       PYTHON_SCRIPT_PATH,
@@ -733,8 +704,6 @@ describe("clients/python-crucible.py — a key no project holds is refused by ev
         crucibleUrl: baseUrl,
         env: {
           PYTHONPATH: pythonPath,
-          FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("fixture", [{ name: "one" }]),
-          FAKE_XMLRUNNER_EXIT_CODE: "0",
         },
       },
     );
@@ -750,7 +719,7 @@ describe("clients/python-crucible.py — a key no project holds is refused by ev
   });
 });
 
-describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'unit', context enrichment (fake xmlrunner, CR-CRU-008 §S2)", () => {
+describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'unit', context enrichment (a real unittest package, CR-CRU-008 §S2)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   let proxy: ReturnType<typeof startCapturingProxy> | undefined;
   const scratch = makeScratchTracker();
@@ -776,6 +745,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-test-unit-tier");
     const { dir, pythonPath } = fixtureDir(key);
+    writeUnittestCases(dir, [{ name: "one" }, { name: "two" }, { name: "three", fail: true }]);
     await ensureRegistered(PYTHON_SCRIPT_PATH, "python-test-agent", { cwd: dir, crucibleUrl: baseUrl });
     proxy = startCapturingProxy(baseUrl);
 
@@ -787,12 +757,6 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
         crucibleUrl: proxy.url,
         env: {
           PYTHONPATH: pythonPath,
-          FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("fixture", [
-            { name: "one" },
-            { name: "two" },
-            { name: "three", fail: true },
-          ]),
-          FAKE_XMLRUNNER_EXIT_CODE: "1",
         },
       },
     );
@@ -825,6 +789,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     const otherCycleId = plan.cycles[1]!.id;
     await activateCycle(baseUrl, key, plan.planId, activeCycleId);
     const { dir, pythonPath } = fixtureDir(key);
+    writeUnittestCases(dir, [{ name: "one" }]);
     runGit(["init", "-q"], dir);
     runGit(["symbolic-ref", "HEAD", `refs/heads/${branch}`], dir);
     writeFileSync(join(dir, ".gitkeep"), "");
@@ -850,8 +815,6 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
         crucibleUrl: baseUrl,
         env: {
           PYTHONPATH: pythonPath,
-          FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("fixture", [{ name: "one" }]),
-          FAKE_XMLRUNNER_EXIT_CODE: "0",
           WORKFLOW_CYCLE_ID: String(otherCycleId),
           WORKFLOW_CYCLE: "python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix",
           WORKFLOW_WAVE: "wave-4",
@@ -882,6 +845,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-test-no-context");
     const { dir, pythonPath } = fixtureDir(key);
+    writeUnittestCases(dir, [{ name: "one" }]);
     await ensureRegistered(PYTHON_SCRIPT_PATH, "python-no-context-agent", { cwd: dir, crucibleUrl: baseUrl });
 
     await runScript(
@@ -892,8 +856,6 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
         crucibleUrl: baseUrl,
         env: {
           PYTHONPATH: pythonPath,
-          FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("fixture", [{ name: "one" }]),
-          FAKE_XMLRUNNER_EXIT_CODE: "0",
         },
       },
     );
@@ -905,7 +867,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
   });
 });
 
-describe("clients/python-crucible.py — regression subcommand: tier:'regression', coverage.py passthrough (fake xmlrunner+coverage, CR-CRU-008 §S2)", () => {
+describe("clients/python-crucible.py — regression subcommand: tier:'regression', coverage.py passthrough (a real unittest package, fake coverage, CR-CRU-008 §S2)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   let proxy: ReturnType<typeof startCapturingProxy> | undefined;
   const scratch = makeScratchTracker();
@@ -930,6 +892,7 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-regression-tier");
     const { dir, pythonPath } = fixtureDir(key);
+    writeUnittestCases(dir, [{ name: "alpha" }, { name: "beta" }]);
     await ensureRegistered(PYTHON_SCRIPT_PATH, "python-regression-agent", { cwd: dir, crucibleUrl: baseUrl });
     proxy = startCapturingProxy(baseUrl);
 
@@ -941,11 +904,6 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
         crucibleUrl: proxy.url,
         env: {
           PYTHONPATH: pythonPath,
-          FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("regression_fixture", [
-            { name: "alpha" },
-            { name: "beta" },
-          ]),
-          FAKE_XMLRUNNER_EXIT_CODE: "0",
         },
       },
     );
@@ -968,6 +926,7 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-regression-coverage");
     const { dir, pythonPath } = fixtureDir(key);
+    writeUnittestCases(dir, [{ name: "alpha" }]);
     await ensureRegistered(PYTHON_SCRIPT_PATH, "python-coverage-agent", { cwd: dir, crucibleUrl: baseUrl });
 
     const res = await runScript(
@@ -978,8 +937,6 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
         crucibleUrl: baseUrl,
         env: {
           PYTHONPATH: pythonPath,
-          FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("regression_fixture", [{ name: "alpha" }]),
-          FAKE_XMLRUNNER_EXIT_CODE: "0",
           FAKE_COVERAGE_LCOV: "SF:app/lib.py\nFNF:6\nFNH:5\nLF:20\nLH:17\nend_of_record\n",
         },
       },
@@ -1036,6 +993,7 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
     const shadowDir = join(dir, "coverage");
     mkdirSync(shadowDir, { recursive: true });
     writeFileSync(join(shadowDir, "lcov.info"), "SF:app/other.ts\nLF:3\nLH:2\nend_of_record\n");
+    writeUnittestCases(dir, [{ name: "alpha" }]);
     await ensureRegistered(PYTHON_SCRIPT_PATH, "python-coverage-shadow-agent", { cwd: dir, crucibleUrl: baseUrl });
 
     const res = await runScript(
@@ -1046,8 +1004,6 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
         crucibleUrl: baseUrl,
         env: {
           PYTHONPATH: pythonPath,
-          FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("regression_fixture", [{ name: "alpha" }]),
-          FAKE_XMLRUNNER_EXIT_CODE: "0",
           FAKE_COVERAGE_LCOV: "SF:app/lib.py\nFNF:6\nFNH:5\nLF:20\nLH:17\nend_of_record\n",
         },
       },
@@ -1063,110 +1019,6 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
     expect(event.coverage?.lines?.covered).toBe(17);
     expect(event.coverage?.functions?.total).toBe(6);
     expect(event.coverage?.functions?.covered).toBe(5);
-  });
-});
-
-describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, CR-CRU-008 Implementation Notes): test AND regression carry REAL captured runner output, never the dead empty-string 400", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
-  let proxy: ReturnType<typeof startCapturingProxy> | undefined;
-  const scratch = makeScratchTracker();
-
-  afterEach(() => {
-    proxy?.stop();
-    proxy = undefined;
-    handle?.stop();
-    handle = undefined;
-    scratch.cleanup();
-  });
-
-  test("'test' with no XML produced (xmlrunner genuinely absent on this interpreter) → POST /api/v2/runs/compile with NON-EMPTY errors carrying the real captured ModuleNotFoundError text; server accepts (no 400, an event exists); exits non-zero", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
-    const baseUrl = `http://localhost:${handle.server.port}`;
-    const key = await createProject(baseUrl, "clients-pc-test-no-xml-fallback");
-    const dir = scratch.dir("python-crucible-no-xml-");
-    writeEnvFile(dir, key);
-    await ensureRegistered(PYTHON_SCRIPT_PATH, "python-no-xml-agent", { cwd: dir, crucibleUrl: baseUrl });
-    proxy = startCapturingProxy(baseUrl);
-
-    const res = await runScript(PYTHON_SCRIPT_PATH, ["test", "--agent", "python-no-xml-agent", "--project-dir", dir], {
-      cwd: dir,
-      crucibleUrl: proxy.url,
-      env: { PYTHONPATH: "", PYTHONNOUSERSITE: "1" },
-    });
-
-    expect(res.code).not.toBe(0);
-    const events = await nonLifecycleEvents(baseUrl, key);
-    // An event exists at all → the server accepted the ingest (never a 400
-    // from an empty `errors` string, which would leave zero events stored).
-    expect(events.length).toBe(1);
-    const event = await getFullEvent(baseUrl, events[0]!.id);
-    expect(event.compile?.raw).toBeDefined();
-    expect((event.compile?.raw ?? "").length).toBeGreaterThan(0);
-    expect(event.compile?.raw).toContain("No module named");
-    expect(
-      proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/compile"),
-    ).toBe(true);
-    expect(proxy.calls.some((c) => c.path === "/api/ingest/compile")).toBe(false);
-
-    // CR-CRU-064 §S5 -- this fixture (xmlrunner genuinely absent on THIS
-    // interpreter) is the fleet's one real starved-toolchain drive, so it is
-    // extended here with the stdout envelope assertion rather than a second
-    // starved harness. §S3 purity: the TOON document is the ENTIRE stdout,
-    // nothing ahead of it -- exactly ONE `axi:` document, decoding to
-    // ok:false under verb:test, carrying the shared no-report helper's
-    // `no-test-reports` warning whose composed `detail` carries the REAL
-    // captured "No module named" cause (never the blank-capture form -- the
-    // capture here is genuinely non-empty, so that branch must not fire).
-    expect(res.stdout.trimStart().startsWith("axi:")).toBe(true);
-    expect((res.stdout.match(/^axi:/gm) ?? []).length).toBe(1);
-    expect(res.stdout).toContain("verb: test");
-    expect(res.stdout).toContain("ok: false");
-    expect(res.stdout).toContain("no-test-reports");
-    expect(res.stdout).toContain("No module named");
-    expect(res.stdout).not.toContain("no runner output reached this envelope");
-  });
-
-  test("'regression' with no XML produced NOW posts the same compile fallback (an event exists) instead of silently returning 1 with no ingest at all", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
-    const baseUrl = `http://localhost:${handle.server.port}`;
-    const key = await createProject(baseUrl, "clients-pc-regression-no-xml-fallback");
-    const dir = scratch.dir("python-crucible-no-xml-regression-");
-    writeEnvFile(dir, key);
-    await ensureRegistered(PYTHON_SCRIPT_PATH, "python-no-xml-regression-agent", { cwd: dir, crucibleUrl: baseUrl });
-    proxy = startCapturingProxy(baseUrl);
-
-    const res = await runScript(
-      PYTHON_SCRIPT_PATH,
-      ["regression", "--agent", "python-no-xml-regression-agent", "--project-dir", dir],
-      { cwd: dir, crucibleUrl: proxy.url, env: { PYTHONPATH: "", PYTHONNOUSERSITE: "1" } },
-    );
-
-    expect(res.code).not.toBe(0);
-    const events = await nonLifecycleEvents(baseUrl, key);
-    expect(events.length).toBe(1);
-    const event = await getFullEvent(baseUrl, events[0]!.id);
-    expect(event.compile?.raw).toBeDefined();
-    expect((event.compile?.raw ?? "").length).toBeGreaterThan(0);
-    expect(event.compile?.raw).toContain("No module named");
-    expect(
-      proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/compile"),
-    ).toBe(true);
-    expect(proxy.calls.some((c) => c.path === "/api/ingest/compile")).toBe(false);
-
-    // CR-CRU-064 §S5/AC6 -- same envelope contract as the `test` sibling
-    // above, under the `regression` verb this invocation was actually run
-    // as (never a hardcoded literal -- `_regression_run` emits under its
-    // `verb` PARAMETER so a starved `pre-merge-gate` would speak as the
-    // gate; this drive is the plain `regression` subcommand, so `verb` is
-    // "regression" here). §S3 purity: exactly ONE `axi:` document, nothing
-    // ahead of it on stdout.
-    expect(res.stdout.trimStart().startsWith("axi:")).toBe(true);
-    expect((res.stdout.match(/^axi:/gm) ?? []).length).toBe(1);
-    expect(res.stdout).toContain("verb: regression");
-    expect(res.stdout).toContain("ok: false");
-    expect(res.stdout).toContain("no-test-reports");
-    expect(res.stdout).toContain("No module named");
-    expect(res.stdout).not.toContain("no runner output reached this envelope");
   });
 });
 
@@ -1204,11 +1056,11 @@ describe("clients/python-crucible.py — byte-compatible CLI surface (existing f
 
 // CR-CRU-050 §S1/§S1b/§S2 — python's JUnit parse once folded every
 // `<skipped/>` testcase into `passed` and hardcoded `"pending": 0`; since
-// CR-CRU-204 the client sends xmlrunner's report to the board, whose codec
-// counts a skipped case as pending. The printed `run:` TOON block and the
+// CR-CRU-224 the client relays its runner's event stream to the board, whose
+// codec counts a skipped case as pending. The printed `run:` TOON block and the
 // plain stderr ingest line both state the board's answer, pending included —
 // both are §S2 surfaces.
-describe("clients/python-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> testcases count as pending, never passed (fake xmlrunner)", () => {
+describe("clients/python-crucible.py — CR-CRU-050 §S1/§S1b/§S2: skipped testcases count as pending, never passed (a real unittest package)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
   let runResult: RunResult | undefined;
@@ -1232,6 +1084,11 @@ describe("clients/python-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> 
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-cr050-pending");
     const { dir, pythonPath } = fixtureDir(key);
+    writeUnittestCases(dir, [
+      { name: "passes" },
+      { name: "fails", fail: true },
+      { name: "skipped_case", skip: true },
+    ]);
     await ensureRegistered(PYTHON_SCRIPT_PATH, "python-cr050-agent", { cwd: dir, crucibleUrl: baseUrl });
 
     runResult = await runScript(
@@ -1242,12 +1099,6 @@ describe("clients/python-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> 
         crucibleUrl: baseUrl,
         env: {
           PYTHONPATH: pythonPath,
-          FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("cr050_fixture", [
-            { name: "passes" },
-            { name: "fails", fail: true },
-            { name: "skipped_case", skip: true },
-          ]),
-          FAKE_XMLRUNNER_EXIT_CODE: "1",
         },
       },
     );
@@ -1267,9 +1118,9 @@ describe("clients/python-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> 
 
     // §S1b — leaf status, not just counts.
     const leaves = (event.tree ?? []).flatMap((suite) => suite.children);
-    const skipLeaf = leaves.find((l) => l.name === "skipped_case");
-    const passLeaf = leaves.find((l) => l.name === "passes");
-    const failLeaf = leaves.find((l) => l.name === "fails");
+    const skipLeaf = leaves.find((l) => l.name === "test_skipped_case");
+    const passLeaf = leaves.find((l) => l.name === "test_passes");
+    const failLeaf = leaves.find((l) => l.name === "test_fails");
     expect(skipLeaf?.status).toBe("pending");
     expect(skipLeaf?.status).not.toBe("pass");
     expect(passLeaf?.status).toBe("pass");

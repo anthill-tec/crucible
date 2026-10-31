@@ -77,9 +77,11 @@ HELP_CLIENTS = (
 )
 
 # The recording stand-in for the project's python interpreter. Every launch
-# appends its argv to `interpreter_runs.jsonl` beside it; a suite run (`-o
-# <reports dir>`) writes one passing JUnit case there; `coverage lcov -o
-# <file>` writes a small lcov; everything else exits 0.
+# appends its argv to `interpreter_runs.jsonl` beside it; a suite run (the
+# client's `subtest_runner.py`) writes one passing case as a Crucible event
+# stream to the file `CRUCIBLE_STREAM` names, taking the variable out of its
+# own environment first, and writes no JUnit (CR-CRU-224 section S1);
+# `coverage lcov -o <file>` writes a small lcov; everything else exits 0.
 # The lcov report the stand-in's `coverage lcov` writes, byte for byte.
 PYTHON_LCOV_TEXT = ("SF:pkg_under_measure/mod.py\nFNF:2\nFNH:1\n"
                     "LF:10\nLH:8\nend_of_record\n")
@@ -98,15 +100,19 @@ if out and "lcov" in argv:
         handle.write("SF:pkg_under_measure/mod.py\nFNF:2\nFNH:1\n"
                      "LF:10\nLH:8\nend_of_record\n")
     sys.exit(0)
-if out:
+stream = os.environ.pop("CRUCIBLE_STREAM", None)
+if any(os.path.basename(arg) == "subtest_runner.py" for arg in argv):
     sys.stderr.write("test_case_1 (fake_module.FakeCase.test_case_1) ... ok\n")
-    os.makedirs(out, exist_ok=True)
-    with open(os.path.join(out, "TEST-fake_module.FakeCase.xml"), "w") as handle:
-        handle.write('<?xml version="1.0" encoding="UTF-8"?>\n<testsuite '
-                     'name="fake_module.FakeCase" tests="1" errors="0" '
-                     'failures="0" skipped="0"><testcase '
-                     'classname="fake_module.FakeCase" name="test_case_1" '
-                     'time="0.001"></testcase></testsuite>\n')
+    if stream:
+        with open(stream, "w", encoding="utf-8") as handle:
+            for event in (dict(event="run-start", total=1),
+                          dict(event="test-end", id="fake_module.FakeCase.test_case_1",
+                               name="test_case_1", suite="fake_module.FakeCase",
+                               file="fake_module.py", status="pass", duration_ms=1),
+                          dict(event="run-end", total=1, passed=1, failed=0,
+                               pending=0, duration_ms=1)):
+                handle.write(json.dumps(event) + "\n")
+                handle.flush()
 sys.exit(0)
 '''
 
@@ -438,6 +444,12 @@ class PythonCovSourceWithCoverageRunsTest(_PythonProject, unittest.TestCase):
             f"coverage measures the --cov-source given; runs={suite_runs!r}")
         path, body = _the_one_ingest(self, self.board, result)
         self.assertEqual(path, "/api/v2/runs", _diagnostics(result))
+        # CR-CRU-224: a unittest run closes from its stream.
+        self.assertEqual(
+            ((body or {}).get("codec"), "data" in (body or {})),
+            ("crucible-events", False),
+            f"a unittest run is closed from its stream, carrying no report; "
+            f"body={body!r}")
         self.assertEqual(
             (body or {}).get("coverage"),
             {"codec": "lcov", "data": [PYTHON_LCOV_TEXT]},
@@ -452,7 +464,8 @@ class PythonCovSourceWithCoverageRunsTest(_PythonProject, unittest.TestCase):
 class RegressionWithoutCoverageFilesNoCoverageTest(unittest.TestCase):
     """GUARD — holds today: bun's, python's and arduino's `regression` without
     `--coverage` file a `regression` run whose ingest body has no `coverage`
-    key."""
+    key. RED for python until its unittest run is closed from its stream
+    (CR-CRU-224)."""
 
     def setUp(self):
         self.board = RecordingBoard()
@@ -497,6 +510,13 @@ class RegressionWithoutCoverageFilesNoCoverageTest(unittest.TestCase):
         driver.make_project(self.board.url, "python-regression-no-coverage")
         result = driver.drive(agent="py-regression-no-coverage")
         self._assert_no_coverage(result)
+        _, body = _the_one_ingest(self, self.board, result)
+        # CR-CRU-224: a unittest run closes from its stream.
+        self.assertEqual(
+            ((body or {}).get("codec"), "data" in (body or {})),
+            ("crucible-events", False),
+            f"a unittest run is closed from its stream, carrying no report; "
+            f"body={body!r}")
         self.assertFalse(
             any(argv[:2] == ["-m", "coverage"] for argv in driver.interpreter_runs()),
             f"coverage.py never runs; runs={driver.interpreter_runs()!r}")

@@ -1,27 +1,19 @@
-"""Python's test/regression verbs run `unittest` through xmlrunner's own
-discovery entry point (built by the client's `_xmlrunner_cmd` helper, its
-JUnit reports sent to the board for it to decode). `unittest` reports every subtest to the
-result through `addSubTest(test, subtest, outcome)`, with `outcome` `None` for
-a pass. The installed unittest-xml-reporting result class's `addSubTest`
-writes a `<testcase>` only when `outcome` is not `None` -- a passing subtest
-is silently dropped, and the whole parent test's own success is written once
-instead. A suite with subtests therefore reports a SMALLER total when every
-subtest passes than when one of them fails, and the subtest's own name never
-appears in the all-pass run at all.
+"""Python's test/regression verbs run `unittest` through the client's own
+runner (`clients/subtest_runner.py`), which counts every subtest as
+CR-CRU-189 counts them and writes one Crucible event per counted case to the
+stream the run is filed from (CR-CRU-224). `unittest` reports every subtest
+through `addSubTest(test, subtest, outcome)`, with `outcome` `None` for a
+pass; a runner that wrote a case only for a failing subtest would report a
+SMALLER total when every subtest passes than when one of them fails.
 
-Measured directly against the installed unittest-xml-reporting 4.0.0 (see
-`xmlrunner.result._XMLTestResult.addSubTest`): a loop of three `subTest`
-cases plus one plain test reports 2 cases when every subtest passes (the
-plain test's success plus the parent's own, collapsed) and 4 when the loop
-fails (the plain test plus one `<testcase>` per failing subtest, named
-`<method> (<params>)`). This file drives the REAL `python-crucible.py`
-`test` and `regression` verbs (regression both with and without coverage.py
-on) against a real interpreter holding the real unittest-xml-reporting
-4.0.0, through an in-process HTTP board double, and asserts what the reports the
-client sends the board hold, read as the board's `junit` codec reads them
-(`junit_sent`): the total must be identical whether every subtest passes or
-some of them fail, every subtest's case name must be identical between the
-two runs, and `passed + failed + pending` must equal `total` on every run.
+This file drives the REAL `python-crucible.py` `test` and `regression` verbs
+(regression both with and without coverage.py on) against the repo's own
+interpreter, through an in-process HTTP board double that holds the run's
+stream as the real board does, and asserts what that stream holds, read as the
+board's `crucible-events` codec counts it (`stream_sent`): the total must be
+identical whether every subtest passes or some of them fail, every subtest's
+case name must be identical between the two runs, and `passed + failed +
+pending` must equal `total` on every run.
 
 Fixture names and environment variables below are chosen for this file alone
 and carry no significance beyond it."""
@@ -40,8 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.client.live_run_harness import (
     RecordingBoard,
     install_project,
-    junit_sent,
     load_client,
+    stream_sent,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -74,10 +66,8 @@ class SubtestParityCase(unittest.TestCase):
         self.assertTrue(True)
 '''
 
-# The case names unittest/xmlrunner assign: the plain test keeps its own
-# name, and each subtest is named "<method> (case=<i>)" -- measured directly
-# off a failing run's own JUnit XML, which already names failing subtests
-# this way today.
+# The case names the runner gives: the plain test keeps its own name, and
+# each subtest is named "<method> (case=<i>)", as a JUnit record named them.
 PARITY_ALL_NAMES = frozenset({
     "test_plain_case",
     "test_three_case_loop (case=0)",
@@ -108,14 +98,15 @@ def _run_main(module, argv):
 
 
 def _last_sent_report(board):
-    """The run's last `/api/v2/runs` ingest, its JUnit report texts read as
-    the board's `junit` codec reads them (`junit_sent`): the client sends
-    the runner's reports and counts nothing itself."""
+    """The stream the board holds for the run, read as its `crucible-events`
+    codec counts it (`stream_sent`), after checking the run was closed from
+    that stream: the client sends the runner's stream and counts nothing
+    itself."""
     sent = [body for path, body in board.posts() if path == "/api/v2/runs"]
     assert sent, f"no /api/v2/runs POST observed; posts={board.posts()!r}"
-    read = junit_sent(sent[-1])
-    assert read is not None, f"the ingest is not a junit one; body={sent[-1]!r}"
-    return read
+    assert sent[-1].get("codec") == "crucible-events", (
+        f"the run is closed from its stream; body={sent[-1]!r}")
+    return stream_sent(board)
 
 
 def _case_names(payload):

@@ -12,20 +12,21 @@ case — suite `runner`, case `exit <n>` — before it stores the run.
 
 `PythonRunnerExitOnARealBoardTest`
     End to end against a REAL scratch board (`tests/client/real_board.py`):
-    a fake interpreter whose runner exits 1 over a passing-only JUnit report,
+    a fake interpreter whose runner exits 1 over a passing-only stream,
     through `test`, `regression` and `pre-merge-gate` — the stored run carries
     the `runner / exit 1` case, the envelope's `run` counts include it, and
     the verb exits non-zero. A runner killed by SIGKILL files `exit 137`. A
-    runner exiting non-zero with no report exits non-zero. A clean runner over
-    a passing report is filed and exits exactly as before.
+    runner exiting non-zero with no stream exits non-zero. A clean runner over
+    a passing stream is filed and exits exactly as before.
 
 `PythonRunnerExitReachesTheIngestTest`
     Against a recording board: what the ingest body CARRIES as `runnerExit`,
     and the exit of a clean runner whose ingest was refused.
 
 Every run drives the real `clients/python-crucible.py` as a subprocess, with a
-fake interpreter (`--python`) that writes its JUnit report where the client
-told it to (`-o <dir>`) and exits as the test asks.
+fake interpreter (`--python`) that writes its Crucible event stream to the
+file the client names (`CRUCIBLE_STREAM`, CR-CRU-224) and exits as the test
+asks; the run is closed from that stream (`codec: "crucible-events"`).
 
 Invocation:
     python3 -m unittest tests.client.test_python_exits_and_files_on_its_runners_exit -v
@@ -65,12 +66,14 @@ PASSING_CASE = "test_adds_two_numbers"
 _SCRUBBED = ("PY_CRUCIBLE_PYTHON", "CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY",
              "PYTHON_CRUCIBLE_PROJECT_DIR")
 
-# A fake interpreter. Run as the suite (`<subtest_runner> ... -o <dir> -v`,
-# bare or under `-m coverage run`), it writes one passing JUnit case into the
-# `-o` directory — unless FAKE_REPORT=none — then exits FAKE_EXIT, or kills
-# itself with FAKE_SIGNAL. A coverage.py probe (`-c <script>`) answers that
-# the project declares its source; `-m coverage lcov` has no data to report.
+# A fake interpreter. Run as the suite (`<subtest_runner> ... -v`, bare or
+# under `-m coverage run`), it writes one passing case as a Crucible event
+# stream to the file `CRUCIBLE_STREAM` names (unless FAKE_REPORT=none), then
+# exits FAKE_EXIT, or kills itself with FAKE_SIGNAL. A coverage.py probe
+# (`-c <script>`) answers that the project declares its source; `-m coverage
+# lcov` has no data to report.
 _FAKE_PYTHON = r'''
+import json
 import os
 import signal
 import sys
@@ -83,21 +86,20 @@ if argv[:1] == ["-c"]:
     sys.exit(0)
 if argv[:2] == ["-m", "coverage"] and argv[2:3] != ["run"]:
     sys.exit(1)
-outdir = None
-for i, arg in enumerate(argv):
-    if arg == "-o" and i + 1 < len(argv):
-        outdir = argv[i + 1]
+stream_path = os.environ.pop("CRUCIBLE_STREAM", None)
 sys.stderr.write("%s (%s.%s) ... ok\n" % (CASE, CLASS, CASE))
 sys.stderr.write("\n----------------------------------------------------------------------\n"
                  "Ran 1 test in 0.001s\n\nOK\n")
 sys.stderr.flush()
-if outdir and os.environ.get("FAKE_REPORT") != "none":
-    os.makedirs(outdir, exist_ok=True)
-    with open(os.path.join(outdir, "TEST-%s.xml" % CLASS), "w") as handle:
-        handle.write('<?xml version="1.0" encoding="UTF-8"?>\n'
-                     '<testsuite name="%s" tests="1" errors="0" failures="0" '
-                     'skipped="0"><testcase classname="%s" name="%s" '
-                     'time="0.001"></testcase></testsuite>\n' % (CLASS, CLASS, CASE))
+if stream_path and os.environ.get("FAKE_REPORT") != "none":
+    with open(stream_path, "w", encoding="utf-8") as handle:
+        for event in (dict(event="run-start", total=1),
+                      dict(event="test-end", id=CLASS + "." + CASE, name=CASE,
+                           suite=CLASS, file="fake_module.py", status="pass",
+                           duration_ms=1),
+                      dict(event="run-end", total=1, passed=1, failed=0, pending=0)):
+            handle.write(json.dumps(event) + "\n")
+            handle.flush()
 name = os.environ.get("FAKE_SIGNAL")
 if name:
     os.kill(os.getpid(), getattr(signal, "SIG" + name))
@@ -332,6 +334,10 @@ class PythonRunnerExitReachesTheIngestTest(_FakeInterpreterProject, unittest.Tes
         self.assertEqual(len(bodies), 1,
                          f"exactly one {path} ingest; posts={self.board.posts()!r} "
                          f"{_diagnostics(result)}")
+        if path == RUNS_INGEST:
+            self.assertEqual(bodies[0].get("codec"), "crucible-events",
+                             "a unittest run is closed from its stream")
+            self.assertNotIn("data", bodies[0])
         return bodies[0]
 
     def assert_runner_exit(self, body, code):

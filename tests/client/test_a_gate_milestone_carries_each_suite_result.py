@@ -89,7 +89,8 @@ _SCRUBBED = ("BUN_CRUCIBLE_PACKAGE_DIR", "BUN_CRUCIBLE_PROJECT_DIR",
              "BUN_CRUCIBLE_BUN", "BUN_CRUCIBLE_NO_LIFECYCLE",
              "PY_CRUCIBLE_PYTHON", "PYTHON_CRUCIBLE_PROJECT_DIR",
              "CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY",
-             "FAKE_BUN_FAIL", "FAKE_PYTHON_FAIL", "FAKE_TSC_FAIL")
+             "FAKE_BUN_FAIL", "FAKE_PYTHON_FAIL", "FAKE_TSC_FAIL",
+             "FAKE_PYTHON_STREAM_CAPTURE")
 
 # A fake `bun`. `bun x tsc …` (the gate's step 0) fails with a tsc error when
 # FAKE_TSC_FAIL=1; `bun test …` writes one passing JUnit case — plus one
@@ -129,10 +130,15 @@ if junit:
 sys.exit(1 if fail else 0)
 '''
 
-# A fake interpreter for the python client: run as the suite (`... -o <dir>`)
-# it writes one passing JUnit case — plus one failing case, and exits 1, when
-# FAKE_PYTHON_FAIL=1. A coverage.py probe (`-c <script>`) answers true.
+# The python stand-in — a fake interpreter for the python client, run as the suite, writes one
+# passing case, plus one failing case (and exits 1) when FAKE_PYTHON_FAIL=1,
+# as a Crucible event stream to the file `CRUCIBLE_STREAM` names, taking the
+# variable out of its own environment first, and writes no JUnit (CR-CRU-224
+# section S1). It records the `CRUCIBLE_STREAM` it was handed to the file
+# FAKE_PYTHON_STREAM_CAPTURE names. A coverage.py probe (`-c <script>`)
+# answers true.
 _FAKE_PYTHON = r'''
+import json
 import os
 import sys
 
@@ -143,24 +149,29 @@ if argv[:1] == ["-c"]:
     sys.stdout.write("true\n")
     sys.exit(0)
 fail = os.environ.get("FAKE_PYTHON_FAIL") == "1"
-outdir = None
-for i, arg in enumerate(argv):
-    if arg == "-o" and i + 1 < len(argv):
-        outdir = argv[i + 1]
-cases = '<testcase classname="%s" name="%s" time="0.001"></testcase>' % (CLASS, CASE)
+stream = os.environ.pop("CRUCIBLE_STREAM", None)
+capture = os.environ.get("FAKE_PYTHON_STREAM_CAPTURE")
+if capture:
+    with open(capture, "w") as handle:
+        handle.write(stream or "")
+file = CLASS.split(".")[0] + ".py"
+cases = [dict(event="test-end", id=CLASS + "." + CASE, name=CASE, suite=CLASS,
+              file=file, status="pass", duration_ms=1)]
 if fail:
-    cases += ('<testcase classname="%s" name="%s" time="0.001">'
-              '<failure type="AssertionError" message="2 != 3">AssertionError: 2 != 3'
-              '</failure></testcase>' % (CLASS, FAILING))
+    cases.append(dict(event="test-end", id=CLASS + "." + FAILING, name=FAILING,
+                      suite=CLASS, file=file, status="fail", duration_ms=1,
+                      failure=dict(message="2 != 3", type="AssertionError",
+                                   trace="AssertionError: 2 != 3")))
 total, failures = (2, 1) if fail else (1, 0)
 sys.stderr.write("Ran %d test(s)\n\n%s\n" % (total, "FAILED (failures=1)" if fail else "OK"))
 sys.stderr.flush()
-if outdir:
-    os.makedirs(outdir, exist_ok=True)
-    with open(os.path.join(outdir, "TEST-%s.xml" % CLASS), "w") as handle:
-        handle.write('<?xml version="1.0" encoding="UTF-8"?>\n'
-                     '<testsuite name="%s" tests="%d" errors="0" failures="%d" '
-                     'skipped="0">%s</testsuite>\n' % (CLASS, total, failures, cases))
+if stream:
+    with open(stream, "w", encoding="utf-8") as handle:
+        for event in ([dict(event="run-start", total=total)] + cases
+                      + [dict(event="run-end", total=total, passed=total - failures,
+                              failed=failures, pending=0, duration_ms=1)]):
+            handle.write(json.dumps(event) + "\n")
+            handle.flush()
 sys.exit(1 if fail else 0)
 '''
 
@@ -240,6 +251,7 @@ class _GateScenario(unittest.TestCase):
         cls.board.install(cls.project)
         cls.orchestrator = f"gate-suites-{cls.NAME}-orchestrator"
         cls.plan_id, cls.cycle_id = cls._plan()
+        cls._register_the_gates_agent()
         cls.result = cls._drive_gate()
 
     @classmethod
@@ -271,6 +283,18 @@ class _GateScenario(unittest.TestCase):
         return plan_id, cycle_id
 
     @classmethod
+    def _register_the_gates_agent(cls):
+        """The gate's agent, registered unbound before the drive. The plan's
+        cycle is done, so the clients' own registration bound to it is
+        refused, and a streamed python unittest run whose run cannot be
+        opened files nothing (CR-CRU-224 section S3): the dispatched suite's
+        run opens under this registration."""
+        reg = cls.board.http("/api/v2/agents/register",
+                             {"projectKey": cls.board.key, "agentId": cls.agent,
+                              "role": "ORCHESTRATOR"})
+        assert reg.get("ok"), f"gate agent registration failed: {reg!r}"
+
+    @classmethod
     def _env(cls):
         env = scrubbed_env(None)
         for key in _SCRUBBED:
@@ -278,6 +302,8 @@ class _GateScenario(unittest.TestCase):
         env["FAKE_BUN_FAIL"] = "1" if cls.BUN_FAILS else "0"
         env["FAKE_PYTHON_FAIL"] = "1" if cls.PYTHON_FAILS else "0"
         env["FAKE_TSC_FAIL"] = "1" if cls.TSC_FAILS else "0"
+        env["FAKE_PYTHON_STREAM_CAPTURE"] = os.path.join(cls.project,
+                                                         "stream-capture.txt")
         return env
 
     @classmethod
@@ -427,6 +453,19 @@ class AFullGateRecordsADispatchedSuitesFailureTest(_GateScenario):
             any(PYTHON_FAILING_CASE in str(name) for name in failing),
             f"failingTests names the REAL failing test "
             f"({PYTHON_FAILING_CASE!r}); failingTests={failing!r}")
+
+    def test_the_dispatched_python_suite_hands_its_runner_a_stream(self):
+        """CR-CRU-224 section S3: the dispatched python suite is a unittest
+        run with `--agent`, so its runner is handed `CRUCIBLE_STREAM`, naming
+        `<reports dir>/crucible-events.ndjson`, and the run is filed from it."""
+        capture = Path(self.project, "stream-capture.txt")
+        handed = capture.read_text() if capture.exists() else None
+        self.assertEqual(
+            os.path.realpath(handed) if handed else handed,
+            os.path.realpath(os.path.join(self.project, "py-reports",
+                                          "crucible-events.ndjson")),
+            f"the python runner was handed CRUCIBLE_STREAM={handed!r}; "
+            f"{_diagnostics(self.result)}")
 
     def test_the_gate_envelope_lists_the_events_of_its_own_run_and_the_dispatched_one(self):
         envelope = self.gate_envelope()

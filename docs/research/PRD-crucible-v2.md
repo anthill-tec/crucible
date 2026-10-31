@@ -255,7 +255,7 @@ registry** translating each tool's native output into one **canonical RunSchema*
 - **Codecs follow the supported stacks' reporting strategies** (corrected 2026-09-24, codec audit).
   The five stacks (bun, python, maven, rust, arduino) all report test results as JUnit XML (bun
   `--reporter=junit`, `xmlrunner`, surefire, `cargo nextest`, the native g++ harness), so `junit`
-  serves them all; `playwright` serves frontend e2e. `vitest`, `tap` and a separate `nextest` codec,
+  serves them all (python unittest has streamed `crucible-events` instead since CR-CRU-224, below); `playwright` serves frontend e2e. `vitest`, `tap` and a separate `nextest` codec,
   listed here before, are **not needed**: no supported stack emits those formats (nextest writes
   JUnit). A codec is added when a supported stack's report needs one. Measured gaps against this
   section are filed as CR-CRU-151 (stack stamp), CR-CRU-152 (per-stack reports decoded on the server)
@@ -268,6 +268,11 @@ registry** translating each tool's native output into one **canonical RunSchema*
   by JUnit's own failure and suite-status rules. An open run's batches go to `POST /api/v2/runs/<runId>/stream`, which
   holds them byte-offset by byte-offset and fills the run's live state; the close on `/runs` (`runId`,
   `codec: "crucible-events"`, no report) decodes the whole held stream into the run's one event.
+- **Python unittest streams its record (CR-CRU-224).** The python client's own unittest runner
+  (`clients/subtest_runner.py`) writes the `crucible-events` stream to the file `CRUCIBLE_STREAM` names,
+  the shared relay (`StreamRelay`) sends it to the open run while the suite works, and the run is closed
+  with `codec: "crucible-events"`. A python unittest run writes no JUnit and xmlrunner left the client;
+  a pytest run and `auto-ingest` keep their JUnit record.
 
 ### 4.5 Compile ingest
 - Structured parsers per format: `rustc` (`error[EXXXX]` + `--> file:line:col`), java/

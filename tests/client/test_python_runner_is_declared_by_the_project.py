@@ -331,6 +331,10 @@ class TheFlagOverridesTheDeclarationTest(_RunnerCase):
                              "--python", self.python, "--project-dir", self.project,
                              "--reports", "reports"])
         self.assert_unittest_chosen(result, "regression --runner unittest over declared pytest")
+        closes = [body for path, body in self.board.posts() if path == "/api/v2/runs"]
+        self.assertEqual([c.get("codec") for c in closes], ["crucible-events"],
+                         f"a unittest run is closed from its stream, whatever the "
+                         f"project declares; {self.diag(result)}")
 
 
 class _RefusalCase(_RunnerCase):

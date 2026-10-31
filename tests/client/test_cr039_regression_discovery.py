@@ -29,8 +29,8 @@ file):
   - Sec S1: `python -m xmlrunner discover -s tests -p 'test_*.py'` today
     collects 0 tests and produces no TEST-*.xml at all (confirmed), while
     `discover -s tests/client` collects 374 (confirmed) -- so the default
-    `_xmlrunner_cmd(..., "tests", ...)` invocation fails this test's
-    >=300-test lower bound today.
+    discovery `_suite_cmd` builds through `_unittest_cmd` (no targets:
+    `discover -s tests`) fails this test's >=300-test lower bound today.
   - Sec S2: the current `_regression_run` zero-discovery branch
     (python-crucible.py ~700-705) prints ONLY a stderr line and calls
     `_ingest_compile(project_dir, args.agent, ..., tier="regression")` --
@@ -54,6 +54,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+from tests.client.live_run_harness import StreamingPost, get_answering_health
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "python-crucible.py"
@@ -159,7 +161,11 @@ class RegressionZeroDiscoveryEmitsDefinitiveNoTestsDiscoveredErrorTest(unittest.
 
     def test_zero_discovery_emits_definitive_no_tests_discovered_error_and_skips_compile_ingest(self):
         pattern = "test_*.py"
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
+        # A board that opens the run and holds its stream (CR-CRU-224): the
+        # zero-test run is then caught from the local count and aborted.
+        os.environ.pop("CRUCIBLE_STREAM", None)
+        with mock.patch.object(self.module, "_post", side_effect=StreamingPost()), \
+             mock.patch.object(self.module, "_get", side_effect=get_answering_health()), \
              mock.patch.object(self.module, "_ingest_compile") as compile_mock:
             code, out, _err = _run_main(self.module, [
                 "regression", "--agent", "CR-CRU-039-C1-RED-probe",

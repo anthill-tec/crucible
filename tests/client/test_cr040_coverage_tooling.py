@@ -35,6 +35,7 @@ import argparse
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import sys
@@ -44,7 +45,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.client.live_run_harness import get_answering_health
+from tests.client.live_run_harness import (
+    STREAM_CODEC,
+    StreamingPost,
+    get_answering_health,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "python-crucible.py"
@@ -233,7 +238,9 @@ class CoverageRunEnvTest(unittest.TestCase):
             )
             with mock.patch.object(module, "_run_logged",
                                     side_effect=_capture_env), \
-                    mock.patch.object(module, "_post", return_value={"ok": True}):
+                    mock.patch.object(module, "_post", return_value={"ok": True}), \
+                    mock.patch.object(module, "_get",
+                                      side_effect=get_answering_health()):
                 with self.assertRaises(CoverageRunEnvTest._AbortAfterCapture):
                     module._regression_run(args)
 
@@ -249,22 +256,27 @@ class CoverageRunEnvTest(unittest.TestCase):
         """Same lock-in for the sibling `coverage lcov` step: the env the
         client builds for that subprocess must ALSO carry no PYTHONSAFEPATH
         key. Drives `_regression_run` with the runner and every
-        `subprocess.run` stood in for: the runner writes one JUnit report,
-        and `coverage lcov` (captured) writes the lcov report the run then
+        `subprocess.run` stood in for: the runner writes one passing case to
+        the event stream `CRUCIBLE_STREAM` names (CR-CRU-224), and
+        `coverage lcov` (captured) writes the lcov report the run then
         sends, inline, as `coverage: {codec: "lcov", data}` on its one
-        `/api/v2/runs` ingest."""
+        `/api/v2/runs` close, which carries `codec: "crucible-events"` and
+        no `data`."""
         module = _load_client_module()
         captured = {}
         lcov_text = "SF:clients/x.py\nDA:1,1\nLF:1\nLH:1\nend_of_record\n"
-        junit_text = ('<?xml version="1.0" ?><testsuite name="t.T" tests="1">'
-                      '<testcase classname="t.T" name="test_a" time="0.001"/>'
-                      '</testsuite>')
+        events = ({"event": "run-start", "total": 1},
+                  {"event": "test-end", "id": "t.T.test_a", "name": "test_a",
+                   "suite": "t.T", "file": "t.py", "status": "pass",
+                   "duration_ms": 1},
+                  {"event": "run-end", "total": 1, "passed": 1, "failed": 0,
+                   "pending": 0, "duration_ms": 1})
 
-        def _fake_runner(cmd, _cwd, _env, _log_path, _narrator=None):
-            reports = cmd[cmd.index("-o") + 1]
-            os.makedirs(reports, exist_ok=True)
-            with open(os.path.join(reports, "TEST-t.T.xml"), "w") as f:
-                f.write(junit_text)
+        def _fake_runner(cmd, _cwd, env, *_rest, **_kwargs):
+            captured["stream"] = (env or {}).get("CRUCIBLE_STREAM")
+            if captured["stream"]:
+                with open(captured["stream"], "w", encoding="utf-8") as f:
+                    f.writelines(json.dumps(event) + "\n" for event in events)
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         def _fake_run(cmd, **kwargs):
@@ -286,13 +298,22 @@ class CoverageRunEnvTest(unittest.TestCase):
             with mock.patch.object(module, "_run_logged", side_effect=_fake_runner), \
                     mock.patch.object(module.subprocess, "run", side_effect=_fake_run), \
                     mock.patch.object(module, "_post",
-                                      return_value={"ok": True}) as post_mock, \
+                                      side_effect=StreamingPost()) as post_mock, \
                     mock.patch.object(module, "_get",
                                       side_effect=get_answering_health()), \
                     contextlib.redirect_stdout(io.StringIO()), \
                     contextlib.redirect_stderr(io.StringIO()):
                 module._regression_run(args)
 
+        self.assertTrue(captured.get("stream"),
+                        "the runner was handed no CRUCIBLE_STREAM to write its run to")
+        sent = [c.args[1] for c in post_mock.call_args_list
+                if c.args and c.args[0] == "/api/v2/runs"]
+        self.assertEqual([(s.get("codec"), "data" in s) for s in sent],
+                         [(STREAM_CODEC, False)],
+                         f"one /api/v2/runs close, from the stream, carrying no "
+                         f"report; posts="
+                         f"{[c.args[0] for c in post_mock.call_args_list]!r}")
         self.assertIn("env", captured, "`coverage lcov` was never run")
         self.assertIsNotNone(
             captured["env"], "the `coverage lcov` step must pass an explicit env"
@@ -303,11 +324,6 @@ class CoverageRunEnvTest(unittest.TestCase):
             "rationale as the coverage-run step (real coverage.py beats the "
             "namespace-dir shadow)",
         )
-        sent = [c.args[1] for c in post_mock.call_args_list
-                if c.args and c.args[0] == "/api/v2/runs"]
-        self.assertEqual(len(sent), 1,
-                         f"one /api/v2/runs ingest; posts="
-                         f"{[c.args[0] for c in post_mock.call_args_list]!r}")
         self.assertEqual(sent[0].get("coverage") if sent else None,
                          {"codec": "lcov", "data": [lcov_text]},
                          "the lcov report `coverage lcov` wrote is sent as it stands")

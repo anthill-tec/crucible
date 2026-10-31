@@ -180,6 +180,9 @@ from pathlib import Path
 from unittest import mock
 
 from tests.client.live_run_harness import (  # noqa: E402
+    START,
+    STREAM_ROUTE,
+    StreamingPost,
     get_answering_health,
     junit_sent,
 )
@@ -521,23 +524,25 @@ sys.stdout.write(os.environ.get("FAKE_BUN_OUTPUT", ""))
 sys.exit(int(os.environ.get("FAKE_BUN_EXIT_CODE", "0")))
 """
 
-# The interpreter `python-crucible.py --python` runs: stands in for
-# `python -m xmlrunner ... -o <reports>`. With FAKE_PY_JUNIT_CONTENT it writes
-# one TEST-*.xml there; without it, it prints a traceback and exits non-zero —
+# The interpreter `python-crucible.py --python` runs: stands in for the
+# client's unittest runner (CR-CRU-224). With FAKE_PY_STREAM=1 it writes one
+# passing case as a Crucible event stream to the file `CRUCIBLE_STREAM` names;
+# without it, it prints a traceback and exits non-zero, writing no stream --
 # the genuine collection/import failure that routes to the compile ingest.
 _FAKE_PY_RUNNER = """#!{python}
+import json
 import os
 import sys
 
-argv = sys.argv[1:]
-reports = None
-if "-o" in argv:
-    reports = argv[argv.index("-o") + 1]
-content = os.environ.get("FAKE_PY_JUNIT_CONTENT", "")
-if content and reports:
-    os.makedirs(reports, exist_ok=True)
-    with open(os.path.join(reports, "TEST-tier.probe.xml"), "w") as f:
-        f.write(content)
+stream = os.environ.pop("CRUCIBLE_STREAM", None)
+if os.environ.get("FAKE_PY_STREAM") == "1" and stream:
+    with open(stream, "w", encoding="utf-8") as f:
+        for event in (dict(event="run-start", total=1),
+                      dict(event="test-end", id="tier.probe.Case.test_probe",
+                           name="test_probe", suite="tier.probe.Case",
+                           file="tests/probe.py", status="pass", duration_ms=1),
+                      dict(event="run-end", total=1, passed=1, failed=0, pending=0)):
+            f.write(json.dumps(event) + "\\n")
     sys.exit(int(os.environ.get("FAKE_PY_EXIT_CODE", "0")))
 sys.stdout.write(os.environ.get(
     "FAKE_PY_OUTPUT",
@@ -720,7 +725,7 @@ _ENV_KEYS = (
     "WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID", "WORKFLOW_CYCLE",
     "AGENT_ID", "CRUCIBLE_URL", "CRUCIBLE_BASE",
     "FAKE_BUN_JUNIT_CONTENT", "FAKE_BUN_EXIT_CODE", "FAKE_BUN_OUTPUT",
-    "FAKE_PY_JUNIT_CONTENT", "FAKE_PY_EXIT_CODE", "FAKE_PY_OUTPUT",
+    "FAKE_PY_STREAM", "FAKE_PY_EXIT_CODE", "FAKE_PY_OUTPUT", "CRUCIBLE_STREAM",
     "FAKE_MVN_EXIT_CODE", "FAKE_CARGO_EXIT_CODE", "FAKE_MAKE_EXIT_CODE",
     "FAKE_CARGO_JUNIT_CONTENT",
     "BUN_CRUCIBLE_PROJECT_DIR", "BUN_CRUCIBLE_PACKAGE_DIR",
@@ -895,6 +900,33 @@ class _BunCase(_ClientDriveCase):
 class _PythonCase(_ClientDriveCase):
     CLIENT = "python"
 
+    def drive(self, argv, response=None):
+        """The shared drive, with a board that opens the run and holds its
+        stream (`StreamingPost`): a streamed unittest run that opens no run
+        files nothing (CR-CRU-224), so the drive must open one to measure
+        the close."""
+        stream = StreamingPost()
+        calls = []
+
+        def fake_post(path, payload, *_args, **_kwargs):
+            calls.append((path, copy.deepcopy(payload)))
+            if path == START or STREAM_ROUTE.match(path):
+                return stream(path, payload)
+            return copy.deepcopy(response if response is not None else _OK_RESPONSE)
+
+        with mock.patch.object(self.module, "_post", side_effect=fake_post, create=True), \
+                mock.patch.object(self.module, "_get", create=True,
+                                  side_effect=get_answering_health(lambda _p: None)), \
+                mock.patch.object(self.module, "_patch", return_value={"ok": True},
+                                  create=True):
+            code, out, err = _run_main(self.module, self.CLIENT, argv)
+        return _Drive(code, out, err, calls)
+
+    def assertStreamClose(self, drive, where):
+        closes = [payload for path, payload in drive.calls if path == RUNS]
+        self.assertEqual([c.get("codec") for c in closes], ["crucible-events"],
+                         f"{where}: a unittest run is closed from its stream")
+
     def py_argv(self, verb, extra=()):
         return [verb, "--agent", AGENT, "--project-dir", self.tmpdir,
                 "--reports", "reports"] + list(extra)
@@ -1041,9 +1073,10 @@ class PythonUnearnedTierTest(_PythonCase):
     def test_python_test_ingests_the_run_without_claiming_a_tier(self):
         """AC3, python `cmd_test`'s `/runs` call (the shared ingest) — `--tests
         tests.whatever` says nothing about the dependency that target takes."""
-        os.environ["FAKE_PY_JUNIT_CONTENT"] = _JUNIT_SUITE_ONE_PASS
+        os.environ["FAKE_PY_STREAM"] = "1"
         drive = self.drive(self.py_argv(
             "test", ["--tests", "tests.probe", "--python", _fake("fake-python-runner")]))
+        self.assertStreamClose(drive, "python cmd_test -> POST /runs")
         self.assertNoStatedTier(drive, RUNS, "python cmd_test -> POST /runs")
 
     def test_python_test_collection_failure_claims_no_tier(self):
@@ -1145,10 +1178,11 @@ class PythonEarnedTierTest(_PythonCase):
     """PIN — python `_regression_run`."""
 
     def test_python_regression_ingests_the_run_as_regression(self):
-        os.environ["FAKE_PY_JUNIT_CONTENT"] = _JUNIT_SUITE_ONE_PASS
+        os.environ["FAKE_PY_STREAM"] = "1"
         drive = self.drive(self.py_argv(
             "regression", ["--python", _fake("fake-python-runner"),
                            "--start-dir", "tests", "--pattern", "test_*.py"]))
+        self.assertStreamClose(drive, "python regression -> POST /runs")
         self.assertStatedTier(drive, RUNS, "regression",
                               "python regression -> POST /runs")
 

@@ -216,7 +216,8 @@ ALLOW_LIST = {
         "signature. No shared shape survives past 'fail-fast pre-step, then "
         "regression' (DN §3)."),
     "cmd_test": (
-        "4-75 lines: bun test vs pytest/unittest+xmlrunner vs cargo-nextest "
+        "4-75 lines: bun test vs pytest (its JUnit report) / unittest (the "
+        "client's runner and its event stream) vs cargo-nextest "
         "vs maven surefire vs arduino's native-tier delegator (DN §3)."),
     "main": (
         "183-452 lines: argparse subcommand wiring is inherently "

@@ -17,6 +17,11 @@ them. So the counts, leaves and groups below are read by THIS harness from
 the report texts the body carried, the way the board's `junit` codec reads
 them (a suite pytest names `pytest` grouped by each case's `classname`, any
 other suite one node), proving the runner's own report reached the board.
+
+A unittest run sends no report: it is closed from its runner's stream (codec
+`crucible-events`, no `data`), so what it ran is read from the stream the
+board holds for the run its close names (`streamed_leaves`,
+`streamed_counts`), the way the board's `crucible-events` codec counts it.
 """
 
 import importlib.util
@@ -35,6 +40,7 @@ from tests.client.live_run_harness import (
     load_toon,
     new_scratch,
     scrubbed_env,
+    stream_sent,
 )
 
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "pytest-project"
@@ -194,6 +200,20 @@ def counts(body):
     statuses = [status for _g, _n, status, _f in sent_cases(body)]
     return {"total": len(statuses), "passed": statuses.count("pass"),
             "failed": statuses.count("fail"), "pending": statuses.count("pending")}
+
+
+def streamed_leaves(board, body):
+    """Every leaf `(name, status)` of the stream `board` holds for the run a
+    `/api/v2/runs` close `body` names by its `runId` (`stream_sent`), sorted."""
+    tree = stream_sent(board, str((body or {}).get("runId") or ""))["tree"]
+    return sorted((leaf["name"], leaf["status"])
+                  for node in tree for leaf in node["children"])
+
+
+def streamed_counts(board, body):
+    """`{total, passed, failed, pending}` over the stream `board` holds for
+    the run a `/api/v2/runs` close `body` names by its `runId`."""
+    return dict(stream_sent(board, str((body or {}).get("runId") or ""))["summary"])
 
 
 def sent_files(body):

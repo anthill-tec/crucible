@@ -7,9 +7,9 @@ src/server.ts` on an OS-assigned free port over a `mkdtemp` store — never the
 live 3850/3849 and never the installer probe's 39877, so nothing here writes
 to a live board, CR-CRU-214). One plan with one active cycle is filed; a fake
 interpreter (the `--python` idiom of
-`test_python_exits_and_files_on_its_runners_exit.py`) writes a JUnit report
-holding one passing and one failing case, and `python-crucible.py test --cycle
-<it>` files that run. The comparison target is the board's OWN answer —
+`test_python_exits_and_files_on_its_runners_exit.py`) writes an event stream
+(CR-CRU-224) holding one passing and one failing case, and `python-crucible.py
+test --cycle <it>` files that run. The comparison target is the board's OWN answer —
 `GET /api/v2/events/<id>` and `GET /api/v2/events/<id>?depth=suites` — never a
 value this test derives from what it told the fake to write.
 
@@ -60,10 +60,13 @@ _SCRUBBED = ("PY_CRUCIBLE_PYTHON", "PYTHON_CRUCIBLE_PROJECT_DIR",
 
 EMPTY = (None, "")
 
-# A fake interpreter: run as the suite (`… -o <dir>`) it writes one passing
-# and one failing JUnit case and exits 1, as a runner with a failure does. A
-# coverage.py probe (`-c <script>`) answers true.
+# A fake interpreter: run as the suite (`… subtest_runner.py`) it writes one
+# passing and one failing case as a Crucible event stream to the file
+# `CRUCIBLE_STREAM` names, taking the variable out of its own environment
+# first, writes no JUnit (CR-CRU-224 section S1), and exits 1, as a runner
+# with a failure does. A coverage.py probe (`-c <script>`) answers true.
 _FAKE_PYTHON = r'''
+import json
 import os
 import sys
 
@@ -73,23 +76,23 @@ argv = sys.argv[1:]
 if argv[:1] == ["-c"]:
     sys.stdout.write("true\n")
     sys.exit(0)
-outdir = None
-for i, arg in enumerate(argv):
-    if arg == "-o" and i + 1 < len(argv):
-        outdir = argv[i + 1]
+stream = os.environ.pop("CRUCIBLE_STREAM", None)
 sys.stderr.write("Ran 2 tests in 0.002s\n\nFAILED (failures=1)\n")
 sys.stderr.flush()
-if outdir:
-    os.makedirs(outdir, exist_ok=True)
-    with open(os.path.join(outdir, "TEST-%s.xml" % CLASS), "w") as handle:
-        handle.write(
-            '<?xml version="1.0" encoding="UTF-8"?>\n'
-            '<testsuite name="%s" tests="2" errors="0" failures="1" skipped="0">'
-            '<testcase classname="%s" name="%s" time="0.001"></testcase>'
-            '<testcase classname="%s" name="%s" time="0.001">'
-            '<failure type="AssertionError" message="2 != 3">AssertionError: 2 != 3'
-            '</failure></testcase></testsuite>\n'
-            % (CLASS, CLASS, CASE, CLASS, FAILING))
+file = CLASS.split(".")[0] + ".py"
+if stream:
+    with open(stream, "w", encoding="utf-8") as handle:
+        for event in (dict(event="run-start", total=2),
+                      dict(event="test-end", id=CLASS + "." + CASE, name=CASE,
+                           suite=CLASS, file=file, status="pass", duration_ms=1),
+                      dict(event="test-end", id=CLASS + "." + FAILING, name=FAILING,
+                           suite=CLASS, file=file, status="fail", duration_ms=1,
+                           failure=dict(message="2 != 3", type="AssertionError",
+                                        trace="AssertionError: 2 != 3")),
+                      dict(event="run-end", total=2, passed=1, failed=1, pending=0,
+                           duration_ms=2)):
+            handle.write(json.dumps(event) + "\n")
+            handle.flush()
 sys.exit(1)
 '''
 
@@ -205,6 +208,10 @@ class AFiledRunReadsBackAsTheBoardStoredItEndToEndTest(unittest.TestCase):
             f"the stored run holds the fake runner's one pass and one "
             f"failure; event={full!r}")
         self.assertEqual(brief.get("cycleId"), self.cycle_id, f"{brief!r}")
+        # A python unittest run is filed from its runner's stream (CR-CRU-224).
+        self.assertEqual(brief.get("codec"), "crucible-events",
+                         f"the stored run was filed from the runner's stream; "
+                         f"event={brief!r}")
         suites = self.board.http(f"/api/v2/events/{brief['id']}?depth=suites")
         self.assertTrue(suites.get("ok"), f"suites read failed: {suites!r}")
         return brief, full, suites["event"].get("tree") or []

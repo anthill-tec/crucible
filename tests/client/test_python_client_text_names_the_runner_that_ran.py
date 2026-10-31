@@ -1,6 +1,7 @@
 """The python client's printed text names the runners it runs.
 
-The client runs `unittest` (through xmlrunner) by default and `pytest` when
+The client runs `unittest` (through its own runner, which writes the Crucible
+event stream) by default and `pytest` when
 the project declares `[python] runner = "pytest"` in its own `crucible.toml`
 or the caller passes `--runner pytest`. What it prints must say so:
 
@@ -10,10 +11,12 @@ or the caller passes `--runner pytest`. What it prints must say so:
     the `[python] runner` declaration -- never `unittest`/xmlrunner alone.
 
 `TheEmptyCaptureFallbackNamesTheRunnerTest`
-    When the runner wrote no JUnit XML and printed nothing at all, the text
-    the client files as the compile record is its own fallback line. Under
-    pytest that line names pytest and never xmlrunner (on `test` and on
-    `regression`); under unittest it stays exactly what it was.
+    When the runner wrote no report (pytest's JUnit XML, unittest's stream)
+    and printed nothing at all, the text the client files as the compile
+    record is its own fallback line. Under pytest that line names pytest and
+    never xmlrunner (on `test` and on `regression`); under unittest it names
+    unittest and the stream it never wrote, and never xmlrunner (CR-CRU-224
+    S4 rewords `_no_xml_errors_text`).
 
 A runner that produced no report and no output is made real by the
 interpreter the client is handed: a wrapper that hands every call to this
@@ -51,10 +54,6 @@ UNITTEST = "unittest"
 PYTEST = "pytest"
 RUNNER_DECLARATION = "[python] runner"
 SILENT_AGENT = "silent-runner-proof-agent"
-
-#: The unittest path's fallback line, unchanged.
-UNITTEST_FALLBACK = ("xmlrunner produced no JUnit XML "
-                     "(import/syntax failure, no output captured)")
 
 _INHERITED_KEYS = ("PY_CRUCIBLE_PYTHON", "PY_CRUCIBLE_PROJECT_DIR", "PYTEST_ADDOPTS",
                    "PYTEST_PLUGINS", "COVERAGE_RCFILE", "COVERAGE_PROCESS_START")
@@ -248,11 +247,17 @@ class TheEmptyCaptureFallbackNamesTheRunnerTest(unittest.TestCase):
     def test_a_silent_pytest_regression_files_a_fallback_naming_pytest(self):
         self.assert_names_pytest_not_xmlrunner("regression")
 
-    def test_a_silent_unittest_test_run_files_the_unchanged_xmlrunner_fallback(self):
+    def test_a_silent_unittest_test_run_files_a_fallback_naming_unittest_and_its_stream(self):
         self.project.declare()
         result = self.drive("test")
-        self.assertEqual(self.the_one_compile_text(result), UNITTEST_FALLBACK,
-                         diag(result))
+        text = self.the_one_compile_text(result)
+        self.assertRegex(text, _word(UNITTEST),
+                         f"under unittest the fallback names unittest: {text!r}")
+        self.assertRegex(text, r"\bstream\b",
+                         f"under unittest the fallback names the stream the runner "
+                         f"never wrote: {text!r}")
+        self.assertNotIn("xmlrunner", text.lower(),
+                         f"xmlrunner has left the client: {text!r}")
 
 
 if __name__ == "__main__":

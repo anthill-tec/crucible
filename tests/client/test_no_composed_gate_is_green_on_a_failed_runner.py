@@ -98,11 +98,13 @@ if junit:
 sys.exit(int(os.environ.get("FAKE_BUN_EXIT", "0")))
 '''
 
-# A fake interpreter for the python client: run as the suite (`... -o <dir>`),
-# it writes one passing JUnit case into the `-o` directory, then exits
-# FAKE_PYTHON_EXIT. A coverage.py probe (`-c <script>`) answers that the
-# project declares its source.
+# A fake interpreter for the python client: run as the suite it writes one
+# passing case as a Crucible event stream to the file `CRUCIBLE_STREAM` names,
+# taking the variable out of its own environment first, and writes no JUnit
+# (CR-CRU-224 section S1); then it exits FAKE_PYTHON_EXIT. A coverage.py probe
+# (`-c <script>`) answers that the project declares its source.
 _FAKE_PYTHON = r'''
+import json
 import os
 import sys
 
@@ -112,21 +114,21 @@ argv = sys.argv[1:]
 if argv[:1] == ["-c"]:
     sys.stdout.write("true\n")
     sys.exit(0)
-outdir = None
-for i, arg in enumerate(argv):
-    if arg == "-o" and i + 1 < len(argv):
-        outdir = argv[i + 1]
+stream = os.environ.pop("CRUCIBLE_STREAM", None)
 sys.stderr.write("%s (%s.%s) ... ok\n" % (CASE, CLASS, CASE))
 sys.stderr.write("\n----------------------------------------------------------------------\n"
                  "Ran 1 test in 0.001s\n\nOK\n")
 sys.stderr.flush()
-if outdir:
-    os.makedirs(outdir, exist_ok=True)
-    with open(os.path.join(outdir, "TEST-%s.xml" % CLASS), "w") as handle:
-        handle.write('<?xml version="1.0" encoding="UTF-8"?>\n'
-                     '<testsuite name="%s" tests="1" errors="0" failures="0" '
-                     'skipped="0"><testcase classname="%s" name="%s" '
-                     'time="0.001"></testcase></testsuite>\n' % (CLASS, CLASS, CASE))
+if stream:
+    with open(stream, "w", encoding="utf-8") as handle:
+        for event in (dict(event="run-start", total=1),
+                      dict(event="test-end", id=CLASS + "." + CASE, name=CASE,
+                           suite=CLASS, file=CLASS.split(".")[0] + ".py",
+                           status="pass", duration_ms=1),
+                      dict(event="run-end", total=1, passed=1, failed=0, pending=0,
+                           duration_ms=1)):
+            handle.write(json.dumps(event) + "\n")
+            handle.flush()
 sys.exit(int(os.environ.get("FAKE_PYTHON_EXIT", "0")))
 '''
 

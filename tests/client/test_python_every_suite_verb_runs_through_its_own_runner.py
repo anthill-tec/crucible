@@ -1,21 +1,18 @@
 """Every suite-running verb on python-crucible.py -- `test`, the five tier
 verbs (`unit`, `module`, `integration`, `e2e`, `bdd`), `regression`, and
-`pre-merge-gate` -- builds its suite invocation through `_xmlrunner_cmd`,
-which spawns the suite as `[<python>, "-m", "xmlrunner", ...]` (optionally
-wrapped in `coverage run` for `pre-merge-gate`). None of them spawns a runner
-module of this client's own; the bare `-m xmlrunner` invocation is the one
-`python-crucible.py` builds today for every one of these verbs.
+`pre-merge-gate` -- spawns its suite through the client's own runner module
+(`subtest_runner.py`, shipped beside `toon.py`) with the runner's own command
+line (`discover -s <dir> -p <pattern> -v`, no `-o`), and files the run from
+the Crucible event stream that runner writes (CR-CRU-224 §S1, §S3).
 
-This file drives each verb against a real interpreter and a fixture with NO
-subtests at all, and inspects the ACTUAL spawned command line the client
-printed on its own `[crucible] running: ...` stderr line (the same line
-`_test_run`/`_regression_run` already print before the suite is spawned) --
-not an internal mock. Each verb must spawn its suite through a runner module
-of the client's own (chosen here as `subtest_runner.py`, landed beside
-`toon.py`), never the bare `-m xmlrunner` module invocation, and a run with
-no subtests must still report the same totals it does today.
+This file drives each verb against the repo's own interpreter, a fixture
+with no subtests at all, and a stand-in board that holds an open run's stream
+as the real board does (`RecordingBoard`). It inspects the spawned command
+line the client prints on its own `[crucible] running: ...` stderr line, the
+stream the board holds for the run, and the close (`POST /api/v2/runs` with
+`runId`, `codec: "crucible-events"` and no `data`).
 
-Fixture names and the runner module's name are chosen for this file alone."""
+Fixture names are chosen for this file alone."""
 
 import contextlib
 import io
@@ -32,7 +29,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.client.live_run_harness import (
     RecordingBoard,
     install_project,
-    junit_sent,
     load_client,
 )
 
@@ -41,18 +37,13 @@ REAL_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 
 AGENT = "every-verb-runner-fixture-agent"
 PROJECT_KEY = "every-verb-runner-fixture-key"
+RUN_ID = "run-live-1"
 
-# Chosen for this file: the name a runner module of this client's own would
-# carry once it ships beside toon.py. Nothing in `python-crucible.py` spawns
-# a file by this name today -- every verb spawns the bare `-m xmlrunner`
-# module invocation instead.
 RUNNER_MODULE_FILENAME = "subtest_runner.py"
 
-# A plain fixture with no `subTest` at all -- the "unchanged where there are
-# no subtests" case, checked alongside the spawned-command assertion below.
+# A plain fixture with no `subTest` at all.
 NO_SUBTEST_FIXTURE_SOURCE = '''\
 import unittest
-
 
 class PlainOnlyCase(unittest.TestCase):
     def test_one(self):
@@ -72,12 +63,19 @@ VERBS = (
     "regression", "pre-merge-gate",
 )
 
+# The tier each verb's close states (`test` states none).
+TIERS = {"test": None, "unit": "unit", "module": "module",
+         "integration": "integration", "e2e": "e2e", "bdd": "bdd",
+         "regression": "regression", "pre-merge-gate": "regression"}
+
 
 def _run_main(module, argv):
     full_argv = ["python-crucible.py"] + list(argv)
     stdout, stderr = io.StringIO(), io.StringIO()
     with mock.patch.object(sys, "argv", full_argv), \
+            mock.patch.dict(os.environ, {}, clear=False), \
             contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        os.environ.pop("CRUCIBLE_STREAM", None)
         try:
             module.main()
             code = 0
@@ -93,9 +91,7 @@ def _run_main(module, argv):
 
 def _suite_running_line(stderr_text):
     """The ONE `[crucible] running: ...` line that spawns the SUITE itself --
-    excluding `pre-merge-gate`'s separate py_compile check-step line, which
-    carries the same prefix but names no xmlrunner/runner invocation at
-    all."""
+    excluding `pre-merge-gate`'s separate py_compile check-step line."""
     candidates = [line for line in RUNNING_LINE_RE.findall(stderr_text)
                   if "py_compile" not in line]
     assert candidates, (
@@ -104,29 +100,14 @@ def _suite_running_line(stderr_text):
     return candidates[-1]
 
 
-def _last_sent_report(board):
-    """The run's last `/api/v2/runs` ingest, its JUnit report texts read as
-    the board's `junit` codec reads them (`junit_sent`): the client sends
-    the runner's reports and counts nothing itself."""
-    sent = [body for path, body in board.posts() if path == "/api/v2/runs"]
-    assert sent, f"no /api/v2/runs POST observed; posts={board.posts()!r}"
-    read = junit_sent(sent[-1])
-    assert read is not None, f"the ingest is not a junit one; body={sent[-1]!r}"
-    return read
-
-
 class EveryVerbRunsThroughItsOwnRunnerModuleTest(unittest.TestCase):
-    """`test`, every tier verb, `regression` and `pre-merge-gate` must spawn
-    the suite through a runner module of this client's own, never the bare
-    `-m xmlrunner` module invocation -- shown by each verb's own spawned
-    command line. A run with no subtests at all must still report the
-    totals it does today (2 passing, 0 failing)."""
+    """Each suite-running verb spawns the client's own runner with the
+    runner's command line, and closes its run from the stream it wrote: a
+    run with no subtests reports 2 passing, 0 failing."""
 
     def setUp(self):
-        self.assertTrue(
-            REAL_VENV_PYTHON.exists(),
-            f"this file needs a real interpreter with unittest-xml-reporting "
-            f"4.0.0 installed; expected one at {REAL_VENV_PYTHON}")
+        self.assertTrue(REAL_VENV_PYTHON.exists(),
+                        f"this file needs the repo's interpreter at {REAL_VENV_PYTHON}")
 
     def _run_verb(self, verb):
         project_dir = tempfile.mkdtemp(prefix=f"every-verb-{verb}-")
@@ -142,36 +123,66 @@ class EveryVerbRunsThroughItsOwnRunnerModuleTest(unittest.TestCase):
         argv = [verb, "--start-dir", "tests", "--pattern", "fixture_plain.py",
                 "--project-dir", project_dir, "--agent", AGENT,
                 "--python", str(REAL_VENV_PYTHON)]
-        _code, _out, err = _run_main(load_client("python-crucible.py"), argv)
-        return err, board
+        code, _out, err = _run_main(load_client("python-crucible.py"), argv)
+        return code, err, board
 
-    def test_every_suite_running_verb_spawns_its_own_runner_module_not_bare_xmlrunner(self):
+    def test_every_suite_running_verb_spawns_its_own_runner_and_closes_from_its_stream(self):
         for verb in VERBS:
             with self.subTest(verb=verb):
-                err, board = self._run_verb(verb)
-                cmd_line = _suite_running_line(err)
-                tokens = cmd_line.split()
-                self.assertNotIn(
-                    "xmlrunner", tokens,
-                    f"{verb}: must spawn its suite through a runner module "
-                    f"of this client's own, never the bare `-m xmlrunner` "
-                    f"module invocation `_xmlrunner_cmd` still builds for "
-                    f"every verb today; got cmd={cmd_line!r}")
+                code, err, board = self._run_verb(verb)
+                tokens = _suite_running_line(err).split()
                 self.assertTrue(
                     any(tok.endswith(RUNNER_MODULE_FILENAME) for tok in tokens),
-                    f"{verb}: expected the suite to run through "
-                    f"{RUNNER_MODULE_FILENAME!r} (shipped beside toon.py), "
-                    f"named on the verb's own spawned command line; "
-                    f"got cmd={cmd_line!r}")
-                payload = _last_sent_report(board)
-                summary = payload["summary"]
-                self.assertEqual(
-                    summary["total"], 2,
-                    f"{verb}: a fixture with no subtests at all must still "
-                    f"report the SAME totals it does today (2 passing "
-                    f"tests, 0 failing); got summary={summary!r}")
-                self.assertEqual(summary["passed"], 2, f"{verb}: {summary!r}")
-                self.assertEqual(summary["failed"], 0, f"{verb}: {summary!r}")
+                    f"{verb}: the suite runs through {RUNNER_MODULE_FILENAME!r}; "
+                    f"got {tokens!r}")
+                self.assertNotIn("xmlrunner", " ".join(tokens).lower(), tokens)
+                self.assertNotIn("-o", tokens,
+                                 f"{verb}: the runner writes no report dir (`-o` is gone)")
+                self.assertEqual(tokens[-1], "-v", tokens)
+                held = board.held_stream(RUN_ID)
+                test_ends = [line for line in held.splitlines() if '"test-end"' in line]
+                self.assertEqual(len(test_ends), 2,
+                                 f"{verb}: the board holds the run's two cases; "
+                                 f"held={held!r} stderr={err[-2000:]!r}")
+                self.assertEqual(sum('"pass"' in line for line in test_ends), 2, held)
+                closes = [body for path, body in board.posts() if path == "/api/v2/runs"]
+                self.assertEqual(len(closes), 1, f"{verb}: posts={board.posts()!r}")
+                close = closes[0]
+                self.assertEqual(close.get("codec"), "crucible-events", close)
+                self.assertEqual(close.get("runId"), RUN_ID)
+                self.assertNotIn("data", close)
+                self.assertEqual(close.get("runnerExit"), 0)
+                self.assertEqual(close.get("tier"), TIERS[verb], close)
+                if verb == "pre-merge-gate":
+                    coverage = close.get("coverage") or {}
+                    self.assertEqual(coverage.get("codec"), "lcov",
+                                     "the gate's coverage travels with the close")
+                self.assertEqual(code, 0, f"{verb}: stderr={err[-2000:]!r}")
+
+    def test_the_gate_exits_non_zero_when_the_board_flags_the_stream_incomplete(self):
+        project_dir = tempfile.mkdtemp(prefix="every-verb-incomplete-")
+        self.addCleanup(shutil.rmtree, project_dir, ignore_errors=True)
+        board = RecordingBoard()
+        self.addCleanup(board.close)
+        board.script_run(passed=2, warnings=[{
+            "code": "stream-incomplete",
+            "detail": "the stream cannot be trusted: no run-end — the run is stored "
+                      "flagged incomplete"}])
+        install_project(project_dir, board.url, PROJECT_KEY)
+        os.makedirs(os.path.join(project_dir, "tests"))
+        Path(project_dir, "tests", "__init__.py").write_text("", encoding="utf-8")
+        Path(project_dir, "tests", "fixture_plain.py").write_text(
+            NO_SUBTEST_FIXTURE_SOURCE, encoding="utf-8")
+        code, out, err = _run_main(
+            load_client("python-crucible.py"),
+            ["pre-merge-gate", "--start-dir", "tests", "--pattern", "fixture_plain.py",
+             "--project-dir", project_dir, "--agent", AGENT,
+             "--python", str(REAL_VENV_PYTHON)])
+        closes = [body for path, body in board.posts() if path == "/api/v2/runs"]
+        self.assertEqual([c.get("codec") for c in closes], ["crucible-events"],
+                         f"stderr={err[-2000:]!r}")
+        self.assertIn("stream-incomplete", out)
+        self.assertNotEqual(code, 0, "an incomplete stream never passes the gate")
 
 
 if __name__ == "__main__":

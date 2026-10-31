@@ -223,6 +223,15 @@ class AScopedGateNamingOnlyTheDispatchedSuiteTest(_OnTheBoard):
         """One gate over the project under its own plan's cycle; returns the
         result and the bun invocations it made."""
         cycle_id = cls.file_plan(cr)
+        # The plan's cycle is done, so the clients' own registration bound to
+        # it is refused; a streamed python unittest run whose run cannot be
+        # opened files nothing (CR-CRU-224 section S3), so the gate's agent is
+        # registered unbound first and the dispatched suite's run opens.
+        board = cls.board()
+        reg = board.http("/api/v2/agents/register",
+                         {"projectKey": board.key, "agentId": agent,
+                          "role": "ORCHESTRATOR"})
+        assert reg.get("ok"), f"gate agent registration failed: {reg!r}"
         log = Path(cls.project, INVOCATION_LOG)
         log.unlink(missing_ok=True)
         env = scrubbed_env(None)

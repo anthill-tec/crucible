@@ -159,7 +159,9 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest import mock
 
@@ -189,7 +191,14 @@ _MODALITY = _load_module(MODALITY_PATH, "cr112_c1_modality_harness")
 #: would make its own config unparsable the moment the shipped file carried one
 #: too, and a fixture that checked the resolution its own way would be a second
 #: spelling of a safety device.
-from tests.client.live_run_harness import HEALTH_PATHS, board_health, junit_sent  # noqa: E402
+from tests.client.live_run_harness import (  # noqa: E402
+    HEALTH_PATHS,
+    STREAM_CODEC,
+    STREAM_ROUTE,
+    board_health,
+    junit_sent,
+    stream_sent,
+)
 from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
     declare_board,
     would_resolve,
@@ -222,7 +231,7 @@ BUN_SUITE_PASSED = 2
 PYTHON_SUITE_PASSED = 1
 
 # The interpreter the dispatched python suite runs under: the project venv,
-# which is where `xmlrunner` lives (a bare `python3` would give the child a
+# which is where coverage.py lives (a bare `python3` would give the child a
 # phantom ModuleNotFoundError that is a fixture bug, not a finding).
 _VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 CHILD_PYTHON = str(_VENV_PYTHON if _VENV_PYTHON.exists() else Path(sys.executable))
@@ -375,11 +384,19 @@ class _StubBoard:
     one reason: a suite dispatched to its own stack's client runs in a
     subprocess, and a patched attribute in this process cannot see what that
     subprocess sent. Bound to 127.0.0.1 on an ephemeral port, so the live board
-    is never touched and no port is assumed free."""
+    is never touched and no port is assumed free.
+
+    A python run is opened (`/api/v2/runs/start` carrying `stack: python`
+    answers a `runId`) and its stream is held at the byte offset each batch's
+    `from` states, as the real board holds it: a python unittest run is filed
+    from its runner's stream (CR-CRU-224), and a run opened with no `runId`
+    files nothing."""
 
     def __init__(self):
         self.requests = []
         self._lock = threading.Lock()
+        self._streams = {}
+        self._run_seq = 0
         board = self
 
         class _Handler(http.server.BaseHTTPRequestHandler):
@@ -399,27 +416,41 @@ class _StubBoard:
             def _answer(self, payload=None):
                 # Health is answered as a board that decodes the clients'
                 # reports states it. An ingest is answered with the counts it
-                # was sent -- a parsed `summary`, or the JUnit reports a bun
-                # or python `/api/v2/runs` body carries inline, read as the
-                # board's codec reads them (`junit_sent`) -- as the board
-                # answers a run it stored.
+                # was sent -- a parsed `summary`, the JUnit reports a bun
+                # `/api/v2/runs` body carries inline (`junit_sent`), or the
+                # stream a python close names (`stream_sent`), read as the
+                # board's codec reads them -- as the board answers a run it
+                # stored.
+                status = 200
+                streamed = STREAM_ROUTE.match(self.path)
                 if self.path in HEALTH_PATHS:
                     answer = board_health()
+                elif streamed is not None:
+                    status, answer = board.hold(
+                        urllib.parse.unquote(streamed.group(1)), payload)
+                elif (self.path == _MODALITY.RUN_START and isinstance(payload, dict)
+                      and payload.get("stack") == PYTHON_STACK):
+                    answer = {"ok": True, "changed": True, "runId": board.open_run(),
+                              "startedAt": int(time.time() * 1000)}
                 else:
                     answer = dict(_BOARD_OK)
                 summary = (payload or {}).get("summary")
                 read = None
-                if (not isinstance(summary, dict) and isinstance(payload, dict)
-                        and payload.get("stack") in ("bun", "python")):
-                    read = junit_sent(payload) or {}
-                    summary = read.get("summary")
+                if (streamed is None and not isinstance(summary, dict)
+                        and isinstance(payload, dict)):
+                    if payload.get("codec") == STREAM_CODEC:
+                        read = stream_sent(board, str(payload.get("runId") or ""))
+                        summary = read.get("summary")
+                    elif payload.get("stack") in ("bun", "python"):
+                        read = junit_sent(payload) or {}
+                        summary = read.get("summary")
                 if isinstance(summary, dict):
                     answer["run"] = {key: summary.get(key, 0) for key in
                                      ("total", "passed", "failed", "pending")}
                     if read:
                         answer["run"]["files"] = read.get("files")
                 body = json.dumps(answer).encode()
-                self.send_response(200)
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
@@ -445,6 +476,34 @@ class _StubBoard:
     def url(self):
         host, port = self._server.server_address[:2]
         return "http://%s:%d" % (host, port)
+
+    def open_run(self):
+        """A fresh `runId` for an opened python run."""
+        with self._lock:
+            self._run_seq += 1
+            return f"run-stub-{self._run_seq}"
+
+    def hold(self, run_id, body):
+        """One stream batch, held at the UTF-8 byte offset its `from` states;
+        `(status, answer)`. A gap is a 409 carrying `held`."""
+        body = body if isinstance(body, dict) else {}
+        start, data = body.get("from"), body.get("data")
+        if (isinstance(start, bool) or not isinstance(start, int) or start < 0
+                or not isinstance(data, str)):
+            return 400, {"ok": False, "error": "malformed stream batch"}
+        incoming = data.encode("utf-8")
+        with self._lock:
+            held = self._streams.setdefault(run_id, bytearray())
+            if start > len(held):
+                return 409, {"ok": False, "held": len(held), "error": "a gap"}
+            if start + len(incoming) > len(held):
+                held[start:] = incoming
+            return 200, {"ok": True, "runId": run_id, "held": len(held)}
+
+    def held_stream(self, run_id):
+        """The text held as `run_id`'s stream (`""` for none)."""
+        with self._lock:
+            return bytes(self._streams.get(run_id, b"")).decode("utf-8")
 
     def posts(self):
         with self._lock:
@@ -797,6 +856,30 @@ class EachSuiteIngestsThroughItsOwnStacksClientTest(_GateFixtureCase):
             "AC5 — exactly one run of this gate belongs to the python suite; "
             "%d distinct runs carry that stack. ingests=%s"
             % (python_runs, _text(ingests)))
+
+    def test_the_python_suites_run_is_closed_from_its_runners_stream(self):
+        """CR-CRU-224 section S3, through the gate: the dispatched python
+        suite is a unittest run, so the real python client relays the real
+        runner's stream to the run it opened and closes that run with
+        `codec: "crucible-events"` and no `data`; the stream the board holds
+        is the one test the fixture's python suite ran, passing."""
+        drive = self.drive_gate()
+        closes = [payload for path, payload in drive.calls
+                  if path == _MODALITY.RUNS and payload.get("stack") == PYTHON_STACK]
+        self.assertEqual(
+            [(payload.get("codec"), "data" in payload) for payload in closes],
+            [(STREAM_CODEC, False)],
+            "the python suite's one close is from its runner's stream, "
+            f"carrying no report. closes={_text(closes)}")
+        run_id = str((closes[0] if closes else {}).get("runId") or "")
+        held = [json.loads(line) for line in self.board.held_stream(run_id).splitlines()
+                if line.strip()]
+        self.assertEqual(
+            [(event.get("name"), event.get("status")) for event in held
+             if event.get("event") == "test-end"],
+            [("test_the_declared_python_suite_runs_and_records_its_runner", "pass")],
+            "the board holds the python suite's one test from its stream. "
+            f"run={run_id!r} held={_text(held)}")
 
     def test_the_python_suite_is_run_by_invoking_the_python_client(self):
         """AC5's dispatch half, and §S1's 'no client learns another language's

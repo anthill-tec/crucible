@@ -4,17 +4,18 @@ and fail counts as the same run given the absolute path, and no compile
 failure.
 
 Each run is the real `clients/python-crucible.py` as its own process, with the
-repo's own interpreter (xmlrunner and coverage.py installed), over a tiny
+repo's own interpreter (coverage.py installed), over a tiny
 scratch unittest project that holds three passing tests and one failing test,
 its own `.env`, and a project `crucible.toml` whose `[client] url` names a
 `RecordingBoard` on a free loopback port. Never the live board.
 
-What the board received is the observable outcome: the runner's JUnit
-reports the one `/api/v2/runs` ingest carried, read as the board's `junit`
-codec reads them (`junit_sent`), and the absence of any compile ingest
-(`/api/v2/runs/compile`). A relative project dir that is kept relative sends
-the runner's reports to a directory the client never reads, and the run is
-filed as a compile failure; the gate's py_compile step fails the same way.
+What the board received is the observable outcome: the Crucible event stream
+the client relayed for the run and closed it from (`codec: "crucible-events"`,
+CR-CRU-224), read as the board's codec counts it (`stream_sent`), and the
+absence of any compile ingest (`/api/v2/runs/compile`). A relative project
+dir that is kept relative sends the runner's stream to a file the client never
+reads, and the run is filed as a compile failure; the gate's py_compile step
+fails the same way.
 """
 
 import os
@@ -30,8 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.client.live_run_harness import (  # noqa: E402
     RecordingBoard,
     install_project,
-    junit_sent,
     scrubbed_env,
+    stream_sent,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -93,9 +94,11 @@ class _Run:
         return [body for p, body in self.board.posts() if p == path]
 
     def filed_counts(self):
-        """`(passed, failed)` of the reports every `/api/v2/runs` ingest
-        the board received carried (`junit_sent`)."""
-        read = [(junit_sent(body) or {}).get("summary") or {}
+        """`(passed, failed)` of the stream each `/api/v2/runs` close closed
+        (`stream_sent`), one entry per close; a close that is not a stream
+        close counts as `None`."""
+        read = [stream_sent(self.board, body.get("runId"))["summary"]
+                if body.get("codec") == "crucible-events" else {}
                 for body in self.posts_to(RUNS)]
         return ([summary.get("passed") for summary in read],
                 [summary.get("failed") for summary in read])
@@ -106,7 +109,7 @@ class RunFromTheParentWithARelativeProjectDirTest(unittest.TestCase):
     def setUp(self):
         self.assertTrue(
             REAL_VENV_PYTHON.exists(),
-            f"these tests need the repo's interpreter with xmlrunner and "
+            f"these tests need the repo's interpreter with "
             f"coverage.py installed, at {REAL_VENV_PYTHON}")
 
     def _make_project(self):
@@ -127,6 +130,7 @@ class RunFromTheParentWithARelativeProjectDirTest(unittest.TestCase):
 
     def _drive(self, verb, project_dir_arg, cwd, board):
         env = scrubbed_env()
+        env.pop("CRUCIBLE_STREAM", None)
         for key in _EXTRA_ENV_TO_SCRUB:
             env.pop(key, None)
         cmd = [str(REAL_VENV_PYTHON), str(CLIENT_PATH), verb,
