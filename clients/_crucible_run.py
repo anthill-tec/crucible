@@ -29,6 +29,7 @@ import resource
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -1132,3 +1133,225 @@ def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
         print(f"[crucible] run log \u2192 {log_path} ({len(out)} bytes)",
               file=sys.stderr)
     return subprocess.CompletedProcess(cmd, returncode, stdout=out)
+
+
+# ── CR-CRU-224 §S2 — the shared stream relay ────────────────────────────────
+#
+# A runner that writes Crucible's event stream to a file (`CRUCIBLE_STREAM`)
+# has it followed by `StreamRelay`, which sends what was written since the
+# board's last acknowledgement to the open run, in throttled batches. The
+# relay decodes and counts nothing: counting tests is the client's job.
+
+#: The stream route of one open run.
+RELAY_STREAM_PATH = "/api/v2/runs/{run_id}/stream"
+#: How often the relay's thread wakes to send (P3: the board's LIVE_FRAME_MS
+#: and the narrator's cadence).
+RELAY_SECONDS = 2.0
+#: The timeout of each stream post, and the bound on `finish`'s join.
+RELAY_POST_TIMEOUT_SECONDS = 10.0
+#: How many times `finish` tries one batch before it gives up on it.
+RELAY_FINISH_ATTEMPTS = 3
+#: A batch's body limit when health gives no `ingest_body_bytes`: its shipped
+#: minimum, 1 MiB.
+RELAY_DEFAULT_BATCH_BYTES = 1024 * 1024
+
+_HTTP_STATUS = re.compile(r"^HTTP (\d{3})\b")
+_JSON_QUOTES = len('""')
+
+
+def _whole_utf8_length(data):
+    """(PURE) How many leading bytes of `data` end at a complete UTF-8
+    character: a trailing sequence whose lead byte announces more bytes than
+    follow it is still being written, and is left out."""
+    end = len(data)
+    for back in range(1, min(4, end) + 1):
+        byte = data[end - back]
+        if byte & 0xC0 != 0x80:
+            needed = (4 if byte >= 0xF0 else 3 if byte >= 0xE0
+                      else 2 if byte >= 0xC0 else 1)
+            return end - back if needed > back else end
+    return end
+
+
+def _fitting_text(text, body_bytes, limit):
+    """(PURE) The longest prefix of `text` whose JSON-encoded string, added to
+    a body of `body_bytes` with an empty `data`, stays within `limit`."""
+    def size(count):
+        return body_bytes + len(json.dumps(text[:count])) - _JSON_QUOTES
+    if size(len(text)) <= limit:
+        return text
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if size(middle) <= limit:
+            low = middle
+        else:
+            high = middle - 1
+    return text[:low]
+
+
+def _stream_answer(resp):
+    """(PURE) What the board's answer to one stream post tells the relay:
+    `("held", n)` for a 200, `("resend", n)` for a 409 carrying `held`,
+    `("cut", error)` for a 413 carrying `held`, `("stop", error)` for any
+    other client-class refusal, and `("retry", error)` for an unreachable
+    board, a timeout, a 5xx or an answer that says nothing."""
+    if not isinstance(resp, dict):
+        return "retry", "the board gave no answer"
+    held = resp.get("held")
+    held = held if isinstance(held, int) and not isinstance(held, bool) else None
+    if resp.get("ok"):
+        return ("held", held) if held is not None else (
+            "retry", "the board's answer carried no held")
+    error = str(resp.get("error") or "the board refused the batch")
+    status = _HTTP_STATUS.match(error)
+    code = int(status.group(1)) if status else None
+    if code is None or code >= 500:
+        return "retry", error
+    if code == 409 and held is not None:
+        return "resend", held
+    if code == 413 and held is not None:
+        return "cut", error
+    return "stop", error
+
+
+class StreamRelay:
+    """Follows the stream file at `path` and sends it, as written, to `POST
+    /api/v2/runs/<runId>/stream` through `post_fn(path, payload, timeout=)`.
+
+    `start()` runs a background thread that wakes every `RELAY_SECONDS` and
+    sends what lies past `held`, the bytes the board has acknowledged, cut at
+    the last complete UTF-8 character into batches whose encoded body stays
+    within `batch_limit` (`RELAY_DEFAULT_BATCH_BYTES` when health gave none).
+    The board's answer moves it on (`_stream_answer`): a 200's or a 409's
+    `held` is the next `from`; a 413 carrying `held`, or any other client-class
+    refusal, stops all further sending, said once on stderr; an unreachable
+    board, a timeout or a 5xx is retried on the next tick, said once.
+
+    `finish(deadline_seconds)` stops and joins the thread (bounded by the post
+    timeout), sends what was never acknowledged with up to
+    `RELAY_FINISH_ATTEMPTS` tries per batch before the deadline, confirms the
+    board's `held` with an empty batch, and answers `(held, stopped)`:
+    `stopped` is None, or the board's error naming why sending stopped."""
+
+    def __init__(self, post_fn, project_key, agent_id, run_id, path, codec,
+                 batch_limit):
+        self._post_fn = post_fn
+        self._project_key = project_key
+        self._agent_id = agent_id
+        self._run_id = run_id
+        self._route = RELAY_STREAM_PATH.format(
+            run_id=urllib.parse.quote(str(run_id), safe=""))
+        self._path = path
+        self._codec = codec
+        self._batch_limit = batch_limit or RELAY_DEFAULT_BATCH_BYTES
+        self.held = 0
+        self.stopped = None
+        self._lock = threading.Lock()
+        self._halt = threading.Event()
+        self._thread = None
+        self._said_retry = False
+        self._said_unreadable = False
+
+    def start(self):
+        """Start the background thread that sends while the runner works."""
+        self._thread = threading.Thread(target=self._follow, daemon=True,
+                                        name=f"crucible-stream-relay-{self._run_id}")
+        self._thread.start()
+
+    def finish(self, deadline_seconds):
+        """Stop the thread, send what the board has not acknowledged, confirm
+        its `held`, and answer `(held, stopped)`."""
+        ends = time.monotonic() + deadline_seconds
+        self._halt.set()
+        if self._thread is not None:
+            self._thread.join(timeout=max(min(RELAY_POST_TIMEOUT_SECONDS,
+                                              ends - time.monotonic()), 0))
+        tries = 0
+        while self.stopped is None and time.monotonic() < ends:
+            batch = self._next_batch()
+            if batch is None:
+                break
+            sent_from, data = batch
+            kind = self._apply(sent_from, self._send(sent_from, data))
+            tries = 0 if kind == "held" else tries + 1
+            if tries >= RELAY_FINISH_ATTEMPTS:
+                break
+        if self.stopped is None and time.monotonic() < ends:
+            self._apply(self.held, self._send(self.held, ""))
+        return self.held, self.stopped
+
+    def _follow(self):
+        while not self._halt.wait(RELAY_SECONDS):
+            self._tick()
+
+    def _tick(self):
+        """Send every batch past `held`, until the file is sent, a retry waits
+        for the next tick, or sending stopped."""
+        while self.stopped is None and not self._halt.is_set():
+            batch = self._next_batch()
+            if batch is None:
+                return
+            sent_from, data = batch
+            answer = self._send(sent_from, data)
+            with self._lock:
+                if self._halt.is_set():
+                    return
+            if self._apply(sent_from, answer) not in ("held", "resend"):
+                return
+
+    def _send(self, sent_from, data):
+        return self._post_fn(self._route, self._payload(sent_from, data),
+                             timeout=RELAY_POST_TIMEOUT_SECONDS)
+
+    def _payload(self, sent_from, data):
+        return {"projectKey": self._project_key, "agentId": self._agent_id,
+                "codec": self._codec, "from": sent_from, "data": data}
+
+    def _next_batch(self):
+        """`(from, data)`: the next batch past `held`, or None when nothing
+        whole is left to send."""
+        sent_from = self.held
+        try:
+            with open(self._path, "rb") as handle:
+                handle.seek(sent_from)
+                chunk = handle.read(self._batch_limit)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            if not self._said_unreadable:
+                self._said_unreadable = True
+                print(f"[crucible] WARN: the test stream {self._path} could "
+                      f"not be read ({exc}) — it is tried again",
+                      file=sys.stderr)
+            return None
+        text = chunk[:_whole_utf8_length(chunk)].decode("utf-8", "surrogateescape")
+        empty = len(json.dumps(self._payload(sent_from, "")).encode())
+        data = _fitting_text(text, empty, self._batch_limit)
+        if not data:
+            return None
+        return sent_from, data
+
+    def _apply(self, sent_from, resp):
+        """Move the relay on by the board's answer to a batch sent at
+        `sent_from`; answer the answer's kind."""
+        kind, value = _stream_answer(resp)
+        with self._lock:
+            if kind == "held":
+                self.held = value
+            elif kind == "resend":
+                if value == sent_from:
+                    kind, value = "retry", resp.get("error")
+                else:
+                    self.held = value
+            elif kind in ("cut", "stop"):
+                self.stopped = value
+        if kind in ("cut", "stop"):
+            print(f"[crucible] WARN: the test stream to run {self._run_id} "
+                  f"stopped: {value} — nothing more is sent", file=sys.stderr)
+        elif kind == "retry" and not self._said_retry:
+            self._said_retry = True
+            print(f"[crucible] WARN: the test stream to run {self._run_id} "
+                  f"could not be sent ({value}) — it is retried",
+                  file=sys.stderr)
+        return kind
