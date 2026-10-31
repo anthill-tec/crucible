@@ -139,7 +139,7 @@ class AStreamedPythonRunReachesTheBoardWhileItWorksTest(unittest.TestCase):
                 for gate, shown in steps:
                     seen[gate] = self.observe(run_id, shown)
                     (self.gates / gate).write_text("go")
-                stdout, _ = proc.communicate(timeout=RUN_TIMEOUT)
+                proc.communicate(timeout=RUN_TIMEOUT)
             finally:
                 for gate in ("seen-1", "seen-2", "seen-3"):
                     (self.gates / gate).write_text("go")

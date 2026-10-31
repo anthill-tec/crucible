@@ -29,8 +29,8 @@ file):
   - Sec S1: `python -m xmlrunner discover -s tests -p 'test_*.py'` today
     collects 0 tests and produces no TEST-*.xml at all (confirmed), while
     `discover -s tests/client` collects 374 (confirmed) -- so the default
-    `_xmlrunner_cmd(..., "tests", ...)` invocation fails this test's
-    >=300-test lower bound today.
+    discovery `_suite_cmd` builds through `_unittest_cmd` (no targets:
+    `discover -s tests`) fails this test's >=300-test lower bound today.
   - Sec S2: the current `_regression_run` zero-discovery branch
     (python-crucible.py ~700-705) prints ONLY a stderr line and calls
     `_ingest_compile(project_dir, args.agent, ..., tier="regression")` --

@@ -42,6 +42,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.client.live_run_harness import (
@@ -102,7 +103,7 @@ class StreamedRunCase(unittest.TestCase):
     """A scratch project pointed at a stream-capable `RecordingBoard`, with the
     shared fake interpreter and an explicit reports dir."""
 
-    BOARD_OPTIONS: dict = {}
+    BOARD_OPTIONS: ClassVar[dict] = {}
 
     def setUp(self):
         self.scratch = Path(tempfile.mkdtemp(prefix="python-stream-close-"))
