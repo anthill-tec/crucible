@@ -134,7 +134,7 @@ const RESULT_FAILURES: RunLiveFailure[] = [
   { id: "?::breaks alone#1", name: "breaks alone", suite: "?", file: "top.test.ts", message: "alone boom" },
 ];
 
-/** The whole capture: 2 passes, 3 fails, a skip, a todo, and the load error in broken.test.ts. */
+/** The whole capture: 2 passes, 3 fails, a skip, a todo, and the load error in the broken file. */
 function expectCaptureState(live: RunLive, text: string): void {
   expect({
     completed: live.completed,

@@ -17,10 +17,10 @@
 //  - CRLF: PLAIN with every "\n" written as "\r\n", as a console that ends its
 //    lines with CRLF writes it. Derived, not a separate run.
 //
-// The scratch files, run as `bun test ./math.test.ts ./more-math.test.ts
-// ./top.test.ts ./broken.test.ts`:
+// The scratch files — `math`, `more-math`, `top` and `broken`, each a bun
+// test file — run in that order as the four paths of one `bun test` call:
 //
-// math.test.ts:
+// the scratch `math` file:
 //   import { describe, expect, test } from "bun:test";
 //
 //   describe("math", () => {
@@ -36,7 +36,7 @@
 //     test.todo("formats");
 //   });
 //
-// more-math.test.ts:
+// the scratch `more-math` file:
 //   import { describe, expect, test } from "bun:test";
 //
 //   describe("math", () => {
@@ -45,7 +45,7 @@
 //     });
 //   });
 //
-// top.test.ts:
+// the scratch `top` file:
 //   import { expect, test } from "bun:test";
 //
 //   test("stands alone", () => {
@@ -55,7 +55,7 @@
 //     throw new Error("alone boom");
 //   });
 //
-// broken.test.ts:
+// the scratch `broken` file:
 //   import { test } from "bun:test";
 //   import { missing } from "./no-such-module.ts";
 //

@@ -265,7 +265,7 @@ describe("a run holding a view stream closes through its report as a run with no
       }),
     );
     expect(event.codec).toBe("junit");
-    // The report's two cases, plus the load error the raw console names (broken.test.ts), as the record reads it.
+    // The report's two cases, plus the load error the raw console names (the broken file), as the record reads it.
     expect(event.summary).toMatchObject({ total: 3, passed: 1, failed: 2, pending: 0 });
   });
 
