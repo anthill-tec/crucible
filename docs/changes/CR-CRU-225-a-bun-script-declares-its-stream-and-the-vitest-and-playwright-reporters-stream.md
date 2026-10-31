@@ -122,7 +122,9 @@ inherits the start's.
   - a close that states none inherits the start's framework.
 - **Storage** *(P4, F11)* — every site where `stack` is held gains `framework`:
   - the `events` and `runs` tables, in the base DDL and in migration v23, so a new store and a migrated one agree;
-  - `recordProjection`'s UNION, which gains `NULL AS framework` wherever it carries `NULL AS stack`;
+  - the timeline read (`listEvents`), which merges test runs, milestones and gates in code: only a test run carries a
+    framework (RED 836: there is no SQL UNION);
+  - `abortRun`, so an aborted run's event keeps its start's framework (RED 836 ruling);
   - the inserts in `startRun` and `recordTestEvent`, and the mappers (`toEvent` and the run row);
   - `runMeta`, the event brief and `openRunBrief`, which answer it wherever they answer `stack`.
 - **Health** *(P5)*: `codecs.stream` lists the record stream codecs (`isRecordStreamCodec`).
@@ -226,7 +228,7 @@ inherits the start's.
   - The four run routes store an optional `framework`; an empty or non-string value is a 400 and nothing is stored.
   - A close stating a different framework from its start is a 400; a close stating none inherits the start's.
   - It is answered on the event, in the run brief and in the open-run brief.
-  - A timeline read across a test run, a milestone and a gate still answers (the UNION).
+  - A timeline read across a test run, a milestone and a gate answers the test run's framework and none on the others.
   - Migration v23 adds both columns, a new store matches a migrated one, and RUNBOOK reads v23.
   - Health lists `codecs.stream: ["crucible-events"]`.
 - [ ] **AC2 — the table.**
