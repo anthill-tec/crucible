@@ -599,7 +599,7 @@ def _ingest_body_limit(health):
 def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
                    report_paths, raw=None, coverage_codec=None,
                    coverage_paths=(), tier=None, context=None, run_id=None,
-                   release=None, runner_exit=None):
+                   release=None, runner_exit=None, framework=None):
     """The one ingest of a run's reports: the board's health is read first,
     once, through `get_fn`, and the run is refused before anything is sent when
     that health cannot be read, when it names no codec the run needs (the
@@ -610,8 +610,8 @@ def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
     Otherwise ONE `POST /api/v2/runs` goes out through `post_ingest`, carrying
     `codec`, `data` (each report's text, in path order), `coverage` when a
     coverage codec and its reports are given, `raw`, and `tier`, `context`,
-    `runId`, `release` and `runnerExit` when given; the board's answer is
-    returned, a 413 reported naming `ingest_body_bytes`.
+    `runId`, `release`, `runnerExit` and `framework` when given; the board's
+    answer is returned, a 413 reported naming `ingest_body_bytes`.
 
     A refusal before sending answers `{ok: False, error, warnings}`; with a
     run open it is aborted through `abort_run`, the refusal its reason, and
@@ -645,6 +645,8 @@ def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
             # Measured as `post_ingest` stamps the body and `http_request`
             # encodes it.
             stamped = {**payload, "stack": stack}
+            if framework:
+                stamped["framework"] = framework
             if release:
                 stamped["release"] = release
             size = len(json.dumps(stamped).encode())
@@ -659,7 +661,7 @@ def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
         resp = {"ok": False, "error": refusal, "warnings": warnings}
     else:
         resp = _core.post_ingest(post_fn, INGEST_RUNS_PATH, payload, stack=stack,
-                           release=release)
+                                 release=release, **_framework_kwarg(framework))
         error = resp.get("error") if isinstance(resp, dict) else None
         if isinstance(error, str) and _HTTP_413.match(error):
             resp = {**resp, "error": (
@@ -671,13 +673,13 @@ def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
 
 def close_stream(post_fn, *, stack, project_key, agent_id, run_id, codec,
                  raw=None, coverage_codec=None, coverage_paths=(), tier=None,
-                 context=None, release=None, runner_exit=None):
+                 context=None, release=None, runner_exit=None, framework=None):
     """Close an open run whose record is the stream its relay sent: ONE `POST
     /api/v2/runs` through `post_ingest` carrying `runId`, `codec` and no
     `data`, with the coverage report inline when one is given, `raw`, `tier`,
-    `context`, `release` and `runnerExit`. A close the board refuses is
-    followed by the abort `post_ingest` makes. Prints the run's ingest line
-    and returns the board's answer."""
+    `context`, `release`, `runnerExit` and `framework`. A close the board
+    refuses is followed by the abort `post_ingest` makes. Prints the run's
+    ingest line and returns the board's answer."""
     payload = {"projectKey": project_key, "agentId": agent_id,
                "codec": codec, "runId": run_id}
     if coverage_codec is not None and coverage_paths:
@@ -691,7 +693,7 @@ def close_stream(post_fn, *, stack, project_key, agent_id, run_id, codec,
                 ("runnerExit", runner_exit))
     payload.update({key: value for key, value in optional if value is not None})
     resp = _core.post_ingest(post_fn, INGEST_RUNS_PATH, payload, stack=stack,
-                             release=release)
+                             release=release, **_framework_kwarg(framework))
     error = resp.get("error") if isinstance(resp, dict) else None
     if isinstance(error, str) and _HTTP_413.match(error):
         resp = {**resp, "error": (
@@ -699,6 +701,12 @@ def close_stream(post_fn, *, stack, project_key, agent_id, run_id, codec,
             f"{INGEST_BODY_LIMIT_KEY} limit")}
     _print_ingest_line(resp, codec)
     return resp
+
+
+def _framework_kwarg(framework):
+    """(PURE) `post_ingest`'s `framework` keyword when the run names one,
+    and nothing otherwise, so a client that names none calls it as before."""
+    return {"framework": framework} if framework else {}
 
 
 def _print_ingest_line(resp, codec):
@@ -1021,7 +1029,7 @@ def emit_run_abandoned(verb, project_key, agent_id, run_id, abandoned,
 
 
 def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None,
-             *, release=None):
+             *, release=None, framework=None):
     """Open the run BEFORE the suite is spawned. Returns `(run_id, warnings)`.
 
     A refusal degrades to single-shot with a warning naming the fallback. An
@@ -1031,8 +1039,12 @@ def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None,
 
     \u00a7S1 \u2014 `release` rides the start body's TOP-LEVEL `release`, and a
     refused release run raises `ReleaseRunRefused` instead of degrading: its
-    single-shot ingest would carry the same release and be refused in turn."""
+    single-shot ingest would carry the same release and be refused in turn.
+
+    `framework`, when the run names one, rides the start body beside `stack`."""
     payload = {"projectKey": project_key, "agentId": agent_id, "stack": stack}
+    if framework:
+        payload["framework"] = framework
     if tier:
         payload["tier"] = tier
     if context:
@@ -1396,3 +1408,186 @@ class StreamRelay:
                   f"could not be sent ({value}) — it is retried",
                   file=sys.stderr)
         return kind
+
+
+# ── the streamed-run close: what follows a streamed run's runner exit ───────
+#
+# A run whose record is its runner's event stream (`crucible-events`, relayed
+# by `StreamRelay`) is decided, once the runner exits, by the stream file
+# alone: zero discovery, ran nothing, no test written (the compile ingest), or
+# the stream's close. Every client that streams a run ends it here, so the
+# stream is read in this module only; a client contributes its envelope, its
+# compile ingest and its runner's no-report and zero-discovery readings.
+
+#: The record stream codec the shipped runners and reporters write.
+STREAM_RECORD_CODEC = "crucible-events"
+
+
+def stream_counts(path):
+    """The one reading of a stream file: `(test_ends, run_end_total,
+    run_start_total, ran)`. `run_end_total` is None when the stream holds no
+    `run-end` (a `run-end` stating no int total counts its `test-end`s so
+    far), `run_start_total` None when no `run-start` states an int total, and
+    `ran` counts the `test-end`s that passed or failed. A missing file holds
+    nothing; an unreadable one is said on stderr and holds nothing."""
+    count, ran, total, stated = 0, 0, None, None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                kind = event.get("event")
+                given = event.get("total")
+                given = (given if isinstance(given, int)
+                         and not isinstance(given, bool) else None)
+                if kind == "test-end":
+                    count += 1
+                    ran += event.get("status") in ("pass", "fail")
+                elif kind == "run-end":
+                    total = count if given is None else given
+                elif kind == "run-start" and given is not None:
+                    stated = given
+    except FileNotFoundError:
+        return 0, None, None, 0
+    except OSError as exc:
+        print(f"[crucible] WARN: could not read the stream {path} ({exc}) — "
+              f"it counts as holding no test", file=sys.stderr)
+        return 0, None, None, 0
+    return count, total, stated, ran
+
+
+def _narrated_total(count, total, stated):
+    """(PURE) The denominator of a streamed run's closing `ran N/M`: the
+    `run-end`'s total, else the `run-start`'s never below the count, else
+    the count."""
+    if total is not None:
+        return total
+    return max(count, stated) if stated is not None else count
+
+
+def emit_unfiled_run(verb, result, unfiled, warnings, *, artifact, emit,
+                     no_report_warning, zero_discovery=None, stack=None,
+                     gate=False):
+    """The exit of a streamed run for which no run was opened (the board
+    could not be reached or answered no runId, or the run lifecycle was opted
+    out of): the suite ran and nothing was filed. ONE `ok: false` envelope
+    names the cause `unfiled` as its `error`, carries `warnings`, and says
+    what the runner did: a discovery that found nothing, or a runner that
+    exited non-zero having written no test. Returns the exit code."""
+    print(f"[crucible] ERROR: {unfiled}", file=sys.stderr)
+    found = list(warnings)
+    help_steps = [f"re-run {verb} --agent <agentId> once the board answers",
+                  "status"]
+    zero = zero_discovery(result) if zero_discovery is not None else None
+    if zero is not None:
+        warning, help_step = zero
+        found.append(warning)
+        help_steps = [help_step, *help_steps]
+    elif result.returncode:
+        found.append(no_report_warning(result))
+        help_steps = _core.no_report_help(verb, artifact)
+    if gate:
+        found += _core.whole_suite_unreported_warnings(
+            stack, {"ok": False, "error": unfiled})
+    emit(False, {"error": unfiled, "help": help_steps}, found,
+         f"{verb}: ok=False — {unfiled}")
+    return result.returncode or 1
+
+
+def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
+                       framework, post_fn, project_key, agent_id, tier,
+                       context, release, warnings, emit, emit_ingest,
+                       ingest_compile, no_report_warning, zero_discovery=None,
+                       collect_coverage=None, narrator=None, unfiled=None,
+                       gate=False, codec=STREAM_RECORD_CODEC,
+                       coverage_codec=None, base_url=None, close_warnings=()):
+    """Close a streamed run once its runner exited and its relay finished:
+    `result` is the runner's `CompletedProcess`, `held` the bytes of the
+    stream the board confirmed, `stream_path` the stream file. Returns the
+    verb's exit code.
+
+    The client's own facts arrive as hooks: `emit(ok, fields, warnings,
+    legacy_line)` writes its envelope, `emit_ingest(resp, help_steps,
+    warnings, ok)` its filed run's envelope, `ingest_compile(result)` files
+    the runner's output as a compile failure closing `run_id`,
+    `no_report_warning(result)` names a run that wrote no test, and
+    `zero_discovery(result)` (None for a runner with no such reading) answers
+    `(warning, help_step)` for an honest empty discovery, else None.
+
+    With no `run_id` the run is unfiled (`emit_unfiled_run`, `unfiled` its
+    cause). Otherwise the stream decides, in order: zero discovery (the run
+    is aborted), ran nothing (`emit_ran_nothing`), and then, after the
+    closing `ran N/M` and `ingesting…`, a failed runner that wrote no
+    `test-end` and left the board nothing held is filed by the compile
+    ingest; any other run is closed by its stream (`close_stream`, carrying
+    `framework` and, when `collect_coverage` found any, the coverage under
+    `coverage_codec`), with the no-report warning when no `test-end` was
+    written. `close_warnings` join only a run closed by its stream; `gate`
+    derives its help from the run state (`run_help`, at `base_url`) and adds
+    the whole-suite-unreported warning."""
+    artifact = os.path.basename(stream_path)
+    warnings = list(warnings)
+    if run_id is None:
+        return emit_unfiled_run(
+            verb, result, unfiled or "the board opened no run", warnings,
+            artifact=artifact, emit=emit, no_report_warning=no_report_warning,
+            zero_discovery=zero_discovery, stack=stack, gate=gate)
+    count, total, stated, _ran = stream_counts(stream_path)
+    zero = (zero_discovery(result)
+            if count == 0 and zero_discovery is not None else None)
+    if zero is not None:
+        warning, help_step = zero
+        emit(False, {"help": [help_step]},
+             warnings + [warning] + no_report_left_open_warnings(
+                 run_id, artifact, post_fn=post_fn, project_key=project_key,
+                 agent_id=agent_id), None)
+        return 1
+    if ran_nothing(result.returncode, count if total is not None else None):
+        return emit_ran_nothing(
+            verb, artifact, result.returncode, result.stdout or "", run_id,
+            warnings, post_fn=post_fn, project_key=project_key,
+            agent_id=agent_id)
+    # A failed runner that wrote no `test-end` is the no-report failure, and
+    # its envelope says so whichever close follows. The compile path needs
+    # nothing of the stream held by the board too; a stream the board holds
+    # (a `run-start` the runner wrote before it died) is closed as a stream.
+    no_test_end = bool(result.returncode) and count == 0
+    wrote_no_test = no_test_end and held == 0
+    coverage_paths = []
+    if collect_coverage is not None and not wrote_no_test:
+        coverage_paths, missing = collect_coverage()
+        warnings += missing
+    if narrator is not None:
+        # The final count, then `ingesting…`, both ahead of the close.
+        narrator.say(f"ran {count}/{_narrated_total(count, total, stated)}")
+        narrator.say(INGESTING_MESSAGE)
+    if wrote_no_test:
+        # Its captured output is filed as a compile failure, closing the run.
+        ingest_compile(result)
+        emit(False, {"help": _core.no_report_help(verb, artifact)},
+             warnings + [no_report_warning(result)],
+             f"{verb}: ok=False — no {artifact} test, ingested as compile")
+        return result.returncode or 1
+    if no_test_end:
+        warnings.append(no_report_warning(result))
+    runner_exit = runner_exit_code(result.returncode)
+    resp = close_stream(
+        post_fn, stack=stack, project_key=project_key, agent_id=agent_id,
+        run_id=run_id, codec=codec, raw=result.stdout,
+        coverage_codec=coverage_codec if coverage_paths else None,
+        coverage_paths=coverage_paths, tier=tier, context=context,
+        release=release, runner_exit=runner_exit, framework=framework)
+    exit_code = verb_exit(runner_exit, resp)
+    warnings += list(close_warnings)
+    help_steps = None
+    if gate:
+        help_steps = _core.run_help(verb, exit_code == 0,
+                                    filed_run(resp).get("failed"), base_url)
+        warnings += _core.whole_suite_unreported_warnings(stack, resp)
+    # A no-report run is a failure envelope whichever close filed it.
+    emit_ingest(resp, help_steps, warnings, False if no_test_end else None)
+    return exit_code

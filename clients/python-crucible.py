@@ -1391,34 +1391,6 @@ def _open_streamed_run(project_dir, agent, tier, release):
                   f"suite ran with no stream and nothing was filed"), warnings
 
 
-def _stream_counts(path):
-    """The client's one reading of the stream file: `(test_ends,
-    run_end_total)`, the second None when the stream holds no `run-end`."""
-    count, total = 0, None
-    try:
-        with open(path, encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(event, dict):
-                    continue
-                if event.get("event") == "test-end":
-                    count += 1
-                elif event.get("event") == "run-end":
-                    stated = event.get("total")
-                    total = (stated if isinstance(stated, int)
-                             and not isinstance(stated, bool) else count)
-    except FileNotFoundError:
-        return 0, None
-    except OSError as exc:
-        print(f"[crucible] WARN: could not read the stream {path} ({exc}) — "
-              f"it counts as holding no test", file=sys.stderr)
-        return 0, None
-    return count, total
-
-
 def _finish_relay(relay, deadline_seconds):
     """Stop the relay (when one runs), sending what the board has not
     acknowledged within `deadline_seconds`; answer the `held` the board
@@ -1442,45 +1414,15 @@ def _zero_discovery_warning(args):
     return {"code": "no-tests-discovered", "detail": detail}
 
 
-def _emit_zero_discovery(verb, args, project_dir, agent, warnings, run_id,
-                         artifact):
-    """CR-CRU-039 §S2 — a discovery that collected zero tests is a
-    definitive `no-tests-discovered` error, never a compile ingest; the run
-    this verb opened is aborted. Returns the exit code."""
-    _emit_axi(verb, False, {"help": [_ZERO_DISCOVERY_HELP]},
-              _axi_context(project_dir, agent_id=agent),
-              list(warnings) + [_zero_discovery_warning(args)]
-              + _axi().no_report_left_open_warnings(
-                  run_id, artifact, post_fn=_post,
-                  project_key=_project_key(project_dir), agent_id=agent))
-    return 1
-
-
-def _emit_unfiled(verb, args, project_dir, agent, unfiled, warnings, result,
-                  gate):
-    """The exit of a unittest run whose board could not be reached or opened
-    no run: the suite ran and nothing was filed. The envelope is `ok: false`
-    naming the board, carries `warnings` (`run-lifecycle-unavailable` when
-    the board could not be reached or refused the run), and says what the
-    runner did: a discovery that found nothing, or a runner that exited
-    non-zero having written no test. Returns the exit code."""
-    print(f"[crucible] ERROR: {unfiled}", file=sys.stderr)
-    found = list(warnings)
-    help_steps = [f"re-run {verb} --agent <agentId> once the board answers",
-                  "status"]
-    if _is_zero_discovery(result):
-        found.append(_zero_discovery_warning(args))
-        help_steps = [_ZERO_DISCOVERY_HELP, *help_steps]
-    elif result.returncode:
-        found.append(_no_report_warning(verb, _UNITTEST, result))
-        help_steps = _axi().no_report_help(verb, STREAM_FILE)
-    if gate:
-        found += _axi().whole_suite_unreported_warnings(
-            _STACK, {"ok": False, "error": unfiled})
-    _emit_axi(verb, False, {"error": unfiled, "help": help_steps},
-              _axi_context(project_dir, agent_id=agent), found,
-              f"{verb}: ok=False — {unfiled}")
-    return result.returncode or 1
+def _zero_discovery_reading(args):
+    """unittest's zero-discovery reading for the shared streamed-run close:
+    `(warning, help_step)` for a run whose capture shows an honest empty
+    discovery (`_is_zero_discovery`), else None."""
+    def reading(result):
+        if not _is_zero_discovery(result):
+            return None
+        return _zero_discovery_warning(args), _ZERO_DISCOVERY_HELP
+    return reading
 
 
 def _streamed_run(verb, args, project_dir, agent, identity, cmd, env, *,
@@ -1538,66 +1480,29 @@ def _streamed_run(verb, args, project_dir, agent, identity, cmd, env, *,
     held = _finish_relay(relay, _STREAM_FINISH_SECONDS)
     print(f"[crucible] {_runner_label(_UNITTEST)} exit={result.returncode}",
           file=sys.stderr)
-    if run_id is None:
-        return _emit_unfiled(verb, args, project_dir, agent, unfiled,
-                             warnings + lifecycle, result, gate)
-    count, total = _stream_counts(stream_path)
-    if count == 0 and _is_zero_discovery(result):
-        return _emit_zero_discovery(verb, args, project_dir, agent, warnings,
-                                    run_id, STREAM_FILE)
-    if _axi().ran_nothing(result.returncode, count if total is not None else None):
-        return _axi().emit_ran_nothing(
-            verb, STREAM_FILE, result.returncode, result.stdout or "", run_id,
-            warnings, post_fn=_post, project_key=key, agent_id=agent,
-            subject=_no_report_subject(verb, _UNITTEST))
-    # A failed runner that wrote no `test-end` is the no-report failure, and
-    # its envelope says so whichever close follows. The compile path needs
-    # nothing of the stream held by the board too; a stream the board holds
-    # (a `run-start` the runner wrote before it died) is closed as a stream.
-    no_test_end = bool(result.returncode) and count == 0
-    wrote_no_test = no_test_end and held == 0
-    coverage_paths = []
-    if collect_coverage is not None and not wrote_no_test:
-        coverage_paths, missing = collect_coverage()
-        warnings += missing
-    if narrator is not None:
-        # The final count, then `ingesting…`, both ahead of the close.
-        narrator.say(f"ran {count}/{count if total is None else total}")
-        narrator.say(_axi().INGESTING_MESSAGE)
-    if wrote_no_test:
-        # No test written and a failed runner: its captured output is filed
-        # as a compile failure, closing the run (a compile ingest states no
-        # tier).
-        _ingest_compile(project_dir, agent, _no_xml_errors_text(result, _UNITTEST),
-                        run_id=run_id, release=release)
-        _emit_axi(verb, False,
-                  {"help": _axi().no_report_help(verb, STREAM_FILE)},
-                  _axi_context(project_dir, agent_id=agent),
-                  warnings + [_no_report_warning(verb, _UNITTEST, result)],
-                  f"{verb}: ok=False — no {STREAM_FILE} test, ingested as compile")
-        return result.returncode or 1
-    if no_test_end:
-        warnings.append(_no_report_warning(verb, _UNITTEST, result))
-    runner_exit = _axi().runner_exit_code(result.returncode)
-    resp = _axi().close_stream(
-        _post, stack=_STACK, project_key=key, agent_id=agent, run_id=run_id,
-        codec=STREAM_CODEC, raw=result.stdout,
-        coverage_codec=LCOV_CODEC if coverage_paths else None,
-        coverage_paths=coverage_paths, tier=tier, context=_run_context(),
-        release=release, runner_exit=runner_exit)
-    exit_code = _axi().verb_exit(runner_exit, resp)
-    if measure_wall:
-        warnings += _axi().unit_run_wall_vs_cpu_warnings(tier, "python", timing)
-    help_steps = None
-    if gate:
-        help_steps = _axi().run_help(verb, exit_code == 0,
-                                     _axi().filed_run(resp).get("failed"),
-                                     _base_url())
-        warnings += _axi().whole_suite_unreported_warnings(_STACK, resp)
-    # A no-report run is a failure envelope whichever close filed it.
-    _emit_ingest_axi(verb, resp, project_dir, agent, help_steps=help_steps,
-                     warnings=warnings, ok=False if no_test_end else None)
-    return exit_code
+    context = _axi_context(project_dir, agent_id=agent)
+    # The stream file decides the rest, in the shared streamed-run close
+    # (a compile ingest states no tier).
+    return _axi().close_streamed_run(
+        verb, result, run_id=run_id, held=held, stream_path=stream_path,
+        stack=_STACK, framework=None, post_fn=_post, project_key=key,
+        agent_id=agent, tier=tier, context=_run_context(), release=release,
+        warnings=warnings + lifecycle,
+        emit=lambda ok, fields, found, line: _emit_axi(
+            verb, ok, fields, context, found, line),
+        emit_ingest=lambda resp, help_steps, found, ok: _emit_ingest_axi(
+            verb, resp, project_dir, agent, help_steps=help_steps,
+            warnings=found, ok=ok),
+        ingest_compile=lambda ran: _ingest_compile(
+            project_dir, agent, _no_xml_errors_text(ran, _UNITTEST),
+            run_id=run_id, release=release),
+        no_report_warning=lambda ran: _no_report_warning(verb, _UNITTEST, ran),
+        zero_discovery=_zero_discovery_reading(args),
+        collect_coverage=collect_coverage, narrator=narrator, unfiled=unfiled,
+        gate=gate, codec=STREAM_CODEC, coverage_codec=LCOV_CODEC,
+        base_url=_base_url(),
+        close_warnings=(_axi().unit_run_wall_vs_cpu_warnings(
+            tier, "python", timing) if measure_wall else ()))
 
 
 def cmd_auto_ingest(args):
