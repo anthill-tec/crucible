@@ -30,7 +30,9 @@ What is pinned:
 - `crucible.testScript` naming a table-declared script runs through that
   entry: the runner is handed `CRUCIBLE_STREAM=<reports dir>/crucible-events.
   ndjson` and `CRUCIBLE_REPORTERS=<the client's install>/reporters`, and the run
-  is closed by its stream;
+  is closed by its stream; naming a `junit` entry, the runner is handed its
+  report path the entry's way, the run is filed from its JUnit report stamped
+  `bun-test`, and its console relays only when the entry declares one;
 - the declared `framework` rides the run start and the close, and a declared
   `coverage` names the coverage codec the close carries; `check` sends no
   framework.
@@ -375,6 +377,50 @@ class ATestScriptNamingATableScriptRunsThroughItsEntryTest(TargetsCase):
         envelope = self.envelope(drive)
         self.assertEqual(envelope.get("script"), VITEST, f"envelope={envelope!r}")
         self.assertIn(INGESTING, messages)
+
+    def run_through_a_junit_entry(self, entry):
+        """`test` through `crucible.testScript` naming `test:unit`, whose
+        table entry is `entry`: the runner is handed its report path the
+        entry's way and the run is filed from its JUnit report, stamped
+        `bun-test`."""
+        self.declare({UNIT: "bun test"},
+                     {"testScript": UNIT, "targets": {UNIT: entry}})
+        drive = self.drive("test")
+        self.assertEqual(drive.returncode, 0, drive.diag())
+        spawns = self.spawns()
+        self.assertEqual(len(spawns), 1, drive.diag())
+        self.assertEqual(spawns[0]["argv"], ["run", UNIT],
+                         "the named script runs, handed no report flags")
+        env = spawns[0]["env"]
+        self.assertEqual(os.path.realpath(env.get(JUNIT_VAR) or ""),
+                         os.path.realpath(self.reports / "junit.xml"),
+                         f"the report path rides {JUNIT_VAR}; spawn={spawns[0]!r}")
+        self.assertIsNone(env.get(STREAM_VAR), "a junit target is handed no stream")
+        self.assertEqual(self.only(START, drive).get("framework"), "bun-test")
+        close = self.only(CLOSE, drive)
+        self.assertEqual((close.get("codec"), close.get("runId"), close.get("framework")),
+                         ("junit", RUN_ID, "bun-test"),
+                         f"the run is filed from its JUnit report; close={close!r}")
+        self.assertEqual(self.posts_to(COMPILE), [])
+        envelope = self.envelope(drive)
+        self.assertEqual(envelope.get("script"), UNIT, f"envelope={envelope!r}")
+        return drive
+
+    def test_a_test_run_through_a_junit_entry_declaring_bun_console_relays_its_console(self):
+        drive = self.run_through_a_junit_entry(
+            {"framework": "bun-test", "junit": ENV_JUNIT, "console": VIEW_CODEC})
+        self.assertTrue(self.view_batches(), f"the console is relayed; {drive.diag()}")
+        self.assertEqual({p for p, _b in self.board.stream_posts()}, {RUN_STREAM})
+        self.assertEqual({b.get("codec") for _p, b in self.board.stream_posts()},
+                         {VIEW_CODEC}, "the console is relayed under its declared view codec")
+        held = self.board.held_stream(RUN_ID)
+        self.assertIn("(pass) targets > case_1 [0.01ms]\n", held,
+                      "the runner's console is what the board holds")
+
+    def test_a_test_run_through_a_junit_entry_declaring_no_console_does_not_relay(self):
+        drive = self.run_through_a_junit_entry({"framework": "bun-test", "junit": ENV_JUNIT})
+        self.assertEqual(self.board.stream_posts(), [],
+                         f"an entry declaring no console relays nothing; {drive.diag()}")
 
 
 # ── framework and coverage ride the start and the close ─────────────────────
