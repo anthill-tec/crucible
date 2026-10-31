@@ -144,8 +144,10 @@ One ingest call = one immutable event on the project's timeline.
 lines (the JSON-lines codec, one `run-start`, a `test-end` per test, one `run-end`) are posted to
 `POST /api/v2/runs/<runId>/stream`, and the board holds them, filling the run's live state as each batch lands. The run's
 close (`POST /api/v2/runs` with `runId`, `codec: "crucible-events"` and no report) decodes the whole held stream into this
-one event, as a report would be decoded; an abort or the sweep decodes what was held into its aborted event. Either way
-the held batches and the live state are then deleted.
+one event, as a report would be decoded. An abort or the sweep decodes only a RECORD stream: a held `crucible-events`
+stream is decoded into its aborted event, and a run holding a view stream (CR-CRU-201, `bun-console`) is aborted as a run
+with no stream, with no tree, no summary and no `incomplete`. Either way the held batches and the live state are then
+deleted.
 
 ### 3.4 Ingest state
 Per (`projectKey`, `type ∈ unit|bdd`): pointer to the latest test event + latest compile
@@ -264,10 +266,20 @@ registry** translating each tool's native output into one **canonical RunSchema*
   version is not stamped. Coverage codecs: `lcov` and `jacoco`, rounded as the clients' Python `round`.
 - Parsed path (`/runs/parsed`): the route older clients post to — summary/tree/coverage taken as-is.
 - Both paths record a `kind:"test"` event and answer `{ok, run}`; `/runs` adds `files` and `coverage`.
-- Stream codecs (CR-CRU-200): `crucible-events` is registered with `stream: true` and decodes a JSON-lines test stream
-  by JUnit's own failure and suite-status rules. An open run's batches go to `POST /api/v2/runs/<runId>/stream`, which
-  holds them byte-offset by byte-offset and fills the run's live state; the close on `/runs` (`runId`,
-  `codec: "crucible-events"`, no report) decodes the whole held stream into the run's one event.
+- Record stream codecs (CR-CRU-200): `crucible-events` decodes a JSON-lines test stream by JUnit's own failure and
+  suite-status rules. An open run's batches go to `POST /api/v2/runs/<runId>/stream`, which holds them byte-offset by
+  byte-offset and fills the run's live state; the close on `/runs` (`runId`, `codec: "crucible-events"`, no report)
+  decodes the whole held stream into the run's one event.
+- **View codecs (CR-CRU-201)** live in a registry of their own, beside the report codecs, and health lists them as
+  `codecs.view`. A view codec fills an open run's live state from its held stream and is never the run's record: it
+  has no `parse`, so every report and close route refuses it as an unknown codec. `bun-console` is the first: it reads
+  bun's console (both wire forms) into the live state, its failures married to their detail by the rule the JUnit
+  raw-output reading uses. The stream route takes a view stream under the record stream's rules; a run holding one
+  closes through its report as a run with no stream does, and its batches and live state are deleted at settle.
+- **The run start's total (CR-CRU-201).** `POST /api/v2/runs/start` takes an optional `total`, an integer of 0 or more
+  (any other value is a 400, nothing started), the client's own count of the tests it is about to run, stored as
+  `runs.total`. The live read answers the stream's own `run-start` total first, else the start's, never below the
+  completed count, and 0 as no total.
 - **Python unittest streams its record (CR-CRU-224).** The python client's own unittest runner
   (`clients/subtest_runner.py`) writes the `crucible-events` stream to the file `CRUCIBLE_STREAM` names,
   the shared relay (`StreamRelay`) sends it to the open run while the suite works, and the run is closed

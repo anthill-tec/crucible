@@ -39,8 +39,9 @@ Three layers, the same for every stack.
 
 1. **Source.** While the runner works, an event stream is written to a file the client names through
    an environment variable (the `env:<VAR>` mechanism `reportPath` already uses), so it never mixes
-   with console output. Where the runner has no structured stream, the source is its console result
-   lines, which the client already reads.
+   with console output. Where the runner has no structured stream, the source is its console: the
+   client relays the whole console as written, and the board reads the result lines from it
+   (CR-CRU-201's `bun-console` view codec for `bun test`).
 2. **Relay.** The client follows the stream and sends it, in throttled batches, to the run it opened
    at start. It sends the stream as written; it decodes nothing.
 3. **Board.** The board decodes each batch with the codec the stream declares, keeps the open run's
@@ -68,7 +69,7 @@ report is read.
 | Source | The record | The live view |
 |---|---|---|
 | Structured stream: Vitest and Playwright (shipped reporters), nextest libtest JSON, go `-json`, the python and arduino runners Crucible owns | the stream file | the same stream, as it is written |
-| Console only: `bun test`, maven | the JUnit report | the console result lines |
+| Console only: `bun test`, maven | the JUnit report | the console result lines, read on the board by a view codec (`bun test`'s by CR-CRU-201's `bun-console`) |
 
 ### Event format (user ruling)
 
