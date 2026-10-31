@@ -15,7 +15,8 @@ decides discovery unless the caller states `--start-dir`/`--pattern`.
 Every run drives the REAL `clients/python-crucible.py` as an OS subprocess on
 a scratch project filing to a recording board named by the project's own
 `crucible.toml`; what ran is read from the one /api/v2/runs ingest the board
-received.
+received -- a pytest run's JUnit reports, or, for a unittest run closed from
+its stream, the stream the board holds for the run that ingest names.
 
 Invocation:
     python3 -m unittest tests.client.test_a_pytest_run_takes_node_ids_and_the_projects_discovery -v
@@ -30,6 +31,8 @@ from tests.client.pytest_project_harness import (
     diag,
     leaves,
     require_pytest_and_coverage,
+    streamed_counts,
+    streamed_leaves,
 )
 
 
@@ -166,9 +169,14 @@ class WithoutPytestTheUnittestDefaultsStandTest(unittest.TestCase):
         ingests = self.project.runs_ingests()
         self.assertEqual(len(ingests), 1,
                          f"{verb}: exactly one /api/v2/runs ingest; {diag(result)}")
-        self.assertEqual(leaves(ingests[0]), [("test_counted", "pass")],
+        close = ingests[0]
+        self.assertEqual((close.get("codec"), "data" in close), ("crucible-events", False),
+                         f"{verb}: a unittest run closes from its stream, carrying no "
+                         f"report; {diag(result)}")
+        board = self.project.board
+        self.assertEqual(streamed_leaves(board, close), [("test_counted", "pass")],
                          f"{verb}: start dir `tests`, pattern `test_*.py`; {diag(result)}")
-        self.assertEqual(counts(ingests[0]),
+        self.assertEqual(streamed_counts(board, close),
                          {"total": 1, "passed": 1, "failed": 0, "pending": 0},
                          f"{verb}: {diag(result)}")
         self.assertEqual(result.returncode, 0, f"{verb}: {diag(result)}")
