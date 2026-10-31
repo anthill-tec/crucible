@@ -27,6 +27,32 @@ Vitest or Playwright run reaches the board only at exit.
 - **Playwright's steps.** They ride the stream: each Gherkin step is an event, and the board keeps the steps the
   `playwright` codec keeps today.
 
+## Codec selection, and the Model B contract (user rulings 2026-10-31, after CR-CRU-201)
+
+- **Codecs are named by the framework or format whose output they parse, never by stack.** Examples: `junit`,
+  `crucible-events`, `bun-console`, `lcov`, `jacoco`; a Maven console view codec (CR-CRU-203) is `surefire-console`.
+  A codec is then reused across stacks wherever the output matches.
+- **A project selects its codecs by the testing tools of each test modality it runs:**
+  - unit;
+  - regression;
+  - BDD where it is needed (mostly front-end and UI projects, e.g. playwright-bdd via `bddgen`, as this repo's `test:e2e`).
+
+  Coverage follows the same rule: the coverage codec follows the coverage tool, never the stack.
+- **`crucible.targets` records those choices.** It is the project's declaration of its tools per modality, and the client
+  configures the project on the board from it. This CR's gap analysis defines its shape, and the per-project
+  configuration requirements, as a contract another tool can write.
+- **Model B adopts it** (to be shared with Model B at this CR's gap analysis, by Sandesh request). modelb-axi's
+  project-specific verbs each implement it:
+
+  | Verb | What it does with the table |
+  |---|---|
+  | `init` (a new project) | interactively offers the test tools per modality for the selected stacks, and writes the table |
+  | `migrate` (a legacy project) | detects the tools and the older declarations, proposes a table and confirms it with the user |
+  | `update` / `agents` (newer versions) | brings an older table or older declarations to the current shape |
+
+- **Which client stacks this CR covers** (bun only, or python, maven, rust and arduino too) is settled at this CR's gap
+  analysis.
+
 ## Steps
 
 Written at this CR's gap analysis. One known reach item: `tests/docs-live-test-stream-design-record.test.ts` pins the

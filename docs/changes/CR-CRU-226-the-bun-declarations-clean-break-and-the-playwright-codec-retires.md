@@ -24,6 +24,18 @@ stream.
 - **Retirement.** Playwright's JSON report and the board's `playwright` codec retire.
 - **Migration.** This repo's `package.json` and the Vitest fixture move to the table, in the same unit as the break: this
   repo dog-foods its own client.
+- **Readings keyed by the declared framework, not the stack** (user ruling 2026-10-31, after CR-CRU-201). Codecs are
+  named by framework or format, and a project selects them by the tools of each modality it runs (CR-CRU-225). Two
+  readings inside the `junit` codec still switch on the client's stack:
+  - `parseJunit` groups cases by classname when `stack === "python"` and the suite is named `pytest`. That is pytest's
+    shape.
+  - `readJunitRawOutput` reads the console as bun's only when `stack === "bun"`. That is the `bun test` console's
+    failure detail.
+
+  Both are re-keyed by the framework the project declares in `crucible.targets`, so they apply to any stack running
+  that framework. The `stack` field stays only as the run's label.
+- **BDD as well as unit.** The declarations this CR enforces cover BDD frameworks (mostly front-end and UI) as well as
+  unit runners.
 
 ## Steps
 
@@ -37,6 +49,8 @@ Made exact at the gap analysis. At least:
       anything is posted, naming `crucible.targets`.
 - [ ] No `playwright` codec is registered, and nothing declares one.
 - [ ] This repo's own runs file through the table at every commit of the CR.
+- [ ] Neither `junit` reading switches on `stack`. Each applies to a run whose declared framework is pytest or
+      `bun test`, whatever its stack.
 
 ## Non-goals
 
