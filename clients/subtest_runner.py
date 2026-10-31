@@ -226,19 +226,19 @@ class StreamingTestResult(unittest.TextTestResult):
 
     # -- the run --------------------------------------------------------
 
-    def startTestRun(self) -> None:  # noqa: N802 -- unittest's name
+    def startTestRun(self) -> None:
         super().startTestRun()
         self._run_started = time.perf_counter()
         self.events.write({"event": "run-start", "total": self.total})
 
-    def stopTestRun(self) -> None:  # noqa: N802 -- unittest's name
+    def stopTestRun(self) -> None:
         self.events.write({"event": "run-end", **self._counts,
                            "duration_ms": _whole_ms(self._ms_since(self._run_started))})
         super().stopTestRun()
 
     # -- one test -------------------------------------------------------
 
-    def startTest(self, test: Any) -> None:  # noqa: N802 -- unittest's name
+    def startTest(self, test: Any) -> None:
         self._subtest_maps = []
         self._current = test
         self._outcome = None
@@ -246,7 +246,7 @@ class StreamingTestResult(unittest.TextTestResult):
         self._test_started = self._case_mark = time.perf_counter()
         super().startTest(test)
 
-    def stopTest(self, test: Any) -> None:  # noqa: N802 -- unittest's name
+    def stopTest(self, test: Any) -> None:
         if test is self._current and self._outcome is not None:
             status, failure = self._outcome
             duration = (self._duration * 1000.0 if self._duration is not None
@@ -256,26 +256,26 @@ class StreamingTestResult(unittest.TextTestResult):
         self._current = None
         super().stopTest(test)
 
-    def addDuration(self, test: Any, elapsed: float) -> None:  # noqa: N802 -- unittest's name
+    def addDuration(self, test: Any, elapsed: float) -> None:
         super().addDuration(test, elapsed)
         if test is self._current:
             self._duration = elapsed
 
-    def addSuccess(self, test: Any) -> None:  # noqa: N802 -- unittest's name
+    def addSuccess(self, test: Any) -> None:
         if self._subtest_maps:
             return
         super().addSuccess(test)
         self._settle(test, "pass", None)
 
-    def addFailure(self, test: Any, err: Any) -> None:  # noqa: N802 -- unittest's name
+    def addFailure(self, test: Any, err: Any) -> None:
         super().addFailure(test, err)
         self._failed(test, err)
 
-    def addError(self, test: Any, err: Any) -> None:  # noqa: N802 -- unittest's name
+    def addError(self, test: Any, err: Any) -> None:
         super().addError(test, err)
         self._failed(test, err)
 
-    def addSkip(self, test: Any, reason: str) -> None:  # noqa: N802 -- unittest's name
+    def addSkip(self, test: Any, reason: str) -> None:
         super().addSkip(test, reason)
         if isinstance(test, _SubTest):
             self._subtest_maps.append(_params_maps(test))
@@ -285,15 +285,15 @@ class StreamingTestResult(unittest.TextTestResult):
         else:
             self._settle(test, "pending", None)
 
-    def addExpectedFailure(self, test: Any, err: Any) -> None:  # noqa: N802 -- unittest's name
+    def addExpectedFailure(self, test: Any, err: Any) -> None:
         super().addExpectedFailure(test, err)
         self._settle(test, "pending", None)
 
-    def addUnexpectedSuccess(self, test: Any) -> None:  # noqa: N802 -- unittest's name
+    def addUnexpectedSuccess(self, test: Any) -> None:
         super().addUnexpectedSuccess(test)
         self._settle(test, "fail", dict(_UNEXPECTED_SUCCESS))
 
-    def addSubTest(self, test: Any, subtest: Any, err: Any) -> None:  # noqa: N802 -- unittest's name
+    def addSubTest(self, test: Any, subtest: Any, err: Any) -> None:
         maps = _params_maps(subtest)
         if err is not None:
             self._subtest_maps.append(maps)
@@ -387,7 +387,7 @@ def streaming_runner_class(events: EventStream) -> type:
             self._total = test.countTestCases()
             return super().run(test)
 
-        def _makeResult(self) -> Any:  # noqa: N802 -- unittest's name
+        def _makeResult(self) -> Any:
             result = cast(StreamingTestResult, super()._makeResult())
             result.events = events
             result.total = self._total
