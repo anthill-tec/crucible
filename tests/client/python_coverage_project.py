@@ -17,6 +17,7 @@ counts once per statement.
 
 import contextlib
 import io
+import json
 import os
 import shutil
 import signal
@@ -25,7 +26,6 @@ import sys
 import tempfile
 import textwrap
 import time
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
@@ -166,8 +166,8 @@ TOOL_TEST_SOURCE = textwrap.dedent('''\
     ''')
 
 
-# A suite whose runner dies mid-test before writing any report: no JUnit XML,
-# no "Ran 0 tests", no traceback -- the no-report shape.
+# A suite whose runner dies mid-test: its stream holds no `test-end` (a
+# `run-start` at most), no "Ran 0 tests", no traceback -- the no-report shape.
 DIES_TEST_SOURCE = textwrap.dedent('''\
     import os
     import unittest
@@ -177,30 +177,13 @@ DIES_TEST_SOURCE = textwrap.dedent('''\
             os._exit(3)
     ''')
 
-# A suite whose runner leaves a report holding zero results and exits
-# non-zero -- the ran-nothing shape. The report goes where the runner was
-# told to write its reports (`-o`).
-RAN_NOTHING_TEST_SOURCE = textwrap.dedent('''\
-    import os
-    import sys
-    import unittest
-
-    def _reports_dir():
-        argv = sys.argv
-        for i, arg in enumerate(argv):
-            if arg == "-o" and i + 1 < len(argv):
-                return argv[i + 1]
-        raise RuntimeError("no -o reports dir on " + repr(argv))
-
-    class LeavesAnEmptyReportTest(unittest.TestCase):
-        def test_the_runner_leaves_an_empty_report_and_exits_non_zero(self):
-            path = os.path.join(_reports_dir(), "TEST-ran_nothing.Empty.xml")
-            with open(path, "w") as f:
-                f.write('<?xml version="1.0"?><testsuite name="ran_nothing.Empty" '
-                        'tests="0" errors="0" failures="0" skipped="0">'
-                        '</testsuite>')
-            os._exit(3)
-    ''')
+# The stream a runner that ran nothing leaves: a `run-start` and a `run-end`,
+# both stating zero tests, and no `test-end` (CR-CRU-224). The ran-nothing
+# shape is that stream with a non-zero exit.
+RAN_NOTHING_STREAM = ('{"event": "run-start", "total": 0}\n'
+                      '{"event": "run-end", "total": 0, "passed": 0, "failed": 0, '
+                      '"pending": 0, "duration_ms": 0}\n')
+RAN_NOTHING_EXIT = 3
 
 # A suite that says it has started (by writing the file the environment
 # names) and then blocks until the run is interrupted.
@@ -394,22 +377,22 @@ def ingested_coverage(board):
     return sent[-1].get("coverage")
 
 
-def sent_report_counts(board):
-    """`(total, failed)` over the JUnit report texts the last `/api/v2/runs`
-    ingest carried as `data` -- its `<testcase>` elements, and those carrying
-    a `<failure>` or `<error>` -- or None when the run sent no report. The
-    client parses none of them; this is what the board's codec reads."""
+def sent_stream_counts(board):
+    """`(total, failed)` over the stream a unittest run's close filed
+    (CR-CRU-224): the `test-end` events the board holds for the `runId` the
+    last `/api/v2/runs` close carried with `codec: "crucible-events"`, and
+    those whose status is `fail` -- or None when the run sent no stream
+    close. The client counts none of them; this is what the board's codec
+    reads."""
     sent = [body for path, body in board.posts() if path == "/api/v2/runs"]
-    if not sent or not isinstance(sent[-1], dict):
+    if (not sent or not isinstance(sent[-1], dict)
+            or sent[-1].get("codec") != "crucible-events"):
         return None
-    total = failed = 0
-    for text in sent[-1].get("data") or []:
-        root = ET.fromstring(text)  # noqa: S314 - the report this test's own run wrote
-        for case in root.iter("testcase"):
-            total += 1
-            if case.find("failure") is not None or case.find("error") is not None:
-                failed += 1
-    return total, failed
+    ends = [event for event in (json.loads(line) for line in
+                                board.held_stream(sent[-1].get("runId")).splitlines()
+                                if line.strip())
+            if event.get("event") == "test-end"]
+    return len(ends), sum(1 for event in ends if event.get("status") == "fail")
 
 
 def line_counts(coverage):
@@ -445,6 +428,35 @@ def write_starved_python(test):
         "import os\n"
         "import sys\n"
         "os.execv(sys.executable, [sys.executable, '-S', '-E'] + sys.argv[1:])\n",
+        encoding="utf-8")
+    shim.chmod(0o755)
+    return str(shim)
+
+
+def write_ran_nothing_python(test):
+    """A real interpreter whose suite run (any command naming the client's
+    `subtest_runner.py`, under `coverage run` or not) ran nothing: it writes
+    `RAN_NOTHING_STREAM` to the file `CRUCIBLE_STREAM` names, taking the
+    variable out of its own environment first, and exits `RAN_NOTHING_EXIT`.
+    Every other command -- a probe, the gate's py_compile, an erase, the
+    report -- is handed to the repo's own interpreter. Lives outside any
+    scratch project, so it is never measured."""
+    bin_dir = tempfile.mkdtemp(prefix="coverage-config-ran-nothing-")
+    test.addCleanup(shutil.rmtree, bin_dir, ignore_errors=True)
+    shim = Path(bin_dir, "ran-nothing-python")
+    shim.write_text(
+        f"#!{REAL_VENV_PYTHON}\n"
+        "import os\n"
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if any(os.path.basename(arg) == 'subtest_runner.py' for arg in args):\n"
+        "    stream = os.environ.pop('CRUCIBLE_STREAM', None)\n"
+        "    if stream:\n"
+        "        with open(stream, 'w', encoding='utf-8') as handle:\n"
+        f"            handle.write({RAN_NOTHING_STREAM!r})\n"
+        "    sys.stderr.write('ran-nothing-python: no test ran\\n')\n"
+        f"    sys.exit({RAN_NOTHING_EXIT})\n"
+        "os.execv(sys.executable, [sys.executable] + args)\n",
         encoding="utf-8")
     shim.chmod(0o755)
     return str(shim)

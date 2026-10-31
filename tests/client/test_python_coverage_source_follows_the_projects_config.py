@@ -40,7 +40,6 @@ from tests.client.python_coverage_project import (  # noqa: E402
     FAILING_TEST_SOURCE,
     LCOV_UNAVAILABLE,
     NO_REPORT_CODE,
-    RAN_NOTHING_TEST_SOURCE,
     REAL_VENV_PYTHON,
     REPO_ROOT,
     TESTS_COVERED,
@@ -56,13 +55,14 @@ from tests.client.python_coverage_project import (  # noqa: E402
     drive_interrupted,
     ingested_coverage,
     line_counts,
-    sent_report_counts,
+    sent_stream_counts,
     load_client,
     make_project,
     scrubbed_coverage_env,
     source_values,
     subprocess_files,
     warnings_with_code,
+    write_ran_nothing_python,
     write_starved_python,
 )
 
@@ -79,8 +79,8 @@ class _CoverageRunCase(unittest.TestCase):
     def setUp(self):
         self.assertTrue(
             REAL_VENV_PYTHON.exists(),
-            f"these tests need the repo's interpreter with coverage.py and "
-            f"unittest-xml-reporting installed, at {REAL_VENV_PYTHON}")
+            f"these tests need the repo's interpreter with coverage.py "
+            f"installed, at {REAL_VENV_PYTHON}")
 
     def _the_coverage_run_line(self, label, result):
         lines = coverage_run_lines(result.err)
@@ -197,7 +197,7 @@ class UndeclaredSourceMeasuresTheProjectTest(_CoverageRunCase):
                     CORE_TOTAL + EXTRA_TOTAL + TESTS_TOTAL,
                     CORE_COVERED + EXTRA_COVERED + TESTS_COVERED)
                 self.assertEqual(
-                    (sent_report_counts(result.board) or (None, None))[1], 0,
+                    (sent_stream_counts(result.board) or (None, None))[1], 0,
                     f"{label}: the run is green; {result.describe()}")
                 self._assert_one_undeclared_warning(label, result)
 
@@ -209,7 +209,7 @@ class UndeclaredSourceMeasuresTheProjectTest(_CoverageRunCase):
                     extra_files={"tests/test_fails.py": FAILING_TEST_SOURCE})
                 result = drive(project_dir, board, verb)
                 self.assertEqual(
-                    (sent_report_counts(result.board) or (None, None))[1], 1,
+                    (sent_stream_counts(result.board) or (None, None))[1], 1,
                     f"{label}: fixture -- the deliberately failing test makes "
                     f"the run red; {result.describe()}")
                 self._assert_one_undeclared_warning(label, result)
@@ -277,17 +277,17 @@ class UndeclaredWarningRidesEveryFailureEnvelopeTest(_CoverageRunCase):
                 self._assert_one_undeclared_warning(label, result)
 
     def test_a_ran_nothing_envelope_carries_the_warning(self):
+        """The ran-nothing shape is a stream stating zero tests and a
+        non-zero exit (CR-CRU-224): the run's interpreter writes it
+        (`write_ran_nothing_python`), as the runner it stands in for would."""
         for label, verb in VERBS:
             with self.subTest(verb=label):
-                project_dir, board = make_project(
-                    self, base_files(),
-                    extra_files={"empty_report/__init__.py": "",
-                                 "empty_report/test_empty_report.py":
-                                     RAN_NOTHING_TEST_SOURCE})
-                result = drive(project_dir, board, verb, start_dir="empty_report")
+                project_dir, board = make_project(self, base_files())
+                result = drive(project_dir, board, verb,
+                               python=write_ran_nothing_python(self))
                 self.assertIn(
                     "holds no results", result.err,
-                    f"{label}: fixture -- a report with zero results and a "
+                    f"{label}: fixture -- a stream with zero results and a "
                     f"non-zero exit is the ran-nothing failure; "
                     f"{result.describe()}")
                 self.assertIs((result.axi or {}).get("ok"), False, result.describe())
@@ -423,7 +423,7 @@ class SubprocessCoverageIsReportedTest(_CoverageRunCase):
                         f"{label} / {placement}", result,
                         CORE_TOTAL + TOOL_TOTAL, CORE_COVERED + TOOL_COVERED)
                     self.assertEqual(
-                        (sent_report_counts(result.board) or (None, None))[1], 0,
+                        (sent_stream_counts(result.board) or (None, None))[1], 0,
                         f"{label} / {placement}: {result.describe()}")
 
 

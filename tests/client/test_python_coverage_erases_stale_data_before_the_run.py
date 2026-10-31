@@ -40,7 +40,7 @@ from tests.client.python_coverage_project import (  # noqa: E402
     drive,
     ingested_coverage,
     line_counts,
-    sent_report_counts,
+    sent_stream_counts,
     make_project,
     plant_earlier_parallel_data,
 )
@@ -83,8 +83,8 @@ class _StaleDataCase(unittest.TestCase):
     def setUp(self):
         self.assertTrue(
             REAL_VENV_PYTHON.exists(),
-            f"these tests need the repo's interpreter with coverage.py and "
-            f"unittest-xml-reporting installed, at {REAL_VENV_PYTHON}")
+            f"these tests need the repo's interpreter with coverage.py "
+            f"installed, at {REAL_VENV_PYTHON}")
 
     def _assert_only_this_runs_coverage(self, label, result,
                                         expected=(CORE_TOTAL, CORE_COVERED)):
@@ -181,7 +181,7 @@ class AnEarlierRunsCombinedDataFileIsNotMergedTest(_StaleDataCase):
 
                 second = drive(project_dir, board, verb, start_dir="small")
                 self.assertEqual(
-                    sent_report_counts(second.board), (1, 0),
+                    sent_stream_counts(second.board), (1, 0),
                     f"{label}: fixture -- the second run is the smaller one; "
                     f"{second.describe()}")
                 self._assert_only_this_runs_coverage(label, second)
