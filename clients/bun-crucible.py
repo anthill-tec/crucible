@@ -344,11 +344,19 @@ def _recognise_completion(line):
     return bool(_COMPLETION_LINE.match(text)), None
 
 
-def _narrator(project_dir, agent_id, identity, total):
+def _narrator(project_dir, agent_id, identity, total, relay=None):
     """This client's `RunNarrator`: bun's recogniser, the prescanned total, and
     a tick that reports through the gated identity — if the row is pruned
-    mid-run and a tick re-creates it, this run owns that ghost."""
+    mid-run and a tick re-creates it, this run owns that ghost.
+
+    CR-CRU-201 \u00a7S4 step 6 \u2014 with a console `relay`, the in-run `running N/M`
+    ticks are not posted while it sends (its batches keep the agent alive);
+    once the board stops it, they resume, so the run is never swept as a dead
+    agent's. The closing `ran N/M` and `ingesting\u2026` are posted either way."""
     def _tick(message):
+        if (relay is not None and relay.stopped is None
+                and message.startswith(_IN_RUN_TICK)):
+            return
         resp = _register_agent(project_dir, agent_id, message)
         if identity is not None:
             identity.observe(resp)
@@ -362,6 +370,114 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None):
     byte-identical for the `raw` the board reads failure detail from. CR-CRU-017 §S4: a
     signal trap raising through the read reaps the runner before it propagates."""
     return _axi().run_streamed(cmd, cwd, env, log_path, narrator)
+
+
+# ── CR-CRU-201 §S4 — the console relay ──────────────────────────────────────
+#
+# A run whose console is bun's own (this client's `bun test`, or a declared
+# script with no report declaration) writes that console, as `run_streamed`
+# reads it, to `<reports dir>/bun-console.log`, and the shared `StreamRelay`
+# (CR-CRU-224 §S2) follows the file to the open run under the board's
+# `bun-console` view codec. It relays only when the board's health lists that
+# codec under `codecs.view`; otherwise the run is exactly as before.
+
+CONSOLE_FILE = "bun-console.log"
+CONSOLE_CODEC = "bun-console"
+# How long the relay's `finish` may take once the runner exited, and once a
+# signal interrupted the run.
+_CONSOLE_FINISH_SECONDS = 60.0
+_INTERRUPTED_FINISH_SECONDS = 5.0
+# The prefix of `RunNarrator`'s in-run ticks, which a live relay stands in for.
+_IN_RUN_TICK = "running "
+
+
+def _board_reads_console(health):
+    """(PURE) True only when the board's `health` answer lists `bun-console`
+    in a `codecs.view` list."""
+    codecs = health.get("codecs") if isinstance(health, dict) else None
+    view = codecs.get("view") if isinstance(codecs, dict) else None
+    return isinstance(view, list) and CONSOLE_CODEC in view
+
+
+def _console_health(args):
+    """The board's health, read before the run opens, for a run whose console
+    may relay; None for a run that opens none (`--no-lifecycle`)."""
+    if not _lifecycle_enabled(args):
+        return None
+    return _get(_axi().INGEST_HEALTH_PATH)
+
+
+def _relay_post(path, payload, timeout=None):
+    """The relay's poster: one POST bounded by the relay's own `timeout`."""
+    return _request("POST", path, payload, timeout)
+
+
+def _console_relay(project_dir, agent_id, run_id, reports_dir, health):
+    """A started `StreamRelay` following `<reports_dir>/bun-console.log` to the
+    open run `run_id` under `bun-console`, or None when the run does not relay:
+    no run is open, or `health` does not list the codec under `codecs.view`."""
+    if not run_id or not _board_reads_console(health):
+        return None
+    relay = _axi().StreamRelay(_relay_post, _project_key(project_dir), agent_id,
+                               run_id, os.path.join(reports_dir, CONSOLE_FILE),
+                               CONSOLE_CODEC, _axi()._ingest_body_limit(health))
+    relay.start()
+    return relay
+
+
+def _finish_console_relay(relay, deadline_seconds):
+    """Finish the relay (when one runs) within `deadline_seconds`, sending what
+    the board has not acknowledged; answer the `held` the board confirmed (0
+    when no relay ran). A failure is the relay's to say, once, on stderr: it
+    never changes the run or its exit."""
+    if relay is None:
+        return 0
+    held, _stopped = relay.finish(deadline_seconds)
+    return held
+
+
+class _ConsoleTee:
+    """The line observer `run_streamed` is handed on a relayed run: each line
+    of the runner's combined output is written to the console file as read,
+    then handed to the narrator. A write that fails is said once on stderr and
+    ends the writing, never the run."""
+
+    def __init__(self, handle, path, narrator):
+        self._handle = handle
+        self._path = path
+        self._narrator = narrator
+
+    def observe(self, line):
+        """Write one line to the console file, then hand it to the narrator."""
+        if self._handle is not None:
+            try:
+                self._handle.write(line)
+                self._handle.flush()
+            except OSError as exc:
+                self._handle = None
+                print(f"[crucible] WARN: the console {self._path} could not be "
+                      f"written ({exc}) \u2014 the run continues", file=sys.stderr)
+        if self._narrator is not None:
+            self._narrator.observe(line)
+
+
+@contextlib.contextmanager
+def _console_observer(relay, reports_dir, narrator):
+    """The observer the run is handed: the narrator itself when nothing
+    relays, otherwise a `_ConsoleTee` writing `<reports_dir>/bun-console.log`
+    for the relay to follow. A console file that cannot be opened is said
+    once on stderr, and the run goes on with the narrator alone."""
+    path = os.path.join(reports_dir, CONSOLE_FILE)
+    with contextlib.ExitStack() as stack:
+        handle = None
+        if relay is not None:
+            try:
+                handle = stack.enter_context(
+                    open(path, "w", encoding="utf-8", newline=""))
+            except OSError as exc:
+                print(f"[crucible] WARN: the console {path} could not be opened "
+                      f"({exc}) \u2014 nothing of it is relayed", file=sys.stderr)
+        yield narrator if handle is None else _ConsoleTee(handle, path, narrator)
 
 
 @contextlib.contextmanager
@@ -495,7 +611,8 @@ def _wipe(reports_dir, *extra):
     write (the RAW report a declared target produces for server-side decode).
     A stale one left in place is worse than none: the ingest would succeed and
     file the PREVIOUS run's evidence under this run's agent."""
-    for path in (_junit_path(reports_dir), *extra):
+    for path in (_junit_path(reports_dir),
+                 os.path.join(reports_dir, CONSOLE_FILE), *extra):
         if os.path.exists(path):
             with contextlib.suppress(OSError):
                 os.remove(path)
@@ -840,12 +957,22 @@ def _run_left_open_help():
     return _axi().run_left_open_help()
 
 
-def _start_run(project_dir, agent_id, tier=None, context=None, release=None):
+def _start_run(project_dir, agent_id, tier=None, context=None, release=None,
+               total=None):
     """Open the run BEFORE the tool is spawned. Returns `(run_id, warnings)`,
     through the shared `open_run`: a refusal degrades to single-shot with a
     warning naming the fallback; an `ok` answer with no runId is a server that
-    simply did not open one, and the ingest is the unchanged single-shot POST."""
-    return _axi().open_run(_post, _project_key(project_dir), agent_id, _STACK,
+    simply did not open one, and the ingest is the unchanged single-shot POST.
+
+    CR-CRU-201 \u00a7S4 step 2 \u2014 `total`, when given, rides the start body as its
+    `total`: the prescanned count of a run whose scan covers what runs."""
+    post_fn = _post
+    if total is not None:
+        def post_fn(path, payload):
+            if path == _axi().RUN_START_PATH:
+                payload = {**payload, "total": total}
+            return _post(path, payload)
+    return _axi().open_run(post_fn, _project_key(project_dir), agent_id, _STACK,
                            tier=tier, context=context, release=release)
 
 
@@ -1022,7 +1149,7 @@ def cmd_test(args, tier=None):
     log_path = getattr(args, "log", None)
     if args.agent and not log_path:
         log_path = os.path.join(reports_dir, "run.log")
-    narrator = None
+    narrator, relay = None, None
     with _axi().gated_run(project_dir, args.agent,
                           getattr(args, "cycle", None),
                           "gated test run starting",
@@ -1043,13 +1170,21 @@ def cmd_test(args, tier=None):
             # live and the §S2c run.log keeps its result-line block boundaries.
             for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
-            narrator = _narrator(project_dir, args.agent, identity,
-                                 _prescan_test_total(package_dir, args.tests))
+            scanned = _prescan_test_total(package_dir, args.tests)
+            # CR-CRU-201 \u00a7S4 \u2014 this client's own `bun test` relays its
+            # console when the board reads it; the start then carries the
+            # scan's total, unless a name filter runs fewer than it counts.
+            health = _console_health(args)
+            reads_console = _board_reads_console(health)
             if _lifecycle_enabled(args):
-                run_id, run_warnings = _start_run(project_dir, args.agent,
-                                                  tier=tier,
-                                                  context=_run_context(),
-                                                  release=release)
+                run_id, run_warnings = _start_run(
+                    project_dir, args.agent, tier=tier, context=_run_context(),
+                    release=release,
+                    total=scanned if reads_console and name is None else None)
+            relay = _console_relay(project_dir, args.agent, run_id,
+                                   reports_dir, health)
+            narrator = _narrator(project_dir, args.agent, identity, scanned,
+                                 relay)
             # The pre-flight finding rides the SAME envelope warnings[] the
             # run's own lifecycle warnings do, ahead of them (it was decided
             # first) — §S3's second channel.
@@ -1063,12 +1198,22 @@ def cmd_test(args, tier=None):
         # handed, so an untiered `bun test` measures and warns about nothing.
         try:
             with _axi().ChildRunTiming() as timing, _abandon_trap(run_id), \
-                    _run_scoped_tmpdir(env) as run_env:
+                    _run_scoped_tmpdir(env) as run_env, \
+                    _console_observer(relay, reports_dir, narrator) as observer:
                 result = _run_logged(cmd, package_dir, run_env, log_path,
-                                     narrator)
+                                     observer)
         except _axi().RunAbandoned as abandoned:
+            # What the runner wrote before the signal reaches the board
+            # before the run is aborted.
+            _finish_console_relay(relay, _INTERRUPTED_FINISH_SECONDS)
             return _emit_run_abandoned("test", project_dir, args.agent,
                                        run_id, abandoned, run_warnings)
+        except BaseException:
+            _finish_console_relay(relay, 0)
+            raise
+        # \u00a7S4 step 4 \u2014 every exit below closes the run, so the relay is
+        # finished first and nothing is sent to the run after its close.
+        _finish_console_relay(relay, _CONSOLE_FINISH_SECONDS)
         print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
 
         if not args.agent:
@@ -1212,7 +1357,13 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     log_path = getattr(args, "log", None)
     if args.agent and not log_path:
         log_path = os.path.join(reports_dir, "run.log")
-    narrator = None
+    # CR-CRU-201 \u00a7S4 \u2014 a run whose console is bun's own may relay it: this
+    # verb's own `bun test`, or a declared script with no report declaration
+    # (no `crucible.reportPath` and no `crucible.rawReport` entry).
+    console_is_buns = script is None or (
+        raw_report is None
+        and _declared_report_mechanism(package_dir, script) is None)
+    narrator, relay = None, None
     with _axi().gated_run(project_dir, args.agent,
                           getattr(args, "cycle", None),
                           f"gated {verb} run starting",
@@ -1232,21 +1383,36 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
             # A `test` run counts the files it targets; every other run
             # walks the whole package.
             targets = getattr(args, "tests", None) if verb == "test" else None
-            narrator = _narrator(project_dir, args.agent, identity,
-                                 _prescan_test_total(package_dir, targets))
+            scanned = _prescan_test_total(package_dir, targets)
+            health = _console_health(args) if console_is_buns else None
+            reads_console = _board_reads_console(health)
             if _lifecycle_enabled(args):
-                run_id, run_warnings = _start_run(project_dir, args.agent,
-                                                  tier=tier,
-                                                  context=_run_context(),
-                                                  release=release)
+                # The scan covers what runs only for this verb's own
+                # `bun test`: a declared script's start carries no total.
+                run_id, run_warnings = _start_run(
+                    project_dir, args.agent, tier=tier, context=_run_context(),
+                    release=release,
+                    total=(scanned if reads_console and script is None
+                           and name is None else None))
+            relay = _console_relay(project_dir, args.agent, run_id,
+                                   reports_dir, health)
+            narrator = _narrator(project_dir, args.agent, identity, scanned,
+                                 relay)
             run_warnings = preflight_warnings + run_warnings
         try:
-            with _abandon_trap(run_id), _run_scoped_tmpdir(env) as run_env:
+            with _abandon_trap(run_id), _run_scoped_tmpdir(env) as run_env, \
+                    _console_observer(relay, reports_dir, narrator) as observer:
                 result = _run_logged(cmd, package_dir, run_env, log_path,
-                                     narrator)
+                                     observer)
         except _axi().RunAbandoned as abandoned:
+            _finish_console_relay(relay, _INTERRUPTED_FINISH_SECONDS)
             return _emit_run_abandoned(verb, project_dir, args.agent,
                                        run_id, abandoned, run_warnings)
+        except BaseException:
+            _finish_console_relay(relay, 0)
+            raise
+        # \u00a7S4 step 4 \u2014 finished before any exit below closes the run.
+        _finish_console_relay(relay, _CONSOLE_FINISH_SECONDS)
         runner = f"declared script `{script}`" if script else "bun test"
         print(f"[crucible] {runner} exit={result.returncode}", file=sys.stderr)
 
