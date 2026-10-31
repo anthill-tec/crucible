@@ -260,7 +260,7 @@ class StdoutClosedTest(_PipeCloseCase):
              "--python", fake, "--project-dir", self.project,
              "--reports", "reports", "--agent", AGENT], self.env())
         self.assert_clean_exit_despite_closed_stdout(rc, err)
-        self.assert_filed_inline_on_the_run_route()
+        self.assert_filed_from_its_stream_on_the_run_route()
 
     def test_rust_test_with_stdout_closed(self):
         write_fake_cargo(self.bin_dir)
