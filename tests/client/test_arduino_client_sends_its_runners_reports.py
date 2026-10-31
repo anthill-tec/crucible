@@ -1109,9 +1109,12 @@ class NoBoardNoFiguresTest(_ArduinoProject, unittest.TestCase):
 # tests hold, so neither shared module grows unnoticed. The arduino client's
 # move to the shared ingest grows `_crucible_run.py` (`junit_case_sources` in,
 # `filed_summary` out), so its budget is re-recorded at that size here and in
-# maven's and rust's tests; `_crucible_axi.py` does not grow. A change that
-# grows a shared module re-records its budget here, in the same change.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9088, "_crucible_run.py": 1134}
+# maven's and rust's tests; `_crucible_axi.py` does not grow. CR-CRU-224's
+# python stream relay grows `_crucible_run.py` again (`StreamRelay` and
+# `close_stream` in), so its budget is re-recorded at that size here and in
+# maven's and rust's tests; `_crucible_axi.py` still does not grow. A change
+# that grows a shared module re-records its budget here, in the same change.
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9088, "_crucible_run.py": 1398}
 
 # Names the arduino client's move to the shared ingest retires: its own
 # parsers and its own figures' emitter from the client, and the client-figure
