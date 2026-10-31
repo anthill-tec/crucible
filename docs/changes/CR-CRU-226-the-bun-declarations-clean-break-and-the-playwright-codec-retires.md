@@ -1,7 +1,7 @@
 # CR-CRU-226 — the bun declaration's clean break, and the playwright codec retires
 
-**Type** feature · **Points** 8 (to be re-scored at its gap analysis) · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-225 ·
-**Status** PENDING
+**Type** feature · **Points** 8 (to be re-scored at its gap analysis) · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-225,
+CR-CRU-228 · **Status** PENDING
 - **Filed 2026-10-31.** Split from CR-CRU-201 at its gap analysis. User ruling: three dog-food-safe units —
   CR-CRU-201, CR-CRU-225, then this CR.
 - CR-CRU-222's open declaration question (what a bun project's `regression` runs) is taken up at this CR's gap analysis,

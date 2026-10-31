@@ -137,8 +137,9 @@ CR-CRU-224:
 | CR-CRU-200 | the stream route, the `crucible-events` codec, the stream as the record and its completeness check, the body of `Store#runLive` and the change frames that move the live view | 152, 206, 219, 220, 223 |
 | CR-CRU-224 | the python client relays its runner's test stream; proven on the python runner Crucible owns | 200 |
 | CR-CRU-201 | bun's console live view: the board's view-only stream mode and the `bun-console` codec; the JUnit report stays the record (split 2026-10-31, user ruling) | 200, 224 |
-| CR-CRU-225 | the `crucible.targets` table declares a stream; the shipped Vitest and Playwright reporters stream the Crucible shape, Playwright's steps included | 200, 224 |
-| CR-CRU-226 | the clean break: `crucible.reportPath`, `crucible.rawReport` and `crucible.testScript` refused; Playwright's JSON report and codec retire | 225 |
+| CR-CRU-225 | the `crucible.targets` table declares each script's framework, record, console and coverage; the run carries its framework; the shipped Vitest reporter streams the Crucible shape | 200, 224, 201 |
+| CR-CRU-228 | the shipped Playwright reporter streams each scenario as a test with its steps; the specification view reads it (split from 225, 2026-11-01, user ruling) | 225 |
+| CR-CRU-226 | the clean break: `crucible.reportPath`, `crucible.rawReport` and `crucible.testScript` refused; Playwright's JSON report and codec retire | 225, 228 |
 | CR-CRU-202 | rust streams through nextest's libtest JSON | 200 |
 | CR-CRU-203 | the arduino runner streams; maven's console live view, through CR-CRU-201's view-only mode | 200, 201 |
 
