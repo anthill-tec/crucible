@@ -1420,9 +1420,12 @@ def _stream_counts(path):
 
 def _finish_relay(relay, deadline_seconds):
     """Stop the relay (when one runs), sending what the board has not
-    acknowledged within `deadline_seconds`."""
-    if relay is not None:
-        relay.finish(deadline_seconds)
+    acknowledged within `deadline_seconds`; answer the `held` the board
+    confirmed (0 when no relay ran)."""
+    if relay is None:
+        return 0
+    held, _stopped = relay.finish(deadline_seconds)
+    return held
 
 
 _ZERO_DISCOVERY_HELP = ("check --start-dir / --pattern; ensure the test dir "
@@ -1527,7 +1530,7 @@ def _streamed_run(verb, args, project_dir, agent, identity, cmd, env, *,
     except BaseException:
         _finish_relay(relay, 0)
         raise
-    _finish_relay(relay, _STREAM_FINISH_SECONDS)
+    held = _finish_relay(relay, _STREAM_FINISH_SECONDS)
     print(f"[crucible] {_runner_label(_UNITTEST)} exit={result.returncode}",
           file=sys.stderr)
     if run_id is None:
@@ -1542,7 +1545,11 @@ def _streamed_run(verb, args, project_dir, agent, identity, cmd, env, *,
             verb, STREAM_FILE, result.returncode, result.stdout or "", run_id,
             warnings, post_fn=_post, project_key=key, agent_id=agent,
             subject=_no_report_subject(verb, _UNITTEST))
-    wrote_no_test = bool(result.returncode) and count == 0
+    # The compile path needs all three: no `test-end` in the local stream,
+    # nothing of it the board holds, and a failed runner. A stream the board
+    # holds (a `run-start` the runner wrote before it died) is closed as a
+    # stream.
+    wrote_no_test = bool(result.returncode) and count == 0 and held == 0
     coverage_paths = []
     if collect_coverage is not None and not wrote_no_test:
         coverage_paths, missing = collect_coverage()
