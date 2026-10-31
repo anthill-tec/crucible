@@ -522,8 +522,12 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
     #
     # `stack` JOINED it: every ingest states the stack of the client that
     # produced it, a single-shot one included, so the body names `bun`.
-    SINGLE_SHOT_KEYS = {"projectKey", "agentId", "stack", "codec", "data",
-                        "raw", "runnerExit"}
+    #
+    # `framework` JOINED it (CR-CRU-225 §S2): every bun-client test run sends
+    # its framework, a single-shot one included, so a script with no
+    # `crucible.targets` entry names `bun-test`.
+    SINGLE_SHOT_KEYS = {"projectKey", "agentId", "stack", "framework", "codec",
+                        "data", "raw", "runnerExit"}
 
     def test_no_lifecycle_flag_makes_no_start_call_and_sends_no_run_id(self):
         server = _FakeCrucible()
@@ -547,6 +551,10 @@ class NoLifecycleOptOutIsSingleShotTest(_BaseCr017ClientTest):
         self.assertEqual(
             payload.get("stack"), "bun",
             "the single-shot body must name the stack that produced it")
+        self.assertEqual(
+            payload.get("framework"), "bun-test",
+            "the single-shot body of a script with no table entry names "
+            "framework bun-test")
         self.assertEqual(server.events[0].get("runtime_ms"), None,
                          "a single-shot event carries no lifecycle fields")
 
