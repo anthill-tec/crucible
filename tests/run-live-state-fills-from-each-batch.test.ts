@@ -125,7 +125,7 @@ const FIELD_STREAM = L_START + L_PASS + L_FAIL_OWN_ID + L_FAIL_BLANKS + L_PENDIN
 /** §S4's live state for FIELD_STREAM, field by field. */
 const FIELD_LIVE: RunLive = {
   completed: 6,
-  total: 5,
+  total: 6,
   passed: 2,
   failed: 3,
   pending: 1,
@@ -140,7 +140,7 @@ const FIELD_LIVE: RunLive = {
 /** The six counts CR-CRU-223's readers serve as `live` — never the failures. */
 const FIELD_COUNTS = {
   completed: 6,
-  total: 5,
+  total: 6,
   passed: 2,
   failed: 3,
   pending: 1,

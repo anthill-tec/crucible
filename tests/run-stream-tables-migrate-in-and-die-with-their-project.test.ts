@@ -162,6 +162,7 @@ const STREAM_COLUMNS: Record<(typeof RUN_STREAM_TABLES)[number], string[]> = {
     "decoded_offset",
     "undecodable",
     "cut",
+    "reader_state",
   ],
   run_live_failures: ["run_id", "position", "id", "name", "suite", "file", "message", "type"],
 };
@@ -214,7 +215,7 @@ function makeV20Store(): string {
 }
 
 describe("the store migrates v20 → v21 by creating the stream and live-state tables", () => {
-  test("a v20 store gains run_stream_batches, run_live and run_live_failures with their columns, and is stamped 21", () => {
+  test("a v20 store gains run_stream_batches, run_live and run_live_failures with their columns, and is stamped 22", () => {
     const dbPath = makeV20Store();
     // Preconditions, so the test can never pass by testing nothing.
     const before = new Database(dbPath);
@@ -228,11 +229,11 @@ describe("the store migrates v20 → v21 by creating the stream and live-state t
     const store = Store.open(dbPath);
     stores.push(store);
     expect(store.migration?.from).toBe(PRE_STREAM_VERSION);
-    expect(store.migration?.to).toBe(21);
-    expect(store.schemaVersion).toBe(21);
+    expect(store.migration?.to).toBe(22);
+    expect(store.schemaVersion).toBe(22);
 
     const db = dbOf(store);
-    expect(rawUserVersion(db)).toBe(21);
+    expect(rawUserVersion(db)).toBe(22);
     expect(tablesPresent(db)).toEqual(["run_live", "run_live_failures", "run_stream_batches"]);
     for (const table of RUN_STREAM_TABLES) {
       expect(columnsOf(db, table), table).toEqual(STREAM_COLUMNS[table]);
