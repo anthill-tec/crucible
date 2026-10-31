@@ -2,7 +2,7 @@
 // project rollups (PRD §4.2), agent lifecycle verbs (PRD §4.3). Every write
 // response carries `changed: true|false` (§S5). Shares the ONE store instance
 // with the v1 shim — src/server.ts wires handleV2 into its dispatcher.
-import { codecs, parseRunBody, parseStreamBody } from "./codecs/index.ts";
+import { codecs, isRecordStreamCodec, parseRunBody, parseStreamBody, viewCodecs } from "./codecs/index.ts";
 import type { Codec, IngestWarning } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
@@ -179,6 +179,8 @@ interface V2Body {
   dependsOn?: unknown;
   /** CR-CRU-022 §S1 — `cr-plan --points`: story points on the Fibonacci scale. */
   points?: unknown;
+  /** A run start's own count of the tests it is about to run. */
+  total?: unknown;
 }
 
 // §S3 — all help[] wording lives in src/hints.ts (one reviewable module).
@@ -1360,6 +1362,10 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
   if ("fail" in pk) return pk.fail;
   const badStack = refuseBadStack(body, "run NOT started");
   if (badStack !== null) return badStack;
+  const { total } = body;
+  if (total !== undefined && (typeof total !== "number" || !Number.isInteger(total) || total < 0)) {
+    return fail(400, "total must be an integer of 0 or more when present — run NOT started");
+  }
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
@@ -1372,6 +1378,7 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
     ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
+    ...(typeof total === "number" ? { total } : {}),
   });
   return json(
     {
@@ -1475,7 +1482,8 @@ async function handleRunStream(store: Store, runId: string, req: Request): Promi
   if (LONE_SURROGATE.test(data)) {
     return fail(400, `data holds a lone surrogate, which is no UTF-8 text — ${STREAM_REFUSED}`);
   }
-  if (typeof codec !== "string" || codecs.get(codec)?.stream !== true) {
+  // A record stream codec, or a view codec: the batch rules are one and the same.
+  if (typeof codec !== "string" || (!isRecordStreamCodec(codec) && !viewCodecs.has(codec))) {
     return fail(400, `codec ${String(codec)} is not a stream codec — ${STREAM_REFUSED}`);
   }
   const limit = ingestBodyBytes();
@@ -1793,12 +1801,14 @@ function refuseStreamCodecUse(codec: Codec, codecName: string, body: V2Body): Re
 /**
  * CR-CRU-200 §S3 — a run holding a stream is closed only with its stream
  * codec: `/runs` naming another codec, `/runs/parsed` and `/runs/compile`
- * are refused (400), nothing stored and the run left open.
+ * are refused (400), nothing stored and the run left open. Only a RECORD
+ * stream is held to this: a run holding a view stream closes through its
+ * report as a run with no stream does.
  */
 function refuseStreamedRunClose(store: Store, runId: string | undefined): Response | null {
   if (runId === undefined) return null;
   const codec = store.runStreamCodec(runId);
-  if (codec === null) return null;
+  if (codec === null || !isRecordStreamCodec(codec)) return null;
   return fail(400, `run ${runId} streams its record; close it with codec \`${codec}\` — run NOT stored`);
 }
 

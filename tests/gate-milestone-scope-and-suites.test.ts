@@ -294,7 +294,11 @@ describe("health states that the board records a gate's scope and suites", () =>
       const body = await getJson<Record<string, unknown>>(base, route);
       expect(body.ok).toBe(true);
       expect(body.milestones).toEqual({ gate: ["scope", "suites"] });
-      expect(body.codecs).toEqual({ test: ["crucible-events", "junit", "playwright"], coverage: ["jacoco", "lcov"] });
+      expect(body.codecs).toEqual({
+        test: ["crucible-events", "junit", "playwright"],
+        coverage: ["jacoco", "lcov"],
+        view: ["bun-console"],
+      });
     });
   }
 });

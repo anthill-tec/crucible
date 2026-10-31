@@ -3084,6 +3084,25 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       return RUN_STREAM_TABLES.every((table) => tableExists(db, table));
     },
   },
+  {
+    description:
+      "runs + run_live: a run start's own total is stored on its run (nullable `runs.total`), and a view stream's reader state between batches on its live row (nullable `run_live.reader_state`). Additive ALTERs: existing rows read NULL",
+    apply(db) {
+      // A table the store never had is created later in its CURRENT shape.
+      if (tableExists(db, "runs") && !columnsOf(db, "runs").has("total")) {
+        db.exec(`ALTER TABLE runs ADD COLUMN total INTEGER`);
+      }
+      if (tableExists(db, "run_live") && !columnsOf(db, "run_live").has("reader_state")) {
+        db.exec(`ALTER TABLE run_live ADD COLUMN reader_state TEXT`);
+      }
+    },
+    satisfiedBy(db) {
+      return (
+        (!tableExists(db, "runs") || columnsOf(db, "runs").has("total")) &&
+        (!tableExists(db, "run_live") || columnsOf(db, "run_live").has("reader_state"))
+      );
+    },
+  },
 ];
 
 /**
@@ -3548,7 +3567,10 @@ export class Store {
         event_id TEXT,
         -- The release the run was opened under (NULL: none), so an aborted
         -- verification run is still filed under its release.
-        release TEXT
+        release TEXT,
+        -- The run start's own count of the tests it is about to run (NULL:
+        -- none stated), the live read's total when the stream states none.
+        total INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_runs_open
@@ -5124,7 +5146,7 @@ export class Store {
   startRun(
     projectKey: string,
     agentId: string,
-    opts?: { tier?: Tier; stack?: string; context?: RunContext; release?: string },
+    opts?: { tier?: Tier; stack?: string; context?: RunContext; release?: string; total?: number },
   ): RunRecord {
     this.touchAgent(projectKey, agentId);
     const run: RunRecord = {
@@ -5141,8 +5163,8 @@ export class Store {
     this.db
       .query(
         `INSERT INTO runs (run_id, project_key, agent_id, started_at, tier, stack, context,
-           run_state, settled_at, abort_reason, event_id, release)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL, ?)`,
+           run_state, settled_at, abort_reason, event_id, release, total)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL, ?, ?)`,
       )
       .run(
         run.runId,
@@ -5153,6 +5175,7 @@ export class Store {
         run.stack ?? null,
         run.context !== undefined ? JSON.stringify(run.context) : null,
         run.release ?? null,
+        opts?.total ?? null,
       );
     // The dashboard's live "running…" card is driven off the same feed the
     // events stream already refreshes.
@@ -5379,8 +5402,9 @@ export class Store {
    * CR-CRU-200 §S3 — a run that streamed keeps what it streamed: its held
    * stream, read inside the same transaction, is decoded with the
    * `crucible-events` codec (`abortedStreamRecord`), and the event carries the
-   * tree, the counts and `incomplete`. A run that streamed nothing is aborted
-   * exactly as before. The batches and live state are deleted with it.
+   * tree, the counts and `incomplete`. A run that streamed nothing, or that
+   * holds a VIEW stream (never its record), is aborted exactly as before. The
+   * batches and live state are deleted with it.
    */
   private abortRun(
     run: RunRecord,
@@ -5390,7 +5414,8 @@ export class Store {
   ): RunEvent {
     return this.db.transaction((): RunEvent => {
       const held = heldStreamOf(this.db, run.runId);
-      const kept = held !== null ? abortedStreamRecord(held) : undefined;
+      // Only a RECORD stream is decoded; a view stream's run keeps nothing of it.
+      const kept = held !== null ? abortedStreamRecord(held) : null;
       const event: RunEvent = {
         id: this.nextEventId(),
         projectKey: run.projectKey,
@@ -5402,7 +5427,7 @@ export class Store {
         runtimeMs: at - run.startedAt,
         status: "aborted",
         abortReason: reason,
-        ...(kept !== undefined ? { summary: kept.summary, tree: kept.tree, incomplete: kept.incomplete } : {}),
+        ...(kept !== null ? { summary: kept.summary, tree: kept.tree, incomplete: kept.incomplete } : {}),
         ...(run.stack !== undefined ? { stack: run.stack } : {}),
         ...(run.context !== undefined ? { context: run.context } : {}),
         // An aborted verification run stays filed under its release.

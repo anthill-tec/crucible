@@ -72,7 +72,8 @@ batches, never as a file the board reads.
     reader state into the live state, and returns the new offset and reader state.
   - It has no `parse`. Because it is not in the report registry, every report and close route refuses `bun-console` as
     an unknown codec (400), with no per-route check.
-  - Health lists it under `codecs.view`; `codecs.test` and `codecs.stream` are unchanged.
+  - Health lists it under `codecs.view`; `codecs.test` and `codecs.coverage` are unchanged. The record stream codecs
+    keep their `stream: true` marker (RED 831 ruling).
 - **The stream route.** `POST /api/v2/runs/<runId>/stream` takes a codec from either the record stream codecs
   (`crucible-events`) or the view registry, under CR-CRU-200's rules unchanged:
   - offsets, overlap, gap, the size bound;
@@ -102,7 +103,8 @@ batches, never as a file the board reads.
   2. otherwise, the run's start total;
   3. with either source, never below `completed`, and with 0 read as no total.
 
-  `public/app.js`'s live count text reads that answer, so it never shows `1300/1280`.
+  `public/app.js`'s live count text reads that answer, so the board's live count never shows `1300/1280`.
+  `app.js` adds no cap of its own (RED 831 ruling).
 - **No batch yet.** An open run with a start total but no batch has no live state. `/live` answers 404 as today.
 
 ### §S3 — the `bun-console` codec
@@ -119,11 +121,10 @@ batches, never as a file the board reads.
     - `suite`: everything before the last ` > `, or `?`;
     - `file`: the current file, or `?`;
     - `message`: the married block's `error:` text, first line;
-    - `id`: `<suite>::<name>#<n>`, where `n` counts that `<suite>::<name>` among the run's live failures from 1, as
-      CR-CRU-200's fallback id does;
+    - `id`: `<suite>::<name>#<n>`, where `n` counts that `<suite>::<name>` among the run's live failures from 1;
   - **a skip or todo line:** `completed + 1`, `pending + 1`;
   - **a `<file>:` header:** sets `currentFile`;
-  - **a load-error block:** `failed + 1` and one failure, by `parseBunLoadErrors`' rule:
+  - **a load-error block:** `failed + 1` and one failure (`completed` unchanged), by `parseBunLoadErrors`' rule:
     - name `?`, suite `?`;
     - file: the file it names;
     - message: its `error:` line.
@@ -170,10 +171,11 @@ A script that declares an env report path or a raw report (this repo's `test:e2e
    The record of each is unchanged.
 5. **Failures never fail the run.** A relay failure is said once on stderr, and never changes the run or its exit.
 6. **Narration and liveness** (pre-review F1):
-   - while the relay is live, the narrator posts no in-run `running N/M`, because the relay's batches and quiet touches
-     keep the agent alive;
-   - once the relay stops (a refusal, a cut, an error), the narrator goes back to its `running N/M` ticks, so the run
-     is never swept as `agent died`;
+   - while the relay's last batch was HELD by the board, the narrator posts no in-run `running N/M`, because the
+     relay's batches and quiet touches keep the agent alive;
+   - whenever the relay is not landing batches (a refusal, a cut, or a 5xx or unreachable board it is retrying), the
+     narrator posts its `running N/M` ticks, so the run is never swept as `agent died`. Once a retried batch is held
+     again, the ticks stop again (VERIFY 833 finding 2, orchestrator ruling);
    - the closing `ran N/M` and `ingesting…` are posted as today;
    - an unrelayed run narrates as today.
 
@@ -196,7 +198,10 @@ A script that declares an env report path or a raw report (this repo's `test:e2e
   - `tests/gate-milestone-scope-and-suites.test.ts`'s codec lists;
   - `tests/a-streamed-run-closes-into-its-record.test.ts` (`stream: true` and its probe codec);
   - `tests/crucible-events-codec-reads-the-event-shape.test.ts` ("marked stream: true…");
-  - `tests/run-stream-tables-migrate-in-and-die-with-their-project.test.ts` (schema version 21 → 22).
+  - `tests/run-stream-tables-migrate-in-and-die-with-their-project.test.ts` (schema version 21 → 22);
+  - `tests/run-live-state-fills-from-each-batch.test.ts` (the live total capped at `completed`);
+  - `tests/clients-narration.test.ts`: its narration tests stay about an UNRELAYED run, so their in-process board lists
+    no view codec while they run (VERIFY 833 finding 1, orchestrator ruling).
 
   A test edit that changes what a test asserts is the orchestrator's ruling, in its own commit.
 - **The close-out:** `SHARED_MODULE_LINE_BUDGETS` and the `PROSE_CITATIONS` heads are re-measured and re-recorded once
@@ -215,7 +220,7 @@ A script that declares an env report path or a raw report (this repo's `test:e2e
 
 - [ ] **AC1 — the view registry and the close.**
   - `bun-console` is in the view registry and not in the report registry.
-  - Health lists it under `codecs.view`, and leaves `codecs.test` and `codecs.stream` unchanged.
+  - Health lists it under `codecs.view`, and leaves `codecs.test` and `codecs.coverage` unchanged.
   - Sent as a body report, a raw report, or as any close's codec, it is refused as unknown (400).
   - The stream route takes it under CR-CRU-200's rules: offsets, overlap, gap, the size bound, the codec fixed by the
     first batch, the quiet touch and the throttled frames, each shown for a view stream.

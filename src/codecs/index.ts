@@ -1,6 +1,7 @@
 // CR-CRU-002 §S3 — codec registry. Ingest paths look up a codec by name so
 // adding a codec never touches core.
-import type { Coverage, RunSchema, SuiteNode } from "../types.ts";
+import type { Coverage, RunLive, RunSchema, SuiteNode } from "../types.ts";
+import { bunConsoleView } from "./bun-console-view.ts";
 import { coverageCodecs, decodeCoverage } from "./coverage.ts";
 import type { CoverageCodec } from "./coverage.ts";
 import { parseCrucibleEvents } from "./crucible-events.ts";
@@ -77,9 +78,41 @@ export const codecs: Map<string, Codec> = new Map<string, Codec>([
   ],
 ]);
 
-/** The names this board decodes, for health: test and coverage codecs, sorted. */
-export function codecNames(): { test: string[]; coverage: string[] } {
-  return { test: [...codecs.keys()].sort(), coverage: [...coverageCodecs.keys()].sort() };
+/** Whether `name` is a RECORD stream codec: a report codec that decodes a run's held stream at its close. */
+export function isRecordStreamCodec(name: string): boolean {
+  return codecs.get(name)?.stream === true;
+}
+
+/** The live state a view codec fills, mutated in place: the counts, the current file and the failures so far. */
+export type ViewLive = Omit<RunLive, "total">;
+
+/** What a view codec's fill answers: the new decoded byte offset and the reader state to hold. */
+export interface ViewFill {
+  offset: number;
+  readerState: string | null;
+}
+
+/**
+ * A VIEW codec: it fills an open run's live state from its held stream and
+ * is never the run's record, so it has no `parse` and no report or close
+ * route knows it. `fill` reads `text` — the held stream from the decoded byte
+ * offset `offset` to its end — resuming from `readerState`, into `live`.
+ */
+export interface ViewCodec {
+  name: string;
+  fill(text: string, offset: number, readerState: string | null, live: ViewLive): ViewFill;
+}
+
+/** The view codecs, by name, in a registry of their own beside the report codecs. */
+export const viewCodecs: Map<string, ViewCodec> = new Map<string, ViewCodec>([[bunConsoleView.name, bunConsoleView]]);
+
+/** The names this board decodes, for health: test, coverage and view codecs, sorted. */
+export function codecNames(): { test: string[]; coverage: string[]; view: string[] } {
+  return {
+    test: [...codecs.keys()].sort(),
+    coverage: [...coverageCodecs.keys()].sort(),
+    view: [...viewCodecs.keys()].sort(),
+  };
 }
 
 interface CoverageBlock {

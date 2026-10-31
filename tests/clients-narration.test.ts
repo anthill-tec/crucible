@@ -84,15 +84,38 @@
 // with real `sleep` calls between them — the narration wrapper has
 // something to tail live, and the run spans long enough to cross the
 // throttle's time bound at least once.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type ViewCodec, viewCodecs } from "../src/codecs/index.ts";
 import { startServer } from "../src/server.ts";
 import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
 const BUN_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "bun-crucible.py");
 const MVN_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "mvn-crucible.py");
+
+/**
+ * The bun narration tests below are about an UNRELAYED run (CR-CRU-201 §S5,
+ * VERIFY 833 finding 1, orchestrator ruling). The bun client relays its
+ * console — and then posts no in-run `running N/M` (CR-CRU-201 §S4 step 6) —
+ * only when the board's health lists `bun-console` under `codecs.view`, and
+ * health reads that list from the `viewCodecs` registry (src/codecs/index.ts)
+ * on every request. So, for the duration of the describe that calls this, the
+ * in-process board's view-codec registry is emptied, and every entry it held
+ * is put back afterwards.
+ */
+function keepTheBoardUnrelayed(): void {
+  const held = new Map<string, ViewCodec>();
+  beforeAll(() => {
+    for (const [name, codec] of viewCodecs) held.set(name, codec);
+    viewCodecs.clear();
+  });
+  afterAll(() => {
+    for (const [name, codec] of held) viewCodecs.set(name, codec);
+    held.clear();
+  });
+}
 
 // ── spawn / proxy / scratch plumbing (reused verbatim from C2/C3) ──────────
 
@@ -403,6 +426,7 @@ function writeMvnNarrationFixture(dir: string, key: string): void {
 describe("§S2b in-run progress narration — clients/bun-crucible.py (fine-grained running N/M)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
+  keepTheBoardUnrelayed();
 
   afterEach(() => {
     handle?.stop();
@@ -690,6 +714,7 @@ function readEnvCapture(dir: string): Record<string, string> {
 describe("§S3 (CR-CRU-047) — bun narration survives bun's real ANSI tick lines; env-quieting strip covers AGENT/REPL_ID too", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
+  keepTheBoardUnrelayed();
 
   afterEach(() => {
     handle?.stop();
