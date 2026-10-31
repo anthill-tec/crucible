@@ -1335,9 +1335,10 @@ class StreamRelay:
                 return
             sent_from, data = batch
             answer = self._send(sent_from, data)
-            with self._lock:
-                if self._halt.is_set():
-                    return
+            # An answer that lands once `finish` has set `_halt` is dropped:
+            # `finish` sends from its own reading of `held` and confirms it.
+            if self._halt.is_set():
+                return
             if self._apply(sent_from, answer) not in ("held", "resend"):
                 return
 
