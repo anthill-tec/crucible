@@ -247,9 +247,20 @@ class _CliInstallCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.target, ignore_errors=True)
         # Pin $HOME so the parser's `~/.crucible` default resolves inside the
         # scratch, never the operator's real home. Held for the whole test.
+        # $HOME alone does not isolate the real `[manifest]` stage: the
+        # server's store (and the `crucible.toml` beside it) resolves from
+        # $XDG_DATA_HOME first, its database from $CRUCIBLE_DB (else an
+        # existing `<cwd>/data/crucible.db`), and the provisioned server from
+        # $BUN_INSTALL. Each is pinned under the scratch home, so the stage
+        # neither reads nor writes the operator's server config.
         self.home = tempfile.mkdtemp(prefix="cr090-cli-home-")
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
-        home_patch = mock.patch.dict(os.environ, {"HOME": self.home})
+        home_patch = mock.patch.dict(os.environ, {
+            "HOME": self.home,
+            "XDG_DATA_HOME": os.path.join(self.home, "data-home"),
+            "BUN_INSTALL": os.path.join(self.home, "bun-install"),
+            "CRUCIBLE_DB": os.path.join(self.home, "store", "crucible.db"),
+        })
         home_patch.start()
         self.addCleanup(home_patch.stop)
 
