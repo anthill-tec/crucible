@@ -651,11 +651,12 @@ class PythonStatesItsStackOnEveryIngestTest(_ClientIngestCase):
 
     def assert_closed_from_its_stream(self, recorder):
         closes = recorder.bodies(RUNS)
+        # CR-CRU-224: a unittest run closes once from its runner's stream.
         self.assertEqual(
             [(body.get("codec"), "data" in body) for body in closes],
             [(STREAM_CODEC, False)],
             f"python: a unittest run is closed once from its runner's stream, "
-            f"carrying no report (CR-CRU-224); posted to {recorder.paths()!r}")
+            f"carrying no report; posted to {recorder.paths()!r}")
 
     def assert_nothing_filed_and_the_start_states_the_stack(self, recorder):
         """CR-CRU-224 section S3: an open that answers no `runId` sets no

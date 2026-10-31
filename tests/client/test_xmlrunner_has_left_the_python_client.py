@@ -38,6 +38,8 @@ TEXT_SUFFIXES = {".py", ".toml", ".md", ".txt", ".json", ".sh", ".cfg", ".ini", 
 #: What a comment recording xmlrunner's removal says.
 REMOVAL_WORDS = re.compile(r"\b(removed|no longer|retired|dropped|left)\b", re.IGNORECASE)
 XMLRUNNER = re.compile(r"xmlrunner", re.IGNORECASE)
+#: The change the fixtures README must name as the one xmlrunner left with.
+REMOVING_CHANGE = "CR-CRU-224"
 
 
 def xmlrunner_mentions(text):
@@ -116,7 +118,7 @@ def readme_records_the_frozen_fixture(text):
             continue
         if (re.search(r"\bfrozen\b", paragraph, re.IGNORECASE)
                 and "auto-ingest" in paragraph and "junit" in paragraph
-                and "CR-CRU-224" in paragraph
+                and REMOVING_CHANGE in paragraph
                 and re.search(r"no longer writes JUnit", paragraph, re.IGNORECASE)):
             return True
     return False
@@ -210,7 +212,7 @@ class TheDesignRecordReadsAsSection4StatesTest(unittest.TestCase):
         self.assertFalse(records_no_unittest_declaration("A bun project declares one table."))
         self.assertTrue(readme_records_the_frozen_fixture(
             "**python/xmlrunner/** stays frozen for the `junit` codec and `auto-ingest`; "
-            "it was produced before CR-CRU-224 by a runner that no longer writes JUnit."))
+            f"it was produced before {REMOVING_CHANGE} by a runner that no longer writes JUnit."))
         self.assertFalse(readme_records_the_frozen_fixture(
             "**python/xmlrunner/** — a `pkg` package run through xmlrunner."))
 

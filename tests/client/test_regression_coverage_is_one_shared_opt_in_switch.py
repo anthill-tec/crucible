@@ -444,11 +444,12 @@ class PythonCovSourceWithCoverageRunsTest(_PythonProject, unittest.TestCase):
             f"coverage measures the --cov-source given; runs={suite_runs!r}")
         path, body = _the_one_ingest(self, self.board, result)
         self.assertEqual(path, "/api/v2/runs", _diagnostics(result))
+        # CR-CRU-224: a unittest run closes from its stream.
         self.assertEqual(
             ((body or {}).get("codec"), "data" in (body or {})),
             ("crucible-events", False),
-            f"a unittest run is closed from its stream, carrying no report "
-            f"(CR-CRU-224); body={body!r}")
+            f"a unittest run is closed from its stream, carrying no report; "
+            f"body={body!r}")
         self.assertEqual(
             (body or {}).get("coverage"),
             {"codec": "lcov", "data": [PYTHON_LCOV_TEXT]},
@@ -510,11 +511,12 @@ class RegressionWithoutCoverageFilesNoCoverageTest(unittest.TestCase):
         result = driver.drive(agent="py-regression-no-coverage")
         self._assert_no_coverage(result)
         _, body = _the_one_ingest(self, self.board, result)
+        # CR-CRU-224: a unittest run closes from its stream.
         self.assertEqual(
             ((body or {}).get("codec"), "data" in (body or {})),
             ("crucible-events", False),
-            f"a unittest run is closed from its stream, carrying no report "
-            f"(CR-CRU-224); body={body!r}")
+            f"a unittest run is closed from its stream, carrying no report; "
+            f"body={body!r}")
         self.assertFalse(
             any(argv[:2] == ["-m", "coverage"] for argv in driver.interpreter_runs()),
             f"coverage.py never runs; runs={driver.interpreter_runs()!r}")

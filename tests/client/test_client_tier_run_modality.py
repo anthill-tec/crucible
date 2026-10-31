@@ -1126,10 +1126,10 @@ class PythonDeclaredCellsTest(_PythonModalityCase):
         self.assertSelects(runs, ["-s", "tests"], "python/regression",
                            "the declaration python's stack takes is the "
                            "discovery start-dir")
+        # CR-CRU-224 §S1: the unittest runner streams, so `-o` left its argv.
         self.assertDoesNotSelect(runs, "-o", "python/regression",
                                  "the unittest runner writes its stream and no "
-                                 "JUnit report, so `-o <reports>` is gone "
-                                 "(CR-CRU-224 §S1)")
+                                 "JUnit report, so `-o <reports>` is gone")
 
 
 class MvnBddIsADeclaredCellTest(_MvnModalityCase):
