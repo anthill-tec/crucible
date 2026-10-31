@@ -1,0 +1,646 @@
+{
+  "recorded": {
+    "python": "3.14.8",
+    "unittest-xml-reporting": "4.0.0",
+    "runner": "clients/subtest_runner.py at fd92ea6",
+    "command": "<venv python> clients/subtest_runner.py discover -s tests -p test_*.py -o <reports> -v",
+    "board": "tests/client/real_board.py, POST /api/v2/runs codec junit stack python",
+    "normalised": "the copy's root -> <project>, the interpreter's stdlib dir -> <stdlib>; suite names lose xmlrunner's -<timestamp>; failures kept as their digest"
+  },
+  "exitCode": 1,
+  "countTestCases": 20,
+  "caseCount": 28,
+  "summary": {
+    "total": 28,
+    "passed": 15,
+    "failed": 10,
+    "pending": 3
+  },
+  "fileCount": 6,
+  "files": [
+    "<stdlib>/unittest/loader.py",
+    "tests/test_class_setup.py",
+    "tests/test_non_ascii.py",
+    "tests/test_subtest_shapes.py",
+    "tests/test_verdicts.py",
+    "tests/test_witness.py"
+  ],
+  "cases": [
+    {
+      "id": "setUpClass (test_class_setup.BrokenSetUpClassTest)",
+      "name": "setUpClass (test_class_setup.BrokenSetUpClassTest)",
+      "suite": "unittest.suite._ErrorHolder",
+      "file": "tests/test_class_setup.py",
+      "status": "fail",
+      "failure": {
+        "message": "the shared fixture server never came up",
+        "type": "ConnectionError",
+        "traceHead": "Traceback (most recent call last):",
+        "traceTail": "ConnectionError: the shared fixture server never came up",
+        "frames": [
+          [
+            "<project>/tests/test_class_setup.py",
+            22,
+            "setUpClass"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "test_class_setup.AHealthyNeighbourTest.test_runs_before_the_broken_class",
+      "name": "test_runs_before_the_broken_class",
+      "suite": "test_class_setup.AHealthyNeighbourTest",
+      "file": "tests/test_class_setup.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_non_ascii.NonAsciiTest.test_grüße_aus_dem_café",
+      "name": "test_grüße_aus_dem_café",
+      "suite": "test_non_ascii.NonAsciiTest",
+      "file": "tests/test_non_ascii.py",
+      "status": "fail",
+      "failure": {
+        "message": "Grüße aus dem Café — 😀 nicht bestanden",
+        "type": "AssertionError",
+        "traceHead": "Traceback (most recent call last):",
+        "traceTail": "AssertionError: Grüße aus dem Café — 😀 nicht bestanden",
+        "frames": [
+          [
+            "<project>/tests/test_non_ascii.py",
+            9,
+            "test_grüße_aus_dem_café"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "test_non_ascii.NonAsciiTest.test_ñandú_läuft",
+      "name": "test_ñandú_läuft",
+      "suite": "test_non_ascii.NonAsciiTest",
+      "file": "tests/test_non_ascii.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_subtest_shapes.SubtestShapesTest.test_body_fails_after_its_subtests_pass",
+      "name": "test_body_fails_after_its_subtests_pass",
+      "suite": "test_subtest_shapes.SubtestShapesTest",
+      "file": "tests/test_subtest_shapes.py",
+      "status": "fail",
+      "failure": {
+        "message": "the body failed after every subtest passed",
+        "type": "AssertionError",
+        "traceHead": "Traceback (most recent call last):",
+        "traceTail": "AssertionError: the body failed after every subtest passed",
+        "frames": [
+          [
+            "<project>/tests/test_subtest_shapes.py",
+            20,
+            "test_body_fails_after_its_subtests_pass"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "test_subtest_shapes.SubtestShapesTest.test_body_fails_after_its_subtests_pass (n=1)",
+      "name": "test_body_fails_after_its_subtests_pass (n=1)",
+      "suite": "test_subtest_shapes.SubtestShapesTest",
+      "file": "tests/test_subtest_shapes.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_subtest_shapes.SubtestShapesTest.test_body_fails_after_its_subtests_pass (n=2)",
+      "name": "test_body_fails_after_its_subtests_pass (n=2)",
+      "suite": "test_subtest_shapes.SubtestShapesTest",
+      "file": "tests/test_subtest_shapes.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_subtest_shapes.SubtestShapesTest.test_every_subtest_passes (n=1)",
+      "name": "test_every_subtest_passes (n=1)",
+      "suite": "test_subtest_shapes.SubtestShapesTest",
+      "file": "tests/test_subtest_shapes.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_subtest_shapes.SubtestShapesTest.test_every_subtest_passes (n=2)",
+      "name": "test_every_subtest_passes (n=2)",
+      "suite": "test_subtest_shapes.SubtestShapesTest",
+      "file": "tests/test_subtest_shapes.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_subtest_shapes.SubtestShapesTest.test_every_subtest_passes (n=3)",
+      "name": "test_every_subtest_passes (n=3)",
+      "suite": "test_subtest_shapes.SubtestShapesTest",
+      "file": "tests/test_subtest_shapes.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_subtest_shapes.SubtestShapesTest.test_expected_failure_with_subtests",
+      "name": "test_expected_failure_with_subtests",
+      "suite": "test_subtest_shapes.SubtestShapesTest",
+      "file": "tests/test_subtest_shapes.py",
+      "status": "pending"
+    },
+    {
+      "id": "test_subtest_shapes.SubtestShapesTest.test_nested_subtests (n=1, group='even')",
+      "name": "test_nested_subtests (n=1, group='even')",
+      "suite": "test_subtest_shapes.SubtestShapesTest",
+      "file": "tests/test_subtest_shapes.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_subtest_shapes.SubtestShapesTest.test_nested_subtests (n=1, group='odd')",
+      "name": "test_nested_subtests (n=1, group='odd')",
+      "suite": "test_subtest_shapes.SubtestShapesTest",
+      "file": "tests/test_subtest_shapes.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_subtest_shapes.SubtestShapesTest.test_nested_subtests (n=2, group='even')",
+      "name": "test_nested_subtests (n=2, group='even')",
+      "suite": "test_subtest_shapes.SubtestShapesTest",
+      "file": "tests/test_subtest_shapes.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_subtest_shapes.SubtestShapesTest.test_nested_subtests (n=2, group='odd')",
+      "name": "test_nested_subtests (n=2, group='odd')",
+      "suite": "test_subtest_shapes.SubtestShapesTest",
+      "file": "tests/test_subtest_shapes.py",
+      "status": "fail",
+      "failure": {
+        "message": "True is not false : the odd group's second case failed",
+        "type": "AssertionError",
+        "traceHead": "Traceback (most recent call last):",
+        "traceTail": "AssertionError: True is not false : the odd group's second case failed",
+        "frames": [
+          [
+            "<project>/tests/test_subtest_shapes.py",
+            38,
+            "test_nested_subtests"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "test_subtest_shapes.SubtestShapesTest.test_one_subtest_fails (n=1)",
+      "name": "test_one_subtest_fails (n=1)",
+      "suite": "test_subtest_shapes.SubtestShapesTest",
+      "file": "tests/test_subtest_shapes.py",
+      "status": "fail",
+      "failure": {
+        "message": "2 != 4",
+        "type": "AssertionError",
+        "traceHead": "Traceback (most recent call last):",
+        "traceTail": "AssertionError: 2 != 4",
+        "frames": [
+          [
+            "<project>/tests/test_subtest_shapes.py",
+            44,
+            "test_one_subtest_fails"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "test_subtest_shapes.SubtestShapesTest.test_one_subtest_fails (n=2)",
+      "name": "test_one_subtest_fails (n=2)",
+      "suite": "test_subtest_shapes.SubtestShapesTest",
+      "file": "tests/test_subtest_shapes.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_verdicts.TearDownFailureTest.test_body_passes_but_teardown_fails",
+      "name": "test_body_passes_but_teardown_fails",
+      "suite": "test_verdicts.TearDownFailureTest",
+      "file": "tests/test_verdicts.py",
+      "status": "fail",
+      "failure": {
+        "message": "tearDown could not release the resource",
+        "type": "RuntimeError",
+        "traceHead": "Traceback (most recent call last):",
+        "traceTail": "RuntimeError: tearDown could not release the resource",
+        "frames": [
+          [
+            "<project>/tests/test_verdicts.py",
+            14,
+            "tearDown"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "test_verdicts.VerdictsTest.test_adds_two_numbers",
+      "name": "test_adds_two_numbers",
+      "suite": "test_verdicts.VerdictsTest",
+      "file": "tests/test_verdicts.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_verdicts.VerdictsTest.test_adds_with_a_wrong_expectation",
+      "name": "test_adds_with_a_wrong_expectation",
+      "suite": "test_verdicts.VerdictsTest",
+      "file": "tests/test_verdicts.py",
+      "status": "fail",
+      "failure": {
+        "message": "4 != 5",
+        "type": "AssertionError",
+        "traceHead": "Traceback (most recent call last):",
+        "traceTail": "AssertionError: 4 != 5",
+        "frames": [
+          [
+            "<project>/tests/test_verdicts.py",
+            29,
+            "test_adds_with_a_wrong_expectation"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "test_verdicts.VerdictsTest.test_divides_by_zero",
+      "name": "test_divides_by_zero",
+      "suite": "test_verdicts.VerdictsTest",
+      "file": "tests/test_verdicts.py",
+      "status": "fail",
+      "failure": {
+        "message": "division by zero",
+        "type": "ZeroDivisionError",
+        "traceHead": "Traceback (most recent call last):",
+        "traceTail": "ZeroDivisionError: division by zero",
+        "frames": [
+          [
+            "<project>/tests/test_verdicts.py",
+            33,
+            "test_divides_by_zero"
+          ],
+          [
+            "<project>/pkg/arith.py",
+            11,
+            "divide"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "test_verdicts.VerdictsTest.test_is_expected_to_fail",
+      "name": "test_is_expected_to_fail",
+      "suite": "test_verdicts.VerdictsTest",
+      "file": "tests/test_verdicts.py",
+      "status": "pending"
+    },
+    {
+      "id": "test_verdicts.VerdictsTest.test_is_skipped",
+      "name": "test_is_skipped",
+      "suite": "test_verdicts.VerdictsTest",
+      "file": "tests/test_verdicts.py",
+      "status": "pending"
+    },
+    {
+      "id": "test_verdicts.VerdictsTest.test_succeeds_unexpectedly",
+      "name": "test_succeeds_unexpectedly",
+      "suite": "test_verdicts.VerdictsTest",
+      "file": "tests/test_verdicts.py",
+      "status": "fail",
+      "failure": {
+        "message": "Unexpected success: This test was marked as expected failure but passed, please review it",
+        "type": "UnexpectedSuccess",
+        "traceHead": null,
+        "traceTail": null,
+        "frames": []
+      }
+    },
+    {
+      "id": "test_witness.WitnessTest.test_first_look_at_the_stream",
+      "name": "test_first_look_at_the_stream",
+      "suite": "test_witness.WitnessTest",
+      "file": "tests/test_witness.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_witness.WitnessTest.test_records_its_environment",
+      "name": "test_records_its_environment",
+      "suite": "test_witness.WitnessTest",
+      "file": "tests/test_witness.py",
+      "status": "pass"
+    },
+    {
+      "id": "test_witness.WitnessTest.test_second_look_at_the_stream",
+      "name": "test_second_look_at_the_stream",
+      "suite": "test_witness.WitnessTest",
+      "file": "tests/test_witness.py",
+      "status": "pass"
+    },
+    {
+      "id": "unittest.loader._FailedTest.test_unimportable",
+      "name": "test_unimportable",
+      "suite": "unittest.loader._FailedTest",
+      "file": "<stdlib>/unittest/loader.py",
+      "status": "fail",
+      "failure": {
+        "message": "Failed to import test module: test_unimportable",
+        "type": "ImportError",
+        "traceHead": "ImportError: Failed to import test module: test_unimportable",
+        "traceTail": "ModuleNotFoundError: No module named 'pkg.not_a_module'",
+        "frames": [
+          [
+            "<project>/tests/test_unimportable.py",
+            11,
+            "<module>"
+          ]
+        ]
+      }
+    }
+  ],
+  "tree": [
+    {
+      "name": "test_class_setup.AHealthyNeighbourTest",
+      "status": "pass",
+      "children": [
+        {
+          "name": "test_runs_before_the_broken_class",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "name": "test_non_ascii.NonAsciiTest",
+      "status": "fail",
+      "children": [
+        {
+          "name": "test_grüße_aus_dem_café",
+          "status": "fail",
+          "failure": {
+            "message": "Grüße aus dem Café — 😀 nicht bestanden",
+            "type": "AssertionError",
+            "traceHead": "Traceback (most recent call last):",
+            "traceTail": "AssertionError: Grüße aus dem Café — 😀 nicht bestanden",
+            "frames": [
+              [
+                "<project>/tests/test_non_ascii.py",
+                9,
+                "test_grüße_aus_dem_café"
+              ]
+            ]
+          }
+        },
+        {
+          "name": "test_ñandú_läuft",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "name": "test_subtest_shapes.SubtestShapesTest",
+      "status": "fail",
+      "children": [
+        {
+          "name": "test_body_fails_after_its_subtests_pass",
+          "status": "fail",
+          "failure": {
+            "message": "the body failed after every subtest passed",
+            "type": "AssertionError",
+            "traceHead": "Traceback (most recent call last):",
+            "traceTail": "AssertionError: the body failed after every subtest passed",
+            "frames": [
+              [
+                "<project>/tests/test_subtest_shapes.py",
+                20,
+                "test_body_fails_after_its_subtests_pass"
+              ]
+            ]
+          }
+        },
+        {
+          "name": "test_body_fails_after_its_subtests_pass (n=1)",
+          "status": "pass"
+        },
+        {
+          "name": "test_body_fails_after_its_subtests_pass (n=2)",
+          "status": "pass"
+        },
+        {
+          "name": "test_every_subtest_passes (n=1)",
+          "status": "pass"
+        },
+        {
+          "name": "test_every_subtest_passes (n=2)",
+          "status": "pass"
+        },
+        {
+          "name": "test_every_subtest_passes (n=3)",
+          "status": "pass"
+        },
+        {
+          "name": "test_expected_failure_with_subtests",
+          "status": "pending"
+        },
+        {
+          "name": "test_nested_subtests (n=1, group='even')",
+          "status": "pass"
+        },
+        {
+          "name": "test_nested_subtests (n=1, group='odd')",
+          "status": "pass"
+        },
+        {
+          "name": "test_nested_subtests (n=2, group='even')",
+          "status": "pass"
+        },
+        {
+          "name": "test_nested_subtests (n=2, group='odd')",
+          "status": "fail",
+          "failure": {
+            "message": "True is not false : the odd group's second case failed",
+            "type": "AssertionError",
+            "traceHead": "Traceback (most recent call last):",
+            "traceTail": "AssertionError: True is not false : the odd group's second case failed",
+            "frames": [
+              [
+                "<project>/tests/test_subtest_shapes.py",
+                38,
+                "test_nested_subtests"
+              ]
+            ]
+          }
+        },
+        {
+          "name": "test_one_subtest_fails (n=1)",
+          "status": "fail",
+          "failure": {
+            "message": "2 != 4",
+            "type": "AssertionError",
+            "traceHead": "Traceback (most recent call last):",
+            "traceTail": "AssertionError: 2 != 4",
+            "frames": [
+              [
+                "<project>/tests/test_subtest_shapes.py",
+                44,
+                "test_one_subtest_fails"
+              ]
+            ]
+          }
+        },
+        {
+          "name": "test_one_subtest_fails (n=2)",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "name": "test_verdicts.TearDownFailureTest",
+      "status": "fail",
+      "children": [
+        {
+          "name": "test_body_passes_but_teardown_fails",
+          "status": "fail",
+          "failure": {
+            "message": "tearDown could not release the resource",
+            "type": "RuntimeError",
+            "traceHead": "Traceback (most recent call last):",
+            "traceTail": "RuntimeError: tearDown could not release the resource",
+            "frames": [
+              [
+                "<project>/tests/test_verdicts.py",
+                14,
+                "tearDown"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "test_verdicts.VerdictsTest",
+      "status": "fail",
+      "children": [
+        {
+          "name": "test_adds_two_numbers",
+          "status": "pass"
+        },
+        {
+          "name": "test_adds_with_a_wrong_expectation",
+          "status": "fail",
+          "failure": {
+            "message": "4 != 5",
+            "type": "AssertionError",
+            "traceHead": "Traceback (most recent call last):",
+            "traceTail": "AssertionError: 4 != 5",
+            "frames": [
+              [
+                "<project>/tests/test_verdicts.py",
+                29,
+                "test_adds_with_a_wrong_expectation"
+              ]
+            ]
+          }
+        },
+        {
+          "name": "test_divides_by_zero",
+          "status": "fail",
+          "failure": {
+            "message": "division by zero",
+            "type": "ZeroDivisionError",
+            "traceHead": "Traceback (most recent call last):",
+            "traceTail": "ZeroDivisionError: division by zero",
+            "frames": [
+              [
+                "<project>/tests/test_verdicts.py",
+                33,
+                "test_divides_by_zero"
+              ],
+              [
+                "<project>/pkg/arith.py",
+                11,
+                "divide"
+              ]
+            ]
+          }
+        },
+        {
+          "name": "test_is_expected_to_fail",
+          "status": "pending"
+        },
+        {
+          "name": "test_is_skipped",
+          "status": "pending"
+        },
+        {
+          "name": "test_succeeds_unexpectedly",
+          "status": "fail",
+          "failure": {
+            "message": "Unexpected success: This test was marked as expected failure but passed, please review it",
+            "type": "UnexpectedSuccess",
+            "traceHead": null,
+            "traceTail": null,
+            "frames": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "test_witness.WitnessTest",
+      "status": "pass",
+      "children": [
+        {
+          "name": "test_first_look_at_the_stream",
+          "status": "pass"
+        },
+        {
+          "name": "test_records_its_environment",
+          "status": "pass"
+        },
+        {
+          "name": "test_second_look_at_the_stream",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "name": "unittest.loader._FailedTest",
+      "status": "fail",
+      "children": [
+        {
+          "name": "test_unimportable",
+          "status": "fail",
+          "failure": {
+            "message": "Failed to import test module: test_unimportable",
+            "type": "ImportError",
+            "traceHead": "ImportError: Failed to import test module: test_unimportable",
+            "traceTail": "ModuleNotFoundError: No module named 'pkg.not_a_module'",
+            "frames": [
+              [
+                "<project>/tests/test_unimportable.py",
+                11,
+                "<module>"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "unittest.suite._ErrorHolder",
+      "status": "fail",
+      "children": [
+        {
+          "name": "setUpClass (test_class_setup.BrokenSetUpClassTest)",
+          "status": "fail",
+          "failure": {
+            "message": "the shared fixture server never came up",
+            "type": "ConnectionError",
+            "traceHead": "Traceback (most recent call last):",
+            "traceTail": "ConnectionError: the shared fixture server never came up",
+            "frames": [
+              [
+                "<project>/tests/test_class_setup.py",
+                22,
+                "setUpClass"
+              ]
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
