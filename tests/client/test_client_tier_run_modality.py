@@ -419,14 +419,22 @@ if outfile and content:
 sys.exit(int(os.environ.get("FAKE_BUN_EXIT_CODE", "0")))
 """
 
+# The python client's unittest runner writes its run as a Crucible event
+# stream to the file `CRUCIBLE_STREAM` names, taking the variable out of its
+# own environment first, and writes no JUnit (CR-CRU-224 §S1). With
+# FAKE_PY_STREAM=1 this stand-in writes one passing case there.
 _PY_RUNNER_TAIL = """
-argv = sys.argv[1:]
-reports = argv[argv.index("-o") + 1] if "-o" in argv else None
-content = os.environ.get("FAKE_PY_JUNIT_CONTENT", "")
-if content and reports:
-    os.makedirs(reports, exist_ok=True)
-    with open(os.path.join(reports, "TEST-tier.probe.xml"), "w") as f:
-        f.write(content)
+stream = os.environ.pop("CRUCIBLE_STREAM", None)
+if os.environ.get("FAKE_PY_STREAM") == "1" and stream:
+    with open(stream, "w", encoding="utf-8") as f:
+        for event in (dict(event="run-start", total=1),
+                      dict(event="test-end", id="tier.probe.TierProbeTest.probe",
+                           name="probe", suite="tier.probe.TierProbeTest",
+                           file="tests/probe.py", status="pass", duration_ms=1),
+                      dict(event="run-end", total=1, passed=1, failed=0,
+                           pending=0, duration_ms=1)):
+            f.write(json.dumps(event) + "\\n")
+            f.flush()
     sys.exit(int(os.environ.get("FAKE_PY_EXIT_CODE", "0")))
 sys.stdout.write("ModuleNotFoundError: No module named 'not_yet_written'\\n")
 sys.exit(int(os.environ.get("FAKE_PY_EXIT_CODE", "1")))
@@ -1094,8 +1102,11 @@ class PythonDeclaredCellsTest(_PythonModalityCase):
     def test_regression_is_the_one_cell_python_declares_and_it_runs(self):
         """PIN — ESCALATION 1's converse bound for python, and the proof that
         the declared target is what actually reaches the runner: the discovery
-        declaration (`-s <start-dir> -p <pattern>`) rides the invocation."""
-        os.environ["FAKE_PY_JUNIT_CONTENT"] = _JUNIT_SUITE_ONE_PASS
+        declaration (`-s <start-dir> -p <pattern>`) rides the invocation.
+
+        RED (CR-CRU-224 §S1) — the runner's command line carries no
+        `-o <reports>`: it writes its stream, never a JUnit report."""
+        os.environ["FAKE_PY_STREAM"] = "1"
         drive = self.drive(self.py_argv(
             "regression", ["--agent", AGENT, "--python", _fake("fake-python-runner"),
                            "--start-dir", "tests", "--pattern", "test_*.py",
@@ -1109,6 +1120,10 @@ class PythonDeclaredCellsTest(_PythonModalityCase):
         self.assertSelects(runs, ["-s", "tests"], "python/regression",
                            "the declaration python's stack takes is the "
                            "discovery start-dir")
+        self.assertDoesNotSelect(runs, "-o", "python/regression",
+                                 "the unittest runner writes its stream and no "
+                                 "JUnit report, so `-o <reports>` is gone "
+                                 "(CR-CRU-224 §S1)")
 
 
 class MvnBddIsADeclaredCellTest(_MvnModalityCase):

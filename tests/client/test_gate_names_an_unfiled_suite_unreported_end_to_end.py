@@ -40,7 +40,9 @@ two requests of one client:
   - **unreachable at the ingest** — the fake runner arms the proxy; the next
     health read is forwarded and answered, and the proxy stops listening
     before answering it, so the `POST /api/v2/runs` that follows finds
-    nothing at the address.
+    nothing at the address. A streamed python unittest run (CR-CRU-224) may
+    close with no health read first: its close, the `POST /api/v2/runs`, is
+    then where the proxy stops, never forwarding it.
 
 Invocation:
     python3 clients/python-crucible.py test \
@@ -99,11 +101,15 @@ GREEN_BUN_JUNIT = (
     'file="tests/green.test.ts" />\n'
     '  </testsuite>\n'
     '</testsuites>\n')
-GREEN_PYTHON_JUNIT = (
-    '<?xml version="1.0" encoding="UTF-8"?>\n'
-    '<testsuite name="test_green.GreenTest" tests="1" errors="0" failures="0" '
-    'skipped="0" time="0.001"><testcase classname="test_green.GreenTest" '
-    'name="test_passes" time="0.001" file="tests/test_green.py"/></testsuite>\n')
+GREEN_PYTHON_STREAM = (
+    '{"event": "run-start", "total": 1}\n'
+    '{"event": "test-end", "id": "test_green.GreenTest.test_passes", '
+    '"name": "test_passes", "suite": "test_green.GreenTest", '
+    '"file": "tests/test_green.py", "status": "pass", "duration_ms": 1}\n'
+    '{"event": "run-end", "total": 1, "passed": 1, "failed": 0, '
+    '"pending": 0, "duration_ms": 1}\n')
+# The stream file a streamed unittest run's runner is handed (CR-CRU-224).
+STREAM_FILE = "crucible-events.ndjson"
 GREEN_LCOV = ("TN:\nSF:src/green.ts\nFNF:1\nFNH:1\nDA:1,1\nDA:2,1\n"
               "LF:2\nLH:2\nend_of_record\n")
 GREEN_NEXTEST_JUNIT = (
@@ -161,15 +167,18 @@ sys.exit(0)
 
 # The python interpreter's stand-in: `-c <probe>` answers `true`; `-m coverage
 # lcov ... -o <file>` writes GREEN_LCOV there; a suite run (the subtest runner
-# under `coverage run`) writes GREEN_PYTHON_JUNIT into the `-o` reports dir,
-# makes the cut FAKE_PYTHON_CUT names, and exits 0.
+# under `coverage run`) writes GREEN_PYTHON_STREAM to the file
+# `CRUCIBLE_STREAM` names, taking the variable out of its own environment
+# first (CR-CRU-224 §S1), records that path to the file
+# FAKE_PYTHON_STREAM_CAPTURE names, makes the cut FAKE_PYTHON_CUT names, and
+# exits 0. It writes no JUnit.
 _FAKE_PYTHON = r'''
 import os
 import sys
 import urllib.request
 
 CUT_VAR = "FAKE_PYTHON_CUT"
-JUNIT, LCOV = ''' + repr((GREEN_PYTHON_JUNIT, GREEN_LCOV)) + r'''
+STREAM, LCOV = ''' + repr((GREEN_PYTHON_STREAM, GREEN_LCOV)) + r'''
 
 def write(path, text):
     directory = os.path.dirname(path)
@@ -185,8 +194,12 @@ if argv[:1] == ["-c"]:
 if argv[:3] == ["-m", "coverage", "lcov"]:
     write(argv[argv.index("-o") + 1], LCOV)
     sys.exit(0)
-out_dir = argv[len(argv) - 1 - argv[::-1].index("-o") + 1]
-write(os.path.join(out_dir, "TEST-test_green.GreenTest.xml"), JUNIT)
+stream = os.environ.pop("CRUCIBLE_STREAM", None)
+capture = os.environ.get("FAKE_PYTHON_STREAM_CAPTURE")
+if capture:
+    write(capture, stream or "")
+if stream:
+    write(stream, STREAM)
 sys.stderr.write("test_passes (test_green.GreenTest.test_passes) ... ok\n")
 sys.stdout.write("fake python ran\n")
 sys.stdout.flush()
@@ -283,13 +296,19 @@ class _ProxyServer(http.server.ThreadingHTTPServer):
 
 class BoardProxy:
     """Forwards every request to the real board, byte for byte, until it is
-    told to stop listening: at once (`CUT_NOW`), or just before it answers
-    the next health read (`CUT_AFTER_HEALTH`). Once it has stopped, its
-    address refuses every connection, as a board that has gone away does."""
+    told to stop listening: at once (`CUT_NOW`), or once armed
+    (`CUT_AFTER_HEALTH`) at the run's filing: just before it answers the
+    next health read, or, when a `POST /api/v2/runs` comes first (a streamed
+    run's close, CR-CRU-224, which need read no health first), on that POST,
+    which it never forwards. Once it has stopped, its address refuses every
+    connection, as a board that has gone away does. `forwarded_after_control`
+    lists every path it forwarded once a control path reached it."""
 
     def __init__(self, upstream):
         self.upstream = upstream
         self.requests = []
+        self.forwarded_after_control = []
+        self._controlled = False
         self._armed = False
         self._lock = threading.Lock()
         self._stopped = threading.Event()
@@ -305,12 +324,25 @@ class BoardProxy:
                 with proxy._lock:
                     proxy.requests.append((self.command, path))
                 if path == CUT_NOW:
+                    with proxy._lock:
+                        proxy._controlled = True
                     proxy.stop_listening()
                     return self._answer(200, b'{"ok":true}')
                 if path == CUT_AFTER_HEALTH:
                     with proxy._lock:
                         proxy._armed = True
+                        proxy._controlled = True
                     return self._answer(200, b'{"ok":true}')
+                if self.command == "POST" and path.split("?")[0] == "/api/v2/runs":
+                    with proxy._lock:
+                        armed, proxy._armed = proxy._armed, False
+                    if armed:
+                        proxy.stop_listening()
+                        self.close_connection = True
+                        return None
+                with proxy._lock:
+                    if proxy._controlled:
+                        proxy.forwarded_after_control.append(path)
                 status, payload = proxy.forward(self.command, path, body)
                 if self.command == "GET" and path.split("?")[0] in HEALTH_PATHS:
                     with proxy._lock:
@@ -470,7 +502,8 @@ class _GateAgainstABoardThatGoesAway(unittest.TestCase):
 
     def env(self, **fake):
         env = scrubbed_env(None, **fake)
-        for key in _SCRUBBED + ("FAKE_BUN_CUT", "FAKE_PYTHON_CUT", "FAKE_CARGO_CUT"):
+        for key in _SCRUBBED + ("FAKE_BUN_CUT", "FAKE_PYTHON_CUT", "FAKE_CARGO_CUT",
+                                "FAKE_PYTHON_STREAM_CAPTURE"):
             if key not in fake:
                 env.pop(key, None)
         return env
@@ -519,19 +552,33 @@ class _GateAgainstABoardThatGoesAway(unittest.TestCase):
 
     def assert_the_cut_landed(self, when, result):
         """Fixture sanity: the proxy was told to go away, and (for the ingest
-        cut) a health read reached the real board after it was armed."""
+        cut) the run's filing reached it after it was armed: a health read
+        answered by the real board, or the `POST /api/v2/runs` it cut."""
         paths = [p for _m, p in self.proxy.requests]
         control = {"health": CUT_NOW, "ingest": CUT_AFTER_HEALTH}[when]
         self.assertIn(control, paths, f"the fake runner made its cut; "
                                       f"requests={paths!r} {self.diagnostics(result)}")
         after = paths[paths.index(control) + 1:]
         if when == "ingest":
-            self.assertTrue(any(p in HEALTH_PATHS for p in after),
-                            f"the health read before the ingest was answered; "
+            self.assertTrue(any(p in HEALTH_PATHS or p == "/api/v2/runs" for p in after),
+                            f"the run's filing reached the armed proxy; "
                             f"requests={paths!r} {self.diagnostics(result)}")
-        self.assertNotIn("/api/v2/runs", after,
+        self.assertNotIn("/api/v2/runs", self.proxy.forwarded_after_control,
                          f"no ingest reached the board after the cut; "
                          f"requests={paths!r} {self.diagnostics(result)}")
+
+    def stream_capture(self):
+        """Where the fake python records the `CRUCIBLE_STREAM` it was handed."""
+        return os.path.join(self.scratch, "stream-capture.txt")
+
+    def assert_the_runner_was_handed_a_stream(self, result):
+        """CR-CRU-224 §S3: a unittest run with `--agent` hands its runner
+        `CRUCIBLE_STREAM`, naming `<reports dir>/crucible-events.ndjson`."""
+        capture = Path(self.stream_capture())
+        handed = capture.read_text(encoding="utf-8") if capture.exists() else None
+        self.assertEqual(os.path.basename(handed or ""), STREAM_FILE,
+                         f"the python runner was handed CRUCIBLE_STREAM={handed!r}; "
+                         f"{self.diagnostics(result)}")
 
     def assert_unreported_and_not_green(self, result, *, names=None):
         envelope = _envelope(result.stdout)
@@ -601,7 +648,9 @@ class PythonGateWithNoDeclaredSuiteEndToEndTest(_GateAgainstABoardThatGoesAway):
     whole-suite regression is the gate."""
 
     def drive(self, when, agent):
-        result = self.python_gate(agent, FAKE_PYTHON_CUT=self.cut(when))
+        result = self.python_gate(agent, FAKE_PYTHON_CUT=self.cut(when),
+                                  FAKE_PYTHON_STREAM_CAPTURE=self.stream_capture())
+        self.assert_the_runner_was_handed_a_stream(result)
         self.assert_the_cut_landed(when, result)
         envelope = self.assert_unreported_and_not_green(result, names="python")
         self.assertEqual(_figures(envelope.get("run")), {},
@@ -626,7 +675,9 @@ class DeclaredPythonSuiteDispatchedByTheBunGateEndToEndTest(
                    f"--python {self.fake_python} --project-dir {self.project} "
                    f"--reports reports-python")
         self.manifest({"test:python": command})
-        result = self.bun_gate(agent, FAKE_PYTHON_CUT=self.cut(when))
+        result = self.bun_gate(agent, FAKE_PYTHON_CUT=self.cut(when),
+                               FAKE_PYTHON_STREAM_CAPTURE=self.stream_capture())
+        self.assert_the_runner_was_handed_a_stream(result)
         self.assert_the_cut_landed(when, result)
         envelope = self.assert_unreported_and_not_green(result, names="test:python")
         rows = [r for r in envelope.get("suites") or []

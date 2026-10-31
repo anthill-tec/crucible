@@ -423,12 +423,22 @@ class ADeclaredSuiteWhoseIngestIsCutShortIsUnreportedTest(_DroppedIngestCase):
         self.assert_suite_unreported(self.bun_gate(), "test:unit", "bun")
 
     def test_a_declared_python_suite_whose_ingest_is_cut_short_is_unreported(self):
+        """The python suite's run is a streamed unittest run (CR-CRU-224): the
+        `POST /api/v2/runs` cut short is its close, carrying
+        `codec: "crucible-events"` and no `data`."""
         command = (f"{sys.executable} {CLIENTS / 'python-crucible.py'} regression "
                    f"--python {self.fake_python} --project-dir {self.project} "
                    f"--reports reports-python")
         self.manifest({"test:python": command})
         self.board.drop_next(RUNS, "truncate", stack="python")
-        self.assert_suite_unreported(self.bun_gate(), "test:python", "python")
+        result = self.bun_gate()
+        closes = [b for p, b in self.board.posts()
+                  if p == RUNS and isinstance(b, dict) and b.get("stack") == "python"]
+        self.assertEqual([(b.get("codec"), "data" in b) for b in closes],
+                         [("crucible-events", False)],
+                         f"the python suite's one ingest is its stream close; "
+                         f"{self.diagnostics(result)}")
+        self.assert_suite_unreported(result, "test:python", "python")
 
 
 if __name__ == "__main__":
