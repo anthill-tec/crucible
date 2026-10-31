@@ -592,18 +592,19 @@ def _open_plans(project_dir):
 
 
 def _emit_ingest_axi(verb, resp, project_dir, agent, help_steps=None,
-                     warnings=None):
+                     warnings=None, ok=None):
     """Emit the envelope of an ingest verb through the shared run emitter,
     `emit_run_axi`: its `run:` block, `help` (a gate caller's state-derived
     `help_steps`, else the verb's `HELP_STEPS` entry), the answer's `error`
     and `warnings[]` after the caller's `warnings` (the run's pre-flight
     finding among them). The context echoes the cycle the board attached the
-    run to."""
+    run to. `ok` overrides the envelope's verdict (default: the answer's
+    `ok`)."""
     return _axi().emit_run_axi(
         verb, resp,
         _axi_context(project_dir, agent_id=agent,
                      cycle_id=_axi().echoed_cycle_id(resp)),
-        _emit_axi, ok=None, help_steps=help_steps, warnings=warnings,
+        _emit_axi, ok=ok, help_steps=help_steps, warnings=warnings,
         fields={}, coverage=False)
 
 
@@ -1549,11 +1550,12 @@ def _streamed_run(verb, args, project_dir, agent, identity, cmd, env, *,
             verb, STREAM_FILE, result.returncode, result.stdout or "", run_id,
             warnings, post_fn=_post, project_key=key, agent_id=agent,
             subject=_no_report_subject(verb, _UNITTEST))
-    # The compile path needs all three: no `test-end` in the local stream,
-    # nothing of it the board holds, and a failed runner. A stream the board
-    # holds (a `run-start` the runner wrote before it died) is closed as a
-    # stream.
-    wrote_no_test = bool(result.returncode) and count == 0 and held == 0
+    # A failed runner that wrote no `test-end` is the no-report failure, and
+    # its envelope says so whichever close follows. The compile path needs
+    # nothing of the stream held by the board too; a stream the board holds
+    # (a `run-start` the runner wrote before it died) is closed as a stream.
+    no_test_end = bool(result.returncode) and count == 0
+    wrote_no_test = no_test_end and held == 0
     coverage_paths = []
     if collect_coverage is not None and not wrote_no_test:
         coverage_paths, missing = collect_coverage()
@@ -1574,6 +1576,8 @@ def _streamed_run(verb, args, project_dir, agent, identity, cmd, env, *,
                   warnings + [_no_report_warning(verb, _UNITTEST, result)],
                   f"{verb}: ok=False — no {STREAM_FILE} test, ingested as compile")
         return result.returncode or 1
+    if no_test_end:
+        warnings.append(_no_report_warning(verb, _UNITTEST, result))
     runner_exit = _axi().runner_exit_code(result.returncode)
     resp = _axi().close_stream(
         _post, stack=_STACK, project_key=key, agent_id=agent, run_id=run_id,
@@ -1590,8 +1594,9 @@ def _streamed_run(verb, args, project_dir, agent, identity, cmd, env, *,
                                      _axi().filed_run(resp).get("failed"),
                                      _base_url())
         warnings += _axi().whole_suite_unreported_warnings(_STACK, resp)
+    # A no-report run is a failure envelope whichever close filed it.
     _emit_ingest_axi(verb, resp, project_dir, agent, help_steps=help_steps,
-                     warnings=warnings)
+                     warnings=warnings, ok=False if no_test_end else None)
     return exit_code
 
 
