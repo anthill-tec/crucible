@@ -6,11 +6,15 @@
 //   offset it starts at, its text — so an append never rewrites an earlier row.
 // - `run_live`: one row per open run that has streamed — the counts, the
 //   runner's total, the last file, the offset up to which lines are decoded,
-//   the undecodable count, whether the stream was cut, and the stream codec
-//   the run's first batch fixed.
+//   the undecodable count, whether the stream was cut, the stream codec
+//   the run's first batch fixed, and a view codec's reader state between
+//   batches (migration v22).
+// - `runs.total` (migration v22): the run start's own total, the live read's
+//   fallback when the stream states none.
 // - `run_live_failures`: the run's failures so far, in order.
 import type { Database } from "bun:sqlite";
 import { leafNameOf, parseCrucibleEvents, readStreamLine, suiteNameOf } from "./codecs/crucible-events.ts";
+import { isRecordStreamCodec, viewCodecs, type ViewFill, type ViewLive } from "./codecs/index.ts";
 import { failureOf, nonBlank } from "./codecs/junit.ts";
 import type { RunLive, RunLiveFailure, RunSchema } from "./types.ts";
 
@@ -38,7 +42,8 @@ export function createRunStreamTables(db: Database): void {
       current_file TEXT,
       decoded_offset INTEGER NOT NULL,
       undecodable INTEGER NOT NULL,
-      cut INTEGER NOT NULL
+      cut INTEGER NOT NULL,
+      reader_state TEXT
     );
 
     CREATE TABLE IF NOT EXISTS run_live_failures (
@@ -81,6 +86,7 @@ interface LiveRow {
   decoded_offset: number;
   undecodable: number;
   cut: number;
+  reader_state: string | null;
 }
 
 interface FailureRow {
@@ -152,8 +158,14 @@ export const ABORTED_BEFORE_CLOSE = "aborted before its close";
  * `crucible-events` codec — the tree and counts — and why it cannot be
  * trusted. An aborted streamed run is always incomplete: when the stream is
  * otherwise whole, the reason is that it was aborted before its close.
+ *
+ * Only a RECORD stream is decoded: a view stream is not the run's record, so
+ * its run keeps nothing of it and is aborted as a run with no stream (null).
  */
-export function abortedStreamRecord(held: HeldStream): Pick<RunSchema, "summary" | "tree"> & { incomplete: string } {
+export function abortedStreamRecord(
+  held: HeldStream,
+): (Pick<RunSchema, "summary" | "tree"> & { incomplete: string }) | null {
+  if (!isRecordStreamCodec(held.codec)) return null;
   const decoded = parseCrucibleEvents(held.text, held.cut);
   return { summary: decoded.summary, tree: decoded.tree, incomplete: decoded.incomplete ?? ABORTED_BEFORE_CLOSE };
 }
@@ -203,15 +215,89 @@ export function appendRunStream(db: Database, runId: string, batch: StreamBatch)
   return { ok: true, held: held + tail.length };
 }
 
+/** The run's live failures so far, in order. */
+function liveFailures(db: Database, runId: string): RunLiveFailure[] {
+  return db
+    .query<FailureRow, [string]>(
+      `SELECT id, name, suite, file, message, type FROM run_live_failures WHERE run_id = ? ORDER BY position`,
+    )
+    .all(runId)
+    .map(
+      (row): RunLiveFailure => ({
+        id: row.id,
+        name: row.name,
+        suite: row.suite,
+        file: row.file,
+        ...(row.message !== null ? { message: row.message } : {}),
+        ...(row.type !== null ? { type: row.type } : {}),
+      }),
+    );
+}
+
+/** A view codec's fill stored: the counts, the current file, the new failures, the offset and the reader state. */
+function storeViewFill(db: Database, runId: string, live: ViewLive, known: number, read: ViewFill): void {
+  const addFailure = db.query(
+    `INSERT INTO run_live_failures (run_id, position, id, name, suite, file, message, type)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (let position = known; position < live.failures.length; position += 1) {
+    const failure = live.failures[position]!;
+    addFailure.run(
+      runId,
+      position,
+      failure.id,
+      failure.name,
+      failure.suite,
+      failure.file,
+      failure.message ?? null,
+      failure.type ?? null,
+    );
+  }
+  db.query(
+    `UPDATE run_live SET completed = ?, passed = ?, failed = ?, pending = ?, current_file = ?,
+       decoded_offset = ?, reader_state = ? WHERE run_id = ?`,
+  ).run(
+    live.completed,
+    live.passed,
+    live.failed,
+    live.pending,
+    live.currentFile ?? null,
+    read.offset,
+    read.readerState,
+    runId,
+  );
+}
+
 /**
  * §S4 — the live state filled from the lines the held stream completes past
  * its decoded offset. The partial line is never decoded: it stays in the
  * batch rows and is read back from that offset on the next batch.
+ *
+ * The one caller of a view codec's `fill`: a view stream is handed, from its
+ * decoded offset, to its codec (looked up in `viewCodecs` as it fills), which
+ * answers the new offset and the reader state to hold. A record stream is
+ * read line by line by the `crucible-events` line reading, unchanged.
  */
 function fillRunLive(db: Database, runId: string): void {
   const live = liveRow(db, runId);
   if (live === null) return;
   const pending = heldBytesFrom(db, runId, live.decoded_offset);
+  const view = viewCodecs.get(live.codec);
+  if (view !== undefined) {
+    const failures = liveFailures(db, runId);
+    const known = failures.length;
+    const state: ViewLive = {
+      completed: live.completed,
+      passed: live.passed,
+      failed: live.failed,
+      pending: live.pending,
+      ...(live.current_file !== null ? { currentFile: live.current_file } : {}),
+      failures,
+    };
+    const read = view.fill(pending.toString("utf8"), live.decoded_offset, live.reader_state, state);
+    storeViewFill(db, runId, state, known, read);
+    return;
+  }
   const end = pending.lastIndexOf(0x0a);
   if (end === -1) return;
   const state = { ...live };
@@ -292,27 +378,25 @@ export function projectHasStreamingRun(db: Database, projectKey: string): boolea
 }
 
 /** §S4 — the run's live state, or null when it holds none. */
+/**
+ * The total the live read answers: the stream's own `run-start` total when
+ * it states one, otherwise the run start's total; with either, never below
+ * `completed`, and 0 read as no total. Null when there is none.
+ */
+function liveTotal(db: Database, runId: string, live: LiveRow): number | null {
+  const started = db.query<{ total: number | null }, [string]>(`SELECT total FROM runs WHERE run_id = ?`).get(runId);
+  const stated = live.total ?? started?.total ?? null;
+  return stated !== null && stated > 0 ? Math.max(stated, live.completed) : null;
+}
+
 export function runLiveOf(db: Database, runId: string): RunLive | null {
   const live = liveRow(db, runId);
   if (live === null) return null;
-  const failures = db
-    .query<FailureRow, [string]>(
-      `SELECT id, name, suite, file, message, type FROM run_live_failures WHERE run_id = ? ORDER BY position`,
-    )
-    .all(runId)
-    .map(
-      (row): RunLiveFailure => ({
-        id: row.id,
-        name: row.name,
-        suite: row.suite,
-        file: row.file,
-        ...(row.message !== null ? { message: row.message } : {}),
-        ...(row.type !== null ? { type: row.type } : {}),
-      }),
-    );
+  const failures = liveFailures(db, runId);
+  const total = liveTotal(db, runId, live);
   return {
     completed: live.completed,
-    ...(live.total !== null ? { total: live.total } : {}),
+    ...(total !== null ? { total } : {}),
     passed: live.passed,
     failed: live.failed,
     pending: live.pending,

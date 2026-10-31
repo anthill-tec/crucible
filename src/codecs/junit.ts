@@ -3,7 +3,12 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { RunSummary, SuiteNode, TestLeaf } from "../types.ts";
-import { parseBunConsoleFailures, parseBunLoadErrors } from "./bun-console.ts";
+import {
+  BunConsoleFailureReader,
+  BunLoadErrorReader,
+  parseBunConsoleFailures,
+  parseBunLoadErrors,
+} from "./bun-console.ts";
 import type { DecodedRun } from "./index.ts";
 
 interface XmlElement {
@@ -309,7 +314,8 @@ export function parseJunit(xml: string, stack?: string): DecodedRun {
  */
 export function readJunitRawOutput(tree: SuiteNode[], raw: string, stack?: string): string[] {
   if (stack !== "bun" || raw.length === 0) return [];
-  const details = parseBunConsoleFailures(raw);
+  // The record reads the console by the shared readers the live view reads it by.
+  const details = parseBunConsoleFailures(raw, new BunConsoleFailureReader());
   for (const suite of tree) {
     for (const leaf of suite.children) {
       if (leaf.status !== "fail" || leaf.failure?.message !== undefined) continue;
@@ -317,7 +323,7 @@ export function readJunitRawOutput(tree: SuiteNode[], raw: string, stack?: strin
       if (detail !== undefined) leaf.failure = { ...leaf.failure, ...detail };
     }
   }
-  const loadErrors = parseBunLoadErrors(raw);
+  const loadErrors = parseBunLoadErrors(raw, new BunLoadErrorReader());
   for (const [path, failure] of Object.entries(loadErrors)) {
     const leaf: TestLeaf = { name: "?", status: "fail", duration_ms: 0, failure: { ...failure } };
     const suite = tree.find((s) => s.name === path);
