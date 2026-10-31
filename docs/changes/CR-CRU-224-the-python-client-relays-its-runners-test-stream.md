@@ -16,7 +16,7 @@
 **Pre-review: ran** — the CR scores 13 points, its gap analysis needed rulings from the user, and it changes the shipped
 client's surface.
 
-**PROPOSED, awaiting the user's ruling** (Rule 19):
+**P1–P4, approved by the user 2026-10-31** with the CR (Rule 19):
 - **P1:** two outcomes.
   - A board that does not decode `crucible-events` refuses the run before the suite is spawned. Health is read before
     `open_run`, so no run is left open.
