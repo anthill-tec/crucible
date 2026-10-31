@@ -377,7 +377,6 @@ export function projectHasStreamingRun(db: Database, projectKey: string): boolea
   return row !== null;
 }
 
-/** §S4 — the run's live state, or null when it holds none. */
 /**
  * The total the live read answers: the stream's own `run-start` total when
  * it states one, otherwise the run start's total; with either, never below
@@ -389,6 +388,7 @@ function liveTotal(db: Database, runId: string, live: LiveRow): number | null {
   return stated !== null && stated > 0 ? Math.max(stated, live.completed) : null;
 }
 
+/** §S4 — the run's live state, or null when it holds none. */
 export function runLiveOf(db: Database, runId: string): RunLive | null {
   const live = liveRow(db, runId);
   if (live === null) return null;
