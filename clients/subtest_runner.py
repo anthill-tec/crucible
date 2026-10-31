@@ -58,6 +58,11 @@ _ErrorHolder: Any = unittest.suite._ErrorHolder  # pyright: ignore[reportAttribu
 # The environment variable naming the stream file.
 STREAM_VAR = "CRUCIBLE_STREAM"
 
+# The directory the runner was started in, read once as it loads (before any
+# test runs and can move the working directory): a case's `file` is shown
+# relative to it.
+_STARTED_IN = os.getcwd()
+
 # The suite prefix a test run as a script carries, stripped from `suite`.
 _MAIN_PREFIX = "__main__."
 
@@ -145,15 +150,14 @@ def _holder_file(holder: Any) -> str | None:
 
 
 def _shown_path(path: str | None) -> str | None:
-    """``path`` relative to the working directory when it lies under it,
-    else absolute, with ``\\`` read as ``/``."""
+    """``path`` relative to the directory the runner was started in when it
+    lies under it, else absolute, with ``\\`` read as ``/``."""
     if path is None:
         return None
-    absolute = os.path.abspath(path)
-    cwd = os.getcwd()
+    absolute = os.path.normpath(os.path.join(_STARTED_IN, path))
     try:
-        under = os.path.commonpath([absolute, cwd]) == cwd
-        shown = os.path.relpath(absolute, cwd) if under else absolute
+        under = os.path.commonpath([absolute, _STARTED_IN]) == _STARTED_IN
+        shown = os.path.relpath(absolute, _STARTED_IN) if under else absolute
     except ValueError:
         shown = absolute
     return shown.replace("\\", "/")
