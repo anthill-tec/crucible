@@ -31,7 +31,9 @@ What is pinned, by AC4 bullet:
 - a relay failure is said once on stderr and never changes the exit;
 - narration: a relayed run posts no `running N/M`, and posts `ran N/M` then
   `ingesting…`; a relay stopped mid-run (a 413, a 4xx) gives the ticks back and
-  the run still files its JUnit record.
+  the run still files its JUnit record; a relay retrying a 5xx gives the ticks
+  back too, and once a retried batch is held again they stop again (§S4 step
+  6 as amended for VERIFY 833 finding 2).
 
 `_emit_filter_uncounted` is the one §S4 step 4 exit with no test here: it is
 reached only through a declared script that declares a raw report, and such a
@@ -54,6 +56,7 @@ Interface choices (the spec leaves these names open; GREEN is asked to use them)
 """
 
 import json
+import re
 import shutil
 import signal
 import subprocess
@@ -114,8 +117,12 @@ _SCRUBBED = ("BUN_CRUCIBLE_NO_LIFECYCLE", "BUN_CRUCIBLE_PACKAGE_DIR",
 # test case, exit 1). The JUnit path comes from `--reporter-outfile=` or from
 # FIXTURE_JUNIT_PATH (an env report-path declaration); FIXTURE_RAW_PATH, when
 # set, gets a Playwright JSON report holding one spec. FAKE_PROBE records, at
-# spawn, what FAKE_PROBE_TARGET held (`<absent>` when nothing).
+# spawn, what FAKE_PROBE_TARGET held (`<absent>` when nothing). FAKE_GATES, a
+# JSON list of `[case, marker, release file]`, parks the runner again before
+# that case: it prints the marker and waits for the release file, gates naming
+# the same case in list order.
 FAKE_BUN = r'''
+import json
 import os
 import sys
 import time
@@ -150,6 +157,7 @@ fail_last = env_int("FAKE_FAIL_LAST", "0")
 after_delay = float(os.environ.get("FAKE_AFTER_DELAY", "0"))
 release = os.environ.get("FAKE_RELEASE_FILE")
 marker = os.environ.get("FAKE_MARKER_LINE")
+gates = json.loads(os.environ.get("FAKE_GATES", "[]"))
 
 def say(text, stream=sys.stdout):
     stream.write(text + "\n")
@@ -168,6 +176,12 @@ for i in range(1, total + 1):
         deadline = time.time() + 30
         while not os.path.exists(release) and time.time() < deadline:
             time.sleep(0.02)
+    for gate_case, gate_marker, gate_release in gates:
+        if gate_case == i:
+            say(gate_marker)
+            deadline = time.time() + 30
+            while not os.path.exists(gate_release) and time.time() < deadline:
+                time.sleep(0.02)
     if i > before and after_delay:
         time.sleep(after_delay)
     name = "case_%d" % i
@@ -828,6 +842,188 @@ class ARelayStoppedMidRunGivesTheTicksBackTest(ConsoleRelayCase):
     def test_a_relay_refused_with_a_4xx_gives_the_ticks_back_and_files_the_junit_record(self):
         drive = self.run_stopped(ConsoleBoard(refuse_stream=(400, REFUSAL)))
         self.assert_ticks_resume(drive)
+
+
+# An in-run tick: `running <completed>/<total>`, a label maybe after it.
+_RUNNING_TICK = re.compile(r"^running (\d+)/(\d+)")
+
+
+class AStreamThatFailsThenHoldsBoard(ConsoleBoard):
+    """`ConsoleBoard` whose stream answers each batch by a script the test
+    moves on: a 503 (`REFUSAL`, `held` 0) for every batch until the test calls
+    `hold_from_now()`, then each batch held as `ConsoleBoard` holds it.
+    `answered` is each stream batch's status in the order the batches came;
+    the relay sends one batch at a time, so it lines up with `stream_posts()`."""
+
+    def __init__(self, **options):
+        super().__init__(**options)
+        self._failing = True
+        self.answered = []
+
+    def hold_from_now(self):
+        with self._lock:
+            self._failing = False
+
+    def held_a_batch(self):
+        with self._lock:
+            return 200 in self.answered
+
+    def _append_stream(self, run_id, body):
+        with self._lock:
+            failing = self._failing
+        if failing:
+            status, answer = 503, {"ok": False, "error": REFUSAL, "held": 0}
+        else:
+            status, answer = super()._append_stream(run_id, body)
+        with self._lock:
+            self.answered.append(status)
+        return status, answer
+
+
+class ARelayRetryingA5xxGivesTheTicksBackTest(ConsoleRelayCase):
+    """While the relay is not landing batches because the board answers 5xx
+    and it retries them, the narrator posts its `running N/M` ticks; once a
+    retried batch is held again, the ticks stop again. The run still files its
+    JUnit record. (CR-CRU-201 \u00a7S4 step 6, VERIFY 833 finding 2.)
+
+    The runner is gated, never timed: it parks at each gate until the test
+    has seen the board and the client reach what the gate waits for. The
+    narrator ticks only on a completed test, so no tick can be posted while
+    the runner is parked."""
+
+    BEFORE = 3
+    MIDDLE = 20
+    AFTER = 20
+
+    def drive_through_gates(self, gates, **fake):
+        """Run `test` against a runner parking at each of `gates`, a list of
+        `(case, step)`: before that case the runner prints a marker and waits;
+        the test calls `step(said)` (`said()` reads the client's stderr so
+        far), which answers whether what the gate waits for was reached, and
+        then releases the runner. `cued` is True only when every step was."""
+        self._drives += 1
+        stderr_path = self.scratch / f"gated-stderr-{self._drives}.txt"
+        plan = [(case, f"{MARKER}_GATE_{n}", self.scratch / f"gate-{self._drives}-{n}", step)
+                for n, (case, step) in enumerate(gates, start=1)]
+        env = self.environment(
+            FAKE_GATES=json.dumps([[case, marker, str(release)]
+                                   for case, marker, release, _step in plan]),
+            **fake)
+
+        def said():
+            return _read(stderr_path)
+
+        cued = True
+        with open(stderr_path, "w", encoding="utf-8") as err:
+            proc = subprocess.Popen(self.command("test"), cwd=str(self.project), env=env,
+                                    stdout=subprocess.PIPE, stderr=err, text=True)
+            try:
+                for _case, marker, release, step in plan:
+                    parked = _wait_until(lambda m=marker: m in said(), MARKER_WAIT)
+                    cued = cued and parked and bool(step(said))
+                    release.write_text("go", encoding="utf-8")
+                stdout, _ = proc.communicate(timeout=RUN_TIMEOUT)
+            finally:
+                for _case, _marker, release, _step in plan:
+                    release.write_text("go", encoding="utf-8")
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+        return Drive(proc.returncode, stdout, said(), cued)
+
+    @staticmethod
+    def heard_a_503(said):
+        """The relay has had a 503 answer and taken it in: it says the
+        failure, naming the board's error, once it has applied the answer."""
+        return _wait_until(lambda: REFUSAL in said(), RELAY_WAIT)
+
+    def ticks(self):
+        """`[(wire index, completed, total)]` of every in-run heartbeat whose
+        message starts `running ` (`None`s when it carries no `N/M`)."""
+        found = []
+        for i, (path, body) in enumerate(self.board.posts()):
+            message = str(body.get("message") or "") if isinstance(body, dict) else ""
+            if path == HEARTBEAT and message.startswith("running "):
+                count = _RUNNING_TICK.match(message)
+                found.append((i, int(count.group(1)), int(count.group(2)))
+                             if count else (i, None, None))
+        return found
+
+    def assert_files_the_junit_record(self, drive, total):
+        self.assertIn(f"ran {total}/{total}", self.board.messages())
+        closes = self.posts_to(CLOSE)
+        self.assertEqual(len(closes), 1, drive.diag())
+        self.assertEqual((closes[0].get("codec"), closes[0].get("runId")), ("junit", RUN_ID),
+                         "the run still files its JUnit record")
+
+    def test_a_stream_answered_503_for_the_whole_run_gives_the_ticks_back_and_files_the_junit_record(self):
+        after = self.MIDDLE + self.AFTER
+        total = self.BEFORE + after
+        self.use_board(ConsoleBoard(refuse_stream=(503, REFUSAL)))
+        self.declare_tests("relay.test.ts", total)
+        drive = self.drive_through_gates([(self.BEFORE + 1, self.heard_a_503)],
+                                         FAKE_BEFORE=self.BEFORE, FAKE_AFTER=after,
+                                         FAKE_AFTER_DELAY="0.1")
+        self.assertTrue(drive.cued, f"the relay heard a 503 while the runner was parked; "
+                                    f"{drive.diag()}")
+        self.assertEqual(drive.returncode, 0, drive.diag())
+        streams = self.stream_indexes()
+        self.assertGreaterEqual(len(streams), 2,
+                                f"the relay retried the 5xx, it did not stop; {drive.diag()}")
+        close = self.index_of(lambda p, _b: p == CLOSE)
+        ticks = [t for t in self.ticks() if streams[0] < t[0] < close]
+        self.assertTrue(ticks, f"`running N/{total}` ticks while every batch is answered 503; "
+                               f"messages={self.board.messages()!r}")
+        self.assertEqual([t for t in ticks if not (self.BEFORE < t[1] <= total and t[2] == total)],
+                         [], f"each tick counts the tests run after the 503, over {total}")
+        self.assert_files_the_junit_record(drive, total)
+
+    def test_a_stream_answered_503_then_held_again_ticks_only_until_a_batch_is_held(self):
+        total = self.BEFORE + self.MIDDLE + self.AFTER
+        board = AStreamThatFailsThenHoldsBoard()
+        self.use_board(board)
+        self.declare_tests("relay.test.ts", total)
+
+        def start_holding(_said):
+            board.hold_from_now()
+            return _wait_until(board.held_a_batch, RELAY_WAIT)
+
+        def heard_the_board_hold(_said):
+            # A batch sent from past 0 is sent from the `held` the board
+            # answered: the client has taken the held answer in.
+            return _wait_until(lambda: any(isinstance(b, dict) and (b.get("from") or 0) > 0
+                                           for _p, b in board.stream_posts()), RELAY_WAIT)
+
+        resume = self.BEFORE + self.MIDDLE + 1
+        drive = self.drive_through_gates(
+            [(self.BEFORE + 1, self.heard_a_503), (resume, start_holding),
+             (resume, heard_the_board_hold)],
+            FAKE_BEFORE=self.BEFORE, FAKE_AFTER=self.MIDDLE + self.AFTER,
+            FAKE_AFTER_DELAY="0.1")
+        self.assertTrue(drive.cued, f"the board failed, then held, while the runner was parked; "
+                                    f"answered={board.answered!r}; {drive.diag()}")
+        self.assertEqual(drive.returncode, 0, drive.diag())
+        streams = self.stream_indexes()
+        answered = list(board.answered)
+        self.assertEqual(len(answered), len(streams))
+        self.assertIn(200, answered)
+        first_held = answered.index(200)
+        self.assertGreaterEqual(first_held, 1, f"a 503 stretch first; answered={answered!r}")
+        self.assertEqual(set(answered[first_held:]), {200},
+                         f"every batch after the first held one is held; answered={answered!r}")
+        held_at = streams[first_held]
+        ticks = self.ticks()
+        during = [t for t in ticks if streams[0] < t[0] < held_at]
+        self.assertTrue(during, f"`running N/{total}` ticks while the board answers 503; "
+                                f"messages={self.board.messages()!r}")
+        self.assertEqual(
+            [t for t in during if not (self.BEFORE < t[1] <= self.BEFORE + self.MIDDLE
+                                       and t[2] == total)],
+            [], f"each tick of the 503 stretch counts a test run in it, over {total}")
+        self.assertEqual([t for t in ticks if t[0] > held_at], [],
+                         f"no `running` tick once a retried batch is held again; "
+                         f"messages={self.board.messages()!r}")
+        self.assert_files_the_junit_record(drive, total)
 
 
 # ── the health check ────────────────────────────────────────────────────────
