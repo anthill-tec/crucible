@@ -1,11 +1,9 @@
 """The installer's packaged fleet (`crucible_axi.install.FLEET_FILES`, laid
-down under `<target-dir>/clients/` by `run_fleet_stage`) is nine files today:
-the five hyphen-named clients, `_crucible_axi.py`, `toon.py`,
-`STATUS-CONTRACT.md` and the shipped `crucible.toml`. None of them is a
-runner module `python-crucible.py` could spawn in place of `-m xmlrunner`,
-so a real `run_install` never lands one, and the INSTALLED copy of
-`python-crucible.py` runs a suite exactly the way the in-repo copy does
-today -- undercounting a passing loop of `subTest` cases the same way.
+down under `<target-dir>/clients/` by `run_fleet_stage`) carries the
+client's own unittest runner (`subtest_runner.py`) beside `toon.py`, so the
+INSTALLED copy of `python-crucible.py` runs a suite exactly as the in-repo
+copy does: through that runner, which counts every passing subtest and
+writes the Crucible event stream the run is filed from (CR-CRU-224).
 
 This file runs the REAL `[fleet]`/`[manifest]` install stages against a
 scratch target directory (the `[server]`/`[unit]` stages are stubbed, the
@@ -22,6 +20,7 @@ import contextlib
 import importlib
 import importlib.util
 import io
+import json
 import os
 import shutil
 import sys
@@ -35,7 +34,7 @@ REAL_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "tests" / "client"))
-from live_run_harness import RecordingBoard, install_project, junit_sent  # noqa: E402
+from live_run_harness import RecordingBoard, install_project  # noqa: E402
 
 RUNNER_MODULE_FILENAME = "subtest_runner.py"
 CLIENTS_DIRNAME = "clients"
@@ -107,23 +106,26 @@ def _run_main(module, argv):
     return code, stdout.getvalue(), stderr.getvalue()
 
 
-def _last_sent_report(board):
-    """The run's last `/api/v2/runs` ingest, its JUnit report texts read as
-    the board's `junit` codec reads them (`junit_sent`): the client sends
-    the runner's reports and counts nothing itself."""
-    sent = [body for path, body in board.posts() if path == "/api/v2/runs"]
-    assert sent, f"no /api/v2/runs POST observed; posts={board.posts()!r}"
-    read = junit_sent(sent[-1])
-    assert read is not None, f"the ingest is not a junit one; body={sent[-1]!r}"
-    return read
+def _held_stream_summary(board):
+    """The counts of the stream the board holds for the run, read from its
+    `test-end` lines, after checking the run was closed from that stream: the
+    client counts nothing it files."""
+    closes = [body for path, body in board.posts() if path == "/api/v2/runs"]
+    assert closes, f"no /api/v2/runs POST observed; posts={board.posts()!r}"
+    assert closes[-1].get("codec") == "crucible-events", (
+        f"the run is closed from its stream; body={closes[-1]!r}")
+    statuses = [json.loads(line).get("status")
+                for line in board.held_stream("run-live-1").splitlines()
+                if '"test-end"' in line]
+    return {"total": len(statuses), "passed": statuses.count("pass"),
+            "failed": statuses.count("fail")}
 
 
 class _InstalledFleetCase(unittest.TestCase):
     def setUp(self):
         self.assertTrue(
             REAL_VENV_PYTHON.exists(),
-            f"this file needs a real interpreter with unittest-xml-reporting "
-            f"4.0.0 installed; expected one at {REAL_VENV_PYTHON}")
+            f"this file needs the repo's interpreter at {REAL_VENV_PYTHON}")
         self.target = tempfile.mkdtemp(prefix="installed-fleet-target-")
         self.addCleanup(shutil.rmtree, self.target, ignore_errors=True)
         self.install, = _import_fresh("crucible_axi.install")
@@ -203,8 +205,7 @@ class InstalledPythonClientRunsASubtestFixtureWithCorrectTotalsTest(_InstalledFl
                 "--python", str(REAL_VENV_PYTHON)]
         _code, _out, err = _run_main(installed_module, argv)
 
-        payload = _last_sent_report(board)
-        summary = payload["summary"]
+        summary = _held_stream_summary(board)
         self.assertEqual(
             summary["total"], 4,
             f"the INSTALLED client must report total=4 (3 passing subtests "

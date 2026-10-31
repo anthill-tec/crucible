@@ -876,12 +876,12 @@ describe("clients/bun-crucible.py — silent-cleanup swap (§S4 precondition 4)"
 // is RED against an ABSENT call, not a wrong-endpoint call — GREEN must add
 // the silent-unregister call site to each script's gated-run path.
 //
-// TOOLCHAIN-FREE FIXTURE STRATEGY reused verbatim from
-// tests/clients-rust-mvn-crucible.test.ts / tests/clients-python-arduino-
-// crucible.test.ts (their header comments document why each is safe: a
-// no-op `cargo`/`mvnw`/`make` stub on PATH, or fake `xmlrunner`/`coverage`
-// python packages on PYTHONPATH, so pre-placed report fixtures are read
-// without any real toolchain invocation).
+// TOOLCHAIN-FREE FIXTURE STRATEGY reused from
+// tests/clients-rust-mvn-crucible.test.ts: a no-op `cargo`/`mvnw`/`make` stub
+// on PATH, so pre-placed report fixtures are read without any real toolchain
+// invocation. python needs no stub: its unittest runner is the client's own
+// and needs only the standard library (CR-CRU-224), so a one-test `tests`
+// package is the whole fixture.
 // ─────────────────────────────────────────────────────────────────────────
 const NOOP_SCRIPT = "#!/bin/sh\nexit 0\n";
 
@@ -909,30 +909,16 @@ function writeJunitXmlFile(
   writeFileSync(filePath, junitXmlString(suiteName, cases));
 }
 
-/** Two FAKE python packages (`xmlrunner`, `coverage`) — verbatim technique
- * from tests/clients-python-arduino-crucible.test.ts's writeFakePyModules. */
-function writeFakePyModules(rootDir: string): string {
-  const xmlrunnerDir = join(rootDir, "xmlrunner");
-  mkdirSync(xmlrunnerDir, { recursive: true });
-  writeFileSync(join(xmlrunnerDir, "__init__.py"), "");
+/** A one-test unittest `tests` package in `projectDir`: what the client's own
+ * runner discovers and streams. */
+function writeOneTestPackage(projectDir: string): void {
+  const testsDir = join(projectDir, "tests");
+  mkdirSync(testsDir, { recursive: true });
+  writeFileSync(join(testsDir, "__init__.py"), "");
   writeFileSync(
-    join(xmlrunnerDir, "__main__.py"),
-    `import os, sys
-reports_dir = None
-argv = sys.argv[1:]
-for i, a in enumerate(argv):
-    if a == "-o" and i + 1 < len(argv):
-        reports_dir = argv[i + 1]
-if reports_dir:
-    os.makedirs(reports_dir, exist_ok=True)
-    content = os.environ.get("FAKE_XMLRUNNER_JUNIT_XML")
-    if content:
-        with open(os.path.join(reports_dir, "TEST-fake_fixture.xml"), "w") as f:
-            f.write(content)
-sys.exit(int(os.environ.get("FAKE_XMLRUNNER_EXIT_CODE", "0")))
-`,
+    join(testsDir, "test_fixture.py"),
+    "import unittest\n\n\nclass FixtureTest(unittest.TestCase):\n    def test_alpha(self):\n        self.assertTrue(True)\n",
   );
-  return rootDir;
 }
 
 describe("clients/{rust,mvn,python,arduino}-crucible.py — silent-cleanup swap (§S4 precondition 4 addendum)", () => {
@@ -1023,17 +1009,12 @@ describe("clients/{rust,mvn,python,arduino}-crucible.py — silent-cleanup swap 
     const key = await createProject(baseUrl, "silent-cleanup-python-1");
     const dir = scratchDir("python-crucible-silent-cleanup-");
     writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
-    const pythonPath = writeFakePyModules(scratchDir("python-crucible-fakepy-"));
+    writeOneTestPackage(dir);
 
     await runScript(["regression", "--agent", "python-gated-agent", "--project-dir", dir], {
       cwd: dir,
       crucibleUrl: proxy.url,
       scriptPath: PYTHON_SCRIPT_PATH,
-      env: {
-        PYTHONPATH: pythonPath,
-        FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("regression_fixture", [{ name: "alpha" }]),
-        FAKE_XMLRUNNER_EXIT_CODE: "0",
-      },
     });
 
     assertSilentCleanup(proxy.calls, "python-gated-agent", key);

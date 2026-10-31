@@ -85,13 +85,12 @@ GREEN_BUN_JUNIT = (
     'file="tests/green.test.ts" />\n'
     '  </testsuite>\n'
     '</testsuites>\n')
-GREEN_XMLRUNNER_JUNIT = (
-    '<?xml version="1.0" encoding="UTF-8"?>\n'
-    '<testsuite name="test_green.GreenTest-20261027165127" tests="1" '
-    'file="tests/test_green.py" errors="0" failures="0" skipped="0" '
-    'time="0.001"><testcase classname="test_green.GreenTest" '
-    'name="test_passes" time="0.001" file="tests/test_green.py" '
-    'line="5"/></testsuite>\n')
+GREEN_UNITTEST_STREAM = (
+    '{"event": "run-start", "total": 1}\n'
+    '{"event": "test-end", "id": "test_green.GreenTest.test_passes", '
+    '"name": "test_passes", "suite": "test_green.GreenTest", '
+    '"file": "tests/test_green.py", "status": "pass", "duration_ms": 1}\n'
+    '{"event": "run-end", "total": 1, "passed": 1, "failed": 0, "pending": 0}\n')
 GREEN_PYTEST_JUNIT = (
     '<?xml version="1.0" encoding="utf-8"?>\n'
     '<testsuites name="pytest tests"><testsuite name="pytest" errors="0" '
@@ -141,11 +140,11 @@ sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 # A python interpreter stand-in, faithful to how the python client drives
 # one: `-c <probe>` (the pytest import probe, coverage.py's config and erase
 # probes) answers `true`; `-m coverage lcov ... -o <file>` copies FAKE_LCOV
-# there; a suite run -- the subtest runner (`... -o <dir> -v`) or `-m pytest
-# ... --junitxml=<file>`, bare or under `-m coverage run` -- copies every
-# FAKE_REPORTS file into the reports dir (xmlrunner: one file per class, by
-# its own name) or the first to the `--junitxml` path (pytest), prints
-# FAKE_OUTPUT, and exits FAKE_EXIT.
+# there; a suite run, bare or under `-m coverage run` -- `-m pytest ...
+# --junitxml=<file>` copies the first FAKE_REPORTS file to the `--junitxml`
+# path, and the client's unittest runner copies FAKE_STREAM to the stream file
+# `CRUCIBLE_STREAM` names (CR-CRU-224) -- prints FAKE_OUTPUT, and exits
+# FAKE_EXIT.
 _FAKE_PYTHON = r'''
 import os
 import shutil
@@ -170,9 +169,9 @@ if pytest:
     target = [a.split("=", 1)[1] for a in argv if a.startswith("--junitxml=")][0]
     place(reports[0], target)
 else:
-    out_dir = argv[len(argv) - 1 - argv[::-1].index("-o") + 1]
-    for src in reports:
-        place(src, os.path.join(out_dir, os.path.basename(src)))
+    stream = os.environ.pop("CRUCIBLE_STREAM", None)
+    if stream and os.environ.get("FAKE_STREAM"):
+        place(os.environ["FAKE_STREAM"], stream)
 sys.stdout.write(os.environ.get("FAKE_OUTPUT", "fake python ran") + "\n")
 sys.stdout.flush()
 sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
@@ -443,7 +442,7 @@ class _FiledThroughTheClient(unittest.TestCase):
         self.assertIsInstance(event, dict, f"detail={detail!r}")
         return event
 
-    def assert_fixture_stored(self, fixture_dir, agent, result):
+    def assert_fixture_stored(self, fixture_dir, agent, result, red_exit=True):
         expected = _expected(fixture_dir)["client"]
         event = self.stored_run(agent, result)
         where = f"event={json.dumps(event)[:3000]} {self.diagnostics(result)}"
@@ -459,8 +458,9 @@ class _FiledThroughTheClient(unittest.TestCase):
         self.assertEqual(_counts((envelope or {}).get("run")),
                          _counts(event.get("summary")),
                          f"the envelope's run: counts are the stored ones; {where}")
-        self.assertNotEqual(result.returncode, 0,
-                            f"a run with failures is not green; {where}")
+        if red_exit:
+            self.assertNotEqual(result.returncode, 0,
+                                f"a run with failures is not green; {where}")
         return event
 
     def assert_coverage_stored(self, fixture_dir, agent, result):
@@ -532,12 +532,23 @@ class PythonFixturesFiledThroughThePythonClientEndToEndTest(_FiledThroughTheClie
         path.write_text(text, encoding="utf-8")
         return str(path)
 
-    def test_the_xmlrunner_fixture_filed_by_python_test_stores_its_expected_counts_and_statuses(self):
-        agent = "real-xmlrunner-through-client"
-        result = self.drive(PYTHON_CLIENT, self.argv("test", agent),
-                            FAKE_REPORTS=self.fixture_reports("python/xmlrunner"),
-                            FAKE_EXIT="1")
-        self.assert_fixture_stored("python/xmlrunner", agent, result)
+    def test_the_xmlrunner_fixture_filed_by_auto_ingest_stores_its_expected_counts_and_statuses(self):
+        """The frozen `python/xmlrunner/` fixture stays the `junit` codec's
+        and `auto-ingest`'s: a unittest run no longer writes JUnit
+        (CR-CRU-224), so the fixture's reports are filed as a JUnit dir."""
+        agent = "real-xmlrunner-through-auto-ingest"
+        reports = Path(self.project, "reports")
+        reports.mkdir(parents=True, exist_ok=True)
+        for name in _expected("python/xmlrunner")["reports"]:
+            shutil.copyfile(FIXTURES / "python" / "xmlrunner" / name, reports / name)
+        registered = self.drive(PYTHON_CLIENT,
+                                ["register", "--agent", agent, "--role", "report",
+                                 "--project-dir", self.project])
+        self.assertEqual(registered.returncode, 0, self.diagnostics(registered))
+        result = self.drive(PYTHON_CLIENT,
+                            ["auto-ingest", "--agent", agent, "--project-dir",
+                             self.project, "--reports", "reports"])
+        self.assert_fixture_stored("python/xmlrunner", agent, result, red_exit=False)
 
     def test_the_pytest_fixture_filed_by_python_test_under_pytest_stores_its_expected_counts_and_statuses(self):
         agent = "real-pytest-through-client"
@@ -547,15 +558,19 @@ class PythonFixturesFiledThroughThePythonClientEndToEndTest(_FiledThroughTheClie
                             FAKE_EXIT="1")
         self.assert_fixture_stored("python/pytest", agent, result)
 
-    def test_the_xmlrunner_fixtures_lcov_filed_by_regression_coverage_stores_its_expected_coverage(self):
+    def test_the_xmlrunner_fixtures_lcov_filed_by_a_streamed_regression_coverage_stores_its_expected_coverage(self):
         agent = "real-xmlrunner-coverage-through-client"
+        stream = Path(self.scratch, "green", "crucible-events.ndjson")
+        stream.parent.mkdir(parents=True, exist_ok=True)
+        stream.write_text(GREEN_UNITTEST_STREAM, encoding="utf-8")
         result = self.drive(
             PYTHON_CLIENT, self.argv("regression", agent, "--coverage"),
-            FAKE_REPORTS=self.green_report("TEST-test_green.GreenTest-20261027165127.xml",
-                                           GREEN_XMLRUNNER_JUNIT),
+            FAKE_STREAM=str(stream),
             FAKE_LCOV=str(FIXTURES / "python" / "xmlrunner" / "lcov.info"),
             FAKE_EXIT="0")
         self.assert_coverage_stored("python/xmlrunner", agent, result)
+        self.assertEqual(self.stored_run(agent, result).get("codec"), "crucible-events",
+                         "a unittest run's coverage travels with its stream close")
 
     def test_the_pytest_fixtures_lcov_filed_by_regression_coverage_under_pytest_stores_its_expected_coverage(self):
         agent = "real-pytest-coverage-through-client"

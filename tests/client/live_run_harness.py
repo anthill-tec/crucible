@@ -590,6 +590,74 @@ def junit_sent(body):
             "tree": tree, "files": len(sources)}
 
 
+def stream_sent(board, run_id="run-live-1"):
+    """The stream `board` holds for `run_id`, read as the board's
+    `crucible-events` codec counts it, in `junit_sent`'s shape: `{"summary":
+    {total, passed, failed, pending}, "tree": [{name, status, children:
+    [{name, status}]}], "files": <distinct files>}`, one node per `suite`.
+    The client sends the stream as written and counts nothing itself."""
+    nodes = {}
+    files = set()
+    for line in board.held_stream(run_id).splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if event.get("event") != "test-end":
+            continue
+        nodes.setdefault(event.get("suite") or "?", []).append(
+            {"name": event.get("name", "?"), "status": event.get("status")})
+        files.add(event.get("file") or event.get("suite") or "?")
+    tree = [{"name": name,
+             "status": "fail" if any(c["status"] == "fail" for c in children) else "pass",
+             "children": children} for name, children in nodes.items()]
+    statuses = [c["status"] for children in nodes.values() for c in children]
+    return {"summary": {"total": len(statuses), "passed": statuses.count("pass"),
+                        "failed": statuses.count("fail"),
+                        "pending": statuses.count("pending")},
+            "tree": tree, "files": len(files)}
+
+
+class StreamingPost:
+    """An in-process `_post` stand-in for a streamed unittest run
+    (CR-CRU-224): opens a run on `/api/v2/runs/start`, holds each stream
+    batch at the UTF-8 byte offset its `from` states and answers its `held`
+    (a gap is a 409 carrying `held`), and answers `/api/v2/runs` with `run`
+    when one is given. Takes the relay's post timeout as an optional third
+    argument."""
+
+    RUN_ID = "run-in-process-1"
+
+    def __init__(self, run=None):
+        self.run = run
+        self.held = b""
+
+    def __call__(self, path, payload, *_args, **_kwargs):
+        if path == START:
+            return {"ok": True, "changed": True, "runId": self.RUN_ID}
+        if STREAM_ROUTE.match(path):
+            data = payload["data"].encode("utf-8")
+            start = payload["from"]
+            if start > len(self.held):
+                return {"ok": False, "error": "HTTP 409: a gap", "held": len(self.held)}
+            if start + len(data) > len(self.held):
+                self.held = self.held[:start] + data
+            return {"ok": True, "runId": self.RUN_ID, "held": len(self.held)}
+        if path == "/api/v2/runs" and self.run is not None:
+            return {"ok": True, "changed": True, "run": dict(self.run)}
+        return {"ok": True}
+
+    def test_ends(self):
+        """Every `test-end` event of the stream held, in order."""
+        return [json.loads(line) for line in self.held.decode("utf-8").splitlines()
+                if '"test-end"' in line]
+
+    def summary(self):
+        """`{total, passed, failed, pending}` over the stream held."""
+        statuses = [e.get("status") for e in self.test_ends()]
+        return {"total": len(statuses), "passed": statuses.count("pass"),
+                "failed": statuses.count("fail"), "pending": statuses.count("pending")}
+
+
 def first_index(posts, predicate):
     for i, (path, body) in enumerate(posts):
         if predicate(path, body):
