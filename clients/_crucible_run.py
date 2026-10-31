@@ -1286,7 +1286,7 @@ class StreamRelay:
         self._path = path
         self._codec = codec
         self._batch_limit = batch_limit or RELAY_DEFAULT_BATCH_BYTES
-        self.held = 0
+        self.held: int = 0
         self.stopped = None
         self._lock = threading.Lock()
         self._halt = threading.Event()
@@ -1378,10 +1378,9 @@ class StreamRelay:
         `sent_from`; answer the answer's kind."""
         kind, value = _stream_answer(resp)
         with self._lock:
-            if kind == "held":
-                self.held = value
-            elif kind == "resend":
-                if value == sent_from:
+            # A `held` or `resend` answer always carries an int `held`.
+            if kind in ("held", "resend") and isinstance(value, int):
+                if kind == "resend" and value == sent_from:
                     kind, value = "retry", resp.get("error")
                 else:
                     self.held = value
