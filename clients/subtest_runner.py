@@ -39,6 +39,7 @@ unittest's exit 5).
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sys
@@ -82,6 +83,13 @@ def _restore_module_search_path() -> None:
     own_dir = os.path.dirname(os.path.abspath(__file__))
     if sys.path and os.path.abspath(sys.path[0] or os.curdir) == own_dir:
         sys.path[0] = os.getcwd()
+
+
+def _whole_ms(milliseconds: float) -> int:
+    """``milliseconds`` as a whole number, never below 0, a half rounded up:
+    JavaScript's ``Math.round``, as the board's JUnit reading rounds a
+    duration (``toDurationMs``, src/codecs/junit.ts)."""
+    return max(0, math.floor(milliseconds + 0.5))
 
 
 def _params_maps(subtest: Any) -> tuple:
@@ -221,7 +229,7 @@ class StreamingTestResult(unittest.TextTestResult):
 
     def stopTestRun(self) -> None:  # noqa: N802 -- unittest's name
         self.events.write({"event": "run-end", **self._counts,
-                           "duration_ms": self._ms_since(self._run_started)})
+                           "duration_ms": _whole_ms(self._ms_since(self._run_started))})
         super().stopTestRun()
 
     # -- one test -------------------------------------------------------
@@ -345,7 +353,7 @@ class StreamingTestResult(unittest.TextTestResult):
         if shown is not None:
             event["file"] = shown
         event["status"] = status
-        event["duration_ms"] = max(0.0, duration_ms)
+        event["duration_ms"] = _whole_ms(duration_ms)
         if failure is not None:
             event["failure"] = failure
         self._counts["total"] += 1
