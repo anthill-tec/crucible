@@ -1512,15 +1512,19 @@ def _streamed_run(verb, args, project_dir, agent, identity, cmd, env, *,
         lifecycle = [{"code": _axi().RUN_LIFECYCLE_UNAVAILABLE_CODE,
                       "detail": unfiled}]
     stream_path = os.path.join(reports_dir, STREAM_FILE)
+    # The runner alone is handed the stream, in its own copy of `env`: the
+    # caller's `env` (the one `coverage lcov` runs under) never carries it.
+    runner_env = env
     if run_id:
-        env[STREAM_VAR] = stream_path
+        runner_env = {**env, STREAM_VAR: stream_path}
         narrator = _narrator(project_dir, agent, identity, streamed=True)
         relay = _axi().StreamRelay(_post, key, agent, run_id, stream_path,
                                    STREAM_CODEC, _axi()._ingest_body_limit(health))
         relay.start()
     try:
         with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
-            result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
+            result = _run_logged(cmd, project_dir, runner_env,
+                                 getattr(args, "log", None))
     except _axi().RunAbandoned as abandoned:
         # The tests the runner wrote before the signal reach the board
         # before the run is aborted.
