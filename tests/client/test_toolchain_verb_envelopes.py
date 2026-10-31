@@ -68,6 +68,7 @@ import unittest
 from pathlib import Path
 
 from tests.client.test_client_fleet_envelope_census import (
+    _UNREACHABLE_CRUCIBLE_URL,
     CLIENT_FILES,
     _FAKE_TOOLS,
     _build_fake_bin_dir,
@@ -78,6 +79,7 @@ from tests.client.test_client_fleet_envelope_census import (
     drive_verb,
     enumerate_verbs,
 )
+from tests.client.live_run_harness import HEALTH_PATHS, board_health
 
 # ── §S2 fail-fast toolchain overrides ───────────────────────────────────────
 #
@@ -579,17 +581,18 @@ class PreMergeGateStateDerivedHelpTest(unittest.TestCase):
 # HOW EACH SITE IS STARVED (real runners, never a hand-built envelope, never
 # an in-process call -- the CR's own Risk section forbids both):
 #
-#   python (3 sites): `--python starved-python`, a chmod +x shim placed in
-#     the SAME fake bin dir the census already builds, which re-execs the
-#     real interpreter with `-S -E`. site-packages is then not on sys.path at
-#     all, so `python -m xmlrunner` (and `-m coverage`, which the GATE wraps
-#     it in) die with the genuine `No module named ...` message and write no
-#     `TEST-*.xml`. `-S` -- not `-s` -- is deliberate: it starves the module
-#     wherever it is installed (user site OR system site), so the fixture is
-#     deterministic on a dev box AND on a CI runner that pip-installed
-#     `unittest-xml-reporting` system-wide. `auto-ingest` needs no shim at
-#     all: it runs no toolchain, and the census's project fixture has no
-#     reports dir, which IS its no-report state.
+#   python (3 sites): `--python starved-python`, a chmod +x fake interpreter
+#     placed in the SAME fake bin dir the census already builds. It runs no
+#     test and writes nothing -- no stream, no report -- and exits 1, saying
+#     one cause line on stderr. (The runner needs only the stdlib since
+#     CR-CRU-224, so the old `-S -E` re-exec no longer starves it.) It hands
+#     `-m py_compile` alone to the real interpreter, so the GATE's fail-fast
+#     check passes and its regression step is genuinely reached. A unittest
+#     run that exits non-zero with no `test-end` written carries
+#     `no-test-reports` naming `crucible-events.ndjson`, whether or not a
+#     stream was set. `auto-ingest` needs no fake at all: it runs no
+#     toolchain, and the census's project fixture has no reports dir, which
+#     IS its no-report state.
 #   bun (2 sites): a `bun` override that exits 3 -- NOT 1 -- for a `bun test`
 #     invocation while still succeeding for `bun x tsc --noEmit`, so the
 #     gate's fail-fast check passes and the regression step is genuinely
@@ -606,23 +609,28 @@ class PreMergeGateStateDerivedHelpTest(unittest.TestCase):
 # MEASURED PRE-CR EXIT CODES (AC5's guard -- an envelope that flips a
 # non-zero exit to 0 makes a starved gate look GREEN): all ten drives below
 # exit 1 today. python's sites return `result.returncode or 1` and the
-# starved interpreter's module-not-found exit IS 1; bun `cmd_regression` and
+# starved interpreter's exit IS 1; bun `cmd_regression` and
 # both arduino `sys.exit(<message>)` sites are hard-coded 1; bun `cmd_test`
 # returns its compile ingest's result, which is 1 against this harness's
 # deliberately unreachable server.
 
 _STARVED_PYTHON_NAME = "starved-python"
 
+# The one line the starved interpreter says: the cause a no-report detail
+# carries.
+STARVED_PYTHON_CAUSE = "starved-python: this interpreter runs no test and writes no stream"
+
 _STARVED_PYTHON_BODY = r'''#!/usr/bin/env python3
 import os
 import sys
 
-# A REAL interpreter that genuinely cannot produce a JUnit report: `-S`
-# drops site-packages from sys.path entirely and `-E` drops PYTHONPATH, so
-# `-m xmlrunner` / `-m coverage` raise the interpreter's own
-# "No module named ..." and exit non-zero. No fake xmlrunner package, no
-# stubbed subprocess -- the starved first-run state CR-CRU-063 measured.
-os.execv(sys.executable, [sys.executable, "-S", "-E"] + sys.argv[1:])
+# A fake interpreter that runs no test and writes nothing -- no stream, no
+# report -- and exits 1. `-m py_compile` alone (the gate's check step) is
+# handed to the real interpreter, so the gate reaches its regression step.
+if sys.argv[1:3] == ["-m", "py_compile"]:
+    os.execv(sys.executable, [sys.executable] + sys.argv[1:])
+sys.stderr.write(''' + repr(STARVED_PYTHON_CAUSE + "\n") + r''')
+sys.exit(1)
 '''
 
 _FAIL_BUN_NO_JUNIT_BODY = r'''#!/usr/bin/env python3
@@ -681,10 +689,10 @@ def _fail_make_bin_dir():
 
 def _python_project_dir_with_empty_start_dir():
     """The census's python fixture plus an EMPTY package-less dir, so a
-    HEALTHY interpreter's `xmlrunner discover -s <dir>` collects zero tests
-    ("Ran 0 tests", no traceback) -- `_is_zero_discovery`'s own definition of
-    an honest empty discovery, driven with the real xmlrunner, never the
-    starved shim (AC7 needs the OTHER branch)."""
+    HEALTHY interpreter's runner, discovering from `<dir>`, collects zero
+    tests ("Ran 0 tests", no traceback) -- `_is_zero_discovery`'s own
+    definition of an honest empty discovery, driven with the real runner,
+    never the starved fake (AC7 needs the OTHER branch)."""
     project_dir = _make_project_dir("python")
     (project_dir / _EMPTY_START_DIR).mkdir()
     return project_dir
@@ -727,11 +735,14 @@ _STARVED_DRIVE_CACHE = {}
 
 
 class _RunOpeningBoard:
-    """A loopback stand-in board for AC7's two drives: `POST
+    """A loopback stand-in board for AC7's two drives: its health is a board
+    that decodes the clients' reports (`board_health`, crucible-events
+    included), so a unittest run is not refused before it opens; `POST
     /api/v2/runs/start` is answered `{"ok": true}` with no runId (a server
-    that simply opened none -- the single-shot ingest, no warning); every
-    other request is refused 503, which the client reads exactly as it reads
-    the default unreachable board (`{ok: false, error}`)."""
+    that simply opened none -- no stream is set and the suite still runs,
+    CR-CRU-224 §S3); every other request is refused 503, which the client
+    reads exactly as it reads the default unreachable board (`{ok: false,
+    error}`)."""
 
     def __enter__(self):
         class _Handler(http.server.BaseHTTPRequestHandler):
@@ -753,7 +764,10 @@ class _RunOpeningBoard:
                     self._reply(503, {"ok": False, "error": "stand-in board"})
 
             def do_GET(self):
-                self._reply(503, {"ok": False, "error": "stand-in board"})
+                if self.path in HEALTH_PATHS:
+                    self._reply(200, board_health())
+                else:
+                    self._reply(503, {"ok": False, "error": "stand-in board"})
 
             do_PATCH = do_POST
 
@@ -943,10 +957,10 @@ class PythonTestNoReportEnvelopeTest(_NoReportSiteContractMixin,
     SITE = "python/test"
     CLIENT = "python"
     VERB = "test"
-    ARTIFACT = "TEST-*.xml"
+    ARTIFACT = "crucible-events.ndjson"
     RUNNER_EXIT = 1
     MEASURED_EXIT = 1
-    CAUSE_FRAGMENT = "No module named xmlrunner"
+    CAUSE_FRAGMENT = STARVED_PYTHON_CAUSE
 
 
 class PythonRegressionNoReportEnvelopeTest(_NoReportSiteContractMixin,
@@ -958,28 +972,26 @@ class PythonRegressionNoReportEnvelopeTest(_NoReportSiteContractMixin,
     SITE = "python/regression"
     CLIENT = "python"
     VERB = "regression"
-    ARTIFACT = "TEST-*.xml"
+    ARTIFACT = "crucible-events.ndjson"
     RUNNER_EXIT = 1
     MEASURED_EXIT = 1
-    CAUSE_FRAGMENT = "No module named xmlrunner"
+    CAUSE_FRAGMENT = STARVED_PYTHON_CAUSE
 
 
 class PythonPreMergeGateNoReportEnvelopeTest(_NoReportSiteContractMixin,
                                              _CapturedCauseMixin,
                                              unittest.TestCase):
     """§S2 site 2 again, reached as the GATE's regression step (AC6). The
-    cause names `coverage`, not `xmlrunner`, because the gate wraps the
-    runner in `coverage run` and the starved interpreter has neither -- the
-    coverage module is the first import that fails, and it is the genuine
-    measured cause line at this site."""
+    gate wraps the runner in `coverage run` under the same starved
+    interpreter, which says the same cause line and writes nothing."""
 
     SITE = "python/pre-merge-gate"
     CLIENT = "python"
     VERB = "pre-merge-gate"
-    ARTIFACT = "TEST-*.xml"
+    ARTIFACT = "crucible-events.ndjson"
     RUNNER_EXIT = 1
     MEASURED_EXIT = 1
-    CAUSE_FRAGMENT = "No module named coverage"
+    CAUSE_FRAGMENT = STARVED_PYTHON_CAUSE
 
 
 class PythonAutoIngestNoReportEnvelopeTest(_NoReportSiteContractMixin,
@@ -1179,6 +1191,48 @@ class ZeroDiscoveryVsNoReportWarningCodeTest(unittest.TestCase):
             f"AC7 -- the two conditions must share NO warning code, or a "
             f"consumer cannot tell a misconfigured discovery from a starved "
             f"toolchain: zero={zero_codes!r} no_report={no_report_codes!r}")
+
+
+# ── CR-CRU-224 -- a python run whose board cannot be reached ───────────────
+
+
+class PythonUnreachableBoardEnvelopeTest(unittest.TestCase):
+    """CR-CRU-224 §S3 step 1 (orchestrator ruling, cycle 826): a unittest
+    run whose board cannot be reached still runs its suite -- here the real
+    runner under the real interpreter, over the census's one passing probe
+    test -- sets no stream and files nothing. The envelope is `ok: false`
+    with an `error` naming the board it could not reach, and no new warning
+    code: the one code such an envelope carries before CR-CRU-224 is
+    `run-lifecycle-unavailable` (no run could be opened), and the runner ran
+    its tests and exited 0, so neither `no-test-reports` nor
+    `no-tests-discovered` applies. A pin: today's envelope already holds."""
+
+    # The warning codes an unreachable board's envelope carried before
+    # CR-CRU-224 (measured on this branch, cycle 826): the only ones allowed.
+    CODES_BEFORE = {"run-lifecycle-unavailable"}
+
+    def _assert_unreachable_board_envelope(self, verb):
+        emits, axi, result = _drive_with_bin_dir("python", verb, _build_fake_bin_dir)
+        where = (f"python/{verb}: exit={result.returncode} stdout={result.stdout!r} "
+                 f"stderr={result.stderr[-1500:]!r}")
+        self.assertTrue(emits, f"one envelope on stdout; {where}")
+        axi = axi or {}
+        self.assertEqual(axi.get("verb"), verb, where)
+        self.assertIs(axi.get("ok"), False, f"nothing was filed; {where}")
+        self.assertIn(_UNREACHABLE_CRUCIBLE_URL, str(axi.get("error") or ""),
+                      f"the error names the board that could not be reached; {where}")
+        codes = {str(w.get("code")) for w in (axi.get("warnings") or [])
+                 if isinstance(w, dict)}
+        self.assertEqual(codes - self.CODES_BEFORE, set(),
+                         f"no new warning code rides an unreachable board; {where}")
+        self.assertEqual(result.returncode, 1,
+                         f"the suite passed and nothing was filed; {where}")
+
+    def test_test_on_an_unreachable_board_is_ok_false_naming_the_board(self):
+        self._assert_unreachable_board_envelope("test")
+
+    def test_regression_on_an_unreachable_board_is_ok_false_naming_the_board(self):
+        self._assert_unreachable_board_envelope("regression")
 
 
 # ── CR-CRU-064 C3 RED -- mvn's no-report detail must carry the captured ────
