@@ -1,49 +1,50 @@
-# CR-CRU-201 — a bun project streams its tests, declared in one table per script
+# CR-CRU-201 — a bun test run shows its console live on the board
 
-**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-200 · **Status**
-PENDING — filed 2026-10-20 (user rulings 2026-10-20; design in `DN-crucible-live-test-progress.md`)
+**Type** feature · **Points** 8 (to be re-scored at its gap analysis) · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-200,
+CR-CRU-224 · **Status** PENDING
+- **Filed 2026-10-20.** User rulings 2026-10-20; the design is in `DN-crucible-live-test-progress.md`.
+- **Split at its gap analysis, 2026-10-31.** User ruling: three dog-food-safe units.
+  - **This CR:** bun's console live view, with the board's view-only stream mode it needs.
+  - **CR-CRU-225:** the `crucible.targets` table declares a stream, and the shipped Vitest and Playwright reporters stream
+    the Crucible shape.
+  - **CR-CRU-226:** the clean break. `crucible.reportPath`, `crucible.rawReport` and `crucible.testScript` are refused, the
+    `playwright` codec retires, and this repo's `package.json` and the Vitest fixture move to the table.
+
+The file keeps its first slug.
 
 ## Problem
 
-A bun project's runs reach the board only at exit. `bun test` has no structured live stream; Vitest
-and Playwright have reporter APIs nothing uses. A script's reports are declared in two keyed tables,
-`crucible.reportPath` and `crucible.rawReport`, and "raw report" misnames the runner's full report the
-board decodes (Playwright's JSON, kept for the Gherkin steps JUnit drops).
+A `bun test` run reaches the board only at exit. While it runs, the client counts its console result lines and sends
+`running N/M · <file>` as a heartbeat. The board sees no test name, status or failure until the JUnit report arrives.
 
-## Scope
+`bun test` has no structured stream: its console result lines are its only live source. Its record stays its JUnit report
+(the DN's console-only row), so its live view must come from a stream that is NOT the run's record.
 
-- **§S1 — one declaration per script, clean break.** `crucible.targets.<script>` declares either a
-  `stream` (its codec, and how the runner is told where to write it) or a `junit` report (`flag` or
-  `env:<VAR>`) with an optional `console` codec for its live view. `crucible.reportPath` and
-  `crucible.rawReport` are refused, naming the table that replaces them. An undeclared script keeps
-  today's default: `bun test`, the `flag` JUnit report, the bun console view.
-- **§S2 — `bun test` shows its console live.** A `bun-console` board codec decodes bun's console
-  result lines, reusing CR-CRU-152's `src/codecs/bun-console.ts`; the client relays them to the open run; the JUnit report stays the record.
-- **§S3 — Vitest and Playwright stream the Crucible shape.** Reporters for both ship in the client
-  install and emit the Crucible event shape; the client hands their location to the runner through a
-  variable Crucible fixes, so a project's config names no machine path and runs unchanged without a
-  client. A streamed Vitest or Playwright run is recorded from its stream.
-- **§S4 — Playwright's steps ride the stream.** The Playwright reporter emits each Gherkin step;
-  this repo's own e2e target moves to the stream, and Playwright's JSON report and the `playwright`
-  codec retire.
-- **§S5 — the fixture and this repo move to the table.** The Vitest fixture and this repo's
-  `package.json` declare their targets in the new table.
+CR-CRU-200's board takes only record-bearing streams: a run holding a stream closed by a JUnit report is refused.
+
+## Design (user rulings 2026-10-20 and 2026-10-31)
+
+- **A view-only stream.** The board learns a second kind of stream codec, one that fills the live state and is never the
+  run's record. A run holding a view-only stream closes through its JUnit ingest as today.
+- **`bun-console`.** A board codec that reads bun's console result lines into the live state. It reuses the reading
+  CR-CRU-152 put in `src/codecs/bun-console.ts`.
+- **The relay.** The bun client relays the runner's console lines to the open run through CR-CRU-224's shared relay.
+- **The record is unchanged:** the JUnit report.
+
+## Steps
+
+Written at this CR's gap analysis.
 
 ## Acceptance criteria
 
-To be made exact at gap analysis. These hold under any design:
+Made exact at the gap analysis. At least:
 
-- [ ] A `bun test` run's completed tests and failures show on the open run while it runs; its stored
-      result is unchanged from today's for the same tests.
-- [ ] A Vitest run through the fixture streams its tests to the board and is recorded from the
-      stream; its result equals the JUnit report's for the same tests.
-- [ ] This repo's e2e run streams its scenarios with their steps; the stored scenarios and steps
-      equal what the `playwright` codec stored for the same run, before that codec is removed.
-- [ ] A `package.json` declaring `crucible.reportPath` or `crucible.rawReport` is refused before
-      anything is posted, naming `crucible.targets`.
-- [ ] A project config that adds the shipped reporter runs unchanged when no client sets the
-      variable.
+- [ ] A `bun test` run's completed tests and failures show on the open run while it runs.
+- [ ] Its stored result is unchanged from today's for the same tests.
 
 ## Non-goals
 
-- A structured stream from `bun test` itself (it has no reporter API).
+- **A structured stream from `bun test` itself:** it has no reporter API.
+- **The declaration table and the shipped reporters** (CR-CRU-225).
+- **The clean break and the `playwright` codec's retirement** (CR-CRU-226).
+- **Maven's console live view** (CR-CRU-203), which reuses this CR's view-only mode.
