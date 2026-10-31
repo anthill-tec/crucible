@@ -14,9 +14,9 @@
 * **The installer lays it down.** `crucible_axi.install.run_fleet_stage`
   writes `<target>/clients/reporters/vitest-crucible.ts`, byte-identical to its
   source, creating the subdirectory; a second run converges; and a symlinked
-  `reporters/` directory is never followed -- the stage either refuses it
-  (raises, naming it) or replaces the link with a real directory, and writes
-  nothing through it either way.
+  `reporters/` directory is never followed -- under the confinement rule a
+  symlinked file already follows, the stage replaces the link with a real
+  directory holding the reporter, and writes nothing through it.
 
 The interface these tests drive -- `CRUCIBLE_REPORTERS` naming the reporter's
 directory, the config adding `<dir>/vitest-crucible.ts` only when it is set,
@@ -236,27 +236,27 @@ class FleetStageNeverFollowsASymlinkedReportersDirectoryTest(unittest.TestCase):
         self.link = clients / REPORTERS_SUBDIR
         os.symlink(self.outside, self.link)
 
-    def test_a_symlinked_reporters_directory_is_refused_or_replaced_never_written_through(self):
-        refusal = None
-        try:
-            self.install.run_fleet_stage(self.target)
-        except (OSError, ValueError, RuntimeError) as error:
-            refusal = error
+    def test_a_symlinked_reporters_directory_is_replaced_by_a_real_one_never_written_through(self):
+        # Replaced, not refused: the stage completes, as it does over a
+        # symlinked file, so an error here propagates and fails the test.
+        result = self.install.run_fleet_stage(self.target)
         self.assertEqual(sorted(os.listdir(self.outside)), [REPORTER_NAME],
                          "nothing is written into the directory the link points at")
         self.assertEqual(Path(self.outside, REPORTER_NAME).read_bytes(), self.SENTINEL,
                          "the file outside the target is never overwritten through the link")
-        if refusal is not None:
-            self.assertIn(REPORTERS_SUBDIR, str(refusal),
-                          f"a refusal names the symlinked directory; {refusal!r}")
-            return
         self.assertFalse(
             self.link.is_symlink(),
-            "the stage neither refused the symlinked reporters/ directory nor "
-            "replaced it: it is still a link out of the install target")
+            f"the symlinked reporters/ directory is replaced, not left as a link out "
+            f"of the install target; result={result!r}")
+        self.assertTrue(self.link.is_dir(),
+                        f"a real reporters/ directory takes the link's place; result={result!r}")
+        self.assertIs(result.get("converged"), False,
+                      f"the run that replaces a link does not report convergence; {result!r}")
         _assert_reporter_exists(self)
+        self.assertEqual(os.listdir(self.link), [REPORTER_NAME],
+                         "the replaced reporters/ directory holds the shipped reporter only")
         self.assertEqual((self.link / REPORTER_NAME).read_bytes(), REPORTER.read_bytes(),
-                         "a replaced reporters/ directory holds the shipped reporter")
+                         "the replaced reporters/ directory holds the shipped reporter's bytes")
 
 
 if __name__ == "__main__":
