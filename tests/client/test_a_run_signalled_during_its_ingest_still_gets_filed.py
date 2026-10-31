@@ -44,11 +44,13 @@ import unittest
 
 from tests.client.live_run_harness import (
     CLIENTS,
+    STREAM_CODEC,
     RecordingBoard,
     install_project,
     load_toon,
     new_scratch,
     scrubbed_env,
+    stream_sent,
     write_fake_bun,
     write_fake_cargo,
     write_fake_mvnw,
@@ -174,7 +176,8 @@ class _IngestHeldSignalCase(unittest.TestCase):
     # ── the shared assertion ────────────────────────────────────────────
 
     def _assert_ingest_signal_filed_the_run(self, label, signum, code, stdout,
-                                            stderr, ingest_path, inline=None):
+                                            stderr, ingest_path, inline=None,
+                                            streamed=False):
         signame = signal.Signals(signum).name
         run_ids = self.board.run_ids_opened()
         self.assertEqual(
@@ -192,7 +195,21 @@ class _IngestHeldSignalCase(unittest.TestCase):
             body.get("runId"), run_id,
             f"{label}: the ingest must carry the runId it closes; got "
             f"{body!r}")
-        if inline:
+        if streamed:
+            # CR-CRU-224: a python unittest run is closed from its runner's
+            # stream, carrying no report and no parse; the board holds the
+            # runner's 3 cases.
+            self.assertEqual(
+                (body.get("codec"), "data" in body, "summary" in body),
+                (STREAM_CODEC, False, False),
+                f"{label}: the close names the stream codec and carries no "
+                f"report; got {body!r}")
+            held = stream_sent(self.board, run_id)["summary"]
+            self.assertEqual(
+                (held["total"], held["failed"]), (3, 0),
+                f"{label}: the board holds the runner's 3 cases from its "
+                f"stream; held={self.board.held_stream(run_id)!r}")
+        elif inline:
             # CR-CRU-204 — a client that sends its runner's reports carries
             # the report's text inline, never a path or a parse of it.
             self.assertEqual(
@@ -267,9 +284,12 @@ INGEST_HELD_SITES = (
 # The clients that send their runner's reports inline through the shared
 # ingest (CR-CRU-204), each with the number of report files its fake runner
 # writes for the 3-case run: their ingest body carries `data`, never a parse.
-# bun, python, rust and arduino write one report; maven's surefire writes one
-# per class.
-INLINE_REPORT_CLIENTS = {"bun": 1, "python": 1, "mvn": 3, "rust": 1, "arduino": 1}
+# bun, rust and arduino write one report; maven's surefire writes one per
+# class.
+INLINE_REPORT_CLIENTS = {"bun": 1, "mvn": 3, "rust": 1, "arduino": 1}
+# The clients whose `test` run is closed from its runner's stream: python's
+# unittest run (CR-CRU-224).
+STREAMED_CLIENTS = {"python"}
 
 
 class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):
@@ -289,7 +309,8 @@ class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):
                     cmd, ingest_path, signal.SIGTERM)
                 self._assert_ingest_signal_filed_the_run(
                     f"{key} test", signal.SIGTERM, code, stdout, stderr,
-                    ingest_path, inline=INLINE_REPORT_CLIENTS.get(key))
+                    ingest_path, inline=INLINE_REPORT_CLIENTS.get(key),
+                    streamed=key in STREAMED_CLIENTS)
 
 
 if __name__ == "__main__":

@@ -58,11 +58,13 @@ import unittest
 
 from tests.client.live_run_harness import (
     CLIENTS,
+    STREAM_CODEC,
     RecordingBoard,
     drive_and_close_stderr,
     install_project,
     new_scratch,
     scrubbed_env,
+    stream_sent,
     write_fake_bun,
     write_fake_cargo,
     write_fake_mvnw,
@@ -166,6 +168,23 @@ class _PipeCloseCase(unittest.TestCase):
             and data[0].count("<testcase") == 3,
             f"the ingest carries the runner's own report (3 cases) inline; "
             f"body={body!r}")
+
+    def assert_filed_from_its_stream_on_the_run_route(self, run_id=RUN_ID):
+        """CR-CRU-224: a python unittest run is closed from its runner's
+        stream: ONE `POST /api/v2/runs` carrying `codec: "crucible-events"`
+        and no `data`, never the parsed route, and the board holds the
+        runner's 3 cases."""
+        filed = self.filed_posts(run_id)
+        self.assertEqual(
+            [p for p, _ in filed], [RUNS],
+            f"the run is filed by one {RUNS} close, never {PARSED}; "
+            f"posts={self.board.posts()!r}")
+        body = filed[0][1]
+        self.assertEqual((body.get("codec"), "data" in body), (STREAM_CODEC, False),
+                         f"body={body!r}")
+        self.assertEqual(stream_sent(self.board, run_id)["summary"]["total"], 3,
+                         f"the board holds the runner's 3 cases from its stream; "
+                         f"held={self.board.held_stream(run_id)!r}")
 
 
 # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
@@ -316,7 +335,7 @@ class StderrClosedTest(_PipeCloseCase):
              "--reports", "reports", "--agent", AGENT], self.env())
         self.assert_run_opened()
         if self.assert_run_settled("stderr"):
-            self.assert_filed_inline_on_the_run_route()
+            self.assert_filed_from_its_stream_on_the_run_route()
         self.assertNotIn(PARSED, [p for p, _ in self.board.posts()],
                          f"python never files on {PARSED}; posts={self.board.posts()!r}")
 

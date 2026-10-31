@@ -31,6 +31,8 @@ from pathlib import Path
 from unittest import mock
 
 from tests.client.live_run_harness import (
+    STREAM_CODEC,
+    STREAM_ROUTE,
     get_answering_health,
     write_fake_bun,
     write_fake_mvnw,
@@ -98,7 +100,9 @@ def _load_client(client):
 
 class _RecordingPost:
     """A client's `_post` seam: records every (path, body) and answers the run
-    start with the reply the test chose, every other POST with `ok`."""
+    start with the reply the test chose, a stream batch with the bytes it
+    makes held (as the board answers it, CR-CRU-200), every other POST with
+    `ok`."""
 
     def __init__(self, start_reply=START_ACCEPTED):
         self.start_reply = start_reply
@@ -108,6 +112,10 @@ class _RecordingPost:
         self.calls.append((path, dict(payload or {})))
         if path == RUN_START:
             return dict(self.start_reply)
+        if STREAM_ROUTE.match(path):
+            body = payload or {}
+            held = int(body.get("from") or 0) + len(str(body.get("data") or "").encode("utf-8"))
+            return {"ok": True, "runId": RUN_ID, "held": held}
         return dict(INGEST_OK)
 
     def bodies(self, path):
@@ -613,9 +621,11 @@ _PYTHON_DIES_BEFORE_ANY_REPORT = (
 
 class PythonStatesItsStackOnEveryIngestTest(_ClientIngestCase):
     """python: the whole `test` verb (`main`), which opens the run itself — a
-    real unittest run over a one-test fixture for `/runs` (its report sent
-    through the shared ingest), and an
-    interpreter that dies before writing a report for `/runs/compile`."""
+    real unittest run over a one-test fixture for `/runs` (closed from the
+    runner's stream, CR-CRU-224), and an interpreter that dies before writing
+    anything for `/runs/compile`. A unittest run whose start opened no run
+    files nothing at all (CR-CRU-224 section S3): its run start is then the
+    one body that states the stack."""
 
     CLIENT = "python"
 
@@ -639,29 +649,55 @@ class PythonStatesItsStackOnEveryIngestTest(_ClientIngestCase):
         fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
         self._test_verb(str(fake))
 
+    def assert_closed_from_its_stream(self, recorder):
+        closes = recorder.bodies(RUNS)
+        self.assertEqual(
+            [(body.get("codec"), "data" in body) for body in closes],
+            [(STREAM_CODEC, False)],
+            f"python: a unittest run is closed once from its runner's stream, "
+            f"carrying no report (CR-CRU-224); posted to {recorder.paths()!r}")
+
+    def assert_nothing_filed_and_the_start_states_the_stack(self, recorder):
+        """CR-CRU-224 section S3: an open that answers no `runId` sets no
+        stream and files nothing -- no `/runs`, no `/runs/compile`, no
+        `/runs/parsed` -- so the run start is the one body naming the stack."""
+        filed = [path for path in recorder.paths() if path in INGEST_ROUTES]
+        self.assertEqual(
+            filed, [],
+            f"python: a unittest run whose start opened no run files nothing; "
+            f"posted to {recorder.paths()!r}")
+        starts = recorder.bodies(RUN_START)
+        self.assertEqual(
+            [body.get("stack") for body in starts], [self.stack],
+            f"python: the one run start names the python stack; "
+            f"posted to {recorder.paths()!r}")
+
     def test_a_report_ingest_states_the_python_stack_when_its_start_was_accepted(self):
         recorder = self.drive(START_ACCEPTED, self._passing_suite)
+        self.assert_closed_from_its_stream(recorder)
         self.assert_ingest_states_the_stack(recorder, RUNS, START_ACCEPTED)
 
-    def test_a_refused_start_still_leaves_the_python_stack_on_the_report_ingest(self):
-        """Regression guard — python names its stack on a report ingest
-        whose start was refused; that must survive the change."""
+    def test_a_refused_start_files_no_python_unittest_run_and_the_start_states_the_stack(self):
+        """Refused start, CR-CRU-224 section S3 — a start that opened no run: the unittest run
+        files nothing, where before it filed a single-shot body."""
         recorder = self.drive(START_REFUSED, self._passing_suite)
-        self.assert_ingest_states_the_stack(recorder, RUNS, START_REFUSED)
+        self.assert_nothing_filed_and_the_start_states_the_stack(recorder)
 
-    def test_a_report_ingest_states_the_python_stack_when_its_start_opened_no_run(self):
+    def test_a_start_that_opened_no_run_files_no_python_unittest_run(self):
         """A board that answers the start `ok` with no runId opened nothing:
-        the ingest is the single-shot body and must still name the stack."""
+        the unittest run files nothing (CR-CRU-224 section S3)."""
         recorder = self.drive(START_OPENED_NONE, self._passing_suite)
-        self.assert_ingest_states_the_stack(recorder, RUNS, START_OPENED_NONE)
+        self.assert_nothing_filed_and_the_start_states_the_stack(recorder)
 
     def test_a_compile_ingest_states_the_python_stack_when_its_start_was_accepted(self):
         recorder = self.drive(START_ACCEPTED, self._dying_interpreter)
         self.assert_ingest_states_the_stack(recorder, COMPILE, START_ACCEPTED)
 
-    def test_a_compile_ingest_states_the_python_stack_when_its_start_was_refused(self):
+    def test_a_refused_start_files_no_compile_ingest_for_a_python_unittest_run(self):
+        """An interpreter that dies with no run opened: nothing is filed, the
+        compile ingest included (CR-CRU-224 section S3)."""
         recorder = self.drive(START_REFUSED, self._dying_interpreter)
-        self.assert_ingest_states_the_stack(recorder, COMPILE, START_REFUSED)
+        self.assert_nothing_filed_and_the_start_states_the_stack(recorder)
 
 
 class RustStatesItsStackOnEveryIngestTest(_ClientIngestCase):

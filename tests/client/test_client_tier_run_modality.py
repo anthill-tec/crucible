@@ -763,6 +763,12 @@ class _BunModalityCase(_ModalityCase):
 class _PythonModalityCase(_ModalityCase):
     CLIENT = "python"
 
+    def drive(self, argv, response=None):
+        """Cycle 378's python drive (`_PythonCase.drive`): the board opens the
+        run and holds its stream (`StreamingPost`), as a streamed unittest run
+        that opens no run files nothing (CR-CRU-224)."""
+        return _HARNESS._PythonCase.drive(self, argv, response)
+
     def py_argv(self, verb, extra=()):
         return [verb, "--project-dir", self.tmpdir] + list(extra)
 

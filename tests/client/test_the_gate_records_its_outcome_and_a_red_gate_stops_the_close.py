@@ -501,6 +501,15 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
             head_sha = _git_commit_fixture(project_dir)
             bin_dir = pass_bin if outcome == "pass" else fail_bin
             agent_id = f"gate-fixture-{client_key}-{case}-agent"
+            if client_key == "python":
+                # The plan's cycle is done, so the client's own registration
+                # bound to it is refused, and a streamed unittest run whose
+                # run cannot be opened files nothing (CR-CRU-224 section S3):
+                # the gate's agent is registered unbound first, so its run opens.
+                reg = cls._http("/api/v2/agents/register",
+                                {"projectKey": key, "agentId": agent_id,
+                                 "role": "ORCHESTRATOR"})
+                assert reg.get("ok"), f"gate agent registration failed: {reg!r}"
             result, emits, axi = cls._drive_pre_merge_gate(
                 client_key, project_dir, agent_id, cycle_id, bin_dir, extra)
             fixture["cases"][case] = {
