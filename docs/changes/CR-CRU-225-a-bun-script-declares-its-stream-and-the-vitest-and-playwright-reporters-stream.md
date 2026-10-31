@@ -168,7 +168,16 @@ inherits the start's.
   declared one, or `bun-test`. `check` (tsc) sends none.
 - **`coverage`** names the coverage codec the client sends; undeclared, it is `lcov`, as today.
 - **Liveness.** A stream target's narration follows CR-CRU-201 §S4 step 6: no in-run `running N/M` while the relay lands
-  batches, and ticks whenever it does not.
+  batches, and ticks whenever it does not. The in-run count comes from the STREAM's `test-end`s, never from the runner's
+  console, so a runner whose console the client does not read (Vitest) still ticks. This holds in the shared narration,
+  for python's streamed run too (VERIFY 839 finding 2, orchestrator ruling).
+- **The closing count** (VERIFY 839 finding 3, orchestrator ruling): a streamed run with no `run-end` closes on
+  `ran N/M`, with `M` the `run-start`'s total when there is one, never less than `N`. So a crashed python run now says
+  `ran 3/10`, where it said `ran 3/3`; a run that stopped short never claims the whole suite ran. This is AC5's one
+  intended change to python's streamed runs.
+- **The gate and a non-`bun-test` target** (VERIFY 839 finding 5, user ruling): `pre-merge-gate`'s bun suite is the
+  client's own `bun test`, which counts every declared bun target as covered. How the gate runs a table target whose
+  framework is not `bun-test` is CR-CRU-226's. This repo declares none in this CR.
 
 ### §S3 — the shipped Vitest reporter
 
@@ -262,7 +271,8 @@ inherits the start's.
   - The installer lays down `reporters/`, replaces a symlinked `reporters/` with a real directory without writing through
     the link, and the three fleet tests follow.
 - [ ] **AC5 — the shared close.**
-  - Python-crucible's streamed runs behave exactly as before through the extracted close: its existing streamed-run
+  - Python-crucible's streamed runs behave exactly as before through the extracted close, apart from the closing count
+    §S2 rules on: its existing streamed-run
     tests pass unchanged.
   - The bun client calls the same close; a source check shows neither client copies it.
 - [ ] **AC6 — the design record and the guards.**

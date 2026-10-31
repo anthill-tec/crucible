@@ -36,6 +36,10 @@ stream.
   that framework. The `stack` field stays only as the run's label.
 - **BDD as well as unit.** The declarations this CR enforces cover BDD frameworks (mostly front-end and UI) as well as
   unit runners.
+- **The gate runs every declared target's framework** (user ruling 2026-11-01, from CR-CRU-225's VERIFY finding 5).
+  `pre-merge-gate`'s bun suite is the client's own `bun test`, which today counts every declared bun target as covered.
+  A table target whose framework is not `bun-test` (Vitest, Playwright) would be reported covered without running. This
+  CR decides how the gate runs it.
 
 ## Steps
 
