@@ -344,17 +344,19 @@ def _recognise_completion(line):
     return bool(_COMPLETION_LINE.match(text)), None
 
 
-def _narrator(project_dir, agent_id, identity, total, relay=None):
+def _narrator(project_dir, agent_id, identity, total, poster=None):
     """This client's `RunNarrator`: bun's recogniser, the prescanned total, and
     a tick that reports through the gated identity — if the row is pruned
     mid-run and a tick re-creates it, this run owns that ghost.
 
-    CR-CRU-201 \u00a7S4 step 6 \u2014 with a console `relay`, the in-run `running N/M`
-    ticks are not posted while it sends (its batches keep the agent alive);
-    once the board stops it, they resume, so the run is never swept as a dead
+    CR-CRU-201 \u00a7S4 step 6 \u2014 on a relayed run (`poster` is its relay's
+    `_ConsolePoster`), the in-run `running N/M` ticks are not posted while the
+    relay's last batch was held (its batches keep the agent alive); whenever
+    it is not landing batches \u2014 a refusal, a cut, or a 5xx or unreachable
+    board it is retrying \u2014 they are, so the run is never swept as a dead
     agent's. The closing `ran N/M` and `ingesting\u2026` are posted either way."""
     def _tick(message):
-        if (relay is not None and relay.stopped is None
+        if (poster is not None and poster.landing
                 and message.startswith(_IN_RUN_TICK)):
             return
         resp = _register_agent(project_dir, agent_id, message)
@@ -412,13 +414,35 @@ def _relay_post(path, payload, timeout=None):
     return _request("POST", path, payload, timeout)
 
 
-def _console_relay(project_dir, agent_id, run_id, reports_dir, health):
+class _ConsolePoster:
+    """The relay's poster on a relayed run: posts through `_relay_post` and
+    keeps `landing`, whether the board held the last batch it was sent, read
+    as the relay reads it (`_stream_answer`): a held answer, or a resend that
+    moves `from` on, lands; a refusal, a cut, a 5xx, an unreachable board or a
+    resend from where the batch was sent does not. True until the first
+    answer: the relay is taken as landing until the board says otherwise."""
+
+    def __init__(self):
+        self.landing = True
+
+    def __call__(self, path, payload, timeout=None):
+        resp = _relay_post(path, payload, timeout)
+        kind, held = _axi()._stream_answer(resp)
+        self.landing = kind == "held" or (
+            kind == "resend" and held != payload.get("from"))
+        return resp
+
+
+def _console_relay(project_dir, agent_id, run_id, reports_dir, health,
+                   poster=None):
     """A started `StreamRelay` following `<reports_dir>/bun-console.log` to the
-    open run `run_id` under `bun-console`, or None when the run does not relay:
+    open run `run_id` under `bun-console`, posting through `poster` (a fresh
+    `_ConsolePoster` when none is given), or None when the run does not relay:
     no run is open, or `health` does not list the codec under `codecs.view`."""
     if not run_id or not _board_reads_console(health):
         return None
-    relay = _axi().StreamRelay(_relay_post, _project_key(project_dir), agent_id,
+    relay = _axi().StreamRelay(poster or _ConsolePoster(),
+                               _project_key(project_dir), agent_id,
                                run_id, os.path.join(reports_dir, CONSOLE_FILE),
                                CONSOLE_CODEC, _axi()._ingest_body_limit(health))
     relay.start()
@@ -1181,10 +1205,11 @@ def cmd_test(args, tier=None):
                     project_dir, args.agent, tier=tier, context=_run_context(),
                     release=release,
                     total=scanned if reads_console and name is None else None)
+            poster = _ConsolePoster()
             relay = _console_relay(project_dir, args.agent, run_id,
-                                   reports_dir, health)
+                                   reports_dir, health, poster)
             narrator = _narrator(project_dir, args.agent, identity, scanned,
-                                 relay)
+                                 poster if relay is not None else None)
             # The pre-flight finding rides the SAME envelope warnings[] the
             # run's own lifecycle warnings do, ahead of them (it was decided
             # first) — §S3's second channel.
@@ -1394,10 +1419,11 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
                     release=release,
                     total=(scanned if reads_console and script is None
                            and name is None else None))
+            poster = _ConsolePoster()
             relay = _console_relay(project_dir, args.agent, run_id,
-                                   reports_dir, health)
+                                   reports_dir, health, poster)
             narrator = _narrator(project_dir, args.agent, identity, scanned,
-                                 relay)
+                                 poster if relay is not None else None)
             run_warnings = preflight_warnings + run_warnings
         try:
             with _abandon_trap(run_id), _run_scoped_tmpdir(env) as run_env, \
