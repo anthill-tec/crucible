@@ -67,6 +67,13 @@
 - **The live failure row shows its browser** (finding 5, user ruling).
 - **An unwritable `CRUCIBLE_STREAM`** gives one clear error line from the reporter, not a throw out of `onBegin`
   (finding 7, user ruling).
+- **AC4's step comparison and Background** (RED 846 ruling): Playwright's JSON report keeps only top-level steps, so
+  the `playwright` codec never sees Background steps, which the stream puts first (P4, ruling 6). AC4's comparison
+  puts the feature's Background steps ahead of the codec's steps, then compares exactly. This repo's own features
+  have no Background, so its real-suite proof compares unchanged.
+- **The hook-failed scenario box in every view state** (RED 846 ruling): it is shown or hidden exactly as a failing
+  step's box is in the same state (`failureBoxVisible`). If that contradicts a cycle 844 test, FIX escalates rather
+  than choosing.
 - **The reports-dir client change in its own commit** (`bd98731`, before the move commit) is accepted: it changes
   only what a stream target is handed, and leaves the gate green (finding 6).
 
