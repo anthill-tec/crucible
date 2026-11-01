@@ -44,7 +44,8 @@
   The existing `tests/e2e-suite-reaches-the-board.test.ts`, which already drives this repo's real e2e suite in the gate,
   is re-pointed at the stream shape (F1) and is the real-suite proof, at no extra gate cost.
 - **P4:** the reporter's steps are the attempt's `test.step` steps: the top-level ones, plus the `test.step` children of a
-  hook step (Background, ruling 6). Fixtures are not steps.
+  hook step named `Background` (ruling 6). Fixtures are not steps, and neither is the `test.step` playwright-bdd wraps
+  a Before or After hook in: a Before-hook failure is the scenario's failure, with no failing step (RED 842 ruling).
 - **P5 — the suite** (F11): a test's `suite` is the describe titles after its file in `titlePath()`, without the
   scenario's own title, joined by ` › `. Two features with the same title in different files stay apart because the
   file is part of the match: the store keys a suite by (`suite`, `browser`) and the view by (`file`, `suite`, `browser`).
@@ -119,7 +120,8 @@
     `pending`;
   - `duration_ms`;
   - `steps` *(P4)*;
-  - `failure` (F6): from `result.error`, else `result.errors[0]`, with message, type and stack. A scenario whose Before
+  - `failure` (F6): from `result.error`, else `result.errors[0]`, with message and stack (as `trace`). Playwright's `TestError`
+    has no type, so a reporter failure carries none (RED 842 ruling). A scenario whose Before
     hook fails has a failure and no failing step; one whose After hook fails has passing steps and a failure.
 - **Tests that never run** (F4). At `onEnd`, the reporter emits a `pending` `test-end` for every test with no result: a
   dependency project that failed, `--max-failures`, an interrupt. It also emits the last result of any test not yet
