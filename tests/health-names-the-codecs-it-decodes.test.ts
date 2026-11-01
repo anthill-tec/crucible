@@ -1,6 +1,6 @@
 // Health (`/api/health`, `/api/v2/health`) carries
-// `codecs: {test: [...], coverage: [...], view: [...]}` — the names this
-// board decodes — so a client can tell a board that predates server-side
+// `codecs: {test: [...], coverage: [...], view: [...], stream: [...]}` — the
+// names this board decodes — so a client can tell a board that predates server-side
 // decoding before it sends. This board decodes `junit` and `playwright` test
 // reports, the `crucible-events` test stream, and `jacoco` and `lcov`
 // coverage, and reads the `bun-console` view stream into a run's live state
