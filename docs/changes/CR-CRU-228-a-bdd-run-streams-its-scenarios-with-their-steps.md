@@ -12,13 +12,32 @@
   3. **The live view shows no steps.** An open BDD run's live view is its scenario counts, current file and failures,
      as for any stream. The steps are in the stored run.
 
-Its gap analysis is short: CR-CRU-225's analysis covered this scope before the split. The baseline is re-measured
-and the code re-read once CR-CRU-225 merges.
+Its gap analysis is short: CR-CRU-225's analysis covered this scope before the split.
+
+**Gap analysis 2026-11-01** (after CR-CRU-225 merged as `62a9abfc`):
+- **Baseline:** CR-CRU-225's pre-merge gate on the identical tree: 10481/0 (bun 4539/0, python 5942/0; events
+  `evt-1793492541466-75` and `evt-1793493838630-76`). No re-run is needed: `git diff 148507b1 62a9abfc` is empty.
+- **What changed:** `framework` exists on every run and its event brief (CR-CRU-225), and the shared
+  `start_stream_relay` and `close_streamed_run` exist. The reporters directory and its install exist.
+- **Reach:** two more places key a BDD run on the `playwright` codec: `isSpecRun` (`public/app.js`) and the BDD tab's
+  index, `bddIndexRows` (`public/app-logic.mjs`). Both are named in §S3.
+- **The spec view's shape today:** `specFeaturesOf` splits each suite's name at `BDD_SEP` (` › `) into feature and
+  scenario, and the steps are the suite's leaves. The new shape has the feature as the suite and the scenario as the
+  test, so the view reads two shapes.
+- **Cost (Dimension 7):** a full run of this repo's e2e suite inside the client test suite would add about 10 minutes to
+  every gate. That is P3.
+
+**Pre-review: due** — a new shipped artifact (a reporter), a migration, and a re-modelled view.
 
 **PROPOSED, awaiting the user's ruling** (Rule 19):
 
 - **P1:** the migration is v24, adding a `run_case_steps` table that holds a test's steps.
 - **P2:** this repo's `test:e2e` moves to the table in this CR, which proves the Playwright stream on the real suite.
+- **P3:** AC4 has two proofs. A small playwright-bdd fixture project, run through the bun client against a stub board,
+  is the automated test: one feature, scenarios with steps, a failing step, a retried scenario, and two projects. The
+  real `test:e2e` run against a scratch board is VERIFY's recorded proof, run once and not part of the gate.
+- **P4:** the reporter's steps are the attempt's top-level `test.step` steps, which are the steps Playwright's own JSON
+  reporter keeps, so the comparison with the `playwright` codec is like for like. Hooks and fixtures are not steps.
 
 ## Problem
 
@@ -82,6 +101,8 @@ and the code re-read once CR-CRU-225 merges.
   - A new run reads feature → scenario → step from suites, tests and their steps.
   - An old run reads its scenario suites and their step leaves, as today.
   - The scenario's identity (name, browser) is unchanged.
+- **The BDD tab's index** (`bddIndexRows`, `public/app-logic.mjs`) lists a run whose framework is `playwright-bdd` as
+  well as a run stored by the `playwright` codec.
 
 ### §S4 — the record of the design, and the close-out
 
@@ -112,9 +133,11 @@ and `browser` until it runs the merged code. AC4 proves the stream on a scratch 
   - It writes nothing with `CRUCIBLE_REPORTERS` unset.
   - It is installed.
 - [ ] **AC3 — the specification view.** In the run detail, a `playwright-bdd` run opens as feature → scenario → step from
-  its tests and steps, and a run stored by the `playwright` codec opens as today. Both are shown on stored fixtures.
-- [ ] **AC4 — this repo's e2e streams.** `test:e2e`, run through the bun client against a scratch board built from this
-  branch:
+  its tests and steps, and a run stored by the `playwright` codec opens as today. Both are shown on stored fixtures. The
+  BDD tab's index lists both.
+- [ ] **AC4 — a BDD run streams** *(P3)*. A playwright-bdd fixture project (one feature, scenarios with steps, a
+  failing step, a retried scenario, two projects), run through the bun client against a stub board, and — as VERIFY's
+  recorded proof, outside the gate — this repo's `test:e2e` against a scratch board built from this branch:
   - it is closed by its stream, with framework `playwright-bdd`;
   - its scenario count equals the same run's JUnit `tests`;
   - each scenario's steps equal, by name, status and order, what the `playwright` codec decodes from the same run's
