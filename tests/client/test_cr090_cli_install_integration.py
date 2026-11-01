@@ -98,6 +98,7 @@ EXPECTED_FLEET_FILES = frozenset({
     # hands a runner as `CRUCIBLE_REPORTERS`. Named by its path under
     # `clients/`.
     "reporters/vitest-crucible.ts",
+    "reporters/playwright-crucible.ts",
 })
 
 
