@@ -7690,7 +7690,13 @@
 
     // A playwright run's detail opens as a SPECIFICATION (feature →
     // scenario → step). Every other codec keeps the plain test tree.
-    const isSpecRun = (d) => d?.kind === "test" && d?.codec === "playwright";
+    const isSpecRun = (d) =>
+      d?.kind === "test" && (d?.codec === "playwright" || d?.framework === "playwright-bdd");
+
+    // A spec run in the scenario shape: one suite per feature and browser, a
+    // test per scenario, its Gherkin steps under it. A run the playwright
+    // codec stored keeps a suite per scenario, its steps as leaves.
+    const isScenarioShape = (d) => isSpecRun(d) && d?.codec !== "playwright";
 
     // On open, the first feature (failures-first order) shows its failing
     // scenarios plus its first SPEC_FIRST_OPEN scenarios; the rest of its
@@ -7832,6 +7838,7 @@
       function specFeaturesOf(d) {
         if (specCache !== null && specCache.d === d) return specCache.features;
         const tree = d.tree ?? [];
+        const scenarioShape = isScenarioShape(d);
         const failing = new Set(
           L.foldSuites(tree.map((s) => ({ name: suiteKeyOf(s), status: s.status }))),
         );
@@ -7839,7 +7846,8 @@
         for (const node of tree) {
           const name = typeof node.name === "string" ? node.name : "";
           const cut = name.indexOf(BDD_SEP);
-          const title = cut < 0 ? "" : name.slice(0, cut);
+          // The scenario shape's suite IS its feature, whole, never split.
+          const title = scenarioShape ? name : cut < 0 ? "" : name.slice(0, cut);
           if (!byTitle.has(title)) byTitle.set(title, []);
           byTitle.get(title).push({ node, failing: failing.has(suiteKeyOf(node)) });
         }
@@ -7848,11 +7856,14 @@
             ...entries.filter((e) => e.failing),
             ...entries.filter((e) => !e.failing),
           ];
+          // The scenario shape counts its scenarios over every browser's suite.
+          const sum = (k) => scenarios.reduce((n, e) => n + (e.node.counts?.[k] ?? 0), 0);
           return {
             title,
             scenarios,
-            failed: scenarios.filter((e) => e.failing).length,
-            passed: scenarios.filter((e) => e.node.status === "pass").length,
+            failed: scenarioShape ? sum("failed") : scenarios.filter((e) => e.failing).length,
+            passed: scenarioShape ? sum("passed") : scenarios.filter((e) => e.node.status === "pass").length,
+            browsers: new Set(scenarios.map((e) => e.node.browser)).size,
           };
         });
         const ordered = [
@@ -7869,6 +7880,15 @@
       // other all-green feature stays folded. Nothing else is read until it
       // scrolls into view (loadScrolledScenarios) or is clicked.
       function openProgressively(d) {
+        // The scenario shape: every failing feature opens, then the first
+        // SPEC_FIRST_OPEN features (failures-first); an open feature reads
+        // each of its browsers' suites, which answer its scenarios and steps.
+        if (isScenarioShape(d)) {
+          specFeaturesOf(d).forEach((feature, i) => {
+            if (feature.failed > 0 || i < SPEC_FIRST_OPEN) openFeature(feature);
+          });
+          return;
+        }
         const initial = [];
         specFeaturesOf(d).forEach((feature, i) => {
           featureOpenState(feature.title).val = i === 0 || feature.failed > 0;
@@ -7879,9 +7899,18 @@
         for (const node of initial) void loadSuite(node);
       }
 
-      function toggleFeature(title) {
-        const open = featureOpenState(title);
-        open.val = !open.val;
+      // Unfold a feature; in the scenario shape, read its suites as it opens.
+      function openFeature(feature) {
+        featureOpenState(feature.title).val = true;
+        if (isScenarioShape(detail.val)) {
+          for (const entry of feature.scenarios) void loadSuite(entry.node);
+        }
+      }
+
+      function toggleFeature(feature) {
+        const open = featureOpenState(feature.title);
+        if (open.val) open.val = false;
+        else openFeature(feature);
       }
 
       // A heat-cell reveal first opens the feature holding its scenario:
@@ -7895,7 +7924,7 @@
           f.scenarios.some((entry) => suiteKeyOf(entry.node) === suiteName),
         );
         if (feature === undefined) return;
-        featureOpenState(feature.title).val = true;
+        openFeature(feature);
       }
 
       // A folded scenario row of an unfolded feature reads its steps once it
@@ -8588,7 +8617,7 @@
             {
               "data-testid": "feature-heading",
               class: `app-feature-heading app-tree-line ${status}`,
-              onclick: () => toggleFeature(feature.title),
+              onclick: () => toggleFeature(feature),
             },
             span({ "data-testid": "feature-toggle", class: "app-tree-toggle" }, open ? "▾" : "▸"),
             span(
@@ -8605,10 +8634,55 @@
             ? div(
                 { class: "app-feature-scenarios" },
                 feature.scenarios.map((entry) =>
-                  SuiteBinding(entry.node, presentation, density),
+                  isScenarioShape(detail.val)
+                    ? () => ScenarioRows(entry.node, feature.browsers > 1, presentation)
+                    : SuiteBinding(entry.node, presentation, density),
                 ),
               )
             : null,
+        );
+      };
+
+      // The scenario shape: one browser's suite of a feature, read whole by
+      // its ?suite=&browser= read — each scenario (failing first) with its
+      // steps. A binding per suite, reading only that suite's state.
+      const ScenarioRows = (node, namesBrowser, presentation) => {
+        const key = suiteKeyOf(node);
+        const scenarios = leavesOf(key);
+        if (scenarios === undefined) return div({ class: "app-empty" }, Spinner());
+        const ordered = [
+          ...scenarios.filter((s) => s.status === "fail"),
+          ...scenarios.filter((s) => s.status !== "fail"),
+        ];
+        const browser = namesBrowser ? node.browser : null;
+        return div(ordered.map((s) => ScenarioGroup(key, s, browser, presentation)));
+      };
+
+      // One scenario row and its steps. A scenario that failed with no failing
+      // step (a Before hook) carries its own failure box, below its row.
+      const ScenarioGroup = (key, scenario, browser, presentation) => {
+        const steps = scenario.steps ?? [];
+        const failure = scenario.failure;
+        const ownFailure = scenario.status === "fail" && !steps.some((s) => s.status === "fail");
+        const trace = typeof failure?.trace === "string" && failure.trace.length > 0 ? failure.trace : null;
+        return div(
+          { class: "app-suite-group" },
+          div(
+            { "data-testid": "suite-row", class: `app-suite-row app-tree-line ${scenario.status}` },
+            span({ class: "app-suite-name" }, `${drillinLeafGlyph(scenario.status)} ${scenario.name}`),
+            browser === null || browser === undefined
+              ? null
+              : span({ class: "app-suite-browser app-card-meta" }, `· ${browser}`),
+            span({ class: "app-card-meta" }, fmtDuration(scenario.duration_ms ?? 0)),
+          ),
+          ownFailure
+            ? div(
+                { "data-testid": "failure-box", class: "app-failure-box app-step-failure" },
+                div({ class: "app-failure-message" }, failure?.message || failure?.type || "test failed"),
+                trace === null ? null : pre({ class: "app-failure-trace app-stack-trace" }, trace),
+              )
+            : null,
+          steps.map((step) => LeafRows(`${key} › ${scenario.name}`, step, presentation)),
         );
       };
 

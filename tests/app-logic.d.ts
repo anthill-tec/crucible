@@ -13,6 +13,8 @@ declare module "../public/app-logic.mjs" {
     kind: string;
     tier?: string;
     codec?: string;
+    /** The run's test framework, when its filer named one (e.g. `playwright-bdd`). */
+    framework?: string;
     timestamp: number;
     total: number;
     passed: number;
