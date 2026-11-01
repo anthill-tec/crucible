@@ -30,7 +30,7 @@
   index, `bddIndexRows` (`public/app-logic.mjs`).
 - **Pre-review** (`CR-CRU-228-SPEC-REVIEW`): its 13 findings are folded in below, named F1–F13 where a choice was made.
 
-**PROPOSED, awaiting the user's ruling** (Rule 19):
+**Approved by the user 2026-11-01**, with P1 and P3–P6 as proposed (no longer open):
 
 - **P1:** migration v24 adds a `run_case_steps` table holding a test's steps, listed in `RUN_DETAIL_TABLES` ahead of
   `run_cases`.
