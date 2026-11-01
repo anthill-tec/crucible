@@ -55,10 +55,14 @@ export function createRunStreamTables(db: Database): void {
       file TEXT NOT NULL,
       message TEXT,
       type TEXT,
+      browser TEXT,
       PRIMARY KEY (run_id, position)
     );
   `);
 }
+
+/** A live failure's browser: added last, by the base pass's DDL and by the migration's ALTER alike. */
+export const LIVE_FAILURE_BROWSER_DDL = "ALTER TABLE run_live_failures ADD COLUMN browser TEXT";
 
 /** What a batch did, or why it was refused; `held` is the stream's UTF-8 length either way. */
 export type StreamBatchOutcome =
@@ -96,6 +100,7 @@ interface FailureRow {
   file: string;
   message: string | null;
   type: string | null;
+  browser: string | null;
 }
 
 function liveRow(db: Database, runId: string): LiveRow | null {
@@ -219,7 +224,7 @@ export function appendRunStream(db: Database, runId: string, batch: StreamBatch)
 function liveFailures(db: Database, runId: string): RunLiveFailure[] {
   return db
     .query<FailureRow, [string]>(
-      `SELECT id, name, suite, file, message, type FROM run_live_failures WHERE run_id = ? ORDER BY position`,
+      `SELECT id, name, suite, file, message, type, browser FROM run_live_failures WHERE run_id = ? ORDER BY position`,
     )
     .all(runId)
     .map(
@@ -228,6 +233,7 @@ function liveFailures(db: Database, runId: string): RunLiveFailure[] {
         name: row.name,
         suite: row.suite,
         file: row.file,
+        ...(row.browser !== null ? { browser: row.browser } : {}),
         ...(row.message !== null ? { message: row.message } : {}),
         ...(row.type !== null ? { type: row.type } : {}),
       }),
@@ -305,9 +311,10 @@ function fillRunLive(db: Database, runId: string): void {
     .query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM run_live_failures WHERE run_id = ?`)
     .get(runId)!.n;
   const addFailure = db.query(
-    `INSERT INTO run_live_failures (run_id, position, id, name, suite, file, message, type)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO run_live_failures (run_id, position, id, name, suite, file, message, type, browser)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
+  // A test's steps are never read here: the live state counts tests (its steps are in the stored run).
   for (const line of pending.subarray(0, end).toString("utf8").split("\n")) {
     const read = readStreamLine(line);
     if (read.event === "undecodable") state.undecodable += 1;
@@ -332,6 +339,7 @@ function fillRunLive(db: Database, runId: string): void {
         file ?? "?",
         failure.message?.split("\n")[0] ?? null,
         failure.type ?? null,
+        read.browser ?? null,
       );
       position += 1;
     }

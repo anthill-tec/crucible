@@ -3,7 +3,7 @@
 // decoded into the canonical run through JUnit's own reading rules
 // (`failureOf`, `suiteStatus`). A stream codec: it reads a run's held stream,
 // never a report sent as one.
-import type { RunSummary, SuiteNode, TestLeaf } from "../types.ts";
+import type { RunSummary, SuiteNode, TestLeaf, TestStep } from "../types.ts";
 import type { DecodedRun } from "./index.ts";
 import { failureOf, nonBlank, suiteStatus } from "./junit.ts";
 import type { FailureParts } from "./junit.ts";
@@ -18,6 +18,16 @@ export interface TestEndEvent {
   name: string;
   suite?: string;
   file?: string;
+  browser?: string;
+  status: TestLeaf["status"];
+  duration_ms?: number;
+  failure?: FailureParts;
+  steps?: StepEvent[];
+}
+
+/** One step of a `test-end`, its keys checked as a `test-end`'s are. */
+export interface StepEvent {
+  name: string;
   status: TestLeaf["status"];
   duration_ms?: number;
   failure?: FailureParts;
@@ -72,6 +82,26 @@ function isFailure(value: unknown): value is FailureParts {
   return optionalString(parts["message"]) && optionalString(parts["type"]) && optionalString(parts["trace"]);
 }
 
+/** A `test-end`'s `steps`, each step's keys checked; null when any is ill-formed. */
+function readSteps(value: unknown): StepEvent[] | null {
+  if (!Array.isArray(value)) return null;
+  const steps: StepEvent[] = [];
+  for (const step of value as unknown[]) {
+    if (typeof step !== "object" || step === null || Array.isArray(step)) return null;
+    const { name, status, duration_ms: duration, failure } = step as Record<string, unknown>;
+    if (typeof name !== "string" || typeof status !== "string" || !STATUSES.has(status)) return null;
+    if (duration !== undefined && !isDuration(duration)) return null;
+    if (failure !== undefined && !isFailure(failure)) return null;
+    steps.push({
+      name,
+      status: status as TestLeaf["status"],
+      ...(duration !== undefined ? { duration_ms: duration } : {}),
+      ...(failure !== undefined ? { failure } : {}),
+    });
+  }
+  return steps;
+}
+
 /** A parsed object as the event its `event` key names, its keys checked. */
 function readEvent(fields: Record<string, unknown>): StreamLine {
   const kind = fields["event"];
@@ -82,13 +112,16 @@ function readEvent(fields: Record<string, unknown>): StreamLine {
     return isCount(total) ? { event: "run-start", total } : { event: "undecodable" };
   }
   if (kind === "test-end") {
-    const { id, name, suite, file, status, duration_ms: duration, failure } = fields;
+    const { id, name, suite, file, browser, status, duration_ms: duration, failure } = fields;
     if (typeof name !== "string" || typeof status !== "string" || !STATUSES.has(status)) {
       return { event: "undecodable" };
     }
     if (!optionalString(id) || !optionalString(suite) || !optionalString(file)) return { event: "undecodable" };
     if (duration !== undefined && !isDuration(duration)) return { event: "undecodable" };
     if (failure !== undefined && !isFailure(failure)) return { event: "undecodable" };
+    if (browser !== undefined && (typeof browser !== "string" || browser.length === 0)) return { event: "undecodable" };
+    const steps = fields["steps"] === undefined ? undefined : readSteps(fields["steps"]);
+    if (steps === null) return { event: "undecodable" };
     return {
       event: "test-end",
       name,
@@ -96,8 +129,10 @@ function readEvent(fields: Record<string, unknown>): StreamLine {
       ...(id !== undefined ? { id: id as string } : {}),
       ...(suite !== undefined ? { suite: suite as string } : {}),
       ...(file !== undefined ? { file: file as string } : {}),
+      ...(browser !== undefined ? { browser } : {}),
       ...(duration !== undefined ? { duration_ms: duration } : {}),
       ...(failure !== undefined ? { failure } : {}),
+      ...(steps !== undefined ? { steps } : {}),
     };
   }
   if (kind === "run-end") {
@@ -146,7 +181,14 @@ function fileOf(test: TestEndEvent): string {
   return (nonBlank(test.file) ?? suiteNameOf(test)).replace(/\\/g, "/");
 }
 
-/** A `test-end` as the leaf JUnit would store for the same case. */
+/** A step as its leaf reads: rounded duration (0 when absent), its failure kept only when it failed. */
+function toStep(step: StepEvent): TestStep {
+  const read: TestStep = { name: step.name, status: step.status, duration_ms: Math.round(step.duration_ms ?? 0) };
+  if (step.status === "fail") read.failure = failureOf(step.failure ?? {});
+  return read;
+}
+
+/** A `test-end` as the leaf JUnit would store for the same case, its steps read by the same rules. */
 function toLeaf(test: TestEndEvent): TestLeaf {
   const leaf: TestLeaf = {
     name: leafNameOf(test),
@@ -154,6 +196,7 @@ function toLeaf(test: TestEndEvent): TestLeaf {
     duration_ms: Math.round(test.duration_ms ?? 0),
   };
   if (test.status === "fail") leaf.failure = failureOf(test.failure ?? {});
+  if (test.steps !== undefined) leaf.steps = test.steps.map(toStep);
   return leaf;
 }
 
@@ -174,7 +217,7 @@ function figures(counts: Omit<RunSummary, "duration_ms">): string {
 
 /**
  * A `crucible-events` stream decoded into the canonical run, synchronously:
- * one suite node per distinct suite in first-seen order, one leaf per
+ * one suite node per distinct (suite, browser) in first-seen order, one leaf per
  * `test-end` in stream order, counts from the leaves, the duration the last
  * `run-end`'s, else the leaves' sum. `incomplete` states, in §S1's order and
  * joined by "; ", why the stream cannot be trusted — `cut` (a batch the board
@@ -182,7 +225,8 @@ function figures(counts: Omit<RunSummary, "duration_ms">): string {
  * nothing is wrong.
  */
 export function parseCrucibleEvents(text: string, cut = false): DecodedRun {
-  const suites = new Map<string, TestLeaf[]>();
+  // Keyed by (suite, browser): one node per distinct pair, in first-seen order.
+  const suites = new Map<string, { name: string; browser?: string; children: TestLeaf[] }>();
   const leaves: TestLeaf[] = [];
   const files = new Set<string>();
   let runEnd: RunEndEvent | undefined;
@@ -196,16 +240,19 @@ export function parseCrucibleEvents(text: string, cut = false): DecodedRun {
       if (runEnd !== undefined) afterRunEnd = true;
       const leaf = toLeaf(read);
       leaves.push(leaf);
-      const suite = suiteNameOf(read);
-      const children = suites.get(suite);
-      if (children === undefined) suites.set(suite, [leaf]);
-      else children.push(leaf);
+      const name = suiteNameOf(read);
+      const key = JSON.stringify([name, read.browser ?? null]);
+      const suite = suites.get(key);
+      if (suite === undefined) {
+        suites.set(key, { name, ...(read.browser !== undefined ? { browser: read.browser } : {}), children: [leaf] });
+      } else suite.children.push(leaf);
       files.add(fileOf(read));
     }
   }
-  const tree: SuiteNode[] = [...suites].map(([name, children]) => ({
+  const tree: SuiteNode[] = [...suites.values()].map(({ name, browser, children }) => ({
     name,
     status: suiteStatus(children),
+    ...(browser !== undefined ? { browser } : {}),
     children,
   }));
   const counts = countsOf(leaves);

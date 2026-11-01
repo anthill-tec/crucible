@@ -34,14 +34,13 @@
     "start": "bun run src/server.ts"
   },
   "crucible": {
-    "reportPath": {
-      "test:e2e": "env:PLAYWRIGHT_JUNIT_OUTPUT_NAME"
-    },
-    "rawReport": {
+    "targets": {
       "test:e2e": {
-        "codec": "playwright",
-        "file": "playwright.json",
-        "path": "env:PLAYWRIGHT_JSON_OUTPUT_NAME"
+        "framework": "playwright-bdd",
+        "stream": {
+          "codec": "crucible-events",
+          "path": "env:CRUCIBLE_STREAM"
+        }
       }
     }
   },

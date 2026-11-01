@@ -144,6 +144,7 @@ describe("progressive run-detail reads stay bounded to what they actually answer
     // NEGATIVE/bound — exactly zero, not "fewer than before": a `?depth=suites`
     // read has no business touching the cases table at all.
     expect(rowsFromTable(records, "run_cases")).toBe(0);
+    expect(rowsFromTable(records, "run_case_steps")).toBe(0);
     expect(rowsFromTable(records, "run_suites")).toBeGreaterThan(0);
   });
 

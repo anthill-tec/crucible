@@ -44,7 +44,8 @@
   The existing `tests/e2e-suite-reaches-the-board.test.ts`, which already drives this repo's real e2e suite in the gate,
   is re-pointed at the stream shape (F1) and is the real-suite proof, at no extra gate cost.
 - **P4:** the reporter's steps are the attempt's `test.step` steps: the top-level ones, plus the `test.step` children of a
-  hook step (Background, ruling 6). Fixtures are not steps.
+  hook step named `Background` (ruling 6). Fixtures are not steps, and neither is the `test.step` playwright-bdd wraps
+  a Before or After hook in: a Before-hook failure is the scenario's failure, with no failing step (RED 842 ruling).
 - **P5 — the suite** (F11): a test's `suite` is the describe titles after its file in `titlePath()`, without the
   scenario's own title, joined by ` › `. Two features with the same title in different files stay apart because the
   file is part of the match: the store keys a suite by (`suite`, `browser`) and the view by (`file`, `suite`, `browser`).
@@ -53,6 +54,28 @@
   - opening a feature reads `?suite=<feature>&browser=<b>`, which answers its scenarios with their steps;
   - a feature run in several projects shows once, as one feature, with each scenario row naming its browser;
   - failing features open first, then the first `SPEC_FIRST_OPEN`, as today.
+
+**VERIFY 845 rulings 2026-11-01** (user and orchestrator), carried by FIX cycle 846:
+
+- **The P3 fixture proof** is a bun integration test that drives the playwright-bdd fixture through the bun client
+  against an in-process board, asserting every AC4 bullet (VERIFY finding 1).
+- **The design record** (§S5) is made, with the DN pin moved in its own commit (finding 2).
+- **A new-shape scenario row is a reveal target:** it carries `data-suite-key` and `data-leaf-key`, so the heat-cell
+  reveal and the footer failure jump reach it (finding 3, user ruling).
+- **The scenario's failure box follows the shipped failure-box rules:** the one-box focus model and the
+  no-detail note, sharing `LeafRows`' rendering (finding 4, user ruling).
+- **The live failure row shows its browser** (finding 5, user ruling).
+- **An unwritable `CRUCIBLE_STREAM`** gives one clear error line from the reporter, not a throw out of `onBegin`
+  (finding 7, user ruling).
+- **AC4's step comparison and Background** (RED 846 ruling): Playwright's JSON report keeps only top-level steps, so
+  the `playwright` codec never sees Background steps, which the stream puts first (P4, ruling 6). AC4's comparison
+  puts the feature's Background steps ahead of the codec's steps, then compares exactly. This repo's own features
+  have no Background, so its real-suite proof compares unchanged.
+- **The hook-failed scenario box in every view state** (RED 846 ruling): it is shown or hidden exactly as a failing
+  step's box is in the same state (`failureBoxVisible`). If that contradicts a cycle 844 test, FIX escalates rather
+  than choosing.
+- **The reports-dir client change in its own commit** (`bd98731`, before the move commit) is accepted: it changes
+  only what a stream target is handed, and leaves the gate green (finding 6).
 
 ## Problem
 
@@ -119,7 +142,8 @@
     `pending`;
   - `duration_ms`;
   - `steps` *(P4)*;
-  - `failure` (F6): from `result.error`, else `result.errors[0]`, with message, type and stack. A scenario whose Before
+  - `failure` (F6): from `result.error`, else `result.errors[0]`, with message and stack (as `trace`). Playwright's `TestError`
+    has no type, so a reporter failure carries none (RED 842 ruling). A scenario whose Before
     hook fails has a failure and no failing step; one whose After hook fails has passing steps and a failure.
 - **Tests that never run** (F4). At `onEnd`, the reporter emits a `pending` `test-end` for every test with no result: a
   dependency project that failed, `--max-failures`, an interrupt. It also emits the last result of any test not yet

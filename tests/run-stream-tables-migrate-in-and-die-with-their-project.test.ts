@@ -20,7 +20,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { RUN_STREAM_TABLES } from "../src/run-stream.ts";
-import { Store } from "../src/store.ts";
+import { SCHEMA_VERSION, Store } from "../src/store.ts";
 import type { ServerHandle } from "../src/server.ts";
 import {
   base,
@@ -164,7 +164,7 @@ const STREAM_COLUMNS: Record<(typeof RUN_STREAM_TABLES)[number], string[]> = {
     "cut",
     "reader_state",
   ],
-  run_live_failures: ["run_id", "position", "id", "name", "suite", "file", "message", "type"],
+  run_live_failures: ["run_id", "position", "id", "name", "suite", "file", "message", "type", "browser"],
 };
 
 function scratchDbPath(): string {
@@ -215,7 +215,7 @@ function makeV20Store(): string {
 }
 
 describe("the store migrates v20 → v21 by creating the stream and live-state tables", () => {
-  test("a v20 store gains run_stream_batches, run_live and run_live_failures with their columns, and is stamped 23", () => {
+  test("a v20 store gains run_stream_batches, run_live and run_live_failures with their columns, and is stamped the build's schema version", () => {
     const dbPath = makeV20Store();
     // Preconditions, so the test can never pass by testing nothing.
     const before = new Database(dbPath);
@@ -229,11 +229,11 @@ describe("the store migrates v20 → v21 by creating the stream and live-state t
     const store = Store.open(dbPath);
     stores.push(store);
     expect(store.migration?.from).toBe(PRE_STREAM_VERSION);
-    expect(store.migration?.to).toBe(23);
-    expect(store.schemaVersion).toBe(23);
+    expect(store.migration?.to).toBe(SCHEMA_VERSION);
+    expect(store.schemaVersion).toBe(SCHEMA_VERSION);
 
     const db = dbOf(store);
-    expect(rawUserVersion(db)).toBe(23);
+    expect(rawUserVersion(db)).toBe(SCHEMA_VERSION);
     expect(tablesPresent(db)).toEqual(["run_live", "run_live_failures", "run_stream_batches"]);
     for (const table of RUN_STREAM_TABLES) {
       expect(columnsOf(db, table), table).toEqual(STREAM_COLUMNS[table]);

@@ -11,6 +11,7 @@ import {
   deleteProjectRunStreams,
   deleteRunStream,
   heldStreamOf,
+  LIVE_FAILURE_BROWSER_DDL,
   liveStateToken,
   projectHasStreamingRun,
   RUN_STREAM_TABLES,
@@ -1424,6 +1425,7 @@ function createGateDecisionsTable(db: Database): void {
  * they hang off. Every path that removes a run removes its rows here first.
  */
 const RUN_DETAIL_TABLES = [
+  "run_case_steps",
   "run_cases",
   "run_suites",
   "run_diagnostics",
@@ -1442,6 +1444,8 @@ const RUN_DETAIL_TABLES = [
  *   its leaf counts and, for a BDD scenario, the `feature` its name opens with.
  * - `run_cases`: a `TestLeaf` per row, at its `position` within the suite at
  *   `suite_position`; a failure's message, type and trace are each optional.
+ * - `run_case_steps`: a `TestStep` per row, at its `position` within the case
+ *   at (`suite_position`, `case_position`), in `run_cases`' own columns.
  * - `run_compiles` / `run_diagnostics`: a `CompileReport`'s header and its
  *   diagnostics, each diagnostic at its `position`.
  *
@@ -1494,6 +1498,21 @@ function createRunDetailTables(db: Database): void {
       PRIMARY KEY (event_id, suite_position, position)
     ) WITHOUT ROWID;
 
+    CREATE TABLE IF NOT EXISTS run_case_steps (
+      event_id TEXT NOT NULL,
+      suite_position INTEGER NOT NULL,
+      case_position INTEGER NOT NULL,
+      position INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      has_failure INTEGER NOT NULL,
+      failure_message TEXT,
+      failure_type TEXT,
+      failure_trace TEXT,
+      PRIMARY KEY (event_id, suite_position, case_position, position)
+    ) WITHOUT ROWID;
+
     CREATE TABLE IF NOT EXISTS run_compiles (
       event_id TEXT PRIMARY KEY,
       format TEXT NOT NULL,
@@ -1518,6 +1537,9 @@ function createRunDetailTables(db: Database): void {
 
 /** The separator the playwright codec joins a BDD scenario's name with. */
 const FEATURE_SEPARATOR = " › ";
+
+/** The framework whose suites are features, each stored under its own whole name. */
+const FEATURE_SUITE_FRAMEWORK = "playwright-bdd";
 
 /** A BDD scenario's feature: its name up to the first separator; null otherwise. */
 function featureOf(suiteName: string): string | null {
@@ -1545,8 +1567,8 @@ function nodeLabel(path: string, node: unknown): string {
   return typeof name === "string" ? `${path} "${name}"` : path;
 }
 
-function invalidLeaf(leaf: unknown, path: string): string | null {
-  if (!isPlainObject(leaf)) return `${path} is not a test leaf object`;
+function invalidLeaf(leaf: unknown, path: string, step = false): string | null {
+  if (!isPlainObject(leaf)) return `${path} is not a ${step ? "step" : "test leaf"} object`;
   const label = nodeLabel(path, leaf);
   if (typeof leaf.name !== "string") return `${label}: name must be a string`;
   if (typeof leaf.status !== "string" || !TEST_STATUSES.has(leaf.status)) {
@@ -1560,6 +1582,14 @@ function invalidLeaf(leaf: unknown, path: string): string | null {
     if (!isPlainObject(failure)) return `${label}: failure must be an object`;
     for (const key of ["message", "type", "trace"] as const) {
       if (!isOptionalString(failure[key])) return `${label}: failure.${key} must be a string`;
+    }
+  }
+  if (leaf.steps !== undefined) {
+    // A step follows a leaf's own rules, and holds no steps of its own.
+    if (step || !Array.isArray(leaf.steps)) return `${label}: steps must be an array of steps`;
+    for (let k = 0; k < leaf.steps.length; k++) {
+      const refusal = invalidLeaf(leaf.steps[k], `${label} steps[${k}]`, true);
+      if (refusal !== null) return refusal;
     }
   }
   return null;
@@ -1652,6 +1682,7 @@ function unitsAt(text: string, index: number): number {
 interface RunDetailSource {
   id: string;
   kind: string;
+  framework?: string;
   tree?: SuiteNode[];
   raw?: string;
   compile?: unknown;
@@ -1686,6 +1717,12 @@ function writeRunDetailRows(db: Database, run: RunDetailSource): void {
          has_failure, failure_message, failure_type, failure_trace)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    const insertStep = db.query(
+      `INSERT INTO run_case_steps (event_id, suite_position, case_position, position, name, status,
+         duration_ms, has_failure, failure_message, failure_type, failure_trace)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const ownFeature = run.framework === FEATURE_SUITE_FRAMEWORK;
     tree.forEach((suite, suitePosition) => {
       const count = (status: string): number =>
         suite.children.filter((leaf) => leaf.status === status).length;
@@ -1695,7 +1732,7 @@ function writeRunDetailRows(db: Database, run: RunDetailSource): void {
         suite.name,
         suite.status,
         suite.browser ?? null,
-        featureOf(suite.name),
+        ownFeature ? suite.name : featureOf(suite.name),
         suite.children.length,
         count("pass"),
         count("fail"),
@@ -1714,6 +1751,21 @@ function writeRunDetailRows(db: Database, run: RunDetailSource): void {
           leaf.failure?.type ?? null,
           leaf.failure?.trace ?? null,
         );
+        leaf.steps?.forEach((step, stepPosition) => {
+          insertStep.run(
+            run.id,
+            suitePosition,
+            position,
+            stepPosition,
+            step.name,
+            step.status,
+            step.duration_ms,
+            step.failure !== undefined ? 1 : 0,
+            step.failure?.message ?? null,
+            step.failure?.type ?? null,
+            step.failure?.trace ?? null,
+          );
+        });
       });
     });
   }
@@ -1871,6 +1923,20 @@ interface RunCaseRow {
   failure_message: string | null;
   failure_type: string | null;
   failure_trace: string | null;
+}
+
+/** A `run_case_steps` row: a case's own columns, at its case's position. */
+interface RunStepRow extends RunCaseRow {
+  case_position: number;
+}
+
+/** The columns a step is read back from, in `run_case_steps`. */
+const STEP_READ = `SELECT event_id, suite_position, case_position, name, status, duration_ms, has_failure,
+         failure_message, failure_type, failure_trace FROM run_case_steps`;
+
+/** A step row onto its read-back test, read as the case it shares columns with. */
+function addStep(leaf: TestLeaf | undefined, row: RunStepRow): void {
+  if (leaf !== undefined) (leaf.steps ??= []).push(testLeafOf(row));
 }
 
 interface RunCompileRow {
@@ -3120,6 +3186,22 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
     satisfiedBy(db) {
       return FRAMEWORK_COLUMNS.every(
         ({ table }) => !tableExists(db, table) || columnsOf(db, table).has("framework"),
+      );
+    },
+  },
+  {
+    description:
+      "run_case_steps + run_live_failures: a test's steps are stored under it (a CREATE), and a live failure's browser beside it (nullable `browser`, an additive ALTER only where missing). Runs stored before it read unchanged, with no steps and no browser",
+    apply(db) {
+      createRunDetailTables(db);
+      if (tableExists(db, "run_live_failures") && !columnsOf(db, "run_live_failures").has("browser")) {
+        db.exec(LIVE_FAILURE_BROWSER_DDL);
+      }
+    },
+    satisfiedBy(db) {
+      return (
+        tableExists(db, "run_case_steps") &&
+        (!tableExists(db, "run_live_failures") || columnsOf(db, "run_live_failures").has("browser"))
       );
     },
   },
@@ -6052,6 +6134,12 @@ export class Store {
       )
       .all(id, row.position);
     for (const caseRow of caseRows) suite.children.push(testLeafOf(caseRow));
+    const stepRows = this.db
+      .query<RunStepRow, [string, number]>(
+        `${STEP_READ} WHERE event_id = ? AND suite_position = ? ORDER BY case_position, position`,
+      )
+      .all(id, row.position);
+    for (const stepRow of stepRows) addStep(suite.children[stepRow.case_position], stepRow);
     return { event, suite, ...raw };
   }
 
@@ -6410,6 +6498,14 @@ export class Store {
           const suite = suites.get(row.event_id)?.get(row.suite_position);
           if (suite === undefined) continue;
           suite.children.push(testLeafOf(row));
+        }
+        const stepRows = this.db
+          .query<RunStepRow, string[]>(
+            `${STEP_READ} WHERE ${among} ORDER BY event_id, suite_position, case_position, position`,
+          )
+          .all(...chunk);
+        for (const row of stepRows) {
+          addStep(suites.get(row.event_id)?.get(row.suite_position)?.children[row.case_position], row);
         }
       }
 

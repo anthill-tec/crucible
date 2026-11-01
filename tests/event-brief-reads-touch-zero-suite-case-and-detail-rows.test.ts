@@ -163,6 +163,7 @@ function expectDetailTablesUntouched(records: QueryRecord[]): void {
   expect(rowsFromTable(records, "run_suites")).toBe(0);
   expect(rowsFromTable(records, "run_cases")).toBe(0);
   expect(rowsFromTable(records, "run_details")).toBe(0);
+  expect(rowsFromTable(records, "run_case_steps")).toBe(0);
   expect(rowsFromTable(records, "run_compiles")).toBeGreaterThan(0);
   expect(rowsFromTable(records, "run_diagnostics")).toBeGreaterThan(0);
 }

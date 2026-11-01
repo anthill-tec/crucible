@@ -45,8 +45,8 @@ Three layers, the same for every stack.
 2. **Relay.** The client follows the stream and sends it, in throttled batches, to the run it opened
    at start. It sends the stream as written; it decodes nothing.
 3. **Board.** The board decodes each batch with the codec the stream declares, keeps the open run's
-   live state (completed of total, current file, every failure as it happens, Playwright's steps),
-   and pushes it over the live feed.
+   live state (completed of total, current file, every failure as it happens), and pushes it over
+   the live feed.
 
 ### The stream is the record (user ruling)
 
@@ -63,8 +63,9 @@ report is read.
   structured message, type or trace.
 - **Coverage** (lcov, coverage.py, JaCoCo, llvm-cov) is known only at exit and stays a final report
   on every stack.
-- **Playwright:** the shipped reporter emits each Gherkin step as an event, so its JSON report is no
-  longer needed, and the board's `playwright` codec retires once nothing declares it.
+- **Playwright:** the shipped reporter streams each scenario as one test, and its Gherkin steps ride
+  inside that scenario's `test-end` (`steps`), so its JSON report is no longer needed, and the board's
+  `playwright` codec retires once nothing declares it.
 
 | Source | The record | The live view |
 |---|---|---|
@@ -96,7 +97,7 @@ A bun project declares, per `package.json` script, one table:
 ```json
 "crucible": {
   "targets": {
-    "test:e2e":  { "framework": "playwright", "stream": { "codec": "crucible-events", "path": "env:CRUCIBLE_STREAM" } },
+    "test:e2e":  { "framework": "playwright-bdd", "stream": { "codec": "crucible-events", "path": "env:CRUCIBLE_STREAM" } },
     "test:unit": { "framework": "bun-test", "junit": "flag", "console": "bun-console", "coverage": "lcov" }
   }
 }
@@ -161,8 +162,8 @@ Go's stream lands with its client (CR-CRU-195), which therefore also depends on 
 
 What CR-CRU-200 leaves to later CRs (its non-goals):
 
-- Playwright's steps in the live state are CR-CRU-201's, with its shipped Playwright reporter; CR-CRU-200's live state
-  holds the counts, the current file and the failures.
+- Playwright's steps are in the stored run's record, not in the live state (CR-CRU-228, user ruling 3): an open BDD
+  run's live state holds the counts, the current file and the failures, as CR-CRU-200's does for any stream.
 - A stream that only feeds the view, and is never the run's record (`bun-console`, maven's console), is CR-CRU-201's
   and CR-CRU-203's to define, with its codec.
 

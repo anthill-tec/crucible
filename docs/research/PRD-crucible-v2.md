@@ -304,6 +304,24 @@ registry** translating each tool's native output into one **canonical RunSchema*
     `reporters/` as `CRUCIBLE_REPORTERS`, and a project's Vitest config adds the reporter from it when it is set, so
     the config names no machine path. Its `run-start` states no total *(P9)*. A stream target's run is relayed by the
     shared `StreamRelay` and closed by the shared streamed-run close, as python unittest's is.
+- **The Playwright reporter: a BDD run's test is the scenario (CR-CRU-228).** `clients/reporters/playwright-crucible.ts`
+  ships beside the Vitest reporter, is handed in the same way through `CRUCIBLE_REPORTERS`, and writes the
+  `crucible-events` shape to the file `CRUCIBLE_STREAM` names, one whole line as each test ends:
+  - **Scenario-as-test.** Each scenario is one test per Playwright project, streamed once from its last attempt, its
+    status following `test.outcome()`, so a run's counts match its JUnit report. Its `run-start` states `onBegin`'s
+    total, every test in every project.
+  - **`test-end` takes two optional keys:** `browser`, the project, a non-empty string; and `steps`, the scenario's
+    Gherkin steps in order, each `{name, status, duration_ms?, failure?}`: the `test.step` children of the
+    `Background` hook first, then the top-level `test.step`s. A hook's own step and a fixture are not steps, so a
+    Before-hook failure is the scenario's failure with no failing step.
+  - **The board** groups a run's test-ends into suites by (`suite`, `browser`), stores a test's steps under it
+    (`run_case_steps`), and counts tests, never steps. The run detail opens a `playwright-bdd` run as feature →
+    scenario → step.
+  - **The live state holds no steps:** an open run's live view is its counts, current file and failures, and each live
+    failure answers its `browser`, so one scenario failing under two projects reads as two failures. The steps are in
+    the stored run.
+  - **A stream it cannot write** gives one error line naming the path, and the reporter writes nothing more; the run
+    completes.
 
 ### 4.5 Compile ingest
 - Structured parsers per format: `rustc` (`error[EXXXX]` + `--> file:line:col`), java/

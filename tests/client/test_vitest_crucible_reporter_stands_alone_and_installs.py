@@ -203,8 +203,9 @@ class FleetStageLaysTheReporterDownTest(unittest.TestCase):
         _assert_reporter_exists(self)
         self.assertEqual(self.landed.read_bytes(), REPORTER.read_bytes(),
                          "the landed reporter is byte-identical to its source")
-        self.assertEqual(os.listdir(self.landed_dir), [REPORTER_NAME],
-                         "the reporters directory holds the shipped reporter only")
+        self.assertEqual(sorted(os.listdir(self.landed_dir)),
+                         ["playwright-crucible.ts", "vitest-crucible.ts"],
+                         "the reporters directory holds the two shipped reporters only")
 
     def test_a_second_run_converges_and_a_stale_reporter_is_rewritten(self):
         self.install.run_fleet_stage(self.target)
@@ -253,8 +254,9 @@ class FleetStageNeverFollowsASymlinkedReportersDirectoryTest(unittest.TestCase):
         self.assertIs(result.get("converged"), False,
                       f"the run that replaces a link does not report convergence; {result!r}")
         _assert_reporter_exists(self)
-        self.assertEqual(os.listdir(self.link), [REPORTER_NAME],
-                         "the replaced reporters/ directory holds the shipped reporter only")
+        self.assertEqual(sorted(os.listdir(self.link)),
+                         ["playwright-crucible.ts", "vitest-crucible.ts"],
+                         "the replaced reporters/ directory holds the two shipped reporters only")
         self.assertEqual((self.link / REPORTER_NAME).read_bytes(), REPORTER.read_bytes(),
                          "the replaced reporters/ directory holds the shipped reporter's bytes")
 

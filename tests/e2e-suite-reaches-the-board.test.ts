@@ -1,46 +1,27 @@
-// CR-CRU-015 C1 (RED) — the BDD-driven e2e suite reaches the board, with its
-// scenarios intact.
+// The BDD-driven e2e suite reaches the board through its event stream, with
+// every scenario's steps intact.
 //
-// Spec: docs/changes/CR-CRU-015-bdd-harness.md
-//   §S1 the e2e suite is BDD-driven, files as `e2e`, and reaches the board at
-//       all — no rename, no `test:bdd`, no tier change; the ingest carries
-//       SCENARIO-LEVEL detail rather than a pass/fail total
-//   §S2 the `"playwright"` codec that already parses the Gherkin gets a
-//       CALLER — the harness posts the RAW playwright JSON report with
-//       `codec: "playwright"` to POST /api/v2/runs, and the SERVER decodes it.
-//       `POST /api/v2/runs/parsed` is REFUSED for this suite: a client-side
-//       parse flattens the Gherkin before the server ever sees it and stores
-//       `codec: "parsed"`.
+// `package.json`'s `crucible.targets` declares `test:e2e` as a
+// `playwright-bdd` target streamed in `crucible-events` through
+// `env:CRUCIBLE_STREAM`, and in neither `crucible.reportPath` nor
+// `crucible.rawReport`. The bun client opens a run, hands the runner the
+// stream file and the shipped reporters, relays the stream to the open run and
+// closes the run by it. Playwright's kept `junit` and `json` reports are
+// written to the run's own reports dir, never to `<repo>/test-reports`.
 //
-// §S3 (the BDD UI section) and §S4 (the queue row) are LATER cycles and are
-// not touched here.
-//
-// ── GROUND TRUTH, MEASURED ON THIS BRANCH (2026-09-18) ────────────────────
-//
-// A real drive of the shipped client — `bun-crucible.py e2e --agent <id>
-// --project-dir <scratch> --package-dir <repo>` against an ephemeral board —
-// completed in 66s and DID ingest. What it stored is the defect:
-//
-//   codec = "parsed"          (the CLIENT parsed; §S2 requires "playwright")
-//   tier  = "e2e"             (correct, and §S1 says it must stay that way)
-//   summary = {total: 46, passed: 45, failed: 1}
-//   tree  = 16 nodes, one per generated SPEC FILE, e.g.
-//           "tests/e2e/features/roadmap.feature.spec.js"
-//           children = ONE leaf per scenario, named "<Feature> › <Scenario>"
-//
-// So the run reaches the board already (CR-CRU-133 wired the declared target's
-// report mechanism) — what never reaches it is the SPECIFICATION. Every leaf
-// is a whole scenario collapsed to a verdict; not one `Given`/`When`/`Then`
-// survives, because the JUnit the client parses has no notion of a step.
-//
-// The same run's report, decoded by the codec this CR points at (measured by
-// feeding a real `--reporter=json` report through `src/codecs/playwright.ts`):
-//
-//   tree  = one node PER SCENARIO, named "<Feature title> › <Scenario title>"
-//   children = one leaf PER GHERKIN STEP, in step order, `name` being the
-//              literal step line ("Given …", "When …", "And …", "Then …")
-//   a failing step carries its own `failure.message`, and the steps AFTER it
-//   are absent (Playwright halts the `test.step()` chain at the first error).
+// What the drive's one stored run shows:
+//   - tier `e2e`, framework `playwright-bdd`, codec `crucible-events`: opened
+//     at /api/v2/runs/start, streamed to /api/v2/runs/<id>/stream, closed at
+//     /api/v2/runs, and never posted to /api/v2/runs/parsed;
+//   - one suite per feature per browser, named by its `Feature:` title and
+//     carrying its browser;
+//   - a test count equal to the same run's JUnit `tests`;
+//   - each scenario's steps equal, by name, status and order, what the
+//     `playwright` codec (`parsePlaywright`, src/codecs/playwright.ts) decodes
+//     from the same run's JSON report, matched by (suite, name, browser);
+//   - a broken step's own failure message on that step, and the step after it
+//     absent (Playwright halts the `test.step()` chain at the first error);
+//   - `<repo>/test-reports/junit.xml` and `playwright.json` untouched.
 //
 // ── HOW THIS FILE DRIVES IT, AND WHY IN THIS SHAPE ────────────────────────
 //
@@ -74,32 +55,19 @@
 // a guard that hardcoded today's 46 would fail the day it lands for a reason
 // that has nothing to do with this CR.
 //
-// ── WHY EACH ASSERTION FAILS TODAY ───────────────────────────────────────
-//
-//   1  (§S1 declaration guard) BORN GREEN, deliberately — a regression rail,
-//      the shape tests/ci-toolchain-provisioning.test.ts documents for its own
-//      assertions 5 and 6. `test:e2e` is declared, is the BDD harness, and has
-//      no renamed twin TODAY; the criterion is that it cannot silently stop
-//      being so, and contorting a rename guard into failing would pin nothing.
-//   2  (§S1 ingested, scenario-addressed) FAILS: the stored tree holds 16
-//      spec-FILE nodes, so no node is named "<Feature> › <Scenario>".
-//   3  (§S1 scenario-level detail) FAILS: `summary.total` equals the scenario
-//      count exactly — the event IS a per-scenario tally, with no step below
-//      any node.
-//   4  (§S2 codec) FAILS: the stored `codec` is "parsed", and the ingest was
-//      POSTed to /api/v2/runs/parsed rather than /api/v2/runs.
-//   5  (§S2 Gherkin structure) FAILS: a scenario's node holds no step leaves
-//      at all, so the ordered step text cannot be compared.
-//   6  (§S2 failure on the failing STEP) FAILS: the deliberately broken step
-//      has no leaf of its own; the message lands on the whole scenario.
-//
-// `tests/playwright-codec.test.ts` is deliberately NOT touched by any of this
-// (§S2's last criterion): this CR adds a caller, it does not rewrite the
-// parser, and the codec's own unit coverage stays exactly as it is.
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parsePlaywright } from "../src/codecs/playwright.ts";
 import { startServer } from "../src/server.ts";
 import type { ServerHandle } from "../src/server.ts";
 import { declareClientBoard } from "./helpers/client-board.ts";
@@ -119,15 +87,29 @@ const AGENT = "e2e-suite-ingest-fixture";
  *  that this string does not move. */
 const E2E_TARGET = "test:e2e";
 
-/** The codec §S2 rules the server must decode this suite's report with, and
- *  the two that would mean it did not: the client's own pre-parse
- *  (`runs/parsed`) and the flattening JUnit default. */
-const REQUIRED_CODEC = "playwright";
-const FLATTENING_CODECS = ["junit", "parsed"];
+/** The framework the target runs under, and the codec its stream is in. */
+const E2E_FRAMEWORK = "playwright-bdd";
+const STREAM_CODEC = "crucible-events";
 
-/** The route §S2 rules the ingest must take, and the one it must not. */
-const SERVER_DECODE_ROUTE = "/api/v2/runs";
+/** The target's one declaration: its `crucible.targets` entry. */
+const E2E_TARGET_ENTRY = {
+  framework: E2E_FRAMEWORK,
+  stream: { codec: STREAM_CODEC, path: "env:CRUCIBLE_STREAM" },
+};
+
+/** The routes a streamed run takes (open, stream, close), and the one it must
+ *  not: the client's own pre-parse. */
+const START_ROUTE = "/api/v2/runs/start";
+const STREAM_ROUTE = /^\/api\/v2\/runs\/[^/]+\/stream$/;
+const CLOSE_ROUTE = "/api/v2/runs";
 const CLIENT_PARSE_ROUTE = "/api/v2/runs/parsed";
+
+/** The package's own report paths, the defaults `playwright.config.ts` writes
+ *  to when no path is handed in. The drive must leave both untouched. */
+const REPO_REPORTS = [
+  join(REPO_ROOT, "test-reports", "junit.xml"),
+  join(REPO_ROOT, "test-reports", "playwright.json"),
+];
 
 // ── the temporary deliberately-failing specification ─────────────────────
 //
@@ -224,26 +206,43 @@ function declaredScenarios(): DeclaredScenario[] {
 
 // ── the drive ────────────────────────────────────────────────────────────
 
-interface StoredLeaf {
+interface StoredStep {
   name: string;
   status: string;
   duration_ms?: number;
   failure?: { message?: string; trace?: string; type?: string };
 }
 
+interface StoredTest {
+  name: string;
+  status: string;
+  duration_ms?: number;
+  failure?: { message?: string; trace?: string; type?: string };
+  steps?: StoredStep[];
+}
+
 interface StoredSuite {
   name: string;
   status: string;
-  children?: StoredLeaf[];
+  browser?: string;
+  children?: StoredTest[];
 }
 
 interface StoredEvent {
   id: string;
   kind?: string;
   tier?: string;
+  framework?: string;
   codec?: string;
   summary?: { total: number; passed: number; failed: number; pending?: number };
   tree?: StoredSuite[];
+}
+
+/** Whether a package report exists, and when it was last written. */
+interface ReportSnapshot {
+  path: string;
+  exists: boolean;
+  mtimeMs?: number;
 }
 
 interface Drive {
@@ -253,6 +252,13 @@ interface Drive {
   posts: string[];
   /** The scenarios the suite declared for THIS drive, temporary one included. */
   declared: DeclaredScenario[];
+  /** The same run's kept JUnit report, read from the drive's reports dir. */
+  junitXml: string;
+  /** The same run's kept Playwright JSON report, read from the drive's reports dir. */
+  playwrightJson: string;
+  /** The package's own reports, before the drive and after it. */
+  repoReportsBefore: ReportSnapshot[];
+  repoReportsAfter: ReportSnapshot[];
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -308,6 +314,26 @@ async function spawnClient(
   return { code, stdout, stderr };
 }
 
+function snapshotRepoReports(): ReportSnapshot[] {
+  return REPO_REPORTS.map((path) =>
+    existsSync(path) ? { path, exists: true, mtimeMs: statSync(path).mtimeMs } : { path, exists: false },
+  );
+}
+
+/** The one report with `extension` the run wrote into its reports dir. */
+function keptReport(reportsDir: string, extension: string): string {
+  const found = existsSync(reportsDir)
+    ? readdirSync(reportsDir).filter((name) => name.endsWith(extension))
+    : [];
+  if (found.length !== 1) {
+    throw new Error(
+      `the run's reports dir ${reportsDir} holds ${found.length} ${extension} report(s), ` +
+        `not one: ${JSON.stringify(found)}`,
+    );
+  }
+  return readFileSync(join(reportsDir, found[0] as string), "utf8");
+}
+
 async function runTheSuiteThroughTheClient(): Promise<Drive> {
   writeFileSync(RED_FEATURE_FILE, RED_FEATURE_SOURCE);
   writeFileSync(RED_STEPS_FILE, RED_STEPS_SOURCE);
@@ -345,6 +371,8 @@ async function runTheSuiteThroughTheClient(): Promise<Drive> {
   // wipes its reports dir before a run, and the suite that is running THIS
   // file is itself writing `<repo>/test-reports/junit.xml`. Two runs sharing
   // one report path is a race, not a test.
+  const reportsDir = join(scratch, "test-reports");
+  const repoReportsBefore = snapshotRepoReports();
   const run = await spawnClient(
     [
       "e2e",
@@ -355,10 +383,13 @@ async function runTheSuiteThroughTheClient(): Promise<Drive> {
       "--package-dir",
       REPO_ROOT,
       "--reports",
-      join(scratch, "test-reports"),
+      reportsDir,
     ],
     scratch,
   );
+  const repoReportsAfter = snapshotRepoReports();
+  const junitXml = keptReport(reportsDir, ".xml");
+  const playwrightJson = keptReport(reportsDir, ".json");
 
   const res = await fetch(`${board}/api/v2/events?project=${projectKey}`);
   const body = (await res.json()) as { events: StoredEvent[] };
@@ -374,6 +405,10 @@ async function runTheSuiteThroughTheClient(): Promise<Drive> {
     events,
     posts: proxy.posts,
     declared,
+    junitXml,
+    playwrightJson,
+    repoReportsBefore,
+    repoReportsAfter,
     exitCode: run.code,
     stdout: run.stdout,
     stderr: run.stderr,
@@ -417,8 +452,35 @@ function phoneEngineCount(): number {
     : 1;
 }
 
-function nodeNamed(event: StoredEvent, name: string): StoredSuite | undefined {
-  return (event.tree ?? []).find((node) => node.name === name);
+/** A stored test with the suite and browser it sits under. */
+interface PlacedTest {
+  suite: string;
+  browser: string;
+  test: StoredTest;
+}
+
+function placedTests(event: StoredEvent): PlacedTest[] {
+  return (event.tree ?? []).flatMap((suite) =>
+    (suite.children ?? []).map((test) => ({ suite: suite.name, browser: suite.browser ?? "", test })),
+  );
+}
+
+/** The stored tests of one declared scenario, under every browser that ran it. */
+function testsOf(event: StoredEvent, scenario: DeclaredScenario): StoredTest[] {
+  return placedTests(event)
+    .filter((placed) => placed.suite === scenario.feature && placed.test.name === scenario.scenario)
+    .map((placed) => placed.test);
+}
+
+/** The `tests` count on the JUnit report's root element. */
+function junitTests(xml: string): number {
+  const root = /<testsuites\b[^>]*\btests="(\d+)"/.exec(xml);
+  if (root === null) throw new Error(`the JUnit report states no root tests count: ${xml.slice(0, 400)}`);
+  return Number(root[1]);
+}
+
+function nameAndStatus(entries: { name: string; status: string }[]): { name: string; status: string }[] {
+  return entries.map(({ name, status }) => ({ name, status }));
 }
 
 /** The drive is one real browser suite: ~70s of Playwright plus the ingest. */
@@ -436,11 +498,15 @@ afterAll(() => {
   scratchDir = undefined;
 });
 
-describe("CR-CRU-015 §S1 — the BDD suite's declaration cannot be renamed or retiered", () => {
+describe("the BDD suite's declaration cannot be renamed or retiered", () => {
   test("the BDD suite is declared as `test:e2e`, with no renamed twin and no second target", () => {
     const manifest = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as {
       scripts?: Record<string, string>;
-      crucible?: { reportPath?: Record<string, string> };
+      crucible?: {
+        targets?: Record<string, unknown>;
+        reportPath?: Record<string, unknown>;
+        rawReport?: Record<string, unknown>;
+      };
     };
     const scripts = manifest.scripts ?? {};
 
@@ -466,44 +532,54 @@ describe("CR-CRU-015 §S1 — the BDD suite's declaration cannot be renamed or r
     // red on a hoisted constant with nothing broken.
     expect(declaredScenarios().length).toBeGreaterThan(0);
 
-    // CR-CRU-133's declaration rides the same manifest: the report mechanism
-    // is declared FOR this target, and for no target the script table does
-    // not declare.
-    const reportPath = manifest.crucible?.reportPath ?? {};
-    expect(Object.keys(reportPath)).toContain(E2E_TARGET);
-    expect(Object.keys(reportPath).filter((target) => scripts[target] === undefined)).toEqual([]);
+    // The target's record is declared in the same manifest, once: its
+    // `crucible.targets` entry, and neither of the older report declarations.
+    // No table entry names a script the script table does not declare.
+    const targets = manifest.crucible?.targets ?? {};
+    expect(targets[E2E_TARGET]).toEqual(E2E_TARGET_ENTRY);
+    expect(Object.keys(manifest.crucible?.reportPath ?? {})).not.toContain(E2E_TARGET);
+    expect(Object.keys(manifest.crucible?.rawReport ?? {})).not.toContain(E2E_TARGET);
+    expect(Object.keys(targets).filter((target) => scripts[target] === undefined)).toEqual([]);
   });
 });
 
-describe("CR-CRU-015 §S1/§S2 — a real client drive of the e2e suite lands the Gherkin on the board", () => {
+describe("a real client drive of the e2e suite streams the Gherkin to the board", () => {
   test(
-    "the drive files ONE run, under tier `e2e`, addressed by scenario rather than by spec file",
+    "the drive files ONE `playwright-bdd` run under tier `e2e`, each scenario under its feature and browser",
     async () => {
       const run = await drive();
       const event = ingested(run);
 
-      // §S1 — no rename of the TIER either: the run this target files is e2e.
+      // No rename of the TIER either: the run this target files is e2e, and
+      // it ran under the framework its table entry declares.
       expect(event.tier).toBe("e2e");
+      expect(event.framework).toBe(E2E_FRAMEWORK);
 
-      // The stored tree is addressed the way a specification is read: one node
-      // per SCENARIO, named "<Feature> › <Scenario>". Today it is one node per
-      // generated spec FILE, so every name below is missing.
-      const names = (event.tree ?? []).map((node) => node.name);
+      // Each stored suite is one feature under one browser: named by its
+      // `Feature:` title, and carrying the browser (Playwright project) it ran
+      // under.
+      const features = new Set(run.declared.map((scenario) => scenario.feature));
+      const suites = event.tree ?? [];
+      expect(suites.length).toBeGreaterThan(0);
+      expect(suites.filter((suite) => (suite.browser ?? "") === "").map((suite) => suite.name)).toEqual([]);
+      expect(suites.filter((suite) => !features.has(suite.name)).map((suite) => suite.name)).toEqual([]);
+
+      // Every declared scenario is a test under its feature.
+      const names = placedTests(event).map((placed) => `${placed.suite} › ${placed.test.name}`);
       const missing = run.declared.filter((scenario) => !names.includes(scenario.node));
       expect(missing.map((scenario) => scenario.node)).toEqual([]);
 
-      // NEGATIVE/bound — and NOTHING else is a node. A tree that also carried
-      // the spec files, or a second copy of each scenario, would pass the
-      // containment check above while being a different shape.
+      // NEGATIVE/bound — and NOTHING else is a test. A tree that also carried
+      // a second copy of each scenario would pass the containment check above
+      // while being a different shape.
       //
-      // CR-CRU-018 — the ONE legitimate second copy: the phone feature runs on
-      // TWO engines (chromium-mobile + webkit-iphone) whenever a WebKit engine
-      // exists for the run (CI's native install, or the Docker endpoint; the
-      // SAME predicate that gates webkit-iphone in playwright.config.ts). The
-      // codec drops Playwright's projectName (CR-CRU-145 §S3), so each phone
-      // scenario then lands as two same-named nodes. Asserted as the exact
-      // multiset: every declared scenario once, plus one more copy of each
-      // phone scenario per extra engine, and nothing else.
+      // The ONE legitimate second copy: the phone feature runs on TWO engines
+      // (chromium-mobile + webkit-iphone) whenever a WebKit engine exists for
+      // the run (CI's native install, or the Docker endpoint; the SAME
+      // predicate that gates webkit-iphone in playwright.config.ts), each under
+      // its own browser. Asserted as the exact multiset: every declared
+      // scenario once, plus one more copy of each phone scenario per extra
+      // engine, and nothing else.
       const expected = new Map(run.declared.map((scenario) => [scenario.node, 1]));
       const phoneEngines = phoneEngineCount();
       for (const scenario of parseFeatureFile(PHONE_FEATURE_FILE)) {
@@ -517,57 +593,67 @@ describe("CR-CRU-015 §S1/§S2 — a real client drive of the e2e suite lands th
   );
 
   test(
-    "the ingest carries scenario-level detail — every scenario holds its own steps, not a single verdict",
+    "the run counts scenarios, as the same run's JUnit report does, and every scenario holds its own steps",
     async () => {
       const run = await drive();
       const event = ingested(run);
 
-      // Every scenario node holds leaves, and there are as many of them as the
-      // scenario declares steps (bar the steps Playwright never reached — a
-      // broken step halts the chain, which is why this is a bound and not an
-      // equality).
-      const childless = (event.tree ?? []).filter((node) => (node.children ?? []).length === 0);
-      expect(childless.map((node) => node.name)).toEqual([]);
+      // The run's total counts TESTS (scenarios per browser), never steps: it
+      // equals the `tests` the same run's kept JUnit report states.
+      expect(event.summary?.total).toBe(junitTests(run.junitXml));
 
-      // POSITIVE, with the specific number: the run's own total counts STEPS.
-      // The suite declares far more steps than scenarios, so an event whose
-      // total is the scenario count is a tally of verdicts and nothing more —
-      // which is exactly what 46 testcases through JUnit produce today.
-      const declaredSteps = run.declared.reduce((sum, scenario) => sum + scenario.steps.length, 0);
-      expect(declaredSteps).toBeGreaterThan(run.declared.length);
-      expect(event.summary?.total).not.toBe(run.declared.length);
-      expect(event.summary?.total).toBeGreaterThan(run.declared.length);
-      // The ceiling is every step the drive EXECUTES: each declared step once,
-      // plus the phone feature's steps once more per extra engine — on a run
-      // with a WebKit engine (CI's native install) webkit-iphone runs the phone
-      // feature a second time, and its steps are real steps of this run (the
-      // first test's node multiset counts those same second copies).
-      const phoneSteps = parseFeatureFile(PHONE_FEATURE_FILE).reduce(
-        (sum, scenario) => sum + scenario.steps.length,
-        0,
-      );
-      const executedSteps = declaredSteps + phoneSteps * (phoneEngineCount() - 1);
-      expect(event.summary?.total).toBeLessThanOrEqual(executedSteps);
+      // Every scenario holds its steps, not a single verdict.
+      const stepless = placedTests(event).filter((placed) => (placed.test.steps ?? []).length === 0);
+      expect(stepless.map((placed) => `${placed.browser}: ${placed.suite} › ${placed.test.name}`)).toEqual([]);
     },
     DRIVE_BUDGET_MS,
   );
 
   test(
-    "the run is decoded by the `playwright` codec ON THE SERVER — never junit, never a client-side parse",
+    "the run is opened, streamed and closed by its `crucible-events` stream — never a client-side parse",
     async () => {
       const run = await drive();
       const event = ingested(run);
 
-      // §S2 — the stored provenance. `junit` would have flattened the steps
-      // into counts; `parsed` means the client decided the shape and the
-      // server recorded a tree no codec vouches for.
-      expect(FLATTENING_CODECS).not.toContain(event.codec);
-      expect(event.codec).toBe(REQUIRED_CODEC);
+      // The stored provenance: the stream's own codec.
+      expect(event.codec).toBe(STREAM_CODEC);
 
-      // …and the ROUTE that provenance can only come from. Read off the
-      // proxy, so this is the request the client really made.
-      expect(run.posts).toContain(SERVER_DECODE_ROUTE);
+      // …and the ROUTES that provenance can only come from. Read off the
+      // proxy, so these are the requests the client really made.
+      expect(run.posts).toContain(START_ROUTE);
+      expect(run.posts.filter((path) => STREAM_ROUTE.test(path)).length).toBeGreaterThan(0);
+      expect(run.posts).toContain(CLOSE_ROUTE);
       expect(run.posts).not.toContain(CLIENT_PARSE_ROUTE);
+    },
+    DRIVE_BUDGET_MS,
+  );
+
+  test(
+    "each scenario's steps equal, by name and status, what the `playwright` codec decodes from the same run's JSON report",
+    async () => {
+      const run = await drive();
+      const event = ingested(run);
+      const decoded = parsePlaywright(run.playwrightJson).tree;
+
+      // Matched by (suite, name, browser): the codec names a node
+      // "<Feature> › <Scenario>" and carries the project as its browser.
+      const wrong: string[] = [];
+      for (const placed of placedTests(event)) {
+        const node = `${placed.suite} › ${placed.test.name}`;
+        const matches = decoded.filter(
+          (candidate) => candidate.name === node && candidate.browser === placed.browser,
+        );
+        if (matches.length !== 1) {
+          wrong.push(`${placed.browser}: ${node}: ${matches.length} codec node(s)`);
+          continue;
+        }
+        const stored = nameAndStatus(placed.test.steps ?? []);
+        const expected = nameAndStatus((matches[0] as StoredSuite).children ?? []);
+        if (JSON.stringify(stored) !== JSON.stringify(expected)) {
+          wrong.push(`${placed.browser}: ${node}: ${JSON.stringify(stored)} != ${JSON.stringify(expected)}`);
+        }
+      }
+      expect(wrong).toEqual([]);
     },
     DRIVE_BUDGET_MS,
   );
@@ -584,21 +670,23 @@ describe("CR-CRU-015 §S1/§S2 — a real client drive of the e2e suite lands th
       // when the scenario passed, truncated at the break when it did not.
       const wrong: string[] = [];
       for (const scenario of run.declared) {
-        const node = nodeNamed(event, scenario.node);
-        if (node === undefined) {
-          wrong.push(`${scenario.node}: no node`);
+        const tests = testsOf(event, scenario);
+        if (tests.length === 0) {
+          wrong.push(`${scenario.node}: no test`);
           continue;
         }
-        const leaves = (node.children ?? []).map((leaf) => leaf.name);
-        const expected = scenario.steps.slice(0, leaves.length);
-        if (JSON.stringify(leaves) !== JSON.stringify(expected)) {
-          wrong.push(`${scenario.node}: ${JSON.stringify(leaves)} != ${JSON.stringify(expected)}`);
-          continue;
-        }
-        if (node.status === "pass" && leaves.length !== scenario.steps.length) {
-          wrong.push(
-            `${scenario.node}: passed with ${leaves.length} of ${scenario.steps.length} steps`,
-          );
+        for (const stored of tests) {
+          const leaves = (stored.steps ?? []).map((step) => step.name);
+          const expected = scenario.steps.slice(0, leaves.length);
+          if (JSON.stringify(leaves) !== JSON.stringify(expected)) {
+            wrong.push(`${scenario.node}: ${JSON.stringify(leaves)} != ${JSON.stringify(expected)}`);
+            continue;
+          }
+          if (stored.status === "pass" && leaves.length !== scenario.steps.length) {
+            wrong.push(
+              `${scenario.node}: passed with ${leaves.length} of ${scenario.steps.length} steps`,
+            );
+          }
         }
       }
       expect(wrong).toEqual([]);
@@ -614,11 +702,12 @@ describe("CR-CRU-015 §S1/§S2 — a real client drive of the e2e suite lands th
 
       const broken = run.declared.find((scenario) => scenario.steps.some((step) => step.includes("the broken step reports the message it failed with")));
       expect(broken).toBeDefined();
-      const node = nodeNamed(event, broken!.node);
-      expect(node).toBeDefined();
-      expect(node!.status).toBe("fail");
+      const tests = testsOf(event, broken!);
+      expect(tests).toHaveLength(1);
+      const stored = tests[0] as StoredTest;
+      expect(stored.status).toBe("fail");
 
-      const leaves = node!.children ?? [];
+      const leaves = stored.steps ?? [];
       const brokenStep = leaves.find((leaf) =>
         leaf.name === "Then the broken step reports the message it failed with",
       );
@@ -632,6 +721,16 @@ describe("CR-CRU-015 §S1/§S2 — a real client drive of the e2e suite lands th
       const failing = leaves.filter((leaf) => leaf.failure !== undefined).map((leaf) => leaf.name);
       expect(failing).toEqual(["Then the broken step reports the message it failed with"]);
       expect(leaves.map((leaf) => leaf.name)).not.toContain("And the step after the break never runs");
+    },
+    DRIVE_BUDGET_MS,
+  );
+
+  test(
+    "the drive writes nothing to the package's own test-reports",
+    async () => {
+      const run = await drive();
+      ingested(run);
+      expect(run.repoReportsAfter).toEqual(run.repoReportsBefore);
     },
     DRIVE_BUDGET_MS,
   );

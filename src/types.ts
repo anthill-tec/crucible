@@ -119,7 +119,12 @@ export interface TestLeaf {
     type?: string;
     trace?: string;
   };
+  // A scenario's steps, in order; absent when the test has none.
+  steps?: TestStep[];
 }
+
+/** One step of a test (a BDD scenario's Gherkin step): a leaf's own shape, without steps. */
+export type TestStep = Omit<TestLeaf, "steps">;
 
 export interface SuiteNode {
   name: string;
@@ -162,6 +167,8 @@ export interface RunLiveFailure {
   name: string;
   suite: string;
   file: string;
+  // The browser (Playwright project) the test failed under; absent when none stated.
+  browser?: string;
   message?: string;
   type?: string;
 }

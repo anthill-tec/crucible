@@ -233,8 +233,8 @@ STORE_DIR_NAME = "crucible"
 # And `_crucible_run.py`, the run and ingest pipeline `_crucible_axi.py` reads
 # BY FILE PATH from its own directory as it loads, so an install that omits it
 # lays down a shared module that cannot load at all.
-# And `reporters/vitest-crucible.ts`, the shipped Vitest reporter, in the
-# `reporters/` subdirectory the bun client hands a runner as
+# And `reporters/vitest-crucible.ts` and `reporters/playwright-crucible.ts`,
+# the shipped Vitest and Playwright reporters, in the `reporters/` subdirectory the bun client hands a runner as
 # `CRUCIBLE_REPORTERS`; a name may carry a `/`-separated subdirectory, which
 # `run_fleet_stage` creates under the same confinement rule as a file.
 FLEET_FILES = (
@@ -250,6 +250,7 @@ FLEET_FILES = (
     manifest.CONFIG_FILENAME,
     "subtest_runner.py",
     "reporters/vitest-crucible.ts",
+    "reporters/playwright-crucible.ts",
 )
 
 # The directory the fleet lands in, under `--target-dir`. `manifest` anchors
