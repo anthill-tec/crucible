@@ -596,6 +596,7 @@ describe("the last-event read is bounded and reads no suite, case or detail row"
     expect(rowsFromTable(records, "run_suites")).toBe(0);
     expect(rowsFromTable(records, "run_cases")).toBe(0);
     expect(rowsFromTable(records, "run_details")).toBe(0);
+    expect(rowsFromTable(records, "run_case_steps")).toBe(0);
     // The compile result's counts and diagnostics are read — the read is not
     // kept clean by reading nothing.
     expect(rowsFromTable(records, "run_compiles")).toBeGreaterThan(0);

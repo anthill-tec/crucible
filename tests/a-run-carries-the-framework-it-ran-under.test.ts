@@ -15,8 +15,8 @@
 //    answers all three (the record projections carry `NULL AS framework`);
 //  - the schema: migration v23 adds a nullable `framework` to `events` and
 //    `runs`, a brand-new store's columns equal a store migrated from v22,
-//    rows stored before it read unchanged with no framework, and RUNBOOK's
-//    schema figures read v23.
+//    and rows stored before it read unchanged with no framework. A store
+//    migrated from v22 reaches the build's own schema version.
 //
 // Modelled on run-close-carries-stack-and-tier.test.ts (the stack rules this
 // mirrors) and a-run-start-carries-the-total-its-live-state-reads.test.ts
@@ -489,11 +489,11 @@ function makeV22Store(): V22Store {
 }
 
 describe("migration v23 adds framework to events and runs", () => {
-  test("the schema version this build declares is 23", () => {
-    expect(SCHEMA_VERSION).toBe(FRAMEWORK_VERSION);
+  test("the schema version this build declares reaches 23, the version that adds framework", () => {
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(FRAMEWORK_VERSION);
   });
 
-  test("a v22 store is migrated 22 → 23: events and runs each gain a nullable TEXT framework, and the store is stamped 23", () => {
+  test("a v22 store is migrated from 22 to the build's schema version: events and runs each gain a nullable TEXT framework, and the store is stamped the build's version", () => {
     const v22 = makeV22Store();
     const before = new Database(v22.dbPath);
     try {
@@ -506,10 +506,10 @@ describe("migration v23 adds framework to events and runs", () => {
 
     const handle = boot(v22.dbPath);
     expect(handle.store.migration?.from).toBe(PRE_FRAMEWORK_VERSION);
-    expect(handle.store.migration?.to).toBe(FRAMEWORK_VERSION);
-    expect(handle.store.schemaVersion).toBe(FRAMEWORK_VERSION);
+    expect(handle.store.migration?.to).toBe(SCHEMA_VERSION);
+    expect(handle.store.schemaVersion).toBe(SCHEMA_VERSION);
     const db = dbOf(handle.store);
-    expect(rawUserVersion(db)).toBe(FRAMEWORK_VERSION);
+    expect(rawUserVersion(db)).toBe(SCHEMA_VERSION);
     for (const table of ["events", "runs"] as const) {
       expect(columnsOf(db, table).find((c) => c.name === "framework"), table).toEqual({
         name: "framework",
@@ -539,7 +539,7 @@ describe("migration v23 adds framework to events and runs", () => {
   test("on the migrated store a run and its event stored before v23 read unchanged with no framework, and a new run stores one", async () => {
     const v22 = makeV22Store();
     const handle = boot(v22.dbPath);
-    expect(handle.store.migration?.to).toBe(FRAMEWORK_VERSION);
+    expect(handle.store.migration?.to).toBe(SCHEMA_VERSION);
 
     expect(storedRunFramework(handle, v22.runId)).toBeNull();
     expect(storedEventFramework(handle, v22.eventId)).toBeNull();
@@ -562,17 +562,5 @@ describe("migration v23 adds framework to events and runs", () => {
     });
     expect(opened.status, JSON.stringify(opened.body)).toBe(202);
     expect(storedRunFramework(handle, opened.body.runId as string)).toBe("vitest");
-  });
-});
-
-describe("RUNBOOK's schema figures read v23", () => {
-  test("docs/RUNBOOK.md states schema v23, the migration banner reaching v23 and the health figure schemaVersion 23, and names no v22 figure", () => {
-    const runbook = fs.readFileSync(path.join(import.meta.dir, "..", "docs", "RUNBOOK.md"), "utf8");
-    expect(runbook).toContain(`schema v${FRAMEWORK_VERSION})`);
-    expect(runbook).toContain(`-> v${FRAMEWORK_VERSION} (`);
-    expect(runbook).toContain(`"schemaVersion":${FRAMEWORK_VERSION}`);
-    expect(runbook).not.toContain(`schema v${PRE_FRAMEWORK_VERSION})`);
-    expect(runbook).not.toContain(`-> v${PRE_FRAMEWORK_VERSION} (`);
-    expect(runbook).not.toContain(`"schemaVersion":${PRE_FRAMEWORK_VERSION}`);
   });
 });

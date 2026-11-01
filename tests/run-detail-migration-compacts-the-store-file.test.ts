@@ -45,6 +45,7 @@ function buildBigLegacyStore(dbPath: string): void {
   db.exec(`
     DROP INDEX IF EXISTS idx_run_suites_name;
     DROP INDEX IF EXISTS idx_run_suites_feature;
+    DROP TABLE IF EXISTS run_case_steps;
     DROP TABLE IF EXISTS run_cases;
     DROP TABLE IF EXISTS run_suites;
     DROP TABLE IF EXISTS run_diagnostics;
