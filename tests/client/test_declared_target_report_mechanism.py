@@ -522,16 +522,19 @@ class DeclaredE2eTargetIngestsTest(_DeclaredTargetCase):
     def test_this_project_declares_the_report_mechanism_its_e2e_runner_uses(self):
         """AC1 against the REAL manifest: a fixture proves the code path, and
         this proves THIS project's own e2e verb is the one that ingests. The
-        declaration is the project's statement of its target's contract."""
+        declaration is the project's statement of its target's contract, and
+        that statement is now the `crucible.targets` table entry: a
+        `playwright-bdd` target streamed in `crucible-events`, declared there
+        and in neither `crucible.reportPath` nor `crucible.rawReport`."""
         manifest = json.loads(MANIFEST_PATH.read_text())
         self.assertIn("test:e2e", manifest.get("scripts") or {},
                       "AC1: this project no longer declares test:e2e.")
-        declared = ((manifest.get("crucible") or {}).get("reportPath") or {})
-        self.assertEqual(
-            declared.get("test:e2e"), ENV_MECHANISM,
-            "§S2 — playwright takes its JUnit path from "
-            f"{E2E_REPORT_VAR}, not a flag, so this project must DECLARE that "
-            f"mechanism for test:e2e; it declares {declared.get('test:e2e')!r}.")
+        crucible = manifest.get("crucible") or {}
+        self.assertEqual((crucible.get("targets") or {}).get("test:e2e"),
+                         {"framework": "playwright-bdd",
+                          "stream": {"codec": "crucible-events", "path": "env:CRUCIBLE_STREAM"}})
+        self.assertNotIn("test:e2e", crucible.get("reportPath") or {})
+        self.assertNotIn("test:e2e", crucible.get("rawReport") or {})
 
     def test_the_e2e_runner_honours_the_mechanism_this_project_declared(self):
         """The round trip: a declaration the TARGET ignores is not a contract.

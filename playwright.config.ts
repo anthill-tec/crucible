@@ -26,7 +26,7 @@
 // rather than diverge. `tests/e2e/teardown-contracts/crucible-db-isolation.test.ts`
 // feeds this config's real `webServer.env` through the real `resolveDbPath`
 // and asserts the result is neither the user-level nor the XDG path.
-import { defineConfig, devices } from "@playwright/test";
+import { defineConfig, devices, type ReporterDescription } from "@playwright/test";
 import { defineBddConfig } from "playwright-bdd";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -128,6 +128,41 @@ const testDir = defineBddConfig({
   steps: "tests/e2e/steps/*.ts",
 });
 
+// The run's record is the Crucible event stream. `package.json`'s
+// `crucible.targets` entry for `test:e2e` declares a `playwright-bdd` target
+// streamed in `crucible-events`, and the bun client hands the runner the
+// directory of its shipped reporters in CRUCIBLE_REPORTERS. The Crucible
+// reporter (`playwright-crucible.ts` in that directory) is added only when
+// the variable is set: a bare `bun run test:e2e` names no machine path and
+// runs unchanged.
+//
+// The `junit` and `json` reporters are kept beside it. Each reads its path
+// from the variable Playwright itself reads (PLAYWRIGHT_JUNIT_OUTPUT_NAME,
+// PLAYWRIGHT_JSON_OUTPUT_NAME); an explicit `outputFile` would win over the
+// variable, so a hardcoded path here would stop the client moving the file.
+// For a stream target the client points both into the run's own reports dir
+// (`_stream_target_run`, clients/bun-crucible.py). The JSON report keeps
+// every Gherkin step, which the `playwright` codec (`parsePlaywright`,
+// src/codecs/playwright.ts) turns into the feature, scenario and step tree.
+// The defaults keep a bare run writing both under `test-reports/`.
+const crucibleReporters = process.env["CRUCIBLE_REPORTERS"];
+const reporters: ReporterDescription[] = [
+  ["list"],
+  [
+    "junit",
+    {
+      outputFile: process.env.PLAYWRIGHT_JUNIT_OUTPUT_NAME ?? "test-reports/junit.xml",
+    },
+  ],
+  [
+    "json",
+    {
+      outputFile: process.env.PLAYWRIGHT_JSON_OUTPUT_NAME ?? "test-reports/playwright.json",
+    },
+  ],
+];
+if (crucibleReporters) reporters.push([`${crucibleReporters}/playwright-crucible.ts`]);
+
 export default defineConfig({
   testDir,
   // Single logical suite (4 features / 19 scenarios), run serially: F1
@@ -137,44 +172,7 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   timeout: 30_000,
-  // "junit" additionally feeds the Crucible auto-ingest path
-  // (`bun-crucible.py auto-ingest`), which reads test-reports/junit.xml.
-  //
-  // CR-CRU-133 §S2 — `package.json`'s `crucible.reportPath` DECLARES that this
-  // target takes its report path from PLAYWRIGHT_JUNIT_OUTPUT_NAME, and
-  // playwright's junit reporter prefers an explicit `outputFile` OVER that
-  // variable — so a hardcoded path here would make the declaration a lie and
-  // the client could never move the file this suite writes. The default is
-  // kept for a bare `bun run test:e2e`, which is unaffected.
-  //
-  // CR-CRU-015 §S2 — and the RAW report the SERVER decodes. The JUnit XML has
-  // no notion of a `test.step`, so every Gherkin step this suite executes is
-  // already gone by the time that file is written; playwright's own JSON
-  // report keeps them, and `src/codecs/playwright.ts` (registered as the
-  // `"playwright"` codec) turns them back into the feature → scenario → step
-  // tree. `package.json`'s `crucible.rawReport` DECLARES that this target
-  // takes that report's path from PLAYWRIGHT_JSON_OUTPUT_NAME, so the path is
-  // read from the environment for exactly the reason the junit reporter above
-  // reads one: playwright's json reporter prefers an explicit `outputFile`
-  // OVER the variable, and a hardcoded path here would make the declaration a
-  // lie. The default keeps a bare `bun run test:e2e` writing beside the XML.
-  reporter: [
-    ["list"],
-    [
-      "junit",
-      {
-        outputFile:
-          process.env.PLAYWRIGHT_JUNIT_OUTPUT_NAME ?? "test-reports/junit.xml",
-      },
-    ],
-    [
-      "json",
-      {
-        outputFile:
-          process.env.PLAYWRIGHT_JSON_OUTPUT_NAME ?? "test-reports/playwright.json",
-      },
-    ],
-  ],
+  reporter: reporters,
   use: {
     baseURL: process.env.CRUCIBLE_E2E_BASE_URL ?? `http://localhost:${PORT}`,
     trace: "retain-on-failure",
