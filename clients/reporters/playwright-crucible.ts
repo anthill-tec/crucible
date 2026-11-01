@@ -20,6 +20,10 @@
 // children of the `Background` hook first, then the top-level ones. A hook's
 // own step and a fixture are not steps.
 //
+// A stream it cannot open or write gives ONE error line naming the path, on
+// stderr, and the reporter writes nothing more: no hook throws, so Playwright
+// runs the tests to completion.
+//
 // It imports only Playwright types (erased at load) and `node:` built-ins, so it
 // loads from an install with no `node_modules` above it.
 import { closeSync, openSync, writeSync } from "node:fs";
@@ -110,8 +114,14 @@ function stepsOf(result: TestResult): StreamStep[] {
   return [...backgroundSteps(result.steps), ...topLevel].map(streamStep);
 }
 
+function reasonOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export default class CrucibleReporter implements Reporter {
   private fd: number | undefined;
+  private path = "";
+  private gaveUp = false;
   private rootDir = "";
   private root: Suite | undefined;
   private readonly reported = new Set<string>();
@@ -127,9 +137,16 @@ export default class CrucibleReporter implements Reporter {
     this.counts = { total: 0, passed: 0, failed: 0, pending: 0 };
     this.rootDir = config.rootDir;
     this.root = suite;
+    this.gaveUp = false;
     const path = process.env[STREAM_VAR];
     if (path === undefined || path === "") return;
-    this.fd = openSync(path, "w");
+    this.path = path;
+    try {
+      this.fd = openSync(path, "w");
+    } catch (error) {
+      this.giveUp("cannot open", error);
+      return;
+    }
     this.write({ event: "run-start", total: suite.allTests().length });
   }
 
@@ -176,12 +193,30 @@ export default class CrucibleReporter implements Reporter {
 
   private write(event: Record<string, unknown>): void {
     if (this.fd === undefined) return;
-    writeSync(this.fd, `${JSON.stringify(event)}\n`);
+    try {
+      writeSync(this.fd, `${JSON.stringify(event)}\n`);
+    } catch (error) {
+      this.giveUp("cannot write", error);
+      this.close();
+    }
+  }
+
+  // The one error line of a stream this reporter stops writing; a later
+  // failure on the same stream adds none.
+  private giveUp(what: string, error: unknown): void {
+    if (this.gaveUp) return;
+    this.gaveUp = true;
+    process.stderr.write(`crucible reporter: ${what} ${STREAM_VAR}=${this.path} (${reasonOf(error)}); streaming nothing more\n`);
   }
 
   private close(): void {
     if (this.fd === undefined) return;
-    closeSync(this.fd);
+    const fd = this.fd;
     this.fd = undefined;
+    try {
+      closeSync(fd);
+    } catch (error) {
+      this.giveUp("cannot close", error);
+    }
   }
 }
