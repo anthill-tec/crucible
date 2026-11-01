@@ -7595,6 +7595,11 @@
           { class: "app-live-failure-head" },
           span({ class: "app-live-glyph" }, "✗"),
           span({ "data-testid": "live-failure-name", class: "app-live-failure-name" }, f.name),
+          // The project a Playwright test ran under: one test failing in two
+          // browsers reads as two rows. A failure stated with none draws none.
+          typeof f.browser === "string" && f.browser.length > 0
+            ? span({ class: "app-live-failure-browser app-card-meta" }, `· ${f.browser}`)
+            : null,
           span({ class: "app-live-failure-file" }, f.file),
         ),
         div({ "data-testid": "live-failure-message", class: "app-live-failure-message" }, liveFailureLine(f)),
@@ -7952,18 +7957,13 @@
         return focused === key;
       }
 
-      // One leaf row (+ its failure box when visible). §S3 failure-box
+      // The failure box of the failure keyed `key`. §S3 failure-box
       // degradation (user defect 2026-07-15): the box NEVER renders empty —
       // message → else failure.type → else `test failed`; when the message
       // is absent a dim reporter note is appended; the trace block renders
-      // only when a trace exists.
-      const LeafRows = (suiteName, leaf, presentation) => {
-        const key = `${suiteName}::${leaf.name}`;
-        const failed = leaf.status === "fail";
-        // A spec run's failing step carries its message AT the step, inside
-        // its own row, always shown; its stored stack sits behind `stack ▸`.
-        const spec = isSpecRun(detail.val);
-        const failure = leaf.failure ?? null;
+      // only when a trace exists. A spec run's box keeps its stored stack
+      // behind `stack ▸`.
+      const FailureBox = (key, failure, spec) => {
         const hasMessage =
           typeof failure?.message === "string" && failure.message.length > 0;
         const hasType = typeof failure?.type === "string" && failure.type.length > 0;
@@ -7979,7 +7979,52 @@
               { class: "app-failure-note" },
               "no failure detail captured by the reporter",
             );
+        if (!spec) {
+          return div(
+            { "data-testid": "failure-box", class: "app-failure-box" },
+            div({ class: "app-failure-message" }, messageLine),
+            noteLine,
+            hasTrace ? div({ class: "app-failure-trace" }, failure.trace) : null,
+          );
+        }
         const stackOpen = openStacks.val[key] === true;
+        return div(
+          { "data-testid": "failure-box", class: "app-failure-box app-step-failure" },
+          div({ class: "app-failure-message" }, messageLine),
+          noteLine,
+          hasTrace
+            ? button(
+                {
+                  "data-testid": "stack-toggle",
+                  class: "app-chip app-stack-toggle",
+                  onclick: (e) => {
+                    e.stopPropagation();
+                    const next = { ...openStacks.val };
+                    if (next[key] === true) delete next[key];
+                    else next[key] = true;
+                    openStacks.val = next;
+                  },
+                },
+                stackOpen ? "stack ▾" : "stack ▸",
+              )
+            : null,
+          hasTrace && stackOpen
+            ? pre(
+                { "data-testid": "stack-trace", class: "app-failure-trace app-stack-trace" },
+                failure.trace,
+              )
+            : null,
+        );
+      };
+
+      // One leaf row (+ its failure box when visible).
+      const LeafRows = (suiteName, leaf, presentation) => {
+        const key = `${suiteName}::${leaf.name}`;
+        const failed = leaf.status === "fail";
+        // A spec run's failing step carries its message AT the step, inside
+        // its own row, always shown.
+        const spec = isSpecRun(detail.val);
+        const failure = leaf.failure ?? null;
         const nodes = [
           div(
             {
@@ -8004,46 +8049,11 @@
                   "data-duration": fmtDuration(leaf.duration_ms ?? 0),
                 })
               : span({ class: "app-card-meta" }, fmtDuration(leaf.duration_ms ?? 0)),
-            spec && failed
-              ? div(
-                  { "data-testid": "failure-box", class: "app-failure-box app-step-failure" },
-                  div({ class: "app-failure-message" }, messageLine),
-                  noteLine,
-                  hasTrace
-                    ? button(
-                        {
-                          "data-testid": "stack-toggle",
-                          class: "app-chip app-stack-toggle",
-                          onclick: (e) => {
-                            e.stopPropagation();
-                            const next = { ...openStacks.val };
-                            if (next[key] === true) delete next[key];
-                            else next[key] = true;
-                            openStacks.val = next;
-                          },
-                        },
-                        stackOpen ? "stack ▾" : "stack ▸",
-                      )
-                    : null,
-                  hasTrace && stackOpen
-                    ? pre(
-                        { "data-testid": "stack-trace", class: "app-failure-trace app-stack-trace" },
-                        failure.trace,
-                      )
-                    : null,
-                )
-              : null,
+            spec && failed ? FailureBox(key, failure, true) : null,
           ),
         ];
         if (!spec && failed && failureBoxVisible(key, presentation)) {
-          nodes.push(
-            div(
-              { "data-testid": "failure-box", class: "app-failure-box" },
-              div({ class: "app-failure-message" }, messageLine),
-              noteLine,
-              hasTrace ? div({ class: "app-failure-trace" }, failure.trace) : null,
-            ),
-          );
+          nodes.push(FailureBox(key, failure, false));
         }
         return nodes;
       };
@@ -8183,7 +8193,8 @@
         const sep = target.indexOf(":");
         const kind = target.slice(0, sep);
         const key = target.slice(sep + 1);
-        const selector = kind === "leaf" ? '[data-testid="leaf-row"]' : '[data-testid="suite-row"]';
+        // A leaf key sits on a leaf row, or on a scenario row (ScenarioGroup).
+        const selector = kind === "leaf" ? "[data-leaf-key]" : '[data-testid="suite-row"]';
         const attr = kind === "leaf" ? "data-leaf-key" : "data-suite-key";
         const findRow = () => {
           for (const row of (pane ?? document).querySelectorAll(selector)) {
@@ -8393,6 +8404,8 @@
             [`${suiteName}::${leaf.failure.message}`]: true,
           };
         }
+        // A scenario row mounts only in an unfolded feature.
+        unfoldFeatureOf(suiteName);
         focusedLeaf.val = target;
         // CR-CRU-034 §S1 — DEFER **and CONVERGE** the row scroll until AFTER
         // VanJS has actually finished re-rendering. Setting focusedLeaf/
@@ -8417,7 +8430,7 @@
         // target row (block:"start") into the SAME bounded pane-scroll
         // viewport, exactly once.
         const findTargetRow = () => {
-          const rows = document.querySelectorAll('[data-testid="leaf-row"]');
+          const rows = document.querySelectorAll("[data-leaf-key]");
           for (const r of rows) {
             if (r.getAttribute("data-leaf-key") === target) return r;
           }
@@ -8658,29 +8671,35 @@
         return div(ordered.map((s) => ScenarioGroup(key, s, browser, presentation)));
       };
 
-      // One scenario row and its steps. A scenario that failed with no failing
-      // step (a Before hook) carries its own failure box, below its row.
+      // One scenario row and its steps. The row is a leaf of its suite, keyed
+      // `<suiteKey>::<scenario>` as a leaf row is, so the heat-strip reveal and
+      // the failure jump reach it, and a click focuses the scenario. A scenario
+      // that failed with no failing step (a Before hook) carries its own
+      // failure box below its row, shown as a leaf's box is (failureBoxVisible).
       const ScenarioGroup = (key, scenario, browser, presentation) => {
         const steps = scenario.steps ?? [];
-        const failure = scenario.failure;
+        const leafKey = `${key}::${scenario.name}`;
         const ownFailure = scenario.status === "fail" && !steps.some((s) => s.status === "fail");
-        const trace = typeof failure?.trace === "string" && failure.trace.length > 0 ? failure.trace : null;
         return div(
           { class: "app-suite-group" },
           div(
-            { "data-testid": "suite-row", class: `app-suite-row app-tree-line ${scenario.status}` },
+            {
+              "data-testid": "suite-row",
+              "data-suite-key": key,
+              "data-leaf-key": leafKey,
+              class: `app-suite-row app-tree-line ${scenario.status}${located.val === `leaf:${leafKey}` ? ` ${LOCATE_BLINK_CLASS}` : ""}`,
+              onclick: () => {
+                focusedLeaf.val = leafKey;
+              },
+            },
             span({ class: "app-suite-name" }, `${drillinLeafGlyph(scenario.status)} ${scenario.name}`),
             browser === null || browser === undefined
               ? null
               : span({ class: "app-suite-browser app-card-meta" }, `· ${browser}`),
             span({ class: "app-card-meta" }, fmtDuration(scenario.duration_ms ?? 0)),
           ),
-          ownFailure
-            ? div(
-                { "data-testid": "failure-box", class: "app-failure-box app-step-failure" },
-                div({ class: "app-failure-message" }, failure?.message || failure?.type || "test failed"),
-                trace === null ? null : pre({ class: "app-failure-trace app-stack-trace" }, trace),
-              )
+          ownFailure && failureBoxVisible(leafKey, presentation)
+            ? FailureBox(leafKey, scenario.failure ?? null, true)
             : null,
           steps.map((step) => LeafRows(`${key} › ${scenario.name}`, step, presentation)),
         );
