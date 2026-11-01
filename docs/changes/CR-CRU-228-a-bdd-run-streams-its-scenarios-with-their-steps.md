@@ -55,6 +55,21 @@
   - a feature run in several projects shows once, as one feature, with each scenario row naming its browser;
   - failing features open first, then the first `SPEC_FIRST_OPEN`, as today.
 
+**VERIFY 845 rulings 2026-11-01** (user and orchestrator), carried by FIX cycle 846:
+
+- **The P3 fixture proof** is a bun integration test that drives the playwright-bdd fixture through the bun client
+  against an in-process board, asserting every AC4 bullet (VERIFY finding 1).
+- **The design record** (§S5) is made, with the DN pin moved in its own commit (finding 2).
+- **A new-shape scenario row is a reveal target:** it carries `data-suite-key` and `data-leaf-key`, so the heat-cell
+  reveal and the footer failure jump reach it (finding 3, user ruling).
+- **The scenario's failure box follows the shipped failure-box rules:** the one-box focus model and the
+  no-detail note, sharing `LeafRows`' rendering (finding 4, user ruling).
+- **The live failure row shows its browser** (finding 5, user ruling).
+- **An unwritable `CRUCIBLE_STREAM`** gives one clear error line from the reporter, not a throw out of `onBegin`
+  (finding 7, user ruling).
+- **The reports-dir client change in its own commit** (`bd98731`, before the move commit) is accepted: it changes
+  only what a stream target is handed, and leaves the gate green (finding 6).
+
 ## Problem
 
 - **Nothing uses Playwright's reporter API,** so a Playwright run reaches the board only at exit, through its JSON
