@@ -350,19 +350,27 @@ def _narrator(project_dir, agent_id, identity, total, poster=None):
     mid-run and a tick re-creates it, this run owns that ghost.
 
     CR-CRU-201 \u00a7S4 step 6 \u2014 on a relayed run (`poster` is its relay's
-    `_ConsolePoster`), the in-run `running N/M` ticks are not posted while the
+    shared `LandingPoster`), the in-run `running N/M` ticks are not posted while the
     relay's last batch was held (its batches keep the agent alive); whenever
     it is not landing batches \u2014 a refusal, a cut, or a 5xx or unreachable
     board it is retrying \u2014 they are, so the run is never swept as a dead
     agent's. The closing `ran N/M` and `ingesting\u2026` are posted either way."""
+    tick = _heartbeat_tick(project_dir, agent_id, identity)
+    if poster is not None:
+        tick = poster.withhold_ticks(tick)
+    return _axi().RunNarrator(tick, _recognise_completion, total=total)
+
+
+def _heartbeat_tick(project_dir, agent_id, identity):
+    """The narration's `post(message)`: one heartbeat that reports through the
+    gated identity, so a tick that re-creates a pruned row makes it this
+    run's."""
     def _tick(message):
-        if (poster is not None and poster.landing
-                and message.startswith(_IN_RUN_TICK)):
-            return
         resp = _register_agent(project_dir, agent_id, message)
         if identity is not None:
             identity.observe(resp)
-    return _axi().RunNarrator(_tick, _recognise_completion, total=total)
+        return resp
+    return _tick
 
 
 def _run_logged(cmd, cwd, env, log_path, narrator=None):
@@ -389,8 +397,6 @@ CONSOLE_CODEC = "bun-console"
 # signal interrupted the run.
 _CONSOLE_FINISH_SECONDS = 60.0
 _INTERRUPTED_FINISH_SECONDS = 5.0
-# The prefix of `RunNarrator`'s in-run ticks, which a live relay stands in for.
-_IN_RUN_TICK = "running "
 
 
 def _board_reads_console(health, codec=CONSOLE_CODEC):
@@ -421,35 +427,22 @@ def _relay_post(path, payload, timeout=None):
     return _request("POST", path, payload, timeout)
 
 
-class _ConsolePoster:
-    """The relay's poster on a relayed run: posts through `_relay_post` and
-    keeps `landing`, whether the board held the last batch it was sent, read
-    as the relay reads it (`_stream_answer`): a held answer, or a resend that
-    moves `from` on, lands; a refusal, a cut, a 5xx, an unreachable board or a
-    resend from where the batch was sent does not. True until the first
-    answer: the relay is taken as landing until the board says otherwise."""
-
-    def __init__(self):
-        self.landing = True
-
-    def __call__(self, path, payload, timeout=None):
-        resp = _relay_post(path, payload, timeout)
-        kind, held = _axi()._stream_answer(resp)
-        self.landing = kind == "held" or (
-            kind == "resend" and held != payload.get("from"))
-        return resp
+def _console_poster():
+    """The relay's poster on a relayed run: the shared `LandingPoster` over
+    `_relay_post`, keeping whether the board held the last batch."""
+    return _axi().LandingPoster(_relay_post)
 
 
 def _console_relay(project_dir, agent_id, run_id, reports_dir, health,
                    poster=None, codec: str | None = CONSOLE_CODEC):
     """A started `StreamRelay` following `<reports_dir>/bun-console.log` to the
     open run `run_id` under the view `codec` (`bun-console`), posting through
-    `poster` (a fresh `_ConsolePoster` when none is given), or None when the
+    `poster` (a fresh `_console_poster()` when none is given), or None when the
     run does not relay: no run is open, it relays no console (`codec` None),
     or `health` does not list the codec under `codecs.view`."""
     if not run_id or not codec or not _board_reads_console(health, codec):
         return None
-    relay = _axi().StreamRelay(poster or _ConsolePoster(),
+    relay = _axi().StreamRelay(poster or _console_poster(),
                                _project_key(project_dir), agent_id,
                                run_id, os.path.join(reports_dir, CONSOLE_FILE),
                                codec, _axi()._ingest_body_limit(health))
@@ -1364,7 +1357,7 @@ def cmd_test(args, tier=None):
                     release=release,
                     total=scanned if reads_console and name is None else None,
                     framework=DEFAULT_FRAMEWORK)
-            poster = _ConsolePoster()
+            poster = _console_poster()
             relay = _console_relay(project_dir, args.agent, run_id,
                                    reports_dir, health, poster)
             narrator = _narrator(project_dir, args.agent, identity, scanned,
@@ -1606,7 +1599,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
                     total=(scanned if reads_console and script is None
                            and name is None else None),
                     framework=framework)
-            poster = _ConsolePoster()
+            poster = _console_poster()
             relay = _console_relay(project_dir, args.agent, run_id,
                                    reports_dir, health, poster,
                                    codec=console_codec)
@@ -1833,18 +1826,16 @@ def _stream_target_run(args, verb, tier, script, target, passthrough, name,
             if run_id:
                 # The runner alone is handed the stream and the reporters.
                 env.update(stream_env)
-                poster = _ConsolePoster()
-                relay = _axi().StreamRelay(poster, _project_key(project_dir),
-                                           agent, run_id, stream_path, codec,
-                                           _axi()._ingest_body_limit(health))
-                relay.start()
-                # CR-CRU-201 \u00a7S4 step 6: no in-run tick while the relay
-                # lands batches; the closing count is the stream's.
-                narrator = _narrator(project_dir, agent, identity, 0, poster)
+                # CR-CRU-201 §S4 step 6, counted from the STREAM: no in-run
+                # tick while the relay lands batches, the stream's `test-end`s
+                # whenever it does not; the closing count is the stream's.
+                relay, narrator = _axi().start_stream_relay(
+                    _relay_post, _heartbeat_tick(project_dir, agent, identity),
+                    _project_key(project_dir), agent, run_id, stream_path,
+                    codec, _axi()._ingest_body_limit(health))
         try:
             with _abandon_trap(run_id), _run_scoped_tmpdir(env) as run_env:
-                result = _run_logged(cmd, package_dir, run_env, log_path,
-                                     narrator)
+                result = _run_logged(cmd, package_dir, run_env, log_path)
         except _axi().RunAbandoned as abandoned:
             _finish_console_relay(relay, _INTERRUPTED_FINISH_SECONDS)
             return _emit_run_abandoned(verb, project_dir, agent, run_id,

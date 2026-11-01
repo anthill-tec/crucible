@@ -416,17 +416,15 @@ def _recognise_completion(line):
     return _UNITTEST_VERDICT_LINE.search(line.rstrip("\r\n")) is not None
 
 
-def _narrator(project_dir, agent_id, identity=None, runner=None, streamed=False):
+def _narrator(project_dir, agent_id, identity=None, runner=None):
     """This client's `RunNarrator`: python's recogniser, an unknown total
     (`running N`, then `ran N/N`), and the shared role-optional heartbeat
     tick (`narration_poster`), observed by a gated `identity` when there is one.
     Under pytest the recogniser is pytest's, against the total it selected.
-    A `streamed` run counts nothing in flight (the board shows its stream's
-    count): its narrator only says the closing messages."""
+    A streamed run's narrator is the shared `start_stream_relay`'s, counted
+    from its stream."""
     post = _axi().narration_poster(_post, _project_key(project_dir), agent_id,
                                    identity)
-    if streamed:
-        return _axi().RunNarrator(post, lambda _line: False)
     if runner == _PYTEST:
         progress = _PytestProgress()
         return _axi().RunNarrator(post, progress.recognise,
@@ -1460,10 +1458,12 @@ def _streamed_run(verb, args, project_dir, agent, identity, cmd, env, *,
     runner_env = env
     if run_id:
         runner_env = {**env, STREAM_VAR: stream_path}
-        narrator = _narrator(project_dir, agent, identity, streamed=True)
-        relay = _axi().StreamRelay(_post, key, agent, run_id, stream_path,
-                                   STREAM_CODEC, _axi()._ingest_body_limit(health))
-        relay.start()
+        # CR-CRU-225 §S2: the in-run count is the stream's, posted only
+        # while the relay is not landing its batches.
+        relay, narrator = _axi().start_stream_relay(
+            _post, _axi().narration_poster(_post, key, agent, identity), key,
+            agent, run_id, stream_path, STREAM_CODEC,
+            _axi()._ingest_body_limit(health))
     try:
         with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
             result = _run_logged(cmd, project_dir, runner_env,

@@ -33,6 +33,7 @@ import threading
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 
 #: The core this module is bound to: a live view of `_crucible_axi.py`'s
 #: namespace, set by the core's loader once this module has run. Every core
@@ -221,8 +222,8 @@ class RunNarrator:
     stopped short never claims the whole suite ran (`ran N/N` when no total
     was ever known)."""
 
-    def __init__(self, post, recognise, total=0, min_seconds=2.0,
-                 min_completions=10, unit=None):
+    def __init__(self, post, recognise, total: "int | Callable[[], int]" = 0,
+                 min_seconds=2.0, min_completions=10, unit=None):
         self._post = post
         self._recognise = recognise
         self._total = total
@@ -251,7 +252,14 @@ class RunNarrator:
         else:
             completed = verdict
         if completed:
-            self._completed()
+            self._advance(self._count + 1)
+
+    def reach(self, completed):
+        """Move the count on to `completed`, counted outside the runner's
+        output (a stream's `test-end`s so far), under the same throttle as
+        an observed line; a count that has not moved on posts nothing."""
+        if completed > self._count:
+            self._advance(completed)
 
     def finish(self):
         """Post the final count \u2014 always, with no label: the completions
@@ -270,9 +278,9 @@ class RunNarrator:
         total = total or 0
         return max(total, self._count) if total > 0 else 0
 
-    def _completed(self):
+    def _advance(self, count):
         now = time.monotonic()
-        self._count += 1
+        self._count = count
         if self._first_seen is None:
             self._first_seen = now
         since = now - (self._posted_at if self._posted_at is not None
@@ -1281,6 +1289,10 @@ class StreamRelay:
     refusal, stops all further sending, said once on stderr; an unreachable
     board, a timeout or a 5xx is retried on the next tick, said once.
 
+    `ticks`, when given, is a `StreamTicks` bracketed by the relay: started by
+    `start()`, and finished first thing in `finish()`, so no in-run tick
+    follows the runner's exit.
+
     `finish(deadline_seconds)` stops and joins the thread (bounded by the post
     timeout), sends what was never acknowledged with up to
     `RELAY_FINISH_ATTEMPTS` tries per batch before the deadline, confirms the
@@ -1288,8 +1300,9 @@ class StreamRelay:
     `stopped` is None, or the board's error naming why sending stopped."""
 
     def __init__(self, post_fn, project_key, agent_id, run_id, path, codec,
-                 batch_limit):
+                 batch_limit, ticks=None):
         self._post_fn = post_fn
+        self._ticks = ticks
         self._project_key = project_key
         self._agent_id = agent_id
         self._run_id = run_id
@@ -1308,6 +1321,8 @@ class StreamRelay:
 
     def start(self):
         """Start the background thread that sends while the runner works."""
+        if self._ticks is not None:
+            self._ticks.start()
         self._thread = threading.Thread(target=self._follow, daemon=True,
                                         name=f"crucible-stream-relay-{self._run_id}")
         self._thread.start()
@@ -1316,6 +1331,9 @@ class StreamRelay:
         """Stop the thread, send what the board has not acknowledged, confirm
         its `held`, and answer `(held, stopped)`."""
         ends = time.monotonic() + deadline_seconds
+        if self._ticks is not None:
+            self._ticks.finish(max(min(RELAY_POST_TIMEOUT_SECONDS,
+                                       deadline_seconds), 0))
         self._halt.set()
         if self._thread is not None:
             self._thread.join(timeout=max(min(RELAY_POST_TIMEOUT_SECONDS,
@@ -1408,6 +1426,126 @@ class StreamRelay:
                   f"could not be sent ({value}) — it is retried",
                   file=sys.stderr)
         return kind
+
+
+# ── CR-CRU-225 §S2 — a streamed run's in-run count comes from its stream ────
+#
+# CR-CRU-201 §S4 step 6: no in-run `running N[/M]` tick while the relay lands
+# batches (they keep the agent alive), and ticks whenever it does not. On a
+# streamed run the count is the STREAM's `test-end`s, never the runner's
+# console, so a runner whose console the client does not read still ticks.
+
+#: The prefix of `RunNarrator`'s in-run ticks, which a landing relay stands in
+#: for.
+IN_RUN_TICK = "running "
+
+
+class LandingPoster:
+    """A relay's poster: posts through `post_fn(path, payload, timeout=)` and
+    keeps `landing`, whether the board held the last batch it was sent, read
+    as the relay reads it (`_stream_answer`): a held answer, or a resend that
+    moves `from` on, lands; a refusal, a cut, a 5xx, an unreachable board or a
+    resend from where the batch was sent does not. True until the first
+    answer: the relay is taken as landing until the board says otherwise."""
+
+    def __init__(self, post_fn):
+        self._post_fn = post_fn
+        self.landing = True
+
+    def __call__(self, path, payload, timeout=None):
+        resp = self._post_fn(path, payload, timeout=timeout)
+        kind, held = _stream_answer(resp)
+        self.landing = kind == "held" or (
+            kind == "resend" and held != payload.get("from"))
+        return resp
+
+    def withhold_ticks(self, post):
+        """`post(message)` that posts no in-run tick while the relay lands;
+        every other message (the closing count, `ingesting…`) is posted."""
+        def _post(message):
+            if self.landing and message.startswith(IN_RUN_TICK):
+                return None
+            return post(message)
+        return _post
+
+
+class StreamTicks:
+    """Counts the stream file at `path` into `narrator`, a `RunNarrator`
+    whose recogniser counts no console line and whose total is the
+    `run-start`'s, when the stream states one. `post(message)` delivers each
+    message; the relay's `LandingPoster.withhold_ticks` wraps it.
+
+    `start()` runs a background thread that wakes every `RELAY_SECONDS`, reads
+    the whole lines written since its last reading, and moves the narrator on
+    to the `test-end`s read so far (`RunNarrator.reach`). `finish(timeout)`
+    stops it and joins it within `timeout`."""
+
+    def __init__(self, post, path):
+        self._path = path
+        self._read_to = 0
+        self._ends = 0
+        self._stated = 0
+        self._halt = threading.Event()
+        self._thread = None
+        self.narrator = RunNarrator(post, lambda _line: False,
+                                    total=lambda: self._stated)
+
+    def start(self):
+        """Start the thread that counts while the runner works."""
+        self._thread = threading.Thread(target=self._follow, daemon=True,
+                                        name="crucible-stream-ticks")
+        self._thread.start()
+
+    def finish(self, timeout):
+        """Stop the thread and join it within `timeout` seconds."""
+        self._halt.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+    def _follow(self):
+        while not self._halt.wait(RELAY_SECONDS):
+            self._read()
+            self.narrator.reach(self._ends)
+
+    def _read(self):
+        """Count the whole lines written past the last reading. A file not
+        yet written holds nothing; an unreadable one is the relay's to say."""
+        try:
+            with open(self._path, "rb") as handle:
+                handle.seek(self._read_to)
+                chunk = handle.read()
+        except OSError:
+            return
+        whole = chunk[:chunk.rfind(b"\n") + 1]
+        self._read_to += len(whole)
+        for line in whole.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            given = event.get("total")
+            if event.get("event") == "test-end":
+                self._ends += 1
+            elif (event.get("event") == "run-start" and isinstance(given, int)
+                  and not isinstance(given, bool)):
+                self._stated = given
+
+
+def start_stream_relay(post_fn, tick_post, project_key, agent_id, run_id,
+                       path, codec, batch_limit):
+    """Start a streamed run's relay: answer `(relay, narrator)`, the started
+    `StreamRelay` sending the stream at `path` through a `LandingPoster` over
+    `post_fn`, and the narrator its `StreamTicks` drives, posting through
+    `tick_post` (no in-run tick while the relay lands). The narrator also
+    says the close's messages (`close_streamed_run`)."""
+    poster = LandingPoster(post_fn)
+    ticks = StreamTicks(poster.withhold_ticks(tick_post), path)
+    relay = StreamRelay(poster, project_key, agent_id, run_id, path, codec,
+                        batch_limit, ticks=ticks)
+    relay.start()
+    return relay, ticks.narrator
 
 
 # ── the streamed-run close: what follows a streamed run's runner exit ───────
