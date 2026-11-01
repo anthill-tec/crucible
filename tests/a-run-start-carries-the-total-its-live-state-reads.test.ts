@@ -31,7 +31,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ServerHandle } from "../src/server.ts";
-import { Store } from "../src/store.ts";
+import { SCHEMA_VERSION, Store } from "../src/store.ts";
 import {
   bootOn,
   eventLine,
@@ -192,8 +192,6 @@ describe("an open run with a start total and no batch has no live state", () => 
 // ── Migration v22 ───────────────────────────────────────────────────────────
 
 const PRE_TOTAL_VERSION = 21;
-/** The version a migrated store reaches: the end of the chain, past v22's step. */
-const BUILD_VERSION = 23;
 
 function scratchDbPath(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crucible-run-total-v22-"));
@@ -234,7 +232,7 @@ function makeV21Store(): string {
 }
 
 describe("migration v22 adds runs.total and run_live.reader_state", () => {
-  test("a v21 store is migrated 21 → 23: it gains runs.total and run_live.reader_state, both nullable, and is stamped 23", () => {
+  test("a v21 store is migrated from 21 to the build's schema version: it gains runs.total and run_live.reader_state, both nullable, and is stamped with the build's schema version", () => {
     const dbPath = makeV21Store();
     const before = new Database(dbPath);
     try {
@@ -248,10 +246,10 @@ describe("migration v22 adds runs.total and run_live.reader_state", () => {
     const store = Store.open(dbPath);
     stores.push(store);
     expect(store.migration?.from).toBe(PRE_TOTAL_VERSION);
-    expect(store.migration?.to).toBe(BUILD_VERSION);
-    expect(store.schemaVersion).toBe(BUILD_VERSION);
+    expect(store.migration?.to).toBe(SCHEMA_VERSION);
+    expect(store.schemaVersion).toBe(SCHEMA_VERSION);
     const db = dbOf(store);
-    expect(rawUserVersion(db)).toBe(BUILD_VERSION);
+    expect(rawUserVersion(db)).toBe(SCHEMA_VERSION);
     expect(columnsOf(db, "runs").find((c) => c.name === "total")).toEqual(expect.objectContaining({ notnull: 0 }));
     expect(columnsOf(db, "run_live").find((c) => c.name === "reader_state")).toEqual(
       expect.objectContaining({ notnull: 0 }),
