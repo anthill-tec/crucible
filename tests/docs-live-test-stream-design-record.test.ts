@@ -9,8 +9,9 @@
 //     source, and `ingest_body_bytes` as also bounding a stream's total;
 //   - PRD §4.4 and §3.3 each name the `crucible-events` codec, the stream
 //     route `/runs/<runId>/stream` and the close that decodes the held stream;
-//   - the design note names Playwright's steps in the live state as
-//     CR-CRU-201's, and states that a stream which only feeds the view
+//   - the design note states that Playwright's steps are in the run's
+//     record, not the live state, and assigns them to no later CR; and it
+//     states that a stream which only feeds the view
 //     (`bun-console`, maven's console) is CR-CRU-201's and CR-CRU-203's to
 //     define — each in ONE statement (a paragraph, or one table row), so two
 //     unrelated mentions far apart never pass for it.
@@ -124,11 +125,18 @@ describe("PRD §4.4 and §3.3 name the codec, the stream route and the close", (
 });
 
 describe("the design note assigns what this CR leaves to later ones", () => {
-  test("Playwright's steps in the live state are named as CR-CRU-201's", () => {
-    const found = statements(readText(DN)).some(
-      (st) => st.includes("CR-CRU-201") && /Playwright['’]s (?:\w+ )?steps/.test(st),
+  test("Playwright's steps are in the run's record, not the live state, and no later CR is assigned them", () => {
+    // Each list item on its own: a list's items share one paragraph.
+    const dn = statements(readText(DN)).flatMap((st) => st.split(/\n(?=\s*- )/));
+    const PLAYWRIGHT_STEPS = /Playwright['’]s (?:\w+ )?steps/;
+    // POSITIVE — the ruling, in one statement: the steps are in the record, not the live state.
+    const ruled = dn.some(
+      (st) => PLAYWRIGHT_STEPS.test(st) && /record/.test(st) && /not in the live state/.test(st),
     );
-    expect(found).toBe(true);
+    expect(ruled, "one statement puts Playwright's steps in the record, not the live state").toBe(true);
+    // NEGATIVE — no item assigns them to a CR as its work ("are <CR>'s").
+    const assigned = dn.filter((st) => PLAYWRIGHT_STEPS.test(st) && /\bare CR-[A-Z]+-\d+['’]s\b/.test(st));
+    expect(assigned).toEqual([]);
   });
 
   test("a stream that only feeds the view — bun-console, maven's console — is CR-CRU-201's and CR-CRU-203's to define", () => {
