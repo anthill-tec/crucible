@@ -517,6 +517,10 @@ describe("a scenario that failed with no failing step", () => {
     await openRunDetail(handle, key, eventId);
 
     expect(featureOpen("Search")).toBe(true);
+    // Density shows a failure box once its failure is focused (the one-box
+    // focus model): focus the scenario by clicking its row.
+    scenarioRow("Search", "Find a book by title").click();
+    await settleServedApp();
     const row = scenarioRow("Search", "Find a book by title");
     const group = row.parentElement!;
     const boxes = Array.from(group.querySelectorAll<HTMLElement>('[data-testid="failure-box"]'));
