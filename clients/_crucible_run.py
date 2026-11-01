@@ -33,6 +33,7 @@ import threading
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 
 #: The core this module is bound to: a live view of `_crucible_axi.py`'s
 #: namespace, set by the core's loader once this module has run. Every core
@@ -221,8 +222,8 @@ class RunNarrator:
     stopped short never claims the whole suite ran (`ran N/N` when no total
     was ever known)."""
 
-    def __init__(self, post, recognise, total=0, min_seconds=2.0,
-                 min_completions=10, unit=None):
+    def __init__(self, post, recognise, total: "int | Callable[[], int]" = 0,
+                 min_seconds=2.0, min_completions=10, unit=None):
         self._post = post
         self._recognise = recognise
         self._total = total
@@ -251,7 +252,14 @@ class RunNarrator:
         else:
             completed = verdict
         if completed:
-            self._completed()
+            self._advance(self._count + 1)
+
+    def reach(self, completed):
+        """Move the count on to `completed`, counted outside the runner's
+        output (a stream's `test-end`s so far), under the same throttle as
+        an observed line; a count that has not moved on posts nothing."""
+        if completed > self._count:
+            self._advance(completed)
 
     def finish(self):
         """Post the final count \u2014 always, with no label: the completions
@@ -270,9 +278,9 @@ class RunNarrator:
         total = total or 0
         return max(total, self._count) if total > 0 else 0
 
-    def _completed(self):
+    def _advance(self, count):
         now = time.monotonic()
-        self._count += 1
+        self._count = count
         if self._first_seen is None:
             self._first_seen = now
         since = now - (self._posted_at if self._posted_at is not None
@@ -599,7 +607,7 @@ def _ingest_body_limit(health):
 def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
                    report_paths, raw=None, coverage_codec=None,
                    coverage_paths=(), tier=None, context=None, run_id=None,
-                   release=None, runner_exit=None):
+                   release=None, runner_exit=None, framework=None):
     """The one ingest of a run's reports: the board's health is read first,
     once, through `get_fn`, and the run is refused before anything is sent when
     that health cannot be read, when it names no codec the run needs (the
@@ -610,8 +618,8 @@ def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
     Otherwise ONE `POST /api/v2/runs` goes out through `post_ingest`, carrying
     `codec`, `data` (each report's text, in path order), `coverage` when a
     coverage codec and its reports are given, `raw`, and `tier`, `context`,
-    `runId`, `release` and `runnerExit` when given; the board's answer is
-    returned, a 413 reported naming `ingest_body_bytes`.
+    `runId`, `release`, `runnerExit` and `framework` when given; the board's
+    answer is returned, a 413 reported naming `ingest_body_bytes`.
 
     A refusal before sending answers `{ok: False, error, warnings}`; with a
     run open it is aborted through `abort_run`, the refusal its reason, and
@@ -645,6 +653,8 @@ def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
             # Measured as `post_ingest` stamps the body and `http_request`
             # encodes it.
             stamped = {**payload, "stack": stack}
+            if framework:
+                stamped["framework"] = framework
             if release:
                 stamped["release"] = release
             size = len(json.dumps(stamped).encode())
@@ -659,7 +669,7 @@ def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
         resp = {"ok": False, "error": refusal, "warnings": warnings}
     else:
         resp = _core.post_ingest(post_fn, INGEST_RUNS_PATH, payload, stack=stack,
-                           release=release)
+                                 release=release, **_framework_kwarg(framework))
         error = resp.get("error") if isinstance(resp, dict) else None
         if isinstance(error, str) and _HTTP_413.match(error):
             resp = {**resp, "error": (
@@ -671,13 +681,13 @@ def ingest_reports(post_fn, get_fn, *, stack, project_key, agent_id, codec,
 
 def close_stream(post_fn, *, stack, project_key, agent_id, run_id, codec,
                  raw=None, coverage_codec=None, coverage_paths=(), tier=None,
-                 context=None, release=None, runner_exit=None):
+                 context=None, release=None, runner_exit=None, framework=None):
     """Close an open run whose record is the stream its relay sent: ONE `POST
     /api/v2/runs` through `post_ingest` carrying `runId`, `codec` and no
     `data`, with the coverage report inline when one is given, `raw`, `tier`,
-    `context`, `release` and `runnerExit`. A close the board refuses is
-    followed by the abort `post_ingest` makes. Prints the run's ingest line
-    and returns the board's answer."""
+    `context`, `release`, `runnerExit` and `framework`. A close the board
+    refuses is followed by the abort `post_ingest` makes. Prints the run's
+    ingest line and returns the board's answer."""
     payload = {"projectKey": project_key, "agentId": agent_id,
                "codec": codec, "runId": run_id}
     if coverage_codec is not None and coverage_paths:
@@ -691,7 +701,7 @@ def close_stream(post_fn, *, stack, project_key, agent_id, run_id, codec,
                 ("runnerExit", runner_exit))
     payload.update({key: value for key, value in optional if value is not None})
     resp = _core.post_ingest(post_fn, INGEST_RUNS_PATH, payload, stack=stack,
-                             release=release)
+                             release=release, **_framework_kwarg(framework))
     error = resp.get("error") if isinstance(resp, dict) else None
     if isinstance(error, str) and _HTTP_413.match(error):
         resp = {**resp, "error": (
@@ -699,6 +709,12 @@ def close_stream(post_fn, *, stack, project_key, agent_id, run_id, codec,
             f"{INGEST_BODY_LIMIT_KEY} limit")}
     _print_ingest_line(resp, codec)
     return resp
+
+
+def _framework_kwarg(framework):
+    """(PURE) `post_ingest`'s `framework` keyword when the run names one,
+    and nothing otherwise, so a client that names none calls it as before."""
+    return {"framework": framework} if framework else {}
 
 
 def _print_ingest_line(resp, codec):
@@ -1021,7 +1037,7 @@ def emit_run_abandoned(verb, project_key, agent_id, run_id, abandoned,
 
 
 def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None,
-             *, release=None):
+             *, release=None, framework=None):
     """Open the run BEFORE the suite is spawned. Returns `(run_id, warnings)`.
 
     A refusal degrades to single-shot with a warning naming the fallback. An
@@ -1031,8 +1047,12 @@ def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None,
 
     \u00a7S1 \u2014 `release` rides the start body's TOP-LEVEL `release`, and a
     refused release run raises `ReleaseRunRefused` instead of degrading: its
-    single-shot ingest would carry the same release and be refused in turn."""
+    single-shot ingest would carry the same release and be refused in turn.
+
+    `framework`, when the run names one, rides the start body beside `stack`."""
     payload = {"projectKey": project_key, "agentId": agent_id, "stack": stack}
+    if framework:
+        payload["framework"] = framework
     if tier:
         payload["tier"] = tier
     if context:
@@ -1269,6 +1289,10 @@ class StreamRelay:
     refusal, stops all further sending, said once on stderr; an unreachable
     board, a timeout or a 5xx is retried on the next tick, said once.
 
+    `ticks`, when given, is a `StreamTicks` bracketed by the relay: started by
+    `start()`, and finished first thing in `finish()`, so no in-run tick
+    follows the runner's exit.
+
     `finish(deadline_seconds)` stops and joins the thread (bounded by the post
     timeout), sends what was never acknowledged with up to
     `RELAY_FINISH_ATTEMPTS` tries per batch before the deadline, confirms the
@@ -1276,8 +1300,9 @@ class StreamRelay:
     `stopped` is None, or the board's error naming why sending stopped."""
 
     def __init__(self, post_fn, project_key, agent_id, run_id, path, codec,
-                 batch_limit):
+                 batch_limit, ticks=None):
         self._post_fn = post_fn
+        self._ticks = ticks
         self._project_key = project_key
         self._agent_id = agent_id
         self._run_id = run_id
@@ -1296,6 +1321,8 @@ class StreamRelay:
 
     def start(self):
         """Start the background thread that sends while the runner works."""
+        if self._ticks is not None:
+            self._ticks.start()
         self._thread = threading.Thread(target=self._follow, daemon=True,
                                         name=f"crucible-stream-relay-{self._run_id}")
         self._thread.start()
@@ -1304,6 +1331,9 @@ class StreamRelay:
         """Stop the thread, send what the board has not acknowledged, confirm
         its `held`, and answer `(held, stopped)`."""
         ends = time.monotonic() + deadline_seconds
+        if self._ticks is not None:
+            self._ticks.finish(max(min(RELAY_POST_TIMEOUT_SECONDS,
+                                       deadline_seconds), 0))
         self._halt.set()
         if self._thread is not None:
             self._thread.join(timeout=max(min(RELAY_POST_TIMEOUT_SECONDS,
@@ -1396,3 +1426,306 @@ class StreamRelay:
                   f"could not be sent ({value}) — it is retried",
                   file=sys.stderr)
         return kind
+
+
+# ── CR-CRU-225 §S2 — a streamed run's in-run count comes from its stream ────
+#
+# CR-CRU-201 §S4 step 6: no in-run `running N[/M]` tick while the relay lands
+# batches (they keep the agent alive), and ticks whenever it does not. On a
+# streamed run the count is the STREAM's `test-end`s, never the runner's
+# console, so a runner whose console the client does not read still ticks.
+
+#: The prefix of `RunNarrator`'s in-run ticks, which a landing relay stands in
+#: for.
+IN_RUN_TICK = "running "
+
+
+class LandingPoster:
+    """A relay's poster: posts through `post_fn(path, payload, timeout=)` and
+    keeps `landing`, whether the board held the last batch it was sent, read
+    as the relay reads it (`_stream_answer`): a held answer, or a resend that
+    moves `from` on, lands; a refusal, a cut, a 5xx, an unreachable board or a
+    resend from where the batch was sent does not. True until the first
+    answer: the relay is taken as landing until the board says otherwise."""
+
+    def __init__(self, post_fn):
+        self._post_fn = post_fn
+        self.landing = True
+
+    def __call__(self, path, payload, timeout=None):
+        resp = self._post_fn(path, payload, timeout=timeout)
+        kind, held = _stream_answer(resp)
+        self.landing = kind == "held" or (
+            kind == "resend" and held != payload.get("from"))
+        return resp
+
+    def withhold_ticks(self, post):
+        """`post(message)` that posts no in-run tick while the relay lands;
+        every other message (the closing count, `ingesting…`) is posted."""
+        def _post(message):
+            if self.landing and message.startswith(IN_RUN_TICK):
+                return None
+            return post(message)
+        return _post
+
+
+class StreamTicks:
+    """Counts the stream file at `path` into `narrator`, a `RunNarrator`
+    whose recogniser counts no console line and whose total is the
+    `run-start`'s, when the stream states one. `post(message)` delivers each
+    message; the relay's `LandingPoster.withhold_ticks` wraps it.
+
+    `start()` runs a background thread that wakes every `RELAY_SECONDS`, reads
+    the whole lines written since its last reading, and moves the narrator on
+    to the `test-end`s read so far (`RunNarrator.reach`). `finish(timeout)`
+    stops it and joins it within `timeout`."""
+
+    def __init__(self, post, path):
+        self._path = path
+        self._read_to = 0
+        self._ends = 0
+        self._stated = 0
+        self._halt = threading.Event()
+        self._thread = None
+        self.narrator = RunNarrator(post, lambda _line: False,
+                                    total=lambda: self._stated)
+
+    def start(self):
+        """Start the thread that counts while the runner works."""
+        self._thread = threading.Thread(target=self._follow, daemon=True,
+                                        name="crucible-stream-ticks")
+        self._thread.start()
+
+    def finish(self, timeout):
+        """Stop the thread and join it within `timeout` seconds."""
+        self._halt.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+    def _follow(self):
+        while not self._halt.wait(RELAY_SECONDS):
+            self._read()
+            self.narrator.reach(self._ends)
+
+    def _read(self):
+        """Count the whole lines written past the last reading. A file not
+        yet written holds nothing; an unreadable one is the relay's to say."""
+        try:
+            with open(self._path, "rb") as handle:
+                handle.seek(self._read_to)
+                chunk = handle.read()
+        except OSError:
+            return
+        whole = chunk[:chunk.rfind(b"\n") + 1]
+        self._read_to += len(whole)
+        for line in whole.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            given = event.get("total")
+            if event.get("event") == "test-end":
+                self._ends += 1
+            elif (event.get("event") == "run-start" and isinstance(given, int)
+                  and not isinstance(given, bool)):
+                self._stated = given
+
+
+def start_stream_relay(post_fn, tick_post, project_key, agent_id, run_id,
+                       path, codec, batch_limit):
+    """Start a streamed run's relay: answer `(relay, narrator)`, the started
+    `StreamRelay` sending the stream at `path` through a `LandingPoster` over
+    `post_fn`, and the narrator its `StreamTicks` drives, posting through
+    `tick_post` (no in-run tick while the relay lands). The narrator also
+    says the close's messages (`close_streamed_run`)."""
+    poster = LandingPoster(post_fn)
+    ticks = StreamTicks(poster.withhold_ticks(tick_post), path)
+    relay = StreamRelay(poster, project_key, agent_id, run_id, path, codec,
+                        batch_limit, ticks=ticks)
+    relay.start()
+    return relay, ticks.narrator
+
+
+# ── the streamed-run close: what follows a streamed run's runner exit ───────
+#
+# A run whose record is its runner's event stream (`crucible-events`, relayed
+# by `StreamRelay`) is decided, once the runner exits, by the stream file
+# alone: zero discovery, ran nothing, no test written (the compile ingest), or
+# the stream's close. Every client that streams a run ends it here, so the
+# stream is read in this module only; a client contributes its envelope, its
+# compile ingest and its runner's no-report and zero-discovery readings.
+
+#: The record stream codec the shipped runners and reporters write.
+STREAM_RECORD_CODEC = "crucible-events"
+
+
+def stream_counts(path):
+    """The one reading of a stream file: `(test_ends, run_end_total,
+    run_start_total, ran)`. `run_end_total` is None when the stream holds no
+    `run-end` (a `run-end` stating no int total counts its `test-end`s so
+    far), `run_start_total` None when no `run-start` states an int total, and
+    `ran` counts the `test-end`s that passed or failed. A missing file holds
+    nothing; an unreadable one is said on stderr and holds nothing."""
+    count, ran, total, stated = 0, 0, None, None
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                kind = event.get("event")
+                given = event.get("total")
+                given = (given if isinstance(given, int)
+                         and not isinstance(given, bool) else None)
+                if kind == "test-end":
+                    count += 1
+                    ran += event.get("status") in ("pass", "fail")
+                elif kind == "run-end":
+                    total = count if given is None else given
+                elif kind == "run-start" and given is not None:
+                    stated = given
+    except FileNotFoundError:
+        return 0, None, None, 0
+    except OSError as exc:
+        print(f"[crucible] WARN: could not read the stream {path} ({exc}) — "
+              f"it counts as holding no test", file=sys.stderr)
+        return 0, None, None, 0
+    return count, total, stated, ran
+
+
+def _narrated_total(count, total, stated):
+    """(PURE) The denominator of a streamed run's closing `ran N/M`: the
+    `run-end`'s total, else the `run-start`'s never below the count, else
+    the count."""
+    if total is not None:
+        return total
+    return max(count, stated) if stated is not None else count
+
+
+def emit_unfiled_run(verb, result, unfiled, warnings, *, artifact, emit,
+                     no_report_warning, zero_discovery=None, stack=None,
+                     gate=False):
+    """The exit of a streamed run for which no run was opened (the board
+    could not be reached or answered no runId, or the run lifecycle was opted
+    out of): the suite ran and nothing was filed. ONE `ok: false` envelope
+    names the cause `unfiled` as its `error`, carries `warnings`, and says
+    what the runner did: a discovery that found nothing, or a runner that
+    exited non-zero having written no test. Returns the exit code."""
+    print(f"[crucible] ERROR: {unfiled}", file=sys.stderr)
+    found = list(warnings)
+    help_steps = [f"re-run {verb} --agent <agentId> once the board answers",
+                  "status"]
+    zero = zero_discovery(result) if zero_discovery is not None else None
+    if zero is not None:
+        warning, help_step = zero
+        found.append(warning)
+        help_steps = [help_step, *help_steps]
+    elif result.returncode:
+        found.append(no_report_warning(result))
+        help_steps = _core.no_report_help(verb, artifact)
+    if gate:
+        found += _core.whole_suite_unreported_warnings(
+            stack, {"ok": False, "error": unfiled})
+    emit(False, {"error": unfiled, "help": help_steps}, found,
+         f"{verb}: ok=False — {unfiled}")
+    return result.returncode or 1
+
+
+def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
+                       framework, post_fn, project_key, agent_id, tier,
+                       context, release, warnings, emit, emit_ingest,
+                       ingest_compile, no_report_warning, zero_discovery=None,
+                       collect_coverage=None, narrator=None, unfiled=None,
+                       gate=False, codec=STREAM_RECORD_CODEC,
+                       coverage_codec=None, base_url=None, close_warnings=()):
+    """Close a streamed run once its runner exited and its relay finished:
+    `result` is the runner's `CompletedProcess`, `held` the bytes of the
+    stream the board confirmed, `stream_path` the stream file. Returns the
+    verb's exit code.
+
+    The client's own facts arrive as hooks: `emit(ok, fields, warnings,
+    legacy_line)` writes its envelope, `emit_ingest(resp, help_steps,
+    warnings, ok)` its filed run's envelope, `ingest_compile(result)` files
+    the runner's output as a compile failure closing `run_id`,
+    `no_report_warning(result)` names a run that wrote no test, and
+    `zero_discovery(result)` (None for a runner with no such reading) answers
+    `(warning, help_step)` for an honest empty discovery, else None.
+
+    With no `run_id` the run is unfiled (`emit_unfiled_run`, `unfiled` its
+    cause). Otherwise the stream decides, in order: zero discovery (the run
+    is aborted), ran nothing (`emit_ran_nothing`), and then, after the
+    closing `ran N/M` and `ingesting…`, a failed runner that wrote no
+    `test-end` and left the board nothing held is filed by the compile
+    ingest; any other run is closed by its stream (`close_stream`, carrying
+    `framework` and, when `collect_coverage` found any, the coverage under
+    `coverage_codec`), with the no-report warning when no `test-end` was
+    written. `close_warnings` join only a run closed by its stream; `gate`
+    derives its help from the run state (`run_help`, at `base_url`) and adds
+    the whole-suite-unreported warning."""
+    artifact = os.path.basename(stream_path)
+    warnings = list(warnings)
+    if run_id is None:
+        return emit_unfiled_run(
+            verb, result, unfiled or "the board opened no run", warnings,
+            artifact=artifact, emit=emit, no_report_warning=no_report_warning,
+            zero_discovery=zero_discovery, stack=stack, gate=gate)
+    count, total, stated, _ran = stream_counts(stream_path)
+    zero = (zero_discovery(result)
+            if count == 0 and zero_discovery is not None else None)
+    if zero is not None:
+        warning, help_step = zero
+        emit(False, {"help": [help_step]},
+             warnings + [warning] + no_report_left_open_warnings(
+                 run_id, artifact, post_fn=post_fn, project_key=project_key,
+                 agent_id=agent_id), None)
+        return 1
+    if ran_nothing(result.returncode, count if total is not None else None):
+        return emit_ran_nothing(
+            verb, artifact, result.returncode, result.stdout or "", run_id,
+            warnings, post_fn=post_fn, project_key=project_key,
+            agent_id=agent_id)
+    # A failed runner that wrote no `test-end` is the no-report failure, and
+    # its envelope says so whichever close follows. The compile path needs
+    # nothing of the stream held by the board too; a stream the board holds
+    # (a `run-start` the runner wrote before it died) is closed as a stream.
+    no_test_end = bool(result.returncode) and count == 0
+    wrote_no_test = no_test_end and held == 0
+    coverage_paths = []
+    if collect_coverage is not None and not wrote_no_test:
+        coverage_paths, missing = collect_coverage()
+        warnings += missing
+    if narrator is not None:
+        # The final count, then `ingesting…`, both ahead of the close.
+        narrator.say(f"ran {count}/{_narrated_total(count, total, stated)}")
+        narrator.say(INGESTING_MESSAGE)
+    if wrote_no_test:
+        # Its captured output is filed as a compile failure, closing the run.
+        ingest_compile(result)
+        emit(False, {"help": _core.no_report_help(verb, artifact)},
+             warnings + [no_report_warning(result)],
+             f"{verb}: ok=False — no {artifact} test, ingested as compile")
+        return result.returncode or 1
+    if no_test_end:
+        warnings.append(no_report_warning(result))
+    runner_exit = runner_exit_code(result.returncode)
+    resp = close_stream(
+        post_fn, stack=stack, project_key=project_key, agent_id=agent_id,
+        run_id=run_id, codec=codec, raw=result.stdout,
+        coverage_codec=coverage_codec if coverage_paths else None,
+        coverage_paths=coverage_paths, tier=tier, context=context,
+        release=release, runner_exit=runner_exit, framework=framework)
+    exit_code = verb_exit(runner_exit, resp)
+    warnings += list(close_warnings)
+    help_steps = None
+    if gate:
+        help_steps = _core.run_help(verb, exit_code == 0,
+                                    filed_run(resp).get("failed"), base_url)
+        warnings += _core.whole_suite_unreported_warnings(stack, resp)
+    # A no-report run is a failure envelope whichever close filed it.
+    emit_ingest(resp, help_steps, warnings, False if no_test_end else None)
+    return exit_code

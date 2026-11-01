@@ -169,6 +169,8 @@ interface EventRow {
   kind: string;
   tier: string;
   stack: string | null;
+  // The framework the run ran under, beside its stack. NULL when none stated.
+  framework: string | null;
   codec: string | null;
   timestamp: number;
   name: string | null;
@@ -221,6 +223,7 @@ interface RunRow {
   started_at: number;
   tier: string | null;
   stack: string | null;
+  framework: string | null;
   context: string | null;
   run_state: string;
   settled_at: number | null;
@@ -247,6 +250,8 @@ export interface RunRecord {
   state: RunState;
   tier?: Tier;
   stack?: string;
+  /** The framework the run ran under; absent when it stated none. */
+  framework?: string;
   context?: RunContext;
   settledAt?: number;
   abortReason?: string;
@@ -872,6 +877,7 @@ export type TestRun = RunSchema;
 export interface RecordEventMeta {
   tier?: Tier;
   stack?: string;
+  framework?: string;
   codec?: string;
   name?: string;
   context?: RunContext;
@@ -2039,7 +2045,7 @@ export interface MilestoneDateFilter {
  * lifecycle to serve.
  */
 function recordProjection(table: "milestones" | "gates", kind: "milestone" | "gate"): string {
-  return `SELECT id, project_key, agent_id, '${kind}' AS kind, tier, NULL AS stack, codec,
+  return `SELECT id, project_key, agent_id, '${kind}' AS kind, tier, NULL AS stack, NULL AS framework, codec,
                  timestamp, NULL AS name, NULL AS total, NULL AS passed, NULL AS failed,
                  NULL AS pending, NULL AS duration_ms, NULL AS tree, NULL AS coverage,
                  NULL AS compile, context, NULL AS action, NULL AS first_seen, payload,
@@ -3103,6 +3109,26 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       );
     },
   },
+  {
+    description:
+      "events + runs: the framework a run ran under is stored beside its stack (nullable `framework`). Additive ALTERs, each only where the column is missing: existing rows read NULL",
+    apply(db) {
+      for (const { table, ddl } of FRAMEWORK_COLUMNS) {
+        if (tableExists(db, table) && !columnsOf(db, table).has("framework")) db.exec(ddl);
+      }
+    },
+    satisfiedBy(db) {
+      return FRAMEWORK_COLUMNS.every(
+        ({ table }) => !tableExists(db, table) || columnsOf(db, table).has("framework"),
+      );
+    },
+  },
+];
+
+/** The two tables a run's framework is stored on, beside its stack, each with its literal additive DDL. */
+const FRAMEWORK_COLUMNS: ReadonlyArray<{ table: "events" | "runs"; ddl: string }> = [
+  { table: "events", ddl: "ALTER TABLE events ADD COLUMN framework TEXT" },
+  { table: "runs", ddl: "ALTER TABLE runs ADD COLUMN framework TEXT" },
 ];
 
 /**
@@ -3515,7 +3541,10 @@ export class Store {
         cycle_id INTEGER,
         -- The release this run verifies, in the base schema so a brand-new
         -- store and the end of the chain agree.
-        release TEXT
+        release TEXT,
+        -- The framework the run ran under, beside its stack (NULL: none
+        -- stated); last, where the v23 step's ALTER puts it.
+        framework TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
@@ -3570,7 +3599,9 @@ export class Store {
         release TEXT,
         -- The run start's own count of the tests it is about to run (NULL:
         -- none stated), the live read's total when the stream states none.
-        total INTEGER
+        total INTEGER,
+        -- The framework the run ran under (NULL: none stated), its event's too.
+        framework TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_runs_open
@@ -4265,6 +4296,7 @@ export class Store {
       // on a failing ingest (failure diagnostics matter most on red runs).
       ...(run.raw !== undefined ? { raw: run.raw } : {}),
       ...(meta?.stack !== undefined ? { stack: meta.stack } : {}),
+      ...(meta?.framework !== undefined ? { framework: meta.framework } : {}),
       ...(meta?.codec !== undefined ? { codec: meta.codec } : {}),
       ...(meta?.name !== undefined ? { name: meta.name } : {}),
       ...(meta?.release !== undefined ? { release: meta.release } : {}),
@@ -4287,7 +4319,7 @@ export class Store {
     compile: CompileReport,
     meta?: Pick<
       RecordEventMeta,
-      "tier" | "stack" | "context" | "codec" | "role" | "lifecycle" | "release"
+      "tier" | "stack" | "framework" | "context" | "codec" | "role" | "lifecycle" | "release"
     >,
   ): RunEvent {
     // A compile report is stored as rows; a value that is not one is refused
@@ -4310,6 +4342,7 @@ export class Store {
       ...(meta?.codec !== undefined ? { codec: meta.codec } : {}),
       ...(meta?.release !== undefined ? { release: meta.release } : {}),
       ...(meta?.stack !== undefined ? { stack: meta.stack } : {}),
+      ...(meta?.framework !== undefined ? { framework: meta.framework } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
       // CR-CRU-057 §S1 — a stamped role is DECLARED data by construction.
       ...(meta?.role !== undefined ? { role: meta.role, roleInferred: false } : {}),
@@ -5146,7 +5179,14 @@ export class Store {
   startRun(
     projectKey: string,
     agentId: string,
-    opts?: { tier?: Tier; stack?: string; context?: RunContext; release?: string; total?: number },
+    opts?: {
+      tier?: Tier;
+      stack?: string;
+      framework?: string;
+      context?: RunContext;
+      release?: string;
+      total?: number;
+    },
   ): RunRecord {
     this.touchAgent(projectKey, agentId);
     const run: RunRecord = {
@@ -5157,14 +5197,15 @@ export class Store {
       state: "open",
       ...(opts?.tier !== undefined ? { tier: opts.tier } : {}),
       ...(opts?.stack !== undefined ? { stack: opts.stack } : {}),
+      ...(opts?.framework !== undefined ? { framework: opts.framework } : {}),
       ...(opts?.context !== undefined ? { context: opts.context } : {}),
       ...(opts?.release !== undefined ? { release: opts.release } : {}),
     };
     this.db
       .query(
-        `INSERT INTO runs (run_id, project_key, agent_id, started_at, tier, stack, context,
+        `INSERT INTO runs (run_id, project_key, agent_id, started_at, tier, stack, framework, context,
            run_state, settled_at, abort_reason, event_id, release, total)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL, ?, ?)`,
       )
       .run(
         run.runId,
@@ -5173,6 +5214,7 @@ export class Store {
         run.startedAt,
         run.tier ?? null,
         run.stack ?? null,
+        run.framework ?? null,
         run.context !== undefined ? JSON.stringify(run.context) : null,
         run.release ?? null,
         opts?.total ?? null,
@@ -5429,6 +5471,8 @@ export class Store {
         abortReason: reason,
         ...(kept !== null ? { summary: kept.summary, tree: kept.tree, incomplete: kept.incomplete } : {}),
         ...(run.stack !== undefined ? { stack: run.stack } : {}),
+        // An aborted run's event keeps the framework its start stated.
+        ...(run.framework !== undefined ? { framework: run.framework } : {}),
         ...(run.context !== undefined ? { context: run.context } : {}),
         // An aborted verification run stays filed under its release.
         ...(run.release !== undefined ? { release: run.release } : {}),
@@ -5458,6 +5502,7 @@ export class Store {
       state: row.run_state === "ended" || row.run_state === "aborted" ? row.run_state : "open",
       ...(row.tier !== null ? { tier: row.tier as Tier } : {}),
       ...(row.stack !== null ? { stack: row.stack } : {}),
+      ...((row.framework ?? null) !== null ? { framework: row.framework! } : {}),
       ...(row.context !== null ? { context: JSON.parse(row.context) as RunContext } : {}),
       ...(row.settled_at !== null ? { settledAt: row.settled_at } : {}),
       ...(row.abort_reason !== null ? { abortReason: row.abort_reason } : {}),
@@ -6219,8 +6264,8 @@ export class Store {
              timestamp, name, total, passed, failed, pending, duration_ms,
              tree, coverage, compile, context, action, first_seen, payload,
              role, role_inferred, started_at, runtime_ms, status, retired_at,
-             cycle_id, release)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             cycle_id, release, framework)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           event.id,
@@ -6276,6 +6321,8 @@ export class Store {
           // The release this run verifies, as the route stamped it; NULL when
           // the run declared none.
           event.release ?? null,
+          // The framework the run ran under, beside its stack; NULL when none.
+          event.framework ?? null,
         );
       // The run's raw output is capped here, the one place both run routes
       // store it, after any codec has read the whole text; the limit is
@@ -6467,6 +6514,8 @@ export class Store {
       ...(row.action !== null ? { action: row.action as "registered" | "unregistered" } : {}),
       ...(row.first_seen !== null ? { firstSeen: row.first_seen } : {}),
       ...(row.stack !== null ? { stack: row.stack } : {}),
+      // ABSENT on a run that stated none, on every record and on every older row.
+      ...((row.framework ?? null) !== null ? { framework: row.framework! } : {}),
       ...(row.codec !== null ? { codec: row.codec } : {}),
       ...(row.name !== null ? { name: row.name } : {}),
       ...(row.total !== null

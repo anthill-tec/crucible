@@ -923,10 +923,11 @@ class NoBoardNoFiguresTest(_MavenProject, unittest.TestCase):
 # into its own module, `_crucible_run.py`'s re-recorded when the arduino
 # client's move to the shared ingest grew it (`junit_case_sources` in,
 # `filed_summary` out), and again when CR-CRU-224's python stream relay grew
-# it (`StreamRelay` and `close_stream` in). The maven client's move to the
-# shared ingest adds nothing to either. A change that grows a shared module
-# re-records its budget here, in the same change.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9088, "_crucible_run.py": 1398}
+# it (`StreamRelay` and `close_stream` in), and again at CR-CRU-225's close-out
+# (the shared streamed-run close and the stream-counted narration in). The
+# maven client's move to the shared ingest adds nothing to either. A change
+# that grows a shared module re-records its budget here, in the same change.
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9088, "_crucible_run.py": 1731}
 _OWN_INGEST_LINES = ("ingest junit:", "ingest parsed:")
 
 

@@ -224,6 +224,8 @@ export interface RunEvent {
   kind: "test" | "compile" | "lifecycle" | "gate" | "milestone";
   tier: Tier;
   stack?: string;
+  /** The framework the run ran under, beside its stack; absent when none was stated. */
+  framework?: string;
   codec?: string;
   context?: RunContext;
   /**

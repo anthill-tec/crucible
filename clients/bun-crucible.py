@@ -350,19 +350,27 @@ def _narrator(project_dir, agent_id, identity, total, poster=None):
     mid-run and a tick re-creates it, this run owns that ghost.
 
     CR-CRU-201 \u00a7S4 step 6 \u2014 on a relayed run (`poster` is its relay's
-    `_ConsolePoster`), the in-run `running N/M` ticks are not posted while the
+    shared `LandingPoster`), the in-run `running N/M` ticks are not posted while the
     relay's last batch was held (its batches keep the agent alive); whenever
     it is not landing batches \u2014 a refusal, a cut, or a 5xx or unreachable
     board it is retrying \u2014 they are, so the run is never swept as a dead
     agent's. The closing `ran N/M` and `ingesting\u2026` are posted either way."""
+    tick = _heartbeat_tick(project_dir, agent_id, identity)
+    if poster is not None:
+        tick = poster.withhold_ticks(tick)
+    return _axi().RunNarrator(tick, _recognise_completion, total=total)
+
+
+def _heartbeat_tick(project_dir, agent_id, identity):
+    """The narration's `post(message)`: one heartbeat that reports through the
+    gated identity, so a tick that re-creates a pruned row makes it this
+    run's."""
     def _tick(message):
-        if (poster is not None and poster.landing
-                and message.startswith(_IN_RUN_TICK)):
-            return
         resp = _register_agent(project_dir, agent_id, message)
         if identity is not None:
             identity.observe(resp)
-    return _axi().RunNarrator(_tick, _recognise_completion, total=total)
+        return resp
+    return _tick
 
 
 def _run_logged(cmd, cwd, env, log_path, narrator=None):
@@ -389,16 +397,21 @@ CONSOLE_CODEC = "bun-console"
 # signal interrupted the run.
 _CONSOLE_FINISH_SECONDS = 60.0
 _INTERRUPTED_FINISH_SECONDS = 5.0
-# The prefix of `RunNarrator`'s in-run ticks, which a live relay stands in for.
-_IN_RUN_TICK = "running "
 
 
-def _board_reads_console(health):
-    """(PURE) True only when the board's `health` answer lists `bun-console`
-    in a `codecs.view` list."""
+def _board_reads_console(health, codec=CONSOLE_CODEC):
+    """(PURE) True only when the board's `health` answer lists `codec`
+    (`bun-console` unless a target declares its own) in a `codecs.view`
+    list."""
+    return _health_lists(health, "view", codec)
+
+
+def _health_lists(health, kind, codec):
+    """(PURE) True only when the board's `health` answer lists `codec` in its
+    `codecs.<kind>` list."""
     codecs = health.get("codecs") if isinstance(health, dict) else None
-    view = codecs.get("view") if isinstance(codecs, dict) else None
-    return isinstance(view, list) and CONSOLE_CODEC in view
+    listed = codecs.get(kind) if isinstance(codecs, dict) else None
+    return isinstance(listed, list) and codec in listed
 
 
 def _console_health(args):
@@ -414,37 +427,25 @@ def _relay_post(path, payload, timeout=None):
     return _request("POST", path, payload, timeout)
 
 
-class _ConsolePoster:
-    """The relay's poster on a relayed run: posts through `_relay_post` and
-    keeps `landing`, whether the board held the last batch it was sent, read
-    as the relay reads it (`_stream_answer`): a held answer, or a resend that
-    moves `from` on, lands; a refusal, a cut, a 5xx, an unreachable board or a
-    resend from where the batch was sent does not. True until the first
-    answer: the relay is taken as landing until the board says otherwise."""
-
-    def __init__(self):
-        self.landing = True
-
-    def __call__(self, path, payload, timeout=None):
-        resp = _relay_post(path, payload, timeout)
-        kind, held = _axi()._stream_answer(resp)
-        self.landing = kind == "held" or (
-            kind == "resend" and held != payload.get("from"))
-        return resp
+def _console_poster():
+    """The relay's poster on a relayed run: the shared `LandingPoster` over
+    `_relay_post`, keeping whether the board held the last batch."""
+    return _axi().LandingPoster(_relay_post)
 
 
 def _console_relay(project_dir, agent_id, run_id, reports_dir, health,
-                   poster=None):
+                   poster=None, codec: str | None = CONSOLE_CODEC):
     """A started `StreamRelay` following `<reports_dir>/bun-console.log` to the
-    open run `run_id` under `bun-console`, posting through `poster` (a fresh
-    `_ConsolePoster` when none is given), or None when the run does not relay:
-    no run is open, or `health` does not list the codec under `codecs.view`."""
-    if not run_id or not _board_reads_console(health):
+    open run `run_id` under the view `codec` (`bun-console`), posting through
+    `poster` (a fresh `_console_poster()` when none is given), or None when the
+    run does not relay: no run is open, it relays no console (`codec` None),
+    or `health` does not list the codec under `codecs.view`."""
+    if not run_id or not codec or not _board_reads_console(health, codec):
         return None
-    relay = _axi().StreamRelay(poster or _ConsolePoster(),
+    relay = _axi().StreamRelay(poster or _console_poster(),
                                _project_key(project_dir), agent_id,
                                run_id, os.path.join(reports_dir, CONSOLE_FILE),
-                               CONSOLE_CODEC, _axi()._ingest_body_limit(health))
+                               codec, _axi()._ingest_body_limit(health))
     relay.start()
     return relay
 
@@ -776,6 +777,150 @@ def _declared_raw_report(package_dir, script, reports_dir):
             "path": os.path.join(reports_dir, name)}
 
 
+# CR-CRU-225 \u00a7S2 \u2014 the `crucible.targets` table: one entry per script,
+# naming its `framework`, its record (`stream: {codec, path}` or `junit`:
+# `flag` | `env:<VAR>`), and optionally a `console` view codec and a
+# `coverage` codec. A script with no entry runs as before, as `bun-test`.
+TARGETS_DECLARATION = "crucible.targets"
+DEFAULT_FRAMEWORK = "bun-test"
+BUN_FRAMEWORKS = (DEFAULT_FRAMEWORK, "vitest", "playwright", "playwright-bdd")
+# A stream target's record: the file the shipped reporters write, named to
+# the runner in `CRUCIBLE_STREAM`, and the directory they are installed in,
+# named in `CRUCIBLE_REPORTERS` (the client's own install's `reporters/`).
+STREAM_FILE = "crucible-events.ndjson"
+STREAM_VAR = "CRUCIBLE_STREAM"
+REPORTERS_VAR = "CRUCIBLE_REPORTERS"
+STREAM_PATH_DECLARATION = f"{REPORT_MECHANISM_ENV_PREFIX}{STREAM_VAR}"
+
+
+def _reporters_dir():
+    """The shipped reporters' directory: this install's `reporters/`."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "reporters")
+
+
+def _declared_target(package_dir, script):
+    """The `crucible.targets` entry of `script`, read from the same
+    `package.json` its script table lives in: `(target, refusal)`.
+
+    `(None, None)` for a script with no entry (it runs as before);
+    `(target, None)` for an entry the client can run, as `{framework, stream,
+    junit, console, coverage}` (`stream` is `{codec}` or None, `junit` the
+    `flag` / `env:<VAR>` declaration or None); `(None, detail)` for one it
+    refuses, the detail naming `crucible.targets`, the script and the field at
+    fault. A script declared both here and in `crucible.reportPath` or
+    `crucible.rawReport` is refused, naming both."""
+    if not script:
+        return None, None
+    crucible = _package_manifest(package_dir).get("crucible")
+    if not isinstance(crucible, dict):
+        return None, None
+    targets = crucible.get("targets")
+    if not isinstance(targets, dict) or script not in targets:
+        return None, None
+    key = f"{TARGETS_DECLARATION}.{script}"
+    for older in ("reportPath", RAW_REPORT_KEY):
+        table = crucible.get(older)
+        if isinstance(table, dict) and script in table:
+            return None, (f"{key} is also declared in crucible.{older}: a "
+                          f"script is declared in one place, so remove "
+                          f"crucible.{older}.{script} or the table entry")
+    entry = targets[script]
+    if not isinstance(entry, dict):
+        return None, (f"{key} must be an object naming its `framework` and its "
+                      f"record (`stream` or `junit`), not {entry!r}")
+    return _read_target_entry(key, entry)
+
+
+def _read_target_entry(key, entry):
+    """`(target, refusal)` for the table entry `entry` keyed `key`."""
+    framework = entry.get("framework")
+    if framework not in BUN_FRAMEWORKS:
+        return None, (f"{key} `framework` {framework!r} is not one of the bun "
+                      f"frameworks ({', '.join(BUN_FRAMEWORKS)})")
+    stream, junit = entry.get("stream"), entry.get("junit")
+    console, coverage = entry.get("console"), entry.get("coverage")
+    if (stream is None) == (junit is None):
+        return None, (f"{key} declares its record as exactly one of `stream` "
+                      f"and `junit`, not {'both' if stream is not None else 'neither'}")
+    target = {"framework": framework, "stream": None, "junit": None,
+              "console": None, "coverage": None}
+    if stream is not None:
+        codec = stream.get("codec") if isinstance(stream, dict) else None
+        path = stream.get("path") if isinstance(stream, dict) else None
+        if not isinstance(stream, dict):
+            return None, f"{key} `stream` must be an object of {{codec, path}}"
+        if not isinstance(codec, str) or not codec.strip():
+            return None, f"{key} `stream` names no `codec`"
+        if path != STREAM_PATH_DECLARATION:
+            return None, (f"{key} `stream` `path` must be "
+                          f"{STREAM_PATH_DECLARATION!r}, the one variable the "
+                          f"shipped reporters read, not {path!r}")
+        if console is not None:
+            return None, (f"{key} declares a `console` on a `stream` entry: a "
+                          f"stream is its own live view")
+        target["stream"] = {"codec": codec.strip()}
+    else:
+        if junit != REPORT_MECHANISM_FLAG and not _junit_variable(junit):
+            return None, (f"{key} `junit` must be {REPORT_MECHANISM_FLAG!r} or "
+                          f"'env:<VAR>', not {junit!r}")
+        target["junit"] = junit
+        if console is not None:
+            if not isinstance(console, str) or not console.strip():
+                return None, f"{key} `console` must name a view codec"
+            if console == CONSOLE_CODEC and framework != DEFAULT_FRAMEWORK:
+                return None, (f"{key} `console` {CONSOLE_CODEC!r} reads bun's "
+                              f"own console, which framework {framework!r} "
+                              f"does not print")
+            target["console"] = console
+    if coverage is not None:
+        if not (coverage == LCOV_CODEC and junit == REPORT_MECHANISM_FLAG
+                and framework == DEFAULT_FRAMEWORK):
+            return None, (f"{key} `coverage` {coverage!r} cannot be produced: "
+                          f"only {LCOV_CODEC!r}, on a `junit: flag` target of "
+                          f"framework {DEFAULT_FRAMEWORK!r}")
+        target["coverage"] = coverage
+    return target, None
+
+
+def _junit_variable(junit):
+    """(PURE) The variable an `env:<VAR>` declaration names, or None."""
+    if not isinstance(junit, str) or not junit.startswith(REPORT_MECHANISM_ENV_PREFIX):
+        return None
+    return junit[len(REPORT_MECHANISM_ENV_PREFIX):].strip() or None
+
+
+def _target_board_refusal(script, target, health):
+    """Why the board whose `health` was read cannot take the codecs `script`'s
+    table entry declares (`stream` under `codecs.stream`, `console` under
+    `codecs.view`, `coverage` under `codecs.coverage`), or None. A health that
+    could not be read checks nothing here."""
+    if not isinstance(health, dict) or health.get("ok") is False:
+        return None
+    declared = (("stream", (target["stream"] or {}).get("codec")),
+                ("view", target["console"]), ("coverage", target["coverage"]))
+    lacking = [(kind, codec) for kind, codec in declared
+               if codec and not _health_lists(health, kind, codec)]
+    if not lacking:
+        return None
+    named = ", ".join(f"`{codec}` (codecs.{kind})" for kind, codec in lacking)
+    return (f"{TARGETS_DECLARATION}.{script} declares {named}, which the board "
+            f"at {_base_url()} does not list in its health; nothing was run")
+
+
+def _emit_target_refused(verb, project_dir, agent_id, detail):
+    """The exit of a run whose `crucible.targets` entry cannot be honoured:
+    nothing is run and no run is opened; ONE ok:false envelope names it.
+    Returns 1."""
+    _emit_axi(verb, False,
+              {"error": detail,
+               "help": [f"fix {TARGETS_DECLARATION} in package.json, then "
+                        f"re-run {verb}", "status"]},
+              _axi_context(project_dir, agent_id=agent_id),
+              [{"code": "target-refused", "detail": detail}],
+              f"[crucible] ERROR: {detail}")
+    return 1
+
+
 def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir,
                         mechanism=None, passthrough=()):
     """§S6 ruling 2 — a DECLARED tier target is a `package.json` script, and it
@@ -846,19 +991,21 @@ LCOV_CODEC = "lcov"
 
 def _file_reports(project_dir, agent_id, *, codec, report_paths, raw=None,
                   coverage_paths=(), tier=None, context=None, run_id=None,
-                  release=None, runner_exit=None):
+                  release=None, runner_exit=None, framework=None,
+                  coverage_codec=LCOV_CODEC):
     """Send a run's reports to the board for it to decode: the shared
     `ingest_reports`, which reads the board's health first and, unless it
     refuses, makes ONE `POST /api/v2/runs` carrying `codec`, the report texts
-    inline, the lcov coverage report when one is given, `raw` and
-    `runnerExit`. This client parses none of them. Returns the board's
-    answer."""
+    inline, the coverage report (under `coverage_codec`) when one is given,
+    `raw`, `runnerExit` and the run's `framework`. This client parses none
+    of them. Returns the board's answer."""
     return _axi().ingest_reports(
         _post, _get, stack=_STACK, project_key=_project_key(project_dir),
         agent_id=agent_id, codec=codec, report_paths=report_paths, raw=raw,
-        coverage_codec=LCOV_CODEC if coverage_paths else None,
+        coverage_codec=coverage_codec if coverage_paths else None,
         coverage_paths=coverage_paths, tier=tier, context=context,
-        run_id=run_id, release=release, runner_exit=runner_exit)
+        run_id=run_id, release=release, runner_exit=runner_exit,
+        framework=framework)
 
 
 def _raw_report_result_count(raw_report):
@@ -895,7 +1042,9 @@ def _raw_report_result_count(raw_report):
 
 
 def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None,
-                    cycle_id=None):
+                    cycle_id=None, framework=None):
+    """File `errors_text` to /api/v2/runs/compile, closing `run_id` when
+    given; a test run's compile close states its `framework`, `check` none."""
     payload = {
         "projectKey": _project_key(project_dir),
         "format": "typescript",
@@ -910,7 +1059,8 @@ def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=Non
     if run_id:
         payload["runId"] = run_id
     resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload, stack=_STACK,
-                              release=release)
+                              release=release,
+                              **({"framework": framework} if framework else {}))
     # CR-CRU-058 §S3 — the human ingest line is interactive-only (stderr); it
     # used to land on stdout AHEAD of the caller's envelope (`check`'s failure
     # path, and with it `pre-merge-gate`'s), leaving stdout un-decodable.
@@ -982,7 +1132,7 @@ def _run_left_open_help():
 
 
 def _start_run(project_dir, agent_id, tier=None, context=None, release=None,
-               total=None):
+               total=None, framework=None):
     """Open the run BEFORE the tool is spawned. Returns `(run_id, warnings)`,
     through the shared `open_run`: a refusal degrades to single-shot with a
     warning naming the fallback; an `ok` answer with no runId is a server that
@@ -997,7 +1147,8 @@ def _start_run(project_dir, agent_id, tier=None, context=None, release=None,
                 payload = {**payload, "total": total}
             return _post(path, payload)
     return _axi().open_run(post_fn, _project_key(project_dir), agent_id, _STACK,
-                           tier=tier, context=context, release=release)
+                           tier=tier, context=context, release=release,
+                           framework=framework)
 
 
 def _abandon_trap(run_id):
@@ -1204,8 +1355,9 @@ def cmd_test(args, tier=None):
                 run_id, run_warnings = _start_run(
                     project_dir, args.agent, tier=tier, context=_run_context(),
                     release=release,
-                    total=scanned if reads_console and name is None else None)
-            poster = _ConsolePoster()
+                    total=scanned if reads_console and name is None else None,
+                    framework=DEFAULT_FRAMEWORK)
+            poster = _console_poster()
             relay = _console_relay(project_dir, args.agent, run_id,
                                    reports_dir, health, poster)
             narrator = _narrator(project_dir, args.agent, identity, scanned,
@@ -1270,7 +1422,8 @@ def cmd_test(args, tier=None):
                                  raw=getattr(result, "stdout", None),
                                  tier=tier, context=_run_context(),
                                  run_id=run_id, release=release,
-                                 runner_exit=runner_exit)
+                                 runner_exit=runner_exit,
+                                 framework=DEFAULT_FRAMEWORK)
             _emit_ingest_axi("test", resp, project_dir, args.agent,
                              warnings=(run_warnings
                                        + _axi().unit_run_wall_vs_cpu_warnings(
@@ -1287,7 +1440,8 @@ def cmd_test(args, tier=None):
                      "bun test produced no JUnit XML (collection/compile failure)")
         rc = _ingest_compile(project_dir, args.agent,
                              synthetic + ("\n\n" + tail if tail else ""),
-                             run_id=run_id, release=release)
+                             run_id=run_id, release=release,
+                             framework=DEFAULT_FRAMEWORK)
         # CR-CRU-064 §S3 — the synthetic TS0000 ingest above is UNCHANGED
         # (errorCount=1, red card); the envelope is additive. A runner that
         # exited non-zero exits non-zero whatever the compile ingest answered.
@@ -1325,10 +1479,23 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     one `gate-suite-unreported` warning when the run was not filed."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
-    bun = _resolve_bun(args.bun)
     agent = getattr(args, "agent", None)
+    # CR-CRU-225 \u00a7S2 \u2014 a script's `crucible.targets` entry is read first:
+    # one the client cannot honour is refused before anything is posted.
+    target, refusal = _declared_target(package_dir, script)
+    if refusal:
+        return _emit_target_refused(verb, project_dir, agent, refusal)
     reports_dir = _reports_dir(package_dir, args.reports, agent)
     os.makedirs(reports_dir, exist_ok=True)
+    if target is not None and target["stream"] is not None:
+        return _stream_target_run(args, verb, tier, script, target, passthrough,
+                                  name, name_unfiled, project_dir, package_dir,
+                                  reports_dir)
+    bun = _resolve_bun(args.bun)
+    # A script with no table entry runs as before, as `bun-test`.
+    framework = target["framework"] if target else DEFAULT_FRAMEWORK
+    mechanism = (target["junit"] if target
+                 else _declared_report_mechanism(package_dir, script))
     # CR-CRU-015 §S2 — a declared target may state that its report is decoded
     # by the BOARD; that report is written into this same reports dir, so it is
     # resolved before the wipe and wiped with the XML beside it.
@@ -1362,7 +1529,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         # target's DECLARATION asked the report path to be carried in.
         cmd, report_env = _bun_run_script_cmd(
             bun, script, junit_path, coverage_on, coverage_dir,
-            _declared_report_mechanism(package_dir, script), passthrough)
+            mechanism, passthrough)
         # CR-CRU-015 §S2 — the RAW report rides the SAME env-overlay
         # discipline, for the same reason: the client picks WHERE the
         # report lands (its reports dir) and the declaration states HOW the
@@ -1385,9 +1552,13 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     # CR-CRU-201 \u00a7S4 \u2014 a run whose console is bun's own may relay it: this
     # verb's own `bun test`, or a declared script with no report declaration
     # (no `crucible.reportPath` and no `crucible.rawReport` entry).
-    console_is_buns = script is None or (
-        raw_report is None
-        and _declared_report_mechanism(package_dir, script) is None)
+    # A table entry relays the `console` it declares, and only that.
+    if target:
+        console_codec = target["console"]
+    else:
+        console_is_buns = script is None or (
+            raw_report is None and mechanism is None)
+        console_codec = CONSOLE_CODEC if console_is_buns else None
     narrator, relay = None, None
     with _axi().gated_run(project_dir, args.agent,
                           getattr(args, "cycle", None),
@@ -1409,8 +1580,16 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
             # walks the whole package.
             targets = getattr(args, "tests", None) if verb == "test" else None
             scanned = _prescan_test_total(package_dir, targets)
-            health = _console_health(args) if console_is_buns else None
+            health = (_console_health(args) if console_codec or target
+                      else None)
             reads_console = _board_reads_console(health)
+            # A codec the table declares that the board does not list is
+            # refused before the run opens (unchecked under --no-lifecycle).
+            board_refusal = (_target_board_refusal(script, target, health)
+                             if target and _lifecycle_enabled(args) else None)
+            if board_refusal:
+                return _emit_target_refused(verb, project_dir, args.agent,
+                                            board_refusal)
             if _lifecycle_enabled(args):
                 # The scan covers what runs only for this verb's own
                 # `bun test`: a declared script's start carries no total.
@@ -1418,10 +1597,12 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
                     project_dir, args.agent, tier=tier, context=_run_context(),
                     release=release,
                     total=(scanned if reads_console and script is None
-                           and name is None else None))
-            poster = _ConsolePoster()
+                           and name is None else None),
+                    framework=framework)
+            poster = _console_poster()
             relay = _console_relay(project_dir, args.agent, run_id,
-                                   reports_dir, health, poster)
+                                   reports_dir, health, poster,
+                                   codec=console_codec)
             narrator = _narrator(project_dir, args.agent, identity, scanned,
                                  poster if relay is not None else None)
             run_warnings = preflight_warnings + run_warnings
@@ -1548,7 +1729,10 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
                              raw=getattr(result, "stdout", None),
                              coverage_paths=coverage_paths, tier=tier,
                              context=_run_context(), run_id=run_id,
-                             release=release, runner_exit=runner_exit)
+                             release=release, runner_exit=runner_exit,
+                             framework=framework,
+                             coverage_codec=(target or {}).get("coverage")
+                             or LCOV_CODEC)
         exit_code = _axi().verb_exit(runner_exit, resp)
         ok = exit_code == 0
         # §S2 — a GATE run's next step is derived from the run state it reached
@@ -1565,6 +1749,141 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
                          help_steps=help_steps, warnings=run_warnings,
                          run_id=run_id, name=name, script=named_script)
         return exit_code
+
+
+def _stream_target_run(args, verb, tier, script, target, passthrough, name,
+                       name_unfiled, project_dir, package_dir, reports_dir):
+    """CR-CRU-225 \u00a7S2 \u2014 a declared script whose `crucible.targets` entry
+    declares a `stream`: its record is the event stream its runner writes.
+
+    The runner (`bun run <script>`, handed no report flags) is told the
+    stream file in `CRUCIBLE_STREAM` (`<reports dir>/crucible-events.ndjson`,
+    wiped first) and the shipped reporters in `CRUCIBLE_REPORTERS`; a
+    `StreamRelay` follows the file to the open run under the declared codec,
+    and once the runner exits the shared `close_streamed_run` files the run.
+    A codec the board's health does not list is refused before the run
+    opens; with no open run (`--no-lifecycle`, a board that cannot be reached
+    or opens none) the suite runs and nothing is filed. A `--name` run that
+    ran no test, counted from the stream, is aborted. Returns the exit code."""
+    bun = _resolve_bun(args.bun)
+    agent = getattr(args, "agent", None)
+    framework, codec = target["framework"], target["stream"]["codec"]
+    stream_path = os.path.join(reports_dir, STREAM_FILE)
+    _wipe(reports_dir, stream_path)
+    named_script = script if verb == "test" else None
+    release = getattr(args, "release", None)
+    cmd = [bun, "run", script] + (["--", *passthrough] if passthrough else [])
+    stream_env = {STREAM_VAR: stream_path, REPORTERS_VAR: _reporters_dir()}
+    print(f"[crucible] running: {_render_invocation(cmd, stream_env, passthrough)}"
+          f"  (cwd={package_dir})", file=sys.stderr)
+    log_path = getattr(args, "log", None)
+    if agent and not log_path:
+        log_path = os.path.join(reports_dir, "run.log")
+    env = os.environ.copy()
+    warnings, unfiled = [], None
+    if getattr(args, "coverage", False):
+        where = f"`{script}` streams its record and declares no coverage"
+        print(f"[crucible] WARN: --coverage was requested but {where} "
+              f"\u2014 this run is filed with no coverage", file=sys.stderr)
+        warnings.append(_axi().coverage_not_measured_warning(where))
+    run_id, relay, narrator = None, None, None
+    with _axi().gated_run(project_dir, agent, getattr(args, "cycle", None),
+                          f"gated {verb} run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity) as identity:
+        if agent:
+            warnings = _axi().preflight_cycle_warnings(
+                _get, _project_key(project_dir), agent,
+                cycle_id=getattr(args, "cycle", None),
+                context=_run_context(), release=release) + warnings
+            for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
+                env.pop(_quieting_var, None)
+            health = _console_health(args)
+            if not _lifecycle_enabled(args):
+                unfiled = ("the run lifecycle is opted out of (--no-lifecycle), "
+                           "so no run was opened; the suite ran with no stream "
+                           "and nothing was filed")
+            elif not isinstance(health, dict) or health.get("ok") is False:
+                error = health.get("error") if isinstance(health, dict) else None
+                unfiled = (f"the board at {_base_url()} could not be reached "
+                           f"({error or 'its health could not be read'}); the "
+                           f"suite ran with no stream and nothing was filed")
+                warnings.append(_run_lifecycle_unavailable_warning(unfiled))
+            else:
+                refusal = _target_board_refusal(script, target, health)
+                if refusal:
+                    return _emit_target_refused(verb, project_dir, agent, refusal)
+                run_id, lifecycle = _start_run(
+                    project_dir, agent, tier=tier, context=_run_context(),
+                    release=release, framework=framework)
+                warnings += lifecycle
+                if run_id is None:
+                    cause = (lifecycle[0].get("detail") if lifecycle
+                             and isinstance(lifecycle[0], dict) else None)
+                    unfiled = (f"the board at {_base_url()} opened no run "
+                               f"({cause or 'it answered no runId'}); the suite "
+                               f"ran with no stream and nothing was filed")
+            if run_id:
+                # The runner alone is handed the stream and the reporters.
+                env.update(stream_env)
+                # CR-CRU-201 §S4 step 6, counted from the STREAM: no in-run
+                # tick while the relay lands batches, the stream's `test-end`s
+                # whenever it does not; the closing count is the stream's.
+                relay, narrator = _axi().start_stream_relay(
+                    _relay_post, _heartbeat_tick(project_dir, agent, identity),
+                    _project_key(project_dir), agent, run_id, stream_path,
+                    codec, _axi()._ingest_body_limit(health))
+        try:
+            with _abandon_trap(run_id), _run_scoped_tmpdir(env) as run_env:
+                result = _run_logged(cmd, package_dir, run_env, log_path)
+        except _axi().RunAbandoned as abandoned:
+            _finish_console_relay(relay, _INTERRUPTED_FINISH_SECONDS)
+            return _emit_run_abandoned(verb, project_dir, agent, run_id,
+                                       abandoned, warnings)
+        except BaseException:
+            _finish_console_relay(relay, 0)
+            raise
+        held = _finish_console_relay(relay, _CONSOLE_FINISH_SECONDS)
+        print(f"[crucible] declared script `{script}` exit={result.returncode}",
+              file=sys.stderr)
+        if not agent:
+            return result.returncode
+        if (name is not None and run_id
+                and _axi().stream_counts(stream_path)[3] == 0):
+            return _emit_filter_ran_nothing(project_dir, agent, run_id, name,
+                                            warnings, script=named_script)
+        context = _axi_context(project_dir, agent_id=agent)
+        named = {**({"name": name} if name is not None else {}),
+                 **({"script": named_script} if named_script else {})}
+        return _axi().close_streamed_run(
+            verb, result, run_id=run_id, held=held, stream_path=stream_path,
+            stack=_STACK, framework=framework, post_fn=_post,
+            project_key=_project_key(project_dir), agent_id=agent, tier=tier,
+            context=_run_context(), release=release, warnings=warnings,
+            emit=lambda ok, fields, found, line: _emit_axi(
+                verb, ok, {**fields, **named}, context, found, line),
+            emit_ingest=lambda resp, help_steps, found, ok: _emit_ingest_axi(
+                verb, resp, project_dir, agent, help_steps=help_steps,
+                warnings=found, run_id=run_id, name=name, script=named_script,
+                ok=ok),
+            ingest_compile=lambda ran: _ingest_compile(
+                project_dir, agent, _stream_compile_errors(script, framework, ran),
+                run_id=run_id, release=release, framework=framework),
+            no_report_warning=lambda ran: _axi().no_report_warning(
+                verb, STREAM_FILE, ran.returncode, ran.stdout or ""),
+            narrator=narrator, unfiled=unfiled, gate=name_unfiled, codec=codec,
+            base_url=_base_url())
+
+
+def _stream_compile_errors(script, framework, result):
+    """The compile ingest of a stream target whose runner failed having
+    written no test: one synthetic tsc-format diagnostic (so the card reads
+    red) and the tail of the runner's captured output."""
+    tail = (getattr(result, "stdout", None) or "")[-4000:]
+    synthetic = (f"{framework}(1,1): error TS0000: declared script `{script}` "
+                 f"wrote no test to {STREAM_FILE} (collection/compile failure)")
+    return synthetic + ("\n\n" + tail if tail else "")
+
 
 def cmd_auto_ingest(args):
     project_dir = _resolve_project_dir(args.project_dir)
@@ -2129,7 +2448,8 @@ _HELP_STEPS = {
 
 
 def _emit_ingest_axi(verb, resp, project_dir, agent, help_steps=None,
-                     warnings=None, run_id=None, name=None, script=None):
+                     warnings=None, run_id=None, name=None, script=None,
+                     ok=None):
     """Emit the envelope of an ingest verb (test/regression/auto-ingest)
     through the shared run emitter, `emit_run_axi`: its `run:` block, `help`
     (the caller's state-derived `help_steps`, else this client's `_HELP_STEPS`
@@ -2138,12 +2458,13 @@ def _emit_ingest_axi(verb, resp, project_dir, agent, help_steps=None,
 
     A wrapped run also names the `runId` its ingest closed; `name` is the
     test-name filter the run was narrowed by and `script` the declared suite
-    it ran; each is absent when unset."""
+    it ran; each is absent when unset. `ok` overrides the envelope's verdict
+    (default: the answer's `ok`)."""
     return _axi().emit_run_axi(
         verb, resp,
         _axi_context(project_dir, agent_id=agent,
                      cycle_id=_axi().echoed_cycle_id(resp)),
-        _emit_axi, ok=None,
+        _emit_axi, ok=ok,
         help_steps=help_steps or _HELP_STEPS.get(verb, ["status"]),
         warnings=warnings,
         fields={**({"runId": run_id} if run_id else {}),

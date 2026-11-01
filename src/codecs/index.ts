@@ -106,12 +106,16 @@ export interface ViewCodec {
 /** The view codecs, by name, in a registry of their own beside the report codecs. */
 export const viewCodecs: Map<string, ViewCodec> = new Map<string, ViewCodec>([[bunConsoleView.name, bunConsoleView]]);
 
-/** The names this board decodes, for health: test, coverage and view codecs, sorted. */
-export function codecNames(): { test: string[]; coverage: string[]; view: string[] } {
+/**
+ * The names this board decodes, for health: test, coverage and view codecs,
+ * and the record stream codecs (`isRecordStreamCodec`), each sorted.
+ */
+export function codecNames(): { test: string[]; coverage: string[]; view: string[]; stream: string[] } {
   return {
     test: [...codecs.keys()].sort(),
     coverage: [...coverageCodecs.keys()].sort(),
     view: [...viewCodecs.keys()].sort(),
+    stream: [...codecs.keys()].filter((name) => isRecordStreamCodec(name)).sort(),
   };
 }
 

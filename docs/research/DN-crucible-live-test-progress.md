@@ -96,12 +96,23 @@ A bun project declares, per `package.json` script, one table:
 ```json
 "crucible": {
   "targets": {
-    "test:e2e":  { "stream": { "codec": "crucible-events", "path": "env:CRUCIBLE_STREAM" } },
-    "test:unit": { "junit": "flag", "console": "bun-console" }
+    "test:e2e":  { "framework": "playwright", "stream": { "codec": "crucible-events", "path": "env:CRUCIBLE_STREAM" } },
+    "test:unit": { "framework": "bun-test", "junit": "flag", "console": "bun-console", "coverage": "lcov" }
   }
 }
 ```
 
+- **The modality is the script's name** (CR-CRU-225): a project selects its codecs by the testing tools of each
+  test modality it runs (unit, regression, and BDD where needed), and the modality is read from the script's name by
+  the template the client already reads (`test:<tier>`). The table does not restate it.
+- `framework` is required: the test framework the script runs, which the run carries to the board. For bun it is one
+  of `bun-test`, `vitest`, `playwright` and `playwright-bdd`; `pytest`, `unittest`, `nextest`, `surefire`, `go-test`
+  and `arduino-native` are reserved for the other stacks (CR-CRU-225 P1). A script with no entry runs as `bun-test`.
+- `coverage` is optional: the coverage codec the client sends, refused unless the target can produce it (for bun,
+  `lcov` on a `junit: flag` target with framework `bun-test`). Undeclared, it is `lcov`, as before.
+- **Model B writes the table** (the Model B contract): modelb-axi's `init` offers the tools per modality for the
+  selected stacks and writes the table; `migrate` detects a legacy project's tools and older keys, proposes a table
+  and confirms it with the user; `update` brings an older table to the current shape.
 - A target declares **either** a structured `stream` (its record and its live view) **or** a
   `junit` report (its record), optionally with the `console` codec that reads its live view.
 - `stream` is new: the event codec and how the runner is told where to write the file.
@@ -120,9 +131,12 @@ A bun project declares, per `package.json` script, one table:
 
 ### Totals
 
-The run-start event carries the runner's own total where it has one (Vitest's collected tests,
-Playwright's `onBegin`, nextest's start, go's list). bun keeps its source scan, which already
-excludes nothing it should count.
+The run-start event carries the runner's own total where it has one (Playwright's `onBegin`,
+nextest's start, go's list). bun keeps its source scan, which already excludes nothing it should
+count.
+
+Vitest's `run-start` states no total (CR-CRU-225 P9): its `onTestRunStart` receives only the files,
+before anything is collected, so the live view shows a count with no total until the run ends.
 
 ## Where it lands (user ruling)
 

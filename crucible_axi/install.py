@@ -233,6 +233,10 @@ STORE_DIR_NAME = "crucible"
 # And `_crucible_run.py`, the run and ingest pipeline `_crucible_axi.py` reads
 # BY FILE PATH from its own directory as it loads, so an install that omits it
 # lays down a shared module that cannot load at all.
+# And `reporters/vitest-crucible.ts`, the shipped Vitest reporter, in the
+# `reporters/` subdirectory the bun client hands a runner as
+# `CRUCIBLE_REPORTERS`; a name may carry a `/`-separated subdirectory, which
+# `run_fleet_stage` creates under the same confinement rule as a file.
 FLEET_FILES = (
     "bun-crucible.py",
     "python-crucible.py",
@@ -245,6 +249,7 @@ FLEET_FILES = (
     "STATUS-CONTRACT.md",
     manifest.CONFIG_FILENAME,
     "subtest_runner.py",
+    "reporters/vitest-crucible.ts",
 )
 
 # The directory the fleet lands in, under `--target-dir`. `manifest` anchors
@@ -1305,6 +1310,8 @@ def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
         if not os.path.isfile(source):
             raise FileNotFoundError(
                 f"packaged fleet file missing at source: {source}")
+        if _confined_parent_dirs(clients_dir, name):
+            converged = False
         destination = os.path.join(clients_dir, name)
         # §S1's confinement rule, ENFORCED: the copy lands inside
         # `<target-dir>/clients/` and nowhere else. `os.path.isfile` and
@@ -1332,6 +1339,26 @@ def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
         shutil.copymode(source, destination)
         converged = False
     return {"path": clients_dir, "converged": converged}
+
+
+def _confined_parent_dirs(clients_dir: str, name: str) -> bool:
+    """Create the subdirectories a packaged `name` (a `/`-separated path
+    under `clients/`, e.g. `reporters/vitest-crucible.ts`) sits in, confined
+    as its file is: a SYMLINK at one of them is replaced by a real directory
+    and never followed, so nothing lands through it outside the target dir.
+
+    Returns True when a link was replaced, which the stage reports as
+    `converged: False`, exactly as it does for a replaced file link.
+    """
+    replaced = False
+    directory = clients_dir
+    for part in name.split("/")[:-1]:
+        directory = os.path.join(directory, part)
+        if os.path.islink(directory):
+            os.unlink(directory)
+            replaced = True
+        os.makedirs(directory, exist_ok=True)
+    return replaced
 
 
 # Module-level, in-place-mutable stage table (patched by tests via

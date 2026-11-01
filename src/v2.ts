@@ -114,6 +114,8 @@ interface V2Body {
   // §S2 run context (graceful)
   tier?: unknown;
   stack?: unknown;
+  // the framework the run ran under, stored beside its stack
+  framework?: unknown;
   context?: unknown;
   // the exit code of the runner that produced a run ingest
   runnerExit?: unknown;
@@ -992,11 +994,12 @@ export const TIERS: ReadonlySet<string> = new Set<Tier>([
   "bdd",
 ]);
 
-/** §S2 — pull the optional {tier, stack, context} trio verbatim, never fabricated. */
-function runMeta(body: V2Body): Pick<RecordEventMeta, "tier" | "stack" | "context"> {
+/** §S2 — pull the optional {tier, stack, framework, context} verbatim, never fabricated. */
+function runMeta(body: V2Body): Pick<RecordEventMeta, "tier" | "stack" | "framework" | "context"> {
   return {
     ...(typeof body.tier === "string" && TIERS.has(body.tier) ? { tier: body.tier as Tier } : {}),
     ...(typeof body.stack === "string" ? { stack: body.stack } : {}),
+    ...(typeof body.framework === "string" ? { framework: body.framework } : {}),
     ...(typeof body.context === "object" && body.context !== null
       ? { context: body.context as RunContext }
       : {}),
@@ -1004,13 +1007,18 @@ function runMeta(body: V2Body): Pick<RecordEventMeta, "tier" | "stack" | "contex
 }
 
 /**
- * A `stack` a run start or ingest states must be a non-empty string; anything
- * else is refused (400) before anything is stored. Absent is fine.
+ * A `stack` or `framework` a run start or ingest states must be a non-empty
+ * string; anything else is refused (400) before anything is stored. Absent is
+ * fine. The board checks no vocabulary: any non-empty framework is stored.
  */
 function refuseBadStack(body: V2Body, outcome = "run NOT stored"): Response | null {
-  if (body.stack === undefined) return null;
-  if (typeof body.stack === "string" && body.stack.length > 0) return null;
-  return fail(400, `stack must be a non-empty string when present — ${outcome}`);
+  for (const field of ["stack", "framework"] as const) {
+    const value = body[field];
+    if (value === undefined) continue;
+    if (typeof value === "string" && value.length > 0) continue;
+    return fail(400, `${field} must be a non-empty string when present — ${outcome}`);
+  }
+  return null;
 }
 
 /**
@@ -1563,7 +1571,7 @@ const CLOSE_REFUSED = "run NOT stored";
  *  - already ended or aborted → 409, nothing stored (the CR's end/end and
  *    end-after-abort races);
  *  - open → the lifecycle stamp for the ONE event about to be written, plus
- *    the stack and tier the start stated (`started`), which the event carries
+ *    the stack, tier and framework the start stated (`started`), which the event carries
  *    when the ingest states none; an ingest stating a different one is refused
  *    (400), nothing stored and the run left open.
  *
@@ -1582,7 +1590,7 @@ function resolveRunClose(
   settled?: Pick<RunRecord, "state" | "eventId">;
   runId?: string;
   lifecycle?: { startedAt: number; runtimeMs: number };
-  started?: Pick<RecordEventMeta, "stack" | "tier">;
+  started?: Pick<RecordEventMeta, "stack" | "tier" | "framework">;
 } {
   if (body.runId === undefined || body.runId === null) return {};
   if (typeof body.runId !== "string" || body.runId.length === 0) {
@@ -1622,7 +1630,7 @@ function resolveRunClose(
     };
   }
   const stated = runMeta(body);
-  for (const field of ["stack", "tier"] as const) {
+  for (const field of ["stack", "tier", "framework"] as const) {
     const started = run[field];
     const ingested = stated[field];
     if (started !== undefined && ingested !== undefined && started !== ingested) {
@@ -1641,6 +1649,7 @@ function resolveRunClose(
     started: {
       ...(run.stack !== undefined ? { stack: run.stack } : {}),
       ...(run.tier !== undefined ? { tier: run.tier } : {}),
+      ...(run.framework !== undefined ? { framework: run.framework } : {}),
     },
   };
 }
@@ -5372,6 +5381,9 @@ function eventBrief(event: RunEvent) {
     // The stack the run was made on, as stored; key ABSENT on every event
     // never told one.
     ...(event.stack !== undefined ? { stack: event.stack } : {}),
+    // The framework the run ran under, beside its stack; key ABSENT on every
+    // event that states none (milestones and gates among them).
+    ...(event.framework !== undefined ? { framework: event.framework } : {}),
     // CR-CRU-057 §S1 (additive) — the stamped declared role and its
     // provenance; both keys ABSENT on events that carry no stored role, so
     // history renders unclassified rather than guessed.
@@ -5433,6 +5445,7 @@ function openRunBrief(store: Store, run: RunRecord) {
     startedAt: run.startedAt,
     ...(run.tier !== undefined ? { tier: run.tier } : {}),
     ...(run.stack !== undefined ? { stack: run.stack } : {}),
+    ...(run.framework !== undefined ? { framework: run.framework } : {}),
     ...(run.context !== undefined ? { context: run.context } : {}),
     ...(live !== null ? { live: liveCounts(live) } : {}),
   };

@@ -134,6 +134,7 @@ One ingest call = one immutable event on the project's timeline.
 | `tree` | suite→test nodes (`name`, `status: pass|fail|pending`, `duration_ms`); failed leaves additionally carry `failure: {message, type?, trace?}` (v2 — v1 stored no failure detail; codecs preserve the tool's assertion message + stack trace for the UI run drill-in) | test events |
 | `tier` | `"unit"` \| `"module"` \| `"integration"` \| `"e2e"` \| `"regression"` \| `"bdd"` | v2 — sent by upgraded clients so the UI represents them differently: unit/module/integration share tools per stack; e2e is a different approach; `bdd` only on frontend projects. Legacy default `unit`. |
 | `stack` | `"rust"` \| `"java"` \| `"python"` \| `"ts"` \| `"arduino"` \| … | v2 — which stack produced the run |
+| `framework` | string? — `"bun-test"` \| `"vitest"` \| `"playwright"` \| `"playwright-bdd"` for bun; `"pytest"`, `"unittest"`, `"nextest"`, `"surefire"`, `"go-test"`, `"arduino-native"` reserved for the other stacks | CR-CRU-225 (migration v23) — which test framework ran it, as the run's target declares (§4.4); stored beside `stack` on the event and the run. The board takes any non-empty string; a close that states none inherits its start's. A run stored before v23, or sent by a client that states none, has none |
 | `codec` | `"junit"` \| `"playwright"` \| `"rustc"` \| `"javac"` \| `"python"` \| `"tsc"` \| `"gcc"` \| … | v2 — which codec normalized it; drives stack-aware rendering (the set follows the supported stacks, §4.4) |
 | `coverage` | `{lines, functions, branches?}` each `{total, covered, percent}` | only on fully-green runs — server discards otherwise (v1 safety net) |
 | `compile` | `{format, errorCount, warningCount, errors: [{file?, line?, col?, code?, message, level}], raw}` | compile events |
@@ -285,6 +286,24 @@ registry** translating each tool's native output into one **canonical RunSchema*
   the shared relay (`StreamRelay`) sends it to the open run while the suite works, and the run is closed
   with `codec: "crucible-events"`. A python unittest run writes no JUnit and xmlrunner left the client;
   a pytest run and `auto-ingest` keep their JUnit record.
+- **The run's framework and the `crucible.targets` table (CR-CRU-225).** A run carries the test framework that ran it:
+  - **The vocabulary** *(P1)*: `bun-test`, `vitest`, `playwright` and `playwright-bdd` for bun; `pytest`, `unittest`,
+    `nextest`, `surefire`, `go-test` and `arduino-native` are reserved for the other stacks, which adopt it in their own
+    CRs. The bun client refuses a framework outside the bun four; the board stays string-only.
+  - **The run's `framework`.** `POST /api/v2/runs/start`, `/runs`, `/runs/parsed` and `/runs/compile` take an optional
+    `framework`, a non-empty string (any other value is a 400, nothing stored). A close states its start's framework or
+    none, and one stating none inherits the start's. It is stored beside `stack` (§3.3) and answered wherever `stack` is.
+  - **The table.** A bun project declares, per `package.json` script, one entry in `crucible.targets.<script>`: its
+    `framework` (required), its record (a `stream: {codec, path}` or a `junit` report, `flag` or `env:<VAR>`), and
+    optionally a `console` view codec and a `coverage` codec. A script with no entry keeps today's behaviour as
+    `bun-test`. A codec the table declares that the board's health does not list is refused before the run opens.
+  - **`codecs.stream`.** Health lists the record stream codecs (`crucible-events`) under `codecs.stream`, so a client
+    checks a declared `stream` codec before the run opens; `codecs.test` is unchanged.
+  - **The Vitest reporter.** `clients/reporters/vitest-crucible.ts` ships inside the client install and writes the
+    `crucible-events` shape to the file `CRUCIBLE_STREAM` names. The client hands the runner its install's
+    `reporters/` as `CRUCIBLE_REPORTERS`, and a project's Vitest config adds the reporter from it when it is set, so
+    the config names no machine path. Its `run-start` states no total *(P9)*. A stream target's run is relayed by the
+    shared `StreamRelay` and closed by the shared streamed-run close, as python unittest's is.
 
 ### 4.5 Compile ingest
 - Structured parsers per format: `rustc` (`error[EXXXX]` + `--> file:line:col`), java/

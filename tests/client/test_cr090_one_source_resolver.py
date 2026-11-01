@@ -215,6 +215,8 @@ class OneSourceResolverTest(unittest.TestCase):
         expected = {}
         for name in install.FLEET_FILES:
             body = f"CR-CRU-090 C5 stand-in for {name}\n".encode("utf-8")
+            # A packaged name may sit in a subdirectory (`reporters/`).
+            Path(source, name).parent.mkdir(parents=True, exist_ok=True)
             Path(source, name).write_bytes(body)
             expected[name] = body
 

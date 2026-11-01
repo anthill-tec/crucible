@@ -215,7 +215,7 @@ function makeV20Store(): string {
 }
 
 describe("the store migrates v20 → v21 by creating the stream and live-state tables", () => {
-  test("a v20 store gains run_stream_batches, run_live and run_live_failures with their columns, and is stamped 22", () => {
+  test("a v20 store gains run_stream_batches, run_live and run_live_failures with their columns, and is stamped 23", () => {
     const dbPath = makeV20Store();
     // Preconditions, so the test can never pass by testing nothing.
     const before = new Database(dbPath);
@@ -229,11 +229,11 @@ describe("the store migrates v20 → v21 by creating the stream and live-state t
     const store = Store.open(dbPath);
     stores.push(store);
     expect(store.migration?.from).toBe(PRE_STREAM_VERSION);
-    expect(store.migration?.to).toBe(22);
-    expect(store.schemaVersion).toBe(22);
+    expect(store.migration?.to).toBe(23);
+    expect(store.schemaVersion).toBe(23);
 
     const db = dbOf(store);
-    expect(rawUserVersion(db)).toBe(22);
+    expect(rawUserVersion(db)).toBe(23);
     expect(tablesPresent(db)).toEqual(["run_live", "run_live_failures", "run_stream_batches"]);
     for (const table of RUN_STREAM_TABLES) {
       expect(columnsOf(db, table), table).toEqual(STREAM_COLUMNS[table]);

@@ -94,7 +94,22 @@ EXPECTED_FLEET_FILES = frozenset({
     # `<install>/crucible.toml` is absent.
     "crucible.toml",
     "subtest_runner.py",
+    # The shipped Vitest reporter, in the `reporters/` subdirectory the client
+    # hands a runner as `CRUCIBLE_REPORTERS`. Named by its path under
+    # `clients/`.
+    "reporters/vitest-crucible.ts",
 })
+
+
+def _landed_fleet_listing(clients_dir):
+    """Every regular file under `clients_dir`, recursively, as a path relative
+    to it with `/` separators -- the shape `EXPECTED_FLEET_FILES` names."""
+    listing = set()
+    for directory, _, files in os.walk(clients_dir):
+        for name in files:
+            relative = os.path.relpath(os.path.join(directory, name), clients_dir)
+            listing.add(Path(relative).as_posix())
+    return listing
 
 CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino")
 
@@ -232,9 +247,20 @@ class _CliInstallCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.target, ignore_errors=True)
         # Pin $HOME so the parser's `~/.crucible` default resolves inside the
         # scratch, never the operator's real home. Held for the whole test.
+        # $HOME alone does not isolate the real `[manifest]` stage: the
+        # server's store (and the `crucible.toml` beside it) resolves from
+        # $XDG_DATA_HOME first, its database from $CRUCIBLE_DB (else an
+        # existing `<cwd>/data/crucible.db`), and the provisioned server from
+        # $BUN_INSTALL. Each is pinned under the scratch home, so the stage
+        # neither reads nor writes the operator's server config.
         self.home = tempfile.mkdtemp(prefix="cr090-cli-home-")
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
-        home_patch = mock.patch.dict(os.environ, {"HOME": self.home})
+        home_patch = mock.patch.dict(os.environ, {
+            "HOME": self.home,
+            "XDG_DATA_HOME": os.path.join(self.home, "data-home"),
+            "BUN_INSTALL": os.path.join(self.home, "bun-install"),
+            "CRUCIBLE_DB": os.path.join(self.home, "store", "crucible.db"),
+        })
         home_patch.start()
         self.addCleanup(home_patch.stop)
 
@@ -281,7 +307,7 @@ class _CliInstallCase(unittest.TestCase):
             f"AC2/AC8 -- {clients_dir} does not exist: `cli.main install "
             f"--target-dir` laid NO fleet down under the target it was given. "
             f"envelope:\n{stdout}")
-        landed = set(os.listdir(clients_dir))
+        landed = _landed_fleet_listing(clients_dir)
         self.assertEqual(
             EXPECTED_FLEET_FILES, landed,
             f"AC2/AC8 -- <target-dir>/clients/ must hold EXACTLY the "

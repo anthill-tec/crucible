@@ -96,13 +96,14 @@ describe("bun-console is a view codec, held in the view registry and not in the 
 
 describe("health lists the view codecs under codecs.view", () => {
   for (const route of ["/api/health", "/api/v2/health"]) {
-    test(`GET ${route} carries codecs {test, coverage} as before and view: [bun-console], and no other list`, async () => {
+    test(`GET ${route} carries codecs {test, coverage} as before, view: [bun-console] and stream: [crucible-events], and no other list`, async () => {
       const body = await getJson(boot(), route);
       expect(body.ok).toBe(true);
       expect(body.codecs).toEqual({
         test: ["crucible-events", "junit", "playwright"],
         coverage: ["jacoco", "lcov"],
         view: ["bun-console"],
+        stream: ["crucible-events"],
       });
     });
   }
