@@ -791,6 +791,14 @@ STREAM_FILE = "crucible-events.ndjson"
 STREAM_VAR = "CRUCIBLE_STREAM"
 REPORTERS_VAR = "CRUCIBLE_REPORTERS"
 STREAM_PATH_DECLARATION = f"{REPORT_MECHANISM_ENV_PREFIX}{STREAM_VAR}"
+# The reports a stream target's Playwright config still writes beside the
+# stream (its `junit` and `json` reporters), each named to the runner in the
+# variable Playwright reads, and placed in the run's reports dir so the run
+# writes nothing into the package's `test-reports/`.
+STREAM_KEPT_REPORTS = (
+    ("PLAYWRIGHT_JUNIT_OUTPUT_NAME", "playwright-junit.xml"),
+    ("PLAYWRIGHT_JSON_OUTPUT_NAME", "playwright-report.json"),
+)
 
 
 def _reporters_dir():
@@ -1769,17 +1777,23 @@ def _stream_target_run(args, verb, tier, script, target, passthrough, name,
     agent = getattr(args, "agent", None)
     framework, codec = target["framework"], target["stream"]["codec"]
     stream_path = os.path.join(reports_dir, STREAM_FILE)
-    _wipe(reports_dir, stream_path)
+    # The kept reports go to the run's reports dir whether or not a run
+    # opens, so a `--no-lifecycle` run writes nothing into the package's
+    # `test-reports/` either; they replace any path the caller's env carries.
+    kept_env = {variable: os.path.join(reports_dir, file_name)
+                for variable, file_name in STREAM_KEPT_REPORTS}
+    _wipe(reports_dir, stream_path, *kept_env.values())
     named_script = script if verb == "test" else None
     release = getattr(args, "release", None)
     cmd = [bun, "run", script] + (["--", *passthrough] if passthrough else [])
     stream_env = {STREAM_VAR: stream_path, REPORTERS_VAR: _reporters_dir()}
-    print(f"[crucible] running: {_render_invocation(cmd, stream_env, passthrough)}"
-          f"  (cwd={package_dir})", file=sys.stderr)
+    rendered = _render_invocation(cmd, {**stream_env, **kept_env}, passthrough)
+    print(f"[crucible] running: {rendered}  (cwd={package_dir})", file=sys.stderr)
     log_path = getattr(args, "log", None)
     if agent and not log_path:
         log_path = os.path.join(reports_dir, "run.log")
     env = os.environ.copy()
+    env.update(kept_env)
     warnings, unfiled = [], None
     if getattr(args, "coverage", False):
         where = f"`{script}` streams its record and declares no coverage"
