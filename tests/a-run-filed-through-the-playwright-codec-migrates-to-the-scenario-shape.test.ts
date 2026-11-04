@@ -114,7 +114,7 @@ const TWO_SCENARIO_TREE: SuiteNode[] = [
         name: "When I redeem it",
         status: "fail",
         duration_ms: 6,
-        failure: { message: "voucher expired", type: "AssertionError", trace: "at redeem.ts:9" },
+        failure: { message: "voucher expired", type: "AssertionError", trace: "at redeem (step 2)" },
       },
       { name: "Then I see the receipt", status: "pending", duration_ms: 0 },
     ],
@@ -356,14 +356,14 @@ const TWO_SCENARIO_STREAM =
     browser: "chromium",
     status: "fail",
     duration_ms: 8,
-    failure: { message: "voucher expired", type: "AssertionError", trace: "at redeem.ts:9" },
+    failure: { message: "voucher expired", type: "AssertionError", trace: "at redeem (step 2)" },
     steps: [
       { name: "Given a voucher", status: "pass", duration_ms: 2 },
       {
         name: "When I redeem it",
         status: "fail",
         duration_ms: 6,
-        failure: { message: "voucher expired", type: "AssertionError", trace: "at redeem.ts:9" },
+        failure: { message: "voucher expired", type: "AssertionError", trace: "at redeem (step 2)" },
       },
       { name: "Then I see the receipt", status: "pending", duration_ms: 0 },
     ],
@@ -493,7 +493,7 @@ describe("a v24 store's playwright-codec runs migrate to the playwright-bdd scen
         has_failure: 1,
         failure_message: "voucher expired",
         failure_type: "AssertionError",
-        failure_trace: "at redeem.ts:9",
+        failure_trace: "at redeem (step 2)",
       },
     ]);
     expect(after.details).toEqual(v24.before.twoScenario.details);
@@ -539,7 +539,7 @@ describe("a v24 store's playwright-codec runs migrate to the playwright-bdd scen
       step(1, 1, "When I redeem it", "fail", 6, {
         message: "voucher expired",
         type: "AssertionError",
-        trace: "at redeem.ts:9",
+        trace: "at redeem (step 2)",
       }),
       step(1, 2, "Then I see the receipt", "pending", 0),
     ]);
