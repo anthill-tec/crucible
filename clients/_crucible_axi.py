@@ -7302,10 +7302,11 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     Three rules, and only the second adds a run to a project that already had a
     gate:
 
-    1. the invoking stack's whole-suite regression ALWAYS runs (`whole_suite`),
-       unchanged — same argv, same `regression` tier, same `run` block
-       INCLUDING `files`. It is the gate's union BASE, so the union is never
-       smaller than what the gate covered before this CR (AC4);
+    1. the invoking stack's whole-suite regression runs (`whole_suite`)
+       unless rule 4 skips it, and runs unchanged — same argv, same
+       `regression` tier, same `run` block INCLUDING `files`. It is the gate's
+       union BASE, so the union is never smaller than what the gate covered
+       before this CR (AC4);
     2. a declared suite owned by ANOTHER stack is ADDED — one dispatched run
        each, run and ingested by that stack's own client, under its own stack;
     3. a declared target owned by THIS stack is NOT re-run. The whole-suite run
@@ -7328,7 +7329,8 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     A fourth rule: an own-stack suite whose `framework` is not
     `whole_framework` (the whole-suite run's) is not collected by that run, so
     it runs in this process through `run_suite(suite)`, as a suite of its own.
-    When every own-stack suite is such a suite, the whole-suite run is
+    When the project declares at least one own-stack suite and every one of
+    them, excluded ones included, is such a suite, the whole-suite run is
     skipped, and the envelope says so."""
     rows, gate_warnings = [], list(warnings)
     ok, worst = True, 0

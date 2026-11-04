@@ -698,18 +698,13 @@ def _report_path_variable(mechanism):
     """CR-CRU-133 §S2 — the environment variable a declared mechanism names, or
     None when the declaration is the flag default (`flag`, or no entry at all).
 
-    An unrecognised value is NOT honoured as a variable name: it falls back to
-    the default and SAYS so, because a typo'd declaration that silently starved
-    the report is the class of failure this CR exists to end."""
+    The mechanism is a table entry's `junit`, which `_read_target_entry` has
+    already refused unless it is `flag` or `env:<VAR>`."""
     text = (mechanism or "").strip()
     if text.startswith(REPORT_MECHANISM_ENV_PREFIX):
         variable = text[len(REPORT_MECHANISM_ENV_PREFIX):].strip()
         if variable:
             return variable
-    if text and text != REPORT_MECHANISM_FLAG:
-        print(f"[crucible] WARN: unknown {TARGETS_DECLARATION} `junit` "
-              f"mechanism {mechanism!r} — falling back to "
-              f"{REPORT_MECHANISM_FLAG!r}", file=sys.stderr)
     return None
 
 
@@ -1884,8 +1879,9 @@ def cmd_pre_merge_gate(args):
         return _emit_target_refused(
             "pre-merge-gate", project_dir, args.agent,
             f"{TARGETS_DECLARATION}.{hidden} declares a framework other than "
-            f"{DEFAULT_FRAMEWORK!r} on a script that is not a `test:` script, "
-            f"so the gate cannot run it; nothing was run")
+            f"{DEFAULT_FRAMEWORK!r} on a key that is not a `test:` script in "
+            f"package.json's `scripts`, so the gate cannot run it; nothing "
+            f"was run")
     # The gate files from its first step on (a failing tsc files a compile
     # result), so an unattributed gate is refused before that step.
     _axi().refuse_unattributed_run(
@@ -1922,8 +1918,10 @@ def cmd_pre_merge_gate(args):
     # CR-CRU-112 §S1/§S2 — the gate's scope is this stack's whole suite PLUS
     # every declared suite another stack owns, each run by the client of the
     # stack that OWNS it. Additive, never exclusionary: the whole-suite
-    # regression below always runs, and a declared bun target is a subset of it
-    # rather than a replacement for it.
+    # regression below runs unless the package declares at least one bun suite
+    # and every bun suite, excluded ones included, runs under another
+    # framework (it is then skipped, and the envelope says so); a declared
+    # `bun-test` target is a subset of it rather than a replacement for it.
     return _axi().gate_regression(
         args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK,
         verb="pre-merge-gate",
@@ -2644,11 +2642,14 @@ def _entry_framework(entry):
 
 def _off_template_target(args, surface):
     """The first non-`bun-test` table entry whose key is not a script the
-    gate enumerates, or None: the gate could not see it, so it refuses it."""
+    gate enumerates, or None: the gate could not see it, so it refuses it.
+    The gate enumerates `scripts`, so a key that is not `test:`-prefixed, and
+    a `test:` key with no script of that name, are both unseen."""
     head = surface.target.split("<tier>")[0]
+    scripts = _package_scripts(args)
     for key, entry in _targets_table(args).items():
-        if (not key.startswith(head)
-                and _entry_framework(entry) != DEFAULT_FRAMEWORK):
+        if (_entry_framework(entry) != DEFAULT_FRAMEWORK
+                and not (key.startswith(head) and key in scripts)):
             return key
     return None
 
