@@ -5,6 +5,10 @@ gap analysis, which splits it if it outgrows the cap) · **Wave** 8 (0.4.0) · *
 **Status** PENDING — filed 2026-10-19 (Model B question, Sandesh #1486; user ruling: a `lint` verb in
 every client, in 0.4.0; design is settled with the user before its gap analysis)
 
+- **Scope added 2026-11-04** (user ruling): the pi-lens errors still open in the clients are fixed
+  here (measured 2026-11-04: 20 in `clients/_crucible_run.py`, 1 in `clients/arduino-crucible.py`).
+  The gap analysis re-measures them and gives them an AC.
+
 ## Problem
 
 Raised by Model B (2026-10-19), which wants a lint step in every project's pre-merge gate. Lint is
