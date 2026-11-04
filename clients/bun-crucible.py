@@ -644,8 +644,8 @@ def _wipe(reports_dir, *extra):
 
 
 # CR-CRU-133 §S2 — the vocabulary a project states a declared target's
-# report-path mechanism in (`package.json`'s `crucible.reportPath.<target>`,
-# beside the script table the target is already declared in). `flag` — or NO
+# report-path mechanism in (a `crucible.targets` entry's `junit`, beside the
+# script table the target is already declared in). `flag` — or NO
 # entry at all — is the DEFAULT: `bun test`'s own flag contract, which is every
 # target this project declares today except `test:e2e`. `env:<VAR>` names the
 # environment variable the target's OWN runner reads the path from.
@@ -694,87 +694,23 @@ def _bun_test_cmd(bun, targets, junit_path, coverage, coverage_dir, *,
     return cmd + _bun_test_report_flags(junit_path, coverage, coverage_dir)
 
 
-def _report_path_variable(mechanism, declaration="crucible.reportPath"):
+def _report_path_variable(mechanism):
     """CR-CRU-133 §S2 — the environment variable a declared mechanism names, or
     None when the declaration is the flag default (`flag`, or no entry at all).
 
     An unrecognised value is NOT honoured as a variable name: it falls back to
     the default and SAYS so, because a typo'd declaration that silently starved
-    the report is the class of failure this CR exists to end.
-
-    CR-CRU-015 §S2 — `declaration` names the block the value was read from, so
-    the same `env:<VAR>` vocabulary can be reused by the RAW-report declaration
-    beside it without the warning naming the wrong key."""
+    the report is the class of failure this CR exists to end."""
     text = (mechanism or "").strip()
     if text.startswith(REPORT_MECHANISM_ENV_PREFIX):
         variable = text[len(REPORT_MECHANISM_ENV_PREFIX):].strip()
         if variable:
             return variable
     if text and text != REPORT_MECHANISM_FLAG:
-        print(f"[crucible] WARN: unknown {declaration} mechanism "
-              f"{mechanism!r} — falling back to {REPORT_MECHANISM_FLAG!r}",
-              file=sys.stderr)
+        print(f"[crucible] WARN: unknown {TARGETS_DECLARATION} `junit` "
+              f"mechanism {mechanism!r} — falling back to "
+              f"{REPORT_MECHANISM_FLAG!r}", file=sys.stderr)
     return None
-
-
-def _declared_report_mechanism(package_dir, script):
-    """CR-CRU-133 §S2 — the mechanism the PROJECT declared for this target's
-    report path, read from `crucible.reportPath.<target>` in the same manifest
-    the script table lives in. `None` (no entry) is the flag default, so every
-    declaration that exists today keeps its meaning with no edit."""
-    crucible = _package_manifest(package_dir).get("crucible") or {}
-    return (crucible.get("reportPath") or {}).get(script)
-
-
-# CR-CRU-015 §S2 — the declaration that a target's report is decoded BY THE
-# SERVER rather than by this client. It sits beside `crucible.reportPath` in
-# the same manifest, keyed by the same target name, and states the three things
-# a client cannot infer without classifying a runner it was told never to read:
-#
-#   "rawReport": {"test:e2e": {"codec": "playwright",
-#                              "file": "playwright.json",
-#                              "path": "env:PLAYWRIGHT_JSON_OUTPUT_NAME"}}
-#
-# `codec` is the decoder the BOARD resolves from its own registry, `file` is
-# what the report is called inside this client's reports dir, and `path` reuses
-# `reportPath`'s `env:<VAR>` vocabulary for how the target is told where to
-# write it. NO entry is the default: the target's JUnit XML is the report sent,
-# under the `junit` codec.
-RAW_REPORT_KEY = "rawReport"
-RAW_REPORT_DECLARATION = f"crucible.{RAW_REPORT_KEY}"
-
-
-def _declared_raw_report(package_dir, script, reports_dir):
-    """CR-CRU-015 §S2 — the RAW report the declared target writes for the SERVER
-    to decode, as `{codec, path, variable}`, or None when the project declares
-    none (every target but `test:e2e` today).
-
-    A declaration that exists but cannot be honoured is a HARD STOP, never a
-    silent fall-back to the client-side parse: the whole point of declaring a
-    codec is that the client's own parse discards what that codec keeps (here,
-    every Gherkin step), so quietly taking the other route would file evidence
-    the project explicitly refused."""
-    if not script:
-        return None
-    crucible = _package_manifest(package_dir).get("crucible") or {}
-    declared = (crucible.get(RAW_REPORT_KEY) or {}).get(script)
-    if not declared:
-        return None
-    if not isinstance(declared, dict):
-        sys.exit(f"[crucible] ERROR: {RAW_REPORT_DECLARATION}.{script} must be "
-                 f"an object of {{codec, file, path}}, not {declared!r}")
-    codec = str(declared.get("codec") or "").strip()
-    name = str(declared.get("file") or "").strip()
-    variable = _report_path_variable(declared.get("path"),
-                                     declaration=RAW_REPORT_DECLARATION)
-    if not (codec and name and variable):
-        sys.exit(f"[crucible] ERROR: {RAW_REPORT_DECLARATION}.{script} is "
-                 f"incomplete ({declared!r}) — it must name the board `codec` "
-                 f"that decodes the report, the `file` it is written as, and "
-                 f"the `path` mechanism (\"env:<VAR>\") the target reads its "
-                 f"location from")
-    return {"codec": codec, "variable": variable,
-            "path": os.path.join(reports_dir, name)}
 
 
 # CR-CRU-225 \u00a7S2 \u2014 the `crucible.targets` table: one entry per script,
@@ -806,6 +742,39 @@ def _reporters_dir():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "reporters")
 
 
+# The keys `crucible.targets` replaced, each with the table field that says
+# the same thing now. A package still declaring one is refused by every verb
+# that reads the package, before anything is posted.
+_REFUSED_KEYS = (
+    ("reportPath", "an entry's `junit`"),
+    ("rawReport", "an entry's `stream`"),
+    ("testScript", "the entry marked `\"test\": true`"),
+)
+
+
+def _refuse_old_keys(package_dir, verb):
+    """Refuse a package whose `crucible` block still declares a key
+    `crucible.targets` replaced, each named in full beside what replaced it:
+    raises the shared `DeclarationRefused` hard stop, so nothing is run and
+    nothing is posted (a refused gate records no outcome either). Returns
+    None when the package declares none."""
+    crucible = _package_manifest(package_dir).get("crucible")
+    if not isinstance(crucible, dict):
+        return
+    declared = [(key, by) for key, by in _REFUSED_KEYS if key in crucible]
+    if not declared:
+        return
+    named = "; ".join(f"crucible.{key} is replaced by {by} in "
+                      f"{TARGETS_DECLARATION}" for key, by in declared)
+    where = os.path.join(package_dir, "package.json")
+    raise _axi().DeclarationRefused(
+        f"{where} declares a key {TARGETS_DECLARATION} replaced, so nothing "
+        f"was run: {named}. Declare each script in its {TARGETS_DECLARATION} "
+        f"entry and remove the old key",
+        [f"move the declaration into {TARGETS_DECLARATION} in package.json, "
+         f"then re-run {verb}", "status"])
+
+
 def _declared_target(package_dir, script):
     """The `crucible.targets` entry of `script`, read from the same
     `package.json` its script table lives in: `(target, refusal)`.
@@ -815,8 +784,7 @@ def _declared_target(package_dir, script):
     junit, console, coverage}` (`stream` is `{codec}` or None, `junit` the
     `flag` / `env:<VAR>` declaration or None); `(None, detail)` for one it
     refuses, the detail naming `crucible.targets`, the script and the field at
-    fault. A script declared both here and in `crucible.reportPath` or
-    `crucible.rawReport` is refused, naming both."""
+    fault."""
     if not script:
         return None, None
     crucible = _package_manifest(package_dir).get("crucible")
@@ -826,12 +794,6 @@ def _declared_target(package_dir, script):
     if not isinstance(targets, dict) or script not in targets:
         return None, None
     key = f"{TARGETS_DECLARATION}.{script}"
-    for older in ("reportPath", RAW_REPORT_KEY):
-        table = crucible.get(older)
-        if isinstance(table, dict) and script in table:
-            return None, (f"{key} is also declared in crucible.{older}: a "
-                          f"script is declared in one place, so remove "
-                          f"crucible.{older}.{script} or the table entry")
     entry = targets[script]
     if not isinstance(entry, dict):
         return None, (f"{key} must be an object naming its `framework` and its "
@@ -1016,39 +978,6 @@ def _file_reports(project_dir, agent_id, *, codec, report_paths, raw=None,
         framework=framework)
 
 
-def _raw_report_result_count(raw_report):
-    """The number of results the declared RAW report holds, counted before it
-    is offered to the board \u2014 or `None` when this client cannot tell.
-
-    The client still decodes nothing it files: this count only asks whether
-    the report holds ANY result. For the `playwright` codec a result is a
-    spec anywhere in the report's suite tree (each spec is a scenario the
-    board's codec turns into a node), so a report whose suites hold no spec \u2014
-    what Playwright writes when it cannot start \u2014 counts 0. Any other codec,
-    or a report that cannot be read as Playwright JSON, is `None`: unknown,
-    so it is filed as it stands and the board's own decoder judges it."""
-    if raw_report["codec"] != "playwright":
-        return None
-    try:
-        with open(raw_report["path"], encoding="utf-8") as handle:
-            report = json.load(handle)
-    except (OSError, ValueError) as exc:
-        print(f"[crucible] WARN: could not count the results in "
-              f"{raw_report['path']} ({exc}) \u2014 it is filed as it stands",
-              file=sys.stderr)
-        return None
-    suites = report.get("suites") if isinstance(report, dict) else None
-    if not isinstance(suites, list):
-        return None
-    count = 0
-    while suites:
-        suite = suites.pop()
-        if isinstance(suite, dict):
-            count += len(suite.get("specs") or [])
-            suites.extend(suite.get("suites") or [])
-    return count
-
-
 def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None,
                     cycle_id=None, framework=None):
     """File `errors_text` to /api/v2/runs/compile, closing `run_id` when
@@ -1201,81 +1130,6 @@ def _emit_filter_ran_nothing(project_dir, agent_id, run_id, pattern,
     return 1
 
 
-def _emit_filter_uncounted(project_dir, agent_id, run_id, pattern, script,
-                           junit_path, warnings=()):
-    """The exit of a `test --name` run through a declared script whose report
-    is decoded on the board, when the same run wrote no JUnit report: the
-    filter's outcome cannot be counted, so nothing is ingested, the run this
-    verb opened is aborted, and ONE ok:false envelope carries a warning naming
-    the script and the missing JUnit report. Returns 1."""
-    detail = (f"--name {pattern!r} ran through declared script `{script}`, "
-              f"which wrote no JUnit report at {junit_path}, so the run "
-              f"cannot be counted and nothing was filed")
-    closing = []
-    if run_id:
-        closing.append(_axi().abort_run(
-            _post, _project_key(project_dir), agent_id, run_id,
-            f"the filtered run through `{script}` wrote no JUnit report, "
-            f"so it cannot be counted"))
-    _emit_axi("test", False,
-              {"name": pattern, "script": script,
-               "help": [(f"make `{script}` write its JUnit report to the path "
-                         f"it is handed, then re-run test --name <pattern>"),
-                        "status"]},
-              _axi_context(project_dir, agent_id=agent_id),
-              list(warnings) + closing
-              + [{"code": "name-filter-uncounted", "detail": detail}],
-              f"[crucible] ERROR: {detail}")
-    return 1
-
-
-_TEST_SCRIPT_DECLARATION = "crucible.testScript"
-
-
-def _declared_test_script(package_dir):
-    """The script a project declares every `test` run goes through, read from
-    `crucible.testScript` in the same `package.json` its script table lives in.
-
-    Returns `(script, refusal)`: `(None, None)` when nothing is declared (the
-    run is this client's own `bun test`), `(name, None)` for a declaration
-    naming a script with a body, and `(None, detail)` for one that cannot be
-    honoured -- not a string, naming no script of the table, or naming one
-    whose body is empty."""
-    manifest = _package_manifest(package_dir)
-    crucible = manifest.get("crucible") or {}
-    if not isinstance(crucible, dict) or "testScript" not in crucible:
-        return None, None
-    declared = crucible["testScript"]
-    where = os.path.join(package_dir, "package.json")
-    if not isinstance(declared, str):
-        return None, (f"{_TEST_SCRIPT_DECLARATION} {declared!r} in {where} "
-                      f"is not a string naming a script")
-    scripts = manifest.get("scripts") or {}
-    if declared not in scripts:
-        return None, (f"{_TEST_SCRIPT_DECLARATION} names script "
-                      f"`{declared}`, which the scripts table of {where} "
-                      f"does not hold")
-    body = scripts[declared]
-    if not isinstance(body, str) or not body.strip():
-        return None, (f"{_TEST_SCRIPT_DECLARATION} names script "
-                      f"`{declared}`, whose body in {where} is empty")
-    return declared, None
-
-
-def _emit_test_script_refused(project_dir, agent_id, detail):
-    """The exit of a `test` whose declared test script cannot be honoured:
-    nothing is run and nothing is posted to the board; ONE ok:false envelope
-    names the declaration. Returns 1."""
-    _emit_axi("test", False,
-              {"help": [(f"fix {_TEST_SCRIPT_DECLARATION} in package.json so "
-                         f"it names a script with a body, or remove it"),
-                        "status"]},
-              _axi_context(project_dir, agent_id=agent_id),
-              [{"code": "test-script-refused", "detail": detail}],
-              f"[crucible] ERROR: {detail}")
-    return 1
-
-
 # The field a `crucible.targets` entry carries to mark itself as the script
 # `test` runs; only `test` reads it, and only the JSON boolean `true` marks.
 TEST_MARKER = "test"
@@ -1343,18 +1197,9 @@ def cmd_test(args, tier=None):
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     name = getattr(args, "name", None)
-    # A project that declares its own test script runs every `test` through
-    # it, exactly as a tier verb runs a declared script: the files and the
-    # filter ride the script's passthrough. A declaration that cannot be
-    # honoured is refused before anything reaches the board.
-    script, refusal = _declared_test_script(package_dir)
-    if refusal:
-        return _emit_test_script_refused(project_dir, args.agent, refusal)
-    if script:
-        passthrough = list(args.tests or []) + (
-            ["-t", name] if name is not None else [])
-        return cmd_regression(args, verb="test", tier=tier, script=script,
-                              passthrough=passthrough, name=name)
+    # A package declaring a key the table replaced is refused before
+    # anything reaches the board.
+    _refuse_old_keys(package_dir, "test")
     # The table entry marked `"test": true` is the script every `test` runs,
     # the name filter passed in the flag its framework takes.
     script, framework, refusal = _marked_test_script(package_dir)
@@ -1542,8 +1387,8 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     `passthrough` — what was typed after `--` on a declared tier verb — rides
     only a declared `script`; this verb's own `bun test` takes none.
 
-    A `test` run through the project's declared test script runs this body
-    under `verb="test"`: its files and `-t <name>` filter are the passthrough,
+    A `test` run through the table entry marked for `test` runs this body
+    under `verb="test"`: its files and name filter are the passthrough,
     `name` is that filter (a filtered run that ran nothing is aborted, as on
     `test`'s own path), and its envelope names the script it went through.
 
@@ -1552,6 +1397,9 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     agent = getattr(args, "agent", None)
+    # A package declaring a key the table replaced is refused first, before
+    # anything is posted, whatever script this run would take.
+    _refuse_old_keys(package_dir, verb)
     # CR-CRU-225 \u00a7S2 \u2014 a script's `crucible.targets` entry is read first:
     # one the client cannot honour is refused before anything is posted.
     target, refusal = _declared_target(package_dir, script)
@@ -1566,13 +1414,9 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     bun = _resolve_bun(args.bun)
     # A script with no table entry runs as before, as `bun-test`.
     framework = target["framework"] if target else DEFAULT_FRAMEWORK
-    mechanism = (target["junit"] if target
-                 else _declared_report_mechanism(package_dir, script))
-    # CR-CRU-015 §S2 — a declared target may state that its report is decoded
-    # by the BOARD; that report is written into this same reports dir, so it is
-    # resolved before the wipe and wiped with the XML beside it.
-    raw_report = _declared_raw_report(package_dir, script, reports_dir)
-    _wipe(reports_dir, *([raw_report["path"]] if raw_report else []))
+    # A script with no table entry takes the flag default.
+    mechanism = target["junit"] if target else None
+    _wipe(reports_dir)
     junit_path = _junit_path(reports_dir)
     coverage_on = bool(getattr(args, "coverage", False))
     # Only a `test` run names its script in the envelope: a tier verb's
@@ -1602,13 +1446,6 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         cmd, report_env = _bun_run_script_cmd(
             bun, script, junit_path, coverage_on, coverage_dir,
             mechanism, passthrough)
-        # CR-CRU-015 §S2 — the RAW report rides the SAME env-overlay
-        # discipline, for the same reason: the client picks WHERE the
-        # report lands (its reports dir) and the declaration states HOW the
-        # target is told, so nothing is appended to an argv the runner
-        # never agreed to accept.
-        if raw_report:
-            report_env[raw_report["variable"]] = raw_report["path"]
         env.update(report_env)
     else:
         passthrough = ()
@@ -1622,15 +1459,9 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     if args.agent and not log_path:
         log_path = os.path.join(reports_dir, "run.log")
     # CR-CRU-201 \u00a7S4 \u2014 a run whose console is bun's own may relay it: this
-    # verb's own `bun test`, or a declared script with no report declaration
-    # (no `crucible.reportPath` and no `crucible.rawReport` entry).
+    # verb's own `bun test`, or a declared script with no table entry.
     # A table entry relays the `console` it declares, and only that.
-    if target:
-        console_codec = target["console"]
-    else:
-        console_is_buns = script is None or (
-            raw_report is None and mechanism is None)
-        console_codec = CONSOLE_CODEC if console_is_buns else None
+    console_codec = target["console"] if target else CONSOLE_CODEC
     narrator, relay = None, None
     with _axi().gated_run(project_dir, args.agent,
                           getattr(args, "cycle", None),
@@ -1701,13 +1532,8 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         if not args.agent:
             return result.returncode
 
-        # CR-CRU-015 §S2 — the report that MATTERS is the one this run will
-        # ingest: the raw report the board decodes when the target declares
-        # one, and the JUnit XML this client sends otherwise. A run whose
-        # declared raw report is missing is starved exactly as a run with no
-        # XML is — it must never quietly ingest the other one by the route the
-        # declaration exists to refuse.
-        ingest_path = raw_report["path"] if raw_report else junit_path
+        # The report this run ingests is the JUnit XML it wrote.
+        ingest_path = junit_path
         ingest_name = os.path.basename(ingest_path)
         if not os.path.exists(ingest_path):
             print(f"[crucible] ERROR: no {ingest_name} produced — nothing to "
@@ -1746,12 +1572,10 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
                       f"{verb}: ok=False — no {ingest_name}, nothing to ingest")
             return 1
 
-        # A report that EXISTS but holds no results — the declared raw report,
-        # or the JUnit XML this client sends — from a runner that exited
-        # non-zero, is a run that never ran: it takes the no-report exit
-        # above, never a `total: 0` ingest.
-        result_count = (_raw_report_result_count(raw_report) if raw_report
-                        else _axi().junit_testcase_count([junit_path]))
+        # A report that EXISTS but holds no results, from a runner that
+        # exited non-zero, is a run that never ran: it takes the no-report
+        # exit above, never a `total: 0` ingest.
+        result_count = _axi().junit_testcase_count([junit_path])
         if _axi().ran_nothing(result.returncode, result_count):
             return _axi().emit_ran_nothing(
                 verb, ingest_name, result.returncode,
@@ -1763,22 +1587,15 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         # Something WILL be ingested: the final count, then `ingesting…`.
         _axi().close_narration(narrator)
         # A filtered run in which nothing passed and nothing failed ran
-        # nothing: it is aborted, exactly as on `test`'s own path. A run whose
-        # report the board decodes is counted from the JUnit report the same
-        # run wrote; without one it cannot be counted, and is aborted too.
-        if name is not None:
-            if raw_report and not os.path.exists(junit_path):
-                return _emit_filter_uncounted(project_dir, args.agent, run_id,
-                                              name, script, junit_path,
-                                              run_warnings)
-            if _axi().junit_non_skipped_count([junit_path]) == 0:
-                return _emit_filter_ran_nothing(project_dir, args.agent, run_id,
-                                                name, run_warnings,
-                                                script=named_script)
+        # nothing: it is aborted, exactly as on `test`'s own path.
+        if (name is not None
+                and _axi().junit_non_skipped_count([junit_path]) == 0):
+            return _emit_filter_ran_nothing(project_dir, args.agent, run_id,
+                                            name, run_warnings,
+                                            script=named_script)
         # The board decodes every report this run sends; the client parses
-        # none. A target declaring a raw report sends that report under its
-        # declared codec; every other run sends its JUnit report.
-        codec = raw_report["codec"] if raw_report else JUNIT_CODEC
+        # none: the run sends its JUnit report.
+        codec = JUNIT_CODEC
         coverage_paths = []
         if coverage_on:
             lcov_path = os.path.join(coverage_dir, "lcov.info")
@@ -2056,7 +1873,10 @@ def cmd_pre_merge_gate(args):
     project_dir = _resolve_project_dir(args.project_dir)
     # A package dir that cannot be run in is refused before the board is asked
     # anything.
-    _resolve_package_dir(args.package_dir, project_dir)
+    package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    # A package declaring a key the table replaced is refused before the tsc
+    # step, which files a compile result of its own.
+    _refuse_old_keys(package_dir, "pre-merge-gate")
     # The gate files from its first step on (a failing tsc files a compile
     # result), so an unattributed gate is refused before that step.
     _axi().refuse_unattributed_run(
@@ -2842,16 +2662,12 @@ _CLI_DESCRIPTION = (
     "project path, the bun package dir and the bun binary are all parameterizable.\n"
     "\n"
     "A tier verb this client has no run of its own for runs the `test:<tier>` script\n"
-    "the project declares in package.json, by name. How that script is told where to\n"
-    "write its JUnit report is declared beside it, under `crucible.reportPath.<target>`:\n"
-    "`flag` (the default — `bun test`'s own report flags are appended) or `env:<VAR>`\n"
-    "(the variable the script's own runner reads the path from, so nothing is appended\n"
-    "that the runner never agreed to accept).\n"
-    "\n"
-    "A target whose report the BOARD should decode declares that beside it, under\n"
-    "`crucible.rawReport.<target>` = {codec, file, path}: the run's raw report is\n"
-    "POSTed to /api/v2/runs under that codec instead of its JUnit report. Every report\n"
-    "is decoded by the board; this client parses none.\n"
+    "the project declares in package.json, by name. Each script's record is declared\n"
+    "beside it, in its `crucible.targets` entry: its `framework`, and either `junit`\n"
+    "(`flag`, the default: `bun test`'s own report flags are appended; or `env:<VAR>`,\n"
+    "the variable the script's own runner reads the path from, so nothing is appended\n"
+    "that the runner never agreed to accept) or `stream` (the event stream the shipped\n"
+    "reporters write). Every report is decoded by the board; this client parses none.\n"
     "\n"
     "Run `<verb> --help` for a verb's own flags.\n"
     "\n" + _axi().BOARD_CONFIGURATION_HELP

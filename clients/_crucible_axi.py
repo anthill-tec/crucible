@@ -2674,6 +2674,34 @@ def emit_coverage_flag_refused_hard_stop(verb, refusal, context=None):
     return 1
 
 
+# A project declaration a client no longer reads (a retired key). Raised by
+# the client before anything is posted, converted by `run_verb`, so a gate
+# refused this way runs nothing and posts no milestone.
+
+DECLARATION_REFUSED_CODE = "declaration-refused"
+
+
+class DeclarationRefused(Exception):
+    """Raised when a project declares what the client refuses; `detail`
+    names the declaration and `help[]` the next moves."""
+
+    def __init__(self, detail, help_steps):
+        self.detail = detail
+        self.help = list(help_steps)
+        super().__init__(detail)
+
+
+def emit_declaration_refused_hard_stop(verb, refusal, context=None):
+    """Emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for a refused declaration, and return the non-zero exit code.
+    Nothing is run, nothing is posted from this path."""
+    emit_axi(verb or "unknown", False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {DECLARATION_REFUSED_CODE} \u2014 {refusal.detail}")
+    return 1
+
+
 def _hard_stop_context(args, project_key_fn, agent_id=None):
     """The best-effort `context` a hard-stopped verb's envelope carries.
 
@@ -2764,6 +2792,11 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
                                getattr(args, "agent", None)))
     except ScopedGateRefused as refusal:
         return emit_scoped_gate_refused_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
+    except DeclarationRefused as refusal:
+        return emit_declaration_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
             _hard_stop_context(args, project_key_fn,
                                getattr(args, "agent", None)))

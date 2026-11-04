@@ -6,9 +6,12 @@
     "test:vitest": "bun --bun vitest run"
   },
   "crucible": {
-    "testScript": "test:vitest",
-    "reportPath": {
-      "test:vitest": "env:FIXTURE_JUNIT_PATH"
+    "targets": {
+      "test:vitest": {
+        "framework": "vitest",
+        "junit": "env:FIXTURE_JUNIT_PATH",
+        "test": true
+      }
     }
   }
 }

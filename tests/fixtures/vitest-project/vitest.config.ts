@@ -1,7 +1,8 @@
 // A Vitest project the bun client's tests drive from a scratch copy.
 //
 // Vitest takes none of `bun test`'s report flags, so the JUnit path arrives the
-// way the project's `crucible.reportPath` declares it: in FIXTURE_JUNIT_PATH.
+// way the project's `crucible.targets` entry declares it (`junit:
+// env:FIXTURE_JUNIT_PATH`): in FIXTURE_JUNIT_PATH.
 // `include` names only this fixture's own `*.vitest.ts` files, which no
 // `bun test` discovery pattern collects. Caches stay inside the project root
 // (the scratch copy), never in a shared `node_modules`.
