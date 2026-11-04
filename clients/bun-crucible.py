@@ -1276,6 +1276,59 @@ def _emit_test_script_refused(project_dir, agent_id, detail):
     return 1
 
 
+# The field a `crucible.targets` entry carries to mark itself as the script
+# `test` runs; only `test` reads it, and only the JSON boolean `true` marks.
+TEST_MARKER = "test"
+# The name filter each bun framework takes on its command line.
+_NAME_FILTER_FLAGS = {"bun-test": "-t", "vitest": "-t",
+                      "playwright": "--grep", "playwright-bdd": "--grep"}
+
+
+def _marked_test_script(package_dir):
+    """The `crucible.targets` entry marked `"test": true`, read from the same
+    `package.json` its script table lives in: `(script, framework, refusal)`.
+
+    `(None, None, None)` when no entry carries the marker (the run is this
+    client's own `bun test`); `(script, framework, None)` for one marked entry
+    whose script has a body; `(None, None, detail)` for a table `test` cannot
+    honour -- two marked entries, a marker that is not `true`, or a marked
+    script missing from `scripts` or with an empty body. Only the marked
+    entry's script is checked here; its entry is read by the run itself."""
+    manifest = _package_manifest(package_dir)
+    crucible = manifest.get("crucible")
+    targets = crucible.get("targets") if isinstance(crucible, dict) else None
+    if not isinstance(targets, dict):
+        return None, None, None
+    marked = []
+    for script, entry in targets.items():
+        if not isinstance(entry, dict) or TEST_MARKER not in entry:
+            continue
+        if entry[TEST_MARKER] is not True:
+            return None, None, (
+                f"{TARGETS_DECLARATION}.{script} `{TEST_MARKER}` must be "
+                f"true, not {entry[TEST_MARKER]!r}: an entry `test` does not "
+                f"run omits the field")
+        marked.append(script)
+    if not marked:
+        return None, None, None
+    if len(marked) > 1:
+        named = ", ".join(f"{TARGETS_DECLARATION}.{s}" for s in marked)
+        return None, None, (f"{named} are each marked `\"{TEST_MARKER}\": "
+                            f"true`: `test` runs one script, so mark one")
+    script = marked[0]
+    key = f"{TARGETS_DECLARATION}.{script}"
+    where = os.path.join(package_dir, "package.json")
+    scripts = manifest.get("scripts") or {}
+    if script not in scripts:
+        return None, None, (f"{key} is marked for `test`, but the scripts "
+                            f"table of {where} does not hold `{script}`")
+    body = scripts[script]
+    if not isinstance(body, str) or not body.strip():
+        return None, None, (f"{key} is marked for `test`, but its script's "
+                            f"body in {where} is empty")
+    return script, targets[script].get("framework"), None
+
+
 def cmd_test(args, tier=None):
     """Targeted/whole-suite `bun test` → junit → ingest.
 
@@ -1300,6 +1353,17 @@ def cmd_test(args, tier=None):
     if script:
         passthrough = list(args.tests or []) + (
             ["-t", name] if name is not None else [])
+        return cmd_regression(args, verb="test", tier=tier, script=script,
+                              passthrough=passthrough, name=name)
+    # The table entry marked `"test": true` is the script every `test` runs,
+    # the name filter passed in the flag its framework takes.
+    script, framework, refusal = _marked_test_script(package_dir)
+    if refusal:
+        return _emit_target_refused("test", project_dir, args.agent, refusal)
+    if script:
+        flag = _NAME_FILTER_FLAGS.get(str(framework), "-t")
+        passthrough = list(args.tests or []) + (
+            [flag, name] if name is not None else [])
         return cmd_regression(args, verb="test", tier=tier, script=script,
                               passthrough=passthrough, name=name)
     bun = _resolve_bun(args.bun)
@@ -2851,18 +2915,21 @@ def main():
     u.set_defaults(func=cmd_unregister)
 
     t = sub.add_parser(
-        "test", help=("Targeted/whole-suite `bun test`, or the declared test "
-                      "script (`crucible.testScript`) → junit → ingest."),
+        "test", help=("Targeted/whole-suite `bun test`, or the declared script: "
+                      "the `crucible.targets` entry marked `\"test\": true` → junit → ingest."),
         description="Run a targeted test (file/path, optionally filtered by --name) or "
-                    "the whole suite, then ingest the junit result. A project that "
-                    "declares `crucible.testScript` in package.json runs `test` through "
-                    "that script (`bun run <script>`, with the files and the --name "
-                    "filter passed on); without it the run is `bun test`.")
+                    "the whole suite, then ingest the junit result. A project whose "
+                    "`crucible.targets` table in package.json marks one entry "
+                    "`\"test\": true` runs `test` through that script (`bun run "
+                    "<script>`, with the files and the --name filter passed on); "
+                    "without it the run is `bun test`.")
     t.add_argument("--tests", nargs="+",
                    help="Test file/path target(s) (e.g. src/example.test.ts). Omit for all.")
     t.add_argument("--name", metavar="PATTERN",
                    help="Run only the tests whose name matches this regular "
-                        "expression (passed unchanged as `-t PATTERN`).")
+                        "expression (passed unchanged as `-t PATTERN`, or as "
+                        "`--grep PATTERN` to a playwright or playwright-bdd "
+                        "entry).")
     t.add_argument("--agent", help="If set, ingest the junit result after the run")
     _add_gate_cycle_arg(t)
     _add_run_release_arg(t)
