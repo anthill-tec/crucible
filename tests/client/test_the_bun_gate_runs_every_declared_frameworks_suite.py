@@ -17,8 +17,13 @@ What is pinned:
 - the `bun-test` target's row is still `coveredBy` the whole-suite run;
 - a project whose own-stack targets are all non-`bun-test` skips the
   whole-suite `bun test`, and the envelope says so;
+- a package that declares no bun suite at all (its one `test:` script is
+  python-owned) still runs the whole-suite `bun test`;
+- an excluded `bun-test` suite counts: a Vitest `test:unit` beside a
+  `bun-test` `test:e2e` runs the whole-suite `bun test` AND the Vitest suite;
 - a non-`bun-test` table entry whose key is not a `test:` script is refused by
-  the gate, naming the entry;
+  the gate, naming the entry; so is one keyed `test:` with no script of that
+  name in `scripts`;
 - `--suites <vitest target>` runs only that target; `--suites <bun-test
   target>` runs the whole suite and no Vitest suite;
 - the Vitest suite's run requests no coverage and adds no
@@ -164,6 +169,28 @@ if coverage_dir:
 sys.exit(1 if failing else 0)
 '''
 
+PYTHON_TARGET = "test:client"
+PYTHON_CLIENT_SPAWN = "python-crucible.py"
+PYTHON_SUITE_CASES = 1
+
+# A stand-in python client, named as the real one so a script invoking it is
+# python-owned and dispatched to it as declared. It records its spawn (its
+# argv headed by its own name) and prints a passing `regression` envelope.
+FAKE_PYTHON_CLIENT = r'''
+import json
+import os
+import sys
+
+log = os.environ.get("FAKE_SPAWN_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"argv": ["python-crucible.py"] + sys.argv[1:],
+                                 "env": {}}) + "\n")
+print("axi:\n  verb: regression\n  ok: true\n  run:\n    passed: 1\n"
+      "    failed: 0\n    pending: 0\n    total: 1")
+sys.exit(0)
+'''
+
 _TESTCASE = re.compile(r"<testcase\b")
 _FAILURE = re.compile(r"<failure\b")
 
@@ -264,6 +291,10 @@ class _GateFrameworksCase(TargetsCase):
 
     def whole_suite_spawns(self):
         return [s for s in self.spawns() if s.get("argv", [])[:1] == ["test"]]
+
+    def python_client_spawns(self):
+        return [s for s in self.spawns()
+                if s.get("argv", [])[:1] == [PYTHON_CLIENT_SPAWN]]
 
     def ingests(self):
         return [b for b in self.posts_to(RUNS) if isinstance(b, dict)]
@@ -460,6 +491,76 @@ class AProjectWhoseBunTargetsAreAllNonBunTestSkipsTheWholeSuiteTest(_GateFramewo
                          (2 * SCRIPT_CASES, 2 * SCRIPT_CASES), f"run={run!r}; {drive.diag()}")
 
 
+class APackageDeclaringNoBunSuiteStillRunsTheWholeSuiteTest(_GateFrameworksCase):
+    """The package's one `test:` script is python-owned (it invokes the
+    python client), so it declares no bun suite: the skip needs at least one
+    bun suite, and the whole-suite `bun test` runs."""
+
+    def setUp(self):
+        super().setUp()
+        client = self.scratch / PYTHON_CLIENT_SPAWN
+        client.write_text(FAKE_PYTHON_CLIENT, encoding="utf-8")
+        self.declare({PYTHON_TARGET: f"{sys.executable} {client} regression"})
+
+    def test_the_whole_suite_bun_test_runs_beside_the_dispatched_python_suite(self):
+        """The whole suite is spawned once, the python suite is dispatched
+        once to the python client, the envelope says no skip, and the gate
+        is ok with both runs' counts."""
+        drive = self.gate()
+        self.assertEqual(len(self.whole_suite_spawns()), 1,
+                         f"the whole bun suite runs; spawns={self.spawns()!r}; "
+                         f"{drive.diag()}")
+        self.assertEqual(len(self.python_client_spawns()), 1,
+                         f"the python suite is dispatched once; "
+                         f"spawns={self.spawns()!r}; {drive.diag()}")
+        envelope = self.envelope(drive)
+        self.assertNotIn("wholeSuite", envelope, f"envelope={envelope!r}")
+        self.assertEqual(self.row(drive, PYTHON_TARGET).get("stack"), "python",
+                         drive.diag())
+        run = envelope.get("run") or {}
+        expected = WHOLE_SUITE_CASES + PYTHON_SUITE_CASES
+        self.assertEqual((run.get("passed"), run.get("total")), (expected, expected),
+                         f"run={run!r}; {drive.diag()}")
+        self.assertEqual(drive.returncode, 0, drive.diag())
+        self.assertIs(envelope.get("ok"), True, drive.diag())
+
+
+class AnExcludedBunTestSuiteKeepsTheWholeSuiteRunningTest(_GateFrameworksCase):
+    """A Vitest `test:unit` beside a `bun-test` `test:e2e`: the excluded e2e
+    suite is a declared bun suite under `bun-test`, so the whole-suite
+    `bun test` runs, and the Vitest suite runs as its own suite."""
+
+    def setUp(self):
+        super().setUp()
+        self.declare({VITEST_UNIT_TARGET: "vitest run", "test:e2e": "bun test e2e"},
+                     {"targets": {VITEST_UNIT_TARGET: dict(VITEST_JUNIT_ENV_ENTRY),
+                                  "test:e2e": dict(BUN_TEST_ENTRY)}})
+
+    def test_the_whole_suite_runs_and_the_vitest_suite_runs_as_its_own(self):
+        """The whole suite is spawned once and the envelope says no skip; the
+        Vitest script runs once, its row its own (no `coveredBy`, its own
+        counts); the e2e target is never run and is listed excluded."""
+        drive = self.gate()
+        self.assertEqual(len(self.whole_suite_spawns()), 1,
+                         f"the whole bun suite runs; spawns={self.spawns()!r}; "
+                         f"{drive.diag()}")
+        envelope = self.envelope(drive)
+        self.assertNotIn("wholeSuite", envelope, f"envelope={envelope!r}")
+        self.assert_ran_once_by_its_own_script(drive, VITEST_UNIT_TARGET)
+        row = self.row(drive, VITEST_UNIT_TARGET)
+        self.assertNotIn("coveredBy", row, f"row={row!r}")
+        self.assertEqual((row.get("passed"), row.get("total"), row.get("outcome")),
+                         (SCRIPT_CASES, SCRIPT_CASES, "pass"), f"row={row!r}")
+        self.assertEqual(self.script_spawns("test:e2e"), [],
+                         f"the e2e target is never run; spawns={self.spawns()!r}")
+        self.assertIs(self.row(drive, "test:e2e").get("gated"), False, drive.diag())
+        run = envelope.get("run") or {}
+        expected = WHOLE_SUITE_CASES + SCRIPT_CASES
+        self.assertEqual((run.get("passed"), run.get("total")), (expected, expected),
+                         f"run={run!r}; {drive.diag()}")
+        self.assertIs(envelope.get("ok"), True, drive.diag())
+
+
 class ANonBunTestEntryThatIsNotATestScriptIsRefusedByTheGateTest(_GateFrameworksCase):
 
     def test_the_gate_refuses_naming_the_entry_and_runs_nothing(self):
@@ -473,6 +574,22 @@ class ANonBunTestEntryThatIsNotATestScriptIsRefusedByTheGateTest(_GateFrameworks
         envelope = self.envelope(drive)
         self.assertIs(envelope.get("ok"), False, f"envelope={envelope!r}")
         self.assertIn("e2e:browser", json.dumps(envelope), f"envelope={envelope!r}")
+        self.assertEqual(self.spawns(), [],
+                         f"a refused gate runs no suite; spawns={self.spawns()!r}")
+        self.assertEqual(self.ingests(), [], f"a refused gate files no run; {drive.diag()}")
+
+    def test_a_test_keyed_entry_with_no_script_is_refused_naming_it(self):
+        """A Vitest entry keyed `test:browser` with no `test:browser` script:
+        the gate enumerates scripts, so it could not see the entry. The gate
+        exits non-zero with an `ok: false` envelope naming `test:browser`,
+        and no suite runs or is filed."""
+        self.declare({BUN_TARGET: "bun test tests"},
+                     {"targets": {"test:browser": dict(VITEST_JUNIT_ENV_ENTRY)}})
+        drive = self.gate()
+        self.assertNotEqual(drive.returncode, 0, drive.diag())
+        envelope = self.envelope(drive)
+        self.assertIs(envelope.get("ok"), False, f"envelope={envelope!r}")
+        self.assertIn("test:browser", json.dumps(envelope), f"envelope={envelope!r}")
         self.assertEqual(self.spawns(), [],
                          f"a refused gate runs no suite; spawns={self.spawns()!r}")
         self.assertEqual(self.ingests(), [], f"a refused gate files no run; {drive.diag()}")
