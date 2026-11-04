@@ -59,7 +59,7 @@ NO_FIGURES = ("passed=None failed=None pending=None total=None files=None")
 
 def healthy(limit=128 * 1024 * 1024, version="0.4.0"):
     return {"ok": True, "status": "healthy", "version": version,
-            "codecs": {"test": ["junit", "playwright"],
+            "codecs": {"test": ["crucible-events", "junit"],
                        "coverage": ["jacoco", "lcov"]},
             "limits": {"ingest_body_bytes": limit}}
 
@@ -187,10 +187,10 @@ class AFiledRunPrintsTheAnswersFiguresTest(_IngestLineCase):
     def test_the_line_names_the_codec_the_run_was_sent_with(self):
         board = _Board(ingest_reply=filed(
             {"passed": 4, "failed": 0, "pending": 0, "total": 4, "files": 1}))
-        _resp, lines, stdout = self.ingest(board.post, board.get, codec="playwright")
+        _resp, lines, stdout = self.ingest(board.post, board.get, codec="crucible-events")
         self.assertEqual(
             self.the_one_ingest_line(lines, stdout),
-            "ingest: ok=True codec=playwright passed=4 failed=0 pending=0 total=4 "
+            "ingest: ok=True codec=crucible-events passed=4 failed=0 pending=0 total=4 "
             "files=1")
 
 

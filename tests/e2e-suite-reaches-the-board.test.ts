@@ -21,7 +21,7 @@
 //     deliberately broken one, which fails and ends the scenario;
 //   - a broken step's own failure message on that step, and the step after it
 //     absent (Playwright halts the `test.step()` chain at the first error);
-//   - `<repo>/test-reports/junit.xml` and `playwright.json` untouched.
+//   - `<repo>/test-reports/junit.xml` untouched.
 //
 // ── HOW THIS FILE DRIVES IT, AND WHY IN THIS SHAPE ────────────────────────
 //
@@ -103,12 +103,10 @@ const STREAM_ROUTE = /^\/api\/v2\/runs\/[^/]+\/stream$/;
 const CLOSE_ROUTE = "/api/v2/runs";
 const CLIENT_PARSE_ROUTE = "/api/v2/runs/parsed";
 
-/** The package's own report paths, the defaults `playwright.config.ts` writes
- *  to when no path is handed in. The drive must leave both untouched. */
-const REPO_REPORTS = [
-  join(REPO_ROOT, "test-reports", "junit.xml"),
-  join(REPO_ROOT, "test-reports", "playwright.json"),
-];
+/** The package's own report path, the default `playwright.config.ts` writes
+ *  its JUnit report to when no path is handed in. The drive must leave it
+ *  untouched. */
+const REPO_REPORTS = [join(REPO_ROOT, "test-reports", "junit.xml")];
 
 // ── the temporary deliberately-failing specification ─────────────────────
 //

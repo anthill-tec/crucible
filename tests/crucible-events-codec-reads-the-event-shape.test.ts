@@ -76,12 +76,12 @@ function reasons(out: StreamDecoded): string[] {
 // ── Registration ────────────────────────────────────────────────────────────
 
 describe("crucible-events is registered as a stream codec", () => {
-  test("codecs.get('crucible-events') is a codec marked stream: true, and junit and playwright are not stream codecs", () => {
+  test("codecs.get('crucible-events') is a codec marked stream: true, junit is not a stream codec, and playwright is no codec at all", () => {
     const codec = codecs.get(CODEC);
     expect(codec).toBeDefined();
     expect(codec?.stream).toBe(true);
     expect(codecs.get("junit")?.stream).not.toBe(true);
-    expect(codecs.get("playwright")?.stream).not.toBe(true);
+    expect(codecs.get("playwright")).toBeUndefined();
   });
 
   test("its parse answers synchronously — the decoded run, never a Promise", () => {

@@ -105,7 +105,7 @@ RUNS = "/api/v2/runs"
 # same): its version, the codecs it decodes and the largest body it reads.
 HEALTH_PATHS = ("/api/health", "/api/v2/health")
 HEALTH_ANSWER = {"ok": True, "status": "healthy", "version": "0.4.0",
-                 "codecs": {"test": ["junit", "playwright"],
+                 "codecs": {"test": ["crucible-events", "junit"],
                             "coverage": ["jacoco", "lcov"]},
                  "limits": {"ingest_body_bytes": 128 * 1024 * 1024}}
 

@@ -103,7 +103,7 @@ INGEST_OK = {"ok": True, "changed": True, "event": "evt-shared-ingest-1",
 
 def healthy(limit=128 * 1024 * 1024, version="0.4.0"):
     return {"ok": True, "status": "healthy", "version": version,
-            "codecs": {"test": ["junit", "playwright"],
+            "codecs": {"test": ["crucible-events", "junit"],
                        "coverage": ["jacoco", "lcov"]},
             "limits": {"ingest_body_bytes": limit}}
 
@@ -239,7 +239,7 @@ class TheSharedIngestRefusesABoardThatCannotDecodeTheRunTest(_SharedIngestCase):
 
     def test_health_whose_test_codecs_lack_the_runs_codec_is_refused(self):
         health = healthy(version="0.3.9")
-        health["codecs"] = {"test": ["playwright"], "coverage": ["lcov"]}
+        health["codecs"] = {"test": ["crucible-events"], "coverage": ["lcov"]}
         self.assert_older_board_refusal(_Board(health=health), "0.3.9")
 
     def test_health_whose_coverage_codecs_lack_the_coverage_codec_is_refused(self):

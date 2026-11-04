@@ -24,9 +24,11 @@ the contract it is driven through):
   Playwright's `reporter` list when -- and only when -- that variable is set.
 * **Where the reporter writes.** The reporter reads the file path from
   `CRUCIBLE_STREAM` itself; the config passes it no option.
-* **Playwright's own reports.** The config writes Playwright's JUnit report to
-  `FIXTURE_JUNIT_PATH` and its JSON report to `FIXTURE_JSON_PATH`, each only
-  when set: the tests compare the stream against them.
+* **Playwright's own record.** The config writes Playwright's JUnit report to
+  `FIXTURE_JUNIT_PATH`, only when set, and the tests compare the stream against
+  it. Playwright's own test ids come from its test listing
+  (`playwright test --list --reporter=json`), which needs no `json` reporter
+  in the config.
 * **How Playwright runs.** `bun x bddgen`, then `bun x playwright test [args]`
   -- the fixture's `test:bdd` script, its two commands run in turn -- from the
   scratch copy, whose `node_modules` is a directory of links to this repo's
@@ -57,7 +59,6 @@ REPO_NODE_MODULES = REPO_ROOT / "node_modules"
 STREAM_VAR = "CRUCIBLE_STREAM"
 REPORTERS_VAR = "CRUCIBLE_REPORTERS"
 FIXTURE_JUNIT_VAR = "FIXTURE_JUNIT_PATH"
-FIXTURE_JSON_VAR = "FIXTURE_JSON_PATH"
 STREAM_FILE_NAME = "crucible-events.ndjson"
 TIMEOUT = 300
 SUITE_SEPARATOR = " \u203a "
@@ -65,7 +66,7 @@ SUITE_SEPARATOR = " \u203a "
 # Variables an ambient shell or an enclosing Playwright run could carry into
 # the fixture's run; each is removed before the run.
 _SCRUBBED_VARS = (
-    REPORTERS_VAR, STREAM_VAR, FIXTURE_JUNIT_VAR, FIXTURE_JSON_VAR,
+    REPORTERS_VAR, STREAM_VAR, FIXTURE_JUNIT_VAR,
     "PLAYWRIGHT_JUNIT_OUTPUT_NAME", "PLAYWRIGHT_JSON_OUTPUT_NAME",
     "PLAYWRIGHT_BDD_CONFIGS", "PW_TEST_CONNECT_WS_ENDPOINT",
     "PW_TEST_CONNECT_EXPOSE_NETWORK", "TEST_WORKER_INDEX",
@@ -176,21 +177,21 @@ def scratch_fixture(prefix, extra_files=None):
         target.write_text(source)
     return scratch, project
 
-def run_fixture_playwright(bun, project, reporters_dir, stream_path, *args,
-                           junit_path=None, json_path=None):
-    """`bunx bddgen && bunx playwright test [args…]` in the scratch copy.
-
-    `reporters_dir`, `stream_path`, `junit_path` and `json_path` set
-    `CRUCIBLE_REPORTERS`, `CRUCIBLE_STREAM`, `FIXTURE_JUNIT_PATH` and
-    `FIXTURE_JSON_PATH`; `None` leaves the variable UNSET. Returns the
-    `playwright test` run, or the `bddgen` run when that fails."""
+def _fixture_env(**variables):
+    """The fixture run's environment: the suite's own shell variables that
+    would decide what runs, and every variable in `_SCRUBBED_VARS`, removed;
+    then each of `variables` that is not `None` set."""
     env = scrubbed_env(None, NO_COLOR="1", FORCE_COLOR="0")
     for key in _SCRUBBED_VARS:
         env.pop(key, None)
-    for key, value in ((REPORTERS_VAR, reporters_dir), (STREAM_VAR, stream_path),
-                       (FIXTURE_JUNIT_VAR, junit_path), (FIXTURE_JSON_VAR, json_path)):
+    for key, value in variables.items():
         if value is not None:
             env[key] = str(value)
+    return env
+
+def _bddgen_then_playwright(bun, project, env, args):
+    """`bunx bddgen && bunx playwright test [args…]` in `project` under `env`:
+    the `playwright test` run, or the `bddgen` run when that fails."""
     generated = subprocess.run([bun, "x", "bddgen"], cwd=project, env=env,
                                capture_output=True, text=True, timeout=TIMEOUT,
                                check=False)
@@ -199,6 +200,18 @@ def run_fixture_playwright(bun, project, reporters_dir, stream_path, *args,
     return subprocess.run([bun, "x", "playwright", "test", *args], cwd=project,
                           env=env, capture_output=True, text=True, timeout=TIMEOUT,
                           check=False)
+
+def run_fixture_playwright(bun, project, reporters_dir, stream_path, *args,
+                           junit_path=None):
+    """`bunx bddgen && bunx playwright test [args…]` in the scratch copy.
+
+    `reporters_dir`, `stream_path` and `junit_path` set `CRUCIBLE_REPORTERS`,
+    `CRUCIBLE_STREAM` and `FIXTURE_JUNIT_PATH`; `None` leaves the variable
+    UNSET. Returns the `playwright test` run, or the `bddgen` run when that
+    fails."""
+    env = _fixture_env(**{REPORTERS_VAR: reporters_dir, STREAM_VAR: stream_path,
+                          FIXTURE_JUNIT_VAR: junit_path})
+    return _bddgen_then_playwright(bun, project, env, args)
 
 def diagnostics(result):
     if result is None:
@@ -267,12 +280,23 @@ def expected_junit_cases():
     return {(project, f"{suite}{SUITE_SEPARATOR}{name}")
             for (name, project), (_, suite, _, _, _) in EXPECTED_TEST_ENDS.items()}
 
-def json_report_ids(case, json_path, result):
-    """{test id: (scenario, project)} from Playwright's own JSON report. A spec
-    run in several projects is merged there under one id, its first test's."""
-    case.assertTrue(os.path.isfile(json_path),
-                    f"Playwright wrote no JSON report at {json_path}; {diagnostics(result)}")
-    report = json.loads(Path(json_path).read_text())
+def listed_test_ids(case, bun, project):
+    """{test id: (scenario, project)} as Playwright itself lists the scratch
+    copy's tests: `bunx bddgen && bunx playwright test --list --reporter=json`,
+    which runs no test, needs no `json` reporter in the config, and prints the
+    JSON report's `suites[]…specs[]` to stdout. No Crucible reporter or stream
+    is handed in. A spec run in several projects is listed under one id, its
+    first test's."""
+    listing = _bddgen_then_playwright(bun, project, _fixture_env(),
+                                      ["--list", "--reporter=json"])
+    case.assertEqual(listing.returncode, 0,
+                     f"Playwright listed the fixture's tests; {diagnostics(listing)}")
+    try:
+        report = json.loads(listing.stdout)
+    except ValueError as error:
+        raise case.failureException(
+            f"Playwright's --list --reporter=json stdout is not one JSON report "
+            f"({error}); {diagnostics(listing)}") from error
     ids = {}
 
     def walk(suite):

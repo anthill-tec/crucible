@@ -70,8 +70,8 @@ from tests.client.playwright_reporter_scratch import (
     by_scenario,
     codec_rejection,
     diagnostics,
-    json_report_ids,
     junit_report,
+    listed_test_ids,
     require_playwright_toolchain,
     run_fixture_playwright,
     scratch_fixture,
@@ -97,27 +97,27 @@ def _failing_steps(event):
 
 class PlaywrightReporterStreamsEveryScenarioTest(unittest.TestCase):
     """One real Playwright run of the fixture, its stream read back beside
-    Playwright's own JUnit and JSON reports of the same run."""
+    Playwright's own JUnit report of the same run and Playwright's own listing
+    of the same tests."""
 
     bun: ClassVar[str]
     scratch: ClassVar[str]
+    project: ClassVar[str]
     stream: ClassVar[str]
     junit: ClassVar[str]
-    json_report: ClassVar[str]
     result: ClassVar[subprocess.CompletedProcess | None]
 
     @classmethod
     def setUpClass(cls):
-        cls.scratch, project = scratch_fixture("playwright-reporter-stream-")
+        cls.scratch, cls.project = scratch_fixture("playwright-reporter-stream-")
         reports = os.path.join(cls.scratch, "reports")
         os.makedirs(reports)
         cls.stream = os.path.join(reports, STREAM_FILE_NAME)
         cls.junit = os.path.join(reports, "junit.xml")
-        cls.json_report = os.path.join(reports, "playwright.json")
         cls.bun = shutil.which("bun") or ""
         # Without bun nothing runs; `setUp` then fails every test naming why.
-        cls.result = (run_fixture_playwright(cls.bun, project, REPORTERS_DIR, cls.stream,
-                                             junit_path=cls.junit, json_path=cls.json_report)
+        cls.result = (run_fixture_playwright(cls.bun, cls.project, REPORTERS_DIR, cls.stream,
+                                             junit_path=cls.junit)
                       if cls.bun else None)
 
     @classmethod
@@ -198,15 +198,15 @@ class PlaywrightReporterStreamsEveryScenarioTest(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)),
                          f"the same scenario in two projects has two ids: {ids!r}")
         by_id = {event.get("id"): (event.get("name"), event.get("browser")) for event in events}
-        playwright_ids = json_report_ids(self, self.json_report, self.result)
+        playwright_ids = listed_test_ids(self, self.bun, self.project)
         self.assertGreaterEqual(len(playwright_ids), 9,
-                                f"Playwright's JSON report lists the fixture's specs: "
+                                f"Playwright's own listing names the fixture's specs: "
                                 f"{playwright_ids!r}")
         mismatched = {test_id: (expected, by_id.get(test_id))
                       for test_id, expected in playwright_ids.items()
                       if by_id.get(test_id) != expected}
         self.assertEqual(mismatched, {},
-                         "every id Playwright's own JSON report gives a test is the "
+                         "every id Playwright's own listing gives a test is the "
                          "id of that test's test-end (expected, streamed)")
 
     def test_each_scenarios_steps_are_its_background_then_its_own_steps_in_order(self):

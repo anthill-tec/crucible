@@ -84,10 +84,8 @@ const PROJECTS_BY_TAG: Record<string, string[]> = {
   "@waits-on-setup": ["after-setup"],
 };
 
-/** This repo's own Playwright report paths, which the drive must leave alone. */
-const REPO_REPORTS = ["playwright-junit.xml", "playwright-report.json", "playwright.json"].map((name) =>
-  join(REPO_ROOT, "test-reports", name),
-);
+/** This repo's own Playwright JUnit report paths, which the drive must leave alone. */
+const REPO_REPORTS = ["playwright-junit.xml"].map((name) => join(REPO_ROOT, "test-reports", name));
 
 /** Variables an ambient shell or an enclosing run could carry into the drive. */
 const SCRUBBED = [
