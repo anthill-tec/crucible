@@ -1950,9 +1950,11 @@ def cmd_pre_merge_gate(args):
 
 def _gate_regression_args(args):
     """CR-CRU-058 §S1 / CR-CRU-112 §S2 — the regression step's own Namespace:
-    the flags the gate's ALWAYS-RUN whole-suite regression takes, so the run
-    that covers every own-stack declared target cannot run under different
-    flags from the gate that asked for it."""
+    the flags the gate's whole-suite regression takes, so the run that covers
+    every own-stack `bun test` target cannot run under different flags from
+    the gate that asked for it. The gate skips that run when every bun suite
+    the project declares runs under another framework (rule 4 of
+    `run_gate_suites`); this Namespace is then never used."""
     return argparse.Namespace(
         agent=args.agent, coverage=True, reports=args.reports, bun=args.bun,
         package_dir=args.package_dir, project_dir=args.project_dir,
