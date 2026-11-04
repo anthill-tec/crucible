@@ -25,7 +25,9 @@ The bun and python clients keep no copy. A source scan of each asserts:
     called the client's own, and bun's and python's `_emit_ingest_axi` call
     the one run emitter, `_axi().emit_run_axi`, which reads `filed_run`;
   * `_file_reports`'s only statement besides an optional docstring is
-    `return _axi().ingest_reports(...)`, with the arguments it passes today.
+    `return _axi().ingest_reports(...)`, with the arguments it passes today;
+    bun's and python's also pass the run's `framework` (python's: its
+    runner).
 
 The rust and arduino clients file through the same seam: each keeps no copy
 of the helpers, and its `_file_reports` is that one statement, passing the
@@ -73,9 +75,9 @@ INGEST_POSITIONAL = ("_post", "_get")
 INGEST_KEYWORDS = ("agent_id", "codec", "context", "coverage_codec",
                    "coverage_paths", "project_key", "raw", "release",
                    "report_paths", "run_id", "runner_exit", "stack", "tier")
-# bun also names the runner framework its reports came from, so the run is
-# filed under it.
-BUN_INGEST_KEYWORDS = tuple(sorted(INGEST_KEYWORDS + ("framework",)))
+# bun and python also name the runner framework their reports came from, so
+# the run is filed under it (python's framework is its runner).
+FRAMEWORK_INGEST_KEYWORDS = tuple(sorted(INGEST_KEYWORDS + ("framework",)))
 
 DEFINITION, OWN_CALL, INGEST_LITERAL = ("definition", "own call",
                                         "ingest line literal")
@@ -382,11 +384,12 @@ class _ClientScan:
 
 class TheBunClientReadsTheSharedIngestHelpersTest(_ClientScan, unittest.TestCase):
     CLIENT = "bun-crucible.py"
-    INGEST_KEYWORDS = BUN_INGEST_KEYWORDS
+    INGEST_KEYWORDS = FRAMEWORK_INGEST_KEYWORDS
 
 
 class ThePythonClientReadsTheSharedIngestHelpersTest(_ClientScan, unittest.TestCase):
     CLIENT = "python-crucible.py"
+    INGEST_KEYWORDS = FRAMEWORK_INGEST_KEYWORDS
 
 
 class TheRustClientFilesThroughOneSharedIngestCallTest(unittest.TestCase):

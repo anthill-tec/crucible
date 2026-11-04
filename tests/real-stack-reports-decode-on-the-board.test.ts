@@ -8,8 +8,8 @@
 //
 // Each fixture is sent to `POST /api/v2/runs` as its client would send it —
 // `codec: "junit"`, `data` the report texts in the order the client reads
-// them, `coverage: {codec, data}`, bun's console as `raw`, `stack` the stack —
-// and read back through the run detail read `GET /api/v2/events/<id>`:
+// them, `coverage: {codec, data}`, bun's console as `raw`, `stack` the stack,
+// `framework` the framework its client states (`FRAMEWORK_OF`) — and read back through the run detail read `GET /api/v2/events/<id>`:
 //
 //  - figures exact: the stored `total`, `passed`, `failed`, `pending` and every
 //    case's status equal the client's; the coverage object equals the client's,
@@ -125,9 +125,20 @@ interface Expected {
   clientAutoIngestTree?: Node[];
 }
 
+/**
+ * The framework each fixture's client states on the run it files: bun's
+ * `bun-test`, python's runner. A stack whose client states none is absent.
+ */
+const FRAMEWORK_OF: Record<string, string> = {
+  bun: "bun-test",
+  "python/xmlrunner": "unittest",
+  "python/pytest": "pytest",
+};
+
 interface Fixture {
   label: string;
   dir: string;
+  framework?: string;
   expected: Expected;
   reports: string[];
   coverage: string[];
@@ -138,9 +149,11 @@ function loadFixture(label: string, dir: string): Fixture {
   const root = join(FIXTURES, dir);
   const expected = JSON.parse(readFileSync(join(root, "expected.json"), "utf-8")) as Expected;
   const read = (rel: string): string => readFileSync(join(root, rel), "utf-8");
+  const framework = FRAMEWORK_OF[dir];
   return {
     label,
     dir,
+    ...(framework !== undefined ? { framework } : {}),
     expected,
     reports: expected.reports.map(read),
     coverage: expected.coverage.reports.map(read),
@@ -190,11 +203,12 @@ async function ingest(agentId: string, body: Record<string, unknown>): Promise<I
   return { res, run: res.body.run as Record<string, unknown>, event: detail.event as StoredEvent };
 }
 
-/** The fixture sent as its client would send it: reports, coverage, console, stack. */
+/** The fixture sent as its client would send it: reports, coverage, console, stack, framework. */
 function ingestFixture(f: Fixture, agentId: string): Promise<Ingested> {
   return ingest(agentId, {
     codec: "junit",
     stack: f.expected.stack,
+    ...(f.framework !== undefined ? { framework: f.framework } : {}),
     data: f.reports,
     coverage: { codec: f.expected.coverage.codec, data: f.coverage },
     ...(f.raw !== undefined ? { raw: f.raw } : {}),
@@ -280,7 +294,7 @@ function failureOf(el: El): Failure {
   };
 }
 
-function leafOf(tc: El, stack: string): Leaf {
+function leafOf(tc: El, framework: string | undefined): Leaf {
   const bad = tc.children.find((c) => c.name === "failure" || c.name === "error");
   const skipped = kids(tc, "skipped").length > 0;
   const seconds = Number.parseFloat(tc.attrs.time ?? "0");
@@ -291,7 +305,7 @@ function leafOf(tc: El, stack: string): Leaf {
   };
   if (bad !== undefined) {
     leaf.failure = failureOf(bad);
-    if (stack === "bun" && leaf.failure.message === undefined) {
+    if (framework === "bun-test" && leaf.failure.message === undefined) {
       // This reader does not read bun's console; no fixture needs it to.
       throw new Error(`bare bun failure in the fixture: ${leaf.name}`);
     }
@@ -299,13 +313,16 @@ function leafOf(tc: El, stack: string): Leaf {
   return leaf;
 }
 
-function nodeOf(name: string, cases: El[], stack: string): Node {
-  const children = cases.map((tc) => leafOf(tc, stack));
+function nodeOf(name: string, cases: El[], framework: string | undefined): Node {
+  const children = cases.map((tc) => leafOf(tc, framework));
   return { name, status: children.some((c) => c.status === "fail") ? "fail" : "pass", children };
 }
 
 /** The unified reading of a run's reports: its tree and its distinct files. */
-function unifiedReading(texts: string[], stack: string): { tree: Node[]; files: Set<string> } {
+function unifiedReading(
+  texts: string[],
+  framework: string | undefined,
+): { tree: Node[]; files: Set<string> } {
   const tree: Node[] = [];
   const files = new Set<string>();
   for (const text of texts) {
@@ -318,16 +335,16 @@ function unifiedReading(texts: string[], stack: string): { tree: Node[]; files: 
         files.add(file.replace(/\\/g, "/"));
       }
     }
-    const pytest = stack === "python" && suites.length === 1 && suites[0]!.attrs.name === "pytest";
+    const pytest = framework === "pytest" && suites.length === 1 && suites[0]!.attrs.name === "pytest";
     if (pytest) {
       const groups = new Map<string, El[]>();
       for (const tc of held.flatMap((s) => kids(s, "testcase"))) {
         const key = blankless(tc.attrs.classname) ?? "pytest";
         groups.set(key, [...(groups.get(key) ?? []), tc]);
       }
-      for (const [name, cases] of groups) tree.push(nodeOf(name, cases, stack));
+      for (const [name, cases] of groups) tree.push(nodeOf(name, cases, framework));
     } else {
-      for (const suite of held) tree.push(nodeOf(named(suite), kids(suite, "testcase"), stack));
+      for (const suite of held) tree.push(nodeOf(named(suite), kids(suite, "testcase"), framework));
     }
   }
   return { tree, files };
@@ -428,7 +445,7 @@ for (const f of FIXTURE_SET) {
 
     test(`stores the unified reading of the report as its tree (${f.label})`, async () => {
       const { event } = await ingestFixture(f, `${agent}-tree`);
-      const { tree } = unifiedReading(f.reports, f.expected.stack);
+      const { tree } = unifiedReading(f.reports, f.framework);
       expect(tree.length).toBeGreaterThan(0);
       expect(comparable(event.tree ?? [])).toEqual(comparable(tree));
       // No node without cases, no blank name, no message past its cut.
@@ -445,7 +462,7 @@ for (const f of FIXTURE_SET) {
 
     test(`answers the run's distinct-file count, read across every report (${f.label})`, async () => {
       const { run } = await ingestFixture(f, `${agent}-files`);
-      const { files } = unifiedReading(f.reports, f.expected.stack);
+      const { files } = unifiedReading(f.reports, f.framework);
       expect(run.files).toBe(files.size);
     });
   });
