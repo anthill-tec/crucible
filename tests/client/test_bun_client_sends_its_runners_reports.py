@@ -122,7 +122,8 @@ TIER_MANIFEST = {"name": "bun-sends-its-reports", "private": True,
                  "scripts": {f"test:{tier}": "bun test" for tier in TIER_VERBS}}
 TEST_SCRIPT_MANIFEST = {"name": "bun-sends-its-reports", "private": True,
                         "scripts": {"test:all": "bun test"},
-                        "crucible": {"testScript": "test:all"}}
+                        "crucible": {"targets": {"test:all": {
+                            "framework": "bun-test", "junit": "flag", "test": True}}}}
 RAW_REPORT_MANIFEST = {
     "name": "bun-sends-its-reports", "private": True,
     "scripts": {"test:e2e": "playwright test"},

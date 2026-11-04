@@ -27,7 +27,7 @@ What is pinned:
   opens; under `--no-lifecycle` no health is read and nothing is checked;
 - a `junit: env:<VAR>` target is handed its report path in that variable,
   and relays its console only when its entry declares `console: bun-console`;
-- `crucible.testScript` naming a table-declared script runs through that
+- `test` through the table entry marked `"test": true` runs through that
   entry: the runner is handed `CRUCIBLE_STREAM=<reports dir>/crucible-events.
   ndjson` and `CRUCIBLE_REPORTERS=<the client's install>/reporters`, and the run
   is closed by its stream; naming a `junit` entry, the runner is handed its
@@ -167,8 +167,8 @@ class EveryTableRefusalComesBeforeAnythingIsPostedTest(TargetsCase):
 
     def test_a_test_run_through_a_test_script_with_a_refused_entry_is_refused(self):
         self.declare({VITEST: "vitest run"},
-                     {"testScript": VITEST,
-                      "targets": {VITEST: {"framework": "jest", "junit": ENV_JUNIT}}})
+                     {"targets": {VITEST: {"framework": "jest", "junit": ENV_JUNIT,
+                                           "test": True}}})
         drive = self.drive("test")
         self.assert_refused_before_anything_is_posted(drive, VITEST, "framework")
 
@@ -335,14 +335,14 @@ class AJunitEnvTargetRelaysByItsConsoleTest(TargetsCase):
         self.assertEqual(self.board.stream_posts(), [], "nothing is relayed")
 
 
-# ── crucible.testScript naming a table-declared script ──────────────────────
+# ── `test` through the table entry marked `"test": true` ────────────────────
 
 
 class ATestScriptNamingATableScriptRunsThroughItsEntryTest(TargetsCase):
 
     def test_a_test_run_through_a_stream_entry_is_handed_the_stream_and_closed_by_it(self):
         self.declare({VITEST: "vitest run"},
-                     {"testScript": VITEST, "targets": {VITEST: VITEST_STREAM_ENTRY}})
+                     {"targets": {VITEST: {**VITEST_STREAM_ENTRY, "test": True}}})
         drive = self.drive("test")
         self.assertEqual(drive.returncode, 0, drive.diag())
         spawns = self.spawns()
@@ -379,12 +379,11 @@ class ATestScriptNamingATableScriptRunsThroughItsEntryTest(TargetsCase):
         self.assertIn(INGESTING, messages)
 
     def run_through_a_junit_entry(self, entry):
-        """`test` through `crucible.testScript` naming `test:unit`, whose
-        table entry is `entry`: the runner is handed its report path the
-        entry's way and the run is filed from its JUnit report, stamped
-        `bun-test`."""
+        """`test` through `test:unit`, whose table entry is `entry` marked
+        `"test": true`: the runner is handed its report path the entry's way
+        and the run is filed from its JUnit report, stamped `bun-test`."""
         self.declare({UNIT: "bun test"},
-                     {"testScript": UNIT, "targets": {UNIT: entry}})
+                     {"targets": {UNIT: {**entry, "test": True}}})
         drive = self.drive("test")
         self.assertEqual(drive.returncode, 0, drive.diag())
         spawns = self.spawns()

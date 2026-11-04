@@ -14,8 +14,9 @@ census's `drive_verb`) for its top-level `--help` and for EVERY verb's
 
 `TestVerbHelpStatesTheDeclaredScriptAndTheNameFilterTest`
     `test --help` names the declaration a project routes `test` through --
-    `crucible.testScript` in `package.json` -- and the name filter, `--name`,
-    passed on as `-t`.
+    the `"test": true` marker on a `crucible.targets` entry in `package.json`,
+    never the retired `crucible.testScript` -- and the name filter, `--name`,
+    passed on as `-t` or `--grep` by the marked entry's framework.
 
 `PackageDirHelpStatesTheDeclaredResolutionTest`
     On every verb that takes `--package-dir`, that option's printed help names
@@ -50,8 +51,13 @@ BUN_CLIENT = CLIENT_FILES["bun"]
 
 _HELP_ENV = {"COLUMNS": "200", "NO_COLOR": "1", "PYTHON_COLORS": "0"}
 
-#: The `package.json` key a project declares the script `test` runs through.
-TEST_SCRIPT_KEY = "crucible.testScript"
+#: The `package.json` table whose marked entry is the script `test` runs, and
+#: the marker that entry carries.
+TARGETS_TABLE = "crucible.targets"
+TEST_MARKER = '"test": true'
+
+#: The retired key the help no longer names.
+RETIRED_TEST_SCRIPT_KEY = "crucible.testScript"
 
 #: The package-dir variable, the config key and the file that holds it.
 PACKAGE_DIR_VARIABLE = "BUN_CRUCIBLE_PACKAGE_DIR"
@@ -164,13 +170,18 @@ class TestVerbHelpStatesTheDeclaredScriptAndTheNameFilterTest(_HelpCensusCase):
     def test_test_help_names_the_declared_test_script_key_in_package_json(self):
         text = normalise(self.printed(("test",)))
         self.assertIn(
-            TEST_SCRIPT_KEY, text,
-            f"`test --help` must name `{TEST_SCRIPT_KEY}`, the package.json "
-            "declaration a project routes `test` through")
+            TARGETS_TABLE, text,
+            f"`test --help` must name `{TARGETS_TABLE}`, the package.json "
+            "table whose marked entry a project routes `test` through")
+        self.assertIn(
+            TEST_MARKER, text,
+            f"`test --help` must name the marker `{TEST_MARKER}`")
         self.assertIn(
             "package.json", text,
-            "`test --help` must say the declared test script lives in "
-            "package.json")
+            "`test --help` must say the marked entry lives in package.json")
+        self.assertNotIn(
+            RETIRED_TEST_SCRIPT_KEY, text,
+            f"`test --help` must no longer name `{RETIRED_TEST_SCRIPT_KEY}`")
 
     def test_test_help_states_the_name_filter_beside_the_declared_script(self):
         printed = self.printed(("test",))
@@ -179,9 +190,13 @@ class TestVerbHelpStatesTheDeclaredScriptAndTheNameFilterTest(_HelpCensusCase):
         self.assertIn("-t", name_entry,
                       "`test --help` must say `--name` is passed on as `-t`")
         self.assertIn(
-            TEST_SCRIPT_KEY, text,
-            "`test --help` must state the name filter AND the declared test "
-            f"script `{TEST_SCRIPT_KEY}` it reaches")
+            "--grep", name_entry,
+            "`test --help` must say `--name` is passed on as `--grep` to a "
+            "playwright entry")
+        self.assertIn(
+            TEST_MARKER, text,
+            "`test --help` must state the name filter AND the marker "
+            f"`{TEST_MARKER}` of the entry it reaches")
 
 
 class PackageDirHelpStatesTheDeclaredResolutionTest(_HelpCensusCase):
