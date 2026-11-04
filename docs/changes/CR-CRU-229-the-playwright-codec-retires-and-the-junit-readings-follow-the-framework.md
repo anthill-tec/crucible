@@ -11,6 +11,7 @@ Pre-review: ran — 13 points, and the gap analysis needed user rulings; FINDING
   reveal in the scenario shape (§S4), the codec used as a test oracle (§S7), a failing scenario with no failing step
   (§S3), rollups (§S3), the `feature` of other runs (§S3), the PRD and DN rows (§S8), the pytest report condition
   (§S5), and AC2's and AC5's checks.
+- **Approved 2026-11-04** by the user, as written, with the choices it had marked PROPOSED.
 
 ## Problem
 
@@ -69,11 +70,11 @@ Pre-review: ran — 13 points, and the gap analysis needed user rulings; FINDING
 One transacted step in the migration chain. For each `events` row of codec `playwright`:
 - its `framework` is set to `playwright-bdd`, on the event and on its `runs` row when it has one; `codec` stays;
 - its detail rows are rewritten to the scenario shape `writeRunDetailRows` stores for a `playwright-bdd` run:
-  - each old suite is a scenario: its feature is its name up to the first ` › `, its scenario name the rest (PROPOSED:
+  - each old suite is a scenario: its feature is its name up to the first ` › `, its scenario name the rest (Approved 2026-11-04:
     a name with no ` › ` is its own feature and its own scenario name);
   - one suite per distinct (feature, browser), in first-seen order of the old suites, named by the feature, `feature`
     = that name, `browser` kept;
-  - one case per scenario, in the old order, with the old suite's status. PROPOSED: its duration is the sum of its
+  - one case per scenario, in the old order, with the old suite's status. Approved 2026-11-04: its duration is the sum of its
     steps' durations; its failure is its first failing step's failure (message, type, trace). A failing scenario with
     no failing step (a hook failed, or it holds no step) gets an empty failure, every part NULL, as the stream's
     `failureOf({})` gives one; a passing or pending scenario gets none;
@@ -97,7 +98,7 @@ nothing.
 - `featureOf` and `FEATURE_SEPARATOR` (`src/store.ts`) are deleted: a suite's `feature` is its name for a run of
   framework `playwright-bdd`, and NULL for any other.
 - The heat strip in the scenario shape (a feature's suite, a scenario its leaf): a scenario's cell reveals that
-  scenario's row, as it does today. PROPOSED: a synthetic cell of a suite not yet loaded loads it and reveals its
+  scenario's row, as it does today. Approved 2026-11-04: a synthetic cell of a suite not yet loaded loads it and reveals its
   first failing scenario's row when red, else its first scenario's row. Today it reveals a `suite:` row, which the
   scenario shape never draws, so nothing is located.
 
@@ -125,7 +126,7 @@ nothing.
   codec's own behaviour; `tests/playwright-codec.test.ts` is deleted. Codec-list pins lose `playwright`, in
   `tests/` and `tests/client/` alike (health stubs, `codec="playwright"` ingests).
 - A test that uses the codec as its expected value (`tests/playwright-bdd-fixture-streams-through-the-bun-client.test.ts`,
-  `tests/e2e-suite-reaches-the-board.test.ts`) takes it from a codec-free source instead. PROPOSED: the steps read
+  `tests/e2e-suite-reaches-the-board.test.ts`) takes it from a codec-free source instead. Approved 2026-11-04: the steps read
   from the `.feature` files, as the fixture test already reads its Background.
 - The three spec-run scenarios of `tests/e2e/features/heat-cell-reveal.feature` and
   `tests/heat-cell-reveal-spec-unfold.test.ts` are rewritten to the scenario shape's cells and rows (§S4).
