@@ -3,56 +3,169 @@
 **Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-226, CR-CRU-228 · **Status** PENDING ·
 Pre-review: due — 13 points; split from CR-CRU-226 by user ruling
 - **Filed 2026-11-04.** Split from CR-CRU-226 at its gap analysis (user ruling 2026-11-04: two CRs, the client's break
-  first, then the board's half in this one). It gets its own gap analysis when it comes up in the queue (Rule 20).
+  first, then the board's half in this one).
+- **Gap analysis 2026-11-04** on develop `2676d3b5` (baseline: the CR-CRU-226 pre-merge gate, 10681 passed / 0 failed,
+  on the code-identical `f67505ab`). User rulings that day: a migrated run is recounted by scenario; the python
+  `auto-ingest` states the runner the project declares.
 
 ## Problem
 
 - **Playwright's JSON report and the board's `playwright` codec are redundant.** Since CR-CRU-228 the shipped reporter
   streams each scenario as a test with its Gherkin steps, as `crucible-events` with framework `playwright-bdd`. After
-  CR-CRU-226 refuses `crucible.rawReport`, nothing a project declares reaches the codec; only this repo's own test
-  fixtures post Playwright JSON (the e2e harness's `ingestPlaywright` and 29 test files).
-- **Stored runs keep a second shape.** The dev board holds 225 runs filed through the codec: a suite per scenario, its
-  steps as cases. The UI tells them apart by codec (`public/app.js` `isSpecRun` / `isScenarioShape`,
-  `public/app-logic.mjs`).
+  CR-CRU-226 refuses `crucible.rawReport`, nothing a project declares reaches the codec. The bun client still points
+  Playwright's JSON report into a stream run's reports dir (`STREAM_KEPT_REPORTS`), and this repo's
+  `playwright.config.ts` and the `tests/fixtures/playwright-bdd-project` config still write it. Only this repo's own
+  tests post Playwright JSON: 24 files under `tests/` name the codec in a post, a fixture or a direct call (the e2e
+  harness's `ingestPlaywright` among them), and 10 more pin a codec list that holds `playwright`.
+- **Stored runs keep a second shape.** Measured on the DEV board's store (schema v24): 225 runs were filed through the
+  codec, none with a framework; 224 of them also have a `runs` row. 223 hold a suite per scenario named
+  `<feature> › <scenario>`, its steps as cases (no `run_case_steps` row, no `events.tree`), and 2 hold no suite.
+  Their stored counts count steps: run `evt-1793378657927-74` says 150 tests, which are 150 steps of 10 scenarios over
+  2 (feature, browser) pairs. The UI tells the shapes apart by codec (`public/app.js` `isSpecRun`, `isScenarioShape`,
+  `BDD_SEP`; `public/app-logic.mjs`'s BDD filter), and the store splits a feature off a suite's name for every run
+  not of framework `playwright-bdd` (`src/store.ts` `featureOf`, `FEATURE_SEPARATOR`), which only the codec's runs
+  need.
 - **Two `junit` readings switch on the client's stack**, not the framework that wrote the report:
-  - `parseJunit` groups cases by classname when `stack === "python"` and the suite is named `pytest`;
-  - `readJunitRawOutput` reads the console as bun's only when `stack === "bun"`.
-  The python client sends no framework at all (`framework=None` on every path).
+  - `parseJunit` groups cases by classname when `stack === "python"` and the report's only suite is named `pytest`;
+  - `readJunitRawOutput` reads the console as bun's only when `stack === "bun"`, so a bun project's vitest `junit`
+    run gets bun's console reading too.
+  The codec is told the run's effective stack (`DecodeOptions.stack`, from `effectiveStack` in `src/v2.ts`). The
+  python client sends no framework on any path.
 
 ## Design (user rulings 2026-10-31 and 2026-11-04; `DN-crucible-live-test-progress.md`)
 
-- **Retirement** (user ruling 2026-11-04). The board stops accepting Playwright JSON: the `playwright` codec leaves the
+- **Retirement** (ruling 2026-11-04). The board stops accepting Playwright JSON: the `playwright` codec leaves the
   registry and the health codec list, and a post naming it is refused as an unknown codec. Playwright's JSON report
-  leaves `playwright.config.ts` and the client's kept reports (`STREAM_KEPT_REPORTS`).
-- **The stored runs migrate to framework `playwright-bdd`** (user ruling 2026-11-04). PROPOSED: a migration sets the
-  framework and reshapes each run into the scenario shape the stream stores (one suite per feature and browser, a case
-  per scenario, its steps in `run_case_steps`), in `run_suites` / `run_cases` / `run_case_steps` and the event's `tree`;
-  the stored `codec` stays as the record of how the run was filed. The UI's codec checks then collapse to the
-  framework.
-- **The test fixtures re-seed through the stream** (user ruling 2026-11-04). The e2e harness and the tests that post
-  Playwright JSON post `crucible-events` streams with steps instead; `tests/playwright-codec.test.ts` is deleted.
-- **Readings keyed by the declared framework** (user ruling 2026-10-31). pytest's classname grouping applies to a run of
+  leaves both Playwright configs and the client's kept reports; the `junit` reporter and its kept-report entry stay.
+- **The stored runs migrate to framework `playwright-bdd`** (ruling 2026-11-04), in the scenario shape the stream
+  stores, and **are recounted by scenario** (ruling 2026-11-04): a migrated run's counts say what the stream would
+  have said. The stored `codec` stays as the record of how the run was filed. The UI's codec checks and the store's
+  name split then go: the specification view is decided by framework alone.
+- **The test fixtures re-seed through the stream** (ruling 2026-11-04); `tests/playwright-codec.test.ts` is deleted.
+- **Readings keyed by the declared framework** (ruling 2026-10-31). pytest's classname grouping applies to a run of
   framework `pytest`, and the bun console reading to a run of framework `bun-test`, whatever the stack. The `stack`
-  field stays only as the run's label.
-- **The python client sends its framework.** PROPOSED: its runner name, `pytest` or `unittest`, on every run it files.
+  field stays only as the run's label. A run that states no framework gets neither reading.
+- **The python client sends its framework**: its runner, `pytest` or `unittest`, on every run it files. `auto-ingest`,
+  which runs no runner, states the runner the project declares (ruling 2026-11-04).
 
 ## Steps
 
-Written at this CR's gap analysis.
+### §S1 — the codec retires
+- `src/codecs/playwright.ts` is deleted and the `playwright` entry leaves `codecs` (`src/codecs/index.ts`).
+- `GET /api/health` lists `codecs.test` as `crucible-events`, `junit`.
+- `POST /api/v2/runs` naming `codec: "playwright"` is refused by the existing unknown-codec check
+  (400 `unknown codec: playwright`), and nothing is stored.
+
+### §S2 — Playwright's JSON report retires
+- `STREAM_KEPT_REPORTS` (`clients/bun-crucible.py`) keeps only `PLAYWRIGHT_JUNIT_OUTPUT_NAME`.
+- `playwright.config.ts` and `tests/fixtures/playwright-bdd-project/playwright.config.ts` configure no `json`
+  reporter; their comments stop describing the JSON report and the codec.
+
+### §S3 — the stored runs migrate (schema v25)
+One transacted step in the migration chain. For each `events` row of codec `playwright`:
+- its `framework` is set to `playwright-bdd`, on the event and on its `runs` row when it has one; `codec` stays;
+- its detail rows are rewritten to the scenario shape `writeRunDetailRows` stores for a `playwright-bdd` run:
+  - each old suite is a scenario: its feature is its name up to the first ` › `, its scenario name the rest (PROPOSED:
+    a name with no ` › ` is its own feature and its own scenario name);
+  - one suite per distinct (feature, browser), in first-seen order of the old suites, named by the feature, `feature`
+    = that name, `browser` kept;
+  - one case per scenario, in the old order, with the old suite's status. PROPOSED: its duration is the sum of its
+    steps' durations; its failure is its first failing step's failure (message, type, trace), none if no step failed;
+  - the old cases become that case's `run_case_steps` rows, in order, with their status, duration and failure;
+  - each new suite's status and counts follow from its cases, as at ingest;
+- its `total`, `passed`, `failed` and `pending` are recounted over the scenarios; `duration_ms` is unchanged;
+- a run with no suites gets the framework and nothing else.
+No other run changes. A store with no such run migrates with nothing to rewrite.
+
+### §S4 — the specification view by framework alone
+- `isSpecRun` (`public/app.js`) is a test run of framework `playwright-bdd`; the BDD index filter
+  (`public/app-logic.mjs`) the same. Neither reads `codec`.
+- `isScenarioShape`, its branches (`specFeaturesOf`, `openProgressively`, `openFeature`, `FeatureGroup`) and `BDD_SEP`
+  are deleted; the scenario-shape path is the only one.
+- `featureOf` and `FEATURE_SEPARATOR` (`src/store.ts`) are deleted: a suite's `feature` is its name for a run of
+  framework `playwright-bdd`, and NULL for any other.
+
+### §S5 — the readings keyed by framework
+- `DecodeOptions` carries the run's effective framework in place of its stack: the one the ingest states, else the one
+  the run it closes was started with (the rule `effectiveStack` applies today, which it replaces).
+- `parseJunit` groups cases by classname when the framework is `pytest` (PROPOSED: whatever the report's suite is
+  named; the python client keeps naming it `pytest`).
+- `readJunitRawOutput` reads the console as bun's when the framework is `bun-test`.
+- With no framework, or any other, neither applies. Nothing under `src/codecs/` reads the run's stack for a test run.
+
+### §S6 — the python client files its framework
+- Every run the python client opens or files states `framework` = its runner: `test` (the `unittest` stream and the
+  `pytest` junit run), `regression`, and each tier `pre-merge-gate` runs.
+- `auto-ingest` states the runner `[python] runner` declares in the project's own `crucible.toml`, else `unittest`
+  (the running verbs' resolution, without `--runner`, which `auto-ingest` does not take, and without the pytest import
+  check, since it runs nothing). A declared value that is neither runner is refused as the running verbs refuse it:
+  an envelope, and nothing posted.
+
+### §S7 — the test fixtures re-seed through the stream
+- The e2e harness's `ingestPlaywright` is replaced by a seed that opens a run, posts its `crucible-events` stream (each
+  scenario a `test-end` with its `browser` and `steps`) and closes it with codec `crucible-events`, framework
+  `playwright-bdd`; the step files that called it use it.
+- Each test that posts codec `playwright` or calls the codec seeds the same way, or is deleted where it pins only the
+  codec's own behaviour; `tests/playwright-codec.test.ts` is deleted. Codec-list pins lose `playwright`.
+
+### §S8 — the record
+- `CHANGELOG.md` `[Unreleased]`:
+  - **Removed (⚠ breaking):** the `playwright` codec; a post naming it is refused.
+  - **Changed:** the `junit` readings follow the framework; a run that states none (any client older than 0.4.0)
+    gets neither. The python client states its runner as the framework. A migration (schema v25) moves the runs
+    filed through the codec to framework `playwright-bdd` and recounts them by scenario.
+  - **Stack declaration changes:** a Playwright config needs no `json` reporter; the client no longer points one.
+- `DN-crucible-live-test-progress.md` and `PRD-crucible-v2.md` §4.4 state the codec retired and the readings keyed
+  by framework; PRD §4.12 and §8 stop naming the codec.
 
 ## Acceptance criteria
 
-Made exact at the gap analysis. At least:
-
-- [ ] No `playwright` codec is registered or listed in health, and a post naming it is refused.
-- [ ] No config or client writes Playwright's JSON report.
-- [ ] Every stored run filed through the codec reads as framework `playwright-bdd` in the scenario shape, and the UI
-      decides the specification view by framework alone.
-- [ ] No test posts Playwright JSON.
-- [ ] Neither `junit` reading switches on `stack`; each applies to a run whose framework is `pytest` or `bun-test`,
-      whatever its stack, and the python client files its runner as its framework.
+- [ ] **AC1 — the codec is gone.** `codecs` holds `crucible-events` and `junit` only, `src/codecs/playwright.ts` does
+      not exist, `GET /api/health` lists `codecs.test` as `["crucible-events", "junit"]`, and `POST /api/v2/runs` with
+      `codec: "playwright"` answers 400 `unknown codec: playwright` with nothing stored. (§S1)
+- [ ] **AC2 — no Playwright JSON report is written.** `STREAM_KEPT_REPORTS` names only `PLAYWRIGHT_JUNIT_OUTPUT_NAME`;
+      neither `playwright.config.ts` nor the fixture project's config configures a `json` reporter; a stream-target run
+      of the fixture through the bun client leaves no `playwright-report.json` in its reports dir and still writes its
+      `junit` report there. (§S2)
+- [ ] **AC3 — the stored runs migrate.** On a v24 store holding a codec run of two scenarios of one feature in one
+      browser (one passing with two steps; one failing at its second of three steps), plus a codec run with no
+      suite, a junit run and a `crucible-events` run, opening it at v25 leaves:
+      - both codec runs, and the first one's `runs` row, at framework `playwright-bdd` with codec `playwright`;
+      - the first run as one suite named by the feature (`feature` = that name, its browser kept), two cases with
+        the statuses, summed durations and first-failing-step failure of §S3, and their 2 and 3 steps in
+        `run_case_steps`, in order, none left as a case;
+      - its counts at total 2, passed 1, failed 1, pending 0, its `duration_ms` unchanged;
+      - the run with no suite otherwise unchanged, and the junit and `crucible-events` runs unchanged;
+      - `GET /api/v2/events/<id>` and the suite and case reads answering for the migrated run the shape they answer
+        for a `crucible-events` run of the same scenarios.
+      A v24 store with no codec run opens at v25 unchanged. (§S3)
+- [ ] **AC4 — the specification view reads the framework alone.** A migrated run opens in the specification view
+      (feature → scenario → step); a test run of codec `playwright` with no framework does not. `app.js` and
+      `app-logic.mjs` read no `codec` to decide it; `isScenarioShape`, `BDD_SEP`, `featureOf` and `FEATURE_SEPARATOR`
+      do not exist; a stored suite's `feature` is its name for a `playwright-bdd` run and NULL for any other, a junit
+      suite named `A › B` included. (§S4)
+- [ ] **AC5 — no test posts Playwright JSON.** `git grep -nE "codec: \"playwright\"|ingestPlaywright|parsePlaywright"
+      -- tests` finds nothing, `tests/playwright-codec.test.ts` does not exist, and the e2e scenarios that seeded a BDD
+      run through the codec seed it through the stream and pass in the e2e target. (§S7)
+- [ ] **AC6 — the readings follow the framework.** Through `POST /api/v2/runs`, codec `junit`:
+      - a report whose cases carry classnames is grouped by classname for framework `pytest` under stack `bun`, and
+        not for framework `unittest`, or none, under stack `python`;
+      - a failing case with no message takes bun's console message for framework `bun-test` under stack `python`,
+        and not for framework `vitest`, or none, under stack `bun`;
+      - a close stating no framework reads under the framework its run was started with;
+      - nothing under `src/codecs/` reads the run's stack for a test run. (§S5)
+- [ ] **AC7 — the python client states its runner.** Each run filed by `test` (under `unittest` and under `pytest`),
+      `regression`, every `pre-merge-gate` tier and the run each opens states framework = its runner; `auto-ingest`
+      states `pytest` when the project's `crucible.toml` declares `[python] runner = "pytest"`, `unittest` when it
+      declares nothing, and with `runner = "nose"` emits a refusal envelope and posts nothing. (§S6)
+- [ ] **AC8 — the record.** `CHANGELOG.md` `[Unreleased]` holds the §S8 entries; the DN and PRD §4.4 state the codec
+      retired and the readings keyed by framework; PRD §4.12 and §8 do not name the `playwright` codec. (§S8)
+- [ ] **AC9 — the gate.** `pre-merge-gate` runs every declared stack's suite through its own client, green; this
+      repo's `test:e2e` still files through the stream. (all)
 
 ## Non-goals
 
-- **The bun declaration's clean break and the gate** (CR-CRU-226).
+- **The bun declaration's clean break and the gate** (CR-CRU-226, merged).
 - **What `regression` runs** (CR-CRU-222).
+- **`run_suites.feature` has no reader** (gap analysis lead, Dimension 5). This CR keeps writing it as ingest does.
+- **The bun `auto-ingest` framework.** It sends no raw output, so no reading applies to its runs either way.
