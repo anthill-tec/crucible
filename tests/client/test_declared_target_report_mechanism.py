@@ -14,9 +14,12 @@ implements a decision rather than re-deriving one):
 
   * The report path reaches a declared target by the mechanism its DECLARATION
     names, and by nothing else. The declaration rides the manifest this stack
-    already declares its targets in — `package.json` — beside the script table:
+    already declares its targets in — `package.json` — beside the script table,
+    as the `junit` field of the script's `crucible.targets` entry:
 
-        "crucible": {"reportPath": {"test:e2e": "env:PLAYWRIGHT_JUNIT_OUTPUT_NAME"}}
+        "crucible": {"targets": {"test:e2e": {
+            "framework": "playwright",
+            "junit": "env:PLAYWRIGHT_JUNIT_OUTPUT_NAME"}}}
 
     `"env:<VAR>"` means the runner reads the path from `<VAR>`. `"flag"` — or
     NO entry at all — is the FLAG default: `bun test`'s own
@@ -142,6 +145,14 @@ E2E_TEST_COUNT = 46
 E2E_REPORT_VAR = "PLAYWRIGHT_JUNIT_OUTPUT_NAME"
 ENV_MECHANISM = f"env:{E2E_REPORT_VAR}"
 FLAG_MECHANISM = "flag"
+
+# The `crucible.targets` entry each mechanism is declared through: the env
+# mechanism on the fake playwright's framework, the flag mechanism on
+# `bun test`'s own.
+TARGET_ENTRY = {
+    ENV_MECHANISM: {"framework": "playwright", "junit": ENV_MECHANISM},
+    FLAG_MECHANISM: {"framework": "bun-test", "junit": FLAG_MECHANISM},
+}
 
 # Every flag in this set is `bun test`'s own. Appending one to a target whose
 # runner is not `bun test` is the defect CR-CRU-133 exists to remove, so the
@@ -353,14 +364,17 @@ class _DeclaredTargetCase(unittest.TestCase):
         path.chmod(0o755)
         return str(path)
 
-    def declare(self, scripts, report_path=None, project=None):
+    def declare(self, scripts, junit=None, project=None):
         """Write the manifest: the script table, and — only when the fixture
-        says so — the `crucible.reportPath` declaration beside it. A fixture
-        that declares NO mechanism is the AC4 case and must keep working."""
+        says so — a `crucible.targets` entry beside it for each script `junit`
+        maps to its mechanism (`TARGET_ENTRY`). A fixture that declares NO
+        mechanism is the AC4 case and must keep working."""
         root = Path(project or self.project)
         manifest = {"name": "cr133-fixture", "scripts": dict(scripts)}
-        if report_path:
-            manifest["crucible"] = {"reportPath": dict(report_path)}
+        if junit:
+            manifest["crucible"] = {"targets": {
+                script: dict(TARGET_ENTRY[mechanism])
+                for script, mechanism in junit.items()}}
         (root / "package.json").write_text(json.dumps(manifest, indent=2))
         return root
 
@@ -475,7 +489,7 @@ class DeclaredE2eTargetIngestsTest(_DeclaredTargetCase):
     def setUp(self):
         super().setUp()
         self.declare({"test:e2e": self.e2e_body()},
-                     report_path={"test:e2e": ENV_MECHANISM})
+                     junit={"test:e2e": ENV_MECHANISM})
         os.environ["FAKE_E2E_JUNIT_CONTENT"] = E2E_JUNIT_XML
 
     def test_the_declared_e2e_target_ingests_every_test_its_runner_ran(self):
@@ -614,7 +628,7 @@ class ReportMechanismFollowsTheDeclarationTest(_DeclaredTargetCase):
         """RED — the ENV half. The runner is told WHERE to write by the variable
         its declaration named, and by nothing else."""
         self.declare({"test:e2e": self.e2e_body()},
-                     report_path={"test:e2e": ENV_MECHANISM})
+                     junit={"test:e2e": ENV_MECHANISM})
         os.environ["FAKE_E2E_JUNIT_CONTENT"] = E2E_JUNIT_XML
 
         drive = self.drive("e2e")
@@ -637,7 +651,7 @@ class ReportMechanismFollowsTheDeclarationTest(_DeclaredTargetCase):
         one back in. A fix that only removed the reporter pair passes the test
         above and fails this one."""
         self.declare({"test:e2e": self.e2e_body()},
-                     report_path={"test:e2e": ENV_MECHANISM})
+                     junit={"test:e2e": ENV_MECHANISM})
         os.environ["FAKE_E2E_JUNIT_CONTENT"] = E2E_JUNIT_XML
 
         drive = self.drive("e2e", extra=["--coverage"])
@@ -658,7 +672,7 @@ class ReportMechanismFollowsTheDeclarationTest(_DeclaredTargetCase):
         EXPLICITLY must receive exactly what an undeclared one receives; this is
         the bound that stops §S1's fix from stripping the flags wholesale."""
         self.declare({"test:unit": self.bun_body()},
-                     report_path={"test:unit": FLAG_MECHANISM})
+                     junit={"test:unit": FLAG_MECHANISM})
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = UNIT_JUNIT_XML
 
         drive = self.drive("unit")
@@ -679,7 +693,7 @@ class ReportMechanismFollowsTheDeclarationTest(_DeclaredTargetCase):
         invocation path bolted on beside it would ingest and fail here."""
         self.declare({"test:unit": self.bun_body(),
                       "test:e2e": self.e2e_body()},
-                     report_path={"test:e2e": ENV_MECHANISM})
+                     junit={"test:e2e": ENV_MECHANISM})
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = UNIT_JUNIT_XML
         os.environ["FAKE_E2E_JUNIT_CONTENT"] = E2E_JUNIT_XML
 
@@ -757,15 +771,21 @@ class DeclaredBunTestTargetsKeepWorkingTest(_DeclaredTargetCase):
     def test_no_bun_test_target_this_project_declares_needs_a_declaration(self):
         """§S2's own promise, asserted against the real manifest: only a target
         whose runner is not `bun test` opts in, so GREEN may not pay for e2e by
-        editing every other entry."""
+        editing every other entry. The declarations live in the
+        `crucible.targets` table, so that is the table read; it must hold
+        `test:e2e`, or this bound reads an empty table and measures nothing."""
         declared = ((json.loads(MANIFEST_PATH.read_text()).get("crucible") or {})
-                    .get("reportPath") or {})
+                    .get("targets") or {})
+        self.assertIn(
+            "test:e2e", declared,
+            "AC4/§S2: this project's `crucible.targets` table no longer "
+            f"declares test:e2e, so this bound measures nothing: {declared!r}")
         needless = sorted(name for name in _declared_test_targets()
                           if name != "test:e2e" and name in declared)
         self.assertEqual(
             needless, [],
-            "AC4/§S2: a `bun test` target's declaration is unchanged by this "
-            f"CR — these grew a report-path entry they do not need: {needless}")
+            "AC4/§S2: a `bun test` target's declaration is unchanged — these "
+            f"grew a `crucible.targets` entry they do not need: {needless}")
 
     def test_a_declared_target_another_stack_owns_is_still_that_stacks_to_run(self):
         """AC4's other half: `test:client` is a python suite living in bun's
@@ -802,7 +822,7 @@ class NoReportNamesTheTargetTest(_DeclaredTargetCase):
         super().setUp()
         # Declared, runs cleanly, writes nothing — the starvation case.
         self.declare({"test:e2e": self.e2e_body()},
-                     report_path={"test:e2e": ENV_MECHANISM})
+                     junit={"test:e2e": ENV_MECHANISM})
         os.environ.pop("FAKE_E2E_JUNIT_CONTENT", None)
 
     def test_a_declared_target_that_produced_no_report_names_script_command_path(self):
@@ -864,9 +884,9 @@ class InvocationIsClassifiedOnlyByItsDeclarationTest(_DeclaredTargetCase):
         for project in (env_project, flag_project):
             (project / ".env").write_text(f"CRUCIBLE_PROJECT_KEY={PROJECT_KEY}\n")
         body = self.e2e_body()
-        self.declare({"test:e2e": body}, report_path={"test:e2e": ENV_MECHANISM},
+        self.declare({"test:e2e": body}, junit={"test:e2e": ENV_MECHANISM},
                      project=env_project)
-        self.declare({"test:e2e": body}, report_path={"test:e2e": FLAG_MECHANISM},
+        self.declare({"test:e2e": body}, junit={"test:e2e": FLAG_MECHANISM},
                      project=flag_project)
         os.environ["FAKE_E2E_JUNIT_CONTENT"] = E2E_JUNIT_XML
 
@@ -907,10 +927,10 @@ class InvocationIsClassifiedOnlyByItsDeclarationTest(_DeclaredTargetCase):
         for project in (playwright_project, buntest_project):
             (project / ".env").write_text(f"CRUCIBLE_PROJECT_KEY={PROJECT_KEY}\n")
         declaration = {"test:e2e": ENV_MECHANISM}
-        self.declare({"test:e2e": self.e2e_body()}, report_path=declaration,
+        self.declare({"test:e2e": self.e2e_body()}, junit=declaration,
                      project=playwright_project)
         self.declare({"test:e2e": self.bun_body("tests/e2e")},
-                     report_path=declaration, project=buntest_project)
+                     junit=declaration, project=buntest_project)
         os.environ["FAKE_E2E_JUNIT_CONTENT"] = E2E_JUNIT_XML
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = E2E_JUNIT_XML
 

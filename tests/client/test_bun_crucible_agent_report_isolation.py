@@ -3,9 +3,8 @@ spec's own language: a run made with `--agent <id>` and no `--reports` writes,
 reads and ingests its results under `test-reports/<id>/` in the package; only
 that directory is ever cleared before the run; the directory survives the
 run; a run without `--agent` keeps today's shared location; an explicit
-`--reports <dir>` is honoured verbatim; coverage (`--coverage-dir`) and a
-declared target's raw report (e.g. `playwright.json`) follow the run into the
-same directory; and the `--reports` help text states the per-agent default.
+`--reports <dir>` is honoured verbatim; coverage (`--coverage-dir`) follows
+the run into the same directory; and the `--reports` help text states the per-agent default.
 
 RED PHASE: `_reports_dir` (`clients/bun-crucible.py`) ignores the agent id
 entirely today -- `rd = arg_value or DEFAULT_REPORTS` -- so every agent's run
@@ -57,7 +56,6 @@ _ENV_KEYS = (
     "WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID", "WORKFLOW_CYCLE",
     "BUN_CRUCIBLE_PACKAGE_DIR", "BUN_CRUCIBLE_BUN",
     "FAKE_BUN_JUNIT_CONTENT", "FAKE_BUN_EXIT_CODE", "FAKE_BUN_LCOV_CONTENT",
-    "FAKE_E2E_RAW_CONTENT", "FAKE_E2E_EXIT_CODE", "PLAYWRIGHT_JSON_OUTPUT_NAME",
 )
 
 PASSING_JUNIT_XML = (
@@ -130,26 +128,6 @@ if argv[:1] == ["test"]:
 
 sys.exit(1)
 """
-
-# A fake e2e runner (stands in for playwright): ignores every CLI flag it does
-# not need (a declared target under the flag-default mechanism still gets
-# `bun test`'s own `--reporter=junit --reporter-outfile=...` appended) and
-# writes its RAW report to the path named by the declared env var.
-_FAKE_E2E_TEMPLATE = """#!{python}
-import os
-import sys
-
-outfile = os.environ.get("PLAYWRIGHT_JSON_OUTPUT_NAME")
-content = os.environ.get("FAKE_E2E_RAW_CONTENT", "")
-if outfile and content:
-    directory = os.path.dirname(outfile)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    with open(outfile, "w") as handle:
-        handle.write(content)
-sys.exit(int(os.environ.get("FAKE_E2E_EXIT_CODE", "0")))
-"""
-
 
 def _load_bun_crucible_module():
     spec = importlib.util.spec_from_file_location(
@@ -235,10 +213,6 @@ class _BaseIsolationTest(unittest.TestCase):
         with open(self.fake_bun, "w") as f:
             f.write(_FAKE_BUN_TEMPLATE.format(python=sys.executable))
         os.chmod(self.fake_bun, 0o700)
-        self.fake_e2e = os.path.join(self.tmpdir, "fake_playwright.py")
-        with open(self.fake_e2e, "w") as f:
-            f.write(_FAKE_E2E_TEMPLATE.format(python=sys.executable))
-        os.chmod(self.fake_e2e, 0o700)
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASSING_JUNIT_XML
         os.environ["FAKE_BUN_EXIT_CODE"] = "0"
 
@@ -499,60 +473,6 @@ class RegressionCoverageFollowsTheAgentTest(_BaseIsolationTest):
                 f.read(), self.DECOY_LCOV,
                 "the decoy at the old fixed location must be left untouched",
             )
-
-
-class DeclaredRawReportFollowsTheAgentTest(_BaseIsolationTest):
-    """AC6 -- a declared target's raw report (e.g. `playwright.json`) is
-    written to, sent from, and survives in the agent's own directory."""
-
-    RAW_MARKER = "FAKE_E2E_RAW_REPORT_MARKER_9137"
-
-    def test_declared_e2e_raw_report_is_written_to_and_sent_from_the_agents_directory(self):
-        self._write_package_json(
-            scripts={"test:e2e": self.fake_e2e},
-            crucible={"rawReport": {"test:e2e": {
-                "codec": "playwright", "file": "playwright.json",
-                "path": "env:PLAYWRIGHT_JSON_OUTPUT_NAME",
-            }}},
-        )
-        os.environ["FAKE_E2E_RAW_CONTENT"] = json.dumps({"marker": self.RAW_MARKER})
-        os.environ["FAKE_E2E_EXIT_CODE"] = "0"
-
-        with mock.patch.object(self.module, "_post", return_value=BOARD_RUN_ANSWER,
-                                create=True) as post_mock, \
-             mock.patch.object(self.module, "_get",
-                                side_effect=get_answering_health(), create=True):
-            code, _out, err = _run_main(self.module, [
-                "e2e", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
-                "--package-dir", self.tmpdir, "--agent", "agent-alpha",
-            ])
-        self.assertEqual(code, 0, f"stderr={err!r}")
-
-        expected_path = os.path.join(
-            self.tmpdir, "test-reports", "agent-alpha", "playwright.json")
-        self.assertTrue(
-            os.path.exists(expected_path),
-            f"the declared raw report must be written under the agent's own "
-            f"directory at {expected_path}",
-        )
-        with open(expected_path) as f:
-            written = json.load(f)
-        self.assertEqual(written.get("marker"), self.RAW_MARKER)
-
-        with open(expected_path) as f:
-            raw_text = f.read()
-        payload = _runs_ingest_body(self, post_mock)
-        self.assertEqual(payload.get("codec"), "playwright", f"body={payload!r}")
-        self.assertEqual(
-            payload.get("data"), [raw_text],
-            f"the client must send the raw report it read from the agent's own "
-            f"directory inline as `data`; body={payload!r}",
-        )
-        self.assertNotIn("dataPath", payload,
-                         f"the raw report travels inline, never as a path; "
-                         f"body={payload!r}")
-        # AC3 -- still there after the run.
-        self.assertTrue(os.path.exists(expected_path))
 
 
 class ReportsHelpTextTest(_BaseIsolationTest):

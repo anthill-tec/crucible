@@ -16,8 +16,6 @@ What is pinned:
   that is neither `flag` nor `env:<VAR>`; a `console` on a `stream` entry; a
   `console: bun-console` on a framework other than `bun-test`; a `coverage` the
   target cannot produce (only `lcov`, on a `junit: flag` `bun-test` target);
-  a script in the table and in `crucible.reportPath` or `crucible.rawReport`
-  (that refusal names both);
 - a script with no table entry runs as today, now stamped framework
   `bun-test` on its start and its close (the compile close and the
   `--no-lifecycle` single-shot ingest included), against a health with no
@@ -155,15 +153,6 @@ class EveryTableRefusalComesBeforeAnythingIsPostedTest(TargetsCase):
     def test_a_coverage_codec_other_than_lcov_is_refused(self):
         self.refuse({"framework": "bun-test", "junit": "flag", "coverage": "jacoco"},
                     "coverage")
-
-    def test_a_script_in_the_table_and_in_report_path_is_refused_naming_both(self):
-        self.refuse({"framework": "bun-test", "junit": "flag"}, "crucible.reportPath",
-                    reportPath={UNIT: "flag"})
-
-    def test_a_script_in_the_table_and_in_raw_report_is_refused_naming_both(self):
-        self.refuse({"framework": "bun-test", "junit": "flag"}, "crucible.rawReport",
-                    rawReport={UNIT: {"codec": "playwright", "file": "results.json",
-                                      "path": "env:FIXTURE_RAW_PATH"}})
 
     def test_a_test_run_through_a_test_script_with_a_refused_entry_is_refused(self):
         self.declare({VITEST: "vitest run"},
