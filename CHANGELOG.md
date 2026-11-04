@@ -21,8 +21,9 @@ Releases before 0.3.0 are described only on GitHub Releases.
   entry names a framework other than `bun-test` (Vitest, Playwright) as a suite of its own, filed under
   the tier its name names, with its own row, counts and outcome, and its counts in the gate's totals.
   Before this, such a target was reported as covered by `bun test` without running.
-  - When every declared suite is non-`bun-test`, the whole `bun test` run is skipped, and the
-    envelope's `wholeSuite` field says so.
+  - The whole `bun test` run is skipped only when the package declares at least one bun suite and
+    every bun suite, excluded ones included, runs under another framework. The envelope's
+    `wholeSuite` field then says so.
   - `--suites <target>` on a non-`bun-test` target runs only that target.
   - These suites measure no coverage, and the gate warns of none.
   - The other stacks' gates are unchanged.
@@ -56,8 +57,8 @@ For the bun stack (`package.json`'s `crucible` block):
     `playwright-bdd`.
 - **The gate.**
   - `pre-merge-gate` runs each non-`bun-test` target as its own suite.
-  - It refuses a non-`bun-test` entry whose key is not a `test:` script, because it could not
-    otherwise run it.
+  - It refuses a non-`bun-test` entry whose key is not a `test:` script, or is a `test:` key with
+    no script of that name in `scripts`, because it could not otherwise run it.
 - **Model B surfaces to reword.** The `block-direct-bun-test` hook and the bun agent templates name
   `crucible.testScript` and `crucible.reportPath`. They should name the `crucible.targets` entry's
   `"test": true` marker and its `junit` instead.

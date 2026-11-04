@@ -16,9 +16,9 @@ A run's live progress is a count, not data.
   agent's card. The board learns no test name, status or failure until the final report arrives.
 - Any runner the pattern does not know narrates nothing: a Vitest run through a declared script
   (measured), and almost certainly Playwright (unmeasured).
-- `crucible.rawReport` names the runner's full report that the board decodes (Playwright's JSON,
-  which keeps every Gherkin step JUnit drops). "Raw" misnames it: it is the most decoded report the
-  run has.
+- Before the clean break (CR-CRU-226), `crucible.rawReport` named the runner's full report that the
+  board decoded (Playwright's JSON, which keeps every Gherkin step JUnit drops). "Raw" misnamed it: it
+  was the most decoded report the run had. It is now refused, and an entry's `stream` replaces it.
 
 ## What each runner can stream
 
@@ -38,7 +38,7 @@ A run's live progress is a count, not data.
 Three layers, the same for every stack.
 
 1. **Source.** While the runner works, an event stream is written to a file the client names through
-   an environment variable (the `env:<VAR>` mechanism `reportPath` already uses), so it never mixes
+   an environment variable (the mechanism a `crucible.targets` entry's `junit: env:<VAR>` uses), so it never mixes
    with console output. Where the runner has no structured stream, the source is its console: the
    client relays the whole console as written, and the board reads the result lines from it
    (CR-CRU-201's `bun-console` view codec for `bun test`).
@@ -148,8 +148,9 @@ A bun project declares, per `package.json` script, one table:
     and records the `bun-test` targets it covered.
   - A non-`bun-test` suite's run measures no coverage and adds no `coverage-not-measured` warning: the gate's
     coverage is the `bun-test` code's, as before.
-  - A non-`bun-test` entry whose key is not a `test:` script is refused by the gate before anything runs, naming it,
-    since the gate could not otherwise see it. The `e2e` tier stays outside the gate, whatever its framework.
+  - A non-`bun-test` entry whose key is not a `test:` script, or is a `test:` key with no script of that name in
+    `scripts`, is refused by the gate before anything runs, naming it, since the gate could not otherwise see it. The
+    `e2e` tier stays outside the gate, whatever its framework.
   - The other stacks' gates are unchanged: their suites name no framework.
 - The other stacks declare the same three facts in their own place (`crucible.toml` for cargo,
   python, maven, arduino, go); the vocabulary is the same.
