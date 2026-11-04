@@ -84,7 +84,9 @@ builder for the bun client itself, so the target would be reported undispatchabl
 - The DN's §Declaration and §Where it lands, and PRD §4.4, record the break, the `test` marker, the gate rule and the
   split with CR-CRU-229.
 - Model B's surfaces that name the refused keys (the bun hook `block-direct-bun-test`, and the bun agent templates)
-  are reworded by Model B; this CR sends the CReq.
+  are reworded by Model B from the 0.4.0 release notes. Model B learns a CR's features from a release, not from a
+  CReq (user ruling 2026-11-04), so this CR writes its entry in `CHANGELOG.md`'s `[Unreleased]` section. The entry
+  includes a "Stack declaration changes" part that names the break, the `test` marker and those Model B surfaces.
 
 ## Steps
 
@@ -93,7 +95,8 @@ builder for the bun client itself, so the target would be reported undispatchabl
 - **§S2 — the `test` marker.** The marker's reading and refusals, the framework's filter flag, the no-files case.
 - **§S3 — the gate.** `GateSuite.framework`, the in-process rule in `gate_regression`, the whole-suite skip, scoping,
   coverage, the totals.
-- **§S4 — the record.** The DN, PRD §4.4, and the CReq to Model B.
+- **§S4 — the record.** The DN, PRD §4.4, and the CR's entry in `CHANGELOG.md`'s `[Unreleased]` section (the 0.4.0
+  release notes, sent to Model B at the release).
 
 ## Acceptance criteria
 
@@ -124,4 +127,4 @@ builder for the bun client itself, so the target would be reported undispatchabl
 - **The playwright codec, its JSON report (`STREAM_KEPT_REPORTS`), the stored runs' migration and the `junit` readings
   keyed by framework** (CR-CRU-229).
 - **What `regression` runs** (CR-CRU-222).
-- **Model B's hook and template wording**, reworded on their side from this CR's CReq.
+- **Model B's hook and template wording**, reworded on their side from the 0.4.0 release notes.
