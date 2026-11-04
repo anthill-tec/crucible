@@ -87,8 +87,8 @@ One transacted step in the migration chain. For each `events` row of codec `play
 - a run with no suites gets the framework and nothing else.
 The same step sets `feature` to NULL on every suite of a run whose framework is not `playwright-bdd` (no route reads
 it). Nothing else of any other run changes. The `rollups` (`foldIntoRollup`) are left as they were folded: their
-source rows are gone, so a day folded from codec runs keeps its step counts. A store with no codec run rewrites
-nothing.
+source rows are gone, so a day folded from codec runs keeps its step counts. A store with no codec run reshapes
+no run; the `feature` NULLing above still runs on it (user ruling 2026-11-04).
 
 ### §S4 — the specification view by framework alone
 - `isSpecRun` (`public/app.js`) is a test run of framework `playwright-bdd`; the BDD index filter
@@ -171,7 +171,7 @@ nothing.
       - the `rollups` rows unchanged;
       - `GET /api/v2/events/<id>` and the suite and case reads answering for the migrated run the shape they answer
         for a `crucible-events` run of the same scenarios.
-      A v24 store with no codec run opens at v25 unchanged. (§S3)
+      A v24 store with no codec run opens at v25 with no run reshaped. (§S3)
 - [ ] **AC4 — the specification view reads the framework alone.** A migrated run opens in the specification view
       (feature → scenario → step); a test run of codec `playwright` with no framework does not. `app.js` and
       `app-logic.mjs` read no `codec` to decide it; `isScenarioShape`, `BDD_SEP`, `featureOf` and `FEATURE_SEPARATOR`
