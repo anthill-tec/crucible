@@ -1442,7 +1442,7 @@ const RUN_DETAIL_TABLES = [
  *   empty tree reads back as `[]` and an absent one stays absent) or raw
  *   runner output (`raw`, plain text, never inside `events.payload`).
  * - `run_suites`: a `SuiteNode` per row, at its `position` in the tree, with
- *   its leaf counts and, for a BDD scenario, the `feature` its name opens with.
+ *   its leaf counts and, for a `playwright-bdd` run, its whole name as its `feature`.
  * - `run_cases`: a `TestLeaf` per row, at its `position` within the suite at
  *   `suite_position`; a failure's message, type and trace are each optional.
  * - `run_case_steps`: a `TestStep` per row, at its `position` within the case
@@ -1536,17 +1536,8 @@ function createRunDetailTables(db: Database): void {
   `);
 }
 
-/** The separator the playwright codec joins a BDD scenario's name with. */
-const FEATURE_SEPARATOR = " › ";
-
-/** The framework whose suites are features, each stored under its own whole name. */
+/** The framework whose suites are features, each stored under its own whole name; any other run's suites have none. */
 const FEATURE_SUITE_FRAMEWORK = "playwright-bdd";
-
-/** A BDD scenario's feature: its name up to the first separator; null otherwise. */
-function featureOf(suiteName: string): string | null {
-  const at = suiteName.indexOf(FEATURE_SEPARATOR);
-  return at >= 0 ? suiteName.slice(0, at) : null;
-}
 
 const TEST_STATUSES: ReadonlySet<string> = new Set(["pass", "fail", "pending"]);
 
@@ -1691,8 +1682,8 @@ interface RunDetailSource {
 
 /**
  * Write a run's detail as native rows: its tree as suites and cases in
- * decoded order (each suite's counts from its own leaves, a BDD scenario's
- * feature split from its name), its raw output as plain text, and a compile
+ * decoded order (each suite's counts from its own leaves, its feature its
+ * whole name for a `playwright-bdd` run), its raw output as plain text, and a compile
  * report as its header and diagnostics. The ONE mapping, used by ingest and by
  * the migration that moves a legacy row, so the two store a run identically.
  * Its callers have already refused a tree or report that does not fit the
@@ -1736,7 +1727,7 @@ function writeRunDetailRows(db: Database, run: RunDetailSource): void {
 /**
  * A run's tree as its suites, cases and steps, in decoded order: each suite's
  * counts from its own leaves, its `feature` its whole name for a
- * `playwright-bdd` run, else a BDD scenario's feature split from its name.
+ * `playwright-bdd` run and NULL for any other.
  * Shared by `writeRunDetailRows` and the v25 reshape of a codec run.
  */
 function writeRunTreeRows(db: Database, id: string, tree: readonly SuiteNode[], framework?: string): void {
@@ -1765,7 +1756,7 @@ function writeRunTreeRows(db: Database, id: string, tree: readonly SuiteNode[], 
       suite.name,
       suite.status,
       suite.browser ?? null,
-      ownFeature ? suite.name : featureOf(suite.name),
+      ownFeature ? suite.name : null,
       suite.children.length,
       count("pass"),
       count("fail"),
