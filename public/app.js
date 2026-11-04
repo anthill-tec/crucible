@@ -3564,11 +3564,6 @@
     const CompilePanel = () =>
       div({ class: greyed("app-center") }, CompileFeed());
 
-    // The codec (src/codecs/playwright.ts) emits one suite node PER SCENARIO
-    // named "<Feature title> › <Scenario title>"; the run detail's spec view
-    // (specFeaturesOf) splits the feature half off at this separator.
-    const BDD_SEP = " › ";
-
     // CR-CRU-097 §S1/§S4 — the empty state states the CAPABILITY, not the
     // plan: it names no CR and no release version, because a backlog is the
     // builder's and a shipped string does not move when the plan does.
@@ -7693,15 +7688,11 @@
         ? `${suite.name} [${suite.browser}]`
         : suite.name;
 
-    // A playwright run's detail opens as a SPECIFICATION (feature →
-    // scenario → step). Every other codec keeps the plain test tree.
-    const isSpecRun = (d) =>
-      d?.kind === "test" && (d?.codec === "playwright" || d?.framework === "playwright-bdd");
-
-    // A spec run in the scenario shape: one suite per feature and browser, a
-    // test per scenario, its Gherkin steps under it. A run the playwright
-    // codec stored keeps a suite per scenario, its steps as leaves.
-    const isScenarioShape = (d) => isSpecRun(d) && d?.codec !== "playwright";
+    // A test run of framework playwright-bdd opens as a SPECIFICATION
+    // (feature → scenario → step): one suite per feature and browser, a
+    // test per scenario, its Gherkin steps under it. Every other run keeps
+    // the plain test tree.
+    const isSpecRun = (d) => d?.kind === "test" && d?.framework === "playwright-bdd";
 
     // On open, the first feature (failures-first order) shows its failing
     // scenarios plus its first SPEC_FIRST_OPEN scenarios; the rest of its
@@ -7843,16 +7834,13 @@
       function specFeaturesOf(d) {
         if (specCache !== null && specCache.d === d) return specCache.features;
         const tree = d.tree ?? [];
-        const scenarioShape = isScenarioShape(d);
         const failing = new Set(
           L.foldSuites(tree.map((s) => ({ name: suiteKeyOf(s), status: s.status }))),
         );
         const byTitle = new Map();
         for (const node of tree) {
-          const name = typeof node.name === "string" ? node.name : "";
-          const cut = name.indexOf(BDD_SEP);
-          // The scenario shape's suite IS its feature, whole, never split.
-          const title = scenarioShape ? name : cut < 0 ? "" : name.slice(0, cut);
+          // A suite IS its feature, whole, never split.
+          const title = typeof node.name === "string" ? node.name : "";
           if (!byTitle.has(title)) byTitle.set(title, []);
           byTitle.get(title).push({ node, failing: failing.has(suiteKeyOf(node)) });
         }
@@ -7861,13 +7849,13 @@
             ...entries.filter((e) => e.failing),
             ...entries.filter((e) => !e.failing),
           ];
-          // The scenario shape counts its scenarios over every browser's suite.
+          // A feature counts its scenarios over every browser's suite.
           const sum = (k) => scenarios.reduce((n, e) => n + (e.node.counts?.[k] ?? 0), 0);
           return {
             title,
             scenarios,
-            failed: scenarioShape ? sum("failed") : scenarios.filter((e) => e.failing).length,
-            passed: scenarioShape ? sum("passed") : scenarios.filter((e) => e.node.status === "pass").length,
+            failed: sum("failed"),
+            passed: sum("passed"),
             browsers: new Set(scenarios.map((e) => e.node.browser)).size,
           };
         });
@@ -7879,37 +7867,20 @@
         return ordered;
       }
 
-      // Progressive expansion: the first feature (failures-first) unfolds and
-      // reads its failing scenarios plus its first SPEC_FIRST_OPEN; every
-      // other failing feature unfolds and reads its failing scenarios; every
-      // other all-green feature stays folded. Nothing else is read until it
-      // scrolls into view (loadScrolledScenarios) or is clicked.
+      // Progressive expansion: every failing feature opens, then the first
+      // SPEC_FIRST_OPEN features (failures-first); an open feature reads each
+      // of its browsers' suites, which answer its scenarios and steps. Every
+      // other feature stays folded and unread until it is clicked.
       function openProgressively(d) {
-        // The scenario shape: every failing feature opens, then the first
-        // SPEC_FIRST_OPEN features (failures-first); an open feature reads
-        // each of its browsers' suites, which answer its scenarios and steps.
-        if (isScenarioShape(d)) {
-          specFeaturesOf(d).forEach((feature, i) => {
-            if (feature.failed > 0 || i < SPEC_FIRST_OPEN) openFeature(feature);
-          });
-          return;
-        }
-        const initial = [];
         specFeaturesOf(d).forEach((feature, i) => {
-          featureOpenState(feature.title).val = i === 0 || feature.failed > 0;
-          feature.scenarios.forEach((entry, j) => {
-            if (entry.failing || (i === 0 && j < SPEC_FIRST_OPEN)) initial.push(entry.node);
-          });
+          if (feature.failed > 0 || i < SPEC_FIRST_OPEN) openFeature(feature);
         });
-        for (const node of initial) void loadSuite(node);
       }
 
-      // Unfold a feature; in the scenario shape, read its suites as it opens.
+      // Unfold a feature, reading its suites as it opens.
       function openFeature(feature) {
         featureOpenState(feature.title).val = true;
-        if (isScenarioShape(detail.val)) {
-          for (const entry of feature.scenarios) void loadSuite(entry.node);
-        }
+        for (const entry of feature.scenarios) void loadSuite(entry.node);
       }
 
       function toggleFeature(feature) {
@@ -8261,12 +8232,15 @@
             // CR-016 one-box focus model), so the click takes the user
             // straight to that failure instead of just unfolding the tree.
             // A green or pending cell reveals the suite's own (now expanded)
-            // row; a red one reveals that failing leaf.
+            // row; a red one reveals that failing leaf. A spec run draws no
+            // suite row: its green or pending cell reveals the suite's first
+            // scenario's row.
             const pane = paneOf(e);
             unfoldFeatureOf(suiteName);
             await loadSuite(suite);
             const leaves = leavesOf(suiteName) ?? [];
-            const failIdx = status === "fail" ? leaves.findIndex((l) => l.status === "fail") : -1;
+            const failAt = status === "fail" ? leaves.findIndex((l) => l.status === "fail") : -1;
+            const failIdx = failAt < 0 && isSpecRun(detail.val) && leaves.length > 0 ? 0 : failAt;
             if (failIdx < 0) {
               reveal(`suite:${suiteName}`, pane);
               return;
@@ -8611,10 +8585,10 @@
       // ▾/▸), failures first; a folded feature mounts none of its scenarios.
       // Each feature is its own binding on its own open state, so a fold
       // replaces that feature's nodes alone.
-      const SpecFeatures = (d, presentation, density) =>
-        specFeaturesOf(d).map((feature) => () => FeatureGroup(feature, presentation, density));
+      const SpecFeatures = (d, presentation) =>
+        specFeaturesOf(d).map((feature) => () => FeatureGroup(feature, presentation));
 
-      const FeatureGroup = (feature, presentation, density) => {
+      const FeatureGroup = (feature, presentation) => {
         const open = featureOpenState(feature.title).val;
         const status = feature.failed > 0 ? "fail" : "pass";
         return div(
@@ -8646,10 +8620,8 @@
           open
             ? div(
                 { class: "app-feature-scenarios" },
-                feature.scenarios.map((entry) =>
-                  isScenarioShape(detail.val)
-                    ? () => ScenarioRows(entry.node, feature.browsers > 1, presentation)
-                    : SuiteBinding(entry.node, presentation, density),
+                feature.scenarios.map((entry) => () =>
+                  ScenarioRows(entry.node, feature.browsers > 1, presentation),
                 ),
               )
             : null,
@@ -8721,7 +8693,7 @@
           density ? StatusChips(d) : null,
           density ? HeatStrip(d) : null,
           spec
-            ? SpecFeatures(d, presentation, density)
+            ? SpecFeatures(d, presentation)
             : (d.tree ?? []).map((suite) => SuiteBinding(suite, presentation, density)),
           // CR-CRU-038 §S2/§S3 — the failure-jump + raw-toggle moved to the
           // header; only the raw <pre> OUTPUT stays in the body scroller,
