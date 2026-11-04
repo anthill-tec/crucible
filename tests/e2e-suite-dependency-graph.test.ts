@@ -22,11 +22,11 @@
 // depends on the body", derived from the real config object and the real
 // feature files, so adding a project or renaming one cannot false-fail this,
 // and only re-widening a dependency can.
-import { describe, test, expect } from "bun:test";
+import { afterAll, beforeAll, describe, test, expect } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import playwrightConfig from "../playwright.config.ts";
+import { snapshotProcessEnv } from "./helpers/process-env-snapshot.ts";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const FEATURES_DIR = path.join(REPO_ROOT, "tests/e2e/features");
@@ -60,7 +60,21 @@ interface ProjectLike {
   testIgnore?: unknown;
 }
 
-const projects = (playwrightConfig.projects ?? []) as ProjectLike[];
+// The config is loaded inside `beforeAll`, behind an environment snapshot,
+// because loading it writes PLAYWRIGHT_BDD_CONFIGS into `process.env` — see
+// tests/helpers/process-env-snapshot.ts.
+let projects: ProjectLike[] = [];
+let restoreProcessEnv: () => void = () => {};
+
+beforeAll(async () => {
+  restoreProcessEnv = snapshotProcessEnv();
+  const playwrightConfig = (await import("../playwright.config.ts")).default;
+  projects = (playwrightConfig.projects ?? []) as ProjectLike[];
+});
+
+afterAll(() => {
+  restoreProcessEnv();
+});
 
 const asRegExps = (value: RegExp | RegExp[] | undefined): RegExp[] =>
   value === undefined ? [] : Array.isArray(value) ? value : [value];

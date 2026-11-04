@@ -19,13 +19,13 @@
 // project existed — measured by removing the project and re-running this
 // file, per this cycle's own RED-quality checklist), which is what makes it a
 // real rail rather than a test that could never go red.
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { devices } from "@playwright/test";
-import playwrightConfig from "../playwright.config.ts";
+import { snapshotProcessEnv } from "./helpers/process-env-snapshot.ts";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -37,9 +37,24 @@ interface ProjectLike {
   dependencies?: string[];
 }
 
-const projects = (playwrightConfig.projects ?? []) as ProjectLike[];
-const webkitProject = projects.find((p) => p.name === "webkit-iphone");
-const chromiumMobileProject = projects.find((p) => p.name === "chromium-mobile");
+// The config is loaded inside `beforeAll`, behind an environment snapshot,
+// because loading it writes PLAYWRIGHT_BDD_CONFIGS into `process.env` — see
+// tests/helpers/process-env-snapshot.ts.
+let webkitProject: ProjectLike | undefined;
+let chromiumMobileProject: ProjectLike | undefined;
+let restoreProcessEnv: () => void = () => {};
+
+beforeAll(async () => {
+  restoreProcessEnv = snapshotProcessEnv();
+  const playwrightConfig = (await import("../playwright.config.ts")).default;
+  const projects = (playwrightConfig.projects ?? []) as ProjectLike[];
+  webkitProject = projects.find((p) => p.name === "webkit-iphone");
+  chromiumMobileProject = projects.find((p) => p.name === "chromium-mobile");
+});
+
+afterAll(() => {
+  restoreProcessEnv();
+});
 
 describe("CR-CRU-018 §S1 AC13 — the pinned iPhone 15 device profile is REAL webkit, not assumed", () => {
   test('devices["iPhone 15"] exists at this pinned Playwright version (^1.61.1) and declares defaultBrowserType "webkit" — the DN\'s own caution ("do not assume iPhone 15 exists") checked against the real installed descriptor, not memory', () => {

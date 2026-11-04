@@ -44,19 +44,38 @@
 // `[server]` table written beside the very database this test is about. So
 // `webServer.env` now carries `CRUCIBLE_DB` and nothing else — which is what
 // this test has always asserted, and it goes on asserting exactly that.
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveDbPath } from "../../../src/server.ts";
-// eslint-disable-next-line import/no-relative-parent-imports
-import playwrightConfig from "../../../playwright.config.ts";
+import { snapshotProcessEnv } from "../../helpers/process-env-snapshot.ts";
+
+/** The evaluated config module's default export — a type only, so naming it
+ *  loads nothing. */
+type PlaywrightConfig = (typeof import("../../../playwright.config.ts"))["default"];
+
+// The config is loaded inside `beforeAll`, behind an environment snapshot,
+// because loading it writes PLAYWRIGHT_BDD_CONFIGS into `process.env` — see
+// tests/helpers/process-env-snapshot.ts.
+let playwrightConfig: PlaywrightConfig;
+let restoreProcessEnv: () => void = () => {};
+
+beforeAll(async () => {
+  restoreProcessEnv = snapshotProcessEnv();
+  // eslint-disable-next-line import/no-relative-parent-imports
+  playwrightConfig = (await import("../../../playwright.config.ts")).default;
+});
+
+afterAll(() => {
+  restoreProcessEnv();
+});
 
 /** `webServer` is typed as a single entry OR an array of entries — this repo
  * only ever configures one, so unwrap defensively rather than assume the
  * shape. */
 function webServerEnvOf(
-  config: typeof playwrightConfig,
+  config: PlaywrightConfig,
 ): Record<string, string | undefined> | undefined {
   const ws = config.webServer;
   if (ws === undefined) return undefined;
