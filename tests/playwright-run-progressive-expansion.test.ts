@@ -1,5 +1,5 @@
 // CR-CRU-145 §S1 — ONE renderer: the run detail, opened as a specification
-// for BDD (`codec: "playwright"`) runs.
+// for BDD (framework `playwright-bdd`) runs.
 //
 // MEASURED ON THIS BRANCH (158ec48, before this CR's GREEN): `RunDetailBody`
 // (public/app.js) fetches `?depth=suites` and then auto-expands
@@ -475,8 +475,8 @@ describe("CR-CRU-145 §S1 — every OTHER codec's run detail is UNCHANGED", () =
     });
 
     // BOUND — even the FAILING junit suite stays collapsed on open: §S1's
-    // progressive-expansion default is scoped to `codec: "playwright"`
-    // alone, so a non-playwright run must show the SAME minimized default
+    // progressive-expansion default is scoped to framework `playwright-bdd`
+    // alone, so a non-playwright-bdd run must show the SAME minimized default
     // CR-CRU-038 shipped.
     expect(isExpanded(suiteRow("SomeSuite"))).toBe(false);
     expect(leafRowsOf("SomeSuite").length).toBe(0);

@@ -1,9 +1,8 @@
 // A run holding a VIEW stream (codec `bun-console`) is closed and aborted
 // exactly as a run that streamed nothing (CR-CRU-201 §S1, AC1; P4):
 //  - the closes: the JUnit close (`POST /api/v2/runs`, codec junit), the
-//    parsed close (`/runs/parsed`), the compile close (`/runs/compile`) and a
-//    raw-report close (`POST /api/v2/runs`, codec playwright, the raw JSON
-//    report as `data`) each store exactly what the same close stores for a
+//    parsed close (`/runs/parsed`) and the compile close (`/runs/compile`)
+//    each store exactly what the same close stores for a
 //    twin run that streamed nothing — the oracle is that twin, closed the same
 //    way in the same test — and the run's batches, live state and failures
 //    are deleted at settle;
@@ -188,70 +187,6 @@ const PARSED_RUN = {
 
 const TSC_ONE_ERROR = "src/a.ts(1,1): error TS2304: Cannot find name 'x'.";
 
-/** A raw Playwright JSON report: one file, one feature, one passing scenario of two steps. */
-const PLAYWRIGHT_REPORT = {
-  config: { version: "1.61.1" },
-  suites: [
-    {
-      title: "tests/e2e/features/view.feature.spec.js",
-      file: "tests/e2e/features/view.feature.spec.js",
-      column: 0,
-      line: 0,
-      specs: [],
-      suites: [
-        {
-          title: "View Feature",
-          file: "tests/e2e/features/view.feature.spec.js",
-          line: 3,
-          column: 6,
-          specs: [
-            {
-              title: "Scenario passes",
-              ok: true,
-              tags: [],
-              tests: [
-                {
-                  timeout: 30000,
-                  annotations: [],
-                  expectedStatus: "passed",
-                  projectId: "chromium",
-                  projectName: "chromium",
-                  results: [
-                    {
-                      workerIndex: 0,
-                      parallelIndex: 0,
-                      status: "passed",
-                      duration: 10,
-                      errors: [],
-                      stdout: [],
-                      stderr: [],
-                      retry: 0,
-                      steps: [
-                        { title: "Given a view stream", duration: 4 },
-                        { title: "Then the report closes it", duration: 6 },
-                      ],
-                      startTime: "2026-07-15T00:00:00.000Z",
-                      annotations: [],
-                      attachments: [],
-                    },
-                  ],
-                  status: "expected",
-                },
-              ],
-              id: "spec-view",
-              file: "tests/e2e/features/view.feature.spec.js",
-              line: 6,
-              column: 3,
-            },
-          ],
-        },
-      ],
-    },
-  ],
-  errors: [],
-  stats: { startTime: "2026-07-15T00:00:00.000Z", duration: 10, expected: 1, unexpected: 0, flaky: 0, skipped: 0 },
-};
-
 describe("a run holding a view stream closes through its report as a run with no stream does", () => {
   test("the JUnit close, with the console as raw: stored exactly as the twin's, the batches, live state and failures deleted", async () => {
     const event = await expectClosesAsTheTwin((b, runId) =>
@@ -286,20 +221,6 @@ describe("a run holding a view stream closes through its report as a run with no
         errors: TSC_ONE_ERROR,
       }),
     );
-  });
-
-  test("a raw-report close (codec playwright, the raw JSON report as data): stored exactly as the twin's, the held stream deleted", async () => {
-    const event = await expectClosesAsTheTwin((b, runId) =>
-      postJson(b.handle, "/api/v2/runs", {
-        projectKey: b.key,
-        agentId: b.agentId,
-        runId,
-        codec: "playwright",
-        data: JSON.stringify(PLAYWRIGHT_REPORT),
-      }),
-    );
-    expect(event.codec).toBe("playwright");
-    expect((event.summary as Record<string, unknown>).total).toBe(2);
   });
 
   test("beside a view-stream run that takes the JUnit close, a run holding a record stream is still refused it: a 400 naming crucible-events, the run left open", async () => {
