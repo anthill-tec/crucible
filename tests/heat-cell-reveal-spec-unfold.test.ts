@@ -1,41 +1,39 @@
-// CR-CRU-159 C2 — heat-strip reveal: the feature unfold (G5/AC3). Same
-// happy-dom harness pattern as tests/heat-cell-reveal.test.ts (C1): real
+// Heat-strip reveal in a specification run: the feature unfold. Same
+// happy-dom harness pattern as tests/heat-cell-reveal.test.ts: real
 // production public/app.js, real public/app-logic.mjs, real VanJS/VanX
 // vendor bundles; `fetch` is scripted.
 //
-// RED phase: expected to fail against the CURRENT `HeatCell`/`SynthHeatCell`
-// handlers (public/app.js), which call `reveal(...)` but never touch
-// `openFeatures`/`toggleFeature` — CR-CRU-159's own Gap analysis, G5: "a
-// folded feature mounts nothing... SynthHeatCell loads the suite but never
-// unfolds its feature." Every assertion below that checks the clicked
-// scenario's feature re-opens, or that its row/leaf then mounts and blinks,
-// fails against today's code for exactly that missing unfold, not a harness
-// defect.
+// The run is served as the board serves a streamed `playwright-bdd` run (its
+// served shape read off a real board once, then modelled here): the run
+// detail carries codec `crucible-events` and framework `playwright-bdd`; its
+// `?depth=suites` read lists one suite per feature and browser — `name`,
+// `status`, `counts` over its scenarios, `browser`; its
+// `?suite=<feature>&browser=<b>` read answers that one suite with its
+// scenarios as leaves, each carrying its Gherkin `steps`.
 //
-// Contract this file defines for GREEN (identifiers verbatim):
+// In that shape a heat cell is a SCENARIO: a loaded suite draws one cell per
+// scenario, titled `<feature> [<browser>] › <scenario>`; a suite not yet
+// loaded draws synthetic cells from its counts, titled
+// `<feature> [<browser>]`. The contract this file holds:
 //   - a heat cell (loaded `HeatCell` or synthetic `SynthHeatCell`) whose
-//     target scenario's FEATURE is currently folded (`openFeatures.val[...]
-//     !== true`) sets that feature open — so the target's `SuiteGroup` (and
-//     its `leaf-row`s) mounts — alongside its existing `reveal()`.
-//   - a feature that is ALREADY open is left open by a reveal inside it (no
-//     accidental re-fold of an unrelated already-open feature).
+//     scenario's FEATURE is currently folded opens that feature, so the
+//     scenario's row mounts, and reveals it — the row blinks;
+//   - a loaded scenario's cell reveals that scenario's own row;
+//   - a synthetic cell of a suite not yet loaded loads it and reveals its
+//     first failing scenario's row when red, else its first scenario's row;
+//   - a feature that is ALREADY open is left open by a reveal elsewhere.
 //
-// Two fixture techniques this file relies on (both already-established house
-// idioms elsewhere in this suite, tests/playwright-run-progressive-expansion.
-// test.ts and tests/heat-cell-reveal.test.ts respectively):
-//   - "loaded scenario, then manually refolded": a FAILING scenario
-//     auto-loads and its feature auto-opens on mount (CR-CRU-145's
-//     openProgressively); this file folds that feature by hand (clicking
-//     its `feature-heading`, exactly what the already-shipped
-//     `toggleFeature` supports) so an already-LOADED scenario sits inside a
-//     now-folded feature — the "a loaded scenario's cell" case the CR names.
+// Two fixture techniques this file relies on:
+//   - "loaded scenario, then manually refolded": a FAILING feature opens and
+//     loads on mount (`openProgressively`); this file folds it by hand
+//     (clicking its `feature-heading`, which `toggleFeature` supports) so an
+//     already-LOADED scenario sits inside a now-folded feature;
 //   - "not-yet-loaded, still loading": this file's own fetch mock can hold a
 //     NAMED suite's `?suite=` response pending (never resolving until the
-//     test calls `release(...)`) — the same "control the async, don't sleep
-//     for it" idiom tests/heat-cell-reveal.test.ts's `interceptBlinkTimer`
-//     already uses for the 10s blink cleanup. A scenario still mid-fetch
-//     when its feature is folded is a genuine, reachable production race
-//     (network latency), not a fabricated state.
+//     test calls `release(...)`) — the "control the async, don't sleep for
+//     it" idiom tests/heat-cell-reveal.test.ts's `interceptBlinkTimer` uses
+//     for the 10s blink cleanup. A suite still mid-fetch when its feature is
+//     folded is a genuine, reachable production race (network latency).
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -49,21 +47,27 @@ const VAN_X_SRC = readFileSync(path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.n
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
+const BROWSER = "chromium";
+
 interface FailureFixture {
   message: string;
 }
-interface LeafFixture {
+interface StepFixture {
   name: string;
   status: "pass" | "fail" | "pending";
   duration_ms: number;
   failure?: FailureFixture;
 }
+/** A scenario: a leaf of its feature's suite, its Gherkin steps under it. */
+interface ScenarioFixture extends StepFixture {
+  steps: StepFixture[];
+}
+/** A feature run under one browser: the suite the board stores for it. */
 interface SuiteFixture {
-  // "<Feature title> › <Scenario title>" — the codec's own naming
-  // (src/codecs/playwright.ts's `collectScenarios`).
   name: string;
   status: "pass" | "fail" | "pending";
-  children: LeafFixture[];
+  children: ScenarioFixture[];
+  browser: string;
 }
 interface EventDetailFixture {
   id: string;
@@ -71,8 +75,10 @@ interface EventDetailFixture {
   agentId: string;
   kind: "test";
   tier: string;
-  codec: string;
   timestamp: number;
+  stack: string;
+  framework: string;
+  codec: string;
   tree: SuiteFixture[];
 }
 interface EventBriefFixture {
@@ -81,19 +87,21 @@ interface EventBriefFixture {
   agentId: string;
   kind: "test";
   tier: string;
-  codec?: string;
+  codec: string;
   timestamp: number;
-  total?: number;
-  passed?: number;
-  failed?: number;
-  pending?: number;
-  duration_ms?: number;
-  hasCoverage?: boolean;
+  total: number;
+  passed: number;
+  failed: number;
+  pending: number;
+  duration_ms: number;
+  hasCoverage: boolean;
+  stack: string;
+  framework: string;
 }
 
-function suiteCounts(children: LeafFixture[]): { passed: number; failed: number; pending: number } {
+function countsOf(leaves: StepFixture[]): { passed: number; failed: number; pending: number } {
   const counts = { passed: 0, failed: 0, pending: 0 };
-  for (const leaf of children) {
+  for (const leaf of leaves) {
     if (leaf.status === "pass") counts.passed += 1;
     else if (leaf.status === "fail") counts.failed += 1;
     else counts.pending += 1;
@@ -101,8 +109,9 @@ function suiteCounts(children: LeafFixture[]): { passed: number; failed: number;
   return counts;
 }
 
+/** The run's counts are over its scenarios, as the board counts a playwright-bdd run. */
 function briefOf(detail: EventDetailFixture): EventBriefFixture {
-  const c = suiteCounts(detail.tree.flatMap((s) => s.children));
+  const c = countsOf(detail.tree.flatMap((s) => s.children));
   return {
     id: detail.id,
     projectKey: detail.projectKey,
@@ -117,12 +126,14 @@ function briefOf(detail: EventDetailFixture): EventBriefFixture {
     pending: c.pending,
     duration_ms: 500,
     hasCoverage: false,
+    stack: detail.stack,
+    framework: detail.framework,
   };
 }
 
 /** Holds a NAMED suite's `?suite=` fetch pending until `release(name)` is
- *  called — simulates a still-in-flight load (`suiteLoading` true,
- *  `suiteLeaves` still undefined), never a sleep. */
+ *  called — simulates a still-in-flight load (`suiteLoading` true, its
+ *  leaves still undefined), never a sleep. */
 class SuiteLock {
   private readonly locked: Set<string>;
   private readonly waiters = new Map<string, Array<() => void>>();
@@ -175,22 +186,28 @@ async function mountApp(opts: MountOpts): Promise<void> {
           `heat-cell-reveal-spec-unfold.test.ts mountApp: no eventDetails fixture for id ${id}`,
         );
       }
+      const summary = { ...countsOf(detail.tree.flatMap((s) => s.children)), duration_ms: 500 };
+      const served = { ...detail, summary: { total: summary.passed + summary.failed + summary.pending, ...summary } };
       const parsed = new URL(url, "http://localhost");
       const suiteParam = parsed.searchParams.get("suite");
+      const browserParam = parsed.searchParams.get("browser");
       const depthParam = parsed.searchParams.get("depth");
       if (suiteParam !== null) {
         if (opts.lock !== undefined) await opts.lock.waitIfLocked(suiteParam);
-        const match = detail.tree.find((n) => n.name === suiteParam);
-        body = { ok: true, event: { ...detail, tree: match !== undefined ? [match] : [] } };
+        const match = detail.tree.find(
+          (n) => n.name === suiteParam && (browserParam === null || n.browser === browserParam),
+        );
+        body = { ok: true, event: { ...served, tree: match !== undefined ? [match] : [] } };
       } else if (depthParam === "suites") {
         const tree = detail.tree.map((n) => ({
           name: n.name,
           status: n.status,
-          counts: suiteCounts(n.children),
+          counts: countsOf(n.children),
+          browser: n.browser,
         }));
-        body = { ok: true, event: { ...detail, tree } };
+        body = { ok: true, event: { ...served, tree } };
       } else {
-        body = { ok: true, event: detail };
+        body = { ok: true, event: served };
       }
     } else if (url.includes("/api/v2/projects")) {
       body = { ok: true, projects: [] };
@@ -262,120 +279,154 @@ function clickFeatureHeading(title: string): void {
   featureGroup(title).querySelector<HTMLElement>('[data-testid="feature-heading"]')!.click();
 }
 
-function scenario(
-  featureTitle: string,
-  scenarioTitle: string,
-  status: "pass" | "fail",
-  children: LeafFixture[],
-): SuiteFixture {
-  return { name: `${featureTitle} › ${scenarioTitle}`, status, children };
+/** The key the view gives a feature's suite under its browser. */
+const suiteKey = (featureTitle: string): string => `${featureTitle} [${BROWSER}]`;
+
+/** The scenario row of `scenarioTitle` in `featureTitle`, or null when it is not mounted. */
+function scenarioRowOrNull(featureTitle: string, scenarioTitle: string): HTMLElement | null {
+  return overlay().querySelector<HTMLElement>(
+    `[data-testid="suite-row"][data-leaf-key="${suiteKey(featureTitle)}::${scenarioTitle}"]`,
+  );
 }
 
-function playwrightEvent(
-  id: string,
-  tree: SuiteFixture[],
-  opts: Partial<EventDetailFixture> = {},
-): EventDetailFixture {
+/** Every row of the overlay that carries the locate blink. */
+function blinkingRows(): HTMLElement[] {
+  return Array.from(overlay().querySelectorAll<HTMLElement>(".app-locate-blink"));
+}
+
+/** The step rows drawn under a scenario row (its group). */
+function stepRowsOf(row: HTMLElement): HTMLElement[] {
+  return Array.from(row.parentElement?.querySelectorAll<HTMLElement>('[data-testid="leaf-row"]') ?? []);
+}
+
+function scenario(name: string, steps: StepFixture[]): ScenarioFixture {
+  const failed = steps.find((s) => s.status === "fail");
+  return {
+    name,
+    status: failed !== undefined ? "fail" : "pass",
+    duration_ms: steps.reduce((sum, s) => sum + s.duration_ms, 0),
+    ...(failed?.failure !== undefined ? { failure: failed.failure } : {}),
+    steps,
+  };
+}
+
+function feature(name: string, scenarios: ScenarioFixture[]): SuiteFixture {
+  return {
+    name,
+    status: scenarios.some((s) => s.status === "fail") ? "fail" : "pass",
+    children: scenarios,
+    browser: BROWSER,
+  };
+}
+
+const passStep = (name: string): StepFixture => ({ name, status: "pass", duration_ms: 2 });
+const failStep = (name: string, message: string): StepFixture => ({
+  name,
+  status: "fail",
+  duration_ms: 2,
+  failure: { message },
+});
+
+function bddEvent(id: string, tree: SuiteFixture[]): EventDetailFixture {
   return {
     id,
     projectKey: "proj-heat-spec-unfold",
     agentId: "heat-spec-unfold-agent",
     kind: "test",
     tier: "e2e",
-    codec: "playwright",
     timestamp: Date.now(),
+    stack: "bun",
+    framework: "playwright-bdd",
+    codec: "crucible-events",
     tree,
-    ...opts,
   };
 }
 
-// ── §S1 AC3/G5 — a loaded scenario's cell, refolded by hand ────────────────
+// ── a loaded scenario's cell, in a feature refolded by hand ────────────────
 
-describe("§S1 AC3/G5 — a loaded scenario's heat cell, inside a feature refolded by hand, unfolds that feature again and reveals the leaf", () => {
+describe("a loaded scenario's heat cell, inside a feature refolded by hand, unfolds that feature again and reveals the scenario's row", () => {
   function buildTree(): SuiteFixture[] {
     return [
-      scenario("KeptOpenFeature", "its own failing scenario", "fail", [
-        { name: "kept-open-given", status: "pass", duration_ms: 2 },
-        { name: "kept-open-then", status: "fail", duration_ms: 2, failure: { message: "kept-open-failure" } },
+      feature("KeptOpenFeature", [
+        scenario("its own failing scenario", [
+          passStep("kept-open-given"),
+          failStep("kept-open-then", "kept-open-failure"),
+        ]),
       ]),
-      scenario("RefoldTargetFeature", "mixed outcome scenario", "fail", [
-        { name: "refold-given-ok", status: "pass", duration_ms: 2 },
-        {
-          name: "refold-then-breaks",
-          status: "fail",
-          duration_ms: 2,
-          failure: { message: "refold-then-breaks-failure" },
-        },
+      feature("RefoldTargetFeature", [
+        scenario("a calm scenario", [passStep("refold-calm-given"), passStep("refold-calm-then")]),
+        scenario("a breaking scenario", [
+          passStep("refold-given-ok"),
+          failStep("refold-then-breaks", "refold-then-breaks-failure"),
+        ]),
       ]),
     ];
   }
 
-  test("a GREEN leaf's heat cell unfolds its refolded feature, scrolls + blinks its own leaf row, and leaves the other already-open feature open", async () => {
+  test("a GREEN scenario's heat cell unfolds its refolded feature, blinks that scenario's own row, and leaves the other already-open feature open", async () => {
     const eventId = "evt-heat-spec-refold-green";
-    const detail = playwrightEvent(eventId, buildTree());
-    await mountAtRunCold(eventId, detail);
+    await mountAtRunCold(eventId, bddEvent(eventId, buildTree()));
 
-    // PRECONDITION — both features auto-open on mount (both failing,
-    // CR-CRU-145 §S1): this is the existing baseline this file does not
-    // change.
+    // PRECONDITION — both features open and load on mount (both failing).
     expect(isFeatureOpen("KeptOpenFeature")).toBe(true);
     expect(isFeatureOpen("RefoldTargetFeature")).toBe(true);
+    expect(scenarioRowOrNull("RefoldTargetFeature", "a calm scenario")).not.toBeNull();
 
-    // Refold the target feature by hand (toggleFeature — already works
-    // today); its scenario's leaves stay loaded in suiteLeaves, only hidden.
+    // Refold the target feature by hand; its scenarios stay loaded, only
+    // their rows unmount.
     clickFeatureHeading("RefoldTargetFeature");
     await settle();
     expect(isFeatureOpen("RefoldTargetFeature")).toBe(false);
-    expect(
-      overlay().querySelector(
-        '[data-leaf-key="RefoldTargetFeature › mixed outcome scenario::refold-given-ok"]',
-      ),
-    ).toBeNull();
+    expect(scenarioRowOrNull("RefoldTargetFeature", "a calm scenario")).toBeNull();
 
-    const cell = overlay().querySelector(
-      '[title="RefoldTargetFeature › mixed outcome scenario › refold-given-ok"]',
-    ) as HTMLElement | null;
+    const cell = overlay().querySelector<HTMLElement>(
+      `.app-heat-pass[title="${suiteKey("RefoldTargetFeature")} › a calm scenario"]`,
+    );
     expect(cell).not.toBeNull();
     cell!.click();
     await settle();
 
-    // RED — G5: SynthHeatCell/HeatCell never touch openFeatures, so the
-    // feature stays folded and the leaf row this click targets never mounts.
+    // POSITIVE — the feature is open again and the clicked scenario's own
+    // row is the one located.
     expect(isFeatureOpen("RefoldTargetFeature")).toBe(true);
-    const row = overlay().querySelector(
-      '[data-leaf-key="RefoldTargetFeature › mixed outcome scenario::refold-given-ok"]',
-    );
+    const row = scenarioRowOrNull("RefoldTargetFeature", "a calm scenario");
     expect(row).not.toBeNull();
-    expect((row as HTMLElement).classList.contains("app-locate-blink")).toBe(true);
+    expect(row!.classList.contains("app-locate-blink")).toBe(true);
+    // BOUND — that one row alone blinks: not its sibling scenario.
+    expect(blinkingRows()).toEqual([row!]);
 
     // BOUND — the OTHER, already-open feature is left untouched.
     expect(isFeatureOpen("KeptOpenFeature")).toBe(true);
   });
 
-  test("a RED leaf's heat cell unfolds its refolded feature and reveals the failing leaf with its failure box", async () => {
+  test("a RED scenario's heat cell unfolds its refolded feature and reveals that scenario's row, its failing step carrying its failure box", async () => {
     const eventId = "evt-heat-spec-refold-red";
-    const detail = playwrightEvent(eventId, buildTree());
-    await mountAtRunCold(eventId, detail);
+    await mountAtRunCold(eventId, bddEvent(eventId, buildTree()));
 
     clickFeatureHeading("RefoldTargetFeature");
     await settle();
     expect(isFeatureOpen("RefoldTargetFeature")).toBe(false);
 
-    const cell = overlay().querySelector(
-      '[title="RefoldTargetFeature › mixed outcome scenario › refold-then-breaks"]',
-    ) as HTMLElement | null;
+    const cell = overlay().querySelector<HTMLElement>(
+      `.app-heat-fail[title="${suiteKey("RefoldTargetFeature")} › a breaking scenario"]`,
+    );
     expect(cell).not.toBeNull();
     cell!.click();
     await settle();
 
     expect(isFeatureOpen("RefoldTargetFeature")).toBe(true);
-    const row = overlay().querySelector(
-      '[data-leaf-key="RefoldTargetFeature › mixed outcome scenario::refold-then-breaks"]',
-    );
+    const row = scenarioRowOrNull("RefoldTargetFeature", "a breaking scenario");
     expect(row).not.toBeNull();
-    expect((row as HTMLElement).classList.contains("app-locate-blink")).toBe(true);
+    expect(row!.classList.contains("app-locate-blink")).toBe(true);
+    expect(blinkingRows()).toEqual([row!]);
 
-    const failureBox = (row as HTMLElement).querySelector('[data-testid="failure-box"]');
+    // POSITIVE — the scenario's failing step, under its row, carries its
+    // failure box with the step's own message.
+    const failingStep = stepRowsOf(row!).find(
+      (s) => s.getAttribute("data-leaf-key") === `${suiteKey("RefoldTargetFeature")} › a breaking scenario::refold-then-breaks`,
+    );
+    expect(failingStep).toBeDefined();
+    const failureBox = failingStep!.querySelector('[data-testid="failure-box"]');
     expect(failureBox).not.toBeNull();
     expect(failureBox!.textContent ?? "").toContain("refold-then-breaks-failure");
 
@@ -383,146 +434,135 @@ describe("§S1 AC3/G5 — a loaded scenario's heat cell, inside a feature refold
   });
 });
 
-// ── §S1 AC3/G5 — a green synthetic cell, naturally folded, below the fold ──
+// ── a green synthetic cell, naturally folded, below the fold ───────────────
 
-describe("§S1 AC3/G5 — a green synthetic cell of a not-yet-loaded scenario in a naturally-folded, deep feature unfolds it and reveals the scenario's own row", () => {
+describe("a green synthetic cell of a not-yet-loaded suite in a naturally-folded, deep feature unfolds it and reveals its first scenario's row", () => {
   function buildTree(fillerCount: number): SuiteFixture[] {
     const tree: SuiteFixture[] = [
-      scenario("KeptOpenFeature2", "its own failing scenario", "fail", [
-        { name: "kept-open-2-given", status: "pass", duration_ms: 2 },
-        {
-          name: "kept-open-2-then",
-          status: "fail",
-          duration_ms: 2,
-          failure: { message: "kept-open-2-failure" },
-        },
+      feature("KeptOpenFeature2", [
+        scenario("its own failing scenario", [
+          passStep("kept-open-2-given"),
+          failStep("kept-open-2-then", "kept-open-2-failure"),
+        ]),
       ]),
     ];
     for (let i = 0; i < fillerCount; i++) {
       tree.push(
-        scenario(`FillerFeature${i}`, "its one calm scenario", "pass", [
-          { name: `filler-${i}-given`, status: "pass", duration_ms: 2 },
-          { name: `filler-${i}-then`, status: "pass", duration_ms: 2 },
+        feature(`FillerFeature${i}`, [
+          scenario("its one calm scenario", [passStep(`filler-${i}-given`), passStep(`filler-${i}-then`)]),
         ]),
       );
     }
     tree.push(
-      scenario("DeepGreenFeature", "its calm target scenario", "pass", [
-        { name: "deep-green-given", status: "pass", duration_ms: 2 },
-        { name: "deep-green-then", status: "pass", duration_ms: 2 },
+      feature("DeepGreenFeature", [
+        scenario("its calm target scenario", [passStep("deep-green-given"), passStep("deep-green-then")]),
+        scenario("its second calm scenario", [passStep("deep-green-2-given"), passStep("deep-green-2-then")]),
       ]),
     );
     return tree;
   }
 
-  test("clicking the green synthetic cell unfolds DeepGreenFeature, expands + blinks its scenario row (carrying data-suite-key), and leaves KeptOpenFeature2 open", async () => {
+  test("clicking a green synthetic cell unfolds DeepGreenFeature, loads it and blinks its first scenario's row (its steps drawn), and leaves KeptOpenFeature2 open", async () => {
     const eventId = "evt-heat-spec-synth-green";
-    const detail = playwrightEvent(eventId, buildTree(24));
-    await mountAtRunCold(eventId, detail);
+    await mountAtRunCold(eventId, bddEvent(eventId, buildTree(24)));
 
     expect(isFeatureOpen("KeptOpenFeature2")).toBe(true);
-    // PRECONDITION — folds naturally: not the report-first feature, and not
-    // failing (CR-CRU-145 §S1's "green features fold" rule).
+    // PRECONDITION — folds naturally (neither failing nor among the first
+    // features to open), unread: its two cells are synthetic, one per scenario.
     expect(isFeatureOpen("DeepGreenFeature")).toBe(false);
+    const cells = Array.from(
+      overlay().querySelectorAll<HTMLElement>(`.app-heat-pass[title="${suiteKey("DeepGreenFeature")}"]`),
+    );
+    expect(cells.length).toBe(2);
 
-    const cell = overlay().querySelector(
-      '.app-heat-pass[title="DeepGreenFeature › its calm target scenario"]',
-    ) as HTMLElement | null;
-    expect(cell).not.toBeNull();
-    cell!.click();
+    // The SECOND synthetic cell: a synthetic cell names no scenario, so even
+    // it reveals the suite's first scenario.
+    cells[1]!.click();
     await settle();
 
-    // RED — G5: the feature stays folded, so the scenario's SuiteGroup (and
-    // its data-suite-key row) never mounts, even though the suite is now
-    // loaded (expanded) in state.
     expect(isFeatureOpen("DeepGreenFeature")).toBe(true);
-    const row = Array.from(overlay().querySelectorAll<HTMLElement>('[data-testid="suite-row"]')).find(
-      (el) => el.getAttribute("data-suite-key") === "DeepGreenFeature › its calm target scenario",
-    );
-    expect(row).not.toBeUndefined();
-    expect(row!.querySelector('[data-testid="tree-toggle"]')?.textContent?.trim()).toBe("▾");
+    const row = scenarioRowOrNull("DeepGreenFeature", "its calm target scenario");
+    expect(row).not.toBeNull();
+    expect(row!.getAttribute("data-suite-key")).toBe(suiteKey("DeepGreenFeature"));
     expect(row!.classList.contains("app-locate-blink")).toBe(true);
+    // POSITIVE — the loaded scenario's steps are drawn under its row.
+    expect(stepRowsOf(row!).map((s) => s.getAttribute("data-leaf-key"))).toEqual([
+      `${suiteKey("DeepGreenFeature")} › its calm target scenario::deep-green-given`,
+      `${suiteKey("DeepGreenFeature")} › its calm target scenario::deep-green-then`,
+    ]);
+    // NEGATIVE — its second scenario is not located; BOUND — nothing else is.
+    expect(scenarioRowOrNull("DeepGreenFeature", "its second calm scenario")?.classList.contains("app-locate-blink")).toBe(false);
+    expect(blinkingRows()).toEqual([row!]);
 
     expect(isFeatureOpen("KeptOpenFeature2")).toBe(true);
   });
 });
 
-// ── §S1 AC3/G5 — a red synthetic cell still loading, folded by hand ────────
+// ── a red synthetic cell still loading, folded by hand ─────────────────────
 
-describe("§S1 AC3/G5 — a red synthetic cell of a scenario still loading (suiteLoading, not yet mounted) in a refolded feature unfolds it and reveals the first failing leaf", () => {
-  test("folding the feature while its auto-load is in flight, then clicking its still-synthetic red cell, unfolds the feature and reveals the failing leaf once the load resolves", async () => {
+describe("a red synthetic cell of a suite still loading (suiteLoading, not yet mounted) in a refolded feature unfolds it and reveals its first failing scenario's row", () => {
+  test("folding the feature while its auto-load is in flight, then clicking its still-synthetic red cell, unfolds the feature and reveals the first failing scenario's row once the load resolves", async () => {
     const eventId = "evt-heat-spec-synth-red-locked";
-    const LOCKED_SUITE = "RedLockedFeature › locked scenario";
+    const LOCKED_FEATURE = "RedLockedFeature";
     const tree: SuiteFixture[] = [
-      scenario("KeptOpenFeature3", "its own failing scenario", "fail", [
-        { name: "kept-open-3-given", status: "pass", duration_ms: 2 },
-        {
-          name: "kept-open-3-then",
-          status: "fail",
-          duration_ms: 2,
-          failure: { message: "kept-open-3-failure" },
-        },
+      feature("KeptOpenFeature3", [
+        scenario("its own failing scenario", [
+          passStep("kept-open-3-given"),
+          failStep("kept-open-3-then", "kept-open-3-failure"),
+        ]),
       ]),
-      scenario("RedLockedFeature", "locked scenario", "fail", [
-        { name: "red-locked-given", status: "pass", duration_ms: 2 },
-        {
-          name: "red-locked-then",
-          status: "fail",
-          duration_ms: 2,
-          failure: { message: "red-locked-then-failure" },
-        },
+      // A passing scenario first, so "the first FAILING scenario" is not
+      // merely "the first scenario".
+      feature(LOCKED_FEATURE, [
+        scenario("a calm scenario first", [passStep("red-locked-calm-given")]),
+        scenario("locked scenario", [
+          passStep("red-locked-given"),
+          failStep("red-locked-then", "red-locked-then-failure"),
+        ]),
       ]),
     ];
-    const detail = playwrightEvent(eventId, tree);
-    const lock = new SuiteLock([LOCKED_SUITE]);
-    await mountAtRunCold(eventId, detail, lock);
+    const lock = new SuiteLock([LOCKED_FEATURE]);
+    await mountAtRunCold(eventId, bddEvent(eventId, tree), lock);
 
-    // PRECONDITION — RedLockedFeature auto-opens (CR-CRU-145 §S1, it is
-    // failing), which renders its scenario's suite-row (as for ANY
-    // not-yet-loaded scenario of an open feature, C1's own AC2 precedent),
-    // but COLLAPSED — its own auto-load (openProgressively's loadSuite) is
-    // still pending, this test's own lock, never resolved yet — so the
-    // HeatStrip cell for it is STILL a SynthHeatCell (red), and the
-    // scenario's leaf list has not mounted.
-    expect(isFeatureOpen("RedLockedFeature")).toBe(true);
-    expect(overlay().querySelector(`.app-heat-fail[title="${LOCKED_SUITE}"]`)).not.toBeNull();
-    const collapsedRow = Array.from(overlay().querySelectorAll<HTMLElement>('[data-testid="suite-row"]')).find(
-      (el) => el.getAttribute("data-suite-key") === LOCKED_SUITE,
-    );
-    expect(collapsedRow).not.toBeUndefined();
-    expect(collapsedRow!.querySelector('[data-testid="tree-toggle"]')?.textContent?.trim()).toBe("▸");
-    expect(
-      overlay().querySelector('[data-leaf-key="RedLockedFeature › locked scenario::red-locked-then"]'),
-    ).toBeNull();
+    // PRECONDITION — RedLockedFeature opens on mount (it is failing), but its
+    // own load (openProgressively's loadSuite) is held by this test's lock:
+    // its heat cells are STILL synthetic, and none of its scenario rows has
+    // mounted.
+    expect(isFeatureOpen(LOCKED_FEATURE)).toBe(true);
+    const failCell = `.app-heat-fail[title="${suiteKey(LOCKED_FEATURE)}"]`;
+    expect(overlay().querySelectorAll(failCell).length).toBe(1);
+    expect(scenarioRowOrNull(LOCKED_FEATURE, "locked scenario")).toBeNull();
+    expect(scenarioRowOrNull(LOCKED_FEATURE, "a calm scenario first")).toBeNull();
 
     // Fold it by hand while the load is in flight — a real, reachable race
-    // (the user closes a feature while its scenario is still arriving).
-    clickFeatureHeading("RedLockedFeature");
+    // (the user closes a feature while its scenarios are still arriving).
+    clickFeatureHeading(LOCKED_FEATURE);
     await settle();
-    expect(isFeatureOpen("RedLockedFeature")).toBe(false);
+    expect(isFeatureOpen(LOCKED_FEATURE)).toBe(false);
 
-    const cell = overlay().querySelector(
-      `.app-heat-fail[title="${LOCKED_SUITE}"]`,
-    ) as HTMLElement | null;
+    const cell = overlay().querySelector<HTMLElement>(failCell);
     expect(cell).not.toBeNull();
     cell!.click(); // SynthHeatCell's onclick awaits loadSuite — also locked, stays pending
     await settle();
 
     // Let both the stale auto-load AND the click's own loadSuite resolve.
-    lock.release(LOCKED_SUITE);
+    lock.release(LOCKED_FEATURE);
     await settle();
 
-    // RED — G5: the feature stays folded (HeatCell/SynthHeatCell never
-    // touch openFeatures), so even once the load lands, the failing leaf's
-    // row never mounts.
-    expect(isFeatureOpen("RedLockedFeature")).toBe(true);
-    const row = overlay().querySelector(
-      '[data-leaf-key="RedLockedFeature › locked scenario::red-locked-then"]',
-    );
+    expect(isFeatureOpen(LOCKED_FEATURE)).toBe(true);
+    const row = scenarioRowOrNull(LOCKED_FEATURE, "locked scenario");
     expect(row).not.toBeNull();
-    expect((row as HTMLElement).classList.contains("app-locate-blink")).toBe(true);
+    expect(row!.classList.contains("app-locate-blink")).toBe(true);
+    // NEGATIVE — the suite's first (passing) scenario is not the one located.
+    expect(scenarioRowOrNull(LOCKED_FEATURE, "a calm scenario first")?.classList.contains("app-locate-blink")).toBe(false);
+    expect(blinkingRows()).toEqual([row!]);
 
-    const failureBox = (row as HTMLElement).querySelector('[data-testid="failure-box"]');
+    // POSITIVE — its failing step carries its failure box with its message.
+    const failingStep = stepRowsOf(row!).find(
+      (s) => s.getAttribute("data-leaf-key") === `${suiteKey(LOCKED_FEATURE)} › locked scenario::red-locked-then`,
+    );
+    expect(failingStep).toBeDefined();
+    const failureBox = failingStep!.querySelector('[data-testid="failure-box"]');
     expect(failureBox).not.toBeNull();
     expect(failureBox!.textContent ?? "").toContain("red-locked-then-failure");
 

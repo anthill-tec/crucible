@@ -1,7 +1,7 @@
-// The BDD tab's index lists a run whose framework is `playwright-bdd` — a run
-// streamed in `crucible-events` — beside a run the `playwright` codec stored,
-// and still no plain test run. The index keys on the run's FRAMEWORK for the
-// new shape: a `crucible-events` run of another framework is no BDD run.
+// The BDD tab's index lists every run whose framework is `playwright-bdd` — a
+// run streamed in `crucible-events` — newest first, and still no plain test
+// run. The index keys on the run's FRAMEWORK: a `crucible-events` run of
+// another framework is no BDD run.
 //
 // Three proofs:
 //   - `bddIndexRows` (public/app-logic.mjs) over event briefs, directly;
@@ -10,8 +10,8 @@
 //     read as source — the mirrors carry no runtime;
 //   - the BDD tab of the production shell, mounted against a real board
 //     (tests/helpers/served-app.ts) holding the runs as each path stores them:
-//     a streamed playwright-bdd run, a playwright-codec report, a JUnit run
-//     and a streamed run of another framework.
+//     two streamed playwright-bdd runs, a JUnit run and a streamed run of
+//     another framework.
 //
 // SAFETY: every server binds port 0 on ":memory:".
 import { afterEach, describe, expect, test } from "bun:test";
@@ -63,10 +63,10 @@ function brief(fields: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-describe("bddIndexRows lists playwright-bdd runs beside playwright-codec runs", () => {
-  test("a crucible-events run of framework playwright-bdd and a playwright-codec run are listed newest first; a junit run and a crucible-events run of another framework are not", () => {
+describe("bddIndexRows lists the playwright-bdd runs", () => {
+  test("two crucible-events runs of framework playwright-bdd are listed newest first; a junit run and a crucible-events run of another framework are not", () => {
     const rows = bddIndexRows([
-      brief({ id: "evt-codec-playwright", codec: "playwright", timestamp: 2_000 }),
+      brief({ id: "evt-stream-bdd-older", codec: "crucible-events", framework: "playwright-bdd", tier: "e2e", timestamp: 2_000 }),
       brief({ id: "evt-junit", codec: "junit", framework: "bun-test", tier: "unit", timestamp: 4_000 }),
       brief({
         id: "evt-stream-bdd",
@@ -82,7 +82,7 @@ describe("bddIndexRows lists playwright-bdd runs beside playwright-codec runs", 
       brief({ id: "evt-stream-vitest", codec: "crucible-events", framework: "vitest", timestamp: 5_000 }),
     ]);
 
-    expect(rows.map((r) => r.id)).toEqual(["evt-stream-bdd", "evt-codec-playwright"]);
+    expect(rows.map((r) => r.id)).toEqual(["evt-stream-bdd", "evt-stream-bdd-older"]);
     expect(rows[0]).toEqual({
       id: "evt-stream-bdd",
       timestamp: 3_000,
@@ -162,62 +162,20 @@ const ONE_VITEST_STREAM =
   eventLine({ event: "test-end", id: "adds", name: "adds", suite: "math", file: "math.test.ts", status: "pass", duration_ms: 1 }) +
   eventLine({ event: "run-end", total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 1 });
 
-const PLAYWRIGHT_REPORT = {
-  config: { version: "1.61.1" },
-  suites: [
-    {
-      title: "tests/e2e/features/library.feature.spec.js",
-      file: "tests/e2e/features/library.feature.spec.js",
-      column: 0,
-      line: 0,
-      specs: [],
-      suites: [
-        {
-          title: "Library",
-          file: "tests/e2e/features/library.feature.spec.js",
-          line: 3,
-          column: 6,
-          specs: [
-            {
-              title: "Borrow a book",
-              ok: true,
-              tags: [],
-              tests: [
-                {
-                  timeout: 30000,
-                  annotations: [],
-                  expectedStatus: "passed",
-                  projectId: "chromium",
-                  projectName: "chromium",
-                  results: [
-                    {
-                      workerIndex: 0,
-                      parallelIndex: 0,
-                      status: "passed",
-                      duration: 2,
-                      retry: 0,
-                      steps: [{ title: "Given a library card", duration: 2 }],
-                      startTime: "2026-11-01T00:00:00.000Z",
-                      annotations: [],
-                      attachments: [],
-                    },
-                  ],
-                  status: "expected",
-                },
-              ],
-              id: "spec-borrow",
-              file: "tests/e2e/features/library.feature.spec.js",
-              line: 6,
-              column: 3,
-            },
-          ],
-        },
-      ],
-    },
-  ],
-  errors: [],
-  stats: { startTime: "2026-11-01T00:00:00.000Z", duration: 2, expected: 1, skipped: 0, unexpected: 0, flaky: 0 },
-};
+const OLDER_SCENARIO_STREAM =
+  eventLine({ event: "run-start", total: 1 }) +
+  eventLine({
+    event: "test-end",
+    id: "borrow-chromium",
+    name: "Borrow a book",
+    suite: "Library",
+    file: "features/library.feature",
+    browser: "chromium",
+    status: "pass",
+    duration_ms: 2,
+    steps: [{ name: "Given a library card", status: "pass", duration_ms: 2 }],
+  }) +
+  eventLine({ event: "run-end", total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 2 });
 
 const JUNIT_XML =
   '<?xml version="1.0" encoding="UTF-8"?>\n' +
@@ -230,15 +188,15 @@ async function ingest(handle: ServerHandle, body: Record<string, unknown>): Prom
   return res.body.event as string;
 }
 
-describe("the BDD tab lists a playwright-bdd run beside a playwright-codec run", () => {
-  test("on a real board: the streamed playwright-bdd run and the playwright-codec run are listed newest first; the junit run and the vitest stream are not", async () => {
+describe("the BDD tab lists the playwright-bdd runs", () => {
+  test("on a real board: the two streamed playwright-bdd runs are listed newest first; the junit run and the vitest stream are not", async () => {
     const handle = bootOn();
     handles.push(handle);
     const key = crypto.randomUUID();
     handle.store.addProject({ key, name: "bdd-index-board", type: "frontend", sutRoot: "/tmp/bdd-index-board" });
     await register(handle, key, AGENT);
 
-    const codecId = await ingest(handle, { projectKey: key, codec: "playwright", data: JSON.stringify(PLAYWRIGHT_REPORT), tier: "e2e" });
+    const olderBddId = await streamRun(handle, key, "playwright-bdd", OLDER_SCENARIO_STREAM);
     await Bun.sleep(5);
     const junitId = await ingest(handle, { projectKey: key, codec: "junit", data: JUNIT_XML, tier: "unit", stack: "bun", framework: "bun-test" });
     await Bun.sleep(5);
@@ -259,7 +217,7 @@ describe("the BDD tab lists a playwright-bdd run beside a playwright-codec run",
     const ids = Array.from(pane!.querySelectorAll<HTMLElement>('[data-testid="bdd-index-row"]')).map(
       (r) => r.getAttribute("data-run-id") ?? "",
     );
-    expect(ids).toEqual([bddId, codecId]);
+    expect(ids).toEqual([bddId, olderBddId]);
     expect(ids).not.toContain(junitId);
     expect(ids).not.toContain(vitestId);
   });

@@ -332,6 +332,127 @@ export async function ingestPlaywright(
   return (await res.json()) as RunIngestResponse;
 }
 
+// \u2500\u2500 A playwright-bdd run, streamed to the board as the bun client streams a
+// playwright-bdd target: the run opens with `POST /api/v2/runs/start`
+// (framework `playwright-bdd`), its `crucible-events` stream is posted to
+// `POST /api/v2/runs/<runId>/stream` \u2014 each scenario a `test-end` carrying
+// its feature as `suite`, its `browser` and its Gherkin `steps` \u2014 and it
+// closes through `POST /api/v2/runs` with codec `crucible-events`. The board
+// stores one suite per feature and browser, each scenario a leaf of it.
+
+export interface BddStepFixture {
+  name: string;
+  status: "pass" | "fail";
+  duration_ms: number;
+  failure?: { message: string; trace?: string };
+}
+export interface BddScenarioFixture {
+  feature: string;
+  name: string;
+  status: "pass" | "fail";
+  steps: BddStepFixture[];
+  /** The browser it ran under; `chromium` when absent. */
+  browser?: string;
+  /** The scenario's own failure; absent: the `test-end` carries no `failure` key. */
+  failure?: { message: string; trace?: string };
+}
+
+export const bddPassingStep = (name: string): BddStepFixture => ({ name, status: "pass", duration_ms: 5 });
+
+export const bddFailingStep = (name: string, message: string, trace?: string): BddStepFixture => ({
+  name,
+  status: "fail",
+  duration_ms: 5,
+  failure: { message, ...(trace !== undefined ? { trace } : {}) },
+});
+
+/** One `crucible-events` line per event, as the bun client writes it. */
+function bddStreamOf(scenarios: BddScenarioFixture[]): string {
+  const line = (fields: Record<string, unknown>): string => `${JSON.stringify(fields)}\n`;
+  const failed = scenarios.filter((s) => s.status === "fail").length;
+  return (
+    line({ event: "run-start", total: scenarios.length }) +
+    scenarios
+      .map((s, i) => {
+        const browser = s.browser ?? "chromium";
+        return line({
+          event: "test-end",
+          id: `scenario-${i}-${browser}`,
+          name: s.name,
+          suite: s.feature,
+          file: `features/${s.feature.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.feature`,
+          browser,
+          status: s.status,
+          duration_ms: s.steps.reduce((sum, step) => sum + step.duration_ms, 0),
+          steps: s.steps,
+          ...(s.failure !== undefined ? { failure: s.failure } : {}),
+        });
+      })
+      .join("") +
+    line({
+      event: "run-end",
+      total: scenarios.length,
+      passed: scenarios.length - failed,
+      failed,
+      pending: 0,
+      duration_ms: scenarios.reduce((sum, s) => sum + s.steps.reduce((n, step) => n + step.duration_ms, 0), 0),
+    })
+  );
+}
+
+/** Opens, streams and closes a playwright-bdd run; answers the event it stored. */
+export async function streamPlaywrightBdd(
+  request: APIRequestContext,
+  projectKey: string,
+  agentId: string,
+  scenarios: BddScenarioFixture[],
+  tier = "e2e",
+): Promise<RunIngestResponse> {
+  await ensureRegistered(request, projectKey, agentId);
+  const start = await request.post("/api/v2/runs/start", {
+    data: { projectKey, agentId, tier, stack: "bun", framework: "playwright-bdd" },
+  });
+  expect(start.status()).toBe(202);
+  const runId = ((await start.json()) as { runId: string }).runId;
+  const batch = await request.post(`/api/v2/runs/${runId}/stream`, {
+    data: { projectKey, agentId, codec: "crucible-events", from: 0, data: bddStreamOf(scenarios) },
+  });
+  expect(batch.status()).toBe(200);
+  const closed = await request.post("/api/v2/runs", {
+    data: { projectKey, agentId, runId, codec: "crucible-events" },
+  });
+  expect(closed.status()).toBe(200);
+  return (await closed.json()) as RunIngestResponse;
+}
+
+/** The scenario shape of the run `PLAYWRIGHT_BDD_REPORT` describes: one
+ *  feature, a passing scenario whose four steps include an `And` (so verbatim
+ *  step text is exercised) and a failing one that stops AT the broken step \u2014
+ *  the shape `tests/e2e/features/bdd-gherkin-section.feature` asserts. */
+export const PLAYWRIGHT_BDD_SCENARIOS: BddScenarioFixture[] = [
+  {
+    feature: PLAYWRIGHT_BDD_FEATURE_TITLE,
+    name: "a passing scenario renders every step",
+    status: "pass",
+    steps: [
+      bddPassingStep("Given the board has a frontend project"),
+      bddPassingStep("When a BDD run is ingested for it"),
+      bddPassingStep("And the run carries its Gherkin steps"),
+      bddPassingStep("Then the BDD section renders them in order"),
+    ],
+  },
+  {
+    feature: PLAYWRIGHT_BDD_FEATURE_TITLE,
+    name: "a failing scenario stops at the broken step",
+    status: "fail",
+    steps: [
+      bddPassingStep("Given the board has a frontend project"),
+      bddFailingStep("When the specification breaks", "expect(received).toBe(expected) \u2014 the step never rendered"),
+    ],
+    failure: { message: "expect(received).toBe(expected) \u2014 the step never rendered" },
+  },
+];
+
 export async function ingestParsed(
   request: APIRequestContext,
   projectKey: string,

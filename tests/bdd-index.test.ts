@@ -48,6 +48,8 @@ interface EventFixture {
   kind: "test";
   tier: string;
   codec: string;
+  framework?: string;
+  stack?: string;
   timestamp: number;
   total: number;
   passed: number;
@@ -116,12 +118,36 @@ async function mountApp(opts: MountOpts): Promise<void> {
       if (brief === undefined) {
         body = { ok: false, error: "no such event" };
       } else {
+        // Served as the board serves a streamed playwright-bdd run: its
+        // `?depth=suites` read lists one suite per feature and browser with
+        // its scenario counts; its `?suite=<feature>&browser=<b>` read answers
+        // that suite with its scenarios as leaves, each carrying its steps.
         const parsed = new URL(url, "http://localhost");
         const depth = parsed.searchParams.get("depth");
+        const status = brief.failed > 0 ? "fail" : "pass";
         const tree =
           depth === "suites"
-            ? [{ name: "a scenario", status: brief.failed > 0 ? "fail" : "pass", counts: { passed: brief.passed, failed: brief.failed, pending: brief.pending } }]
-            : [];
+            ? [{ name: "a feature", status, counts: { passed: brief.passed, failed: brief.failed, pending: brief.pending }, browser: "chromium" }]
+            : parsed.searchParams.get("suite") === "a feature"
+              ? [
+                  {
+                    name: "a feature",
+                    status,
+                    children: [
+                      {
+                        name: "a scenario",
+                        status,
+                        duration_ms: 10,
+                        steps: [
+                          { name: "Given a step", status: "pass", duration_ms: 5 },
+                          { name: "Then a step", status, duration_ms: 5 },
+                        ],
+                      },
+                    ],
+                    browser: "chromium",
+                  },
+                ]
+              : [];
         body = {
           ok: true,
           event: {
@@ -131,6 +157,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
             kind: brief.kind,
             tier: brief.tier,
             codec: brief.codec,
+            ...(brief.framework !== undefined ? { framework: brief.framework, stack: brief.stack } : {}),
             timestamp: brief.timestamp,
             context: brief.context,
             summary: { total: brief.total, passed: brief.passed, failed: brief.failed, pending: brief.pending, duration_ms: 10 },
@@ -173,7 +200,7 @@ function project(overrides: Partial<ProjectFixture> & { key: string }): ProjectF
 }
 
 function playwrightRun(overrides: Partial<EventFixture> & Pick<EventFixture, "id" | "projectKey" | "agentId" | "timestamp">): EventFixture {
-  return { kind: "test", tier: "e2e", codec: "playwright", total: 59, passed: 58, failed: 1, pending: 0, ...overrides };
+  return { kind: "test", tier: "e2e", codec: "crucible-events", framework: "playwright-bdd", stack: "bun", total: 59, passed: 58, failed: 1, pending: 0, ...overrides };
 }
 
 async function clickTab(name: string): Promise<HTMLElement> {
@@ -203,7 +230,7 @@ function indexRows(): HTMLElement[] {
 const norm = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
 
 describe("CR-CRU-145 §S2 — the BDD tab lists the project's BDD-bearing runs, newest first", () => {
-  test("lists ONLY playwright-coded runs (junit excluded), newest first, each row naming when/who/cycle/verdict", async () => {
+  test("lists ONLY playwright-bdd runs (junit excluded), newest first, each row naming when/who/cycle/verdict", async () => {
     const key = "proj-bdd-index";
     const now = Date.now();
     const older = playwrightRun({ id: "evt-idx-older", projectKey: key, agentId: "idx-runner-older", timestamp: now - 6 * 3600_000, context: { cycleId: 301, cycle: "the older fix" } });
@@ -303,11 +330,13 @@ describe("CR-CRU-145 §S2 — cycle → linked runs → detail lands the SAME re
     const overlayViaChain = document.querySelector('[data-testid="run-overlay"]');
     expect(overlayViaChain).not.toBeNull();
     // POSITIVE — the SAME progressive-specification rendering §S1 defines:
-    // the run's ONE scenario shows its steps without a click (this is what
-    // makes "lands the same rendering" a real, falsifiable claim rather
-    // than "some overlay opened").
-    expect(overlayViaChain!.querySelectorAll('[data-testid="suite-row"] [data-testid="tree-toggle"]').length).toBeGreaterThan(0);
-    const toggleGlyphViaChain = overlayViaChain!.querySelector('[data-testid="tree-toggle"]')?.textContent?.trim();
+    // the run's ONE feature opens and its ONE scenario shows its steps
+    // without a click (this is what makes "lands the same rendering" a
+    // real, falsifiable claim rather than "some overlay opened").
+    expect(overlayViaChain!.querySelectorAll('[data-testid="feature-group"] [data-testid="suite-row"]').length).toBe(1);
+    const toggleGlyphViaChain = overlayViaChain!.querySelector('[data-testid="feature-toggle"]')?.textContent?.trim();
+    const stepsViaChain = Array.from(overlayViaChain!.querySelectorAll('[data-testid="leaf-row"]')).map((r) => norm(r.textContent));
+    expect(stepsViaChain.length).toBe(2);
 
     // Path B — the BDD index, direct entry. Close the detail first the way a
     // user does (the overlay's back chip): while a detail is open the tabs
@@ -323,12 +352,14 @@ describe("CR-CRU-145 §S2 — cycle → linked runs → detail lands the SAME re
     const routeViaIndex = location.pathname;
     const overlayViaIndex = document.querySelector('[data-testid="run-overlay"]');
     expect(overlayViaIndex).not.toBeNull();
-    const toggleGlyphViaIndex = overlayViaIndex!.querySelector('[data-testid="tree-toggle"]')?.textContent?.trim();
+    const toggleGlyphViaIndex = overlayViaIndex!.querySelector('[data-testid="feature-toggle"]')?.textContent?.trim();
+    const stepsViaIndex = Array.from(overlayViaIndex!.querySelectorAll('[data-testid="leaf-row"]')).map((r) => norm(r.textContent));
 
     // POSITIVE — identical route, identical rendering, for the SAME run.
     expect(routeViaIndex).toBe(routeViaChain);
     expect(toggleGlyphViaIndex).toBe(toggleGlyphViaChain);
-    expect(toggleGlyphViaIndex).toBe("▾"); // the scenario is expanded, not "▸"
+    expect(toggleGlyphViaIndex).toBe("▾"); // the feature is open, not "▸"
+    expect(stepsViaIndex).toEqual(stepsViaChain);
   });
 });
 

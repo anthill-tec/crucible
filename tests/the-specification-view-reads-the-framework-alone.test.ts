@@ -215,11 +215,12 @@ describe("the run-detail view opens a run as a specification by its framework al
     // NEGATIVE — no feature group and no spec byline: it is no specification.
     expect(featureGroups().length).toBe(0);
     expect(overlay().querySelector('[data-testid="run-byline"]')).toBeNull();
-    // POSITIVE — each stored suite is drawn as a plain suite row, under its whole name.
+    // POSITIVE — each stored suite is drawn as a plain suite row, under its
+    // whole name, in stored order.
     const suiteKeys = Array.from(overlay().querySelectorAll<HTMLElement>('[data-testid="suite-row"]')).map((r) =>
       r.getAttribute("data-suite-key"),
     );
-    expect(suiteKeys).toEqual(["Checkout › Pay by voucher", "Checkout › Pay by card"]);
+    expect(suiteKeys).toEqual(["Checkout › Pay by card", "Checkout › Pay by voucher"]);
   });
 
   test("a streamed run of framework vitest opens as the plain test tree", async () => {
