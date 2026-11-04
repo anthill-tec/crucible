@@ -1877,6 +1877,15 @@ def cmd_pre_merge_gate(args):
     # A package declaring a key the table replaced is refused before the tsc
     # step, which files a compile result of its own.
     _refuse_old_keys(package_dir, "pre-merge-gate")
+    # A non-`bun-test` entry the gate cannot enumerate is refused before
+    # anything runs.
+    hidden = _off_template_target(args, _TIER_DECLARATION_SURFACE)
+    if hidden is not None:
+        return _emit_target_refused(
+            "pre-merge-gate", project_dir, args.agent,
+            f"{TARGETS_DECLARATION}.{hidden} declares a framework other than "
+            f"{DEFAULT_FRAMEWORK!r} on a script that is not a `test:` script, "
+            f"so the gate cannot run it; nothing was run")
     # The gate files from its first step on (a failing tsc files a compile
     # result), so an unattributed gate is refused before that step.
     _axi().refuse_unattributed_run(
@@ -1929,6 +1938,14 @@ def cmd_pre_merge_gate(args):
         whole_suite_alone=lambda: cmd_regression(
             _gate_regression_args(args), verb="pre-merge-gate",
             name_unfiled=True),
+        # A suite of another framework runs here, by its own script, filed
+        # under the tier its name names, and measures no coverage.
+        run_suite=lambda suite: cmd_regression(
+            argparse.Namespace(**{**vars(_gate_regression_args(args)),
+                                  "coverage": False}),
+            verb="pre-merge-gate", tier=suite.tier or "regression",
+            script=suite.target),
+        whole_framework=DEFAULT_FRAMEWORK,
         context=_axi_context(project_dir, agent_id=args.agent),
         crucible_url=_base_url())
 
@@ -2602,8 +2619,38 @@ def _read_declared_suites(args, surface):
     Reading it decides WHO owns the target and never what to run: an own-stack
     target is still run by NAME (`bun run <target>`)."""
     head = surface.target.split("<tier>")[0]
-    return tuple((name, body) for name, body in _package_scripts(args).items()
+    entries = _targets_table(args)
+    return tuple((name, body, _entry_framework(entries.get(name)))
+                 for name, body in _package_scripts(args).items()
                  if name.startswith(head))
+
+
+def _targets_table(args):
+    """The package's `crucible.targets` table, `{}` when it declares none."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    crucible = _package_manifest(package_dir).get("crucible")
+    targets = crucible.get("targets") if isinstance(crucible, dict) else None
+    return targets if isinstance(targets, dict) else {}
+
+
+def _entry_framework(entry):
+    """The framework a table entry names; `bun-test` for a script with no
+    entry. The `test` marker is not read: only `test` reads it."""
+    if isinstance(entry, dict) and entry.get("framework") is not None:
+        return entry.get("framework")
+    return DEFAULT_FRAMEWORK
+
+
+def _off_template_target(args, surface):
+    """The first non-`bun-test` table entry whose key is not a script the
+    gate enumerates, or None: the gate could not see it, so it refuses it."""
+    head = surface.target.split("<tier>")[0]
+    for key, entry in _targets_table(args).items():
+        if (not key.startswith(head)
+                and _entry_framework(entry) != DEFAULT_FRAMEWORK):
+            return key
+    return None
 
 
 def _run_declared_script(args, tier, script):

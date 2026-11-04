@@ -7062,9 +7062,12 @@ def sibling_client_argv(stack, command, agent=None, *, release=None, cycle=None)
 # One declared suite of a project: the target, the stack that owns it, the tier
 # it names (None when it names none of the vocabulary — `test:client` is a
 # declared target and not a tier), the command it was declared with, and
-# whether the GATE covers it.
+# whether the GATE covers it. `framework` is the runner a suite declares, set
+# only by a stack whose suites name one (None: the stack's whole-suite run).
 GateSuite = collections.namedtuple(
-    "GateSuite", ("target", "stack", "tier", "command", "gated", "excluded"))
+    "GateSuite",
+    ("target", "stack", "tier", "command", "gated", "excluded", "framework"),
+    defaults=(None,))
 
 GATE_SUITE_FAILED_CODE = "gate-suite-failed"
 GATE_SUITE_UNREPORTED_CODE = "gate-suite-unreported"
@@ -7132,7 +7135,7 @@ def declared_gate_suites(args, surface, stack):
     if reader is None:
         return ()
     suites = []
-    for target, command in reader(args, surface) or ():
+    for target, command, *framework in reader(args, surface) or ():
         named = declared_target_tier(surface, target)
         tier = named if named in TIER_MEANINGS else None
         if tier == "regression":
@@ -7140,7 +7143,8 @@ def declared_gate_suites(args, surface, stack):
         excluded = GATE_UNCOVERED_TIERS.get(tier) if tier is not None else None
         suites.append(GateSuite(target=target, tier=tier, command=command,
                                 stack=declaring_stack(command) or stack,
-                                gated=excluded is None, excluded=excluded))
+                                gated=excluded is None, excluded=excluded,
+                                framework=(framework or [None])[0]))
     return tuple(suites)
 
 
@@ -7289,7 +7293,8 @@ def _adopt_suite_warnings(gate_warnings, envelope):
 
 
 def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
-                    crucible_url, warnings=(), named=None):
+                    crucible_url, warnings=(), named=None, run_suite=None,
+                    whole_framework=None):
     """§S2 — the ADDITIVE composition: this stack's OWN whole-suite regression,
     plus one dispatched run for every declared suite another stack owns, in ONE
     envelope naming them all.
@@ -7318,16 +7323,34 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     `named` scopes the gate to those declared targets (`--suites`): only they
     run. Naming an own-stack target runs the whole-suite run, which covers
     every own-stack target, so all of them are recorded; naming only
-    dispatched targets skips it. Excluded targets are not listed."""
+    dispatched targets skips it. Excluded targets are not listed.
+
+    A fourth rule: an own-stack suite whose `framework` is not
+    `whole_framework` (the whole-suite run's) is not collected by that run, so
+    it runs in this process through `run_suite(suite)`, as a suite of its own.
+    When every own-stack suite is such a suite, the whole-suite run is
+    skipped, and the envelope says so."""
     rows, gate_warnings = [], list(warnings)
     ok, worst = True, 0
     scope = GATE_SCOPE_FULL if named is None else GATE_SCOPE_SCOPED
-    run_whole = True
+
+    def own_run(suite):
+        return (run_suite is not None and suite.stack == stack
+                and suite.framework is not None
+                and suite.framework != whole_framework)
+
+    own = [suite for suite in suites if suite.stack == stack]
+    run_whole = not (own and all(own_run(suite) for suite in own))
+    extra = {} if run_whole else {"wholeSuite": (
+        f"the whole {stack} suite was skipped: every declared {stack} suite "
+        f"runs under a framework of its own")}
     if named is not None:
         run_whole = any(suite.gated and suite.stack == stack
+                        and not own_run(suite)
                         and suite.target in named for suite in suites)
         suites = tuple(suite for suite in suites if suite.gated and (
-            suite.target in named or (run_whole and suite.stack == stack)))
+            suite.target in named or (run_whole and suite.stack == stack
+                                      and not own_run(suite))))
     # What each gated suite did, in declaration order, for the outcome
     # milestone: its target, outcome, counts and the events its run filed.
     results = []
@@ -7335,7 +7358,8 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     # Rule 1, and FIRST: every own-stack declared target is reported against
     # this run, so its outcome has to be known before they are named.
     covered = tuple(suite.target for suite in suites
-                    if suite.gated and suite.stack == stack)
+                    if suite.gated and suite.stack == stack
+                    and not own_run(suite))
     totals = {"passed": 0, "failed": 0, "pending": 0, "total": 0}
     whole_counts, whole_outcome, whole_events = None, None, []
     if run_whole:
@@ -7368,7 +7392,7 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
             row["excluded"] = suite.excluded
             rows.append(row)
             continue
-        if suite.stack == stack:
+        if suite.stack == stack and not own_run(suite):
             # Rule 3 — covered by the run that already happened, and SAYING so
             # rather than collecting the same files a second time. The counts
             # are that run's, and they are NOT added to the union again.
@@ -7380,8 +7404,15 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
                                               whole_counts, whole_events))
             continue
         row["client"] = sibling_client(suite.stack)
-        argv, cwd = dispatch(suite) if dispatch else (None, None)
-        if not argv:
+        runner = run_suite if own_run(suite) else None
+        argv, cwd = ((None, None) if runner is not None or not dispatch
+                     else dispatch(suite))
+        filed_before = len(filed_run_events())
+        if runner is not None:
+            # Rule 4 — run here, captured as the whole-suite run is.
+            code, out, error = _captured_suite_run(
+                functools.partial(runner, suite))
+        elif not argv:
             row["outcome"] = GATE_OUTCOME_FAIL
             rows.append(row)
             results.append(_gate_suite_result(suite.target, GATE_OUTCOME_FAIL,
@@ -7392,19 +7423,20 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
                 f"{sibling_client(suite.stack)}, so it did NOT run"))
             ok, worst = False, worst or 1
             continue
-        print(f"[crucible] {verb}: dispatching `{suite.target}` to "
-              f"{' '.join(argv)}  (cwd={cwd})", file=sys.stderr)
-        try:
-            result = subprocess.run(argv, cwd=cwd, capture_output=True,
-                                    text=True)
-        except OSError as spawn_error:
-            # AC3, the DISPATCHED half of the guard: a declared command whose
-            # first token is not there would otherwise kill the gate
-            # mid-composition, taking the suites that DID run with it.
-            code, out, error = None, "", spawn_error
         else:
-            sys.stderr.write(result.stderr or "")
-            code, out, error = result.returncode, result.stdout or "", None
+            print(f"[crucible] {verb}: dispatching `{suite.target}` to "
+                  f"{' '.join(argv)}  (cwd={cwd})", file=sys.stderr)
+            try:
+                result = subprocess.run(argv, cwd=cwd, capture_output=True,
+                                        text=True)
+            except OSError as spawn_error:
+                # AC3, the DISPATCHED half of the guard: a declared command
+                # whose first token is not there would otherwise kill the gate
+                # mid-composition, taking the suites that DID run with it.
+                code, out, error = None, "", spawn_error
+            else:
+                sys.stderr.write(result.stderr or "")
+                code, out, error = result.returncode, result.stdout or "", None
         envelope = _suite_envelope(out)
         counts = _suite_counts(envelope)
         if counts:
@@ -7416,7 +7448,8 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
         suite_outcome = GATE_OUTCOME_PASS if suite_ok else GATE_OUTCOME_FAIL
         row["outcome"] = suite_outcome
         rows.append(row)
-        suite_events = _envelope_events(envelope)
+        suite_events = (filed_run_events()[filed_before:] if runner is not None
+                        else _envelope_events(envelope))
         events.extend(suite_events)
         results.append(_gate_suite_result(suite.target, suite_outcome,
                                           counts, suite_events))
@@ -7429,6 +7462,7 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     _gate_suite_results = results
     emit_axi(verb, ok,
              {"run": totals, "suites": rows, "events": events, "scope": scope,
+              **extra,
               "help": run_help(verb, ok, totals["failed"], crucible_url)},
              context, gate_warnings,
              f"{verb}: ok={ok} suites={len(rows)} passed={totals['passed']} "
@@ -7580,7 +7614,8 @@ def refuse_unrunnable_scoped_gate(args, *, surface, stack, get, project_key):
 
 
 def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
-                    context, crucible_url, whole_suite_alone=None):
+                    context, crucible_url, whole_suite_alone=None,
+                    run_suite=None, whole_framework=None):
     """§S1/§S2 — the GATE's regression step: the one composition all five gates
     run, so "the gate covers every declared suite" is a property of the fleet
     and not of one client.
@@ -7601,7 +7636,9 @@ def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
     return run_gate_suites(suites, stack=stack, verb=verb,
                            whole_suite=whole_suite, dispatch=dispatch,
                            context=context, crucible_url=crucible_url,
-                           named=scoped_gate_targets(args))
+                           named=scoped_gate_targets(args),
+                           run_suite=run_suite,
+                           whole_framework=whole_framework)
 
 
 # ── the run and ingest pipeline lives in `_crucible_run.py` ─────────────────
