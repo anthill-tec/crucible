@@ -6,7 +6,6 @@ import { coverageCodecs, decodeCoverage } from "./coverage.ts";
 import type { CoverageCodec } from "./coverage.ts";
 import { parseCrucibleEvents } from "./crucible-events.ts";
 import { parseJunit, parseJunitPath, readJunitRawOutput } from "./junit.ts";
-import { parsePlaywright, parsePlaywrightPath } from "./playwright.ts";
 
 /**
  * What a codec is told about the run it decodes. `stack` is the run's
@@ -60,13 +59,6 @@ export const codecs: Map<string, Codec> = new Map<string, Codec>([
         parseJunitPath(path, options?.onSkip, options?.stack),
       readRaw: (tree: SuiteNode[], raw: string, options?: DecodeOptions) =>
         readJunitRawOutput(tree, raw, options?.stack),
-    },
-  ],
-  [
-    "playwright",
-    {
-      parse: (data: string) => parsePlaywright(data),
-      parsePath: (path: string) => parsePlaywrightPath(path),
     },
   ],
   [

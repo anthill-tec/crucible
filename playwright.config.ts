@@ -136,15 +136,13 @@ const testDir = defineBddConfig({
 // the variable is set: a bare `bun run test:e2e` names no machine path and
 // runs unchanged.
 //
-// The `junit` and `json` reporters are kept beside it. Each reads its path
-// from the variable Playwright itself reads (PLAYWRIGHT_JUNIT_OUTPUT_NAME,
-// PLAYWRIGHT_JSON_OUTPUT_NAME); an explicit `outputFile` would win over the
-// variable, so a hardcoded path here would stop the client moving the file.
-// For a stream target the client points both into the run's own reports dir
-// (`_stream_target_run`, clients/bun-crucible.py). The JSON report keeps
-// every Gherkin step, which the `playwright` codec (`parsePlaywright`,
-// src/codecs/playwright.ts) turns into the feature, scenario and step tree.
-// The defaults keep a bare run writing both under `test-reports/`.
+// The `junit` reporter is kept beside it. It reads its path from the variable
+// Playwright itself reads (PLAYWRIGHT_JUNIT_OUTPUT_NAME); an explicit
+// `outputFile` would win over the variable, so a hardcoded path here would
+// stop the client moving the file. For a stream target the client points it
+// into the run's own reports dir (`_stream_target_run`,
+// clients/bun-crucible.py). The default keeps a bare run writing it under
+// `test-reports/`.
 const crucibleReporters = process.env["CRUCIBLE_REPORTERS"];
 const reporters: ReporterDescription[] = [
   ["list"],
@@ -152,12 +150,6 @@ const reporters: ReporterDescription[] = [
     "junit",
     {
       outputFile: process.env.PLAYWRIGHT_JUNIT_OUTPUT_NAME ?? "test-reports/junit.xml",
-    },
-  ],
-  [
-    "json",
-    {
-      outputFile: process.env.PLAYWRIGHT_JSON_OUTPUT_NAME ?? "test-reports/playwright.json",
     },
   ],
 ];
