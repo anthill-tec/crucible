@@ -5,8 +5,7 @@ test script, `regression`, the declared tier verbs `unit`, `module`,
 `integration`, `e2e` and `bdd`, `auto-ingest`, and the regression step
 `pre-merge-gate` runs) files it through the shared ingest
 (`ingest_reports`, clients/_crucible_run.py): the board's health is read
-first, then ONE `POST /api/v2/runs` goes out carrying `codec` (`junit`, or a
-`crucible.rawReport` target's declared codec), `data` (the report texts,
+first, then ONE `POST /api/v2/runs` goes out carrying `codec` (`junit`), `data` (the report texts,
 inline), `coverage: {codec: "lcov", data}` when the run measured coverage,
 `raw` (the captured runner output, on every verb but `auto-ingest`) and
 `runnerExit`. Nothing goes to `/api/v2/runs/parsed`, and no body carries a
@@ -100,11 +99,6 @@ EMPTY_JUNIT_TEXT = (
 LCOV_TEXT = ("TN:\nSF:src/math.ts\nFN:1,add\nFN:5,sub\nFNDA:1,add\nFNDA:1,sub\n"
              "FNF:2\nFNH:2\nDA:1,1\nDA:2,1\nDA:3,1\nDA:4,1\nDA:5,1\nDA:6,1\n"
              "DA:7,1\nDA:8,1\nDA:9,1\nDA:10,1\nLF:10\nLH:10\nend_of_record\n")
-PLAYWRIGHT_TEXT = json.dumps({"suites": [{
-    "title": "Sign-in", "specs": [{
-        "title": "a visitor signs in", "file": "sign-in.feature",
-        "tests": [{"projectName": "chromium", "results": [{
-            "status": "passed", "duration": 4}]}]}]}]})
 # The line the fake prints on stdout: the captured output `raw` carries.
 OUTPUT_MARKER = "fake-bun-output-line-7c1e"
 
@@ -114,7 +108,6 @@ BOARD_COVERAGE = {"lines": {"total": 200, "covered": 123, "percent": 61.5},
                   "functions": {"total": 40, "covered": 17, "percent": 42.5}}
 
 JUNIT_VAR = "FAKE_RUNNER_JUNIT_PATH"
-RAW_VAR = "FAKE_RUNNER_PLAYWRIGHT_PATH"
 TIER_VERBS = ("unit", "module", "integration", "e2e", "bdd")
 
 PLAIN_MANIFEST = {"name": "bun-sends-its-reports", "private": True}
@@ -122,21 +115,12 @@ TIER_MANIFEST = {"name": "bun-sends-its-reports", "private": True,
                  "scripts": {f"test:{tier}": "bun test" for tier in TIER_VERBS}}
 TEST_SCRIPT_MANIFEST = {"name": "bun-sends-its-reports", "private": True,
                         "scripts": {"test:all": "bun test"},
-                        "crucible": {"testScript": "test:all"}}
-RAW_REPORT_MANIFEST = {
-    "name": "bun-sends-its-reports", "private": True,
-    "scripts": {"test:e2e": "playwright test"},
-    "crucible": {
-        "reportPath": {"test:e2e": f"env:{JUNIT_VAR}"},
-        "rawReport": {"test:e2e": {"codec": "playwright",
-                                   "file": "playwright.json",
-                                   "path": f"env:{RAW_VAR}"}},
-    },
-}
+                        "crucible": {"targets": {"test:all": {
+                            "framework": "bun-test", "junit": "flag", "test": True}}}}
 
 _SCRUBBED = ("BUN_CRUCIBLE_PACKAGE_DIR", "BUN_CRUCIBLE_PROJECT_DIR",
              "BUN_CRUCIBLE_BUN", "BUN_CRUCIBLE_NO_LIFECYCLE",
-             "CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY", JUNIT_VAR, RAW_VAR)
+             "CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY", JUNIT_VAR)
 
 # A fake `bun`, for `bun test ...` and `bun run <script> ...` alike. It prints
 # OUTPUT_MARKER, writes JUNIT_TEXT (SKIPPED_JUNIT_TEXT under `-t`,
@@ -144,16 +128,15 @@ _SCRUBBED = ("BUN_CRUCIBLE_PACKAGE_DIR", "BUN_CRUCIBLE_PROJECT_DIR",
 # directory in its place under FAKE_REPORT=dir) where
 # `--reporter-outfile=` or the declared JUnit variable points, LCOV_TEXT to
 # `<--coverage-dir>/lcov.info` when `--coverage` is given (unless
-# FAKE_NO_LCOV=1), PLAYWRIGHT_TEXT where the declared raw variable points,
-# then exits FAKE_EXIT.
+# FAKE_NO_LCOV=1), then exits FAKE_EXIT.
 _FAKE_BUN = r'''
 import os
 import sys
 
-JUNIT_VAR, RAW_VAR = ''' + repr((JUNIT_VAR, RAW_VAR)) + r'''
-JUNIT, SKIPPED, EMPTY, LCOV, PLAYWRIGHT, MARKER = ''' + repr((
+JUNIT_VAR = ''' + repr(JUNIT_VAR) + r'''
+JUNIT, SKIPPED, EMPTY, LCOV, MARKER = ''' + repr((
     JUNIT_TEXT, SKIPPED_JUNIT_TEXT, EMPTY_JUNIT_TEXT, LCOV_TEXT,
-    PLAYWRIGHT_TEXT, OUTPUT_MARKER)) + r'''
+    OUTPUT_MARKER)) + r'''
 
 def write(path, text):
     directory = os.path.dirname(path)
@@ -185,8 +168,6 @@ elif os.environ.get("FAKE_REPORT") != "none":
             write(junit, JUNIT)
     if "--coverage" in argv and coverage_dir and os.environ.get("FAKE_NO_LCOV") != "1":
         write(os.path.join(coverage_dir, "lcov.info"), LCOV)
-    if RAW_VAR in os.environ:
-        write(os.environ[RAW_VAR], PLAYWRIGHT)
 sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 '''
 
@@ -370,19 +351,6 @@ class EveryBunReportVerbSendsOneRunsIngestTest(_BunProject, unittest.TestCase):
                 body = self.assert_junit_ingest_with_raw_and_exit(result)
                 self.assertEqual(body.get("tier"), tier, f"body={body!r}")
 
-    def test_a_raw_report_target_sends_its_declared_codec_report_inline(self):
-        self.use_manifest(RAW_REPORT_MANIFEST)
-        self.board.script_run(passed=1, total=1, files=1)
-        result = self.drive("e2e", "sends-raw-report")
-        body = self.the_one_runs_ingest(result)
-        self.assertEqual(body.get("codec"), "playwright", f"body={body!r}")
-        self.assertEqual(body.get("data"), [PLAYWRIGHT_TEXT],
-                         f"the declared report travels inline as `data`; "
-                         f"body={body!r}")
-        self.assertIn(OUTPUT_MARKER, body.get("raw") or "",
-                      f"`raw` is the runner's captured output; body={body!r}")
-        self.assertEqual(body.get("runnerExit"), 0, f"body={body!r}")
-
     def test_auto_ingest_sends_the_junit_text_with_no_raw_and_no_runner_exit(self):
         reports = Path(self.project, "reports")
         reports.mkdir(parents=True, exist_ok=True)
@@ -448,20 +416,6 @@ class CoverageTravelsAsItsReportTest(_BunProject, unittest.TestCase):
         self.assertEqual(codes.count("coverage-not-measured"), 1,
                          f"the envelope says the asked-for coverage was not "
                          f"measured, once; {self.diagnostics(result)}")
-
-    def test_a_raw_report_target_with_coverage_sends_none_and_warns_coverage_not_measured(self):
-        Path(self.project, "package.json").write_text(
-            json.dumps(RAW_REPORT_MANIFEST, indent=2))
-        self.board.script_run(passed=1, total=1, files=1)
-        result = self.drive("e2e", "coverage-raw-report", "--coverage")
-        body = self.the_one_runs_ingest(result)
-        self.assertNotIn("coverage", body, f"body={body!r}")
-        codes = _codes(self.envelope_of(result))
-        self.assertEqual(codes.count("coverage-not-measured"), 1,
-                         f"{self.diagnostics(result)}")
-        self.assertNotIn("raw-report-carries-no-coverage", codes,
-                         f"the route-specific warning is retired; "
-                         f"{self.diagnostics(result)}")
 
 
 # ── AC5 — the local decisions: ran nothing, the filter, the exit ────────────

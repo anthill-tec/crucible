@@ -1,26 +1,23 @@
-"""`test` runs through the `package.json` script the project declares.
+"""`test` runs through the `package.json` script the project's table marks.
 
-A project declares `crucible.testScript` in `package.json`, beside
-`crucible.reportPath`: a string naming a script of the same file's script
-table. With it, every `test` run -- targeted by `--tests` or not, filtered by
+A project marks one `crucible.targets` entry `"test": true` in `package.json`.
+With it, every `test` run -- targeted by `--tests` or not, filtered by
 `--name` or not -- is `bun run <script>` with the files and the filter passed
-on, under the report mechanism `crucible.reportPath.<script>` declares
-(including a `crucible.rawReport` declaration), exactly as a tier verb runs a
-declared script. A starved script is reported in the tier verbs' own words,
-naming the script. The run claims no tier. The envelope's `script` field names
-the script the run went through. A declaration that is not a string, names no
-script of the table, or names one whose body is empty is refused before
-anything is posted to the board: `ok: false`, exit 1, naming the script and
-`package.json`.
+on, under the report mechanism the entry's `junit` declares, exactly as a tier
+verb runs a declared script. A starved script is reported in the tier verbs'
+own words, naming the script. The run claims no tier. The envelope's `script`
+field names the script the run went through. The marker's refusals are pinned
+in tests/client/test_bun_test_runs_the_target_its_table_marks.py.
 
 Three kinds of proof:
 
-* A REAL Vitest project (`tests/fixtures/vitest-project`) whose declared script
+* A REAL Vitest project (`tests/fixtures/vitest-project`) whose script
   launches Vitest on the Bun runtime and whose `vitest.config.ts` reads its
-  JUnit path from the variable its `crucible.reportPath` declares. It is run
-  from a scratch copy -- never in the checkout -- whose `node_modules` is a
-  directory of links to this repo's installed packages, so no network install
-  is needed and Vitest's caches land in the copy.
+  JUnit path from `FIXTURE_JUNIT_PATH`. It is run from a scratch copy --
+  never in the checkout -- whose `crucible` block is rewritten to the marked
+  table entry (`framework: vitest`, `junit: env:FIXTURE_JUNIT_PATH`), and whose
+  `node_modules` is a directory of links to this repo's installed packages, so
+  no network install is needed and Vitest's caches land in the copy.
 * A declared `bun test` script under the default `flag` mechanism, on the real
   `bun`, for the name filter.
 * The argv and the report routes, with a fake `bun` that records every
@@ -62,7 +59,6 @@ AGENT = "declared-test-script-fixture-agent"
 PROJECT_KEY = "declared-test-script-fixture-key"
 PARSED_INGEST = "/api/v2/runs/parsed"
 RUNS_INGEST = "/api/v2/runs"
-RAW_INGEST = "/api/v2/runs"
 START = "/api/v2/runs/start"
 
 VITEST_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "vitest-project"
@@ -108,9 +104,7 @@ test("{BETA}", () => {{
 # it was handed (names, never values), and writes its report wherever the
 # flag or the variable points.
 ENV_JUNIT_VAR = "DECLARED_JUNIT_PATH"
-RAW_JUNIT_VAR = "RAW_JUNIT_PATH"
-RAW_JSON_VAR = "RAW_JSON_PATH"
-_WATCHED_VARS = (VITEST_REPORT_VAR, ENV_JUNIT_VAR, RAW_JUNIT_VAR, RAW_JSON_VAR)
+_WATCHED_VARS = (VITEST_REPORT_VAR, ENV_JUNIT_VAR)
 
 _FAKE_BUN_BODY = r'''
 import json
@@ -118,8 +112,7 @@ import os
 import sys
 
 WATCHED = ''' + repr(_WATCHED_VARS) + r'''
-JUNIT_VARS = WATCHED[:3]
-RAW_VAR = WATCHED[3]
+JUNIT_VARS = WATCHED
 
 argv = sys.argv[1:]
 log = os.environ.get("FAKE_BUN_LOG")
@@ -150,8 +143,6 @@ if junit:
           '<testsuite name="pair.test.ts" tests="1" failures="0">'
           '<testcase name="fixture_case" file="pair.test.ts" time="0.001">'
           '</testcase></testsuite></testsuites>')
-if RAW_VAR in os.environ:
-    write(os.environ[RAW_VAR], "{}")
 sys.exit(0)
 '''
 
@@ -170,6 +161,21 @@ def _write_project_config(project, board_url):
     Path(project, "crucible.toml").write_text(
         f"[client]\nurl = {json.dumps(board_url)}\n\n"
         "[limits.truncate_field_chars]\nvalue = 4000\n")
+
+
+def _marked_entry(framework, junit):
+    """A `crucible.targets` entry marked as the script `test` runs."""
+    return {"framework": framework, "junit": junit, "test": True}
+
+
+def _mark_the_copys_vitest_entry(project):
+    """The scratch copy's `crucible` block rewritten to the marked table entry
+    of `test:vitest`, its JUnit path in the variable its config reads."""
+    path = Path(project, "package.json")
+    manifest = json.loads(path.read_text())
+    manifest["crucible"] = {"targets": {VITEST_SCRIPT: _marked_entry(
+        "vitest", f"env:{VITEST_REPORT_VAR}")}}
+    path.write_text(json.dumps(manifest, indent=2))
 
 
 def _write_manifest(project, scripts, crucible):
@@ -300,6 +306,7 @@ class _VitestFixtureCase(_BoardCase):
         self.project = os.path.join(new_scratch("declared-test-script-vitest-"),
                                     "project")
         shutil.copytree(VITEST_FIXTURE, self.project)
+        _mark_the_copys_vitest_entry(self.project)
         _link_repo_node_modules(self.project)
         self.board = RecordingBoard()
         _write_project_config(self.project, self.board.url)
@@ -471,7 +478,7 @@ class DeclaredBunTestScriptFiltersByNameTest(_BoardCase):
         # The script is `bun test` with a preload that leaves a marker: a run
         # that went through the script, and not a bare `bun test`, leaves it.
         _write_manifest(self.project, {BUN_SCRIPT: f"bun test --preload ./{_MARK_PRELOAD}"},
-                        {"testScript": BUN_SCRIPT})
+                        {"targets": {BUN_SCRIPT: _marked_entry("bun-test", "flag")}})
         Path(self.project, _MARK_PRELOAD).write_text(
             f'await Bun.write("{_SCRIPT_RAN_MARKER}", "ran");\n')
         Path(self.project, "pair.test.ts").write_text(_PAIR_TEST)
@@ -587,7 +594,8 @@ class DeclaredScriptUnderFlagArgvTest(_FakeBunCase):
     follow them with no `--`."""
 
     SCRIPTS: ClassVar[dict] = {BUN_SCRIPT: "bun test"}
-    CRUCIBLE: ClassVar[dict | None] = {"testScript": BUN_SCRIPT}
+    CRUCIBLE: ClassVar[dict | None] = {
+        "targets": {BUN_SCRIPT: _marked_entry("bun-test", "flag")}}
 
     def test_a_targeted_filtered_run_is_the_script_its_report_flags_the_file_and_the_filter(self):
         pattern = "^alpha (one|two) match$"
@@ -624,8 +632,8 @@ class DeclaredScriptUnderEnvArgvTest(_FakeBunCase):
     the declared variable."""
 
     SCRIPTS: ClassVar[dict] = {VITEST_SCRIPT: "bun --bun vitest run"}
-    CRUCIBLE: ClassVar[dict | None] = {"testScript": VITEST_SCRIPT,
-                                       "reportPath": {VITEST_SCRIPT: f"env:{ENV_JUNIT_VAR}"}}
+    CRUCIBLE: ClassVar[dict | None] = {
+        "targets": {VITEST_SCRIPT: _marked_entry("vitest", f"env:{ENV_JUNIT_VAR}")}}
 
     def test_a_targeted_filtered_run_passes_the_file_and_filter_after_dashdash(self):
         result = self.drive("--tests", "a.vitest.ts", "--name", MATCHING_PATTERN)
@@ -650,50 +658,14 @@ class DeclaredScriptUnderEnvArgvTest(_FakeBunCase):
         self.assertEqual(result.returncode, 0, _diagnostics(result))
 
 
-class DeclaredScriptWithARawReportTest(_FakeBunCase):
-    """A declared script whose report the board decodes is filed by the raw
-    route, as a tier verb files it."""
-
-    RAW_SCRIPT = "test:raw"
-    SCRIPTS: ClassVar[dict] = {RAW_SCRIPT: "some-runner"}
-    CRUCIBLE: ClassVar[dict | None] = {"testScript": RAW_SCRIPT,
-                                       "reportPath": {RAW_SCRIPT: f"env:{RAW_JUNIT_VAR}"},
-                                       "rawReport": {RAW_SCRIPT: {"codec": "stub", "file": "stub.json",
-                                                                  "path": f"env:{RAW_JSON_VAR}"}}}
-
-    def test_the_raw_report_is_posted_for_the_board_to_decode(self):
-        # A board that decodes the declared `stub` codec.
-        health = self.board.default_health()
-        health["codecs"]["test"].append("stub")
-        self.board.script_health(health)
-        result = self.drive("--tests", "some.spec")
-        call = self.only_bun_call(result)
-        self.assertEqual(call["argv"], ["run", self.RAW_SCRIPT, "--", "some.spec"],
-                         f"argv={call['argv']!r}")
-        self.assertEqual(call["vars"], sorted([RAW_JUNIT_VAR, RAW_JSON_VAR]),
-                         f"both declared variables are handed to the script; "
-                         f"handed={call['vars']!r}")
-        raw = [b for p, b in self.board.posts() if p == RAW_INGEST]
-        self.assertEqual(len(raw), 1,
-                         f"the raw report is filed once; posts={self.board.posts()!r}")
-        self.assertEqual(raw[0].get("codec"), "stub", f"body={raw[0]!r}")
-        self.assertEqual(raw[0].get("data"), ["{}"],
-                         f"the declared report travels inline; body={raw[0]!r}")
-        self.assertNotIn("dataPath", raw[0], f"body={raw[0]!r}")
-        self.assertNotIn("tier", raw[0], f"body={raw[0]!r}")
-        self.assertEqual(self.parsed_ingests(), [],
-                         f"a declared raw report is never parsed here; "
-                         f"posts={self.board.posts()!r}")
-
-
 class StarvedDeclaredScriptNamesItselfTest(_FakeBunCase):
     """A declared script that writes no report is reported as a tier verb
     reports one: naming the script, the command and the path."""
 
     QUIET = "test:quiet"
     SCRIPTS: ClassVar[dict] = {QUIET: "some-runner"}
-    CRUCIBLE: ClassVar[dict | None] = {"testScript": QUIET,
-                                       "reportPath": {QUIET: f"env:{ENV_JUNIT_VAR}"}}
+    CRUCIBLE: ClassVar[dict | None] = {
+        "targets": {QUIET: _marked_entry("bun-test", f"env:{ENV_JUNIT_VAR}")}}
 
     def test_a_starved_script_is_named_with_its_command_and_report_path(self):
         result = self.drive("--tests", "a.spec", FAKE_BUN_WRITE="none")
@@ -711,52 +683,6 @@ class StarvedDeclaredScriptNamesItselfTest(_FakeBunCase):
         self.assertIn("junit.xml", out,
                       f"the report path is named; {_diagnostics(result)}")
         self.assertIn("no-test-reports", out, _diagnostics(result))
-
-
-class _RefusedDeclarationCase(_FakeBunCase):
-    """A bad `crucible.testScript` is refused before anything is posted."""
-
-    def assert_refused(self, result, names):
-        diagnostics = _diagnostics(result)
-        self.assertEqual(result.returncode, 1, diagnostics)
-        envelope = self.envelope_of(result)
-        self.assertIs(envelope.get("ok"), False, f"envelope={envelope!r}")
-        self.assertIn(names, result.stdout,
-                      f"the refusal names the script; {diagnostics}")
-        self.assertIn("package.json", result.stdout,
-                      f"the refusal names package.json; {diagnostics}")
-        self.assertEqual(self.board.posts(), [],
-                         f"nothing may be posted to the board; "
-                         f"posts={self.board.posts()!r}")
-        self.assertEqual(self.bun_calls(), [],
-                         f"the runner never starts; calls={self.bun_calls()!r}")
-
-
-class ADeclarationThatIsNotAStringIsRefusedTest(_RefusedDeclarationCase):
-    SCRIPTS: ClassVar[dict] = {"test:listed": "bun test"}
-    CRUCIBLE: ClassVar[dict | None] = {"testScript": ["test:listed"]}
-
-    def test_a_non_string_declaration_is_refused_before_anything_is_posted(self):
-        self.assert_refused(self.drive("--tests", "pair.test.ts"), "test:listed")
-
-
-class ADeclarationNamingNoScriptIsRefusedTest(_RefusedDeclarationCase):
-    SCRIPTS: ClassVar[dict] = {"test:unit": "bun test"}
-    CRUCIBLE: ClassVar[dict | None] = {"testScript": "test:absent"}
-
-    def test_a_declaration_naming_no_script_is_refused_before_anything_is_posted(self):
-        self.assert_refused(self.drive("--tests", "pair.test.ts"), "test:absent")
-
-    def test_a_whole_suite_run_is_refused_too(self):
-        self.assert_refused(self.drive(), "test:absent")
-
-
-class ADeclarationNamingAnEmptyScriptIsRefusedTest(_RefusedDeclarationCase):
-    SCRIPTS: ClassVar[dict] = {"test:empty": ""}
-    CRUCIBLE: ClassVar[dict | None] = {"testScript": "test:empty"}
-
-    def test_a_declaration_naming_an_empty_script_is_refused_before_anything_is_posted(self):
-        self.assert_refused(self.drive("--tests", "pair.test.ts"), "test:empty")
 
 
 if __name__ == "__main__":

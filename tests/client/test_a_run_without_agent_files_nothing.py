@@ -17,8 +17,8 @@ report, as a genuine OS subprocess — never the live :3849/:3850 server.
 
 WHAT IS RED HERE, and why, read from the clients at HEAD of this branch:
 
-  * bun's two DECLARED-tier rows (`unit`, flag mechanism; `e2e`, the RAW-report
-    mechanism the real incident used) — `cmd_regression`'s parsed and raw
+  * bun's two DECLARED-tier rows (`unit`, flag mechanism; `e2e`, the stream
+    mechanism this repo's own `test:e2e` declares) — `cmd_regression`'s parsed and raw
     ingest calls carry no `if not args.agent` guard at all, so a passing,
     unfiled run still POSTs. RED on the "posts nothing" assertion.
 
@@ -156,35 +156,28 @@ _write_junit(outfile, total)
 sys.exit(int(os.environ.get("FAKE_EXIT_CODE", "0")))
 """
 
-# The leaf behind a RAW-report declared target (this repo's own `test:e2e`
-# shape: `crucible.reportPath` names an env var for the client's own JUnit
-# read, `crucible.rawReport` names a SECOND env var for the file the board
-# decodes). Writes both and exits FAKE_EXIT_CODE.
-_FAKE_RAW_LEAF_BODY = """
+# The leaf behind a STREAM declared target (this repo's own `test:e2e`
+# shape: a `crucible.targets` entry whose record is the `crucible-events`
+# stream named in `env:CRUCIBLE_STREAM`). It writes a marker where
+# FAKE_RAN_PATH points, so a test can see the suite ran, writes one passing
+# test to the stream file when it is handed one, and exits FAKE_EXIT_CODE.
+_FAKE_STREAM_LEAF_BODY = """
+import json
 import os
 import sys
 
-total = int(os.environ.get("FAKE_TOTAL", "1"))
-junit = os.environ.get("FAKE_JUNIT_PATH")
-if junit:
-    directory = os.path.dirname(junit)
+ran = os.environ.get("FAKE_RAN_PATH")
+if ran:
+    with open(ran, "w") as handle:
+        handle.write(json.dumps({"stream": os.environ.get("CRUCIBLE_STREAM")}))
+stream = os.environ.get("CRUCIBLE_STREAM")
+if stream:
+    directory = os.path.dirname(stream)
     if directory:
         os.makedirs(directory, exist_ok=True)
-    cases = "".join(
-        '<testcase name="scenario_%d" time="0.001"></testcase>' % i
-        for i in range(1, total + 1))
-    with open(junit, "w") as handle:
-        handle.write(
-            '<?xml version="1.0"?><testsuites><testsuite name="e2e.feature" '
-            'tests="%d" failures="0">%s</testsuite></testsuites>'
-            % (total, cases))
-raw = os.environ.get("FAKE_RAW_PATH")
-if raw:
-    directory = os.path.dirname(raw)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    with open(raw, "w") as handle:
-        handle.write('{"scenarios": %d}' % total)
+    with open(stream, "w") as handle:
+        handle.write(json.dumps({"type": "test-end", "status": "pass",
+                                 "name": "scenario_1"}) + "\\n")
 sys.exit(int(os.environ.get("FAKE_EXIT_CODE", "0")))
 """
 
@@ -194,9 +187,9 @@ def _write_fake_bun(project_dir):
                              "#!" + sys.executable + "\n" + _FAKE_BUN_BODY)
 
 
-def _write_fake_raw_leaf(project_dir):
+def _write_fake_stream_leaf(project_dir):
     return _write_executable(os.path.join(project_dir, "fake_leaf.py"),
-                             "#!" + sys.executable + "\n" + _FAKE_RAW_LEAF_BODY)
+                             "#!" + sys.executable + "\n" + _FAKE_STREAM_LEAF_BODY)
 
 
 # The evidence verbs' refusal must happen BEFORE the runner starts. A fake
@@ -241,23 +234,22 @@ class BunDeclaredTierVerbPostsNothingWhenUnfiledTest(unittest.TestCase):
     `bdd`) all dispatch into `cmd_regression`'s `script=` branch, which carries
     NO `if not args.agent` guard: its parsed and raw ingest calls are made
     unconditionally. Two rows: the flag-mechanism default (`unit`, the
-    ordinary case), and the RAW-report mechanism the real incident used
-    (`e2e`, modelled byte-for-byte on this repo's own `package.json`
-    `crucible.reportPath`/`crucible.rawReport` declarations for `test:e2e`)."""
+    ordinary case), and the stream mechanism this repo's own `package.json`
+    declares for `test:e2e` in `crucible.targets` (`e2e`)."""
 
     def setUp(self):
         self.project = new_scratch("cr171-declared-")
         self.board = RecordingBoard()
         install_project(self.project, self.board.url, "cr171-declared-key")
         self.fake_bun = _write_fake_bun(self.project)
-        self.fake_leaf = _write_fake_raw_leaf(self.project)
+        self.fake_leaf = _write_fake_stream_leaf(self.project)
 
     def tearDown(self):
         self.board.close()
         shutil.rmtree(self.project, ignore_errors=True)
 
-    def _drive(self, verb):
-        env = scrubbed_env(None, FAKE_TOTAL="4")
+    def _drive(self, verb, **fake_env):
+        env = scrubbed_env(None, FAKE_TOTAL="4", **fake_env)
         cmd = [sys.executable, str(CLIENTS / "bun-crucible.py"), verb,
                "--bun", self.fake_bun, "--project-dir", self.project,
                "--package-dir", self.project, "--reports", "reports"]
@@ -280,30 +272,32 @@ class BunDeclaredTierVerbPostsNothingWhenUnfiledTest(unittest.TestCase):
             f"NOTHING to the board — cmd_regression's `script` branch "
             f"ingests regardless of --agent; got {posts!r}")
 
-    def test_raw_report_declared_e2e_target_runs_the_suite_and_posts_nothing_when_unfiled(self):
+    def test_stream_declared_e2e_target_runs_the_suite_and_posts_nothing_when_unfiled(self):
         Path(self.project, "package.json").write_text(json.dumps({
             "name": "cr171-fixture",
             "scripts": {"test:e2e": self.fake_leaf},
-            "crucible": {
-                "reportPath": {"test:e2e": "env:FAKE_JUNIT_PATH"},
-                "rawReport": {"test:e2e": {"codec": "stub", "file": "stub.json",
-                                           "path": "env:FAKE_RAW_PATH"}},
-            },
+            "crucible": {"targets": {"test:e2e": {
+                "framework": "playwright",
+                "stream": {"codec": "crucible-events", "path": "env:CRUCIBLE_STREAM"},
+            }}},
         }))
-        result = self._drive("e2e")
+        ran = os.path.join(self.project, "leaf-ran.json")
+        result = self._drive("e2e", FAKE_RAN_PATH=ran)
         self.assertEqual(
             result.returncode, 0,
             f"a passing unfiled declared target must exit with the runner's "
             f"own (0) code; stdout={result.stdout!r} "
             f"stderr={result.stderr[-1500:]!r}")
+        self.assertTrue(
+            os.path.exists(ran),
+            f"the unfiled run still runs the suite; "
+            f"stderr={result.stderr[-1500:]!r}")
         posts = _run_filing_posts(self.board.posts())
         self.assertEqual(
             posts, [],
-            f"THE INCIDENT (C3 GREEN, cycle 597): a declared "
-            f"target with a RAW-report mechanism (bun's own test:e2e "
-            f"shape) run unfiled still POSTs the decoded report, and the "
-            f"real board's 409 turned a 4/4 pass into ok:false exit 1; "
-            f"got {posts!r}")
+            f"THE INCIDENT (C3 GREEN, cycle 597): a declared e2e target run "
+            f"unfiled must post NOTHING — the real board's 409 turned a 4/4 "
+            f"pass into ok:false exit 1; got {posts!r}")
 
 
 class BunRegressionAndPreMergeGateRefuseAnUnfiledRunBeforeItStartsTest(unittest.TestCase):

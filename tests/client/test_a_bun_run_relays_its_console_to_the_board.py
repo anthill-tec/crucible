@@ -15,9 +15,8 @@ sent while the runner was still working.
 
 What is pinned, by AC4 bullet:
 - which runs relay: `test`, `regression`, a declared script with no report
-  declaration (a tier verb's `test:unit`, and `crucible.testScript`) relay
-  the runner's whole console, as written, under codec `bun-console`; a script
-  declaring an env report path or a raw report does not;
+  declaration (a tier verb's `test:unit`) relay the runner's whole console, as
+  written, under codec `bun-console`;
 - the total: the run start carries the prescanned `total` for the client's own
   `bun test` (`test`'s targets when given) and none for a declared script or a
   `--name` filter;
@@ -36,8 +35,8 @@ What is pinned, by AC4 bullet:
   6 as amended for VERIFY 833 finding 2).
 
 `_emit_filter_uncounted` is the one §S4 step 4 exit with no test here: it is
-reached only through a declared script that declares a raw report, and such a
-script never relays (pinned below), so there is no relay for it to stop.
+reached only through a declared script that declares a raw report, which a
+bun package no longer declares, so there is no relay for it to stop.
 
 Interface choices (the spec leaves these names open; GREEN is asked to use them):
 - `CONSOLE_FILE = "bun-console.log"` and `CONSOLE_CODEC = "bun-console"`,
@@ -511,40 +510,6 @@ class WhichRunsRelayTest(ConsoleRelayCase):
                            FAKE_BEFORE=2, FAKE_AFTER=2)
         self.assertEqual(drive.returncode, 0, drive.diag())
         self.assert_relays_the_whole_console(drive)
-
-    def test_a_test_run_through_a_declared_test_script_with_no_report_declaration_relays(self):
-        self.declare_tests("relay.test.ts", 4)
-        self.declare_manifest({"test:unit": "bun test"}, {"testScript": "test:unit"})
-        drive = self.drive("test", release_when=_a_console_batch_landed,
-                           FAKE_BEFORE=2, FAKE_AFTER=2)
-        self.assertEqual(drive.returncode, 0, drive.diag())
-        self.assert_relays_the_whole_console(drive)
-
-    def test_a_declared_script_with_an_env_report_path_does_not_relay(self):
-        self.declare_tests("relay.test.ts", 4)
-        self.declare_manifest({"test:unit": "bun test"},
-                              {"reportPath": {"test:unit": "env:FIXTURE_JUNIT_PATH"}})
-        drive = self.drive("unit", FAKE_BEFORE=4)
-        self.assertEqual(drive.returncode, 0, drive.diag())
-        self.assertEqual(self.board.stream_posts(), [], "nothing is relayed")
-        closes = self.posts_to(CLOSE)
-        self.assertEqual(len(closes), 1, drive.diag())
-        self.assertEqual((closes[0].get("codec"), closes[0].get("runId")), ("junit", RUN_ID),
-                         "the run files exactly as today")
-
-    def test_a_declared_script_with_a_raw_report_does_not_relay(self):
-        self.declare_tests("relay.test.ts", 4)
-        self.declare_manifest({"test:unit": "bun test"},
-                              {"rawReport": {"test:unit": {"codec": "playwright",
-                                                           "file": "results.json",
-                                                           "path": "env:FIXTURE_RAW_PATH"}}})
-        drive = self.drive("unit", FAKE_BEFORE=4)
-        self.assertEqual(drive.returncode, 0, drive.diag())
-        self.assertEqual(self.board.stream_posts(), [], "nothing is relayed")
-        closes = self.posts_to(CLOSE)
-        self.assertEqual(len(closes), 1, drive.diag())
-        self.assertEqual((closes[0].get("codec"), closes[0].get("runId")),
-                         ("playwright", RUN_ID), "the run files exactly as today")
 
 
 # ── the run start's total ───────────────────────────────────────────────────

@@ -322,6 +322,31 @@ registry** translating each tool's native output into one **canonical RunSchema*
     the stored run.
   - **A stream it cannot write** gives one error line naming the path, and the reporter writes nothing more; the run
     completes.
+- **The bun declaration's clean break, the `test` marker and the gate's per-framework suites (CR-CRU-226).**
+  - **The clean break.** A `package.json` declaring `crucible.reportPath`, `crucible.rawReport` or
+    `crucible.testScript`, with or without `crucible.targets`, is refused by `test`, `regression`, every tier verb and
+    `pre-merge-gate` before anything is posted (the gate before its tsc step). The refusal (`declaration-refused`)
+    names each key beside what replaced it in `crucible.targets` (an entry's `junit`, its `stream`, the entry marked
+    `"test": true`), exits non-zero and files nothing. The client keeps no reader of the old keys.
+  - **The `test` marker.** The entry marked `"test": true` is the script `test` runs, with the files and the name
+    filter as its passthrough; the run carries the entry's framework, and the filter flag follows it (`-t` for
+    `bun-test` and `vitest`, `--grep` for `playwright` and `playwright-bdd`). `test` with no files runs the whole
+    script under the verb `test`, with no tier. Two marked entries, a marker that is not `true` (`false` included),
+    and a marked script missing from `scripts` or with an empty body are refused before anything is posted. Only
+    `test` reads the marker; with none, `test` runs `bun test`.
+  - **The gate runs every declared framework.** The shared `GateSuite` carries a `framework`, and `gate_regression`
+    a fourth rule: an own-stack suite whose framework is not the whole-suite run's runs in process through the
+    client's own run, filed under the tier its name names, else `regression`, its row carrying its own counts,
+    outcome and `client`, its counts added to the totals. The bun gate sets it from each `test:` script's entry
+    (`bun-test` when it has none); the other stacks set none, so their gates are unchanged. When every own-stack
+    suite is of another framework the whole-suite run is skipped and the envelope's `wholeSuite` says so. `--suites`
+    naming a non-`bun-test` target runs only it; naming a `bun-test` target runs the whole suite. A non-`bun-test`
+    suite measures no coverage and adds no `coverage-not-measured` warning. A non-`bun-test` entry whose key is not a
+    `test:` script, or is a `test:` key with no script of that name in `scripts`, is refused by the gate before
+    anything runs. `e2e` stays outside the gate, whatever its framework.
+  - **Left to CR-CRU-229** (split 2026-11-04, user ruling): the `playwright` codec's retirement with Playwright's JSON
+    report (`STREAM_KEPT_REPORTS`), the migration of the runs stored through it, and the `junit` readings keyed by
+    framework rather than stack.
 
 ### 4.5 Compile ingest
 - Structured parsers per format: `rustc` (`error[EXXXX]` + `--> file:line:col`), java/

@@ -3013,10 +3013,25 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // CASCADE with it: tests/help-surface-order-independence.test.ts collects THIS
 // file in its child `bun test`, fired for the right reason, and gets no
 // change.
+// UPDATED 2026-11-04 at the close-out of the bun declarations' clean break
+// (its FIX round). ONE head moves: `clients` 822 -> 815 (-7), over the
+// branch's changes to the bun client and the shared module.
+// MEASURED with this file's own machinery on the feature branch after the
+// branch's last content edit: the recorded head 822 against a measured 815,
+// and `src` (883) and `public` (538) re-measure at their recorded heads.
+//
+// TOTALS ONLY, and stated as such: taken from this test's own failure output,
+// which gives each tree's total and no per-file or per-id split.
+//
+//   clients -7: a per-tree total, attributed to no file and no id.
+//
+// A NET LOSS of seven, and stated as one. `clients` (815) stays above its 601
+// floor, so the directional half holds. The three `develop` floors stay at
+// 512/378/601, unchanged.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 883 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 538 },
-  clients: { exts: [".py"], develop: 601, head: 822 },
+  clients: { exts: [".py"], develop: 601, head: 815 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

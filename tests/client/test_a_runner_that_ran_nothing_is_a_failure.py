@@ -19,21 +19,17 @@ report holding zero results keeps filing exactly as it does today.
 
 Fixtures (`tests/client/live_run_harness.py`) reused verbatim from the sibling
 `test_a_client_aborts_a_run_it_cannot_file.py` \u2014 `RecordingBoard`, the fake
-runners, `install_project`/`scrubbed_env`/`new_scratch` \u2014 plus TWO additions
+runners, `install_project`/`scrubbed_env`/`new_scratch` \u2014 plus ONE addition
 this file is written against: a `FAKE_ZERO_REPORT`/`FAKE_EXIT_CODE` mode added
 to every existing per-stack fake runner (writes a report holding zero
 testcases, then exits with a caller-chosen code \u2014 inert unless
 `FAKE_ZERO_REPORT=1`, so every pre-existing drive of these fixtures is
-unchanged), and a fake-Playwright pair (`write_fake_bun_e2e`,
-`write_fake_playwright`) for the `bun-crucible.py e2e` declared-raw-report
-route, adapted from `test_bun_crucible_agent_report_isolation.py`'s own fake
-`bun run <script>` dispatcher.
+unchanged).
 
 Invocation:
     python3 -m unittest tests.client.test_a_runner_that_ran_nothing_is_a_failure -v
 """
 
-import json
 import shutil
 import subprocess
 import sys
@@ -47,12 +43,10 @@ from tests.client.live_run_harness import (
     new_scratch,
     scrubbed_env,
     write_fake_bun,
-    write_fake_bun_e2e,
     write_fake_cargo,
     write_fake_docker,
     write_fake_mvnw,
     write_fake_native,
-    write_fake_playwright,
     write_fake_python,
 )
 
@@ -61,17 +55,6 @@ PROJECT_KEY = "test-key-zero-result"
 PROJECT_NAME = "zero-result-fixture-firmware"
 TOON = load_toon()
 RUN_ID = "run-live-1"
-
-# A minimal, well-formed Playwright JSON report declaring no run at all \u2014
-# the shape \u00a7S4's Problem section cites ("what Playwright writes when it
-# cannot start"). Its CONTENT is never decoded by the fake board (the real
-# server's codec registry is what decodes it in production; `RecordingBoard`
-# always answers a raw ingest with `{total: 0, passed: 0, failed: 0}`, which is
-# itself the zero-results shape this file drives), but it keeps the fixture
-# honest: a real Playwright failure writes exactly this \u2014 an empty suite list.
-ZERO_RESULT_PLAYWRIGHT_JSON = json.dumps(
-    {"suites": [], "stats": {"expected": 0, "unexpected": 0, "skipped": 0}})
-
 
 class _ZeroResultCase(unittest.TestCase):
 
@@ -314,68 +297,9 @@ class EmptyReportWithNonzeroExitAbortsTheRunTest(_ZeroResultCase):
 
 
 # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-# "An e2e that never ran fails" \u2014 `bun-crucible.py e2e` via the DECLARED
-# raw-report route (`test:e2e`), against a fake Playwright that exits 1 before
-# running anything and writes a zero-results `playwright.json`.
-# \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-
-class EmptyPlaywrightReportFailsTheE2eRunTest(_ZeroResultCase):
-
-    def _declare_e2e(self, fake_playwright):
-        manifest = {
-            "name": "zero-result-e2e-fixture",
-            "scripts": {"test:e2e": f"{sys.executable} {fake_playwright}"},
-            "crucible": {
-                "reportPath": {"test:e2e": "env:PLAYWRIGHT_JUNIT_OUTPUT_NAME"},
-                "rawReport": {"test:e2e": {
-                    "codec": "playwright", "file": "playwright.json",
-                    "path": "env:PLAYWRIGHT_JSON_OUTPUT_NAME"}},
-            },
-        }
-        with open(f"{self.project}/package.json", "w") as f:
-            json.dump(manifest, f)
-
-    def _e2e(self, exit_code, raw_content, refuse=False):
-        bun_e2e = write_fake_bun_e2e(self.project)
-        fake_playwright = write_fake_playwright(self.project)
-        self._declare_e2e(fake_playwright)
-        if refuse:
-            self.board.refuse_next_abort()
-        return self.run_client(
-            [sys.executable, str(CLIENTS / "bun-crucible.py"), "e2e",
-             "--bun", bun_e2e, "--project-dir", self.project,
-             "--package-dir", self.project, "--reports", "reports",
-             "--agent", AGENT],
-            self.env(FAKE_E2E_EXIT_CODE=str(exit_code),
-                     FAKE_E2E_RAW_CONTENT=raw_content))
-
-    def test_bun_e2e_with_playwright_exit_before_running_anything_fails(self):
-        """The Problem section's own incident, reproduced: Playwright's port is
-        taken, it exits 1 before running a single test, and STILL writes
-        `playwright.json` holding zero results (`suites: []`)."""
-        result = self._e2e(1, ZERO_RESULT_PLAYWRIGHT_JSON)
-        self.assertNotEqual(result.returncode, 0, f"stdout={result.stdout!r}")
-        axi = self.axi(result.stdout)
-        self.assertEqual(axi.get("ok"), False, f"got axi={axi!r}")
-        self.assert_names_exit_code(self.no_report_warning(axi), 1)
-        self.assert_run_aborted_or_left_open(axi, RUN_ID)
-        self.assert_never_filed()
-
-    def test_bun_e2e_with_playwright_exit_before_running_anything_and_a_refused_abort_leaves_the_run_open(self):
-        result = self._e2e(1, ZERO_RESULT_PLAYWRIGHT_JSON, refuse=True)
-        self.assertNotEqual(result.returncode, 0, f"stdout={result.stdout!r}")
-        axi = self.axi(result.stdout)
-        self.assertEqual(axi.get("ok"), False, f"got axi={axi!r}")
-        self.assert_names_exit_code(self.no_report_warning(axi), 1)
-        self.assert_run_aborted_or_left_open(axi, RUN_ID)
-        self.assert_never_filed()
-
-
-# \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
 # "Existing exits unchanged" \u2014 a runner that exits 0 with zero results keeps
 # TODAY's behaviour: filed normally, `ok: true`, no abort. Pinned explicitly
-# per the AC's own instruction, for every client this CR touches plus the e2e
-# raw-report route.
+# per the AC's own instruction, for every client this CR touches.
 # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
 
 class RunnerExitsZeroWithZeroResultsFilesNormallyTest(_ZeroResultCase):
@@ -430,34 +354,6 @@ class RunnerExitsZeroWithZeroResultsFilesNormallyTest(_ZeroResultCase):
             self.env(FAKE_ZERO_REPORT="1", FAKE_EXIT_CODE="0"))
         self.assertEqual(result.returncode, 0, f"stdout={result.stdout!r}")
         self.assert_filed_normally(self.axi(result.stdout))
-
-    def test_bun_e2e_with_zero_results_and_exit_zero_files_normally(self):
-        bun_e2e = write_fake_bun_e2e(self.project)
-        fake_playwright = write_fake_playwright(self.project)
-        self._declare_e2e_for_pin(fake_playwright)
-        result = self.run_client(
-            [sys.executable, str(CLIENTS / "bun-crucible.py"), "e2e",
-             "--bun", bun_e2e, "--project-dir", self.project,
-             "--package-dir", self.project, "--reports", "reports",
-             "--agent", AGENT],
-            self.env(FAKE_E2E_EXIT_CODE="0",
-                     FAKE_E2E_RAW_CONTENT=ZERO_RESULT_PLAYWRIGHT_JSON))
-        self.assertEqual(result.returncode, 0, f"stdout={result.stdout!r}")
-        self.assert_filed_normally(self.axi(result.stdout))
-
-    def _declare_e2e_for_pin(self, fake_playwright):
-        manifest = {
-            "name": "zero-result-e2e-pin-fixture",
-            "scripts": {"test:e2e": f"{sys.executable} {fake_playwright}"},
-            "crucible": {
-                "reportPath": {"test:e2e": "env:PLAYWRIGHT_JUNIT_OUTPUT_NAME"},
-                "rawReport": {"test:e2e": {
-                    "codec": "playwright", "file": "playwright.json",
-                    "path": "env:PLAYWRIGHT_JSON_OUTPUT_NAME"}},
-            },
-        }
-        with open(f"{self.project}/package.json", "w") as f:
-            json.dump(manifest, f)
 
 
 # ---------------------------------------------------------------------------

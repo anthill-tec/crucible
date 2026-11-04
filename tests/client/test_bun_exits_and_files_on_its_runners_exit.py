@@ -9,9 +9,8 @@ case — suite `runner`, case `exit <n>` — before it stores the run.
 
 `RunnerExitOnARealBoardTest`
     End to end against a REAL scratch board (`tests/client/real_board.py`):
-    a fake runner that exits 1 over a passing-only report, on the parsed route
-    (`test`, `regression`) and on the Playwright raw-report route (a declared
-    `test:e2e` whose report the board decodes) — the stored run carries the
+    a fake runner that exits 1 over a passing-only report (`test`,
+    `regression`) — the stored run carries the
     `runner / exit 1` case, the envelope's `run` counts include it, and the
     verb exits non-zero. A runner killed by SIGKILL files `exit 137`. A runner
     exiting non-zero with no report exits non-zero. A clean runner over a
@@ -58,43 +57,24 @@ COMPILE_INGEST = "/api/v2/runs/compile"
 
 PASSING_CASE = "adds two numbers"
 PASSING_FILE = "math.test.ts"
-SCENARIO = "a visitor signs in"
 
-# The declared `test:e2e` target's report variables: its JUnit path and the
-# Playwright report the board decodes.
-JUNIT_VAR = "FAKE_RUNNER_JUNIT_PATH"
-RAW_VAR = "FAKE_RUNNER_PLAYWRIGHT_PATH"
-
-E2E_MANIFEST = {
-    "name": "runner-exit-fixture", "private": True,
-    "scripts": {"test:e2e": "playwright test"},
-    "crucible": {
-        "reportPath": {"test:e2e": f"env:{JUNIT_VAR}"},
-        "rawReport": {"test:e2e": {"codec": "playwright",
-                                   "file": "playwright.json",
-                                   "path": f"env:{RAW_VAR}"}},
-    },
-}
 PLAIN_MANIFEST = {"name": "runner-exit-fixture", "private": True}
 
 # Keys that would let the shell running this suite decide what the client
 # resolves or how it files: scrubbed from every drive.
 _SCRUBBED = ("BUN_CRUCIBLE_PACKAGE_DIR", "BUN_CRUCIBLE_PROJECT_DIR",
              "BUN_CRUCIBLE_BUN", "BUN_CRUCIBLE_NO_LIFECYCLE",
-             "CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY", JUNIT_VAR, RAW_VAR)
+             "CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY")
 
 # A fake `bun`. It writes one passing JUnit case wherever `--reporter-outfile=`
-# or the declared JUnit variable points, and a one-scenario passing
-# Playwright report wherever the declared raw variable points — unless
-# FAKE_REPORT=none — then exits FAKE_EXIT, or kills itself with FAKE_SIGNAL.
+# points — unless FAKE_REPORT=none — then exits FAKE_EXIT, or kills itself
+# with FAKE_SIGNAL.
 _FAKE_BUN = r'''
-import json
 import os
 import signal
 import sys
 
-JUNIT_VAR, RAW_VAR = ''' + repr((JUNIT_VAR, RAW_VAR)) + r'''
-CASE, FILE, SCENARIO = ''' + repr((PASSING_CASE, PASSING_FILE, SCENARIO)) + r'''
+CASE, FILE = ''' + repr((PASSING_CASE, PASSING_FILE)) + r'''
 
 
 def write(path, text):
@@ -106,7 +86,7 @@ def write(path, text):
 
 
 argv = sys.argv[1:]
-junit = os.environ.get(JUNIT_VAR)
+junit = None
 for arg in argv:
     if arg.startswith("--reporter-outfile="):
         junit = arg.split("=", 1)[1]
@@ -119,14 +99,6 @@ if os.environ.get("FAKE_REPORT") != "none":
               '<testsuite name="%s" file="%s" tests="1" failures="0">'
               '<testcase name="%s" classname="" time="0.00002" file="%s"/>'
               '</testsuite></testsuites>' % (FILE, FILE, CASE, FILE))
-    if RAW_VAR in os.environ:
-        write(os.environ[RAW_VAR], json.dumps({"suites": [{
-            "title": "Sign-in", "specs": [{
-                "title": SCENARIO, "file": "sign-in.feature",
-                "tests": [{"projectName": "chromium", "results": [{
-                    "status": "passed", "duration": 4,
-                    "steps": [{"title": "Given a registered visitor",
-                               "duration": 2}]}]}]}]}]}))
 name = os.environ.get("FAKE_SIGNAL")
 if name:
     os.kill(os.getpid(), getattr(signal, "SIG" + name))
@@ -214,9 +186,6 @@ class RunnerExitOnARealBoardTest(_FakeRunnerProject, unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.project, ignore_errors=True)
 
-    def use_manifest(self, manifest):
-        Path(self.project, "package.json").write_text(json.dumps(manifest, indent=2))
-
     def drive_filed(self, verb, agent, **fake_env):
         self.board.install(self.project)
         return self.drive(verb, agent, **fake_env)
@@ -293,26 +262,6 @@ class RunnerExitOnARealBoardTest(_FakeRunnerProject, unittest.TestCase):
         event = self.the_one_stored_run(agent, result)
         self.assert_runner_case_filed(event, 137, result)
 
-    # -- the Playwright raw-report route -----------------------------------
-
-    def test_a_declared_e2e_target_exiting_1_over_a_passing_playwright_report_files_the_runner_case(self):
-        self.use_manifest(E2E_MANIFEST)
-        agent = "runner-exit-e2e-raw"
-        result = self.drive_filed("e2e", agent, FAKE_EXIT="1")
-        self.assertNotEqual(result.returncode, 0,
-                            f"a declared target that exited 1 never exits "
-                            f"green; {_diagnostics(result)}")
-        event = self.the_one_stored_run(agent, result)
-        self.assertEqual(event.get("codec"), "playwright",
-                         f"fixture guard: the run went the raw route; "
-                         f"event codec={event.get('codec')!r}")
-        self.assert_runner_case_filed(event, 1, result)
-        self.assert_counts(event.get("summary") or {}, total=2, passed=1,
-                           failed=1, where="the stored run's")
-        envelope = self.envelope_of(result)
-        self.assert_counts(envelope.get("run") or {}, total=2, passed=1,
-                           failed=1, where="the envelope's run")
-
     # -- no report ----------------------------------------------------------
 
     def test_test_whose_runner_exits_1_with_no_report_exits_non_zero(self):
@@ -346,52 +295,6 @@ class RunnerExitOnARealBoardTest(_FakeRunnerProject, unittest.TestCase):
         self.assert_counts(envelope.get("run") or {}, total=1, passed=1,
                            failed=0, where="the envelope's run")
 
-
-# ── The raw-report route with no board ──────────────────────────────────────
-
-class RawRouteWithNoBoardShowsNoFiguresTest(_FakeRunnerProject, unittest.TestCase):
-    """On the Playwright raw-report route the board decodes the report; when
-    no board answers, the ingest response carries no `run` and there are no
-    counts to state. The envelope's `run` then carries no figures — null, as
-    the board-decoded routes of the other clients state it — never zeros the
-    client made up, and a run that reached no board never exits green."""
-
-    PROJECT_KEY = "raw-route-no-board-key"
-
-    def setUp(self):
-        self.make_project(E2E_MANIFEST)
-        # A loopback port bound and released: nothing listens on it.
-        import socket
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
-        Path(self.project, ".env").write_text(
-            f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
-        Path(self.project, "crucible.toml").write_text(
-            f"[client]\nurl = {json.dumps(f'http://127.0.0.1:{port}')}\n")
-
-    def tearDown(self):
-        shutil.rmtree(self.project, ignore_errors=True)
-
-    def test_a_declared_raw_report_target_with_no_board_shows_null_counts_and_exits_non_zero(self):
-        result = self.drive("e2e", "raw-route-no-board", FAKE_EXIT="0")
-        envelope = self.envelope_of(result)
-        self.assertIs(envelope.get("ok"), False,
-                      f"a run that reached no board is not filed; "
-                      f"{_diagnostics(result)}")
-        self.assertIsInstance(envelope.get("error"), str,
-                              f"the envelope says why the run was not filed; "
-                              f"{_diagnostics(result)}")
-        run = envelope.get("run") if isinstance(envelope.get("run"), dict) else {}
-        figures = {key: run[key] for key in ("passed", "failed", "pending", "total")
-                   if isinstance(run.get(key), int)}
-        self.assertEqual(
-            figures, {},
-            f"no board decoded the report, so the envelope states no figures "
-            f"— never 0; run={run!r}")
-        self.assertNotEqual(result.returncode, 0,
-                            f"a run that reached no board never exits green; "
-                            f"{_diagnostics(result)}")
 
 # ── What the ingest carries, against a recording board ─────────────────────
 
@@ -452,14 +355,6 @@ class RunnerExitReachesTheIngestTest(_FakeRunnerProject, unittest.TestCase):
                             FAKE_SIGNAL="KILL")
         self.assert_runner_exit(self.the_one_ingest(RAW_INGEST, result),
                                 128 + int(signal.SIGKILL))
-
-    def test_a_declared_e2e_target_exiting_1_sends_runner_exit_1_on_the_raw_ingest(self):
-        Path(self.project, "package.json").write_text(json.dumps(E2E_MANIFEST, indent=2))
-        result = self.drive("e2e", "runner-exit-carry-e2e", FAKE_EXIT="1")
-        body = self.the_one_ingest(RAW_INGEST, result)
-        self.assertEqual(body.get("codec"), "playwright",
-                         f"fixture guard: the raw route; body={body!r}")
-        self.assert_runner_exit(body, 1)
 
     def test_a_refused_ingest_after_a_clean_test_runner_exits_non_zero(self):
         self.board.refuse_ingest_for("run-live-1")

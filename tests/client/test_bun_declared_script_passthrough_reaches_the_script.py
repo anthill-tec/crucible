@@ -109,11 +109,14 @@ sys.exit(0)
 '''
 
 
-def _write_manifest(directory, report_path=None):
+def _write_manifest(directory, junit=None):
+    """The scratch manifest: `test:unit` runs `bun test`; with `junit`, its
+    `crucible.targets` entry declares that report mechanism."""
     manifest = {"name": "declared-passthrough-fixture",
                 "scripts": {"test:unit": "bun test"}}
-    if report_path is not None:
-        manifest["crucible"] = {"reportPath": {"test:unit": report_path}}
+    if junit is not None:
+        manifest["crucible"] = {"targets": {"test:unit": {
+            "framework": "bun-test", "junit": junit}}}
     Path(directory, "package.json").write_text(json.dumps(manifest, indent=2))
 
 
@@ -230,11 +233,11 @@ class FlagMechanismPassthroughRunsOnlyTheMatchingTestTest(unittest.TestCase):
 class _FakeBunCase(unittest.TestCase):
     """A scratch project whose `bun` is a recording fake."""
 
-    REPORT_PATH = None
+    JUNIT = None
 
     def setUp(self):
         self.project = new_scratch("declared-passthrough-argv-")
-        _write_manifest(self.project, self.REPORT_PATH)
+        _write_manifest(self.project, self.JUNIT)
         self.board = RecordingBoard()
         _write_project_config(self.project, self.board.url)
         self.bun_log = os.path.join(self.project, "bun-calls.jsonl")
@@ -272,7 +275,7 @@ class FlagMechanismPassthroughArgvTest(_FakeBunCase):
     """Under `flag` the report flags are appended and the passthrough follows
     them with no `--`, so `bun run` hands it to the script as written."""
 
-    REPORT_PATH = None  # no declaration: the flag default
+    JUNIT = None  # no declaration: the flag default
 
     def test_passthrough_follows_the_report_flags_with_no_dashdash(self):
         result = self.drive_unit("--", "-t", "alpha")
@@ -318,7 +321,7 @@ class EnvMechanismPassthroughIsUnchangedTest(_FakeBunCase):
     """Under `env:<VAR>` nothing is appended, so the invocation is unchanged:
     `bun run <script> -- <passthrough>`."""
 
-    REPORT_PATH = f"env:{ENV_REPORT_VAR}"
+    JUNIT = f"env:{ENV_REPORT_VAR}"
 
     def test_env_mechanism_keeps_the_dashdash_ahead_of_the_passthrough(self):
         result = self.drive_unit("--", "-t", "alpha")

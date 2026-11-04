@@ -10,6 +10,59 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ## [Unreleased]
 
+### Added
+
+- **`test` runs the script a bun project marks.** A `crucible.targets` entry marked `"test": true` is
+  the script every `test` runs, with the files and `--name` passed on in the flag its framework takes
+  (`-t` for `bun-test` and `vitest`, `--grep` for `playwright` and `playwright-bdd`). The run carries
+  the entry's framework. With no files, `test` runs the whole script. With no entry marked, `test`
+  runs `bun test`, as before.
+- **The bun gate runs every declared framework.** `pre-merge-gate` runs each `test:` script whose
+  entry names a framework other than `bun-test` (Vitest, Playwright) as a suite of its own, filed under
+  the tier its name names, with its own row, counts and outcome, and its counts in the gate's totals.
+  Before this, such a target was reported as covered by `bun test` without running.
+  - The whole `bun test` run is skipped only when the package declares at least one bun suite and
+    every bun suite, excluded ones included, runs under another framework. The envelope's
+    `wholeSuite` field then says so.
+  - `--suites <target>` on a non-`bun-test` target runs only that target.
+  - These suites measure no coverage, and the gate warns of none.
+  - The other stacks' gates are unchanged.
+
+### Removed
+
+- **⚠ The bun client's older declaration keys are refused.** A `package.json` declaring
+  `crucible.reportPath`, `crucible.rawReport` or `crucible.testScript` is refused by `test`,
+  `regression`, every tier verb and `pre-merge-gate`, before anything is filed. Declare
+  `crucible.targets` instead:
+  - `crucible.reportPath.<script>` becomes the entry's `junit` (`flag` or `env:<VAR>`);
+  - `crucible.rawReport` becomes the entry's `stream`;
+  - `crucible.testScript` becomes `"test": true` on the script's entry.
+
+### Stack declaration changes
+
+For the bun stack (`package.json`'s `crucible` block):
+
+- **Refused keys.** `crucible.reportPath`, `crucible.rawReport` and `crucible.testScript` are refused,
+  with or without `crucible.targets`, by every verb and by `pre-merge-gate` before its tsc step. The
+  refusal (`declaration-refused`) names each key and what replaces it, exits non-zero and files
+  nothing.
+  - `reportPath.<script>` becomes `crucible.targets.<script>.junit`.
+  - `rawReport` becomes `crucible.targets.<script>.stream`.
+  - `testScript` becomes `crucible.targets.<script>.test: true`.
+- **The `"test": true` marker.** Only `test` reads the marker; the tier verbs and the gate ignore it.
+  - It is refused when two entries carry it, when it is anything but `true` (an unmarked entry omits
+    the field, so `false` is refused too), or when the marked script is missing from `scripts` or has
+    an empty body.
+  - `--name` is passed as `-t` to `bun-test` and `vitest`, and as `--grep` to `playwright` and
+    `playwright-bdd`.
+- **The gate.**
+  - `pre-merge-gate` runs each non-`bun-test` target as its own suite.
+  - It refuses a non-`bun-test` entry whose key is not a `test:` script, or is a `test:` key with
+    no script of that name in `scripts`, because it could not otherwise run it.
+- **Model B surfaces to reword.** The `block-direct-bun-test` hook and the bun agent templates name
+  `crucible.testScript` and `crucible.reportPath`. They should name the `crucible.targets` entry's
+  `"test": true` marker and its `junit` instead.
+
 ## [0.3.0] - 2026-10-10
 
 38 change requests (wave 7).

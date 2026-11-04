@@ -103,8 +103,9 @@ sys.exit(0)
 
 
 def _write_project(project, board_url):
-    """A package with no `crucible.testScript`: `test` takes the default
-    `bun test` path. The board is named by the project's own config."""
+    """A package with no `crucible.targets` entry marked `"test": true`:
+    `test` takes the default `bun test` path. The board is named by the
+    project's own config."""
     Path(project, "package.json").write_text(
         json.dumps({"name": "name-filter-fixture"}, indent=2))
     Path(project, "pair.test.ts").write_text(_PAIR_TEST)

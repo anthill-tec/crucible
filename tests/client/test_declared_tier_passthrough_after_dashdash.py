@@ -70,6 +70,7 @@ import shutil
 import subprocess
 import sys
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from tests.client.live_run_harness import (
@@ -91,15 +92,12 @@ PROJECT_NAME = "cr170-dashdash-passthrough-project"
 RAW_INGEST_PATH = "/api/v2/runs"
 ARGV_LOG_VAR = "CR170_ARGV_LOG"
 
-# The project's own `crucible.reportPath`/`rawReport` vocabulary, reused
-# verbatim (same `env:<VAR>` mechanism, same `{codec, file, path}` shape this
-# repo's real `package.json` declares for `test:e2e`) — only the variable
-# NAMES differ per fixture target so two declared targets in the same
-# process never collide on the same env var.
+# Each fixture target's `crucible.targets` entry: a `junit: env:<VAR>`
+# record, the variable playwright's own JUnit reporter reads for `test:e2e`
+# — only the variable NAMES differ per fixture target so two declared
+# targets in the same process never collide on the same env var.
 E2E_JUNIT_VAR = "PLAYWRIGHT_JUNIT_OUTPUT_NAME"
-E2E_JSON_VAR = "PLAYWRIGHT_JSON_OUTPUT_NAME"
 MODULE_JUNIT_VAR = "MODULE_JUNIT_OUTPUT_NAME"
-MODULE_JSON_VAR = "MODULE_JSON_OUTPUT_NAME"
 
 # What the LAST command's fake runner writes when it was asked for nothing in
 # particular (no `--`) — standing in for "the whole suite ran".
@@ -124,25 +122,28 @@ if _log:
 
 _NOOP_TAIL = "sys.exit(0)\n"
 
-# The LAST command: writes a Playwright-JSON-shaped report holding exactly
-# one case per non-flag argument it was handed (its own static leading
-# "test" token, present whether or not `--` was used, is never counted as a
-# case); with nothing but "test", it stands in for "the whole suite ran".
+# The LAST command: writes a JUnit report, where its declared variable
+# points, holding exactly one passing case per non-flag argument it was
+# handed (its own static leading "test" token, present whether or not `--`
+# was used, is never counted as a case); with nothing but "test", it stands
+# in for "the whole suite ran".
 _RECORDER_TAIL = '''
+from xml.sax.saxutils import quoteattr
 _features = [a for a in argv[1:] if not a.startswith("-")]
 if not _features:
     _features = ''' + repr(WHOLE_SUITE_CASES) + '''
-_specs = [{"title": f, "file": f,
-           "tests": [{"results": [{"status": "passed"}]}]}
-          for f in _features]
-_report = {"suites": [{"specs": _specs}], "stats": {"expected": len(_features)}}
+_cases = "".join('<testcase name=%s classname="last" time="0.001"/>' % quoteattr(f)
+                 for f in _features)
+_report = ('<?xml version="1.0" encoding="UTF-8"?><testsuites>'
+           '<testsuite name="last" tests="%d" failures="0">%s</testsuite>'
+           '</testsuites>' % (len(_features), _cases))
 _outfile = os.environ.get("__REPORT_VAR__")
 if _outfile:
     _directory = os.path.dirname(_outfile)
     if _directory:
         os.makedirs(_directory, exist_ok=True)
     with open(_outfile, "w") as _handle:
-        json.dump(_report, _handle)
+        _handle.write(_report)
 sys.exit(0)
 '''
 
@@ -203,24 +204,32 @@ def _write_recorder(root, name, tool_tag, report_var):
                        _RECORDER_TAIL.replace("__REPORT_VAR__", report_var))
 
 
-def _inline_report(case, body):
-    """The one raw report a rawReport target's ingest carries: its text rides
+def _inline_report_cases(case, body):
+    """The names of the cases in the one JUnit report a `junit: env:` target's
+    ingest carries: its text rides
     inline as `data` (a list of the report texts), never as a `dataPath` the
     board would have to open (CR-CRU-204 \u00a7S2, AC1)."""
     case.assertNotIn("dataPath", body,
                      f"a report travels inline, never as a path; body={body!r}")
+    case.assertEqual(body.get("codec"), "junit",
+                     f"the target's JUnit report is sent; body={body!r}")
     data = body.get("data")
     case.assertIsInstance(data, list, f"`data` is a list of report texts; body={body!r}")
     case.assertEqual(len(data), 1,
                      f"the target wrote exactly one report; body={body!r}")
-    return json.loads(data[0])
+    return [element.get("name")
+            for element in ET.fromstring(data[0]).iter("testcase")]
 
 
-def _declare(root, scripts, report_path, raw_report):
+def _declare(root, scripts, junit):
+    """The manifest: the script table, and a `crucible.targets` entry per
+    script `junit` maps to its `env:<VAR>` declaration."""
     manifest = {
         "name": "cr170-dashdash-fixture",
         "scripts": scripts,
-        "crucible": {"reportPath": report_path, "rawReport": raw_report},
+        "crucible": {"targets": {
+            script: {"framework": "playwright", "junit": declaration}
+            for script, declaration in junit.items()}},
     }
     (root / "package.json").write_text(json.dumps(manifest, indent=2))
 
@@ -253,19 +262,14 @@ class _DashDashCase(unittest.TestCase):
         return _write_recorder(self.project, name, "last", report_var)
 
     def declare_e2e(self):
-        """`test:e2e`, shaped `a && b`: the SAME `crucible.reportPath` /
-        `crucible.rawReport` declarations this repo's own `package.json`
-        carries for `test:e2e` (`env:PLAYWRIGHT_JUNIT_OUTPUT_NAME` /
-        `{codec: "playwright", file: "playwright.json",
-        path: "env:PLAYWRIGHT_JSON_OUTPUT_NAME"}`), only the two commands
+        """`test:e2e`, shaped `a && b`, declared in `crucible.targets` as a
+        `playwright` target whose JUnit report path is handed to it in
+        `PLAYWRIGHT_JUNIT_OUTPUT_NAME` (`junit: env:<VAR>`); the two commands
         are this fixture's own fake tools."""
-        recorder = self.write_recorder("fake-e2e-last", E2E_JSON_VAR)
+        recorder = self.write_recorder("fake-e2e-last", E2E_JUNIT_VAR)
         _declare(self.project,
                 scripts={"test:e2e": f"{self.fake_noop} && {recorder} test"},
-                report_path={"test:e2e": f"env:{E2E_JUNIT_VAR}"},
-                raw_report={"test:e2e": {
-                    "codec": "playwright", "file": "playwright.json",
-                    "path": f"env:{E2E_JSON_VAR}"}})
+                junit={"test:e2e": f"env:{E2E_JUNIT_VAR}"})
 
     # ── driving ──────────────────────────────────────────────────────────
 
@@ -358,14 +362,12 @@ class FeatureArgumentAfterDashDashReachesOnlyTheLastCommandTest(_DashDashCase):
             f"all posts={self.board.posts()!r}")
         _path, body = ingests[0]
         self.assertEqual(body.get("tier"), "e2e", f"body={body!r}")
-        self.assertEqual(body.get("codec"), "playwright", f"body={body!r}")
-        report = _inline_report(self, body)
-        titles = [spec["title"] for spec in report["suites"][0]["specs"]]
+        titles = _inline_report_cases(self, body)
         self.assertEqual(
             titles, [self.FEATURE_PATH],
             f"the report must hold EXACTLY the case matching what the "
             f"target was asked — not the whole suite, not zero cases; "
-            f"report={report!r}")
+            f"body={body!r}")
 
 
 # ── item 2 — a quoted multi-word grep value ─────────────────────────────────
@@ -443,12 +445,11 @@ class NoDashDashLeavesTheDeclaredTargetUnchangedTest(_DashDashCase):
         self.assertEqual(len(ingests), 1, f"ingests={ingests!r}; "
                          f"all posts={self.board.posts()!r}")
         _path, body = ingests[0]
-        report = _inline_report(self, body)
-        titles = [spec["title"] for spec in report["suites"][0]["specs"]]
+        titles = _inline_report_cases(self, body)
         self.assertEqual(
             titles, WHOLE_SUITE_CASES,
             f"without `--`, the ingest is the WHOLE report — unchanged; "
-            f"report={report!r}")
+            f"body={body!r}")
 
 
 # ── item 4 — the printed invocation shows the passthrough ──────────────────
@@ -496,7 +497,7 @@ class DashDashAppliesToAnyDeclaredTierNotJustE2eTest(_DashDashCase):
     cell takes (`clients/_crucible_axi.py: add_tier_verbs`) — never a
     second, e2e-specific argparse wiring.
 
-    Deliberately the SAME (env/rawReport) report mechanism as `test:e2e`,
+    Deliberately the SAME (`junit: env:<VAR>`) report mechanism as `test:e2e`,
     not the flag-default mechanism this repo's real `test:unit` declares:
     under the flag mechanism `_bun_run_script_cmd` ALSO appends `bun test`'s
     own `--reporter=junit --reporter-outfile=…` tokens ahead of any `--`
@@ -513,19 +514,10 @@ class DashDashAppliesToAnyDeclaredTierNotJustE2eTest(_DashDashCase):
 
     def setUp(self):
         super().setUp()
-        recorder = self.write_recorder("fake-module-last", MODULE_JSON_VAR)
+        recorder = self.write_recorder("fake-module-last", MODULE_JUNIT_VAR)
         _declare(self.project,
                 scripts={"test:module": f"{self.fake_noop} && {recorder} test"},
-                report_path={"test:module": f"env:{MODULE_JUNIT_VAR}"},
-                raw_report={"test:module": {
-                    "codec": "generic", "file": "module.json",
-                    "path": f"env:{MODULE_JSON_VAR}"}})
-        # The shared ingest reads the board's health before it sends and
-        # refuses a codec the board does not decode: this board decodes the
-        # declared `generic` codec beside the clients' own.
-        health = self.board.default_health()
-        health["codecs"]["test"].append("generic")
-        self.board.script_health(health)
+                junit={"test:module": f"env:{MODULE_JUNIT_VAR}"})
 
     def test_dashdash_forwards_to_a_declared_module_target_too(self):
         feature = "tests/module/widgets.spec.ts"
@@ -551,6 +543,9 @@ class DashDashAppliesToAnyDeclaredTierNotJustE2eTest(_DashDashCase):
             body.get("tier"), "module",
             f"the run a declared tier files rides THAT verb's own tier; "
             f"body={body!r}")
+        self.assertEqual(
+            _inline_report_cases(self, body), [feature],
+            f"the module report holds exactly the case asked for; body={body!r}")
 
 
 if __name__ == "__main__":

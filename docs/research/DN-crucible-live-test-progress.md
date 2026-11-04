@@ -16,9 +16,9 @@ A run's live progress is a count, not data.
   agent's card. The board learns no test name, status or failure until the final report arrives.
 - Any runner the pattern does not know narrates nothing: a Vitest run through a declared script
   (measured), and almost certainly Playwright (unmeasured).
-- `crucible.rawReport` names the runner's full report that the board decodes (Playwright's JSON,
-  which keeps every Gherkin step JUnit drops). "Raw" misnames it: it is the most decoded report the
-  run has.
+- Before the clean break (CR-CRU-226), `crucible.rawReport` named the runner's full report that the
+  board decoded (Playwright's JSON, which keeps every Gherkin step JUnit drops). "Raw" misnamed it: it
+  was the most decoded report the run had. It is now refused, and an entry's `stream` replaces it.
 
 ## What each runner can stream
 
@@ -38,7 +38,7 @@ A run's live progress is a count, not data.
 Three layers, the same for every stack.
 
 1. **Source.** While the runner works, an event stream is written to a file the client names through
-   an environment variable (the `env:<VAR>` mechanism `reportPath` already uses), so it never mixes
+   an environment variable (the mechanism a `crucible.targets` entry's `junit: env:<VAR>` uses), so it never mixes
    with console output. Where the runner has no structured stream, the source is its console: the
    client relays the whole console as written, and the board reads the result lines from it
    (CR-CRU-201's `bun-console` view codec for `bun test`).
@@ -117,13 +117,41 @@ A bun project declares, per `package.json` script, one table:
 - A target declares **either** a structured `stream` (its record and its live view) **or** a
   `junit` report (its record), optionally with the `console` codec that reads its live view.
 - `stream` is new: the event codec and how the runner is told where to write the file.
-- `junit` replaces `crucible.reportPath.<script>` (`flag` or `env:<VAR>`).
-- `crucible.rawReport` has no successor: its only use, Playwright's step-keeping JSON, is replaced
-  by the stream.
+- `junit` replaced `crucible.reportPath.<script>` (`flag` or `env:<VAR>`).
+- `crucible.rawReport` has no field of its own: its only use, Playwright's step-keeping JSON, is replaced
+  by the stream, so its refusal names `stream`.
 - An undeclared target keeps today's default: `bun test` with the `flag` JUnit report and the bun
   console view.
-- **Clean break:** `crucible.reportPath` and `crucible.rawReport` are refused, with a message naming
-  the table that replaces them, as `--phase` was when it became `--role`.
+- **Clean break** (CR-CRU-226): a `package.json` declaring `crucible.reportPath`, `crucible.rawReport` or
+  `crucible.testScript`, with or without `crucible.targets`, is refused by `test`, `regression`, every tier verb and
+  `pre-merge-gate`, before anything is posted, as `--phase` was when it became `--role`. The gate refuses it before
+  its tsc step, which would otherwise file a compile result. The refusal (`declaration-refused`) names each key it
+  found beside what replaced it (`junit`, `stream`, the entry marked `"test": true`) and `crucible.targets`, exits
+  non-zero and files nothing. The client keeps no reader of the old keys.
+- **The script `test` runs is a table field** (CR-CRU-226): the entry marked `"test": true`, which replaces
+  `crucible.testScript`. Only `test` reads the marker; the tier verbs and the gate ignore it.
+  - `test` refuses, naming `crucible.targets` and the entry, before anything is posted: two marked entries (naming
+    both), a marker that is not `true` (an unmarked entry omits the field, so `false` is refused too), and a marked
+    entry whose script is not in `scripts` or whose body is empty.
+  - `test <files>` runs the marked script with the files and the name filter as its passthrough, and the run
+    carries the entry's framework. The filter flag follows the framework: `-t` for `bun-test` and `vitest`,
+    `--grep` for `playwright` and `playwright-bdd`. `test` with no files runs the whole script under the verb
+    `test`, with no tier. With no entry marked, `test` runs `bun test`, unchanged.
+- **The gate runs every declared framework** (CR-CRU-226). `pre-merge-gate` joins each `test:` script with its
+  entry, so each declared suite carries its framework (`bun-test` when it has no entry).
+  - A `bun-test` suite is covered by the whole-suite `bun test` run, as before. A suite of any other framework runs
+    in the gate's own process, through its own script, filed under the tier its name names, else `regression`; its
+    row carries its own counts and outcome and the client that ran it, and its counts are added to the gate's totals.
+  - When every declared bun suite is of another framework, the whole-suite run is skipped and the envelope's
+    `wholeSuite` says so. A project whose `*.test.ts` files both runners collect is the project's to separate.
+  - `--suites` naming a non-`bun-test` target runs only that target; naming a `bun-test` target runs the whole suite
+    and records the `bun-test` targets it covered.
+  - A non-`bun-test` suite's run measures no coverage and adds no `coverage-not-measured` warning: the gate's
+    coverage is the `bun-test` code's, as before.
+  - A non-`bun-test` entry whose key is not a `test:` script, or is a `test:` key with no script of that name in
+    `scripts`, is refused by the gate before anything runs, naming it, since the gate could not otherwise see it. The
+    `e2e` tier stays outside the gate, whatever its framework.
+  - The other stacks' gates are unchanged: their suites name no framework.
 - The other stacks declare the same three facts in their own place (`crucible.toml` for cargo,
   python, maven, arduino, go); the vocabulary is the same.
 - **Python unittest declares no stream** (CR-CRU-224 amends this paragraph for that case): its
@@ -154,11 +182,17 @@ CR-CRU-224:
 | CR-CRU-201 | bun's console live view: the board's view-only stream mode and the `bun-console` codec; the JUnit report stays the record (split 2026-10-31, user ruling) | 200, 224 |
 | CR-CRU-225 | the `crucible.targets` table declares each script's framework, record, console and coverage; the run carries its framework; the shipped Vitest reporter streams the Crucible shape | 200, 224, 201 |
 | CR-CRU-228 | the shipped Playwright reporter streams each scenario as a test with its steps; the specification view reads it (split from 225, 2026-11-01, user ruling) | 225 |
-| CR-CRU-226 | the clean break: `crucible.reportPath`, `crucible.rawReport` and `crucible.testScript` refused; Playwright's JSON report and codec retire | 225, 228 |
+| CR-CRU-226 | the clean break: `crucible.reportPath`, `crucible.rawReport` and `crucible.testScript` refused by every verb and by the gate before its tsc step; `test` runs the entry marked `"test": true`; the gate runs each non-`bun-test` suite in process | 225, 228 |
+| CR-CRU-229 | the `playwright` codec and Playwright's JSON report retire, its stored runs migrate, and the `junit` readings follow the framework (split from 226, 2026-11-04, user ruling) | 226, 228 |
 | CR-CRU-202 | rust streams through nextest's libtest JSON | 200 |
 | CR-CRU-203 | the arduino runner streams; maven's console live view, through CR-CRU-201's view-only mode | 200, 201 |
 
 Go's stream lands with its client (CR-CRU-195), which therefore also depends on CR-CRU-200.
+
+CR-CRU-226 was split at its gap analysis (user ruling 2026-11-04): it keeps the client's half, and CR-CRU-229 takes
+the board's. The bun client still points Playwright's JSON report into the run's reports dir (`STREAM_KEPT_REPORTS`)
+until CR-CRU-229 retires the `playwright` codec, migrates the runs stored through it, and keys the `junit` readings by
+framework rather than by stack. What a bun project's `regression` runs stays CR-CRU-222's.
 
 What CR-CRU-200 leaves to later CRs (its non-goals):
 

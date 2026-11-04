@@ -2,10 +2,10 @@
 
 A scratch copy of `tests/fixtures/vitest-project` (its `node_modules` linked
 offline, `tests/client/vitest_reporter_scratch.py`), with a describe chain, a
-skipped and a todo test added, and its `crucible.reportPath` REPLACED by a
+skipped and a todo test added, and its `crucible` block REWRITTEN to one
 `crucible.targets` entry declaring `test:vitest` a `vitest` target streamed in
-`crucible-events` through `env:CRUCIBLE_STREAM`. The fixture's own
-`crucible.testScript` keeps naming `test:vitest`. It is run on the real `bun`
+`crucible-events` through `env:CRUCIBLE_STREAM`, marked `"test": true` as the
+script `test` runs. It is run on the real `bun`
 and Vitest through the REAL `clients/bun-crucible.py` (`test`) as an OS
 subprocess, against `TargetsBoard` (tests/client/bun_targets_harness.py), whose
 health lists `crucible-events` under `codecs.stream`.
@@ -18,8 +18,9 @@ What is pinned:
   no total), then `ingesting…`, both ahead of the close;
 - the stored result (the held stream, its summary decoded by the board's own
   `crucible-events` codec) equals the same tests' JUnit report -- the same
-  scratch copy run once more through the client with the fixture's own
-  `crucible.reportPath` -- on summary counts and statuses, and on each test's
+  scratch copy run once more through the client with its marked entry
+  declaring `junit: env:FIXTURE_JUNIT_PATH` instead -- on summary counts and
+  statuses, and on each test's
   failure message, matched by file and the describe chain plus name;
 - a top-level test's suite is its file;
 - a module that fails to load is one failing `?` test with its file;
@@ -56,6 +57,7 @@ from tests.client.bun_targets_harness import (
     COMPILE,
     HEARTBEAT,
     INGESTING,
+    JUNIT_VAR,
     NO_TEST_REPORTS,
     PARSED,
     PROJECT_KEY,
@@ -171,21 +173,27 @@ def _write_manifest(project, manifest):
     Path(project, "package.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
-def declare_stream_target(project, script_body=None):
-    """The scratch copy's `crucible.reportPath` replaced by a `vitest` stream
-    entry in `crucible.targets`; `script_body` replaces `test:vitest`'s."""
+def _declare_marked_target(project, entry, script_body=None):
+    """The scratch copy's `crucible` block rewritten to `entry`, marked as the
+    script `test` runs, as `test:vitest`'s one `crucible.targets` entry;
+    `script_body` replaces `test:vitest`'s."""
     manifest = _manifest(project)
-    crucible = manifest["crucible"]
-    crucible.pop("reportPath", None)
-    crucible["targets"] = {VITEST_SCRIPT: VITEST_STREAM_ENTRY}
+    manifest["crucible"] = {"targets": {VITEST_SCRIPT: {**entry, "test": True}}}
     if script_body is not None:
         manifest["scripts"][VITEST_SCRIPT] = script_body
     _write_manifest(project, manifest)
 
 
-def restore_report_path(project, fixture_manifest):
-    """The fixture's own manifest back: its JUnit through `reportPath`."""
-    _write_manifest(project, fixture_manifest)
+def declare_stream_target(project, script_body=None):
+    """`test:vitest` a marked `vitest` stream target."""
+    _declare_marked_target(project, VITEST_STREAM_ENTRY, script_body)
+
+
+def declare_junit_target(project):
+    """`test:vitest` a marked `vitest` target filing its JUnit report through
+    the variable the fixture's config reads."""
+    _declare_marked_target(project, {"framework": "vitest",
+                                     "junit": f"env:{JUNIT_VAR}"})
 
 
 def drive_client(bun, project, board, *flags):
@@ -318,12 +326,11 @@ class AVitestRunIsStreamedAndFiledFromItsStreamTest(_VitestTargetCase):
 
     @classmethod
     def run_scenario(cls):
-        fixture_manifest = _manifest(cls.project)
         declare_stream_target(cls.project)
         cls.stream_board = cls.new_board()
         cls.stream_board.script_run(passed=6, failed=2, pending=2)
         cls.stream_drive = drive_client(cls.bun, cls.project, cls.stream_board)
-        restore_report_path(cls.project, fixture_manifest)
+        declare_junit_target(cls.project)
         cls.junit_board = cls.new_board()
         cls.junit_drive = drive_client(cls.bun, cls.project, cls.junit_board)
 
