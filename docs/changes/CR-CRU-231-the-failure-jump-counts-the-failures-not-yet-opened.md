@@ -27,13 +27,19 @@
   count: "▸ 1 more failure", "▸ 3 more failures". Each click opens the next failure and the count drops by one.
 - **One and many.** "failure" for one, "failures" for any other count.
 - **The first click opens the first failure** in walk order, the order the walk uses today.
-- **At the end of the walk** (PROPOSED): with every failure opened once, the label says the next click goes back to
-  the first, and the click does so, as the walk wraps today.
+- **Once every failure has been opened, the walk keeps cycling** (user ruling 2026-11-04). Each further click opens and
+  focuses the next failure in walk order, wrapping from the last to the first. The label then names which failure is
+  open and focused, as its place among the run's failures (wording PROPOSED, e.g. "▸ failure 2 of 5"), instead of a
+  count of unopened ones.
 - **Nothing else changes:** the minimized tree, the one-box focus model, the raw toggle and where the controls sit.
 
 ## Acceptance criteria
 
 To be written at the gap analysis, one per Design bullet. Each pins the label's text, not only the control's presence.
+- **A BDD scenario on the UI** (user ruling 2026-11-04): an e2e feature in `tests/e2e/features/` seeds a run with
+  several failures, opens its run detail, and presses the jump again and again. It checks the label after each press:
+  the count of unopened failures going down to the last, then the focused failure's place as the walk cycles. It also
+  checks that the focused, open failure box is the one the label names.
 
 ## Non-goals
 
