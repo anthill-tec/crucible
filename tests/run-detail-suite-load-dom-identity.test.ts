@@ -9,23 +9,36 @@
 // tracks the WHOLE map as one dependency of the body's outer derivation, so
 // writing suiteLeaves.val for just ONE suite (loadSuite, called from
 // expandSuite's click handler, from SynthHeatCell's click handler, and from
-// loadScrolledScenarios on scroll — all three write the same state) reruns
+// a feature heading's unfold — all write the same state) reruns
 // the entire body derivation and replaces every suite's row/cell, loaded or
 // not. Measured directly on a real run view: 2-3 of every 6 suite loads
 // replaced the OTHER suites' rows. The two tests below tag every rendered
 // suite-row and heat-cell element before triggering ONE suite's load (by
-// click, the same suiteLeaves write path loadScrolledScenarios uses) and
+// click, the same suiteLeaves write path every loadSuite caller uses) and
 // assert every element outside that suite keeps its identity — the exact
 // node object, still attached to the document — afterwards, for a plain run
 // and for a spec (BDD) run. The loaded suite's OWN cells are expected to
 // change (synthetic counts become real per-leaf cells); every test below
 // states that expectation explicitly instead of leaving it unchecked.
+//
+// The spec run is a `playwright-bdd` run streamed to a real board
+// (`streamBddRun`, tests/helpers/playwright-bdd-run.ts) and the shell is
+// mounted against that board (tests/helpers/served-app.ts), so its suites are
+// the scenario shape the store serves: one suite per feature and browser, a
+// leaf per scenario. Its unit of loading is a feature: a folded feature's
+// heading click opens it and reads its suite.
+//
+// SAFETY: every server binds port 0 on ":memory:".
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ServerHandle } from "../src/server.ts";
 import { settleDom } from "./helpers/dom-settle";
+import { bddProject, passingStep, streamBddRun, type BddScenario } from "./helpers/playwright-bdd-run.ts";
+import { bootOn } from "./helpers/run-stream-harness.ts";
+import { mountServedApp, restoreRealFetch, settleServedApp } from "./helpers/served-app.ts";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -55,7 +68,6 @@ interface EventDetailFixture {
   agentId: string;
   kind: "test";
   tier: string;
-  codec?: string;
   timestamp: number;
   tree: SuiteFixture[];
 }
@@ -65,7 +77,6 @@ interface EventBriefFixture {
   agentId: string;
   kind: "test";
   tier: string;
-  codec?: string;
   timestamp: number;
   total?: number;
   passed?: number;
@@ -153,8 +164,11 @@ async function settle(ticks = 6): Promise<void> {
   await settleDom({ ticks });
 }
 
+const handles: ServerHandle[] = [];
+
 afterEach(async () => {
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await restoreRealFetch();
+  while (handles.length > 0) handles.pop()?.stop();
 });
 
 function findByText(root: ParentNode, selector: string, text: string): HTMLElement | undefined {
@@ -171,7 +185,6 @@ function briefOf(detail: EventDetailFixture): EventBriefFixture {
     agentId: detail.agentId,
     kind: "test",
     tier: detail.tier,
-    codec: detail.codec,
     timestamp: detail.timestamp,
     total: c.passed + c.failed + c.pending,
     passed: c.passed,
@@ -214,36 +227,53 @@ function manySuitesFixture(eventId: string, suiteCount: number, leavesPerSuite: 
   };
 }
 
-/** A spec-run fixture: ONE feature (so it auto-opens, CR-CRU-145's
- *  progressive-expansion default — the first feature always unfolds) holding
- *  `scenarioCount` all-passing scenarios named by BDD_SEP (" › "), each with
- *  `leavesPerScenario` steps. `tier: "e2e"` + `codec: "playwright"` renders
- *  Density AND the spec (feature → scenario) anatomy (isSpecRun). */
-function specManyScenariosFixture(
-  eventId: string,
-  featureName: string,
-  scenarioCount: number,
-  leavesPerScenario: number,
-): EventDetailFixture {
-  const tree: SuiteFixture[] = [];
-  for (let s = 1; s <= scenarioCount; s++) {
-    const suiteName = `${featureName} › Scenario ${s}`;
-    const children: LeafFixture[] = [];
-    for (let l = 1; l <= leavesPerScenario; l++) {
-      children.push({ name: `step-${l}`, status: "pass", duration_ms: 2 });
-    }
-    tree.push({ name: suiteName, status: "pass", children });
-  }
-  return {
-    id: eventId,
-    projectKey: "proj-spec-suite-load-identity",
-    agentId: "spec-suite-load-identity-agent",
-    kind: "test",
-    tier: "e2e",
-    codec: "playwright",
-    timestamp: Date.now(),
-    tree,
-  };
+/** The spec run's features, in report order: each one suite (one browser)
+ *  of `SCENARIOS_PER_FEATURE` all-passing scenarios of two steps. */
+const SPEC_FEATURES = ["Calm Feature 1", "Calm Feature 2", "Calm Feature 3", "Calm Feature 4", "Calm Feature 5", "Calm Feature 6"];
+const SCENARIOS_PER_FEATURE = 3;
+const SPEC_BROWSER = "chromium";
+/** The feature the tests load: folded at mount, as the progressive default
+ *  opens only the first two features of an all-passing run. */
+const LOADED_FEATURE = "Calm Feature 3";
+/** Its suite's key, as its scenario rows and heat cells name it. */
+const LOADED_KEY = `${LOADED_FEATURE} [${SPEC_BROWSER}]`;
+
+function specScenarios(): BddScenario[] {
+  return SPEC_FEATURES.flatMap((feature) =>
+    Array.from({ length: SCENARIOS_PER_FEATURE }, (_, i) => ({
+      feature,
+      browser: SPEC_BROWSER,
+      name: `${feature} scenario ${i + 1}`,
+      status: "pass" as const,
+      steps: ["Given a calm precondition", "Then nothing of note happens"].map(passingStep),
+    })),
+  );
+}
+
+/** Streams the spec run to a real board (tier `e2e`: Density, with its heat
+ *  strip) and mounts the shell at its run detail. */
+async function mountSpecRun(name: string): Promise<void> {
+  const handle = bootOn();
+  handles.push(handle);
+  const key = await bddProject(handle, name);
+  const eventId = await streamBddRun(handle, key, specScenarios(), "e2e");
+  await mountServedApp(handle, `/p/${key}/run/${eventId}`);
+}
+
+function featureGroupOf(overlay: Element, feature: string): HTMLElement {
+  const group = overlay.querySelector<HTMLElement>(
+    `[data-testid="feature-group"][data-feature-name="${CSS.escape(feature)}"]`,
+  );
+  if (group === null) throw new Error(`no feature-group "${feature}" mounted`);
+  return group;
+}
+
+/** Opens the loaded feature by its heading, as a user does, and waits for its suite read. */
+async function openLoadedFeature(overlay: Element): Promise<void> {
+  const heading = featureGroupOf(overlay, LOADED_FEATURE).querySelector<HTMLElement>('[data-testid="feature-heading"]');
+  expect(heading).not.toBeNull();
+  heading!.click();
+  await settleServedApp();
 }
 
 /** Tags every currently-rendered element matched by `selector` with a unique
@@ -352,87 +382,96 @@ describe("a loaded suite renders without rebuilding the other suites' DOM — pl
 });
 
 describe("a loaded suite renders without rebuilding the other suites' DOM — spec (BDD) run", () => {
-  test("loading one not-yet-loaded scenario's leaves keeps every OTHER scenario's suite-row the exact same DOM node", async () => {
-    const eventId = "evt-spec-suite-load-identity";
-    const detail = specManyScenariosFixture(eventId, "Calm Feature", 6, 3);
-    await mountAtRunCold(eventId, detail);
+  test("opening one folded feature reads its suite and keeps every OTHER feature group, and every scenario row already drawn, the exact same DOM node", async () => {
+    await mountSpecRun("spec-suite-load-identity");
 
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
-    // CR-CRU-145's progressive-expansion default already loaded Scenario 1
-    // and Scenario 2 on mount (SPEC_FIRST_OPEN) — tagging happens AFTER that
-    // settles, so this test targets the SAME suiteLeaves-write path a later
-    // scroll-triggered load uses (loadScrolledScenarios), not just the
-    // initial mount.
-    const rowsBefore = tagAll(overlay, '[data-testid="suite-row"]', (el) =>
-      el.getAttribute("data-suite-key") ?? "",
-    );
+    // The progressive default opened the first two features at mount and read
+    // their suites: their six scenario rows are drawn; the four other features
+    // are folded and draw none. Tagging happens AFTER that settles.
+    const groupsBefore = tagAll(overlay, '[data-testid="feature-group"]', (el) => el.getAttribute("data-feature-name") ?? "");
+    expect(groupsBefore.size).toBe(6);
+    const rowsBefore = tagAll(overlay, '[data-testid="suite-row"]', (el) => el.getAttribute("data-leaf-key") ?? "");
     expect(rowsBefore.size).toBe(6);
-
-    const loadedKey = "Calm Feature › Scenario 3";
-    const targetRow = findByText(overlay, '[data-testid="suite-row"]', "Scenario 3");
-    expect(targetRow).toBeDefined();
-    // Scenario 3 is still collapsed (only Scenario 1/2 auto-loaded) — this
-    // click is the first fetch of its leaves.
-    expect(targetRow!.querySelector('[data-testid="tree-toggle"]')?.textContent).toBe("▸");
-    targetRow!.click();
-    await settle();
-
-    let checked = 0;
-    for (const [label, before] of rowsBefore) {
-      const key = label.split("::")[0]!;
-      if (key === loadedKey) continue;
-      checked += 1;
-      expect((before as HTMLElement).isConnected, `scenario row "${key}" was detached (rebuilt)`).toBe(true);
-      const after = overlay.querySelector(`[data-testid="suite-row"][data-suite-key="${CSS.escape(key)}"]`);
-      expect(after, `scenario row "${key}" should still resolve to an element`).not.toBeNull();
-      expect(after, `scenario row "${key}" was replaced by a different element`).toBe(before);
+    for (const label of rowsBefore.keys()) {
+      expect(label.startsWith("Calm Feature 1 [") || label.startsWith("Calm Feature 2 [")).toBe(true);
     }
-    expect(checked).toBe(5);
+    const loadedGroup = featureGroupOf(overlay, LOADED_FEATURE);
+    expect(loadedGroup.querySelector('[data-testid="feature-toggle"]')?.textContent).toBe("▸");
+    expect(loadedGroup.querySelectorAll('[data-testid="suite-row"]').length).toBe(0);
 
-    const loadedRowAfter = overlay.querySelector(
-      `[data-testid="suite-row"][data-suite-key="${CSS.escape(loadedKey)}"]`,
+    await openLoadedFeature(overlay);
+
+    let checkedGroups = 0;
+    for (const [label, before] of groupsBefore) {
+      const feature = label.split("::")[0]!;
+      if (feature === LOADED_FEATURE) continue;
+      checkedGroups += 1;
+      expect((before as HTMLElement).isConnected, `feature group "${feature}" was detached (rebuilt)`).toBe(true);
+      expect(featureGroupOf(overlay, feature), `feature group "${feature}" was replaced by a different element`).toBe(
+        before as HTMLElement,
+      );
+    }
+    expect(checkedGroups).toBe(5);
+
+    let checkedRows = 0;
+    for (const [label, before] of rowsBefore) {
+      const leafKey = label.split("::probe-")[0]!;
+      checkedRows += 1;
+      expect((before as HTMLElement).isConnected, `scenario row "${leafKey}" was detached (rebuilt)`).toBe(true);
+      const after = overlay.querySelector(`[data-testid="suite-row"][data-leaf-key="${CSS.escape(leafKey)}"]`);
+      expect(after, `scenario row "${leafKey}" was replaced by a different element`).toBe(before);
+    }
+    expect(checkedRows).toBe(6);
+
+    // The loaded feature's OWN group re-renders open, its suite's three scenarios drawn.
+    const loadedAfter = featureGroupOf(overlay, LOADED_FEATURE);
+    expect(loadedAfter.querySelector('[data-testid="feature-toggle"]')?.textContent).toBe("▾");
+    const loadedRows = Array.from(loadedAfter.querySelectorAll('[data-testid="suite-row"]'));
+    expect(loadedRows.map((r) => r.getAttribute("data-leaf-key"))).toEqual(
+      [1, 2, 3].map((n) => `${LOADED_KEY}::${LOADED_FEATURE} scenario ${n}`),
     );
-    expect(loadedRowAfter).not.toBeNull();
-    expect(loadedRowAfter!.querySelector('[data-testid="tree-toggle"]')?.textContent).toBe("▾");
+    // BOUND — no other folded feature opened with it.
+    for (const folded of ["Calm Feature 4", "Calm Feature 5", "Calm Feature 6"]) {
+      expect(featureGroupOf(overlay, folded).querySelectorAll('[data-testid="suite-row"]').length).toBe(0);
+    }
   });
 
-  test("loading one not-yet-loaded scenario's leaves keeps every OTHER scenario's heat-strip cells, and only that scenario's own cells turn real", async () => {
-    const eventId = "evt-spec-heat-cell-identity";
-    const detail = specManyScenariosFixture(eventId, "Calm Feature", 6, 3);
-    await mountAtRunCold(eventId, detail);
+  test("opening one folded feature keeps every OTHER feature's heat-strip cells, and only its own suite's cells turn real", async () => {
+    await mountSpecRun("spec-heat-cell-identity");
 
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
     const strip = overlay.querySelector('[data-testid="heat-strip"]');
     expect(strip).not.toBeNull();
     const cellsBefore = Array.from(strip!.querySelectorAll('[data-testid="heat-cell"]')) as HTMLElement[];
-    // 6 scenarios x 3 leaves = 18 cells, whichever mix of real (Scenario 1/2,
-    // auto-loaded) and synthetic (Scenario 3-6, still collapsed) the
-    // progressive default left behind.
+    // 6 features x 3 scenarios = 18 cells, a cell per scenario: real for the
+    // two features the progressive default read, synthetic for the four folded.
     expect(cellsBefore.length).toBe(18);
     cellsBefore.forEach((el, i) => el.setAttribute("data-identity-probe", `probe-${i}`));
     const titleAt = new Map<string, string>(cellsBefore.map((el) => [el.getAttribute("data-identity-probe")!, el.title]));
 
-    const loadedKey = "Calm Feature › Scenario 3";
-    const targetRow = findByText(overlay, '[data-testid="suite-row"]', "Scenario 3");
-    targetRow!.click();
-    await settle();
+    await openLoadedFeature(overlay);
 
-    const otherCells = cellsBefore.filter((el) => !belongsToSuite(titleAt.get(el.getAttribute("data-identity-probe")!)!, loadedKey));
-    const loadedCellsBefore = cellsBefore.filter((el) => belongsToSuite(titleAt.get(el.getAttribute("data-identity-probe")!)!, loadedKey));
+    const otherCells = cellsBefore.filter((el) => !belongsToSuite(titleAt.get(el.getAttribute("data-identity-probe")!)!, LOADED_KEY));
+    const loadedCellsBefore = cellsBefore.filter((el) => belongsToSuite(titleAt.get(el.getAttribute("data-identity-probe")!)!, LOADED_KEY));
     expect(otherCells.length).toBe(15);
     expect(loadedCellsBefore.length).toBe(3);
+    // The loaded suite's cells were synthetic: titled by its suite key alone.
+    for (const cell of loadedCellsBefore) expect(titleAt.get(cell.getAttribute("data-identity-probe")!)).toBe(LOADED_KEY);
 
     for (const cell of otherCells) {
       expect(cell.isConnected, `heat cell titled "${cell.title}" was detached (rebuilt)`).toBe(true);
     }
     for (const cell of loadedCellsBefore) {
-      expect(cell.isConnected, `Scenario 3's synthetic heat cell should have been replaced`).toBe(false);
+      expect(cell.isConnected, `${LOADED_FEATURE}'s synthetic heat cell should have been replaced`).toBe(false);
     }
     const stripAfter = overlay.querySelector('[data-testid="heat-strip"]')!;
     const realCellsForLoaded = Array.from(stripAfter.querySelectorAll('[data-testid="heat-cell"]')).filter(
-      (el) => (el as HTMLElement).title.startsWith(`${loadedKey} › `),
+      (el) => (el as HTMLElement).title.startsWith(`${LOADED_KEY} › `),
     );
-    expect(realCellsForLoaded.length).toBe(3);
+    expect(realCellsForLoaded.map((el) => (el as HTMLElement).title)).toEqual(
+      [1, 2, 3].map((n) => `${LOADED_KEY} › ${LOADED_FEATURE} scenario ${n}`),
+    );
     expect(stripAfter.querySelectorAll('[data-testid="heat-cell"]').length).toBe(18);
   });
 });

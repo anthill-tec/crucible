@@ -3,19 +3,20 @@
 //  - the tree: one node per `<testsuite>` that holds testcases directly, at
 //    any depth; a suite holding none is not a node; a missing or empty suite
 //    or case name is `?`;
-//  - python / pytest: when the run's stack is `python` and a report's only
-//    suite is named `pytest`, its cases are grouped into one node per
-//    non-empty `classname` (a case with none joins the node `pytest`), in
-//    first-seen order; under any other stack, and for an xmlrunner report,
-//    the cases stay grouped by suite;
+//  - pytest: when the run's framework is `pytest` and a report's only suite
+//    is named `pytest`, its cases are grouped into one node per non-empty
+//    `classname` (a case with none joins the node `pytest`), in first-seen
+//    order; under any other framework, or none, whatever the stack, and for
+//    an xmlrunner report, the cases stay grouped by suite;
 //  - failure text, every stack: `message` is the non-empty `message`
 //    attribute, else the first non-empty line of the text; `trace` is the
 //    text; `type` is the `type` attribute; each part present only when
 //    non-empty; message cut at 1000 characters, trace at 8000; no
 //    `"test failed"` default;
 //  - durations: a case's `time` in milliseconds, `Math.round(seconds * 1000)`;
-//  - the stack: the ingest's `stack`, else the stack its run's start stated;
-//    with none, or an unknown one, no stack-specific rule applies.
+//  - the framework: the ingest's `framework`, else the framework its run's
+//    start stated; with none, or another, no framework-specific rule
+//    applies. The stack is the run's label only.
 //
 // Driven through the real production HTTP surface (`startServer`, in-memory
 // store); every stored outcome is read back through the run detail read
@@ -125,13 +126,14 @@ function counts(run: unknown): Record<string, unknown> {
 }
 
 /**
- * Ingest `data` (one text or a list) as one run under `stack` (omitted when
- * undefined) and read the stored run back.
+ * Ingest `data` (one text or a list) as one run under `stack` and
+ * `framework` (each omitted when undefined) and read the stored run back.
  */
 async function ingest(
   agentId: string,
   data: string | string[],
   stack: string | undefined,
+  framework?: string,
 ): Promise<{ res: Posted; event: StoredEvent }> {
   const handle = boot();
   const key = await ready(handle, agentId);
@@ -140,6 +142,7 @@ async function ingest(
     agentId,
     codec: "junit",
     ...(stack !== undefined ? { stack } : {}),
+    ...(framework !== undefined ? { framework } : {}),
     data,
   });
   expect(res.status).toBe(200);
@@ -456,9 +459,9 @@ describe("a case's duration is its time in milliseconds, rounded, under every st
 
 // ── pytest grouping ──────────────────────────────────────────────────────────
 
-describe("a pytest report under stack python is grouped by classname", () => {
+describe("a pytest report under framework pytest is grouped by classname", () => {
   test("its cases form one node per non-empty classname in first-seen order, cases with none or an empty one joining the node pytest", async () => {
-    const { res, event } = await ingest("pytest-python", PYTEST_REPORT, "python");
+    const { res, event } = await ingest("pytest-python", PYTEST_REPORT, "python", "pytest");
     expect(counts(res.body.run)).toEqual(PYTEST_COUNTS);
     expect(treeShape(event)).toEqual(PYTEST_GROUPED);
     // The grouped run keeps every case's own reading.
@@ -469,7 +472,7 @@ describe("a pytest report under stack python is grouped by classname", () => {
   });
 
   test("a pytest report whose suite is the bare root is grouped by classname too", async () => {
-    const { event } = await ingest("pytest-bare-root", PYTEST_BARE_ROOT, "python");
+    const { event } = await ingest("pytest-bare-root", PYTEST_BARE_ROOT, "python", "pytest");
     expect(treeShape(event)).toEqual([
       ["tests.test_x", ["x1", "x2"]],
       ["tests.test_y", ["y1"]],
@@ -477,7 +480,7 @@ describe("a pytest report under stack python is grouped by classname", () => {
   });
 
   test("a report whose pytest suite is not its only suite stays grouped by suite", async () => {
-    const { res, event } = await ingest("pytest-beside", PYTEST_BESIDE_ANOTHER, "python");
+    const { res, event } = await ingest("pytest-beside", PYTEST_BESIDE_ANOTHER, "python", "pytest");
     expect(counts(res.body.run)).toEqual({ total: 3, passed: 3, failed: 0, pending: 0 });
     expect(treeShape(event)).toEqual([
       ["pytest", ["x1", "y1"]],
@@ -485,8 +488,8 @@ describe("a pytest report under stack python is grouped by classname", () => {
     ]);
   });
 
-  test("the subtest runner's xmlrunner reports under stack python stay grouped by suite, not by classname", async () => {
-    const { res, event } = await ingest("xmlrunner-python", [XMLRUNNER_A, XMLRUNNER_B], "python");
+  test("the subtest runner's xmlrunner reports under framework unittest stay grouped by suite, not by classname", async () => {
+    const { res, event } = await ingest("xmlrunner-python", [XMLRUNNER_A, XMLRUNNER_B], "python", "unittest");
     expect(counts(res.body.run)).toEqual({ total: 3, passed: 3, failed: 0, pending: 0 });
     expect(treeShape(event)).toEqual([
       ["tests.test_a.TestA-20261027120000", ["test_one", "test_two"]],
@@ -494,8 +497,8 @@ describe("a pytest report under stack python is grouped by classname", () => {
     ]);
   });
 
-  test("in a list under stack python, the pytest report is grouped by classname and the xmlrunner report beside it by suite", async () => {
-    const { res, event } = await ingest("pytest-mixed-list", [PYTEST_REPORT, XMLRUNNER_B], "python");
+  test("in a list under framework pytest, the pytest report is grouped by classname and the xmlrunner report beside it by suite", async () => {
+    const { res, event } = await ingest("pytest-mixed-list", [PYTEST_REPORT, XMLRUNNER_B], "python", "pytest");
     expect(counts(res.body.run)).toEqual({ total: 7, passed: 5, failed: 1, pending: 1 });
     expect(treeShape(event)).toEqual([
       ...PYTEST_GROUPED,
@@ -503,7 +506,7 @@ describe("a pytest report under stack python is grouped by classname", () => {
     ]);
   });
 
-  test("a pytest report read from a dataPath directory under stack python is grouped by classname", async () => {
+  test("a pytest report read from a dataPath directory under framework pytest is grouped by classname", async () => {
     const handle = boot();
     const key = await ready(handle, "pytest-datapath");
     const dir = reportDir({ "TEST-pytest.xml": PYTEST_REPORT });
@@ -512,6 +515,7 @@ describe("a pytest report under stack python is grouped by classname", () => {
       agentId: "pytest-datapath",
       codec: "junit",
       stack: "python",
+      framework: "pytest",
       dataPath: dir,
     });
     expect(res.status).toBe(200);
@@ -520,22 +524,40 @@ describe("a pytest report under stack python is grouped by classname", () => {
     expect(treeShape(event)).toEqual(PYTEST_GROUPED);
   });
 
-  for (const stack of [undefined, "bun", "mvn", "rust", "arduino", "cobol"]) {
-    test(`the same pytest report under ${stackLabel(stack)} is not grouped: its one pytest suite is its one node`, async () => {
-      const { res, event } = await ingest(`pytest-not-python-${stack ?? "none"}`, PYTEST_REPORT, stack);
+  /** Every run that is not of framework `pytest`: no framework, or another, under each stack. */
+  const NOT_PYTEST: Array<[string, string | undefined, string | undefined]> = [
+    ["no stack and no framework", undefined, undefined],
+    ["stack python and no framework", "python", undefined],
+    ["stack python and framework unittest", "python", "unittest"],
+    ["stack bun and framework bun-test", "bun", "bun-test"],
+    ["stack bun and framework vitest", "bun", "vitest"],
+    ["stack mvn and no framework", "mvn", undefined],
+    ["stack rust and no framework", "rust", undefined],
+    ["stack arduino and no framework", "arduino", undefined],
+    ["stack cobol and framework cobol-unit", "cobol", "cobol-unit"],
+  ];
+  for (const [label, stack, framework] of NOT_PYTEST) {
+    test(`the same pytest report under ${label} is not grouped: its one pytest suite is its one node`, async () => {
+      const { res, event } = await ingest(
+        `pytest-not-pytest-${stack ?? "none"}-${framework ?? "none"}`,
+        PYTEST_REPORT,
+        stack,
+        framework,
+      );
       expect(counts(res.body.run)).toEqual(PYTEST_COUNTS);
       expect(treeShape(event)).toEqual(PYTEST_BY_SUITE);
     });
   }
 });
 
-// ── The effective stack ──────────────────────────────────────────────────────
+// ── The effective framework ──────────────────────────────────────────────────
 
-describe("a run's reports are decoded under its effective stack", () => {
-  /** Start a run under `startStack`, then close it with an ingest that omits its stack. */
+describe("a run's reports are decoded under its effective framework", () => {
+  /** Start a run under `startStack` and `startFramework`, then close it with an ingest that states neither. */
   async function startThenIngest(
     agentId: string,
     startStack: string,
+    startFramework: string,
   ): Promise<{ event: StoredEvent; openRuns: string[] }> {
     const handle = boot();
     const key = await ready(handle, agentId);
@@ -543,6 +565,7 @@ describe("a run's reports are decoded under its effective stack", () => {
       projectKey: key,
       agentId,
       stack: startStack,
+      framework: startFramework,
       tier: "unit",
     });
     expect(start.status).toBe(202);
@@ -561,16 +584,18 @@ describe("a run's reports are decoded under its effective stack", () => {
     return { event, openRuns: (list.openRuns as { runId: string }[]).map((r) => r.runId) };
   }
 
-  test("an ingest that omits its stack, closing a run started under python, groups its pytest report by classname", async () => {
-    const { event, openRuns } = await startThenIngest("stack-start-python", "python");
-    expect(event.stack).toBe("python");
+  test("an ingest that omits its framework, closing a run started under framework pytest (stack bun), groups its pytest report by classname", async () => {
+    const { event, openRuns } = await startThenIngest("framework-start-pytest", "bun", "pytest");
+    expect(event.stack).toBe("bun");
+    expect(event.framework).toBe("pytest");
     expect(treeShape(event)).toEqual(PYTEST_GROUPED);
     expect(openRuns).toEqual([]);
   });
 
-  test("an ingest that omits its stack, closing a run started under bun, leaves its pytest report grouped by suite", async () => {
-    const { event, openRuns } = await startThenIngest("stack-start-bun", "bun");
-    expect(event.stack).toBe("bun");
+  test("an ingest that omits its framework, closing a run started under framework unittest (stack python), leaves its pytest report grouped by suite", async () => {
+    const { event, openRuns } = await startThenIngest("framework-start-unittest", "python", "unittest");
+    expect(event.stack).toBe("python");
+    expect(event.framework).toBe("unittest");
     expect(treeShape(event)).toEqual(PYTEST_BY_SUITE);
     expect(openRuns).toEqual([]);
   });

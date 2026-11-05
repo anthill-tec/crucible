@@ -29,11 +29,15 @@ interface Leaf {
   name: string;
   status: "pass" | "fail";
   duration_ms: number;
+  /** A scenario's Gherkin steps; absent on a plain test. */
+  steps?: Leaf[];
 }
 interface Suite {
   name: string;
   status: "pass" | "fail";
   children: Leaf[];
+  /** The browser a playwright-bdd feature's suite ran under. */
+  browser?: string;
 }
 interface Detail {
   id: string;
@@ -42,6 +46,8 @@ interface Detail {
   kind: "test";
   tier: string;
   codec?: string;
+  stack?: string;
+  framework?: string;
   timestamp: number;
   raw?: string;
   tree: Suite[];
@@ -63,6 +69,7 @@ async function mountAtRun(detail: Detail): Promise<void> {
     kind: "test",
     tier: detail.tier,
     codec: detail.codec,
+    ...(detail.framework !== undefined ? { stack: detail.stack, framework: detail.framework } : {}),
     timestamp: detail.timestamp,
     total: all.length,
     passed: passedOf(all),
@@ -78,18 +85,20 @@ async function mountAtRun(detail: Detail): Promise<void> {
     if (eventMatch !== null) {
       const parsed = new URL(url, "http://localhost");
       const suite = parsed.searchParams.get("suite");
+      const browser = parsed.searchParams.get("browser");
       // The real wire: the suite reads carry the raw output's byte length
       // (`rawBytes`), never `raw`; only the full read carries `raw`.
       const { raw, ...head } = detail;
       const rawBytes = raw !== undefined ? { rawBytes: Buffer.byteLength(raw, "utf8") } : {};
       if (suite !== null) {
-        const match = detail.tree.find((n) => n.name === suite);
+        const match = detail.tree.find((n) => n.name === suite && (browser === null || n.browser === browser));
         body = { ok: true, event: { ...head, ...rawBytes, tree: match !== undefined ? [match] : [] } };
       } else if (parsed.searchParams.get("depth") === "suites") {
         const tree = detail.tree.map((n) => ({
           name: n.name,
           status: n.status,
           counts: { passed: passedOf(n.children), failed: n.children.length - passedOf(n.children), pending: 0 },
+          ...(n.browser !== undefined ? { browser: n.browser } : {}),
         }));
         body = { ok: true, event: { ...head, ...rawBytes, tree } };
       } else {
@@ -175,29 +184,45 @@ function plainRun(id: string, raw: string): Detail {
   };
 }
 
-/** Three all-passing features of three scenarios each: the first unfolds on
- *  open (and reads its first scenarios), the other two stay folded. */
+/** Three all-passing features of three scenarios each, served as the board
+ *  serves a streamed playwright-bdd run: one suite per feature (under one
+ *  browser), each scenario a leaf of it carrying its steps. The first
+ *  SPEC_FIRST_OPEN (2) features open on open and read their suites; the third
+ *  stays folded and unread. */
 function specRun(id: string): Detail {
-  const tree: Suite[] = [];
-  for (const feature of ["Alpha", "Beta", "Gamma"]) {
-    for (let s = 1; s <= 3; s++) {
-      tree.push({
-        name: `${feature} › Scenario ${s}`,
-        status: "pass",
-        children: [1, 2].map((l) => ({ name: `step-${l}`, status: "pass" as const, duration_ms: 2 })),
-      });
-    }
-  }
+  const tree: Suite[] = ["Alpha", "Beta", "Gamma"].map((feature) => ({
+    name: feature,
+    status: "pass",
+    browser: "chromium",
+    children: [1, 2, 3].map((s) => ({
+      name: `Scenario ${s}`,
+      status: "pass" as const,
+      duration_ms: 4,
+      steps: [1, 2].map((l) => ({ name: `step-${l}`, status: "pass" as const, duration_ms: 2 })),
+    })),
+  }));
   return {
     id,
     projectKey: "proj-fold-identity",
     agentId: "fold-identity-agent",
     kind: "test",
     tier: "e2e",
-    codec: "playwright",
+    codec: "crucible-events",
+    stack: "bun",
+    framework: "playwright-bdd",
     timestamp: Date.now(),
     tree,
   };
+}
+
+/** A scenario row, by its leaf key `<feature> [<browser>]::<scenario>`. */
+function scenarioRow(leafKey: string): Element | null {
+  return overlay().querySelector(`[data-testid="suite-row"][data-leaf-key="${CSS.escape(leafKey)}"]`);
+}
+
+/** The heat cells of every suite but `feature`'s. */
+function cellsOutside(feature: string): Element[] {
+  return nodes('[data-testid="heat-cell"]').filter((c) => !((c as HTMLElement).title ?? "").startsWith(`${feature} [`));
 }
 
 function clickHeading(title: string): void {
@@ -248,42 +273,45 @@ describe("the raw output is its own binding", () => {
 });
 
 describe("each BDD feature is its own binding", () => {
-  test("unfolding one feature replaces only that feature's nodes: the other features, their scenario rows, the heat cells and the body are kept", async () => {
+  test("unfolding one feature replaces only that feature's nodes: the other features, their scenario rows, the other features' heat cells and the body are kept", async () => {
     await mountAtRun(specRun("evt-unfold-identity"));
     expect(featureGroup("Alpha")?.querySelectorAll('[data-testid="suite-row"]').length).toBe(3);
-    expect(featureGroup("Beta")?.querySelectorAll('[data-testid="suite-row"]').length).toBe(0);
+    expect(featureGroup("Beta")?.querySelectorAll('[data-testid="suite-row"]').length).toBe(3);
+    expect(featureGroup("Gamma")?.querySelectorAll('[data-testid="suite-row"]').length).toBe(0);
 
     const body = nodes(".app-drillin-tree");
     const alpha = [featureGroup("Alpha")!];
-    const gamma = [featureGroup("Gamma")!];
+    const beta = [featureGroup("Beta")!];
     const alphaRows = Array.from(alpha[0]!.querySelectorAll('[data-testid="suite-row"]'));
-    const cells = nodes('[data-testid="heat-cell"]');
-    expect(cells.length).toBe(18);
+    // One heat cell per scenario: nine in all, three of them Gamma's.
+    expect(nodes('[data-testid="heat-cell"]').length).toBe(9);
+    const cells = cellsOutside("Gamma");
+    expect(cells.length).toBe(6);
 
-    clickHeading("Beta");
+    clickHeading("Gamma");
     await settle();
 
-    // The change itself: Beta unfolded.
-    expect(featureGroup("Beta")?.querySelectorAll('[data-testid="suite-row"]').length).toBe(3);
+    // The change itself: Gamma unfolded onto its three scenarios.
+    expect(featureGroup("Gamma")?.querySelectorAll('[data-testid="suite-row"]').length).toBe(3);
     expectKept(body, "the run-detail body");
     expectKept(alpha, "feature group");
-    expectKept(gamma, "feature group");
-    expectKept(alphaRows, "suite row");
+    expectKept(beta, "feature group");
+    expectKept(alphaRows, "scenario row");
     expectKept(cells, "heat cell");
     expect(featureGroup("Alpha")).toBe(alpha[0]!);
-    expect(featureGroup("Gamma")).toBe(gamma[0]!);
-    for (const row of alphaRows) expect(suiteRow(row.getAttribute("data-suite-key")!)).toBe(row);
+    expect(featureGroup("Beta")).toBe(beta[0]!);
+    for (const row of alphaRows) expect(scenarioRow(row.getAttribute("data-leaf-key")!)).toBe(row);
   });
 
   test("folding one feature replaces only that feature's nodes: the other features and the body are kept", async () => {
     await mountAtRun(specRun("evt-fold-identity"));
-    clickHeading("Beta");
+    clickHeading("Gamma");
     await settle();
     const body = nodes(".app-drillin-tree");
     const beta = [featureGroup("Beta")!];
     const gamma = [featureGroup("Gamma")!];
-    const betaRows = Array.from(beta[0]!.querySelectorAll('[data-testid="suite-row"]'));
-    expect(betaRows.length).toBe(3);
+    const gammaRows = Array.from(gamma[0]!.querySelectorAll('[data-testid="suite-row"]'));
+    expect(gammaRows.length).toBe(3);
     const cells = nodes('[data-testid="heat-cell"]');
 
     clickHeading("Alpha");
@@ -294,8 +322,9 @@ describe("each BDD feature is its own binding", () => {
     expectKept(body, "the run-detail body");
     expectKept(beta, "feature group");
     expectKept(gamma, "feature group");
-    expectKept(betaRows, "suite row");
+    expectKept(gammaRows, "scenario row");
     expectKept(cells, "heat cell");
     expect(featureGroup("Beta")).toBe(beta[0]!);
+    expect(featureGroup("Gamma")).toBe(gamma[0]!);
   });
 });

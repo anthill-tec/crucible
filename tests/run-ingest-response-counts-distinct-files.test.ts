@@ -4,8 +4,7 @@
 // `files` is the run's count of distinct files: a case's non-empty `file`,
 // else its non-empty `classname`, else its suite's name, with `\` read as
 // `/`, counted once across the whole run (every report of it). It is
-// computed per response and never stored. A `playwright` run's `files` is its
-// count of distinct spec files.
+// computed per response and never stored.
 //
 // Driven through the real production HTTP surface (`startServer`, in-memory
 // store); what is stored is read back through the run detail read
@@ -209,78 +208,5 @@ describe("the run block's files counts each case's file, else classname, else su
     });
     const { res } = await ingest("files-datapath", { dataPath: dir });
     expect(envelopeCounts(res.body.run)).toEqual({ passed: 4, failed: 0, pending: 0, total: 4, files: 3 });
-  });
-});
-
-// ── A playwright run ─────────────────────────────────────────────────────────
-
-/** One playwright test entry (one project) whose last attempt ran `steps`. */
-function pwTest(projectName: string, status: string, steps: unknown[]): Record<string, unknown> {
-  return {
-    projectName,
-    projectId: projectName,
-    results: [{ status, duration: 5, retry: 0, steps }],
-    status: status === "passed" ? "expected" : "unexpected",
-  };
-}
-
-const PASS_STEP = { title: "Given a thing", duration: 2 };
-const FAIL_STEP = { title: "When it breaks", duration: 1, error: { message: "Error: boom", stack: "Error: boom\n    at breaks (steps.js)" } };
-
-/** Two spec files: the first holds two scenarios (one under two projects), the second one. */
-const PLAYWRIGHT_REPORT = JSON.stringify({
-  config: { version: "1.61.1" },
-  suites: [
-    {
-      title: "tests/e2e/features/login.feature.spec.js",
-      file: "tests/e2e/features/login.feature.spec.js",
-      specs: [],
-      suites: [
-        {
-          title: "Login",
-          file: "tests/e2e/features/login.feature.spec.js",
-          specs: [
-            {
-              title: "Signs in",
-              file: "tests/e2e/features/login.feature.spec.js",
-              tests: [pwTest("chromium", "passed", [PASS_STEP]), pwTest("firefox", "passed", [PASS_STEP])],
-            },
-            {
-              title: "Signs out",
-              file: "tests/e2e/features/login.feature.spec.js",
-              tests: [pwTest("chromium", "passed", [PASS_STEP])],
-            },
-          ],
-        },
-      ],
-    },
-    {
-      title: "tests/e2e/features/cart.feature.spec.js",
-      file: "tests/e2e/features/cart.feature.spec.js",
-      specs: [],
-      suites: [
-        {
-          title: "Cart",
-          file: "tests/e2e/features/cart.feature.spec.js",
-          specs: [
-            {
-              title: "Adds an item",
-              file: "tests/e2e/features/cart.feature.spec.js",
-              tests: [pwTest("chromium", "failed", [FAIL_STEP])],
-            },
-          ],
-        },
-      ],
-    },
-  ],
-  errors: [],
-  stats: { startTime: "2026-10-27T00:00:00.000Z", duration: 20, expected: 3, skipped: 0, unexpected: 1, flaky: 0 },
-});
-
-describe("a playwright run's files is its count of distinct spec files", () => {
-  test("four scenario nodes across two spec files answer files 2", async () => {
-    // Four scenario nodes (one spec under two projects); two spec files.
-    const { res } = await ingest("files-playwright", { codec: "playwright", data: PLAYWRIGHT_REPORT });
-    expect(envelopeCounts(res.body.run)).toEqual({ passed: 3, failed: 1, pending: 0, total: 4, files: 2 });
   });
 });

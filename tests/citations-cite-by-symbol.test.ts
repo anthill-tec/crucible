@@ -1174,16 +1174,9 @@ describe("bare line references — real-world false positives, closed this cycle
 // wording CR-CRU-097's own spec states.
 const EXEMPT_FIXTURES: ExemptFixture[] = [
   {
-    citingFile: "tests/playwright-codec.test.ts",
-    text: ["file", ".ts", ":", "10"].join(""),
-    reason:
-      "an invented mock Playwright failure `stack` string the frame-condensation test asserts on " +
-      "verbatim; the file is invented and never exists on disk.",
-  },
-  {
     citingFile: "tests/drill-in.test.ts",
     text: ["file", ".ts", ":", "10"].join(""),
-    reason: "the same invented mock stack frame, asserted on by the failure-detail drill-in test.",
+    reason: "an invented mock stack frame, asserted on by the failure-detail drill-in test.",
   },
   {
     citingFile: "tests/drill-in.test.ts",

@@ -364,6 +364,7 @@ describe("a codec reads a run's whole raw output before it is capped", () => {
       agentId: s.agentId,
       codec: "junit",
       stack: "bun",
+      framework: "bun-test",
       data: report,
       raw: consoleText,
     });

@@ -80,7 +80,11 @@
 //
 // HARNESS — unchanged house idiom (real VanJS/VanX, real public/app-logic
 // .mjs + public/app.js, scripted fetch including the progressive
-// `?depth=suites` / `?suite=<name>` contract).
+// `?depth=suites` / `?suite=<name>&browser=<b>` contract). A BDD run is
+// served as the board serves a streamed `playwright-bdd` run: codec
+// `crucible-events`, framework `playwright-bdd`, one suite per feature and
+// browser, each scenario a leaf of it carrying its Gherkin steps, and the
+// run's counts over its scenarios.
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -120,46 +124,66 @@ const PASSING_STEPS = [
 ];
 const FAILING_STEPS = [SHARED_GIVEN, "When the specification breaks"];
 
-interface Leaf {
+interface Step {
   name: string;
   status: "pass" | "fail" | "pending";
   duration_ms: number;
   failure?: { message: string; trace?: string };
 }
 
+/** A leaf: a scenario of a BDD run (its steps under it), or a plain test. */
+interface Leaf extends Step {
+  steps?: Step[];
+}
+
 interface SuiteNode {
   name: string;
   status: "pass" | "fail" | "pending";
   children: Leaf[];
+  browser?: string;
+}
+
+const passStep = (name: string, duration_ms: number): Step => ({ name, status: "pass", duration_ms });
+
+/** A scenario leaf: its status and duration are its steps'. */
+function scenario(name: string, steps: Step[]): Leaf {
+  const failed = steps.find((st) => st.status === "fail");
+  return {
+    name,
+    status: failed !== undefined ? "fail" : "pass",
+    duration_ms: steps.reduce((sum, st) => sum + st.duration_ms, 0),
+    ...(failed?.failure !== undefined ? { failure: { message: failed.failure.message } } : {}),
+    steps,
+  };
+}
+
+/** One feature run under one browser: the suite the board stores for it. */
+function feature(name: string, scenarios: Leaf[]): SuiteNode {
+  return {
+    name,
+    status: scenarios.some((sc) => sc.status === "fail") ? "fail" : "pass",
+    children: scenarios,
+    browser: "chromium",
+  };
 }
 
 function gherkinTree(): SuiteNode[] {
   return [
-    {
-      name: `${FEATURE_TITLE} › ${PASSING_SCENARIO}`,
-      status: "pass",
-      children: PASSING_STEPS.map((name, i) => ({
-        name,
-        status: "pass" as const,
-        duration_ms: 5 + i,
-      })),
-    },
-    {
-      name: `${FEATURE_TITLE} › ${FAILING_SCENARIO}`,
-      status: "fail",
-      children: [
-        { name: FAILING_STEPS[0] as string, status: "pass", duration_ms: 4 },
+    feature(FEATURE_TITLE, [
+      scenario(PASSING_SCENARIO, PASSING_STEPS.map((name, i) => passStep(name, 5 + i))),
+      scenario(FAILING_SCENARIO, [
+        passStep(FAILING_STEPS[0] as string, 4),
         {
           name: FAILING_STEPS[1] as string,
           status: "fail",
           duration_ms: 1,
           failure: {
             message: FAILURE_MESSAGE,
-            trace: `${FAILURE_MESSAGE}\n    at bdd-section.steps.ts:42:7`,
+            trace: `${FAILURE_MESSAGE}\n    at theStepThatBroke`,
           },
         },
-      ],
-    },
+      ]),
+    ]),
   ];
 }
 
@@ -167,6 +191,8 @@ interface RunFixture {
   id: string;
   tier: string;
   codec: string;
+  /** The run's framework; a BDD run's is `playwright-bdd`. */
+  framework?: string;
   tree: SuiteNode[];
   agentId?: string;
   offsetMs?: number;
@@ -176,7 +202,7 @@ interface RunFixture {
 }
 
 function bddRun(id = "evt-bdd-gherkin"): RunFixture {
-  return { id, tier: "e2e", codec: "playwright", tree: gherkinTree() };
+  return { id, tier: "e2e", codec: "crucible-events", framework: "playwright-bdd", tree: gherkinTree() };
 }
 
 function junitUnitRun(id = "evt-unit-junit"): RunFixture {
@@ -255,8 +281,9 @@ async function mountApp(opts: MountOpts): Promise<void> {
     agentId: run.agentId ?? HARNESS_AGENT_ID,
     kind: "test",
     tier: run.tier,
-    codec: run.codec,
     timestamp: now + (run.offsetMs ?? 0),
+    ...(run.framework !== undefined ? { stack: "bun", framework: run.framework } : {}),
+    codec: run.codec,
     context: run.context,
     summary: summarize(run.tree),
     tree: run.tree,
@@ -290,8 +317,11 @@ async function mountApp(opts: MountOpts): Promise<void> {
       const detail = detailOf(run);
       const params = new URL(url, "http://localhost").searchParams;
       const suiteParam = params.get("suite");
+      const browserParam = params.get("browser");
       if (suiteParam !== null) {
-        const match = run.tree.find((n) => n.name === suiteParam);
+        const match = run.tree.find(
+          (n) => n.name === suiteParam && (browserParam === null || n.browser === browserParam),
+        );
         return okResponse({
           ok: true,
           event: { ...detail, tree: match !== undefined ? [match] : [] },
@@ -310,6 +340,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
                 failed: n.children.filter((c) => c.status === "fail").length,
                 pending: n.children.filter((c) => c.status === "pending").length,
               },
+              ...(n.browser !== undefined ? { browser: n.browser } : {}),
             })),
           },
         });
@@ -334,6 +365,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
           context: run.context,
           ...summarize(run.tree),
           hasCoverage: false,
+          ...(run.framework !== undefined ? { stack: "bun", framework: run.framework } : {}),
         })),
       });
     }
@@ -517,9 +549,9 @@ describe("CR-CRU-145 §S4 (migrated from CR-CRU-015 §S3) — the run detail ren
     await mountBdd({ key: "bdd-gherkin", runs: [bddRun()] });
     await openRunFromIndex("evt-bdd-gherkin");
 
-    // Both scenarios auto-expand on open without a click: the passing one is
-    // the FIRST scenario of the (only) feature, the failing one auto-expands
-    // because it fails (§S1's progressive-expansion rule).
+    // Both scenarios show their steps on open without a click: the (only)
+    // feature fails, so it opens, and an open feature's read answers every
+    // scenario of it with its steps (§S1's progressive-expansion rule).
     expect(leafRowsOf(PASSING_SCENARIO).map(leafText)).toEqual(PASSING_STEPS);
     expect(leafRowsOf(PASSING_SCENARIO).every((r) => r.className.includes("pass"))).toBe(true);
 
@@ -699,71 +731,56 @@ function newerBddRun(): RunFixture {
   return {
     id: "evt-bdd-newer",
     tier: "e2e",
-    codec: "playwright",
+    codec: "crucible-events",
+    framework: "playwright-bdd",
     agentId: FILER_BRAVO,
     offsetMs: NEWER_OFFSET_MS,
-    tree: [
-      {
-        name: `${NEWER_FEATURE_TITLE} › ${NEWER_SCENARIO}`,
-        status: "pass",
-        children: NEWER_STEPS.map((name, i) => ({
-          name,
-          status: "pass" as const,
-          duration_ms: 7 + i,
-        })),
-      },
-    ],
+    tree: [feature(NEWER_FEATURE_TITLE, [scenario(NEWER_SCENARIO, NEWER_STEPS.map((name, i) => passStep(name, 7 + i)))])],
   };
 }
 
 const TALLY_FEATURE_TITLE = "Tally Bound Feature";
 const TALLY_CASES = ["one", "two", "three", "four", "five"];
-const TALLY_PASSED = 13;
+// The board counts a playwright-bdd run over its SCENARIOS: five broken
+// scenarios and one clean one.
+const TALLY_PASSED = 1;
 const TALLY_FAILED = 5;
-const TALLY_TOTAL = 18;
-// CORRECTED against C2 GREEN's settled progressive-expansion rule
-// (a25ff4e, public/app.js `openProgressively`/`specFeaturesOf`): the ONE
-// feature here is opened (it is both the only and the failing feature), but
-// ONLY a scenario that is failing OR among its first SPEC_FIRST_OPEN (2)
-// scenarios loads its steps on open. The 5 failing "case breaks" scenarios
-// already fill (and exceed) that window, so the 6th, all-green "clean path"
-// scenario's row renders but stays FOLDED — its steps are never fetched
-// until it scrolls into view or is clicked. The DOM therefore shows exactly
-// the failing scenarios' own steps on open, not the run's full step count.
-const TALLY_VISIBLE_LEAF_ROWS = TALLY_CASES.length * 3; // 5 failing scenarios × 3 steps each
+const TALLY_TOTAL = 6;
+// The ONE feature here fails, so it opens on its own, and an open feature's
+// read answers EVERY scenario of it with its steps — the clean path's
+// included. The DOM therefore shows the whole run's steps on open: five
+// broken scenarios and the clean one, three steps each.
+const TALLY_VISIBLE_LEAF_ROWS = (TALLY_CASES.length + 1) * 3;
 
 function tallyRun(): RunFixture {
-  const broken: SuiteNode[] = TALLY_CASES.map((word) => ({
-    name: `${TALLY_FEATURE_TITLE} › the ${word} case breaks`,
-    status: "fail" as const,
-    children: [
-      { name: "Given the suite is prepared", status: "pass" as const, duration_ms: 3 },
-      { name: `When it exercises the ${word} case`, status: "pass" as const, duration_ms: 3 },
+  const broken: Leaf[] = TALLY_CASES.map((word) =>
+    scenario(`the ${word} case breaks`, [
+      passStep("Given the suite is prepared", 3),
+      passStep(`When it exercises the ${word} case`, 3),
       {
         name: `Then the ${word} case reports its outcome`,
-        status: "fail" as const,
+        status: "fail",
         duration_ms: 3,
         failure: { message: `the ${word} case never reached its assertion` },
       },
-    ],
-  }));
+    ]),
+  );
   return {
     id: "evt-bdd-tally",
     tier: "e2e",
-    codec: "playwright",
+    codec: "crucible-events",
+    framework: "playwright-bdd",
     agentId: FILER_CHARLIE,
     offsetMs: TALLY_OFFSET_MS,
     tree: [
-      ...broken,
-      {
-        name: `${TALLY_FEATURE_TITLE} › the clean path still runs to the end`,
-        status: "pass",
-        children: [
-          { name: "Given the clean path is prepared", status: "pass", duration_ms: 2 },
-          { name: "When it runs to the end", status: "pass", duration_ms: 2 },
-          { name: "Then every step of it passes", status: "pass", duration_ms: 2 },
-        ],
-      },
+      feature(TALLY_FEATURE_TITLE, [
+        ...broken,
+        scenario("the clean path still runs to the end", [
+          passStep("Given the clean path is prepared", 2),
+          passStep("When it runs to the end", 2),
+          passStep("Then every step of it passes", 2),
+        ]),
+      ]),
     ],
   };
 }
@@ -853,8 +870,8 @@ describe("CR-CRU-145 §S4 (AMENDED, was 'NAMED never TALLIED') — the index sho
     const verdict = norm(
       tallyRow!.querySelector('[data-testid="bdd-index-verdict"]')?.textContent,
     );
-    expect(verdict).toContain(String(TALLY_PASSED));
-    expect(verdict).toContain(String(TALLY_FAILED));
+    expect(verdict).toContain(`${TALLY_PASSED} ✓`);
+    expect(verdict).toContain(`${TALLY_FAILED} ✗`);
 
     // POSITIVE — it is named too (who/when), on the SAME row.
     expect(norm(tallyRow!.textContent)).toContain(FILER_CHARLIE);
@@ -868,13 +885,11 @@ describe("CR-CRU-145 §S4 (AMENDED, was 'NAMED never TALLIED') — the index sho
     // opening its detail is what reveals the steps, not the index row.
     expect(bddPane().querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
 
-    // Opening the row reveals the specification — but per §S1's settled
-    // progressive-expansion rule (C2 GREEN), that means the FAILING
-    // scenarios' steps immediately, not literally every step of the run:
-    // the one all-green "clean path" scenario stays folded until scrolled
-    // into view or clicked. This still proves the counts-forbidden rule
-    // really did move (opening reveals real Gherkin content), without
-    // asserting a figure no correct implementation could ever produce.
+    // Opening the row reveals the specification: the failing feature opens,
+    // and its read answers every scenario with its steps — the all-green
+    // "clean path" scenario's three steps included. This proves the
+    // counts-forbidden rule really did move (opening reveals real Gherkin
+    // content, at the renderer the row hands off to).
     await openRunFromIndex("evt-bdd-tally");
     const cleanPathRow = Array.from(
       runOverlay().querySelectorAll<HTMLElement>('[data-testid="suite-row"]'),
@@ -882,7 +897,7 @@ describe("CR-CRU-145 §S4 (AMENDED, was 'NAMED never TALLIED') — the index sho
     expect(cleanPathRow).toBeDefined();
     expect(
       cleanPathRow!.parentElement?.querySelectorAll('[data-testid="leaf-row"]').length,
-    ).toBe(0);
+    ).toBe(3);
     expect(runOverlay().querySelectorAll('[data-testid="leaf-row"]').length).toBe(
       TALLY_VISIBLE_LEAF_ROWS,
     );

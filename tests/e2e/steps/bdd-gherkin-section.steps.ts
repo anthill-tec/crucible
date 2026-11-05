@@ -1,6 +1,6 @@
 // CR-CRU-015 §S3 — step definitions for tests/e2e/features/
-// bdd-gherkin-section.feature: the Chromium-tier proof that a run the SERVER
-// decoded renders its Gherkin.
+// bdd-gherkin-section.feature: the Chromium-tier proof that a playwright-bdd
+// run streamed to the board renders its Gherkin.
 //
 // MIGRATED (CR-CRU-145 §S4, orchestrator ruling at C3 GREEN): the BDD tab is
 // now an index, and the Gherkin renders at the shared run detail the index
@@ -18,7 +18,7 @@
 // header rule.
 import { expect, type Locator, type Page } from "@playwright/test";
 import { Step } from "./world.ts";
-import { ingestPlaywright, PLAYWRIGHT_BDD_REPORT, seedProject } from "./harness.ts";
+import { PLAYWRIGHT_BDD_SCENARIOS, seedProject, streamPlaywrightBdd } from "./harness.ts";
 
 /** The feature's `|`-separated lists — one Gherkin line cannot be split on a
  *  comma, because step text contains commas. */
@@ -30,8 +30,8 @@ const overlay = (page: Page): Locator => page.getByTestId("run-overlay");
 /** A leaf row's outcome is a whole class token (`pass` / `fail` / `pending`). */
 const outcomeClass = (outcome: string): RegExp => new RegExp(`(^|\\s)${outcome}(\\s|$)`);
 
-/** The step rows of the ONE scenario titled `scenario`: its suite-row's
- *  sibling leaf list (public/app.js SuiteGroup). */
+/** The step rows of the ONE scenario titled `scenario`: the leaf rows of its
+ *  scenario row's own group (public/app.js ScenarioGroup). */
 async function stepsOf(page: Page, scenario: string): Promise<Locator> {
   const row = overlay(page).getByTestId("suite-row").filter({ hasText: scenario });
   await expect(row).toHaveCount(1);
@@ -45,11 +45,11 @@ Step("a frontend project named {string} is registered", async ({ request, world 
 Step(
   "a playwright BDD run is ingested for agent {string} on that project",
   async ({ request, world }, agentId: string) => {
-    const res = await ingestPlaywright(
+    const res = await streamPlaywrightBdd(
       request,
       world.projectKey as string,
       agentId,
-      PLAYWRIGHT_BDD_REPORT,
+      PLAYWRIGHT_BDD_SCENARIOS,
     );
     world.eventId = res.event;
   },
@@ -70,9 +70,10 @@ Step(
     // The COUNT is asserted with the order, so an extra scenario fails too.
     await expect(rows).toHaveCount(expected.length);
     for (let i = 0; i < expected.length; i++) {
-      const name = (await rows.nth(i).locator(".app-suite-name").innerText()).trim();
+      // A scenario row's name cell leads with its outcome glyph.
+      const name = (await rows.nth(i).locator(".app-suite-name").innerText()).trim().replace(/^[✓✗⏭]\s*/, "");
       const title = expected[i] as string;
-      expect(name === title || name.endsWith(` › ${title}`), `scenario ${i}: "${name}"`).toBe(true);
+      expect(name, `scenario ${i}`).toBe(title);
     }
   },
 );

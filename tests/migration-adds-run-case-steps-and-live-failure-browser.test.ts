@@ -6,7 +6,7 @@
 //  - a run stored before v24 reads unchanged (its tests answer no `steps`),
 //    an open run's live failure stored before v24 reads unchanged (no
 //    `browser`), and a run stored after the migration stores its steps;
-//  - RUNBOOK's schema figures read v24.
+//  - RUNBOOK's schema figures read v25.
 //
 // Interface choice (stated for the orchestrator's ruling): the step row's
 // columns are `event_id`, `suite_position`, `case_position`, `position`,
@@ -25,11 +25,15 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { SCHEMA_VERSION, Store } from "../src/store.ts";
+import { MIGRATIONS, SCHEMA_VERSION, Store } from "../src/store.ts";
 import type { RunEvent, RunLive, SuiteNode } from "../src/types.ts";
 
 const PRE_STEPS_VERSION = 23;
 const STEPS_VERSION = 24;
+// The schema figures RUNBOOK states: the version the runbook documents, and
+// the one before it that it must no longer name.
+const RUNBOOK_VERSION = 25;
+const PRE_RUNBOOK_VERSION = 24;
 
 const STEP_COLUMNS = [
   "case_position",
@@ -121,9 +125,9 @@ const PRE_TREE: SuiteNode[] = [
 ];
 
 /**
- * A store from this build walked back to v23, holding a closed run stored by
- * the playwright codec's shape (a scenario per suite, a step per test) and an
- * open streamed run with one live failure, both read before the walk-back.
+ * A store from this build walked back to v23, holding a closed run filed
+ * through a codec no later migration reshapes (junit) and an open streamed
+ * run with one live failure, both read before the walk-back.
  */
 function makeV23Store(): V23Store {
   const dbPath = scratchDbPath();
@@ -134,7 +138,7 @@ function makeV23Store(): V23Store {
     key,
     "pre-runner",
     { summary: { total: 2, passed: 1, failed: 1, pending: 0, duration_ms: 5 }, tree: PRE_TREE },
-    { tier: "e2e", stack: "bun", codec: "playwright" },
+    { tier: "e2e", stack: "bun", codec: "junit" },
   ).id;
   const openRunId = store.startRun(key, "pre-runner", { tier: "unit", stack: "bun" }).runId;
   const data = `${JSON.stringify({
@@ -168,11 +172,12 @@ function makeV23Store(): V23Store {
 }
 
 describe("migration v24 adds run_case_steps and run_live_failures.browser", () => {
-  test("the schema version this build declares is 24", () => {
-    expect(SCHEMA_VERSION).toBe(STEPS_VERSION);
+  test("the schema version this build declares is the length of its migration chain, which reaches v24", () => {
+    expect(SCHEMA_VERSION).toBe(MIGRATIONS.length);
+    expect(MIGRATIONS.length).toBeGreaterThanOrEqual(STEPS_VERSION);
   });
 
-  test("a v23 store is migrated 23 → 24: run_case_steps is created with its columns, run_live_failures gains a nullable TEXT browser, and the store is stamped 24", () => {
+  test("a v23 store is migrated from 23 to this build's schema version: run_case_steps is created with its columns, run_live_failures gains a nullable TEXT browser, and the store is stamped with this build's schema version", () => {
     const v23 = makeV23Store();
     const before = new Database(v23.dbPath);
     try {
@@ -186,10 +191,10 @@ describe("migration v24 adds run_case_steps and run_live_failures.browser", () =
 
     const store = open(v23.dbPath);
     expect(store.migration?.from).toBe(PRE_STEPS_VERSION);
-    expect(store.migration?.to).toBe(STEPS_VERSION);
-    expect(store.schemaVersion).toBe(STEPS_VERSION);
+    expect(store.migration?.to).toBe(SCHEMA_VERSION);
+    expect(store.schemaVersion).toBe(SCHEMA_VERSION);
     const db = dbOf(store);
-    expect(rawUserVersion(db)).toBe(STEPS_VERSION);
+    expect(rawUserVersion(db)).toBe(SCHEMA_VERSION);
     expect(columnsOf(db, "run_case_steps").map((c) => c.name)).toEqual(STEP_COLUMNS);
     expect(columnsOf(db, "run_live_failures").find((c) => c.name === "browser")).toEqual({
       name: "browser",
@@ -216,7 +221,7 @@ describe("migration v24 adds run_case_steps and run_live_failures.browser", () =
     expect(v23.liveBefore?.failures).toHaveLength(1);
 
     const store = open(v23.dbPath);
-    expect(store.migration?.to).toBe(STEPS_VERSION);
+    expect(store.migration?.to).toBe(SCHEMA_VERSION);
 
     const event = store.getEvent(v23.eventId);
     expect(event).toEqual(v23.eventBefore);
@@ -236,7 +241,7 @@ describe("migration v24 adds run_case_steps and run_live_failures.browser", () =
   test("on the migrated store a run stored after the migration stores its steps and reads them back", () => {
     const v23 = makeV23Store();
     const store = open(v23.dbPath);
-    expect(store.migration?.to).toBe(STEPS_VERSION);
+    expect(store.migration?.to).toBe(SCHEMA_VERSION);
     const steps = [
       { name: "Given a cart", status: "pass", duration_ms: 1 },
       { name: "When I pay", status: "fail", duration_ms: 2, failure: { message: "card declined" } },
@@ -262,19 +267,19 @@ describe("migration v24 adds run_case_steps and run_live_failures.browser", () =
   });
 });
 
-describe("RUNBOOK's schema figures read v24", () => {
-  test("docs/RUNBOOK.md states schema v24, the migration banner reaching v24 and the health figure schemaVersion 24, and names no v23 figure", () => {
+describe("RUNBOOK's schema figures read v25", () => {
+  test("docs/RUNBOOK.md states schema v25, the migration banner reaching v25 and the health figure schemaVersion 25, and names no v24 figure", () => {
     const runbook = fs.readFileSync(path.join(import.meta.dir, "..", "docs", "RUNBOOK.md"), "utf8");
     // Each figure read out of the runbook, so a failure names the figures it found rather than the whole file.
     const figures = (pattern: RegExp): string[] => runbook.match(pattern) ?? [];
     const banner = figures(/schema v\d+\)/g);
     const migrated = figures(/-> v\d+ \(/g);
     const health = figures(/"schemaVersion":\d+/g);
-    expect(banner).toContain(`schema v${STEPS_VERSION})`);
-    expect(migrated).toContain(`-> v${STEPS_VERSION} (`);
-    expect(health).toContain(`"schemaVersion":${STEPS_VERSION}`);
-    expect(banner).not.toContain(`schema v${PRE_STEPS_VERSION})`);
-    expect(migrated).not.toContain(`-> v${PRE_STEPS_VERSION} (`);
-    expect(health).not.toContain(`"schemaVersion":${PRE_STEPS_VERSION}`);
+    expect(banner).toContain(`schema v${RUNBOOK_VERSION})`);
+    expect(migrated).toContain(`-> v${RUNBOOK_VERSION} (`);
+    expect(health).toContain(`"schemaVersion":${RUNBOOK_VERSION}`);
+    expect(banner).not.toContain(`schema v${PRE_RUNBOOK_VERSION})`);
+    expect(migrated).not.toContain(`-> v${PRE_RUNBOOK_VERSION} (`);
+    expect(health).not.toContain(`"schemaVersion":${PRE_RUNBOOK_VERSION}`);
   });
 });

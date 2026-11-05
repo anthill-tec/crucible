@@ -1,10 +1,11 @@
 // bun's console failure detail, read on the board — through the ingest route.
 //
-// When a run's stack is `bun`, a failing case whose message is empty takes
+// When a run's framework is `bun-test`, a failing case whose message is empty takes
 // its message and trace from bun's console output in the run's `raw`, by the
 // rules the bun client applies today; a case the console does not explain
 // keeps its type-only failure; a case whose report already gives a message
-// keeps it. Under any other stack — or none — the console is not read.
+// keeps it. Under any other framework — or none — the console is not read,
+// whatever the run's stack.
 //
 // Each case is driven through the real production HTTP surface
 // (`startServer`, in-memory store): a bun JUnit report whose failures are
@@ -129,6 +130,7 @@ async function ingest(opts: {
   report: string;
   raw?: string;
   stack?: string;
+  framework?: string;
 }): Promise<StoredEvent> {
   const handle = boot();
   const key = await ready(handle, opts.agentId);
@@ -139,6 +141,7 @@ async function ingest(opts: {
     data: opts.report,
     ...(opts.raw !== undefined ? { raw: opts.raw } : {}),
     ...(opts.stack !== undefined ? { stack: opts.stack } : {}),
+    ...(opts.framework !== undefined ? { framework: opts.framework } : {}),
   });
   expect(res.status).toBe(200);
   expect(res.body.ok).toBe(true);
@@ -397,6 +400,7 @@ describe("a bun run's failing cases with no message store their console detail, 
           report: bareJunit(run.file, run.cases),
           raw: consoleText,
           stack: "bun",
+          framework: "bun-test",
         });
         const readingKey = `${run.name}/${wire}`;
         expect(CLIENT_READING[readingKey]).toBeDefined();
@@ -428,6 +432,7 @@ describe("a bun run's failing cases with no message store their console detail, 
         ]),
         raw: LEAK_ONELINER[wire]!,
         stack: "bun",
+        framework: "bun-test",
       });
       expect(leaf(event, "alpha fails and leaks").failure?.message).toBe("expect(received).toBe(expected)");
       expect(leaf(event, "beta fails").failure).toEqual({ type: ASSERTION });
@@ -444,6 +449,7 @@ describe("a bun run's failing cases with no message store their console detail, 
         ]),
         raw: EACH_TEST[wire]!,
         stack: "bun",
+        framework: "bun-test",
       });
       expect(leaf(event, "alpha asserts wrongly").failure?.message).toBe("expect(received).toBe(expected)");
       expect(leaf(event, "beta each 1").failure?.message).toBe("beta each boom");
@@ -456,6 +462,7 @@ describe("a bun run's failing cases with no message store their console detail, 
       report: bareJunit("n.test.ts", [{ name: "omega overflows", type: "Error" }]),
       raw: LONG_DETAIL.plain,
       stack: "bun",
+      framework: "bun-test",
     });
     const failure = leaf(event, "omega overflows").failure;
     expect(failure?.message).toBe("M".repeat(1000));
@@ -473,6 +480,7 @@ describe("the real bun runs the bun client froze, ingested with bun's own bare r
       report: BARE_JUNIT_TIMEOUT_RUN,
       raw: TIMEOUT_DETAIL_AFTER_FAIL.plain,
       stack: "bun",
+      framework: "bun-test",
     });
     const mismatch = leaf(event, "mismatched expectation").failure;
     expect(mismatch?.message).toBe("expect(received).toBe(expected)");
@@ -492,6 +500,7 @@ describe("the real bun runs the bun client froze, ingested with bun's own bare r
       report: BARE_JUNIT_TIMEOUT_RUN,
       raw: TIMEOUT_DETAIL_BEFORE_FAIL.plain,
       stack: "bun",
+      framework: "bun-test",
     });
     expect(leaf(event, "times out unmatched").failure).toEqual({
       type: "TimeoutError",
@@ -508,6 +517,7 @@ describe("the real bun runs the bun client froze, ingested with bun's own bare r
       report: BARE_JUNIT_AFTERMATH_RUN,
       raw: AFTERMATH_BLEED.plain,
       stack: "bun",
+      framework: "bun-test",
     });
     const gamma = leaf(event, "gamma leaks after failing").failure;
     expect(gamma?.message).toBe("expect(received).toBe(expected)");
@@ -522,7 +532,7 @@ describe("the real bun runs the bun client froze, ingested with bun's own bare r
 
 // ── Which cases, and which runs, read the console ───────────────────────────
 
-describe("only a bun run's failing cases with no message read the console", () => {
+describe("only a bun-test run's failing cases with no message read the console", () => {
   test("a case whose report gives its failure text keeps that text; a bare case beside it reads the console", async () => {
     const report = [
       '<?xml version="1.0" encoding="UTF-8"?>',
@@ -542,6 +552,7 @@ describe("only a bun run's failing cases with no message read the console", () =
       report,
       raw: LEGIT_CONSECUTIVE.plain,
       stack: "bun",
+      framework: "bun-test",
     });
     expect(leaf(event, "alpha asserts wrongly").failure).toEqual({
       type: "AssertionError",
@@ -551,7 +562,7 @@ describe("only a bun run's failing cases with no message read the console", () =
     expect(leaf(event, "beta throws its own boom").failure?.message).toBe("beta boom");
   });
 
-  test("a run started under bun whose ingest omits its stack reads the console", async () => {
+  test("a run started under framework bun-test whose ingest omits its stack and framework reads the console", async () => {
     const handle = boot();
     const agentId = "bun-console-start-stack";
     const key = await ready(handle, agentId);
@@ -559,6 +570,7 @@ describe("only a bun run's failing cases with no message read the console", () =
       projectKey: key,
       agentId,
       stack: "bun",
+      framework: "bun-test",
       tier: "unit",
     });
     expect(start.status).toBe(202);
@@ -577,29 +589,38 @@ describe("only a bun run's failing cases with no message read the console", () =
     expect(leaf(event, "times out unmatched").failure).toEqual({ type: "TimeoutError" });
   });
 
-  test("a bun run whose console arrives in the report's own captured output reads it there", async () => {
+  test("a bun-test run whose console arrives in the report's own captured output reads it there", async () => {
     const report = BARE_JUNIT_TIMEOUT_RUN.replace(
       "</testsuites>",
       `<system-err><![CDATA[${TIMEOUT_DETAIL_AFTER_FAIL.plain}]]></system-err>\n</testsuites>`,
     );
-    const event = await ingest({ agentId: "bun-console-in-system-err", report, stack: "bun" });
+    const event = await ingest({
+      agentId: "bun-console-in-system-err",
+      report,
+      stack: "bun",
+      framework: "bun-test",
+    });
     expect(leaf(event, "mismatched expectation").failure?.message).toBe("expect(received).toBe(expected)");
     expect(leaf(event, "throws with detail").failure?.message).toBe("boom with detail");
     expect(leaf(event, "times out unmatched").failure).toEqual({ type: "TimeoutError" });
   });
 
-  const NOT_BUN: Array<[string, string | undefined]> = [
-    ["stack python", "python"],
-    ["no stack", undefined],
-    ["an unknown stack", "nonesuch"],
+  /** Runs not of framework `bun-test`, stack `bun` among them: `[label, agent suffix, stack, framework]`. */
+  const NOT_BUN_TEST: Array<[string, string, string | undefined, string | undefined]> = [
+    ["framework vitest under stack bun", "vitest-bun", "bun", "vitest"],
+    ["no framework under stack bun", "none-bun", "bun", undefined],
+    ["framework pytest under stack python", "pytest-python", "python", "pytest"],
+    ["no stack and no framework", "none-none", undefined, undefined],
+    ["an unknown framework", "nonesuch", undefined, "nonesuch"],
   ];
-  for (const [label, stack] of NOT_BUN) {
+  for (const [label, suffix, stack, framework] of NOT_BUN_TEST) {
     test(`under ${label} the console is not read: every bare failure stays type-only`, async () => {
       const event = await ingest({
-        agentId: `bun-console-not-read-${stack ?? "none"}`,
+        agentId: `bun-console-not-read-${suffix}`,
         report: BARE_JUNIT_TIMEOUT_RUN,
         raw: TIMEOUT_DETAIL_BEFORE_FAIL.plain,
         ...(stack !== undefined ? { stack } : {}),
+        ...(framework !== undefined ? { framework } : {}),
       });
       expect(leaf(event, "mismatched expectation").failure).toEqual({ type: "AssertionError" });
       expect(leaf(event, "throws with detail").failure).toEqual({ type: "AssertionError" });

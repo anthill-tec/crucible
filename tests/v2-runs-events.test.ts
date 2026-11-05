@@ -291,6 +291,59 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
       expect(body.ok).toBe(false);
     });
 
+    test("codec playwright, its codec retired → 400 'unknown codec: playwright', no event and no run stored", async () => {
+      // A store FILE, so a second connection counts every `events` and `runs` row.
+      const dir = freshDir();
+      tmpDirs.push(dir);
+      const dbPath = join(dir, "crucible.db");
+      handle = startServer({ port: 0, dbPath });
+      const key = await createProject("runs-retired-codec");
+      // Registered, so the refusal is the codec's and not the caller check's.
+      await registerAgent(key, "retired-1");
+      const rowCounts = (): { events: number; runs: number } => {
+        const db = new Database(dbPath, { readonly: true });
+        try {
+          const events = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM events").get()?.n ?? -1;
+          const runs = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM runs").get()?.n ?? -1;
+          return { events, runs };
+        } finally {
+          db.close();
+        }
+      };
+      // The registration may itself store a row; the refusal must add none.
+      const before = rowCounts();
+      const eventsBefore = handle.store.listEvents(key, Number.MAX_SAFE_INTEGER).map((e) => e.id);
+
+      // A well-formed Playwright JSON report: one feature, one passing scenario of one step.
+      const report = JSON.stringify({
+        suites: [
+          {
+            title: "Checkout",
+            specs: [
+              {
+                title: "pays by card",
+                file: "features/checkout.feature",
+                tests: [{ projectName: "chromium", results: [{ status: "passed", steps: [{ title: "Given a cart", duration: 5 }] }] }],
+              },
+            ],
+          },
+        ],
+      });
+      const res = await postJson("/api/v2/runs", {
+        projectKey: key,
+        agentId: "retired-1",
+        codec: "playwright",
+        data: report,
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as ErrResponse;
+      expect(body.ok).toBe(false);
+      expect(body.error).toBe("unknown codec: playwright");
+      expect(rowCounts()).toEqual(before);
+      expect(handle.store.listEvents(key, Number.MAX_SAFE_INTEGER).map((e) => e.id)).toEqual(eventsBefore);
+    });
+
     test("malformed junit data → 400 JSON {ok:false, error}, never a plain-text 500", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("runs-badxml");

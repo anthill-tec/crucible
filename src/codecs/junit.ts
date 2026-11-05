@@ -268,10 +268,10 @@ function collectRawOutput(el: XmlElement, out: string[]): void {
 
 /**
  * One JUnit reading for every stack: a node per suite holding testcases, the
- * distinct files its cases name, and — when `stack` is `python` and the
+ * distinct files its cases name, and — when `framework` is `pytest` and the
  * report's only suite is named `pytest` — its cases grouped by classname.
  */
-export function parseJunit(xml: string, stack?: string): DecodedRun {
+export function parseJunit(xml: string, framework?: string): DecodedRun {
   const root = parseXml(xml);
   let suites: XmlElement[];
   if (root.name === "testsuites") {
@@ -290,7 +290,7 @@ export function parseJunit(xml: string, stack?: string): DecodedRun {
     const suiteName = nameOf(holder);
     for (const testcase of casesOf(holder)) files.add(fileOf(testcase, suiteName));
   }
-  const isPytest = stack === "python" && suites.length === 1 && suites[0]!.attrs["name"] === "pytest";
+  const isPytest = framework === "pytest" && suites.length === 1 && suites[0]!.attrs["name"] === "pytest";
   const tree = isPytest
     ? groupByClassname(holders.flatMap(casesOf))
     : holders.map((holder) => toNode(nameOf(holder), casesOf(holder)));
@@ -302,18 +302,18 @@ export function parseJunit(xml: string, stack?: string): DecodedRun {
 }
 
 /**
- * The run's raw output read into its failing cases. Under stack `bun` only, a
+ * The run's raw output read into its failing cases. Under framework `bun-test` only, a
  * failing case whose failure carries no message takes its message and trace
  * from bun's console in `raw`, by its name; a case the console does not
  * explain keeps its type-only failure. Each file bun names under
  * `# Unhandled error between tests` gets one failing case `?`, in that file's
  * suite, else in a new suite named by the path appended to the tree. Under any
- * other stack, or none, the tree is left as it is.
+ * other framework, or none, the tree is left as it is.
  *
  * Returns the paths of the files read as having failed to load, in bun's order.
  */
-export function readJunitRawOutput(tree: SuiteNode[], raw: string, stack?: string): string[] {
-  if (stack !== "bun" || raw.length === 0) return [];
+export function readJunitRawOutput(tree: SuiteNode[], raw: string, framework?: string): string[] {
+  if (framework !== "bun-test" || raw.length === 0) return [];
   // The record reads the console by the shared readers the live view reads it by.
   const details = parseBunConsoleFailures(raw, new BunConsoleFailureReader());
   for (const suite of tree) {
@@ -341,15 +341,15 @@ export function readJunitRawOutput(tree: SuiteNode[], raw: string, stack?: strin
  * A report file, or a directory of `TEST-*.xml` read in file-name order and
  * merged into one run. A malformed file in a directory is skipped and named
  * (by its file name) to `onSkip`; when no file decodes the read is refused.
- * Each file is read under the run's `stack`.
+ * Each file is read under the run's `framework`.
  */
 export async function parseJunitPath(
   path: string,
   onSkip?: (report: string, error: string) => void,
-  stack?: string,
+  framework?: string,
 ): Promise<DecodedRun> {
   if (statSync(path).isFile()) {
-    return parseJunit(readFileSync(path, "utf-8"), stack);
+    return parseJunit(readFileSync(path, "utf-8"), framework);
   }
   const files = readdirSync(path)
     .filter((f) => f.startsWith("TEST-") && f.endsWith(".xml"))
@@ -366,7 +366,7 @@ export async function parseJunitPath(
     const full = join(path, file);
     let report: DecodedRun;
     try {
-      report = parseJunit(readFileSync(full, "utf-8"), stack);
+      report = parseJunit(readFileSync(full, "utf-8"), framework);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       skipped.push(`${file}: ${error}`);

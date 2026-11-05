@@ -6,8 +6,8 @@
 // `env:CRUCIBLE_STREAM`, and in neither `crucible.reportPath` nor
 // `crucible.rawReport`. The bun client opens a run, hands the runner the
 // stream file and the shipped reporters, relays the stream to the open run and
-// closes the run by it. Playwright's kept `junit` and `json` reports are
-// written to the run's own reports dir, never to `<repo>/test-reports`.
+// closes the run by it. Playwright's kept reports are written to the run's
+// own reports dir, never to `<repo>/test-reports`.
 //
 // What the drive's one stored run shows:
 //   - tier `e2e`, framework `playwright-bdd`, codec `crucible-events`: opened
@@ -16,12 +16,12 @@
 //   - one suite per feature per browser, named by its `Feature:` title and
 //     carrying its browser;
 //   - a test count equal to the same run's JUnit `tests`;
-//   - each scenario's steps equal, by name, status and order, what the
-//     `playwright` codec (`parsePlaywright`, src/codecs/playwright.ts) decodes
-//     from the same run's JSON report, matched by (suite, name, browser);
+//   - each scenario's steps equal, by name, status and order, the steps its
+//     `.feature` file declares as they run: every step passing, except the
+//     deliberately broken one, which fails and ends the scenario;
 //   - a broken step's own failure message on that step, and the step after it
 //     absent (Playwright halts the `test.step()` chain at the first error);
-//   - `<repo>/test-reports/junit.xml` and `playwright.json` untouched.
+//   - `<repo>/test-reports/junit.xml` untouched.
 //
 // ── HOW THIS FILE DRIVES IT, AND WHY IN THIS SHAPE ────────────────────────
 //
@@ -67,7 +67,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parsePlaywright } from "../src/codecs/playwright.ts";
 import { startServer } from "../src/server.ts";
 import type { ServerHandle } from "../src/server.ts";
 import { declareClientBoard } from "./helpers/client-board.ts";
@@ -104,12 +103,10 @@ const STREAM_ROUTE = /^\/api\/v2\/runs\/[^/]+\/stream$/;
 const CLOSE_ROUTE = "/api/v2/runs";
 const CLIENT_PARSE_ROUTE = "/api/v2/runs/parsed";
 
-/** The package's own report paths, the defaults `playwright.config.ts` writes
- *  to when no path is handed in. The drive must leave both untouched. */
-const REPO_REPORTS = [
-  join(REPO_ROOT, "test-reports", "junit.xml"),
-  join(REPO_ROOT, "test-reports", "playwright.json"),
-];
+/** The package's own report path, the default `playwright.config.ts` writes
+ *  its JUnit report to when no path is handed in. The drive must leave it
+ *  untouched. */
+const REPO_REPORTS = [join(REPO_ROOT, "test-reports", "junit.xml")];
 
 // ── the temporary deliberately-failing specification ─────────────────────
 //
@@ -159,9 +156,9 @@ interface DeclaredScenario {
   scenario: string;
   /** Its step lines, verbatim and in order — `Given …`, `And …`, `Then …`.
    *  playwright-bdd carries the keyword through into the step title, so this
-   *  is the exact leaf name the codec produces. */
+   *  is the exact step name the stream carries. */
   steps: string[];
-  /** `<feature> › <scenario>` — the name `src/codecs/playwright.ts` builds. */
+  /** `<feature> › <scenario>` — how this file names a placed test. */
   node: string;
 }
 
@@ -254,8 +251,6 @@ interface Drive {
   declared: DeclaredScenario[];
   /** The same run's kept JUnit report, read from the drive's reports dir. */
   junitXml: string;
-  /** The same run's kept Playwright JSON report, read from the drive's reports dir. */
-  playwrightJson: string;
   /** The package's own reports, before the drive and after it. */
   repoReportsBefore: ReportSnapshot[];
   repoReportsAfter: ReportSnapshot[];
@@ -389,7 +384,6 @@ async function runTheSuiteThroughTheClient(): Promise<Drive> {
   );
   const repoReportsAfter = snapshotRepoReports();
   const junitXml = keptReport(reportsDir, ".xml");
-  const playwrightJson = keptReport(reportsDir, ".json");
 
   const res = await fetch(`${board}/api/v2/events?project=${projectKey}`);
   const body = (await res.json()) as { events: StoredEvent[] };
@@ -406,7 +400,6 @@ async function runTheSuiteThroughTheClient(): Promise<Drive> {
     posts: proxy.posts,
     declared,
     junitXml,
-    playwrightJson,
     repoReportsBefore,
     repoReportsAfter,
     exitCode: run.code,
@@ -481,6 +474,24 @@ function junitTests(xml: string): number {
 
 function nameAndStatus(entries: { name: string; status: string }[]): { name: string; status: string }[] {
   return entries.map(({ name, status }) => ({ name, status }));
+}
+
+/** The step the temporary specification breaks at, as its `.feature` line reads. */
+const BROKEN_STEP = "Then the broken step reports the message it failed with";
+
+/** A declared scenario's steps, by name and status, as they run: each passes
+ *  until the broken step, which fails, and no later step runs (Playwright
+ *  halts the `test.step()` chain at the first error). */
+function stepsAsTheyRun(scenario: DeclaredScenario): { name: string; status: string }[] {
+  const ran: { name: string; status: string }[] = [];
+  for (const name of scenario.steps) {
+    if (name === BROKEN_STEP) {
+      ran.push({ name, status: "fail" });
+      break;
+    }
+    ran.push({ name, status: "pass" });
+  }
+  return ran;
 }
 
 /** The drive is one real browser suite: ~70s of Playwright plus the ingest. */
@@ -629,26 +640,25 @@ describe("a real client drive of the e2e suite streams the Gherkin to the board"
   );
 
   test(
-    "each scenario's steps equal, by name and status, what the `playwright` codec decodes from the same run's JSON report",
+    "each scenario's steps equal, by name and status, the steps its feature file declares as they run",
     async () => {
       const run = await drive();
       const event = ingested(run);
-      const decoded = parsePlaywright(run.playwrightJson).tree;
+      const declaredOf = new Map(run.declared.map((scenario) => [scenario.node, scenario]));
 
-      // Matched by (suite, name, browser): the codec names a node
-      // "<Feature> › <Scenario>" and carries the project as its browser.
+      // Matched by (suite, name): every browser that ran a scenario reports
+      // the same steps. Each declared step passes, except the deliberately
+      // broken one, which fails and ends the scenario.
       const wrong: string[] = [];
       for (const placed of placedTests(event)) {
         const node = `${placed.suite} › ${placed.test.name}`;
-        const matches = decoded.filter(
-          (candidate) => candidate.name === node && candidate.browser === placed.browser,
-        );
-        if (matches.length !== 1) {
-          wrong.push(`${placed.browser}: ${node}: ${matches.length} codec node(s)`);
+        const scenario = declaredOf.get(node);
+        if (scenario === undefined) {
+          wrong.push(`${placed.browser}: ${node}: declared by no feature file`);
           continue;
         }
         const stored = nameAndStatus(placed.test.steps ?? []);
-        const expected = nameAndStatus((matches[0] as StoredSuite).children ?? []);
+        const expected = stepsAsTheyRun(scenario);
         if (JSON.stringify(stored) !== JSON.stringify(expected)) {
           wrong.push(`${placed.browser}: ${node}: ${JSON.stringify(stored)} != ${JSON.stringify(expected)}`);
         }

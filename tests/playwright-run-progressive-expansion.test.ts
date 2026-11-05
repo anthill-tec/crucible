@@ -1,5 +1,5 @@
 // CR-CRU-145 §S1 — ONE renderer: the run detail, opened as a specification
-// for BDD (`codec: "playwright"`) runs.
+// for BDD (framework `playwright-bdd`) runs.
 //
 // MEASURED ON THIS BRANCH (158ec48, before this CR's GREEN): `RunDetailBody`
 // (public/app.js) fetches `?depth=suites` and then auto-expands
@@ -23,24 +23,8 @@
 // precedent as tests/bdd-section.test.ts's "WHERE in the pane… NOT
 // asserted" note:
 //   • "the first scenarios of the first feature" (plural, no count given).
-//     Read at its SMALLEST defensible width: the literal FIRST scenario is
-//     asserted expanded; a LATER scenario of the SAME first feature is
-//     asserted still folded on open. A GREEN that expands more than one is
-//     not contradicted by that bound (it only fails if NOTHING beyond the
-//     first is ever expandable), but this file does not require it.
-//   • "loads its steps as it scrolls into view" cannot be driven by REAL
-//     layout — happy-dom computes no geometry, so `offsetTop`/
-//     `getBoundingClientRect` are 0 for every node (the reason the
-//     production virtualizer at `handlePaneScroll` already keys off
-//     `pane.scrollTop` alone, not real element positions). These tests
-//     therefore drive the SAME mechanism the codebase already exposes for
-//     this purpose: a `scroll` event dispatched at a large `.scrollTop` on
-//     the run detail's OWN `[data-testid="pane-scroll"]` box (the exact
-//     technique tests/inpane-drill-in.test.ts's header-stability tests and
-//     tests/density.test.ts's virtualization tests already use). A test
-//     that needs IntersectionObserver instead is not written here — nothing
-//     in this codebase's history uses it, and happy-dom's own intersection
-//     reporting cannot be trusted either.
+//     In the scenario shape an open feature's one read answers every
+//     scenario of it, so every scenario of an open feature shows its steps.
 //   • "green features fold" — AMENDED 2026-09-24 by orchestrator ruling
 //     (was: suite-row granularity, no feature heading; F11 is the approved
 //     visual contract and B draws a FEATURE level, so that reading let an
@@ -67,11 +51,15 @@ interface LeafFixture {
   status: "pass" | "fail" | "pending";
   duration_ms: number;
   failure?: { message: string; trace?: string };
+  /** A scenario's Gherkin steps; absent on a plain test. */
+  steps?: LeafFixture[];
 }
 interface SuiteFixture {
   name: string;
   status: "pass" | "fail" | "pending";
   children: LeafFixture[];
+  /** The browser a feature's suite ran under; set on a playwright-bdd run's suites. */
+  browser?: string;
 }
 interface EventDetailFixture {
   id: string;
@@ -80,6 +68,8 @@ interface EventDetailFixture {
   kind: "test";
   tier: string;
   codec: string;
+  framework?: string;
+  stack?: string;
   timestamp: number;
   context?: { cycle?: string; cycleId?: number };
   tree: SuiteFixture[];
@@ -143,12 +133,20 @@ async function mountApp(opts: MountOpts): Promise<void> {
       }
       const parsed = new URL(url, "http://localhost");
       const suiteParam = parsed.searchParams.get("suite");
+      const browserParam = parsed.searchParams.get("browser");
       const depthParam = parsed.searchParams.get("depth");
       if (suiteParam !== null) {
-        const match = detail.tree.find((n) => n.name === suiteParam);
+        const match = detail.tree.find(
+          (n) => n.name === suiteParam && (browserParam === null || n.browser === browserParam),
+        );
         body = { ok: true, event: { ...detail, tree: match !== undefined ? [match] : [] } };
       } else if (depthParam === "suites") {
-        const tree = detail.tree.map((n) => ({ name: n.name, status: n.status, counts: suiteCounts(n.children) }));
+        const tree = detail.tree.map((n) => ({
+          name: n.name,
+          status: n.status,
+          counts: suiteCounts(n.children),
+          ...(n.browser !== undefined ? { browser: n.browser } : {}),
+        }));
         body = { ok: true, event: { ...detail, summary: summarize(detail.tree), tree } };
       } else {
         body = { ok: true, event: { ...detail, summary: summarize(detail.tree) } };
@@ -174,6 +172,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
           context: e.context,
           ...summarize(e.tree),
           hasCoverage: false,
+          ...(e.framework !== undefined ? { stack: e.stack, framework: e.framework } : {}),
         })),
       };
     } else if (url.includes("/api/v2/health")) {
@@ -220,8 +219,14 @@ function suiteRow(name: string): HTMLElement {
   return found;
 }
 
+/** A plain-tree suite row is expanded: its toggle reads "\u25be". */
 function isExpanded(row: HTMLElement): boolean {
-  return row.querySelector('[data-testid="tree-toggle"]')?.textContent?.trim() === "▾";
+  return row.querySelector('[data-testid="tree-toggle"]')?.textContent?.trim() === "\u25be";
+}
+
+/** A scenario row shows its steps: the step rows drawn in its own group. */
+function stepsShown(name: string): boolean {
+  return leafRowsOf(name).length > 0;
 }
 
 function leafRowsOf(suiteName: string): HTMLElement[] {
@@ -230,58 +235,73 @@ function leafRowsOf(suiteName: string): HTMLElement[] {
   return Array.from(group?.querySelectorAll<HTMLElement>('[data-testid="leaf-row"]') ?? []);
 }
 
-function paneScrollEl(): HTMLElement {
-  const el = overlay().querySelector<HTMLElement>('[data-testid="pane-scroll"]');
-  if (el === null) throw new Error("no [data-testid=\"pane-scroll\"] inside the run-overlay");
-  return el;
+// ── Fixture: 3 features, 7 scenarios, served as the board serves a streamed
+// playwright-bdd run: one suite per feature (under one browser), each
+// scenario a leaf of it carrying its Gherkin steps. Features are ordered
+// failures-first; every failing feature opens, then the first SPEC_FIRST_OPEN
+// (2) features in that order; an open feature's one read answers all of its
+// scenarios with their steps. So the failing feature (Gamma, listed LAST in
+// the report) floats to the top and opens, every scenario of it showing its
+// steps; Alpha (listed FIRST in the report, all green) is the second feature
+// in that order and opens too; and Beta, beyond the first two, folds at the
+// FEATURE level — zero scenario rows, its suite unread until clicked. The
+// all-green-run branch of the rule (no failing feature, so the report-first
+// features open) is pinned by its own test below.
+const GIVEN = (n: number): LeafFixture => ({ name: `Given step ${n}`, status: "pass", duration_ms: 2 });
+const THEN_PASS = (n: number): LeafFixture => ({ name: `Then step ${n} passes`, status: "pass", duration_ms: 2 });
+const THEN_FAIL: LeafFixture = { name: "Then it breaks", status: "fail", duration_ms: 3, failure: { message: "expected pane scrollTop > 0, got 0", trace: "Error: expected pane scrollTop > 0, got 0\n    at run-detail.spec.ts:14:3" } };
+
+const BROWSER = "chromium";
+
+/** A scenario leaf: its status and duration are its steps'. */
+function scenario(name: string, steps: LeafFixture[]): LeafFixture {
+  const failed = steps.find((st) => st.status === "fail");
+  return {
+    name,
+    status: failed !== undefined ? "fail" : "pass",
+    duration_ms: steps.reduce((sum, st) => sum + st.duration_ms, 0),
+    ...(failed?.failure !== undefined ? { failure: { message: failed.failure.message } } : {}),
+    steps,
+  };
 }
 
-/** Simulates "scrolled deep into the pane" the only way happy-dom's lack of
- *  real layout permits — see the file header's declared design choice. */
-async function scrollDeep(): Promise<void> {
-  const pane = paneScrollEl();
-  pane.scrollTop = 100_000;
-  pane.dispatchEvent(new Event("scroll"));
-  await settle();
+/** A feature run under one browser: the suite the board stores for it. */
+function feature(name: string, scenarios: LeafFixture[]): SuiteFixture {
+  return {
+    name,
+    status: scenarios.some((sc) => sc.status === "fail") ? "fail" : "pass",
+    children: scenarios,
+    browser: BROWSER,
+  };
 }
 
-// ── Fixture: 3 features, 7 scenarios, shaped to separate the progressive-
-// expansion rules from one another. AMENDED 2026-09-24 by orchestrator ruling
-// (F11's reading wins): features are ordered failures-first, and the FIRST
-// feature in THAT order is the one whose first scenarios open. So the failing
-// feature (Gamma, listed LAST in the report) floats to the top and opens; its
-// report-first green scenario opens with it; a later one of its scenarios has a
-// row but stays folded until it scrolls into view; and the all-green features
-// (Alpha, listed FIRST in the report, and Beta) fold at the FEATURE level —
-// zero scenario rows until clicked. The all-green-run branch of the rule (no
-// failing feature, so the report-first feature opens) is pinned by its own
-// test below.
-const GIVEN = (n: number) => ({ name: `Given step ${n}`, status: "pass" as const, duration_ms: 2 });
-const THEN_PASS = (n: number) => ({ name: `Then step ${n} passes`, status: "pass" as const, duration_ms: 2 });
-const THEN_FAIL = { name: "Then it breaks", status: "fail" as const, duration_ms: 3, failure: { message: "expected pane scrollTop > 0, got 0", trace: "Error: expected pane scrollTop > 0, got 0\n    at run-detail.spec.ts:14:3" } };
-
-const ALPHA_A_NAME = "Alpha Feature › listed first in the report, but all green";
-const ALPHA_B_NAME = "Alpha Feature › its second green scenario";
-const BETA_NAME = "Beta Feature › an all-green feature folds entirely";
-const GAMMA_FIRST_NAME = "Gamma Feature › the failing feature's first scenario opens";
-const S4_NAME = "Gamma Feature › a failing scenario auto-expands anywhere";
-const GAMMA_MID_NAME = "Gamma Feature › a middle scenario";
-const GAMMA_LATE_NAME = "Gamma Feature › a later scenario loads as it scrolls into view";
+const ALPHA_A_NAME = "listed first in the report, but all green";
+const ALPHA_B_NAME = "its second green scenario";
+const BETA_NAME = "an all-green feature beyond the first two folds entirely";
+const GAMMA_FIRST_NAME = "the failing feature's first scenario opens";
+const S4_NAME = "a failing scenario auto-expands anywhere";
+const GAMMA_MID_NAME = "a middle scenario";
+const GAMMA_LATE_NAME = "a later scenario of the open feature";
 
 function progressiveTree(): SuiteFixture[] {
   return [
-    { name: ALPHA_A_NAME, status: "pass", children: [GIVEN(1), THEN_PASS(1)] },
-    { name: ALPHA_B_NAME, status: "pass", children: [GIVEN(2), THEN_PASS(2)] },
-    { name: BETA_NAME, status: "pass", children: [GIVEN(3), THEN_PASS(3)] },
-    { name: GAMMA_FIRST_NAME, status: "pass", children: [GIVEN(5), THEN_PASS(5)] },
-    { name: S4_NAME, status: "fail", children: [GIVEN(4), THEN_FAIL] },
-    { name: GAMMA_MID_NAME, status: "pass", children: [GIVEN(6), THEN_PASS(6)] },
-    { name: GAMMA_LATE_NAME, status: "pass", children: [GIVEN(7), THEN_PASS(7)] },
+    feature("Alpha Feature", [
+      scenario(ALPHA_A_NAME, [GIVEN(1), THEN_PASS(1)]),
+      scenario(ALPHA_B_NAME, [GIVEN(2), THEN_PASS(2)]),
+    ]),
+    feature("Beta Feature", [scenario(BETA_NAME, [GIVEN(3), THEN_PASS(3)])]),
+    feature("Gamma Feature", [
+      scenario(GAMMA_FIRST_NAME, [GIVEN(5), THEN_PASS(5)]),
+      scenario(S4_NAME, [GIVEN(4), THEN_FAIL]),
+      scenario(GAMMA_MID_NAME, [GIVEN(6), THEN_PASS(6)]),
+      scenario(GAMMA_LATE_NAME, [GIVEN(7), THEN_PASS(7)]),
+    ]),
   ];
 }
 
+/** Whether a `?suite=` read of the feature `name` (under its browser) was made. */
 function suiteRead(name: string): boolean {
-  return fetchLog.some((u) => u.includes(`suite=${encodeURIComponent(name)}`));
+  return fetchLog.some((u) => u.includes(`suite=${encodeURIComponent(name)}&browser=${BROWSER}`));
 }
 
 /** A feature-group's heading reads ▾ and it holds scenario rows — or ▸ and
@@ -309,7 +329,9 @@ function playwrightEvent(id: string, opts: Partial<EventDetailFixture> = {}): Ev
     agentId: "s1-run-detail-agent",
     kind: "test",
     tier: "e2e",
-    codec: "playwright",
+    codec: "crucible-events",
+    framework: "playwright-bdd",
+    stack: "bun",
     timestamp: Date.now(),
     tree: progressiveTree(),
     ...opts,
@@ -317,96 +339,81 @@ function playwrightEvent(id: string, opts: Partial<EventDetailFixture> = {}): Ev
 }
 
 describe("CR-CRU-145 §S1 — a playwright run's detail opens PROGRESSIVELY EXPANDED", () => {
-  test("on open: the failing feature floats first and opens — its failing scenario AND its first scenario show their steps without a click, a later scenario of it has a row but stays folded — and every all-green feature (even the report-first one) folds at the FEATURE level", async () => {
+  test("on open: the failing feature floats first and opens — its failing scenario AND its first scenario show their steps without a click, and so does a later scenario of it — the second feature in failures-first order opens too, and an all-green feature beyond the first two folds at the FEATURE level", async () => {
     const eventId = "evt-s1-progressive";
     await mountApp({ pathname: `/run/${eventId}`, events: [playwrightEvent(eventId)] });
 
-    // POSITIVE — the failing scenario is expanded on open, with no click,
-    // its steps rendered.
-    expect(isExpanded(suiteRow(S4_NAME))).toBe(true);
+    // POSITIVE — the failing feature floats first, ahead of the report-first one.
+    expect(
+      Array.from(overlay().querySelectorAll('[data-testid="feature-group"]')).map((g) => g.getAttribute("data-feature-name")),
+    ).toEqual(["Gamma Feature", "Alpha Feature", "Beta Feature"]);
+
+    // POSITIVE — the failing scenario shows its steps on open, with no click.
     expect(leafRowsOf(S4_NAME).some((r) => (r.textContent ?? "").includes("Then it breaks"))).toBe(true);
 
-    // POSITIVE — the failing feature is the FIRST feature in failures-first
-    // order, so its first scenario (report-first within it, and green) ALSO
-    // shows its steps on open.
-    expect(isExpanded(suiteRow(GAMMA_FIRST_NAME))).toBe(true);
+    // POSITIVE — the failing feature's first scenario (report-first within
+    // it, and green) ALSO shows its steps on open.
     expect(leafRowsOf(GAMMA_FIRST_NAME).length).toBe(2);
 
-    // BOUND — a LATER scenario of that same first feature has its row but is
-    // not auto-expanded: "the first scenarios" is not "every scenario".
-    expect(isExpanded(suiteRow(GAMMA_LATE_NAME))).toBe(false);
-    expect(leafRowsOf(GAMMA_LATE_NAME).length).toBe(0);
+    // POSITIVE — the open feature's one read answers every scenario of it,
+    // so a LATER scenario shows its steps too.
+    expect(leafRowsOf(GAMMA_LATE_NAME).map((r) => (r.textContent ?? "").trim())).toEqual(
+      expect.arrayContaining([expect.stringContaining("Given step 7"), expect.stringContaining("Then step 7 passes")]),
+    );
+    expect(leafRowsOf(GAMMA_LATE_NAME).length).toBe(2);
 
-    // BOUND — every all-green feature folds whole at the feature level, the
-    // report-first one (Alpha) included: zero scenario rows until clicked.
-    expect(featureFolded("Alpha Feature")).toBe(true);
+    // POSITIVE — the second feature in failures-first order (Alpha, the
+    // report-first one) is within the first SPEC_FIRST_OPEN and opens.
+    expect(featureFolded("Alpha Feature")).toBe(false);
+    expect(stepsShown(ALPHA_A_NAME)).toBe(true);
+
+    // BOUND — the all-green feature beyond the first two folds whole at the
+    // feature level: zero scenario rows until clicked.
     expect(featureFolded("Beta Feature")).toBe(true);
   });
 
-  test("a long run issues NO per-suite read for a scenario that has not scrolled into view — asserted on the requests made, not on timing", async () => {
+  test("a long run issues NO per-suite read for a feature that has not opened — asserted on the requests made, not on timing", async () => {
     const eventId = "evt-s1-no-eager-fetch";
     await mountApp({ pathname: `/run/${eventId}`, events: [playwrightEvent(eventId)] });
 
-    // The never-expanded scenarios' names never reach a `?suite=` read: the
-    // folded later scenario of the open feature, and every scenario of the
-    // folded all-green features.
-    expect(suiteRead(GAMMA_LATE_NAME)).toBe(false);
-    expect(suiteRead(ALPHA_A_NAME)).toBe(false);
-    expect(suiteRead(ALPHA_B_NAME)).toBe(false);
-    expect(suiteRead(BETA_NAME)).toBe(false);
+    // The folded feature's suite never reaches a `?suite=` read.
+    expect(suiteRead("Beta Feature")).toBe(false);
 
-    // …while the auto-expanded ones legitimately were read — the absence
-    // above is a real signal, not a fetch mock that never fires.
-    expect(suiteRead(S4_NAME)).toBe(true);
-    expect(suiteRead(GAMMA_FIRST_NAME)).toBe(true);
+    // …while the open features' suites legitimately were read, each once, by
+    // feature and browser — the absence above is a real signal, not a fetch
+    // mock that never fires.
+    expect(suiteRead("Gamma Feature")).toBe(true);
+    expect(suiteRead("Alpha Feature")).toBe(true);
+    expect(fetchLog.filter((u) => u.includes("suite=")).length).toBe(2);
   });
 
-  test("scrolling deep into the pane loads and shows a previously-folded scenario's steps, with no click", async () => {
-    const eventId = "evt-s1-scroll-loads";
-    await mountApp({ pathname: `/run/${eventId}`, events: [playwrightEvent(eventId)] });
-
-    // PRECONDITION — the open feature's later scenario is folded and unread.
-    expect(isExpanded(suiteRow(GAMMA_LATE_NAME))).toBe(false);
-    expect(suiteRead(GAMMA_LATE_NAME)).toBe(false);
-
-    await scrollDeep();
-
-    // POSITIVE — it is now expanded, its steps rendered, and the read that
-    // produced them is in the log — WITHOUT a suite-row click anywhere in
-    // this test.
-    expect(suiteRead(GAMMA_LATE_NAME)).toBe(true);
-    expect(isExpanded(suiteRow(GAMMA_LATE_NAME))).toBe(true);
-    expect(leafRowsOf(GAMMA_LATE_NAME).map((r) => (r.textContent ?? "").includes("Given step 7"))).toContain(true);
-
-    // BOUND — a feature folded at the feature level has no rows to scroll
-    // into view, so scrolling reads none of its scenarios.
-    expect(suiteRead(ALPHA_A_NAME)).toBe(false);
-    expect(suiteRead(BETA_NAME)).toBe(false);
-  });
-
-  test("an ALL-GREEN run has no failing feature, so the REPORT-first feature opens: its first scenario shows its steps, a later one of it stays folded, and every other feature folds", async () => {
+  test("an ALL-GREEN run has no failing feature, so the REPORT-first features open: their scenarios show their steps, and every feature beyond the first two folds", async () => {
     const eventId = "evt-s1-all-green";
     const greenTree: SuiteFixture[] = [
-      { name: "Delta Feature › its first scenario opens", status: "pass", children: [GIVEN(11), THEN_PASS(11)] },
-      { name: "Delta Feature › its second scenario", status: "pass", children: [GIVEN(12), THEN_PASS(12)] },
-      { name: "Delta Feature › its third scenario stays folded", status: "pass", children: [GIVEN(13), THEN_PASS(13)] },
-      { name: "Epsilon Feature › a later all-green feature folds", status: "pass", children: [GIVEN(14), THEN_PASS(14)] },
+      feature("Delta Feature", [
+        scenario("its first scenario opens", [GIVEN(11), THEN_PASS(11)]),
+        scenario("its second scenario", [GIVEN(12), THEN_PASS(12)]),
+        scenario("its third scenario", [GIVEN(13), THEN_PASS(13)]),
+      ]),
+      feature("Epsilon Feature", [scenario("the second feature's scenario opens", [GIVEN(14), THEN_PASS(14)])]),
+      feature("Zeta Feature", [scenario("a later all-green feature folds", [GIVEN(15), THEN_PASS(15)])]),
     ];
     await mountApp({ pathname: `/run/${eventId}`, events: [playwrightEvent(eventId, { tree: greenTree })] });
 
-    // POSITIVE — the report-first feature opens, and its first scenario
-    // shows its steps without a click.
+    // POSITIVE — the report-first feature opens, and its scenarios show their
+    // steps without a click, its third included.
     expect(featureFolded("Delta Feature")).toBe(false);
-    expect(isExpanded(suiteRow("Delta Feature › its first scenario opens"))).toBe(true);
-    expect(leafRowsOf("Delta Feature › its first scenario opens").length).toBe(2);
+    expect(leafRowsOf("its first scenario opens").length).toBe(2);
+    expect(leafRowsOf("its third scenario").length).toBe(2);
+    expect(suiteRead("Delta Feature")).toBe(true);
 
-    // BOUND — a later scenario of it has a row but stays folded and unread.
-    expect(isExpanded(suiteRow("Delta Feature › its third scenario stays folded"))).toBe(false);
-    expect(suiteRead("Delta Feature › its third scenario stays folded")).toBe(false);
+    // POSITIVE — so does the second feature in report order.
+    expect(featureFolded("Epsilon Feature")).toBe(false);
+    expect(leafRowsOf("the second feature's scenario opens").length).toBe(2);
 
-    // BOUND — every other feature folds at the feature level, unread.
-    expect(featureFolded("Epsilon Feature")).toBe(true);
-    expect(suiteRead("Epsilon Feature › a later all-green feature folds")).toBe(false);
+    // BOUND — every feature beyond the first two folds at the feature level, unread.
+    expect(featureFolded("Zeta Feature")).toBe(true);
+    expect(suiteRead("Zeta Feature")).toBe(false);
   });
 });
 
@@ -468,8 +475,8 @@ describe("CR-CRU-145 §S1 — every OTHER codec's run detail is UNCHANGED", () =
     });
 
     // BOUND — even the FAILING junit suite stays collapsed on open: §S1's
-    // progressive-expansion default is scoped to `codec: "playwright"`
-    // alone, so a non-playwright run must show the SAME minimized default
+    // progressive-expansion default is scoped to framework `playwright-bdd`
+    // alone, so a non-playwright-bdd run must show the SAME minimized default
     // CR-CRU-038 shipped.
     expect(isExpanded(suiteRow("SomeSuite"))).toBe(false);
     expect(leafRowsOf("SomeSuite").length).toBe(0);
@@ -587,24 +594,28 @@ describe("CR-CRU-145 §S1/§S4 — the byline: who filed the run, when, and its 
 // leaf-row fold contract one level up).
 const FEATURE_GREEN_TITLE = "F11 Green Feature";
 const FEATURE_FAIL_TITLE = "F11 Failing Feature";
-const GREEN_SCENARIO_A = `${FEATURE_GREEN_TITLE} \u203a first green scenario`;
-const GREEN_SCENARIO_B = `${FEATURE_GREEN_TITLE} \u203a second green scenario`;
-const FAIL_SCENARIO = `${FEATURE_FAIL_TITLE} \u203a the scenario that breaks`;
+const FEATURE_LEADING_TITLE = "F11 Leading Green Feature";
+const GREEN_SCENARIO_A = "first green scenario";
+const GREEN_SCENARIO_B = "second green scenario";
+const FAIL_SCENARIO = "the scenario that breaks";
 
-/** The green feature is listed FIRST in the report; the failing feature
- *  SECOND \u2014 the report's own order is the ADVERSARIAL one for "failures
- *  float": a GREEN that merely preserved report order would put the green
+/** The green features are listed FIRST in the report; the failing feature
+ *  LAST — the report's own order is the ADVERSARIAL one for "failures
+ *  float": a GREEN that merely preserved report order would put a green
  *  feature-group first in the DOM, which every ordering assertion below
- *  catches. */
+ *  catches. The leading green feature takes the second of the first
+ *  SPEC_FIRST_OPEN places in failures-first order, so the green feature
+ *  under test is the one beyond them that folds. */
 function featureLevelTree(): SuiteFixture[] {
   return [
-    { name: GREEN_SCENARIO_A, status: "pass", children: [GIVEN(101), THEN_PASS(101)] },
-    { name: GREEN_SCENARIO_B, status: "pass", children: [GIVEN(102), THEN_PASS(102)] },
-    {
-      name: FAIL_SCENARIO,
-      status: "fail",
-      children: [GIVEN(103), { name: "Then it breaks", status: "fail", duration_ms: 2, failure: { message: "feature-level failure" } }],
-    },
+    feature(FEATURE_LEADING_TITLE, [scenario("a leading green scenario", [GIVEN(100), THEN_PASS(100)])]),
+    feature(FEATURE_GREEN_TITLE, [
+      scenario(GREEN_SCENARIO_A, [GIVEN(101), THEN_PASS(101)]),
+      scenario(GREEN_SCENARIO_B, [GIVEN(102), THEN_PASS(102)]),
+    ]),
+    feature(FEATURE_FAIL_TITLE, [
+      scenario(FAIL_SCENARIO, [GIVEN(103), { name: "Then it breaks", status: "fail", duration_ms: 2, failure: { message: "feature-level failure" } }]),
+    ]),
   ];
 }
 
@@ -632,7 +643,7 @@ describe("CR-CRU-145 \u00a7S1 \u2014 F11 draws a FEATURE level: its own heading,
     const eventId = "evt-s1-feature-level-counts";
     await mountApp({ pathname: `/run/${eventId}`, events: [playwrightEvent(eventId, { tree: featureLevelTree() })] });
 
-    expect(featureGroups().length).toBe(2);
+    expect(featureGroups().length).toBe(3);
 
     const greenGroup = featureGroup(FEATURE_GREEN_TITLE);
     expect(greenGroup.getAttribute("data-feature-status")).toBe("pass");
@@ -674,7 +685,7 @@ describe("CR-CRU-145 \u00a7S1 \u2014 F11 draws a FEATURE level: its own heading,
     // BOUND \u2014 folded really means folded: NO suite-row for either of its
     // scenarios exists in the DOM at all, not merely hidden leaves.
     expect(greenGroup.querySelectorAll('[data-testid="suite-row"]').length).toBe(0);
-    expect(fetchLog.some((u) => u.includes(`suite=${encodeURIComponent(GREEN_SCENARIO_A)}`))).toBe(false);
+    expect(suiteRead(FEATURE_GREEN_TITLE)).toBe(false);
 
     // Clicking the folded feature's heading expands it.
     greenGroup.querySelector<HTMLElement>('[data-testid="feature-heading"]')!.click();
@@ -684,6 +695,9 @@ describe("CR-CRU-145 \u00a7S1 \u2014 F11 draws a FEATURE level: its own heading,
     expect(featureExpanded(greenGroupAfter)).toBe(true);
     expect(greenGroupAfter.querySelectorAll('[data-testid="suite-row"]').length).toBeGreaterThan(0);
     expect((greenGroupAfter.textContent ?? "")).toContain("first green scenario");
+    // POSITIVE — opening it read its suite, which answered its scenarios' steps.
+    expect(suiteRead(FEATURE_GREEN_TITLE)).toBe(true);
+    expect(leafRowsOf(GREEN_SCENARIO_A).length).toBe(2);
   });
 
   test("failures float: the failing feature (and its scenario) sit BEFORE the green ones in the rendered order, though the report lists the green feature FIRST", async () => {
@@ -696,6 +710,7 @@ describe("CR-CRU-145 \u00a7S1 \u2014 F11 draws a FEATURE level: its own heading,
     const groups = featureGroups();
     expect(groups.map((g) => g.getAttribute("data-feature-name"))).toEqual([
       FEATURE_FAIL_TITLE,
+      FEATURE_LEADING_TITLE,
       FEATURE_GREEN_TITLE,
     ]);
 
@@ -724,22 +739,28 @@ describe("CR-CRU-145 \u00a7S1 \u2014 F11 draws a FEATURE level: its own heading,
 // scenarios' steps shown" covers MORE than one failing feature; the fixtures
 // above each carry exactly one. This one carries TWO failing features and one
 // green, listed green-first so report order is the adversarial one.
-const TWO_FAIL_GREEN_A = "Two-Fail Green Feature \u203a its first green scenario";
-const TWO_FAIL_GREEN_B = "Two-Fail Green Feature \u203a its second green scenario";
-const TWO_FAIL_ONE_FIRST = "Two-Fail First Failing Feature \u203a its report-first scenario";
-const TWO_FAIL_ONE_BROKEN = "Two-Fail First Failing Feature \u203a its scenario that breaks";
-const TWO_FAIL_TWO_FIRST = "Two-Fail Second Failing Feature \u203a its report-first scenario";
-const TWO_FAIL_TWO_BROKEN = "Two-Fail Second Failing Feature \u203a its scenario that breaks";
+const TWO_FAIL_GREEN_A = "the green feature's first green scenario";
+const TWO_FAIL_GREEN_B = "the green feature's second green scenario";
+const TWO_FAIL_ONE_FIRST = "the first failing feature's report-first scenario";
+const TWO_FAIL_ONE_BROKEN = "the first failing feature's scenario that breaks";
+const TWO_FAIL_TWO_FIRST = "the second failing feature's report-first scenario";
+const TWO_FAIL_TWO_BROKEN = "the second failing feature's scenario that breaks";
 
 function twoFailingFeaturesTree(): SuiteFixture[] {
   const breaks = (n: number): LeafFixture => ({ name: `Then step ${n} breaks`, status: "fail", duration_ms: 3, failure: { message: `failure ${n}` } });
   return [
-    { name: TWO_FAIL_GREEN_A, status: "pass", children: [GIVEN(201), THEN_PASS(201)] },
-    { name: TWO_FAIL_GREEN_B, status: "pass", children: [GIVEN(202), THEN_PASS(202)] },
-    { name: TWO_FAIL_ONE_FIRST, status: "pass", children: [GIVEN(203), THEN_PASS(203)] },
-    { name: TWO_FAIL_ONE_BROKEN, status: "fail", children: [GIVEN(204), breaks(204)] },
-    { name: TWO_FAIL_TWO_FIRST, status: "pass", children: [GIVEN(205), THEN_PASS(205)] },
-    { name: TWO_FAIL_TWO_BROKEN, status: "fail", children: [GIVEN(206), breaks(206)] },
+    feature("Two-Fail Green Feature", [
+      scenario(TWO_FAIL_GREEN_A, [GIVEN(201), THEN_PASS(201)]),
+      scenario(TWO_FAIL_GREEN_B, [GIVEN(202), THEN_PASS(202)]),
+    ]),
+    feature("Two-Fail First Failing Feature", [
+      scenario(TWO_FAIL_ONE_FIRST, [GIVEN(203), THEN_PASS(203)]),
+      scenario(TWO_FAIL_ONE_BROKEN, [GIVEN(204), breaks(204)]),
+    ]),
+    feature("Two-Fail Second Failing Feature", [
+      scenario(TWO_FAIL_TWO_FIRST, [GIVEN(205), THEN_PASS(205)]),
+      scenario(TWO_FAIL_TWO_BROKEN, [GIVEN(206), breaks(206)]),
+    ]),
   ];
 }
 
@@ -763,9 +784,7 @@ describe("CR-CRU-145 \u00a7S1 \u2014 a run with TWO failing features expands BOT
     // scenario AND its first scenario show their steps without a click.
     const first = scenariosOf(firstTitle);
     expect(featureExpanded(featureGroup(firstTitle))).toBe(true);
-    expect(isExpanded(suiteRow(first.broken))).toBe(true);
     expect(leafRowsOf(first.broken).some((r) => (r.textContent ?? "").includes(first.step))).toBe(true);
-    expect(isExpanded(suiteRow(first.first))).toBe(true);
     expect(leafRowsOf(first.first).length).toBe(2);
 
     // POSITIVE \u2014 the SECOND failing feature is expanded too, its failing
@@ -774,14 +793,12 @@ describe("CR-CRU-145 \u00a7S1 \u2014 a run with TWO failing features expands BOT
     const secondGroup = featureGroup(secondTitle);
     expect(featureExpanded(secondGroup)).toBe(true);
     expect(secondGroup.querySelectorAll('[data-testid="suite-row"]').length).toBeGreaterThan(0);
-    expect(isExpanded(suiteRow(second.broken))).toBe(true);
     expect(leafRowsOf(second.broken).some((r) => (r.textContent ?? "").includes(second.step))).toBe(true);
-    expect(suiteRead(second.broken)).toBe(true);
+    expect(suiteRead(secondTitle)).toBe(true);
 
     // BOUND \u2014 the green feature folds whole, its scenarios unread.
     expect(featureFolded("Two-Fail Green Feature")).toBe(true);
-    expect(suiteRead(TWO_FAIL_GREEN_A)).toBe(false);
-    expect(suiteRead(TWO_FAIL_GREEN_B)).toBe(false);
+    expect(suiteRead("Two-Fail Green Feature")).toBe(false);
   });
 });
 

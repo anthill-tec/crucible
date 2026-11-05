@@ -336,17 +336,16 @@ export function workspaceTabs(project) {
 
 /**
  * The BDD tab's index: the BDD-bearing runs among `events`, newest first. A
- * run is BDD-bearing when it is a test run the playwright codec decoded (the
- * codec that produces Gherkin), or a test run whose framework is
- * `playwright-bdd` (one streamed scenario by scenario) — a junit unit run, or
- * a streamed run of another framework, carries no specification.
+ * run is BDD-bearing when it is a test run whose framework is
+ * `playwright-bdd`, whatever filed it — a run of any other framework, or of
+ * none, carries no specification.
  * Each row carries only what the index names: when, who, its cycle (null
  * when the run carries none, so the row reads as unbound rather than being
  * hidden or attributed) and its verdict with counts.
  */
 export function bddIndexRows(events) {
   return (events ?? [])
-    .filter((e) => e.kind === "test" && (e.codec === "playwright" || e.framework === "playwright-bdd"))
+    .filter((e) => e.kind === "test" && e.framework === "playwright-bdd")
     .sort((a, b) => b.timestamp - a.timestamp)
     .map((e) => {
       const cycleId = e.context?.cycleId ?? e.cycleId;

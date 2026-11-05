@@ -6,9 +6,8 @@
 // runs, and the production shell mounted against it in happy-dom
 // (tests/helpers/served-app.ts): the new-shape run is streamed in
 // `crucible-events` and closed over HTTP exactly as the bun client streams a
-// `playwright-bdd` target; the old-shape run is ingested through the
-// `playwright` codec from a real Playwright JSON report. Every read the view
-// makes is answered by that server, so the view draws what the store serves.
+// `playwright-bdd` target. Every read the view makes is answered by that
+// server, so the view draws what the store serves.
 //
 // What this file pins (the loading the design states):
 //   - the run detail's first read is `?depth=suites`, and its features are
@@ -21,8 +20,7 @@
 //   - a feature run in two projects shows ONCE, as one feature, with each
 //     scenario row naming its browser;
 //   - a scenario that failed with no failing step (a Before hook) shows its
-//     failure on the scenario row;
-//   - a run the `playwright` codec stored still opens exactly as before.
+//     failure on the scenario row.
 //
 // INTERFACE CHOICES (the design names no testids for the new shape; this file
 // keeps the ones the old shape's view already draws, so both shapes read the
@@ -53,7 +51,6 @@ import {
   closeStream,
   eventLine,
   openRun,
-  postJson,
   register,
   sendBatch,
 } from "./helpers/run-stream-harness.ts";
@@ -204,95 +201,6 @@ function allGreenRun(): ScenarioFields[] {
     { feature: "Reviews", browser: "chromium", name: "Write a review", status: "pass", steps: REVIEW_STEPS.map(pass) },
     { feature: "Gifts", browser: "chromium", name: "Wrap a gift", status: "pass", steps: ["Given a cart", "Then it is wrapped"].map(pass) },
   ];
-}
-
-// ── The old shape: a run the playwright codec stores ──────────────────────
-
-function projectTest(status: string, steps: Array<{ title: string; duration: number; error?: { message: string; stack: string } }>) {
-  return {
-    timeout: 30000,
-    annotations: [],
-    expectedStatus: "passed",
-    projectId: "chromium",
-    projectName: "chromium",
-    results: [
-      {
-        workerIndex: 0,
-        parallelIndex: 0,
-        status,
-        duration: steps.reduce((sum, s) => sum + s.duration, 0),
-        retry: 0,
-        steps,
-        startTime: "2026-11-01T00:00:00.000Z",
-        annotations: [],
-        attachments: [],
-      },
-    ],
-    status: status === "passed" ? "expected" : "unexpected",
-  };
-}
-
-const SHELF_FAILURE = "expected the book on the shelf, found none";
-const LIBRARY_FILE = "tests/e2e/features/library.feature.spec.js";
-
-/** A real Playwright JSON report: feature Library, a passing and a failing scenario. */
-function libraryReport() {
-  const spec = (title: string, ok: boolean, test: ReturnType<typeof projectTest>, line: number) => ({
-    title,
-    ok,
-    tags: [],
-    tests: [test],
-    id: `spec-${line}`,
-    file: LIBRARY_FILE,
-    line,
-    column: 3,
-  });
-  return {
-    config: { version: "1.61.1" },
-    suites: [
-      {
-        title: LIBRARY_FILE,
-        file: LIBRARY_FILE,
-        column: 0,
-        line: 0,
-        specs: [],
-        suites: [
-          {
-            title: "Library",
-            file: LIBRARY_FILE,
-            line: 3,
-            column: 6,
-            specs: [
-              spec("Borrow a book", true, projectTest("passed", [{ title: "Given a library card", duration: 2 }, { title: "When I borrow a book", duration: 2 }]), 6),
-              spec(
-                "Return a book",
-                false,
-                projectTest("failed", [
-                  { title: "Given a borrowed book", duration: 2 },
-                  { title: "Then the book is back on the shelf", duration: 1, error: { message: SHELF_FAILURE, stack: `Error: ${SHELF_FAILURE}\n    at library.spec.ts:9:3` } },
-                ]),
-                12,
-              ),
-            ],
-          },
-        ],
-      },
-    ],
-    errors: [],
-    stats: { startTime: "2026-11-01T00:00:00.000Z", duration: 7, expected: 1, skipped: 0, unexpected: 1, flaky: 0 },
-  };
-}
-
-async function ingestPlaywrightReport(handle: ServerHandle, key: string): Promise<string> {
-  const res = await postJson(handle, "/api/v2/runs", {
-    projectKey: key,
-    agentId: AGENT,
-    codec: "playwright",
-    data: JSON.stringify(libraryReport()),
-    tier: "e2e",
-  });
-  expect(res.status, JSON.stringify(res.body)).toBe(200);
-  return res.body.event as string;
 }
 
 // ── View reading ──────────────────────────────────────────────────────────
@@ -529,36 +437,5 @@ describe("a scenario that failed with no failing step", () => {
     // On the scenario, not inside any step row.
     expect(boxes[0]!.closest('[data-testid="leaf-row"]')).toBeNull();
     expect(stepRowsOf(row).some((s) => s.classList.contains("fail"))).toBe(false);
-  });
-});
-
-describe("a run the playwright codec stored still opens as before", () => {
-  test("side by side on one board: the old run splits its scenario suites into features and reads scenarios, the new run reads features", async () => {
-    const handle = boot();
-    const key = await frontendProject(handle, "spec-view-both-shapes");
-    const oldId = await ingestPlaywrightReport(handle, key);
-    const newId = await streamBddRun(handle, key, mixedRun());
-
-    // The old shape, exactly as today: one feature split off "Library › …",
-    // its failing scenario read by its own suite name and opened at its steps.
-    await openRunDetail(handle, key, oldId);
-    expect(detailReads(oldId)[0]!.get("depth")).toBe("suites");
-    expect(featureNames()).toEqual(["Library"]);
-    expect(featureOpen("Library")).toBe(true);
-    expect(suiteReads(oldId)).toContain("Library › Return a book|chromium");
-    const returnRow = Array.from(featureOf("Library").querySelectorAll<HTMLElement>('[data-testid="suite-row"]')).find((r) =>
-      (r.textContent ?? "").includes("Library › Return a book"),
-    );
-    expect(returnRow).toBeDefined();
-    const returnSteps = stepRowsOf(returnRow!);
-    expect(returnSteps.map((s) => (s.textContent ?? "").includes("Then the book is back on the shelf"))).toContain(true);
-    expect(returnRow!.parentElement?.querySelector('[data-testid="failure-box"]')?.textContent ?? "").toContain(SHELF_FAILURE);
-
-    // The new shape on the same board: features are the stored suites, read by feature and browser.
-    await openRunDetail(handle, key, newId);
-    expect(detailReads(newId)[0]!.get("depth")).toBe("suites");
-    expect(featureNames()).toEqual(["Checkout", "Search", SETTINGS, "Wishlist", "Reviews"]);
-    expect(suiteReads(newId)).toContain("Checkout|firefox");
-    expect(stepRowsOf(scenarioRow("Checkout", "Pay by card", "firefox")).length).toBe(3);
   });
 });

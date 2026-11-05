@@ -22,8 +22,7 @@
 //     all read the same name-only map.
 //
 // DESIGN CHOICES DECLARED HERE — the AC names the DEFECT, not the wire
-// contract, so this file fixes the contract the same way C1's own
-// tests/playwright-codec.test.ts fixed the codec's additive field:
+// contract, so this file fixes the contract:
 //   - the per-suite read's browser scope is the query parameter `browser`
 //     (mirrors SuiteNode's own field name) — `?suite=<name>&browser=<b>`.
 //     OMITTED, it returns the first same-named node, UNCHANGED — the "no
@@ -37,24 +36,27 @@
 //     that reorders same-named rows independent of report order would
 //     invalidate this assumption; nothing in the AC or F11 asks for that.
 //
-// FIXTURE PROVENANCE — a REAL two-project Playwright JSON reporter payload
-// (the exact `chromium-mobile` / `webkit-iphone` collision
-// `playwright.config.ts`'s `testMatch` produces for
-// `mobile-viewport-responsive.feature`, same shape as
-// tests/playwright-codec.test.ts's own `twoProjectReport`) run through the
-// SAME `parsePlaywright` codec C1 GREEN (5a53a37) ships
-// (src/codecs/playwright.ts), so the SuiteNode[] these tests see is exactly
-// what production now emits — never hand-authored to match what the test
-// wants.
+// FIXTURE PROVENANCE — the route-level run is a `playwright-bdd` run streamed
+// to a real board (`streamBddRun`, tests/helpers/playwright-bdd-run.ts), as
+// the bun client streams one: the feature `responsive phone band` run under
+// two browsers, `chromium-mobile` listed FIRST and passing, `webkit-iphone`
+// SECOND and failing (the `mobile-viewport-responsive.feature` collision
+// `playwright.config.ts`'s `testMatch` produces). The board stores one suite
+// per feature and browser, so the two suites share one name and only their
+// browser tells them apart: what these routes serve is what the store wrote,
+// never a tree hand-authored to match what the test wants.
+//
+// SAFETY: every server binds port 0 on ":memory:".
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startServer } from "../src/server.ts";
-import { parsePlaywright } from "../src/codecs/playwright.ts";
+import type { ServerHandle } from "../src/server.ts";
 import type { SuiteNode, RunSummary } from "../src/types.ts";
 import { settleDom } from "./helpers/dom-settle";
+import { bddProject, failingStep, passingStep, streamBddRun, type BddScenario } from "./helpers/playwright-bdd-run.ts";
+import { bootOn, getJson } from "./helpers/run-stream-harness.ts";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"), "utf8");
@@ -62,186 +64,91 @@ const VAN_X_SRC = readFileSync(path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.n
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
-// ── Shared fixture: ONE Playwright JSON report, TWO projects, run through
-// the REAL codec ────────────────────────────────────────────────────────
-interface StepFixture {
-  title: string;
-  duration: number;
-  error?: { message: string; stack: string };
-}
-
-function projectTest(projectName: string, status: string, steps: StepFixture[]) {
-  return {
-    timeout: 30000,
-    annotations: [],
-    expectedStatus: "passed",
-    projectId: projectName,
-    projectName,
-    results: [
-      {
-        workerIndex: 0,
-        parallelIndex: 0,
-        status,
-        duration: steps.reduce((sum, s) => sum + s.duration, 0),
-        retry: 0,
-        steps,
-        startTime: "2026-09-24T00:00:00.000Z",
-        annotations: [],
-        attachments: [],
-      },
-    ],
-    status: "expected",
-  };
-}
-
-const GIVEN_STEP: StepFixture = { title: "Given the board is open on a phone", duration: 3 };
-const PASS_STEP: StepFixture = { title: "Then the Roadmap pane scrolls inside its own box", duration: 2 };
-const FAIL_STEP: StepFixture = {
-  title: "Then the Roadmap pane scrolls inside its own box",
-  duration: 1,
-  error: {
-    message: "expected pane scrollTop > 0, got 0",
-    stack: "Error: expected pane scrollTop > 0, got 0\n    at mobile-viewport.spec.ts:22:9",
-  },
-};
-
-const SCENARIO_NAME = "responsive phone band › the pane scrolls in its own box";
+// ── Shared fixture: ONE feature, ONE scenario, run under TWO browsers ─────
+const FEATURE_NAME = "responsive phone band";
+const UI_SCENARIO = "the pane scrolls in its own box";
+const GIVEN_STEP = "Given the board is open on a phone";
+const THEN_STEP = "Then the Roadmap pane scrolls inside its own box";
+const FAIL_MESSAGE = "expected pane scrollTop > 0, got 0";
 const PASS_BROWSER = "chromium-mobile";
 const FAIL_BROWSER = "webkit-iphone";
 
-/** A REAL two-project Playwright JSON report: `chromium-mobile` listed
- *  FIRST and passing, `webkit-iphone` listed SECOND and failing — this AC's
- *  own framing ("the FIRST-listed browser passes and the second fails"). */
-function crossBrowserReport() {
-  return {
-    config: { version: "1.61.1" },
-    suites: [
-      {
-        title: "tests/e2e/features/mobile-viewport-responsive.feature.spec.js",
-        file: "tests/e2e/features/mobile-viewport-responsive.feature.spec.js",
-        column: 0,
-        line: 0,
-        specs: [],
-        suites: [
-          {
-            title: "responsive phone band",
-            file: "tests/e2e/features/mobile-viewport-responsive.feature.spec.js",
-            line: 3,
-            column: 6,
-            specs: [
-              {
-                title: "the pane scrolls in its own box",
-                ok: false,
-                tags: [],
-                tests: [
-                  projectTest(PASS_BROWSER, "passed", [GIVEN_STEP, PASS_STEP]),
-                  projectTest(FAIL_BROWSER, "failed", [GIVEN_STEP, FAIL_STEP]),
-                ],
-                id: "spec-cross-browser",
-                file: "tests/e2e/features/mobile-viewport-responsive.feature.spec.js",
-                line: 6,
-                column: 3,
-              },
-            ],
-          },
-        ],
-      },
-    ],
-    errors: [],
-    stats: { startTime: "2026-09-24T00:00:00.000Z", duration: 6, expected: 1, skipped: 0, unexpected: 1, flaky: 0 },
-  };
-}
-
-/** Run through the REAL codec, exactly as C1 GREEN's ingest path does. */
-function crossBrowserTree(): SuiteNode[] {
-  return parsePlaywright(JSON.stringify(crossBrowserReport())).tree;
-}
-
-function crossBrowserSummary(): RunSummary {
-  return parsePlaywright(JSON.stringify(crossBrowserReport())).summary;
+/** The scenario under both browsers, `chromium-mobile` FIRST and passing,
+ *  `webkit-iphone` SECOND and failing at its second step — this AC's own
+ *  framing ("the FIRST-listed browser passes and the second fails"). */
+function crossBrowserScenarios(): BddScenario[] {
+  return [
+    {
+      feature: FEATURE_NAME,
+      browser: PASS_BROWSER,
+      name: UI_SCENARIO,
+      status: "pass",
+      steps: [passingStep(GIVEN_STEP), passingStep(THEN_STEP)],
+    },
+    {
+      feature: FEATURE_NAME,
+      browser: FAIL_BROWSER,
+      name: UI_SCENARIO,
+      status: "fail",
+      steps: [passingStep(GIVEN_STEP), failingStep(THEN_STEP, FAIL_MESSAGE)],
+      failure: { message: FAIL_MESSAGE },
+    },
+  ];
 }
 
 // ──────────────────────────────────────────────────────────────────────
 // ROUTE LEVEL — GET /api/v2/events/:id?depth=suites | ?suite=<name>[&browser=<b>]
 // ──────────────────────────────────────────────────────────────────────
-interface OkResponse {
-  ok: true;
-  [key: string]: unknown;
+interface ServedStep {
+  name: string;
+  status: string;
+  failure?: { message: string };
+}
+interface ServedScenario {
+  name: string;
+  status: string;
+  failure?: { message: string };
+  steps?: ServedStep[];
+}
+interface ServedSuite {
+  name: string;
+  status: string;
+  browser?: string;
+  counts?: { passed: number; failed: number; pending: number };
+  children?: ServedScenario[];
 }
 
-interface RunsParsedResponse extends OkResponse {
-  event: string;
-}
-
-interface EventGetResponse extends OkResponse {
-  event: {
-    id: string;
-    tree?: unknown;
-    [key: string]: unknown;
-  };
+function servedTree(body: Record<string, unknown>): ServedSuite[] {
+  return ((body.event as { tree?: ServedSuite[] } | undefined)?.tree ?? []) as ServedSuite[];
 }
 
 describe("CR-CRU-145 §S1 — route: a scenario run under two browsers opens THAT browser's own steps", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  const handles: ServerHandle[] = [];
 
   afterEach(() => {
-    handle?.stop();
-    handle = undefined;
+    while (handles.length > 0) handles.pop()?.stop();
   });
 
-  async function postJson(p: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${p}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  }
-  async function getJson(p: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${p}`);
-  }
-  async function createProject(name: string): Promise<string> {
-    const res = await postJson("/api/v2/projects", { name });
-    const body = (await res.json()) as OkResponse & { project: { key: string } };
-    return body.project.key;
-  }
-  async function registerAgent(projectKey: string, agentId: string): Promise<void> {
-    const res = await postJson("/api/v2/agents/register", { projectKey, agentId, role: "ORCHESTRATOR" });
-    expect(res.status).toBe(200);
-  }
-  async function seedCrossBrowserEvent(projectKey: string): Promise<string> {
-    const agentId = "browser-scoping-agent";
-    await registerAgent(projectKey, agentId);
-    const res = await postJson("/api/v2/runs/parsed", {
-      projectKey,
-      agentId,
-      summary: crossBrowserSummary(),
-      tree: crossBrowserTree(),
-    });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as RunsParsedResponse;
-    return body.event;
+  /** A board holding the streamed cross-browser run; answers it and the run's event id. */
+  async function seedCrossBrowserRun(name: string): Promise<{ handle: ServerHandle; id: string }> {
+    const handle = bootOn();
+    handles.push(handle);
+    const key = await bddProject(handle, name);
+    const id = await streamBddRun(handle, key, crossBrowserScenarios(), "e2e");
+    return { handle, id };
   }
 
-  test("?depth=suites carries each scenario node's OWN browser — the two same-named nodes stay distinguishable", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
-    const key = await createProject("browser-scoping-depth");
-    const id = await seedCrossBrowserEvent(key);
+  test("?depth=suites carries each browser's suite with its OWN browser — the two same-named suites stay distinguishable", async () => {
+    const { handle, id } = await seedCrossBrowserRun("browser-scoping-depth");
 
-    const res = await getJson(`/api/v2/events/${id}?depth=suites`);
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as EventGetResponse;
-    const tree = body.event.tree as Array<{
-      name: string;
-      status: string;
-      browser?: string;
-      counts: { passed: number; failed: number; pending: number };
-    }>;
+    const tree = servedTree(await getJson(handle, `/api/v2/events/${id}?depth=suites`));
 
-    const sameNamed = tree.filter((n) => n.name === SCENARIO_NAME);
-    // BOUND — both nodes still reach the skeleton (this much already works).
+    // BOUND — exactly the two suites of the one feature, nothing else.
+    expect(tree.length).toBe(2);
+    const sameNamed = tree.filter((n) => n.name === FEATURE_NAME);
     expect(sameNamed.length).toBe(2);
 
-    // POSITIVE — each node's OWN browser reaches the reply; neither is
+    // POSITIVE — each suite's OWN browser reaches the reply; neither is
     // undefined, and neither is confused with the other's.
     const passNode = sameNamed.find((n) => n.browser === PASS_BROWSER);
     const failNode = sameNamed.find((n) => n.browser === FAIL_BROWSER);
@@ -249,71 +156,112 @@ describe("CR-CRU-145 §S1 — route: a scenario run under two browsers opens THA
     expect(failNode).toBeDefined();
     expect(passNode?.status).toBe("pass");
     expect(failNode?.status).toBe("fail");
-    expect(passNode?.counts).toEqual({ passed: 2, failed: 0, pending: 0 });
-    expect(failNode?.counts).toEqual({ passed: 1, failed: 1, pending: 0 });
+    // Counted over its scenarios: one each.
+    expect(passNode?.counts).toEqual({ passed: 1, failed: 0, pending: 0 });
+    expect(failNode?.counts).toEqual({ passed: 0, failed: 1, pending: 0 });
   });
 
-  test("the per-suite read is narrowed by browser: returns the REQUESTED browser's node, never the first same-named one; browser omitted still returns the first match, unchanged", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
-    const key = await createProject("browser-scoping-suite");
-    const id = await seedCrossBrowserEvent(key);
+  test("the per-suite read is narrowed by browser: returns the REQUESTED browser's suite, never the first same-named one; browser omitted still returns the first match, unchanged", async () => {
+    const { handle, id } = await seedCrossBrowserRun("browser-scoping-suite");
+    const suiteRead = `/api/v2/events/${id}?suite=${encodeURIComponent(FEATURE_NAME)}`;
 
     // BOUND — no `browser` param: first match, UNCHANGED (chromium-mobile is
-    // listed first in the ingested tree — this is the CR's own "unchanged"
-    // clause, not a new behaviour).
-    const unscoped = await getJson(`/api/v2/events/${id}?suite=${encodeURIComponent(SCENARIO_NAME)}`);
-    expect(unscoped.status).toBe(200);
-    const unscopedBody = (await unscoped.json()) as EventGetResponse;
-    const unscopedTree = unscopedBody.event.tree as Array<{ name: string; status: string; browser?: string }>;
+    // streamed first — this is the CR's own "unchanged" clause, not a new
+    // behaviour).
+    const unscopedTree = servedTree(await getJson(handle, suiteRead));
     expect(unscopedTree.length).toBe(1);
     expect(unscopedTree[0]?.browser).toBe(PASS_BROWSER);
     expect(unscopedTree[0]?.status).toBe("pass");
 
-    // POSITIVE — narrowed to the FAILING browser: its OWN node, its OWN
-    // failing step's message, never the passing browser's data.
-    const failScoped = await getJson(
-      `/api/v2/events/${id}?suite=${encodeURIComponent(SCENARIO_NAME)}&browser=${encodeURIComponent(FAIL_BROWSER)}`,
-    );
-    expect(failScoped.status).toBe(200);
-    const failBody = (await failScoped.json()) as EventGetResponse;
-    const failTree = failBody.event.tree as Array<{
-      name: string;
-      status: string;
-      browser?: string;
-      children: Array<{ name: string; status: string; failure?: { message: string } }>;
-    }>;
+    // POSITIVE — narrowed to the FAILING browser: its OWN suite, its OWN
+    // scenario failing AT its second step with that step's message, never
+    // the passing browser's data.
+    const failTree = servedTree(await getJson(handle, `${suiteRead}&browser=${encodeURIComponent(FAIL_BROWSER)}`));
     expect(failTree.length).toBe(1);
     expect(failTree[0]?.browser).toBe(FAIL_BROWSER);
     expect(failTree[0]?.status).toBe("fail");
-    const failStep = failTree[0]?.children.find((c) => c.status === "fail");
-    expect(failStep?.failure?.message).toBe("expected pane scrollTop > 0, got 0");
+    const failScenario = failTree[0]?.children?.[0];
+    expect(failTree[0]?.children?.length).toBe(1);
+    expect(failScenario?.name).toBe(UI_SCENARIO);
+    expect(failScenario?.status).toBe("fail");
+    expect(failScenario?.steps?.map((s) => [s.name, s.status])).toEqual([
+      [GIVEN_STEP, "pass"],
+      [THEN_STEP, "fail"],
+    ]);
+    expect(failScenario?.steps?.[1]?.failure?.message).toBe(FAIL_MESSAGE);
 
     // POSITIVE — narrowed to the PASSING browser, independently, proving the
     // narrowing is not a coincidence of "the failing one always wins".
-    const passScoped = await getJson(
-      `/api/v2/events/${id}?suite=${encodeURIComponent(SCENARIO_NAME)}&browser=${encodeURIComponent(PASS_BROWSER)}`,
-    );
-    expect(passScoped.status).toBe(200);
-    const passBody = (await passScoped.json()) as EventGetResponse;
-    const passTree = passBody.event.tree as Array<{
-      name: string;
-      status: string;
-      browser?: string;
-      children: Array<{ status: string; failure?: unknown }>;
-    }>;
+    const passTree = servedTree(await getJson(handle, `${suiteRead}&browser=${encodeURIComponent(PASS_BROWSER)}`));
     expect(passTree.length).toBe(1);
     expect(passTree[0]?.browser).toBe(PASS_BROWSER);
     expect(passTree[0]?.status).toBe("pass");
-    // NEGATIVE — the passing browser's own node carries no failure at all.
-    expect(passTree[0]?.children.some((c) => c.status === "fail")).toBe(false);
+    const passScenario = passTree[0]?.children?.[0];
+    expect(passScenario?.steps?.map((s) => [s.name, s.status])).toEqual([
+      [GIVEN_STEP, "pass"],
+      [THEN_STEP, "pass"],
+    ]);
+    // NEGATIVE — the passing browser's own suite carries no failure at all.
+    expect(passScenario?.failure).toBeUndefined();
+    expect(passScenario?.steps?.some((s) => s.failure !== undefined)).toBe(false);
   });
 });
 
 // ──────────────────────────────────────────────────────────────────────
 // UI LEVEL — the run detail keys loaded leaves / loading flag / window /
-// leaf keys by (name, browser); expanding a browser's row fetches and
-// shows THAT browser's own steps.
+// leaf keys by (name, browser); each browser's row reads and shows THAT
+// browser's own steps.
+//
+// The run is served as the board serves a streamed playwright-bdd run: codec
+// `crucible-events`, framework `playwright-bdd`; one suite per feature and
+// browser (`name`, `status`, `counts` over its scenarios, `browser`), each
+// scenario a leaf of it carrying its Gherkin `steps`; a
+// `?suite=<feature>&browser=<b>` read answers that browser's suite alone.
 // ──────────────────────────────────────────────────────────────────────
+/** The feature run under both browsers: one suite per browser, the
+ *  scenario a leaf of each, `chromium-mobile` listed FIRST and passing,
+ *  `webkit-iphone` SECOND and failing. */
+function crossBrowserScenarioTree(): SuiteNode[] {
+  return [
+    {
+      name: FEATURE_NAME,
+      status: "pass",
+      browser: PASS_BROWSER,
+      children: [
+        {
+          name: UI_SCENARIO,
+          status: "pass",
+          duration_ms: 5,
+          steps: [
+            { name: GIVEN_STEP, status: "pass", duration_ms: 3 },
+            { name: THEN_STEP, status: "pass", duration_ms: 2 },
+          ],
+        },
+      ],
+    },
+    {
+      name: FEATURE_NAME,
+      status: "fail",
+      browser: FAIL_BROWSER,
+      children: [
+        {
+          name: UI_SCENARIO,
+          status: "fail",
+          duration_ms: 4,
+          failure: { message: FAIL_MESSAGE },
+          steps: [
+            { name: GIVEN_STEP, status: "pass", duration_ms: 3 },
+            { name: THEN_STEP, status: "fail", duration_ms: 1, failure: { message: FAIL_MESSAGE } },
+          ],
+        },
+      ],
+    },
+  ];
+}
+
+/** The run's counts over its scenarios, as the board counts a playwright-bdd run. */
+const CROSS_BROWSER_SCENARIO_SUMMARY: RunSummary = { total: 2, passed: 1, failed: 1, pending: 0, duration_ms: 9 };
+
 let cacheBust = 0;
 let fetchLog: string[] = [];
 
@@ -328,6 +276,9 @@ function suiteSkeleton(tree: SuiteNode[]) {
     return { name: n.name, status: n.status, counts, ...(n.browser !== undefined ? { browser: n.browser } : {}) };
   });
 }
+
+/** The fields the board serves on a streamed playwright-bdd run. */
+const BDD_RUN = { stack: "bun", framework: "playwright-bdd", codec: "crucible-events" } as const;
 
 async function mountApp(eventId: string, tree: SuiteNode[], summary: RunSummary): Promise<void> {
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
@@ -358,12 +309,12 @@ async function mountApp(eventId: string, tree: SuiteNode[], summary: RunSummary)
         const match = browserParam !== null ? candidates.find((n) => n.browser === browserParam) : candidates[0];
         body = {
           ok: true,
-          event: { id: eventId, kind: "test", tier: "e2e", codec: "playwright", tree: match !== undefined ? [match] : [] },
+          event: { id: eventId, kind: "test", tier: "e2e", ...BDD_RUN, summary, tree: match !== undefined ? [match] : [] },
         };
       } else if (depthParam === "suites") {
-        body = { ok: true, event: { id: eventId, kind: "test", tier: "e2e", codec: "playwright", summary, tree: suiteSkeleton(tree) } };
+        body = { ok: true, event: { id: eventId, kind: "test", tier: "e2e", ...BDD_RUN, summary, tree: suiteSkeleton(tree) } };
       } else {
-        body = { ok: true, event: { id: eventId, kind: "test", tier: "e2e", codec: "playwright", summary, tree } };
+        body = { ok: true, event: { id: eventId, kind: "test", tier: "e2e", ...BDD_RUN, summary, tree } };
       }
     } else if (url.includes("/api/v2/projects")) {
       body = {
@@ -382,10 +333,12 @@ async function mountApp(eventId: string, tree: SuiteNode[], summary: RunSummary)
             agentId: "browser-scoping-ui-agent",
             kind: "test",
             tier: "e2e",
-            codec: "playwright",
+            codec: BDD_RUN.codec,
             timestamp: Date.now(),
             ...summary,
             hasCoverage: false,
+            stack: BDD_RUN.stack,
+            framework: BDD_RUN.framework,
           },
         ],
       };
@@ -434,86 +387,66 @@ function leafRowsOf(row: HTMLElement): HTMLElement[] {
 }
 
 describe("CR-CRU-145 §S1 — UI: a scenario run under two browsers opens THAT browser's own steps", () => {
-  // AMENDED 2026-09-24 by orchestrator ruling (escalation #2): this test was
-  // written against the pre-§S1 baseline, where nothing auto-expands. Under
-  // §S1 a playwright run's failing scenario is expanded ON OPEN and failures
-  // float, so rows are located by their BROWSER LABEL (never DOM order), the
-  // failing browser's row is asserted open without a click, and the passing
-  // browser's row is clicked open only if §S1 has not already opened it. The
-  // core bound is unchanged in strength: each row shows its OWN browser's
-  // steps and NEVER the other browser's, asserted by absence both ways.
+  // Rows are located by their BROWSER LABEL (never DOM order): the feature
+  // fails, so it opens on its own and reads each browser's suite, which
+  // answers that browser's scenario with its steps. The core bound: each row
+  // shows its OWN browser's steps and NEVER the other browser's, asserted by
+  // absence both ways.
   function rowForBrowser(browser: string): HTMLElement {
-    const rows = suiteRowsNamed(SCENARIO_NAME).filter((el) => (el.textContent ?? "").includes(browser));
+    const rows = suiteRowsNamed(UI_SCENARIO).filter((el) => (el.textContent ?? "").includes(browser));
     if (rows.length !== 1) {
-      throw new Error(`expected exactly one "${SCENARIO_NAME}" row labelled ${browser}; found ${rows.length}`);
+      throw new Error(`expected exactly one "${UI_SCENARIO}" row labelled ${browser}; found ${rows.length}`);
     }
     return rows[0]!;
   }
 
-  function isRowExpanded(row: HTMLElement): boolean {
-    return row.querySelector('[data-testid="tree-toggle"]')?.textContent?.trim() === "▾";
-  }
-
   function readFor(browser: string): boolean {
     return fetchLog.some(
-      (u) => u.includes(`suite=${encodeURIComponent(SCENARIO_NAME)}`) && u.includes(`browser=${encodeURIComponent(browser)}`),
+      (u) => u.includes(`suite=${encodeURIComponent(FEATURE_NAME)}`) && u.includes(`browser=${encodeURIComponent(browser)}`),
     );
   }
 
   test("the failing browser's row opens with its OWN failing step (never the passing browser's); the passing browser's row shows only its OWN steps; each row's read carries that row's browser", async () => {
     const eventId = "evt-cross-browser-run-detail";
-    const tree = crossBrowserTree();
-    const summary = crossBrowserSummary();
-    await mountApp(eventId, tree, summary);
+    await mountApp(eventId, crossBrowserScenarioTree(), CROSS_BROWSER_SCENARIO_SUMMARY);
 
     // PRECONDITION — both same-named scenario rows are present, each named
-    // by its own browser.
-    expect(suiteRowsNamed(SCENARIO_NAME).length).toBe(2);
+    // by its own browser, under ONE feature.
+    expect(
+      Array.from(overlay().querySelectorAll('[data-testid="feature-group"]')).map((g) => g.getAttribute("data-feature-name")),
+    ).toEqual([FEATURE_NAME]);
+    expect(suiteRowsNamed(UI_SCENARIO).length).toBe(2);
     const failRow = rowForBrowser(FAIL_BROWSER);
     const passRow = rowForBrowser(PASS_BROWSER);
     expect(failRow).not.toBe(passRow);
 
-    // The FAILING browser's row is expanded ON OPEN, with no click, from a
-    // read scoped to that browser.
-    expect(isRowExpanded(failRow)).toBe(true);
+    // Each browser's suite was read ON OPEN, with no click, by a read scoped
+    // to that browser.
     expect(readFor(FAIL_BROWSER)).toBe(true);
-
-    // POSITIVE — the failing row's OWN leaves carry the failing step's
-    // message AT that step.
-    const failLeaves = leafRowsOf(failRow);
-    const failThenLeaf = failLeaves.find((r) => (r.textContent ?? "").includes(FAIL_STEP.title));
-    expect(failThenLeaf).toBeDefined();
-    expect(failThenLeaf!.textContent ?? "").toContain("expected pane scrollTop > 0, got 0");
-
-    // NEGATIVE — never the passing browser's steps: no leaf of the failing
-    // row renders that step title as a clean pass, and the failing row holds
-    // no passing leaf for that step at all.
-    const failStepLeaves = failLeaves.filter((r) => (r.textContent ?? "").includes(FAIL_STEP.title));
-    expect(failStepLeaves.length).toBe(1);
-    expect(failStepLeaves.some((r) => !(r.textContent ?? "").includes("expected pane scrollTop > 0, got 0"))).toBe(false);
-
-    // The PASSING browser's row: expand it by click unless §S1 already did.
-    if (!isRowExpanded(passRow)) {
-      passRow.click();
-      await settleDom();
-    }
-    const passRowNow = rowForBrowser(PASS_BROWSER);
-    expect(isRowExpanded(passRowNow)).toBe(true);
     expect(readFor(PASS_BROWSER)).toBe(true);
 
-    // POSITIVE — the passing row DOES carry its own passing steps.
-    const passLeaves = leafRowsOf(passRowNow);
-    const passLeafText = passLeaves.map((r) => r.textContent ?? "").join(" | ");
-    expect(passLeafText).toContain(GIVEN_STEP.title);
-    expect(passLeafText).toContain(PASS_STEP.title);
-    // NEGATIVE — and NEVER the failing browser's failure message.
-    expect(passLeafText).not.toContain("expected pane scrollTop > 0, got 0");
+    // POSITIVE — the failing row's OWN steps carry the failing step's
+    // message AT that step.
+    const failLeaves = leafRowsOf(failRow);
+    expect(failLeaves.length).toBe(2);
+    const failThenLeaf = failLeaves.find((r) => (r.textContent ?? "").includes(THEN_STEP));
+    expect(failThenLeaf).toBeDefined();
+    expect(failThenLeaf!.textContent ?? "").toContain(FAIL_MESSAGE);
 
-    // NEGATIVE, re-checked after the second row opened — the failing row
-    // still shows only its own failing step, not the passing browser's.
-    const failLeavesAfter = leafRowsOf(rowForBrowser(FAIL_BROWSER));
-    const failStepAfter = failLeavesAfter.filter((r) => (r.textContent ?? "").includes(FAIL_STEP.title));
-    expect(failStepAfter.length).toBe(1);
-    expect(failStepAfter[0]!.textContent ?? "").toContain("expected pane scrollTop > 0, got 0");
+    // NEGATIVE — never the passing browser's steps: the failing row holds
+    // exactly one row for that step, and it carries the failure.
+    const failStepLeaves = failLeaves.filter((r) => (r.textContent ?? "").includes(THEN_STEP));
+    expect(failStepLeaves.length).toBe(1);
+    expect(failStepLeaves.some((r) => !(r.textContent ?? "").includes(FAIL_MESSAGE))).toBe(false);
+
+    // POSITIVE — the passing row DOES carry its own passing steps.
+    const passLeaves = leafRowsOf(passRow);
+    expect(passLeaves.length).toBe(2);
+    const passLeafText = passLeaves.map((r) => r.textContent ?? "").join(" | ");
+    expect(passLeafText).toContain(GIVEN_STEP);
+    expect(passLeafText).toContain(THEN_STEP);
+    // NEGATIVE — and NEVER the failing browser's failure message.
+    expect(passLeafText).not.toContain(FAIL_MESSAGE);
+    expect(passLeaves.some((r) => r.classList.contains("fail"))).toBe(false);
   });
 });

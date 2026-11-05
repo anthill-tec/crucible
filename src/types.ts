@@ -130,8 +130,8 @@ export interface SuiteNode {
   name: string;
   status: "pass" | "fail" | "pending";
   children: TestLeaf[];
-  // The Playwright project (browser) a scenario ran under,
-  // from the report's `projectName`. Optional: only the playwright codec sets it.
+  // The Playwright project (browser) a scenario ran under, from the
+  // `browser` of its crucible-events `test-end`. Optional: absent when none stated.
   browser?: string;
 }
 

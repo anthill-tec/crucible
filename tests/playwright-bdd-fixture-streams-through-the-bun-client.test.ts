@@ -8,9 +8,8 @@
 // target streamed in `crucible-events` through `env:CRUCIBLE_STREAM`. The bun
 // client's `bdd` verb runs it against a real in-process board (`startServer`,
 // port 0, ":memory:") reached through a capturing proxy, so the ROUTES the run
-// took are observable. The fixture's own JUnit and JSON reports are written,
-// through the variables its config reads (`FIXTURE_JUNIT_PATH`,
-// `FIXTURE_JSON_PATH`), into the run's reports dir.
+// took are observable. The fixture's own JUnit report is written, through the
+// variable its config reads (`FIXTURE_JUNIT_PATH`), into the run's reports dir.
 //
 // What the drive's one stored run shows:
 //   - it is closed by its stream: opened at /api/v2/runs/start, streamed to
@@ -23,18 +22,20 @@
 //   - each scenario sits under its feature and browser: the stored
 //     (suite, scenario, browser) multiset is the one the feature files and the
 //     fixture's projects declare;
-//   - each scenario's steps equal, by name, status and order, what the
-//     `playwright` codec (`parsePlaywright`, src/codecs/playwright.ts) decodes
-//     from the same run's JSON report, matched by (suite, name, browser);
+//   - each scenario's steps equal, by name, status and order, the steps its
+//     `.feature` file declares as they run;
 //   - nothing is written to the package's `test-reports/`, nor to this repo's
 //     Playwright report paths.
 //
-// THE BACKGROUND, AND THE CODEC. Playwright's JSON report keeps a result's
-// top-level `test.step`s only, and playwright-bdd runs a Background inside a
-// `Background` hook, so the codec never sees a Background step; the stream
-// carries them first (P4). The step comparison therefore puts the feature's
-// Background steps (read off the `.feature` file) ahead of the codec's steps
-// for a scenario whose steps ran, and compares the rest exactly.
+// THE STEPS AS THEY RUN, READ OFF THE `.feature` FILES. A scenario that runs
+// runs its feature's Background steps first (the stream carries them first,
+// P4), then its own, each passing until the first step whose definition
+// throws on every attempt (`FAILING_STEPS`, the fixture's steps/steps.ts):
+// that step fails and no later step runs, so none is reported. The scenario
+// that fails on its first attempt only is reported from its last attempt, the
+// retry, where every step passes. A scenario whose Before hook fails
+// (`@before-hook-fails`) runs no step, nor does a scenario whose project never
+// runs (`NEVER_RUN_TAGS`).
 //
 // The fixture's `setup` project fails on purpose and `after-setup` depends on
 // it, so its two scenarios never run.
@@ -53,7 +54,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parsePlaywright } from "../src/codecs/playwright.ts";
 import { startServer } from "../src/server.ts";
 import type { ServerHandle } from "../src/server.ts";
 import { declareClientBoard } from "./helpers/client-board.ts";
@@ -84,10 +84,8 @@ const PROJECTS_BY_TAG: Record<string, string[]> = {
   "@waits-on-setup": ["after-setup"],
 };
 
-/** This repo's own Playwright report paths, which the drive must leave alone. */
-const REPO_REPORTS = ["playwright-junit.xml", "playwright-report.json", "playwright.json"].map((name) =>
-  join(REPO_ROOT, "test-reports", name),
-);
+/** This repo's own Playwright JUnit report paths, which the drive must leave alone. */
+const REPO_REPORTS = ["playwright-junit.xml"].map((name) => join(REPO_ROOT, "test-reports", name));
 
 /** Variables an ambient shell or an enclosing run could carry into the drive. */
 const SCRUBBED = [
@@ -103,13 +101,30 @@ const SCRUBBED = [
 
 // ── the feature files, read as the expectation ───────────────────────────
 
+/** The fixture's step definitions that throw on every attempt (its steps/steps.ts). */
+const FAILING_STEPS = new Set(["When a step fails on purpose", "Given the setup fails"]);
+
+/** The scenario tag whose Before hook throws, so the scenario runs no step. */
+const BEFORE_HOOK_FAILS = "@before-hook-fails";
+
+/** Feature tags whose project depends on the failing `setup` project, so never runs. */
+const NEVER_RUN_TAGS = new Set(["@waits-on-setup"]);
+
+interface DeclaredScenario {
+  /** The describe chain it sits under (`Feature › Rule`). */
+  suite: string;
+  name: string;
+  tags: string[];
+  /** Its own step lines, verbatim and in order. */
+  steps: string[];
+}
+
 interface DeclaredFeature {
   file: string;
   tag: string;
   title: string;
   background: string[];
-  /** Each scenario with the describe chain it sits under (`Feature › Rule`). */
-  scenarios: Array<{ suite: string; name: string }>;
+  scenarios: DeclaredScenario[];
 }
 
 const STEP_LINE = /^(Given|When|Then|And|But)\s+\S/;
@@ -118,21 +133,44 @@ function parseFeature(file: string): DeclaredFeature {
   const feature: DeclaredFeature = { file, tag: "", title: "", background: [], scenarios: [] };
   let rule: string | undefined;
   let inBackground = false;
+  let current: DeclaredScenario | undefined;
+  let pendingTags: string[] = [];
   for (const raw of readFileSync(join(FIXTURE, "features", file), "utf8").split("\n")) {
     const line = raw.trim();
     if (feature.title === "" && line.startsWith("@")) feature.tag = line.split(/\s+/)[0] ?? "";
+    else if (line.startsWith("@")) pendingTags = line.split(/\s+/);
     else if (line.startsWith("Feature:")) feature.title = line.slice("Feature:".length).trim();
     else if (line.startsWith("Background:")) inBackground = true;
     else if (line.startsWith("Rule:")) {
       rule = line.slice("Rule:".length).trim();
       inBackground = false;
+      current = undefined;
     } else if (line.startsWith("Scenario:")) {
       inBackground = false;
       const suite = rule === undefined ? feature.title : `${feature.title}${SEP}${rule}`;
-      feature.scenarios.push({ suite, name: line.slice("Scenario:".length).trim() });
-    } else if (inBackground && STEP_LINE.test(line)) feature.background.push(line);
+      current = { suite, name: line.slice("Scenario:".length).trim(), tags: pendingTags, steps: [] };
+      pendingTags = [];
+      feature.scenarios.push(current);
+    } else if (STEP_LINE.test(line)) {
+      if (inBackground) feature.background.push(line);
+      else current?.steps.push(line);
+    }
   }
   return feature;
+}
+
+/** The steps a declared scenario reports, by name and status, as it runs (see the header). */
+function stepsAsTheyRun(feature: DeclaredFeature, scenario: DeclaredScenario): StoredStep[] {
+  if (NEVER_RUN_TAGS.has(feature.tag) || scenario.tags.includes(BEFORE_HOOK_FAILS)) return [];
+  const ran: StoredStep[] = [];
+  for (const name of [...feature.background, ...scenario.steps]) {
+    if (FAILING_STEPS.has(name)) {
+      ran.push({ name, status: "fail" });
+      break;
+    }
+    ran.push({ name, status: "pass" });
+  }
+  return ran;
 }
 
 function declaredFeatures(): DeclaredFeature[] {
@@ -176,7 +214,6 @@ interface Drive {
   events: StoredEvent[];
   posts: string[];
   junitXml: string;
-  playwrightJson: string;
   packageReportsAfter: boolean;
   repoReportsBefore: Array<number | null>;
   repoReportsAfter: Array<number | null>;
@@ -285,12 +322,11 @@ async function runTheFixtureThroughTheClient(): Promise<Drive> {
 
   const reportsDir = join(scratch, "run-reports");
   const junitPath = join(reportsDir, "fixture-junit.xml");
-  const jsonPath = join(reportsDir, "fixture-report.json");
   const repoReportsBefore = mtimes(REPO_REPORTS);
   const run = await spawnClient(
     ["bdd", "--agent", AGENT, "--project-dir", scratch, "--package-dir", project, "--reports", reportsDir],
     scratch,
-    { FIXTURE_JUNIT_PATH: junitPath, FIXTURE_JSON_PATH: jsonPath },
+    { FIXTURE_JUNIT_PATH: junitPath },
   );
   const repoReportsAfter = mtimes(REPO_REPORTS);
 
@@ -305,7 +341,6 @@ async function runTheFixtureThroughTheClient(): Promise<Drive> {
     events,
     posts: proxy.posts,
     junitXml: readReport(junitPath, run),
-    playwrightJson: readReport(jsonPath, run),
     packageReportsAfter: existsSync(join(project, "test-reports")),
     repoReportsBefore,
     repoReportsAfter,
@@ -352,11 +387,6 @@ function junitCount(xml: string, attribute: "tests" | "skipped"): number {
 
 function nameAndStatus(entries: StoredStep[]): StoredStep[] {
   return entries.map(({ name, status }) => ({ name, status }));
-}
-
-function lastSegment(suite: string): string {
-  const parts = suite.split(SEP);
-  return parts[parts.length - 1] ?? suite;
 }
 
 const DRIVE_BUDGET_MS = 300_000;
@@ -425,41 +455,33 @@ describe("the playwright-bdd fixture streams its run through the bun client", ()
   );
 
   test(
-    "each scenario's steps equal, by name, status and order, what the `playwright` codec decodes from the same run's JSON report",
+    "each scenario's steps equal, by name, status and order, the steps its feature file declares as they run",
     async () => {
       const run = await drive();
       const event = ingested(run);
-      const decoded = parsePlaywright(run.playwrightJson).tree;
-      const backgroundOf = new Map<string, string[]>();
-      for (const feature of declaredFeatures()) backgroundOf.set(feature.title, feature.background);
+      const expectedOf = new Map<string, StoredStep[]>();
+      for (const feature of declaredFeatures()) {
+        for (const scenario of feature.scenarios) {
+          expectedOf.set(`${scenario.suite}${SEP}${scenario.name}`, stepsAsTheyRun(feature, scenario));
+        }
+      }
 
       const wrong: string[] = [];
       for (const placed of placedTests(event)) {
-        const node = `${lastSegment(placed.suite)}${SEP}${placed.test.name}`;
-        const matches = decoded.filter((c) => c.name === node && c.browser === placed.browser);
-        const [match] = matches;
-        if (matches.length !== 1 || match === undefined) {
-          wrong.push(`${placed.browser}: ${placed.suite} › ${placed.test.name}: ${matches.length} codec node(s)`);
+        const expected = expectedOf.get(`${placed.suite}${SEP}${placed.test.name}`);
+        if (expected === undefined) {
+          wrong.push(`${placed.browser}: ${placed.suite} › ${placed.test.name}: declared by no feature file`);
           continue;
         }
-        const codecSteps = nameAndStatus(match.children);
-        const background = (backgroundOf.get(placed.suite.split(SEP)[0] ?? "") ?? []).map((name) => ({
-          name,
-          status: "pass",
-        }));
-        const codecHasBackground =
-          background.length > 0 &&
-          JSON.stringify(codecSteps.slice(0, background.length)) === JSON.stringify(background);
-        const expected =
-          codecSteps.length === 0 || codecHasBackground ? codecSteps : [...background, ...codecSteps];
         const stored = nameAndStatus(placed.test.steps ?? []);
         if (JSON.stringify(stored) !== JSON.stringify(expected)) {
           wrong.push(`${placed.browser}: ${placed.suite} › ${placed.test.name}: ${JSON.stringify(stored)} != ${JSON.stringify(expected)}`);
         }
       }
       expect(wrong).toEqual([]);
-      // BOUND — the comparison covered steps, not only empty scenarios.
+      // BOUND — the comparison covered steps, a failing step among them, not only empty scenarios.
       expect(placedTests(event).some((p) => (p.test.steps ?? []).length > 1)).toBe(true);
+      expect(placedTests(event).some((p) => (p.test.steps ?? []).some((step) => step.status === "fail"))).toBe(true);
     },
     DRIVE_BUDGET_MS,
   );

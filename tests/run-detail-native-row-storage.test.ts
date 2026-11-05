@@ -13,7 +13,6 @@ import { join } from "node:path";
 import { Store } from "../src/store.ts";
 import { startServer } from "../src/server.ts";
 import { parseJunit } from "../src/codecs/junit.ts";
-import { parsePlaywright } from "../src/codecs/playwright.ts";
 import { parseCompile } from "../src/codecs/compile.ts";
 import type { Project, RunSummary, SuiteNode } from "../src/types.ts";
 
@@ -403,58 +402,48 @@ describe("Store#recordTestEvent — a BDD scenario's feature is stored, and a fe
       const featureA = `Checkout-${crypto.randomUUID()}`;
       const featureB = `Search-${crypto.randomUUID()}`;
 
-      function spec(title: string, status: string) {
-        return {
-          title,
-          tests: [
-            {
-              projectName: "chromium",
-              results: [{ status, steps: [{ title: "a step", duration: 1 }] }],
-            },
-          ],
-        };
-      }
-      const report = {
-        suites: [
-          {
-            title: "features/sample.feature.spec.js",
-            specs: [],
-            suites: [
-              {
-                title: featureA,
-                specs: [spec("scenario one", "passed"), spec("scenario two", "failed")],
-                suites: [],
-              },
-              {
-                title: featureB,
-                specs: [spec("scenario three", "passed")],
-                suites: [],
-              },
-            ],
-          },
-        ],
-      };
-      const parsed = parsePlaywright(JSON.stringify(report));
-      const event = store.recordTestEvent(pk, "a1", { summary: parsed.summary, tree: parsed.tree });
+      // A playwright-bdd run in its scenario shape: a feature is a suite (one
+      // per browser), a scenario its leaf, the Gherkin steps under it. The
+      // feature's two browsers' suites are interleaved with another feature's.
+      const scenario = (name: string, status: "pass" | "fail") => ({
+        name,
+        status,
+        duration_ms: 1,
+        steps: [{ name: "a step", status, duration_ms: 1 }],
+      });
+      const tree: SuiteNode[] = [
+        { name: featureA, status: "fail", browser: "chromium", children: [scenario("scenario one", "pass"), scenario("scenario two", "fail")] },
+        { name: featureB, status: "pass", browser: "chromium", children: [scenario("scenario three", "pass")] },
+        { name: featureA, status: "pass", browser: "firefox", children: [scenario("scenario one", "pass")] },
+      ];
+      const event = store.recordTestEvent(
+        pk,
+        "a1",
+        { summary: summary({ total: 4, passed: 3, failed: 1, pending: 0, duration_ms: 4 }), tree },
+        { tier: "e2e", stack: "bun", framework: "playwright-bdd" },
+      );
 
-      // The wire name is UNCHANGED: "<Feature> › <Scenario>".
-      expect(event.tree?.map((n) => n.name)).toEqual([
-        `${featureA} › scenario one`,
-        `${featureA} › scenario two`,
-        `${featureB} › scenario three`,
-      ]);
+      // The wire name is UNCHANGED: each suite keeps its feature's whole name.
+      expect(event.tree?.map((n) => n.name)).toEqual([featureA, featureB, featureA]);
 
       const table = tableWithColumn(db, "feature");
       const order = orderingColumn(db, table);
       const rows = db
-        .query<{ name: string }, [string]>(
-          `SELECT name FROM "${table}" WHERE feature = ? ORDER BY "${order}"`,
+        .query<{ name: string; browser: string | null }, [string]>(
+          `SELECT name, browser FROM "${table}" WHERE feature = ? ORDER BY "${order}"`,
         )
         .all(featureA);
-      expect(rows.map((r) => r.name)).toEqual([
-        `${featureA} › scenario one`,
-        `${featureA} › scenario two`,
+      // POSITIVE — the feature is the suite's whole name; one query answers
+      // both of its browsers' suites, in stored order.
+      expect(rows).toEqual([
+        { name: featureA, browser: "chromium" },
+        { name: featureA, browser: "firefox" },
       ]);
+      // NEGATIVE — the other feature answers only its own suite.
+      const other = db
+        .query<{ name: string }, [string]>(`SELECT name FROM "${table}" WHERE feature = ? ORDER BY "${order}"`)
+        .all(featureB);
+      expect(other.map((r) => r.name)).toEqual([featureB]);
 
       expect(jsonSuiteOrCompileColumns(db)).toEqual([]);
     } finally {

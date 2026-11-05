@@ -222,9 +222,9 @@ describe("a resend appends only what the board does not hold; a differing overla
 });
 
 describe("a batch names a stream codec, the same one for the whole run", () => {
-  test("a codec that is not a stream codec — junit, playwright, or one the board does not know — is a 400, nothing stored", async () => {
+  test("a codec that is not a stream codec — junit, or one the board does not know — is a 400, nothing stored", async () => {
     const s = await subject();
-    for (const codec of ["junit", "playwright", "no-such-codec"]) {
+    for (const codec of ["junit", "no-such-codec"]) {
       expectRefused(await batch(s, 0, L_START, codec), 400);
     }
     expectRefused(await batch(s, 0, L_START, 42), 400);

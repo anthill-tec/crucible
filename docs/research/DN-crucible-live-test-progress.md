@@ -64,8 +64,13 @@ report is read.
 - **Coverage** (lcov, coverage.py, JaCoCo, llvm-cov) is known only at exit and stays a final report
   on every stack.
 - **Playwright:** the shipped reporter streams each scenario as one test, and its Gherkin steps ride
-  inside that scenario's `test-end` (`steps`), so its JSON report is no longer needed, and the board's
-  `playwright` codec retires once nothing declares it.
+  inside that scenario's `test-end` (`steps`), so its JSON report is no longer needed. The board's
+  `playwright` codec is retired: a post naming it is refused as an unknown codec, and the runs stored
+  through it are migrated to framework `playwright-bdd` (schema v25), recounted by scenario, their
+  `codec` kept as the record of how each was filed. Neither Playwright config writes a `json` reporter.
+- **The `junit` readings are keyed by framework,** not by the client's stack: pytest's grouping by
+  classname applies to a run of framework `pytest`, and bun's console reading to a run of framework
+  `bun-test`, whatever the stack. A run that states no framework gets neither.
 
 | Source | The record | The live view |
 |---|---|---|
@@ -151,7 +156,8 @@ A bun project declares, per `package.json` script, one table:
   - A non-`bun-test` entry whose key is not a `test:` script, or is a `test:` key with no script of that name in
     `scripts`, is refused by the gate before anything runs, naming it, since the gate could not otherwise see it. The
     `e2e` tier stays outside the gate, whatever its framework.
-  - The other stacks' gates are unchanged: their suites name no framework.
+  - The other stacks' gates are unchanged: their suites declare no framework of their own. The python gate's
+    tiers state their runner, `pytest` or `unittest`, as each run's framework.
 - The other stacks declare the same three facts in their own place (`crucible.toml` for cargo,
   python, maven, arduino, go); the vocabulary is the same.
 - **Python unittest declares no stream** (CR-CRU-224 amends this paragraph for that case): its
@@ -190,9 +196,9 @@ CR-CRU-224:
 Go's stream lands with its client (CR-CRU-195), which therefore also depends on CR-CRU-200.
 
 CR-CRU-226 was split at its gap analysis (user ruling 2026-11-04): it keeps the client's half, and CR-CRU-229 takes
-the board's. The bun client still points Playwright's JSON report into the run's reports dir (`STREAM_KEPT_REPORTS`)
-until CR-CRU-229 retires the `playwright` codec, migrates the runs stored through it, and keys the `junit` readings by
-framework rather than by stack. What a bun project's `regression` runs stays CR-CRU-222's.
+the board's. CR-CRU-229 retires the `playwright` codec and Playwright's JSON report (`STREAM_KEPT_REPORTS` keeps only
+the JUnit report), migrates the runs stored through the codec, and keys the `junit` readings by framework rather than
+by stack. What a bun project's `regression` runs stays CR-CRU-222's.
 
 What CR-CRU-200 leaves to later CRs (its non-goals):
 

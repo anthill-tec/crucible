@@ -3028,8 +3028,25 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // A NET LOSS of seven, and stated as one. `clients` (815) stays above its 601
 // floor, so the directional half holds. The three `develop` floors stay at
 // 512/378/601, unchanged.
+// UPDATED 2026-11-04 ahead of the Playwright JSON codec's retirement, from
+// the spec's fact and not from a measurement of code not yet written: the
+// file `src/codecs/playwright.ts` is deleted and its `codecs` entry goes.
+// ONE head moves: `src` 883 -> 880 (-3). The deleted file holds exactly
+// three prose citations, measured with this file's own machinery
+// (`extractCitableText` + CR_LITERAL) on the file as it stands before its
+// deletion; the `playwright` entry in `src/codecs/index.ts` carries no
+// comment, so its removal moves nothing. `public` (538) and `clients` (815)
+// do not move.
+//
+//   src -3: the citations of src/codecs/playwright.ts, leaving with the file.
+//
+// A NET LOSS of three, and stated as one: lineage leaving with the code it
+// explained, not lineage shed from code that stays. `src` (880) stays above
+// its 512 floor, so the directional half holds. The three `develop` floors
+// stay at 512/378/601, unchanged. The close-out re-record after the branch's
+// last content edit still stands.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 883 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 880 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 538 },
   clients: { exts: [".py"], develop: 601, head: 815 },
 };

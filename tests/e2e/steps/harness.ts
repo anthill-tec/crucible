@@ -248,89 +248,128 @@ export async function ingestJunit(
   return (await res.json()) as RunIngestResponse;
 }
 
-// ── CR-CRU-015 §S2/§S3 — the RAW Playwright JSON report, decoded BY THE
-// SERVER. `codec: "playwright"` on POST /api/v2/runs makes the registry codec
-// (src/codecs/playwright.ts) turn the report into the feature → scenario →
-// step tree the BDD section reads; `runs/parsed` is deliberately NOT used,
-// because a client-side parse would flatten the Gherkin before the server ever
-// saw it and store `codec: "parsed"` (§S2's refused route).
+// \u2500\u2500 A playwright-bdd run, streamed to the board as the bun client streams a
+// playwright-bdd target: the run opens with `POST /api/v2/runs/start`
+// (framework `playwright-bdd`), its `crucible-events` stream is posted to
+// `POST /api/v2/runs/<runId>/stream` \u2014 each scenario a `test-end` carrying
+// its feature as `suite`, its `browser` and its Gherkin `steps` \u2014 and it
+// closes through `POST /api/v2/runs` with codec `crucible-events`. The board
+// stores one suite per feature and browser, each scenario a leaf of it.
 
-/** One feature, two scenarios — a passing one whose four steps include an
- *  `And` (so verbatim step text is exercised) and a failing one that stops AT
- *  the broken step, which is the shape the codec produces for a real run and
- *  the shape `tests/e2e/features/bdd-gherkin-section.feature` asserts. Kept
- *  beside the JUnit/rustc fixtures above rather than inline in a step file,
- *  the same rule this harness states in its header. */
-export const PLAYWRIGHT_BDD_FEATURE_TITLE = "Gherkin Rendering Feature";
-export const PLAYWRIGHT_BDD_REPORT = JSON.stringify({
-  suites: [
-    {
-      title: PLAYWRIGHT_BDD_FEATURE_TITLE,
-      specs: [
-        {
-          title: "a passing scenario renders every step",
-          tests: [
-            {
-              results: [
-                {
-                  status: "passed",
-                  duration: 20,
-                  steps: [
-                    { title: "Given the board has a frontend project", duration: 5 },
-                    { title: "When a BDD run is ingested for it", duration: 6 },
-                    { title: "And the run carries its Gherkin steps", duration: 4 },
-                    { title: "Then the BDD section renders them in order", duration: 5 },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-        {
-          title: "a failing scenario stops at the broken step",
-          tests: [
-            {
-              results: [
-                {
-                  status: "failed",
-                  duration: 7,
-                  steps: [
-                    { title: "Given the board has a frontend project", duration: 4 },
-                    {
-                      title: "When the specification breaks",
-                      duration: 3,
-                      error: {
-                        message: "expect(received).toBe(expected) — the step never rendered",
-                        stack:
-                          "expect(received).toBe(expected)\n    at bdd-gherkin-section.steps.ts:42:7",
-                      },
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    },
-  ],
+export interface BddStepFixture {
+  name: string;
+  status: "pass" | "fail";
+  duration_ms: number;
+  failure?: { message: string; trace?: string };
+}
+export interface BddScenarioFixture {
+  feature: string;
+  name: string;
+  status: "pass" | "fail";
+  steps: BddStepFixture[];
+  /** The browser it ran under; `chromium` when absent. */
+  browser?: string;
+  /** The scenario's own failure; absent: the `test-end` carries no `failure` key. */
+  failure?: { message: string; trace?: string };
+}
+
+export const bddPassingStep = (name: string): BddStepFixture => ({ name, status: "pass", duration_ms: 5 });
+
+export const bddFailingStep = (name: string, message: string, trace?: string): BddStepFixture => ({
+  name,
+  status: "fail",
+  duration_ms: 5,
+  failure: { message, ...(trace !== undefined ? { trace } : {}) },
 });
 
-/** POST /api/v2/runs with `codec: "playwright"` — the server decodes. */
-export async function ingestPlaywright(
+/** One `crucible-events` line per event, as the bun client writes it. */
+function bddStreamOf(scenarios: BddScenarioFixture[]): string {
+  const line = (fields: Record<string, unknown>): string => `${JSON.stringify(fields)}\n`;
+  const failed = scenarios.filter((s) => s.status === "fail").length;
+  return (
+    line({ event: "run-start", total: scenarios.length }) +
+    scenarios
+      .map((s, i) => {
+        const browser = s.browser ?? "chromium";
+        return line({
+          event: "test-end",
+          id: `scenario-${i}-${browser}`,
+          name: s.name,
+          suite: s.feature,
+          file: `features/${s.feature.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.feature`,
+          browser,
+          status: s.status,
+          duration_ms: s.steps.reduce((sum, step) => sum + step.duration_ms, 0),
+          steps: s.steps,
+          ...(s.failure !== undefined ? { failure: s.failure } : {}),
+        });
+      })
+      .join("") +
+    line({
+      event: "run-end",
+      total: scenarios.length,
+      passed: scenarios.length - failed,
+      failed,
+      pending: 0,
+      duration_ms: scenarios.reduce((sum, s) => sum + s.steps.reduce((n, step) => n + step.duration_ms, 0), 0),
+    })
+  );
+}
+
+/** Opens, streams and closes a playwright-bdd run; answers the event it stored. */
+export async function streamPlaywrightBdd(
   request: APIRequestContext,
   projectKey: string,
   agentId: string,
-  report: string,
+  scenarios: BddScenarioFixture[],
   tier = "e2e",
 ): Promise<RunIngestResponse> {
   await ensureRegistered(request, projectKey, agentId);
-  const res = await request.post("/api/v2/runs", {
-    data: { projectKey, agentId, codec: "playwright", data: report, tier },
+  const start = await request.post("/api/v2/runs/start", {
+    data: { projectKey, agentId, tier, stack: "bun", framework: "playwright-bdd" },
   });
-  expect(res.ok()).toBe(true);
-  return (await res.json()) as RunIngestResponse;
+  expect(start.status()).toBe(202);
+  const runId = ((await start.json()) as { runId: string }).runId;
+  const batch = await request.post(`/api/v2/runs/${runId}/stream`, {
+    data: { projectKey, agentId, codec: "crucible-events", from: 0, data: bddStreamOf(scenarios) },
+  });
+  expect(batch.status()).toBe(200);
+  const closed = await request.post("/api/v2/runs", {
+    data: { projectKey, agentId, runId, codec: "crucible-events" },
+  });
+  expect(closed.status()).toBe(200);
+  return (await closed.json()) as RunIngestResponse;
 }
+
+/** The feature `PLAYWRIGHT_BDD_SCENARIOS` belongs to. */
+export const PLAYWRIGHT_BDD_FEATURE_TITLE = "Gherkin Rendering Feature";
+
+/** One feature, a passing scenario whose four steps include an `And` (so verbatim
+ *  step text is exercised) and a failing one that stops AT the broken step \u2014
+ *  the shape `tests/e2e/features/bdd-gherkin-section.feature` asserts. */
+export const PLAYWRIGHT_BDD_SCENARIOS: BddScenarioFixture[] = [
+  {
+    feature: PLAYWRIGHT_BDD_FEATURE_TITLE,
+    name: "a passing scenario renders every step",
+    status: "pass",
+    steps: [
+      bddPassingStep("Given the board has a frontend project"),
+      bddPassingStep("When a BDD run is ingested for it"),
+      bddPassingStep("And the run carries its Gherkin steps"),
+      bddPassingStep("Then the BDD section renders them in order"),
+    ],
+  },
+  {
+    feature: PLAYWRIGHT_BDD_FEATURE_TITLE,
+    name: "a failing scenario stops at the broken step",
+    status: "fail",
+    steps: [
+      bddPassingStep("Given the board has a frontend project"),
+      bddFailingStep("When the specification breaks", "expect(received).toBe(expected) \u2014 the step never rendered"),
+    ],
+    failure: { message: "expect(received).toBe(expected) \u2014 the step never rendered" },
+  },
+];
 
 export async function ingestParsed(
   request: APIRequestContext,
@@ -676,79 +715,6 @@ export function junitManySuites(suiteCount: number, leavesPerSuite: number): str
     );
   }
   return [`<testsuites>`, ...suites, `</testsuites>`].join("\n");
-}
-
-// CR-CRU-159 C2 — heat-strip reveal e2e fixtures (spec/BDD runs, the
-// feature-unfold case, G5/AC3). Each builds the raw Playwright JSON report
-// `ingestPlaywright` posts under `codec: "playwright"`; the server-side codec
-// (`src/codecs/playwright.ts`) turns it into the feature → scenario → step
-// tree `SpecFeatures` groups by feature title (the part of its canonical
-// "<Feature> › <Scenario>" name before the separator, `collectScenarios`'
-// own naming: `${featureTitle} › ${spec.title}`).
-
-export interface PwStepFixture {
-  title: string;
-  error?: { message: string; stack?: string };
-}
-export interface PwScenarioFixture {
-  title: string;
-  status: "passed" | "failed" | "skipped" | "interrupted";
-  steps: PwStepFixture[];
-}
-export interface PwFeatureFixture {
-  title: string;
-  scenarios: PwScenarioFixture[];
-}
-
-/** Raw Playwright JSON reporter shape `src/codecs/playwright.ts` decodes —
- *  one `suites[]` entry per Gherkin FEATURE, one `specs[]` entry per
- *  SCENARIO, one `tests[0].results[0].steps[]` entry per STEP. One project
- *  (`tests` has exactly one entry, no `projectName`) per scenario — multi-
- *  browser scoping is tests/playwright-run-browser-scoping.test.ts's own
- *  concern, not this CR's. */
-export function playwrightFeaturesReport(features: PwFeatureFixture[]): string {
-  return JSON.stringify({
-    suites: features.map((f) => ({
-      title: f.title,
-      specs: f.scenarios.map((s) => ({
-        title: s.title,
-        tests: [
-          {
-            results: [
-              {
-                status: s.status,
-                duration: 5,
-                steps: s.steps.map((step) => ({
-                  title: step.title,
-                  duration: 2,
-                  ...(step.error !== undefined ? { error: step.error } : {}),
-                })),
-              },
-            ],
-          },
-        ],
-      })),
-    })),
-  });
-}
-
-/** §S1 AC3/G5 — `count` ALL-PASS, single-scenario features titled
- *  `${baseName} filler N`. None of them is the report-first feature and none
- *  is failing, so CR-CRU-145 §S1's progressive-expansion default folds every
- *  one of them whole (`openProgressively` in public/app.js) — cheap below-
- *  the-fold filler for a target feature placed after them, without any one
- *  feature needing dozens of scenarios of its own. */
-export function playwrightFillerFeatures(baseName: string, count: number): PwFeatureFixture[] {
-  return Array.from({ length: count }, (_, i) => ({
-    title: `${baseName} filler ${i + 1}`,
-    scenarios: [
-      {
-        title: `${baseName} filler ${i + 1} › its one calm scenario`,
-        status: "passed" as const,
-        steps: [{ title: "Given a calm precondition" }, { title: "Then nothing of note happens" }],
-      },
-    ],
-  }));
 }
 
 // rustc fixture per CR §S2 AC4: 1 error[E0308] block + 1 plain warning block

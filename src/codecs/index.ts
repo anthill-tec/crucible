@@ -6,15 +6,15 @@ import { coverageCodecs, decodeCoverage } from "./coverage.ts";
 import type { CoverageCodec } from "./coverage.ts";
 import { parseCrucibleEvents } from "./crucible-events.ts";
 import { parseJunit, parseJunitPath, readJunitRawOutput } from "./junit.ts";
-import { parsePlaywright, parsePlaywrightPath } from "./playwright.ts";
 
 /**
- * What a codec is told about the run it decodes. `stack` is the run's
- * effective stack (the ingest's, else its start's), resolved before the codec
- * runs; `onSkip` hears of each report a path read skips as undecodable.
+ * What a codec is told about the run it decodes. `framework` is the run's
+ * effective framework (the ingest's, else its start's), resolved before the
+ * codec runs — a reading keyed by framework never consults the run's stack;
+ * `onSkip` hears of each report a path read skips as undecodable.
  */
 export interface DecodeOptions {
-  stack?: string;
+  framework?: string;
   onSkip?: (report: string, error: string) => void;
   /** CR-CRU-200 §S1 — a stream codec's stream was cut at `ingest_body_bytes`. */
   cut?: boolean;
@@ -55,18 +55,11 @@ export const codecs: Map<string, Codec> = new Map<string, Codec>([
   [
     "junit",
     {
-      parse: (data: string, options?: DecodeOptions) => parseJunit(data, options?.stack),
+      parse: (data: string, options?: DecodeOptions) => parseJunit(data, options?.framework),
       parsePath: (path: string, options?: DecodeOptions) =>
-        parseJunitPath(path, options?.onSkip, options?.stack),
+        parseJunitPath(path, options?.onSkip, options?.framework),
       readRaw: (tree: SuiteNode[], raw: string, options?: DecodeOptions) =>
-        readJunitRawOutput(tree, raw, options?.stack),
-    },
-  ],
-  [
-    "playwright",
-    {
-      parse: (data: string) => parsePlaywright(data),
-      parsePath: (path: string) => parsePlaywrightPath(path),
+        readJunitRawOutput(tree, raw, options?.framework),
     },
   ],
   [
@@ -210,7 +203,7 @@ function joinRaw(bodyRaw: unknown, reportRaws: Array<string | undefined>): strin
  * Shared ingest core for the v2 runs route: resolve the run from inline
  * `data` — one report text or a non-empty list of them, decoded in list order
  * and merged into one run — or from `dataPath` (via the codec's optional
- * `parsePath` — CR-CRU-010 §S1: registry-only resolution), under the run's effective `stack`.
+ * `parsePath` — CR-CRU-010 §S1: registry-only resolution), under the run's effective `framework`.
  * A report that cannot be decoded is skipped and named in `warnings`; when no
  * report decodes, or the list is empty, the run is refused. Parse and
  * filesystem failures surface as an error string so callers keep the JSON
@@ -222,7 +215,7 @@ export async function parseRunBody(
   codec: Codec,
   body: { data?: unknown; dataPath?: unknown; raw?: unknown; coverage?: unknown },
   codecName: string,
-  stack?: string,
+  framework?: string,
 ): Promise<{ run: RunSchema; warnings: IngestWarning[]; files: number } | { error: string }> {
   const coverageBlock = readCoverageBlock(body.coverage);
   if ("error" in coverageBlock) return coverageBlock;
@@ -230,7 +223,7 @@ export async function parseRunBody(
   const skip = (report: string, error: string): void => {
     warnings.push({ code: "report-skipped", detail: `report ${report} skipped: ${error}` });
   };
-  const options: DecodeOptions = { ...(stack !== undefined ? { stack } : {}), onSkip: skip };
+  const options: DecodeOptions = { ...(framework !== undefined ? { framework } : {}), onSkip: skip };
   const decoded: DecodedRun[] = [];
   try {
     if (typeof body.data === "string") {
@@ -281,12 +274,12 @@ export function parseStreamBody(
   held: { text: string; cut: boolean },
   body: { raw?: unknown; coverage?: unknown },
   codecName: string,
-  stack?: string,
+  framework?: string,
 ): { run: RunSchema; warnings: IngestWarning[]; files: number; incomplete?: string } | { error: string } {
   const coverageBlock = readCoverageBlock(body.coverage);
   if ("error" in coverageBlock) return coverageBlock;
   const warnings: IngestWarning[] = [];
-  const options: DecodeOptions = { ...(stack !== undefined ? { stack } : {}), cut: held.cut };
+  const options: DecodeOptions = { ...(framework !== undefined ? { framework } : {}), cut: held.cut };
   let decoded: DecodedRun | Promise<DecodedRun>;
   try {
     decoded = codec.parse(held.text, options);

@@ -4,6 +4,7 @@ import { Database } from "bun:sqlite";
 import { renameSync } from "node:fs";
 import { configuredRetention, resolveLimit } from "./limits.ts";
 import type { CompileReport } from "./codecs/compile.ts";
+import { suiteStatus } from "./codecs/junit.ts";
 import {
   abortedStreamRecord,
   appendRunStream,
@@ -1441,7 +1442,7 @@ const RUN_DETAIL_TABLES = [
  *   empty tree reads back as `[]` and an absent one stays absent) or raw
  *   runner output (`raw`, plain text, never inside `events.payload`).
  * - `run_suites`: a `SuiteNode` per row, at its `position` in the tree, with
- *   its leaf counts and, for a BDD scenario, the `feature` its name opens with.
+ *   its leaf counts and, for a `playwright-bdd` run, its whole name as its `feature`.
  * - `run_cases`: a `TestLeaf` per row, at its `position` within the suite at
  *   `suite_position`; a failure's message, type and trace are each optional.
  * - `run_case_steps`: a `TestStep` per row, at its `position` within the case
@@ -1535,17 +1536,8 @@ function createRunDetailTables(db: Database): void {
   `);
 }
 
-/** The separator the playwright codec joins a BDD scenario's name with. */
-const FEATURE_SEPARATOR = " › ";
-
-/** The framework whose suites are features, each stored under its own whole name. */
+/** The framework whose suites are features, each stored under its own whole name; any other run's suites have none. */
 const FEATURE_SUITE_FRAMEWORK = "playwright-bdd";
-
-/** A BDD scenario's feature: its name up to the first separator; null otherwise. */
-function featureOf(suiteName: string): string | null {
-  const at = suiteName.indexOf(FEATURE_SEPARATOR);
-  return at >= 0 ? suiteName.slice(0, at) : null;
-}
 
 const TEST_STATUSES: ReadonlySet<string> = new Set(["pass", "fail", "pending"]);
 
@@ -1690,8 +1682,8 @@ interface RunDetailSource {
 
 /**
  * Write a run's detail as native rows: its tree as suites and cases in
- * decoded order (each suite's counts from its own leaves, a BDD scenario's
- * feature split from its name), its raw output as plain text, and a compile
+ * decoded order (each suite's counts from its own leaves, its feature its
+ * whole name for a `playwright-bdd` run), its raw output as plain text, and a compile
  * report as its header and diagnostics. The ONE mapping, used by ingest and by
  * the migration that moves a legacy row, so the two store a run identically.
  * Its callers have already refused a tree or report that does not fit the
@@ -1706,69 +1698,7 @@ function writeRunDetailRows(db: Database, run: RunDetailSource): void {
       run.raw ?? null,
     );
   }
-  if (tree !== undefined) {
-    const insertSuite = db.query(
-      `INSERT INTO run_suites (event_id, position, name, status, browser, feature,
-         total, passed, failed, pending)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    const insertCase = db.query(
-      `INSERT INTO run_cases (event_id, suite_position, position, name, status, duration_ms,
-         has_failure, failure_message, failure_type, failure_trace)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    const insertStep = db.query(
-      `INSERT INTO run_case_steps (event_id, suite_position, case_position, position, name, status,
-         duration_ms, has_failure, failure_message, failure_type, failure_trace)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    const ownFeature = run.framework === FEATURE_SUITE_FRAMEWORK;
-    tree.forEach((suite, suitePosition) => {
-      const count = (status: string): number =>
-        suite.children.filter((leaf) => leaf.status === status).length;
-      insertSuite.run(
-        run.id,
-        suitePosition,
-        suite.name,
-        suite.status,
-        suite.browser ?? null,
-        ownFeature ? suite.name : featureOf(suite.name),
-        suite.children.length,
-        count("pass"),
-        count("fail"),
-        count("pending"),
-      );
-      suite.children.forEach((leaf, position) => {
-        insertCase.run(
-          run.id,
-          suitePosition,
-          position,
-          leaf.name,
-          leaf.status,
-          leaf.duration_ms,
-          leaf.failure !== undefined ? 1 : 0,
-          leaf.failure?.message ?? null,
-          leaf.failure?.type ?? null,
-          leaf.failure?.trace ?? null,
-        );
-        leaf.steps?.forEach((step, stepPosition) => {
-          insertStep.run(
-            run.id,
-            suitePosition,
-            position,
-            stepPosition,
-            step.name,
-            step.status,
-            step.duration_ms,
-            step.failure !== undefined ? 1 : 0,
-            step.failure?.message ?? null,
-            step.failure?.type ?? null,
-            step.failure?.trace ?? null,
-          );
-        });
-      });
-    });
-  }
+  if (tree !== undefined) writeRunTreeRows(db, run.id, tree, run.framework);
   if (run.kind === "compile" && run.compile !== undefined) {
     const report = run.compile as CompileReport;
     db.query(
@@ -1792,6 +1722,76 @@ function writeRunDetailRows(db: Database, run: RunDetailSource): void {
       );
     });
   }
+}
+
+/**
+ * A run's tree as its suites, cases and steps, in decoded order: each suite's
+ * counts from its own leaves, its `feature` its whole name for a
+ * `playwright-bdd` run and NULL for any other.
+ * Shared by `writeRunDetailRows` and the v25 reshape of a codec run.
+ */
+function writeRunTreeRows(db: Database, id: string, tree: readonly SuiteNode[], framework?: string): void {
+  const insertSuite = db.query(
+    `INSERT INTO run_suites (event_id, position, name, status, browser, feature,
+       total, passed, failed, pending)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertCase = db.query(
+    `INSERT INTO run_cases (event_id, suite_position, position, name, status, duration_ms,
+       has_failure, failure_message, failure_type, failure_trace)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertStep = db.query(
+    `INSERT INTO run_case_steps (event_id, suite_position, case_position, position, name, status,
+       duration_ms, has_failure, failure_message, failure_type, failure_trace)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const ownFeature = framework === FEATURE_SUITE_FRAMEWORK;
+  tree.forEach((suite, suitePosition) => {
+    const count = (status: string): number =>
+      suite.children.filter((leaf) => leaf.status === status).length;
+    insertSuite.run(
+      id,
+      suitePosition,
+      suite.name,
+      suite.status,
+      suite.browser ?? null,
+      ownFeature ? suite.name : null,
+      suite.children.length,
+      count("pass"),
+      count("fail"),
+      count("pending"),
+    );
+    suite.children.forEach((leaf, position) => {
+      insertCase.run(
+        id,
+        suitePosition,
+        position,
+        leaf.name,
+        leaf.status,
+        leaf.duration_ms,
+        leaf.failure !== undefined ? 1 : 0,
+        leaf.failure?.message ?? null,
+        leaf.failure?.type ?? null,
+        leaf.failure?.trace ?? null,
+      );
+      leaf.steps?.forEach((step, stepPosition) => {
+        insertStep.run(
+          id,
+          suitePosition,
+          position,
+          stepPosition,
+          step.name,
+          step.status,
+          step.duration_ms,
+          step.failure !== undefined ? 1 : 0,
+          step.failure?.message ?? null,
+          step.failure?.type ?? null,
+          step.failure?.trace ?? null,
+        );
+      });
+    });
+  });
 }
 
 /** An `events` row that still holds a run's detail in a legacy column. */
@@ -3205,7 +3205,119 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       );
     },
   },
+  {
+    description:
+      "events + runs + run detail: every run the retired `playwright` codec filed reads framework `playwright-bdd` and is reshaped to the scenario shape, recounted by scenario (`codec` and `duration_ms` kept); every suite of a run of another framework reads `feature` NULL. The rollups are left as folded",
+    apply(db) {
+      // A store with no events table has no run; it is created later in its CURRENT shape.
+      if (!tableExists(db, "events")) return;
+      for (const { id } of db.query<{ id: string }, []>(`SELECT id FROM events WHERE ${CODEC_RUN}`).all()) {
+        reshapeCodecRun(db, id);
+      }
+      db.exec(`UPDATE run_suites SET feature = NULL WHERE ${NON_BDD_FEATURE}`);
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "events")) return true;
+      const none = (sql: string): boolean => db.query<{ n: number }, []>(sql).get()!.n === 0;
+      return (
+        none(`SELECT COUNT(*) AS n FROM events WHERE ${CODEC_RUN} AND framework IS NOT '${FEATURE_SUITE_FRAMEWORK}'`) &&
+        (!tableExists(db, "run_suites") || none(`SELECT COUNT(*) AS n FROM run_suites WHERE ${NON_BDD_FEATURE}`))
+      );
+    },
+  },
 ];
+
+/** An `events` row the retired `playwright` codec filed. */
+const CODEC_RUN = "codec = 'playwright'";
+
+/** A `run_suites` row holding a `feature` though its run's framework is not `playwright-bdd`. */
+const NON_BDD_FEATURE = `feature IS NOT NULL AND event_id IN
+  (SELECT id FROM events WHERE framework IS NOT '${FEATURE_SUITE_FRAMEWORK}')`;
+
+/** What joined a scenario to its feature in a codec run's suite name ("<Feature> › <Scenario>"). */
+const CODEC_SCENARIO_SEPARATOR = " › ";
+
+/**
+ * The scenario shape of a codec run's stored tree, where each suite is one
+ * scenario and its cases are its steps: one suite per distinct (feature,
+ * browser) in first-seen order, named by the feature; one leaf per scenario
+ * with its old status, its steps' summed duration, its steps, and — when it
+ * failed — its first failing step's failure, else an empty one.
+ */
+function scenarioShapeOf(codecTree: readonly SuiteNode[]): SuiteNode[] {
+  const features = new Map<string, { name: string; browser?: string; children: TestLeaf[] }>();
+  for (const scenario of codecTree) {
+    const at = scenario.name.indexOf(CODEC_SCENARIO_SEPARATOR);
+    const feature = at >= 0 ? scenario.name.slice(0, at) : scenario.name;
+    const name = at >= 0 ? scenario.name.slice(at + CODEC_SCENARIO_SEPARATOR.length) : scenario.name;
+    const steps = scenario.children;
+    const leaf: TestLeaf = {
+      name,
+      status: scenario.status,
+      duration_ms: steps.reduce((sum, step) => sum + step.duration_ms, 0),
+      steps,
+    };
+    if (scenario.status === "fail") leaf.failure = steps.find((step) => step.status === "fail")?.failure ?? {};
+    const key = JSON.stringify([feature, scenario.browser ?? null]);
+    const suite = features.get(key);
+    if (suite === undefined) {
+      features.set(key, {
+        name: feature,
+        ...(scenario.browser !== undefined ? { browser: scenario.browser } : {}),
+        children: [leaf],
+      });
+    } else suite.children.push(leaf);
+  }
+  return [...features.values()].map(({ name, browser, children }) => ({
+    name,
+    status: suiteStatus(children),
+    ...(browser !== undefined ? { browser } : {}),
+    children,
+  }));
+}
+
+/**
+ * Migrate one codec run: framework `playwright-bdd` on its event and its
+ * `runs` row; its suites and cases rewritten through `writeRunTreeRows` in the
+ * scenario shape, and its counts recounted by scenario. A run with no suite
+ * gets the framework alone.
+ */
+function reshapeCodecRun(db: Database, id: string): void {
+  db.query(`UPDATE events SET framework = ? WHERE id = ?`).run(FEATURE_SUITE_FRAMEWORK, id);
+  if (tableExists(db, "runs")) {
+    db.query(`UPDATE runs SET framework = ? WHERE event_id = ?`).run(FEATURE_SUITE_FRAMEWORK, id);
+  }
+  const suites = db
+    .query<RunSuiteRow, [string]>(
+      `SELECT event_id, position, name, status, browser FROM run_suites WHERE event_id = ? ORDER BY position`,
+    )
+    .all(id);
+  if (suites.length === 0) return;
+  const codecTree = suites.map(suiteNodeOf);
+  const cases = db
+    .query<RunCaseRow, [string]>(
+      `SELECT event_id, suite_position, name, status, duration_ms, has_failure,
+              failure_message, failure_type, failure_trace
+         FROM run_cases WHERE event_id = ? ORDER BY suite_position, position`,
+    )
+    .all(id);
+  const byPosition = new Map(suites.map((row, index) => [row.position, codecTree[index]!]));
+  for (const row of cases) byPosition.get(row.suite_position)?.children.push(testLeafOf(row));
+  const tree = scenarioShapeOf(codecTree);
+  for (const table of ["run_case_steps", "run_cases", "run_suites"] as const) {
+    db.query(`DELETE FROM ${table} WHERE event_id = ?`).run(id);
+  }
+  writeRunTreeRows(db, id, tree, FEATURE_SUITE_FRAMEWORK);
+  const scenarios = tree.flatMap((suite) => suite.children);
+  const count = (status: string): number => scenarios.filter((leaf) => leaf.status === status).length;
+  db.query(`UPDATE events SET total = ?, passed = ?, failed = ?, pending = ? WHERE id = ?`).run(
+    scenarios.length,
+    count("pass"),
+    count("fail"),
+    count("pending"),
+    id,
+  );
+}
 
 /** The two tables a run's framework is stored on, beside its stack, each with its literal additive DDL. */
 const FRAMEWORK_COLUMNS: ReadonlyArray<{ table: "events" | "runs"; ddl: string }> = [

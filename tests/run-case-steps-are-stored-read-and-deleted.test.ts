@@ -539,7 +539,7 @@ describe("a playwright-bdd suite stores its own name as its feature", () => {
     ]);
   });
 
-  test("a parsed playwright-bdd run's suite stores its own name as its feature, while a run of no framework and one of another keep the split", async () => {
+  test("a parsed playwright-bdd run's suite stores its own name as its feature, while a run of no framework and one of another store none", async () => {
     const handle = boot();
     const key = await readyProject(handle, [AGENT], "feature-split");
     const suite = (name: string): Record<string, unknown> => ({
@@ -568,10 +568,11 @@ describe("a playwright-bdd suite stores its own name as its feature", () => {
       ["Account › Settings", "Account › Settings"],
       ["Checkout", "Checkout"],
     ]);
+    // Any other run's suites carry no feature, a name holding ' › ' included.
     expect(featuresOf(db, plain)).toEqual([
-      ["Account › Settings", "Account"],
+      ["Account › Settings", null],
       ["Checkout", null],
     ]);
-    expect(featuresOf(db, other)).toEqual([["Account › Settings", "Account"]]);
+    expect(featuresOf(db, other)).toEqual([["Account › Settings", null]]);
   });
 });

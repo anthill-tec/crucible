@@ -1,6 +1,8 @@
 // CR-CRU-002 §S3 — Codec registry: `codecs: Map<string, Codec>` with `junit` registered.
 // Ingest paths look up a codec by name so adding a codec never touches core (§S3, §S4).
 import { describe, test, expect } from "bun:test";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { codecs } from "../src/codecs/index.ts";
 import { parseJunit } from "../src/codecs/junit.ts";
 import type { RunSchema } from "../src/types.ts";
@@ -35,5 +37,16 @@ describe("codecs registry — §S3", () => {
   test("looking up an unknown codec name returns undefined without throwing", () => {
     expect(() => codecs.get("not-a-real-codec")).not.toThrow();
     expect(codecs.get("not-a-real-codec")).toBeUndefined();
+  });
+});
+
+describe("the Playwright JSON codec is retired", () => {
+  test("codecs holds exactly crucible-events and junit, and no playwright entry", () => {
+    expect([...codecs.keys()].sort()).toEqual(["crucible-events", "junit"]);
+    expect(codecs.get("playwright")).toBeUndefined();
+  });
+
+  test("src/codecs/playwright.ts does not exist", () => {
+    expect(existsSync(join(import.meta.dir, "..", "src", "codecs", "playwright.ts"))).toBe(false);
   });
 });

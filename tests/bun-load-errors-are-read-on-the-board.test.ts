@@ -4,7 +4,7 @@
 // one throwing at import, one rejecting at import or after its tests — on its
 // console, under a `<path>:` header followed by one or more `# Unhandled error
 // between tests` blocks; its JUnit report holds only the cases that ran. When
-// a run's stack is `bun`, the board reads that console (the run's `raw`), in
+// a run's framework is `bun-test`, the board reads that console (the run's `raw`), in
 // both wire forms, and stores one failing case per such file, by the rules the
 // bun client applied before the board took that reading over:
 //
@@ -24,7 +24,8 @@
 //    over a passing-only report plus a failed-to-load file stores the
 //    load-error case and no `runner / exit 1` case beside it.
 //
-// Under any other stack — or none — the console is not read.
+// Under any other framework — or none — the console is not read, whatever the
+// run's stack.
 //
 // Each case is driven through the real production HTTP surface (`startServer`,
 // in-memory store): the JUnit bun wrote is posted to `POST /api/v2/runs` with
@@ -131,6 +132,7 @@ async function ingest(opts: {
   report: string;
   raw?: string;
   stack?: string;
+  framework?: string;
   runnerExit?: number;
 }): Promise<Ingested> {
   const handle = boot();
@@ -142,6 +144,7 @@ async function ingest(opts: {
     data: opts.report,
     ...(opts.raw !== undefined ? { raw: opts.raw } : {}),
     ...(opts.stack !== undefined ? { stack: opts.stack } : {}),
+    ...(opts.framework !== undefined ? { framework: opts.framework } : {}),
     ...(opts.runnerExit !== undefined ? { runnerExit: opts.runnerExit } : {}),
   });
   expect(res.status).toBe(200);
@@ -205,6 +208,7 @@ describe("a bun run's files that failed to load are stored as one failing case e
         report: FOUR_FILES.junit,
         raw: FOUR_FILES[wire],
         stack: "bun",
+        framework: "bun-test",
       });
       const expected = oracle("FOUR_FILES", wire);
       expect(Object.keys(expected)).toEqual([
@@ -247,6 +251,7 @@ describe("a bun run's files that failed to load are stored as one failing case e
         report: TWO_BLOCKS.junit,
         raw: TWO_BLOCKS[wire],
         stack: "bun",
+        framework: "bun-test",
       });
       expect(suiteNames(event)).toEqual(["a_passes.test.ts", "e_two_error_blocks.test.ts"]);
       const s = suite(event, "e_two_error_blocks.test.ts");
@@ -269,6 +274,7 @@ describe("a bun run's files that failed to load are stored as one failing case e
         report: RAN_THEN_REJECTED.junit,
         raw: RAN_THEN_REJECTED[wire],
         stack: "bun",
+        framework: "bun-test",
       });
       // No second suite is made for the file the report already names.
       expect(suiteNames(event)).toEqual(["a_passes.test.ts", "f_ran_then_rejected.test.ts"]);
@@ -296,6 +302,7 @@ describe("a bun run's files that failed to load are stored as one failing case e
         report: CONSOLE_LINE.junit,
         raw: CONSOLE_LINE[wire],
         stack: "bun",
+        framework: "bun-test",
       });
       expect(suiteNames(event)).toEqual([
         "a_passes.test.ts",
@@ -341,6 +348,7 @@ describe("the load-error reading runs before the board's runner rule", () => {
         report: FOUR_FILES.junit,
         raw: FOUR_FILES[wire],
         stack: "bun",
+        framework: "bun-test",
         runnerExit: 1,
       });
       expectNoRunnerSuite(event);
@@ -365,6 +373,7 @@ describe("the load-error reading runs before the board's runner rule", () => {
       report: RAN_THEN_REJECTED.junit,
       raw: RAN_THEN_REJECTED.plain,
       stack: "bun",
+      framework: "bun-test",
       runnerExit: 1,
     });
     expectNoRunnerSuite(event);
@@ -435,6 +444,7 @@ describe("the shapes the reading covers beyond the real runs", () => {
         report: ONE_PASSING_REPORT,
         raw,
         stack: "bun",
+        framework: "bun-test",
       });
       expect(suiteNames(event)).toEqual(["a_passes.test.ts", "c_throws_at_import.test.ts"]);
       const c = loadErrorCase(event, "c_throws_at_import.test.ts");
@@ -456,6 +466,7 @@ describe("the shapes the reading covers beyond the real runs", () => {
         report: ONE_PASSING_REPORT,
         raw,
         stack: "bun",
+        framework: "bun-test",
       });
       const c = loadErrorCase(event, "x_no_error_line.test.ts");
       expect(c.failure).toEqual({
@@ -476,6 +487,7 @@ describe("the shapes the reading covers beyond the real runs", () => {
         report: ONE_PASSING_REPORT,
         raw,
         stack: "bun",
+        framework: "bun-test",
       });
       const c = loadErrorCase(event, "y_long.test.ts");
       expect(c.failure?.message).toBe("M".repeat(1000));
@@ -500,6 +512,7 @@ describe("the shapes the reading covers beyond the real runs", () => {
         report: ONE_PASSING_REPORT,
         raw,
         stack: "bun",
+        framework: "bun-test",
       });
       expect(suiteNames(event)).toEqual(["a_passes.test.ts", ...modules]);
       for (const m of modules.slice(0, -1)) {
@@ -525,8 +538,8 @@ describe("the shapes the reading covers beyond the real runs", () => {
 
 // ── Which runs read the console ─────────────────────────────────────────────
 
-describe("only a bun run reads its console for files that failed to load", () => {
-  test("a run started under bun whose ingest omits its stack reads the console", async () => {
+describe("only a bun-test run reads its console for files that failed to load", () => {
+  test("a run started under framework bun-test whose ingest omits its stack and framework reads the console", async () => {
     const handle = boot();
     const agentId = "bun-load-start-stack";
     const key = await ready(handle, agentId);
@@ -534,6 +547,7 @@ describe("only a bun run reads its console for files that failed to load", () =>
       projectKey: key,
       agentId,
       stack: "bun",
+      framework: "bun-test",
       tier: "unit",
     });
     expect(start.status).toBe(202);
@@ -555,12 +569,17 @@ describe("only a bun run reads its console for files that failed to load", () =>
     expect(runBlock(res.body).files).toBe(2);
   });
 
-  test("a bun run whose console arrives in the report's own captured output reads it there", async () => {
+  test("a bun-test run whose console arrives in the report's own captured output reads it there", async () => {
     const report = TWO_BLOCKS.junit.replace(
       "</testsuites>",
       `<system-err><![CDATA[${TWO_BLOCKS.plain}]]></system-err>\n</testsuites>`,
     );
-    const { run, event } = await ingest({ agentId: "bun-load-in-system-err", report, stack: "bun" });
+    const { run, event } = await ingest({
+      agentId: "bun-load-in-system-err",
+      report,
+      stack: "bun",
+      framework: "bun-test",
+    });
     expect(suiteNames(event)).toEqual(["a_passes.test.ts", "e_two_error_blocks.test.ts"]);
     expect(loadErrorCase(event, "e_two_error_blocks.test.ts").failure?.message).toBe("first block");
     expectCounts(event.summary, 2, 1, 1);
@@ -568,20 +587,27 @@ describe("only a bun run reads its console for files that failed to load", () =>
     expect(run.files).toBe(2);
   });
 
-  const NOT_BUN: Array<[string, string | undefined]> = [
-    ["stack python", "python"],
-    ["no stack", undefined],
-    ["an unknown stack", "nonesuch"],
+  /** Runs not of framework `bun-test`, stack `bun` among them: `[label, agent suffix, stack, framework]`. */
+  const NOT_BUN_TEST: Array<[string, string, string | undefined, string | undefined]> = [
+    ["framework vitest under stack bun", "vitest-bun", "bun", "vitest"],
+    ["no framework under stack bun", "none-bun", "bun", undefined],
+    ["framework pytest under stack python", "pytest-python", "python", "pytest"],
+    ["no stack and no framework", "none-none", undefined, undefined],
+    ["an unknown framework", "nonesuch", undefined, "nonesuch"],
   ];
-  for (const [label, stack] of NOT_BUN) {
+  for (const [label, suffix, stack, framework] of NOT_BUN_TEST) {
+    const meta = {
+      ...(stack !== undefined ? { stack } : {}),
+      ...(framework !== undefined ? { framework } : {}),
+    };
     test(`under ${label} the same console adds nothing: the stored run is the decoded report alone`, async () => {
       const { run, event } = await ingest({
-        agentId: `bun-load-not-read-${stack ?? "none"}`,
+        agentId: `bun-load-not-read-${suffix}`,
         report: FOUR_FILES.junit,
         raw: FOUR_FILES.plain,
-        ...(stack !== undefined ? { stack } : {}),
+        ...meta,
       });
-      expect(event.tree).toEqual(parseJunit(FOUR_FILES.junit, stack).tree);
+      expect(event.tree).toEqual(parseJunit(FOUR_FILES.junit).tree);
       expect(suiteNames(event)).toEqual(["a_passes.test.ts"]);
       expectCounts(event.summary, 1, 1, 0);
       expectCounts(run, 1, 1, 0);
@@ -590,11 +616,11 @@ describe("only a bun run reads its console for files that failed to load", () =>
 
     test(`under ${label} with runnerExit 1 the runner rule still fires: the runner / exit 1 case, not a load-error case`, async () => {
       const { run, event } = await ingest({
-        agentId: `bun-load-not-read-exit-${stack ?? "none"}`,
+        agentId: `bun-load-not-read-exit-${suffix}`,
         report: FOUR_FILES.junit,
         raw: FOUR_FILES.plain,
         runnerExit: 1,
-        ...(stack !== undefined ? { stack } : {}),
+        ...meta,
       });
       expect(suiteNames(event)).toEqual(["a_passes.test.ts", "runner"]);
       expect(namesAndStatuses(suite(event, "runner"))).toEqual([["exit 1", "fail"]]);
