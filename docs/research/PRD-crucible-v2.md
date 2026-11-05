@@ -134,8 +134,8 @@ One ingest call = one immutable event on the project's timeline.
 | `tree` | suite→test nodes (`name`, `status: pass|fail|pending`, `duration_ms`); failed leaves additionally carry `failure: {message, type?, trace?}` (v2 — v1 stored no failure detail; codecs preserve the tool's assertion message + stack trace for the UI run drill-in) | test events |
 | `tier` | `"unit"` \| `"module"` \| `"integration"` \| `"e2e"` \| `"regression"` \| `"bdd"` | v2 — sent by upgraded clients so the UI represents them differently: unit/module/integration share tools per stack; e2e is a different approach; `bdd` only on frontend projects. Legacy default `unit`. |
 | `stack` | `"rust"` \| `"java"` \| `"python"` \| `"ts"` \| `"arduino"` \| … | v2 — which stack produced the run |
-| `framework` | string? — `"bun-test"` \| `"vitest"` \| `"playwright"` \| `"playwright-bdd"` for bun; `"pytest"`, `"unittest"`, `"nextest"`, `"surefire"`, `"go-test"`, `"arduino-native"` reserved for the other stacks | CR-CRU-225 (migration v23) — which test framework ran it, as the run's target declares (§4.4); stored beside `stack` on the event and the run. The board takes any non-empty string; a close that states none inherits its start's. A run stored before v23, or sent by a client that states none, has none |
-| `codec` | `"junit"` \| `"playwright"` \| `"rustc"` \| `"javac"` \| `"python"` \| `"tsc"` \| `"gcc"` \| … | v2 — which codec normalized it; drives stack-aware rendering (the set follows the supported stacks, §4.4) |
+| `framework` | string? — `"bun-test"` \| `"vitest"` \| `"playwright"` \| `"playwright-bdd"` for bun; `"pytest"` \| `"unittest"` for python, its runner; `"nextest"`, `"surefire"`, `"go-test"`, `"arduino-native"` reserved for the other stacks | CR-CRU-225 (migration v23) — which test framework ran it, as the run's target declares (§4.4); stored beside `stack` on the event and the run. The python client states its runner, `pytest` or `unittest`, on every run it files. The runs filed through the retired codec carry `playwright-bdd` (migration v25). The framework decides the `junit` readings and the specification view (§4.4). The board takes any non-empty string; a close that states none inherits its start's. A run stored before v23, or sent by a client that states none, has none |
+| `codec` | `"junit"` \| `"crucible-events"` \| `"rustc"` \| `"javac"` \| `"python"` \| `"tsc"` \| `"gcc"` \| … | v2 — which codec normalized it (the set follows the supported stacks, §4.4). A run stored through the retired Playwright JSON codec keeps that codec as the record of how it was filed; no run is filed with it now |
 | `coverage` | `{lines, functions, branches?}` each `{total, covered, percent}` | only on fully-green runs — server discards otherwise (v1 safety net) |
 | `compile` | `{format, errorCount, warningCount, errors: [{file?, line?, col?, code?, message, level}], raw}` | compile events |
 | `name` | string? | optional run label |
@@ -250,15 +250,16 @@ registry** translating each tool's native output into one **canonical RunSchema*
 
 - `junit` reads every supported stack's report by one rule (CR-CRU-152): failure/error → fail, skipped
   → pending, `time` → rounded ms, any nesting, a list of reports or a `dataPath` directory; a pytest
-  report is grouped by class and bun's console detail read, under their stacks. Also `rustc`, `javac`, `python`, `tsc`.
+  report is grouped by class for a run of framework `pytest`, and bun's console detail read for a run of framework
+  `bun-test`, whatever the stack (below). Also `rustc`, `javac`, `python`, `tsc`.
 - Compile codecs added since: `gcc` (GCC/g++ diagnostics and link errors, as the arduino stack's
   `arduino-cli compile` reports them).
-- New codecs: `playwright` (JSON reporter — feature → scenario → step, browser, trace
-  links). Adding a stack = adding a codec; no core changes.
+- Adding a stack = adding a codec; no core changes. The `playwright` codec, which read Playwright's JSON
+  reporter, is retired (below).
 - **Codecs follow the supported stacks' reporting strategies** (corrected 2026-09-24, codec audit).
   The five stacks (bun, python, maven, rust, arduino) all report test results as JUnit XML (bun
   `--reporter=junit`, `xmlrunner`, surefire, `cargo nextest`, the native g++ harness), so `junit`
-  serves them all (python unittest has streamed `crucible-events` instead since CR-CRU-224, below); `playwright` serves frontend e2e. `vitest`, `tap` and a separate `nextest` codec,
+  serves them all (python unittest has streamed `crucible-events` instead since CR-CRU-224, below); frontend e2e streams `crucible-events` through the shipped Playwright reporter. `vitest`, `tap` and a separate `nextest` codec,
   listed here before, are **not needed**: no supported stack emits those formats (nextest writes
   JUnit). A codec is added when a supported stack's report needs one. Measured gaps against this
   section are filed as CR-CRU-151 (stack stamp), CR-CRU-152 (per-stack reports decoded on the server)
@@ -287,9 +288,10 @@ registry** translating each tool's native output into one **canonical RunSchema*
   with `codec: "crucible-events"`. A python unittest run writes no JUnit and xmlrunner left the client;
   a pytest run and `auto-ingest` keep their JUnit record.
 - **The run's framework and the `crucible.targets` table (CR-CRU-225).** A run carries the test framework that ran it:
-  - **The vocabulary** *(P1)*: `bun-test`, `vitest`, `playwright` and `playwright-bdd` for bun; `pytest`, `unittest`,
-    `nextest`, `surefire`, `go-test` and `arduino-native` are reserved for the other stacks, which adopt it in their own
-    CRs. The bun client refuses a framework outside the bun four; the board stays string-only.
+  - **The vocabulary** *(P1)*: `bun-test`, `vitest`, `playwright` and `playwright-bdd` for bun; `pytest` and
+    `unittest` for python, whose client states its runner as the framework of every run it files, the gate's tiers
+    included; `nextest`, `surefire`, `go-test` and `arduino-native` are reserved for the other stacks, which adopt it in
+    their own CRs. The bun client refuses a framework outside the bun four; the board stays string-only.
   - **The run's `framework`.** `POST /api/v2/runs/start`, `/runs`, `/runs/parsed` and `/runs/compile` take an optional
     `framework`, a non-empty string (any other value is a 400, nothing stored). A close states its start's framework or
     none, and one stating none inherits the start's. It is stored beside `stack` (§3.3) and answered wherever `stack` is.
@@ -338,7 +340,8 @@ registry** translating each tool's native output into one **canonical RunSchema*
     a fourth rule: an own-stack suite whose framework is not the whole-suite run's runs in process through the
     client's own run, filed under the tier its name names, else `regression`, its row carrying its own counts,
     outcome and `client`, its counts added to the totals. The bun gate sets it from each `test:` script's entry
-    (`bun-test` when it has none); the other stacks set none, so their gates are unchanged. When every own-stack
+    (`bun-test` when it has none); the other stacks set none, so their gates are unchanged, though the python gate's
+    tier runs state their runner, `pytest` or `unittest`, as the run's framework. When every own-stack
     suite is of another framework the whole-suite run is skipped and the envelope's `wholeSuite` says so. `--suites`
     naming a non-`bun-test` target runs only it; naming a `bun-test` target runs the whole suite. A non-`bun-test`
     suite measures no coverage and adds no `coverage-not-measured` warning. A non-`bun-test` entry whose key is not a
@@ -347,6 +350,24 @@ registry** translating each tool's native output into one **canonical RunSchema*
   - **Left to CR-CRU-229** (split 2026-11-04, user ruling): the `playwright` codec's retirement with Playwright's JSON
     report (`STREAM_KEPT_REPORTS`), the migration of the runs stored through it, and the `junit` readings keyed by
     framework rather than stack.
+- **The `playwright` codec retires; the `junit` readings follow the framework.**
+  - **Retired.** The codec registry holds `crucible-events` and `junit` for test runs, and health lists `codecs.test`
+    as those two. A post naming `codec: "playwright"` is refused with 400 `unknown codec: playwright`, and nothing is
+    stored. Neither Playwright config writes a `json` reporter, and the bun client points only the JUnit report
+    (`PLAYWRIGHT_JUNIT_OUTPUT_NAME`) into a stream run's reports dir.
+  - **The stored runs migrate (schema v25).** Each run filed through the codec moves to framework `playwright-bdd` in
+    the shape the stream stores (a suite per feature and browser, a case per scenario, its steps in
+    `run_case_steps`), recounted by scenario; its `codec` stays as the record of how it was filed. A suite's
+    `feature` is its name on a `playwright-bdd` run and NULL on any other. The rollups keep what they folded, so a day
+    folded from codec runs keeps its step counts.
+  - **The specification view** is a test run of framework `playwright-bdd`, whatever its codec.
+  - **The readings.** The decode is told the run's effective framework (the close's, else its start's):
+    `parseJunit` groups cases by classname for framework `pytest` when the report holds one suite named `pytest`, and
+    `readJunitRawOutput` reads bun's console for framework `bun-test`, whatever the stack. A run that states no
+    framework gets neither.
+  - **The python client states its runner** as the framework on every run it files. `auto-ingest`, which runs
+    nothing, states the runner `[python] runner` declares, else `unittest`, and refuses any other value before
+    anything is posted.
 
 ### 4.5 Compile ingest
 - Structured parsers per format: `rustc` (`error[EXXXX]` + `--> file:line:col`), java/
@@ -609,7 +630,7 @@ BDD-style UI testing applies only to `type:"frontend"` projects — and for thos
 Crucible is not just a sink: it can **harness and execute the BDD suite on the agent's
 behalf** using Playwright (agent asks `POST /api/v2/projects/{key}/bdd/run`; Crucible
 runs the suite against the project's `sutRoot`, ingests the result through the
-`playwright` codec, and returns the event id). This closes the v1 gap where the
+shipped Playwright reporter's `crucible-events` stream, and returns the event id). This closes the v1 gap where the
 BDD/Playwright runtime was never fully realized. Scoped to a post-skeleton wave.
 
 ### 4.13 Configuration — a limit is configuration, never a constant (added 2026-09-14; CR-CRU-129, CR-CRU-131)
@@ -732,8 +753,9 @@ client-fleet upgrade, then the BDD harness (§4.12). Crucible ingests its own ru
 ## 8 Open questions
 - (none — storyboard review closed all design questions 2026-07-14)
 
-(Resolved 2026-07-14: upgraded clients send `tier` explicitly — §3.3; BDD uses the
-dedicated `playwright` codec with trace links, and Crucible can harness the run —
+(Resolved 2026-07-14: upgraded clients send `tier` explicitly — §3.3; BDD used a
+dedicated codec with trace links (since retired: BDD streams `crucible-events`
+through the shipped Playwright reporter, §4.4), and Crucible can harness the run —
 §4.12; run `context` {git, wave, orchestrator} decided as all-optional — §3.3;
 retention: wave-aware rollups — §4.7, whose "100 full-fidelity runs" default was
 DELETED 2026-09-13 by CR-CRU-129 and is now configuration with no literal fallback;

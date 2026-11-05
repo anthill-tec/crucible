@@ -28,6 +28,25 @@ Releases before 0.3.0 are described only on GitHub Releases.
   - These suites measure no coverage, and the gate warns of none.
   - The other stacks' gates are unchanged.
 
+### Changed
+
+- **The `junit` readings follow the framework.** pytest's grouping by classname applies to a run of
+  framework `pytest` whose report holds one suite named `pytest`, and bun's console reading to a run
+  of framework `bun-test`, whatever the run's stack. A close that states no framework reads under the
+  one its run was started with. A run that states none (any client older than 0.4.0) gets neither
+  reading.
+- **The python client states its runner as the framework.** Every run `test`, `regression` and each
+  `pre-merge-gate` tier file states `pytest` or `unittest`. `auto-ingest`, which runs nothing, states
+  the runner `[python] runner` declares in the project's `crucible.toml`, else `unittest`.
+- **The store migrates to schema v25.** The runs filed through the `playwright` codec move to
+  framework `playwright-bdd`, in the shape the stream stores: a suite per feature and browser, a case
+  per scenario, its steps under it. They are recounted by scenario, not by step, so a run whose
+  scenario failed with no failing step turns red. Each keeps `codec` `playwright` as the record of
+  how it was filed. A suite's `feature` is now set only on a `playwright-bdd` run.
+  - Days already folded into the rollups keep their step counts.
+- **The specification view is chosen by framework.** The run detail opens a test run of framework
+  `playwright-bdd` as feature → scenario → step, whatever its codec.
+
 ### Removed
 
 - **⚠ The bun client's older declaration keys are refused.** A `package.json` declaring
@@ -37,6 +56,10 @@ Releases before 0.3.0 are described only on GitHub Releases.
   - `crucible.reportPath.<script>` becomes the entry's `junit` (`flag` or `env:<VAR>`);
   - `crucible.rawReport` becomes the entry's `stream`;
   - `crucible.testScript` becomes `"test": true` on the script's entry.
+- **⚠ The `playwright` codec.** The board no longer accepts Playwright's JSON report: a
+  `POST /api/v2/runs` naming `codec: "playwright"` is refused with 400 `unknown codec: playwright`,
+  and nothing is stored. `GET /api/health` lists `codecs.test` as `crucible-events` and `junit`. A
+  Playwright run files through the shipped reporter's `crucible-events` stream instead.
 
 ### Stack declaration changes
 
@@ -59,9 +82,21 @@ For the bun stack (`package.json`'s `crucible` block):
   - `pre-merge-gate` runs each non-`bun-test` target as its own suite.
   - It refuses a non-`bun-test` entry whose key is not a `test:` script, or is a `test:` key with
     no script of that name in `scripts`, because it could not otherwise run it.
+- **Playwright's JSON report.** A Playwright config needs no `json` reporter: the client no longer
+  points one (`PLAYWRIGHT_JSON_OUTPUT_NAME`) into a stream run's reports dir, and the board no longer
+  reads it. Remove the `json` reporter from the config. The `junit` reporter stays, still pointed by
+  `PLAYWRIGHT_JUNIT_OUTPUT_NAME`.
 - **Model B surfaces to reword.** The `block-direct-bun-test` hook and the bun agent templates name
   `crucible.testScript` and `crucible.reportPath`. They should name the `crucible.targets` entry's
   `"test": true` marker and its `junit` instead.
+
+For the python stack (`crucible.toml`):
+
+- **`auto-ingest` reads `[python] runner`.** It states that runner as the run's framework, so a
+  pytest project that files through `auto-ingest` declares `[python] runner = "pytest"`. With nothing
+  declared, its runs state `unittest` and get no pytest grouping. A declared value that is neither
+  `pytest` nor `unittest` is refused, with an envelope and nothing posted, as the running verbs
+  refuse it. `auto-ingest` takes no `--runner` and does not check that pytest imports.
 
 ## [0.3.0] - 2026-10-10
 
