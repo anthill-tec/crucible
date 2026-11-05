@@ -209,12 +209,13 @@ def _declared_runner(project_dir):
     return table[_RUNNER_FIELD], path
 
 
-def _resolve_runner(args, project_dir):
+def _resolve_runner(args, project_dir, probe=True):
     """--runner > `[python] runner` in the project's own crucible.toml >
     unittest. A valid flag wins and the declaration is not consulted.
 
-    Raises `RunnerRefused` for a value that is neither runner's name, and for
-    `pytest` with an interpreter that cannot import it."""
+    Raises `RunnerRefused` for a value that is neither runner's name, and,
+    when `probe` (a verb that runs the runner), for `pytest` with an
+    interpreter that cannot import it."""
     flag = getattr(args, "runner", None)
     if flag is not None:
         value, source = flag, f"`{_RUNNER_FLAG}`"
@@ -227,7 +228,7 @@ def _resolve_runner(args, project_dir):
         raise RunnerRefused(
             f"{source} is {value!r}, which is not a runner this client runs; "
             f"choose one of {', '.join(_RUNNERS)}")
-    if value == _PYTEST:
+    if value == _PYTEST and probe:
         python = _resolve_python(getattr(args, "python", None), project_dir)
         if not _imports_pytest(python, project_dir):
             raise RunnerRefused(
@@ -500,12 +501,14 @@ class _FallbackWatch:
                  "detail": _PYTEST_SUBTESTS_DETAIL}]
 
 
-def _start_run(project_dir, agent_id, tier=None, context=None, release=None):
+def _start_run(project_dir, agent_id, runner, tier=None, context=None, release=None):
     """Open the run BEFORE the runner is spawned, through the shared
-    `open_run`. Returns `(run_id, warnings)`; a refusal degrades to a
-    single-shot ingest with a warning naming the fallback."""
+    `open_run`, stating `runner` as its framework. Returns `(run_id,
+    warnings)`; a refusal degrades to a single-shot ingest with a warning
+    naming the fallback."""
     return _axi().open_run(_post, _project_key(project_dir), agent_id, _STACK,
-                           tier=tier, context=context, release=release)
+                           tier=tier, context=context, release=release,
+                           framework=runner)
 
 
 # ── Agent lifecycle ─────────────────────────────────────────────────────────
@@ -821,7 +824,7 @@ _STREAM_FINISH_SECONDS = 60.0
 _INTERRUPTED_FINISH_SECONDS = 5.0
 
 
-def _file_reports(project_dir, agent_id, report_paths, *, raw=None,
+def _file_reports(project_dir, agent_id, report_paths, *, runner, raw=None,
                   coverage_paths=(), tier=None, context=None, run_id=None,
                   release=None, runner_exit=None):
     """Send a run's JUnit reports to the board for it to decode: the shared
@@ -829,13 +832,15 @@ def _file_reports(project_dir, agent_id, report_paths, *, raw=None,
     refuses, makes ONE `POST /api/v2/runs` carrying `codec: "junit"`, every
     report's text inline, the lcov coverage report when one is given, `raw`
     and `runnerExit`. This client parses none of them. Returns the board's
-    answer. The stack rides on the body through the shared ingest."""
+    answer. The stack, and `runner` as the framework, ride on the body
+    through the shared ingest."""
     return _axi().ingest_reports(
         _post, _get, stack=_STACK, project_key=_project_key(project_dir),
         agent_id=agent_id, codec=JUNIT_CODEC, report_paths=report_paths,
         raw=raw, coverage_codec=LCOV_CODEC if coverage_paths else None,
         coverage_paths=coverage_paths, tier=tier, context=context,
-        run_id=run_id, release=release, runner_exit=runner_exit)
+        run_id=run_id, release=release, runner_exit=runner_exit,
+        framework=runner)
 
 
 def _ingest_compile(project_dir, agent_id, errors_text, run_id=None, release=None,
@@ -1055,8 +1060,8 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
         # The shared run path: narrate per-test progress, and open the run
         # BEFORE the runner is spawned so the board shows it running.
         narrator = _narrator(project_dir, args.agent, identity, runner)
-        run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
-                                          context=_run_context(),
+        run_id, run_warnings = _start_run(project_dir, args.agent, runner,
+                                          tier=tier, context=_run_context(),
                                           release=release)
         preflight_warnings = list(preflight_warnings) + run_warnings
     # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: the day
@@ -1101,7 +1106,7 @@ def _test_run(args, tier, verb, project_dir, identity, runner=_UNITTEST):
                 subject=_no_report_subject(verb, runner))
         runner_exit = _axi().runner_exit_code(result.returncode)
         resp = _file_reports(project_dir, args.agent, report_paths,
-                             raw=result.stdout, tier=tier,
+                             runner=runner, raw=result.stdout, tier=tier,
                              context=_run_context(), run_id=run_id,
                              release=release, runner_exit=runner_exit)
         # The envelope states the run as the board filed it.
@@ -1249,7 +1254,8 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
         # The shared run path: narrate per-test progress, and open the run
         # BEFORE the sweep is spawned so the board shows it running.
         narrator = _narrator(project_dir, agent, identity, runner)
-        run_id, run_warnings = _start_run(project_dir, agent, tier="regression",
+        run_id, run_warnings = _start_run(project_dir, agent, runner,
+                                          tier="regression",
                                           context=_run_context(),
                                           release=release)
         preflight_warnings += run_warnings
@@ -1334,7 +1340,7 @@ def _regression_run(args, verb="regression", preflight_warnings=(), identity=Non
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
     runner_exit = _axi().runner_exit_code(result.returncode)
-    resp = _file_reports(project_dir, args.agent, report_paths,
+    resp = _file_reports(project_dir, args.agent, report_paths, runner=runner,
                          raw=result.stdout, coverage_paths=coverage_paths,
                          tier="regression", context=_run_context(),
                          run_id=run_id, release=release,
@@ -1379,7 +1385,7 @@ def _open_streamed_run(project_dir, agent, tier, release):
     warnings)` naming the board when it opened none, with `open_run`'s own
     warnings (a refused start's `run-lifecycle-unavailable`; none when the
     board simply opened no run)."""
-    run_id, warnings = _start_run(project_dir, agent, tier=tier,
+    run_id, warnings = _start_run(project_dir, agent, _UNITTEST, tier=tier,
                                   context=_run_context(), release=release)
     if run_id:
         return run_id, None, []
@@ -1485,7 +1491,7 @@ def _streamed_run(verb, args, project_dir, agent, identity, cmd, env, *,
     # (a compile ingest states no tier).
     return _axi().close_streamed_run(
         verb, result, run_id=run_id, held=held, stream_path=stream_path,
-        stack=_STACK, framework=None, post_fn=_post, project_key=key,
+        stack=_STACK, framework=_UNITTEST, post_fn=_post, project_key=key,
         agent_id=agent, tier=tier, context=_run_context(), release=release,
         warnings=warnings + lifecycle,
         emit=lambda ok, fields, found, line: _emit_axi(
@@ -1509,6 +1515,10 @@ def cmd_auto_ingest(args):
     """Ingest an already-produced reports dir: its JUnit reports are sent to
     /api/v2/runs for the board to decode. A bound agent's run is server-stamped with its registered cycle."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # The runner the project declares is the run's framework: resolved, and
+    # refused, before anything reaches the board. This verb runs nothing, so
+    # it takes no `--runner` and never probes for pytest.
+    runner = _resolve_runner(args, project_dir, probe=False)
     reports_dir = _reports_dir(project_dir, args.reports)
     if not _produced_xml(reports_dir):
         print(f"[crucible] no TEST-*.xml in {reports_dir} — nothing to ingest",
@@ -1533,7 +1543,7 @@ def cmd_auto_ingest(args):
     # found, so it cannot know their tier by construction and states none.
     # It ran no runner either, so it sends neither `raw` nor `runnerExit`.
     resp = _file_reports(project_dir, args.agent, _report_paths(reports_dir),
-                         context=_axi().cycle_context(
+                         runner=runner, context=_axi().cycle_context(
                              _run_context(), getattr(args, "cycle", None)))
     _emit_ingest_axi("auto-ingest", resp, project_dir, args.agent,
                      warnings=preflight_warnings)

@@ -1672,14 +1672,14 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   const badStreamUse = refuseStreamCodecUse(codec, codecName, body);
   if (badStreamUse !== null) return badStreamUse;
 
-  // The run's effective stack (the ingest's, else its start's) is told to the
-  // codec before it decodes.
-  const stack = effectiveStack(store, body);
+  // The run's effective framework (the ingest's, else its start's) is told to
+  // the codec before it decodes; the run's stack is never a reading's key.
+  const framework = effectiveFramework(store, body);
   // CR-CRU-200 §S3 — a stream codec closing a run decodes the run's held
   // stream, at the close and inside its transaction; every other ingest
   // decodes its body here.
   const streamed = codec.stream === true;
-  const parsed = streamed ? null : await parseRunBody(codec, body, codecName, stack);
+  const parsed = streamed ? null : await parseRunBody(codec, body, codecName, framework);
   if (parsed !== null && "error" in parsed) return fail(400, parsed.error);
 
   // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
@@ -1746,7 +1746,7 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
           error: `run ${runId} streams its record with codec \`${held.codec}\`; close it with that codec, not ${codecName} — run NOT stored`,
         };
       }
-      const decoded = parseStreamBody(codec, held, body, codecName, stack);
+      const decoded = parseStreamBody(codec, held, body, codecName, framework);
       if ("error" in decoded) return decoded;
       const incomplete = streamIncompleteness(decoded, body.runnerExit, runId);
       if (typeof incomplete === "object") return incomplete;
@@ -1843,15 +1843,15 @@ function streamIncompleteness(
 }
 
 /**
- * The stack a run ingest decodes under: the one it states, else the one the
- * run it closes was started with. A read only: the close itself is resolved
- * (and refused) later, before anything is written.
+ * The framework a run ingest decodes under: the one it states, else the one
+ * the run it closes was started with. A read only: the close itself is
+ * resolved (and refused) later, before anything is written.
  */
-function effectiveStack(store: Store, body: V2Body): string | undefined {
-  const stated = runMeta(body).stack;
+function effectiveFramework(store: Store, body: V2Body): string | undefined {
+  const stated = runMeta(body).framework;
   if (stated !== undefined) return stated;
   if (typeof body.runId !== "string" || body.runId.length === 0) return undefined;
-  return store.getRun(body.runId)?.stack;
+  return store.getRun(body.runId)?.framework;
 }
 
 async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
