@@ -1,6 +1,6 @@
 # CR-CRU-039 — Patch: python-client `regression` discovers 0 tests (silent gate gap)
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (tooling correctness)
 **Priority:** P1 — the Python close-out gate silently runs NOTHING
 **Depends on:** CR-CRU-036 (§S9 client transition — the current `regression` shape)

@@ -5,7 +5,7 @@
 > bare in every one of them, not just rust. The original framing is preserved below in Context for
 > the record; §S0b is the measured scope.
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (AXI-compliance — fleet parity)
 **Priority:** P1 — one of the nine is `pre-merge-gate`, the output an orchestrator reads to decide a merge
 **Depends on:** CR-CRU-030 (established the fleet-wide TOON-AXI contract), CR-CRU-054 (lifted the shared verb surface these must join)

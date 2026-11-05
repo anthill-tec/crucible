@@ -1,6 +1,6 @@
 # CR-CRU-017 — Run lifecycle: start/end events + the Aborted state
 
-**Status:** PENDING (0.2.0 — user-filed during CR-007 execution)
+**Status:** DONE (0.2.0 — user-filed during CR-007 execution)
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-008, CR-CRU-011

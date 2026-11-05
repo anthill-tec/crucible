@@ -1,6 +1,6 @@
 # CR-CRU-062 — CI publishes but never tests: no workflow runs the suite
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** feature (CI verification)
 **Priority:** P1 — not a release blocker for 0.1.0, but it is the reason a bad tag could publish
 **Depends on:** CR-CRU-041 (release.yml), CR-CRU-052 (e2e DB isolation), CR-CRU-060 (e2e suite green)

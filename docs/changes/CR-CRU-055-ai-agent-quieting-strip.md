@@ -1,6 +1,6 @@
 # CR-CRU-055 — Patch: bun env-quieting strip misses `AI_AGENT` (narration + failure-marrying die in agent sessions)
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (client correctness)
 **Priority:** P1 — every agent-session gate run today ingests failure-message-less envelopes and posts no narration
 **Depends on:** CR-CRU-047 (the env-quieting strip + narration guards), CR-CRU-038 (§S2c failure marrying)

@@ -1,6 +1,6 @@
 # CR-CRU-223 — an open run shows its tests as they finish
 
-**Type** feature · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-30 (split from
+**Type** feature · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — filed 2026-10-30 (split from
 CR-CRU-200 at its gap analysis, user ruling: split by layer, the board's live view first, then the board, CR-CRU-200, then the
 client, CR-CRU-224; the view's storyboard frame F25, option A, approved 2026-10-30); spec pre-review 2026-10-30
 (CR-CRU-223-SPEC-REVIEW, F1–F11 folded; user rulings: the live drill-in is `/run/<runId>`; `/live` answers a settled run with its

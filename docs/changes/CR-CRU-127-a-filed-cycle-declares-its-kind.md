@@ -1,6 +1,6 @@
 # CR-CRU-127 — a filed cycle declares its kind
 
-**Status:** PENDING (0.2.0 — born mid-release, D4)
+**Status:** DONE (0.2.0 — born mid-release, D4)
 **Type:** bugfix
 **Priority:** P2
 **Depends on:** CR-CRU-011 (cycle plans), CR-CRU-107 (`plan-file`'s repeatable `--cycle`),

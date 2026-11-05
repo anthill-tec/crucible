@@ -3,7 +3,7 @@
 - **Type**: bug
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 097
-- **Status**: PENDING (0.2.0)
+- **Status**: DONE (0.2.0)
 - **Design reference**: none — this is a test-isolation defect, not a design surface. The contract being protected is `CR-CRU-030` §S15 (per-verb `help[]`) as asserted by `CR-CRU-097` §S2/AC2.
 
 ## Problem

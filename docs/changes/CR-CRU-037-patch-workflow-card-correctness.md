@@ -1,6 +1,6 @@
 # CR-CRU-037 — Patch: workflow-card correctness (parallel-agent liveness dimming + plan-title guard/fallback)
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch
 **Priority:** P2 (board-correctness defects surfaced during CR-036 execution)
 **Depends on:** CR-CRU-011 (workflow/agent card rendering), CR-CRU-008 (plan-file client verb)

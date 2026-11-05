@@ -4,7 +4,7 @@
 - **Wave**: 5
 - **Depends on**: 081
 - **Design**: `docs/research/DN-crucible-wave-track-release.md`
-- **Status**: PENDING
+- **Status**: DONE
 
 ## Problem
 

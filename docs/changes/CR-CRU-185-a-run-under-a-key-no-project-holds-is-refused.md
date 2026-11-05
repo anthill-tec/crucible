@@ -1,7 +1,7 @@
 # CR-CRU-185 — a run under a key no project holds is refused, by every client
 
 **Type** fix (patch CR) · **Points** 3 (confirmed at gap analysis, 2026-10-14) · **Wave** 8 (0.4.0) ·
-**Depends on** — · **Status** PENDING — filed 2026-10-13 (user ruling: a patch CR in the current
+**Depends on** — · **Status** DONE — filed 2026-10-13 (user ruling: a patch CR in the current
 wave and release)
 
 ## Problem

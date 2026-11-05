@@ -4,7 +4,7 @@
 - **Wave**: 5 (0.2.0) — filed into the release it actively misdirects. This defect makes the
   scheduling oracle wrong *during 0.2.0's own execution*. Release membership is the user's call.
 - **Depends on**: 091, 092
-- **Status**: PENDING (0.2.0) — filed 2026-08-29; spec corrected after gap analysis 2026-08-29
+- **Status**: DONE (0.2.0) — filed 2026-08-29; spec corrected after gap analysis 2026-08-29
 - **Found by**: dogfooding the CR-091/092 authoring verbs against a real board. Not found by any
   test: every gate passed (bun 1811/0, python 1272/0) because every fixture authored all rows or
   none, and the failure needs a MIXTURE — which is what a real board always is.

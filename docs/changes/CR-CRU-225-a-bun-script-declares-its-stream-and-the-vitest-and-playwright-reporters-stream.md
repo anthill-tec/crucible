@@ -1,7 +1,7 @@
 # CR-CRU-225 — a bun script declares its stream and its framework, and the Vitest reporter streams the Crucible shape
 
 **Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-200, CR-CRU-224, CR-CRU-201 ·
-**Status** PENDING
+**Status** DONE
 
 - **Filed 2026-10-31.** Split from CR-CRU-201 at its gap analysis. User ruling: three dog-food-safe units —
   CR-CRU-201 (bun's console live view), this CR (the table and the reporters), then CR-CRU-226 (the clean break).

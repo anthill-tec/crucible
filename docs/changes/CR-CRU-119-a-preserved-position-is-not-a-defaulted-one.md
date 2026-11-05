@@ -3,7 +3,7 @@
 - **Type**: bugfix
 - **Wave**: 6 (0.2.0)
 - **Depends on**: 091, 095
-- **Status**: PENDING (0.2.0) — born mid-release by user ruling, 2026-09-10
+- **Status**: DONE (0.2.0) — born mid-release by user ruling, 2026-09-10
 - **Design reference**: `docs/research/DN-crucible-wave-track-release.md` — D4's "A CR can be BORN
   mid-release"; CR-CRU-091 §S2 (the `defaulted-seq` finding) and CR-CRU-095 §S2 (the scale-mixture
   widening) are the two contracts this CR reconciles

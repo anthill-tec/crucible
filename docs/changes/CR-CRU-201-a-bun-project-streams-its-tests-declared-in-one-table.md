@@ -1,6 +1,6 @@
 # CR-CRU-201 — a bun test run shows its console live on the board
 
-**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-200, CR-CRU-224 · **Status** PENDING
+**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-200, CR-CRU-224 · **Status** DONE
 
 - **Filed 2026-10-20.** User rulings 2026-10-20; the design is in `DN-crucible-live-test-progress.md`.
 - **Split at its gap analysis, 2026-10-31.** User ruling: three dog-food-safe units.

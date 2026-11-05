@@ -1,7 +1,7 @@
 # CR-CRU-181 — the client says what really happened to a gate decision and a release
 
 **Type** fix (patch CR, after the 0.3.0 release) · **Points** 5 (confirmed at gap analysis
-2026-10-12) · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING — filed 2026-10-10 (user
+2026-10-12) · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE — filed 2026-10-10 (user
 ruling: the 0.3.0 follow-ups are patch CRs in wave 8)
 
 ## Problem

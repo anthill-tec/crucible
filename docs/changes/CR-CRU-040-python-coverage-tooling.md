@@ -1,6 +1,6 @@
 # CR-CRU-040 — Patch: python-client coverage tooling (gate can't produce coverage)
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (tooling correctness)
 **Priority:** P1 — the Python close-out gate cannot satisfy coverage-on-green
 **Depends on:** CR-CRU-039 (the discovery fix — the suite must run before coverage can be measured)

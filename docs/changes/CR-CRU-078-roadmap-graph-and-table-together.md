@@ -3,7 +3,7 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 077, 084, 091
-- **Status**: PENDING (0.2.0) — re-based 2026-08-28 on the approved flowchart design
+- **Status**: DONE (0.2.0) — re-based 2026-08-28 on the approved flowchart design
 - **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §1–§8, §14 (approved 2026-08-28). Absolute path so it resolves from a worktree. Mirrored in `docs/research/DN-crucible-roadmap-view.md` §Visual contract.
 - **Also**: `docs/research/DN-crucible-wave-track-release.md` (wave/track/release model)
 

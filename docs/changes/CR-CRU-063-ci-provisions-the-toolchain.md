@@ -1,6 +1,6 @@
 # CR-CRU-063 — CI runs the gates but provisions no toolchain: 102 bun + 9 python failures on a real runner
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (CI verification)
 **Priority:** P0 — release blocker. `publish-pypi` and `publish-npm` both `needs:` the three suites, so while they are red **nothing publishes**, tokens and trusted publishers notwithstanding.
 **Depends on:** CR-CRU-062 (the test jobs this CR repairs)

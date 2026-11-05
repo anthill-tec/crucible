@@ -1,7 +1,7 @@
 # CR-CRU-170 — a run nothing will file is closed at once, and the e2e verb runs only what it is asked
 
 **Type** fix · **Points** 8 (set at gap analysis, 2026-10-07) · **Wave** 7 (0.3.0) · **Depends on** none ·
-**Status** PENDING — filed 2026-10-07; amended at gap analysis 2026-10-07 (user-approved)
+**Status** DONE — filed 2026-10-07; amended at gap analysis 2026-10-07 (user-approved)
 
 ## Problem
 

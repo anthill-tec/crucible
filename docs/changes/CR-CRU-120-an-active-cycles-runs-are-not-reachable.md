@@ -1,6 +1,6 @@
 # CR-CRU-120 — an active cycle's runs are not reachable
 
-**Status:** PENDING (0.2.0 — born mid-release, D4)
+**Status:** DONE (0.2.0 — born mid-release, D4)
 **Type:** bugfix
 **Priority:** P2
 **Depends on:** CR-CRU-032 (the anchor-fetch mechanism this CR extends), CR-CRU-025 (cycle↔run

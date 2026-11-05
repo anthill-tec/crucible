@@ -1,7 +1,7 @@
 # CR-CRU-173 — History is told by release
 
 **Type** feature · **Points** 13 (re-scored 8 → 21 at gap analysis, then split 2026-10-08 by user ruling: §S0/§S0b → CR-CRU-176 (8), §S1/§S2 stay here (13)) · **Wave** 7 (0.3.0) ·
-**Depends on** CR-CRU-176, CR-CRU-172, CR-CRU-164, CR-CRU-166 · **Status** PENDING — filed 2026-10-08 (user ruling:
+**Depends on** CR-CRU-176, CR-CRU-172, CR-CRU-164, CR-CRU-166 · **Status** DONE — filed 2026-10-08 (user ruling:
 0.3.0, after CR-CRU-172)
 
 ## Problem

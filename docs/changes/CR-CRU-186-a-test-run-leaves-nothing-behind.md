@@ -1,7 +1,7 @@
 # CR-CRU-186 — a test run leaves nothing behind
 
 **Type** fix (patch CR) · **Points** 5 (confirmed at gap analysis, 2026-10-14) · **Wave** 8 (0.4.0) ·
-**Depends on** CR-CRU-184 · **Status** PENDING — filed 2026-10-14 (user ruling: a patch CR placed
+**Depends on** CR-CRU-184 · **Status** DONE — filed 2026-10-14 (user ruling: a patch CR placed
 next in wave 8, after the setup/teardown leak review)
 
 ## Problem

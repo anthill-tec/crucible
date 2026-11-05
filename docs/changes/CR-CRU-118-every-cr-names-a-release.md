@@ -3,7 +3,7 @@
 - **Type**: feature
 - **Wave**: 6 (0.2.0)
 - **Depends on**: 091, 099, 104
-- **Status**: PENDING (0.2.0)
+- **Status**: DONE (0.2.0)
 - **Design reference**: `docs/research/DN-crucible-wave-track-release.md` — the drift section's **D4**
   (every live CR names a release; every release proposal names its target date) and "A CR can be BORN
   mid-release", both user-ruled 2026-09-10

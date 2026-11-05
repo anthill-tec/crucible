@@ -1,7 +1,7 @@
 # CR-CRU-191 — the clients are clean under pi-lens
 
 **Type** fix (patch CR) · **Points** 8 (5 at filing; 8 after the pre-review widened §S1 and §S3, 2026-10-14) · **Wave** 8 (0.4.0) · **Depends
-on** — · **Status** PENDING — filed 2026-10-14 (user ruling: the pi-lens flags are fixed in a patch
+on** — · **Status** DONE — filed 2026-10-14 (user ruling: the pi-lens flags are fixed in a patch
 CR; moved out of CR-CRU-188 when that CR's live-data section widened past the cap). Re-scoped at gap
 analysis 2026-10-14 (user rulings: one seam and the two lexical rules turned off; every Python file
 the clients ship; the XML parse kept, marked); spec pre-review findings folded in

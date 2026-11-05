@@ -1,6 +1,6 @@
 # CR-CRU-057 — Patch: phase must survive the agent — persist it on events, delete the name fallback
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (server persistence + UI classification)
 **Priority:** P1 — completion of CR-CRU-044's contract; without it most of the board still classifies by name
 **Depends on:** CR-CRU-044 (phase as required registration data), CR-CRU-011 (lifecycle events)

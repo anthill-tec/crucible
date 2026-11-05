@@ -3,7 +3,7 @@
 - **Type**: bugfix
 - **Wave**: 6 (0.2.0)
 - **Depends on**: 013, 115
-- **Status**: PENDING (0.2.0) — declared into 0.2.0 wave 6 by user ruling, 2026-09-10
+- **Status**: DONE (0.2.0) — declared into 0.2.0 wave 6 by user ruling, 2026-09-10
 - **Design reference**: `docs/research/DN-crucible-wave-track-release.md` — the drift section's **D3**
   (the release's in-flight state already has a carrier: the gate). This CR is the half of that
   carrier the reader has to be able to tell apart from a verdict.

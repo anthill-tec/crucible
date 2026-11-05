@@ -1,6 +1,6 @@
 # CR-CRU-200 — an open run takes its test stream, and the board keeps it as the run's record
 
-**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152, CR-CRU-206, CR-CRU-219, CR-CRU-220, CR-CRU-223 · **Status** PENDING
+**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152, CR-CRU-206, CR-CRU-219, CR-CRU-220, CR-CRU-223 · **Status** DONE
 - **Filed 2026-10-20.** User ruling: live progress is designed after CR-CRU-194 and split from CR-CRU-152. The design is in
   `DN-crucible-live-test-progress.md`.
 - **Re-scoped 2026-10-30 at its gap analysis.** User rulings:

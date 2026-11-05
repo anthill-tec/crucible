@@ -1,6 +1,6 @@
 # CR-CRU-224 — the python client relays its runner's test stream
 
-**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-200 · **Status** PENDING
+**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-200 · **Status** DONE
 - **Filed 2026-10-30.** Split from CR-CRU-200 at its gap analysis. User ruling: split by layer — the live view (CR-CRU-223),
   the board (CR-CRU-200), then this CR, the client. pytest keeps its JUnit record.
 - **Gap analysis 2026-10-31, after CR-CRU-200 merged (Rule 20).** Re-scored from 8 to 13 points. User rulings:

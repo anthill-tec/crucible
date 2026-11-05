@@ -1,6 +1,6 @@
 # CR-CRU-159 — a heat-strip click brings its test into view
 
-**Type** fix · **Points** 5 (planning game 3; re-set at gap analysis 2026-10-02) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-09-27, gap analysis 2026-10-02
+**Type** fix · **Points** 5 (planning game 3; re-set at gap analysis 2026-10-02) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** DONE — filed 2026-09-27, gap analysis 2026-10-02
 
 ## Problem
 

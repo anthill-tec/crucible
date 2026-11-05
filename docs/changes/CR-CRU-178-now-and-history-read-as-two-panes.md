@@ -1,7 +1,7 @@
 # CR-CRU-178 — Now and History read as two panes
 
 **Type** fix (patch CR, after CR-CRU-177) · **Points** 2 (confirmed at gap analysis 2026-10-09) ·
-**Wave** 7 (0.3.0) · **Depends on** CR-CRU-177 · **Status** PENDING — filed 2026-10-09 (user ruling)
+**Wave** 7 (0.3.0) · **Depends on** CR-CRU-177 · **Status** DONE — filed 2026-10-09 (user ruling)
 
 ## Problem
 

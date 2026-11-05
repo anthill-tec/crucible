@@ -1,7 +1,7 @@
 # CR-CRU-172 — the Workflow tab splits into Now and History
 
 **Type** feature · **Points** 13 (re-scored 5 → 8 at gap analysis, 8 → 13 for §S5's migration, both 2026-10-08, user rulings) · **Wave** 7 (0.3.0) · **Depends on** none ·
-**Status** PENDING — filed 2026-10-08 (user ruling: 0.3.0, after CR-CRU-171)
+**Status** DONE — filed 2026-10-08 (user ruling: 0.3.0, after CR-CRU-171)
 
 ## Problem
 

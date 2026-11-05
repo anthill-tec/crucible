@@ -2,7 +2,7 @@
 
 **Type** fix (patch CR, split from CR-CRU-181 at its gap analysis) · **Points** 5 (re-scored at gap
 analysis, 2026-10-13; filed at 3) · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-181 · **Status**
-PENDING — filed 2026-10-12 (user ruling)
+DONE — filed 2026-10-12 (user ruling)
 
 ## Problem
 

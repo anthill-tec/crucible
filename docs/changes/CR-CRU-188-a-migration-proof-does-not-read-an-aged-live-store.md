@@ -1,7 +1,7 @@
 # CR-CRU-188 — a gate measures the code, and a red gate stops the merge
 
 **Type** fix (patch CR) · **Points** 13 (re-scored 2026-10-14 at RED of its first cycle: the lint-clean section moved to CR-CRU-191) · **Wave** 8 (0.4.0) ·
-**Depends on** — · **Status** PENDING — filed 2026-10-14; re-scoped the same day (user ruling: a
+**Depends on** — · **Status** DONE — filed 2026-10-14; re-scoped the same day (user ruling: a
 patch CR, worked immediately, for the failure that got past the gates)
 
 ## Problem

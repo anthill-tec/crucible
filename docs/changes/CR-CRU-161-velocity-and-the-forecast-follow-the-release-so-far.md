@@ -1,7 +1,7 @@
 # CR-CRU-161 — velocity and the forecast follow the release so far
 
 **Type** feature · **Points** 8 (gap analysis 2026-10-07) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-158 ·
-**Status** PENDING — filed 2026-09-27, re-specified 2026-10-07
+**Status** DONE — filed 2026-09-27, re-specified 2026-10-07
 
 ## Problem
 

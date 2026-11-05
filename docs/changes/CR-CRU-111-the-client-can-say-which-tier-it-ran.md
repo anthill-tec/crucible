@@ -3,7 +3,7 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 016, 075
-- **Status**: PENDING (0.2.0)
+- **Status**: DONE (0.2.0)
 - **Design reference**: `docs/research/DN-testing-tiers-in-crucible-projects.md` — "What a tier is",
   "Who classifies, and who drives", and decisions **D1** (per-tier verbs), **D2** (the verb set is
   the six tiers), **D3** (a mislabelled `unit` run warns) and **D4** (the declaration seam is

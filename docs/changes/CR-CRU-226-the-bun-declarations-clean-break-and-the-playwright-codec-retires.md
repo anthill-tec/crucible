@@ -1,7 +1,7 @@
 # CR-CRU-226 — the bun declaration's clean break, and the gate runs every declared framework
 
 **Type** feature · **Points** 13 (re-scored after its pre-review, user ruling 2026-11-04) ·
-**Wave** 8 (0.4.0) · **Depends on** CR-CRU-225, CR-CRU-228 · **Status** PENDING · Pre-review: ran — 8 points; its gap
+**Wave** 8 (0.4.0) · **Depends on** CR-CRU-225, CR-CRU-228 · **Status** DONE · Pre-review: ran — 8 points; its gap
 analysis needed user rulings
 - **Filed 2026-10-31.** Split from CR-CRU-201 at its gap analysis. User ruling: three dog-food-safe units —
   CR-CRU-201, CR-CRU-225, then this CR.

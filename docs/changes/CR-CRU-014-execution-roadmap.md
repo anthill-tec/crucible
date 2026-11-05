@@ -1,6 +1,6 @@
 # CR-CRU-014 — Execution roadmap: queue registration + Wave/CR sequence table
 
-**Status:** PENDING (0.2.0 opener — user-scheduled round 24, 2026-07-15;
+**Status:** DONE (0.2.0 opener — user-scheduled round 24, 2026-07-15;
 backend data structures designed NOW so 0.1.0 → 0.2.0 needs no migration)
 **Type:** feature
 **Priority:** P2

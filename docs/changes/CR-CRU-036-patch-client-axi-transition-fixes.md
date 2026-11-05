@@ -1,6 +1,6 @@
 # CR-CRU-036 — Patch: client TOON-AXI transition fixes (§S9 server-active-cycle + CR-008 test retarget + fleet coverage-uniformity)
 
-**Status:** PENDING — **owned by Crucible** (client scripts + their tests).
+**Status:** DONE — **owned by Crucible** (client scripts + their tests).
 **Type:** patch
 **Priority:** P1 (next — restores the CR-008 TS suite to green after the CR-030 merge-gate exception)
 **Depends on:** CR-CRU-030 (the fleet TOON-AXI migration this patch completes the transition for)

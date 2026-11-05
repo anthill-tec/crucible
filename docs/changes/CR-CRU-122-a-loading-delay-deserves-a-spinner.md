@@ -1,6 +1,6 @@
 # CR-CRU-122 — a loading delay deserves a spinner
 
-**Status:** PENDING (0.2.0 — born mid-release, D4)
+**Status:** DONE (0.2.0 — born mid-release, D4)
 **Type:** feature
 **Priority:** P3
 **Depends on:** none

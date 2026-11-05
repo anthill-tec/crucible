@@ -1,7 +1,7 @@
 # CR-CRU-180 — the release's CI suites pass on a clean runner
 
 **Type** fix (patch CR, release blocker) · **Points** 5 (set at filing, 2026-10-10, from the diagnosis below) ·
-**Wave** 7 (0.3.0) · **Depends on** CR-CRU-179 · **Status** PENDING — filed 2026-10-10 (user ruling: diagnose
+**Wave** 7 (0.3.0) · **Depends on** CR-CRU-179 · **Status** DONE — filed 2026-10-10 (user ruling: diagnose
 and fix in 0.3.0; the release waits)
 
 ## Problem

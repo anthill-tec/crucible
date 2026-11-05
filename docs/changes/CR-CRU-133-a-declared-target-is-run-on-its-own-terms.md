@@ -1,6 +1,6 @@
 # CR-CRU-133 — a declared target is run on its own terms
 
-**Type** fix · **Wave** 6 (0.2.0) · **Depends on** CR-CRU-046, CR-CRU-131 · **Status** PENDING
+**Type** fix · **Wave** 6 (0.2.0) · **Depends on** CR-CRU-046, CR-CRU-131 · **Status** DONE
 
 ## Problem
 

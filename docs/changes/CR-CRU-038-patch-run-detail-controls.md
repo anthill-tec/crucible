@@ -1,6 +1,6 @@
 # CR-CRU-038 — Patch: run-detail drill-in controls — minimized error tree, raw-output toggle, header-relocated controls
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch
 **Priority:** P2 (UI correctness; non-blocking — schedule after CR-037)
 **Depends on:** CR-CRU-016 (in-pane drill-in), CR-CRU-034 (drill-down dual-axis scroll — last touched the footer jump + raw toggle)

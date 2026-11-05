@@ -1,7 +1,7 @@
 # CR-CRU-176 — a running gate is a live run, and a cycle's change sits beneath it
 
 **Type** fix · **Points** 8 (split from CR-CRU-173 at its gap analysis, 2026-10-08, user ruling) ·
-**Wave** 7 (0.3.0) · **Depends on** CR-CRU-172 · **Status** PENDING — filed 2026-10-08
+**Wave** 7 (0.3.0) · **Depends on** CR-CRU-172 · **Status** DONE — filed 2026-10-08
 
 ## Problem
 

@@ -1,7 +1,7 @@
 # CR-CRU-228 — a BDD run streams its scenarios with their steps
 
 **Type** feature · **Points** 13 (measures above 13; kept as one CR by user ruling, the board's scale stops at 13) ·
-**Wave** 8 (0.4.0) · **Depends on** CR-CRU-225 · **Status** PENDING
+**Wave** 8 (0.4.0) · **Depends on** CR-CRU-225 · **Status** DONE
 
 - **Filed 2026-11-01.** Split from CR-CRU-225 at its gap analysis (user ruling: the board's points scale stops at 13).
   The id CR-CRU-227 is skipped because a reverted filing used it.

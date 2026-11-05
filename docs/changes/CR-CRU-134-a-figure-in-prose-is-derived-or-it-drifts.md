@@ -1,6 +1,6 @@
 # CR-CRU-134 — a figure in prose is derived, or it drifts
 
-**Type** fix · **Wave** 6 (0.2.0) · **Depends on** CR-CRU-131 · **Status** PENDING
+**Type** fix · **Wave** 6 (0.2.0) · **Depends on** CR-CRU-131 · **Status** DONE
 
 ## Problem
 

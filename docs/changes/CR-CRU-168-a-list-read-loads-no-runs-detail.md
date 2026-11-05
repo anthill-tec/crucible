@@ -1,7 +1,7 @@
 # CR-CRU-168 — a list read loads no run's detail
 
 **Type** fix · **Points** 2 (gap analysis 2026-10-06; was 5 with a cursor, dropped) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-167 ·
-**Status** PENDING — filed 2026-10-06
+**Status** DONE — filed 2026-10-06
 
 ## Problem
 
