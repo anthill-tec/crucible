@@ -191,7 +191,7 @@ describe("§S5b PRD — resolved-note records the 2026-07-28 TOON reversal", () 
     const prd = readText(PRD_PATH);
     const note = extractResolvedNote(prd);
     expect(note).toMatch(/`tier`\s*\n?\s*explicitly/);
-    expect(note).toMatch(/`playwright`\s*\n?\s*codec/);
+    expect(note).toMatch(/dedicated\s*\n?\s*codec with trace links/);
     expect(note).toMatch(/retention:[^;]*§4\.7/);
   });
 });
