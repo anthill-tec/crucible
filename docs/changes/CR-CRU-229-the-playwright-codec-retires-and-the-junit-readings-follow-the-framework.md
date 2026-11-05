@@ -88,7 +88,7 @@ One transacted step in the migration chain. For each `events` row of codec `play
 The same step sets `feature` to NULL on every suite of a run whose framework is not `playwright-bdd` (no route reads
 it). Nothing else of any other run changes. The `rollups` (`foldIntoRollup`) are left as they were folded: their
 source rows are gone, so a day folded from codec runs keeps its step counts. A store with no codec run reshapes and
-recounts no run; only the `feature` NULLing above applies to it.
+recounts no run; only the `feature` NULLing above applies to it (user ruling 2026-11-04).
 
 ### §S4 — the specification view by framework alone
 - `isSpecRun` (`public/app.js`) is a test run of framework `playwright-bdd`; the BDD index filter
