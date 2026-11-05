@@ -7903,21 +7903,6 @@
         openFeature(feature);
       }
 
-      // A folded scenario row of an unfolded feature reads its steps once it
-      // is in (or has passed through) the pane's viewport.
-      function loadScrolledScenarios(pane, d) {
-        const paneTop = pane.getBoundingClientRect().top;
-        const view = pane.clientHeight ?? 0;
-        const byKey = new Map((d.tree ?? []).map((s) => [suiteKeyOf(s), s]));
-        for (const row of pane.querySelectorAll('[data-testid="suite-row"][data-suite-key]')) {
-          const key = row.getAttribute("data-suite-key");
-          if (leavesOf(key) !== undefined || suiteLoading.val[key] === true) continue;
-          if (row.getBoundingClientRect().top - paneTop > view) continue;
-          const node = byKey.get(key);
-          if (node !== undefined) void loadSuite(node);
-        }
-      }
-
       // F4 — a failed leaf's failure box: inline (no click) in Detail until
       // the user focuses a leaf; after any leaf click only the focused
       // failed leaf shows its box. Density starts with boxes closed —
@@ -8006,8 +7991,9 @@
                 focusedLeaf.val = key;
               },
             },
-            // A spec run's step line stays the verbatim Gherkin the codec
-            // stored: its glyph and duration are CSS-drawn from attributes.
+            // A spec run's step line stays the verbatim Gherkin stored for its
+            // playwright-bdd scenario: its glyph and duration are CSS-drawn
+            // from attributes.
             spec
               ? span(
                   { class: "app-leaf-name", "data-glyph": drillinLeafGlyph(leaf.status) },
@@ -8681,7 +8667,7 @@
       // module/integration) renders the plain tree; Density (regression/e2e)
       // adds the status chips (F4½), heat-strip (§S4.2), failure digest
       // (§S4.3) and failures-float folding (§S4.1). Virtualization (§S4.4)
-      // applies in BOTH presentations. A playwright run draws the same suites
+      // applies in BOTH presentations. A playwright-bdd run draws the same suites
       // grouped under their features (SpecFeatures), under its byline.
       const TestBody = (d) => {
         const presentation = presentationOf(d);
@@ -8809,10 +8795,6 @@
           }
         }
         if (next !== null) suiteWindow.val = next;
-        // A spec run's folded scenarios read their steps as they scroll
-        // into view.
-        const d = detail.val;
-        if (d !== null && isSpecRun(d)) loadScrolledScenarios(pane, d);
       };
 
       // CR-CRU-017 §S3 — an aborted run's drill-in leads with WHY it was
