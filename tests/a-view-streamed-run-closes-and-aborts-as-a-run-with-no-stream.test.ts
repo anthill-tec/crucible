@@ -79,7 +79,7 @@ async function board(agentId = "viewer", liveness?: Liveness): Promise<Board> {
 }
 
 function open(b: Board): Promise<string> {
-  return openRun(b.handle, b.key, b.agentId, { stack: "bun", tier: "unit" });
+  return openRun(b.handle, b.key, b.agentId, { stack: "bun", framework: "bun-test", tier: "unit" });
 }
 
 /** The whole capture, sent as a view stream in two batches split before its first `(fail)` line. */
