@@ -752,4 +752,64 @@ describe("a v24 store with no playwright-codec run", () => {
     expect(rawUserVersion(dbOf(migrated))).toBe(SCENARIO_SHAPE_VERSION);
     expect(wholeStoreRows(dbOf(migrated))).toEqual(before);
   });
+
+  test("opens at v25 with the junit suite named `A › B` reading feature NULL, the rest of it, the playwright-bdd run and the rollups unchanged", () => {
+    const dbPath = scratchDbPath();
+    const store = Store.open(dbPath);
+    const key = crypto.randomUUID();
+    store.addProject({ key, name: "no-codec-stray-feature", type: "backend", sutRoot: "/tmp/no-codec-stray-feature" });
+    const junit = store.recordTestEvent(
+      key,
+      AGENT,
+      { summary: JUNIT_SUMMARY, tree: JUNIT_TREE },
+      { tier: "unit", stack: "bun", codec: "junit" },
+    ).id;
+    const stream = store.recordTestEvent(
+      key,
+      AGENT,
+      { summary: STREAM_SUMMARY, tree: STREAM_TREE },
+      { tier: "bdd", stack: "bun", framework: "playwright-bdd", codec: "crucible-events" },
+    ).id;
+    dbOf(store)
+      .query(
+        `INSERT INTO rollups (project_key, bucket, runs, passed, failed, duration_ms, last_coverage)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(key, ROLLUP_BUCKET, 2, 2, 1, 12, null);
+    dbOf(store).close();
+    // At v24 a junit suite named `A › B` held the name up to its first " › "; a playwright-bdd suite held its own name.
+    walkBackToV24(dbPath, [
+      { eventId: junit, features: ["A"] },
+      { eventId: stream, features: ["Search"] },
+    ]);
+    const snapshot = new Database(dbPath, { readonly: true });
+    let junitBefore: RunRows;
+    let streamBefore: RunRows;
+    let rollupsBefore: Row[];
+    try {
+      expect(rawUserVersion(snapshot)).toBe(PRE_MIGRATION_VERSION);
+      expect(snapshot.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM events WHERE codec = 'playwright'").get()?.n).toBe(0);
+      junitBefore = rowsOfRun(snapshot, junit);
+      streamBefore = rowsOfRun(snapshot, stream);
+      rollupsBefore = rollupsOf(snapshot);
+    } finally {
+      snapshot.close();
+    }
+    expect(junitBefore.suites.map((s) => s.feature)).toEqual(["A"]);
+    expect(streamBefore.suites.map((s) => s.feature)).toEqual(["Search"]);
+    expect(rollupsBefore).toHaveLength(1);
+
+    const migrated = open(dbPath);
+    expect(migrated.migration?.from).toBe(PRE_MIGRATION_VERSION);
+    expect(migrated.migration?.to).toBe(SCENARIO_SHAPE_VERSION);
+    expect(rawUserVersion(dbOf(migrated))).toBe(SCENARIO_SHAPE_VERSION);
+    const junitAfter = rowsOfRun(dbOf(migrated), junit);
+    expect(junitAfter.suites.map((s) => s.feature)).toEqual([null]);
+    expect(junitAfter).toEqual({
+      ...junitBefore,
+      suites: junitBefore.suites.map((suite) => ({ ...suite, feature: null })),
+    });
+    expect(rowsOfRun(dbOf(migrated), stream)).toEqual(streamBefore);
+    expect(rollupsOf(dbOf(migrated))).toEqual(rollupsBefore);
+  });
 });

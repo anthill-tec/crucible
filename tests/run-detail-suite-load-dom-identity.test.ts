@@ -9,12 +9,12 @@
 // tracks the WHOLE map as one dependency of the body's outer derivation, so
 // writing suiteLeaves.val for just ONE suite (loadSuite, called from
 // expandSuite's click handler, from SynthHeatCell's click handler, and from
-// loadScrolledScenarios on scroll — all three write the same state) reruns
+// a feature heading's unfold — all write the same state) reruns
 // the entire body derivation and replaces every suite's row/cell, loaded or
 // not. Measured directly on a real run view: 2-3 of every 6 suite loads
 // replaced the OTHER suites' rows. The two tests below tag every rendered
 // suite-row and heat-cell element before triggering ONE suite's load (by
-// click, the same suiteLeaves write path loadScrolledScenarios uses) and
+// click, the same suiteLeaves write path every loadSuite caller uses) and
 // assert every element outside that suite keeps its identity — the exact
 // node object, still attached to the document — afterwards, for a plain run
 // and for a spec (BDD) run. The loaded suite's OWN cells are expected to

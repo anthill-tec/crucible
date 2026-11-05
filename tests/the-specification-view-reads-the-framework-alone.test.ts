@@ -493,12 +493,18 @@ function syntheticCellsOf(feature: string, status: "fail" | "pass"): HTMLElement
   );
 }
 
-/** The scenario row, or null while it is not mounted. */
+/**
+ * The scenario row, or null while it is not mounted. `scenarioRow` throws
+ * "…, found 0; …" when its feature holds no row of that name (folded, or its
+ * suite still loading); any other throw — no overlay, no such feature, more
+ * than one matching row — is a real error and is rethrown.
+ */
 function rowOrNull(feature: string, name: string): HTMLElement | null {
   try {
     return scenarioRow(feature, name);
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(", found 0;")) return null;
+    throw error;
   }
 }
 
