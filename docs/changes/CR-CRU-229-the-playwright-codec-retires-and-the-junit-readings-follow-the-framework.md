@@ -1,6 +1,6 @@
 # CR-CRU-229 — the playwright codec retires, its runs migrate, and the junit readings follow the framework
 
-**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-226, CR-CRU-228 · **Status** PENDING ·
+**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-226, CR-CRU-228 · **Status** DONE ·
 Pre-review: ran — 13 points, and the gap analysis needed user rulings; FINDINGS(9), all folded
 - **Filed 2026-11-04.** Split from CR-CRU-226 at its gap analysis (user ruling 2026-11-04: two CRs, the client's break
   first, then the board's half in this one).
@@ -149,14 +149,14 @@ recounts no run; only the `feature` NULLing above applies to it (user ruling 202
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the codec is gone.** `codecs` holds `crucible-events` and `junit` only, `src/codecs/playwright.ts` does
+- [x] **AC1 — the codec is gone.** `codecs` holds `crucible-events` and `junit` only, `src/codecs/playwright.ts` does
       not exist, `GET /api/health` lists `codecs.test` as `["crucible-events", "junit"]`, and `POST /api/v2/runs` with
       `codec: "playwright"` answers 400 `unknown codec: playwright` with nothing stored. (§S1)
-- [ ] **AC2 — no Playwright JSON report is written.** `STREAM_KEPT_REPORTS` names only `PLAYWRIGHT_JUNIT_OUTPUT_NAME`;
+- [x] **AC2 — no Playwright JSON report is written.** `STREAM_KEPT_REPORTS` names only `PLAYWRIGHT_JUNIT_OUTPUT_NAME`;
       neither `playwright.config.ts` nor the fixture project's config configures a `json` reporter; the runner of a
       stream-target run through the bun client gets `PLAYWRIGHT_JUNIT_OUTPUT_NAME` naming a file in the run's reports
       dir and no `PLAYWRIGHT_JSON_OUTPUT_NAME`. (§S2)
-- [ ] **AC3 — the stored runs migrate.** On a v24 store holding a codec run of two scenarios of one feature in one
+- [x] **AC3 — the stored runs migrate.** On a v24 store holding a codec run of two scenarios of one feature in one
       browser (one passing with two steps; one failing at its second of three steps), a codec run whose one
       scenario failed with no step, a codec run with no suite, a junit run with a suite named `A › B`, and a
       `crucible-events` run, opening it at v25 leaves:
@@ -173,19 +173,19 @@ recounts no run; only the `feature` NULLing above applies to it (user ruling 202
         for a `crucible-events` run of the same scenarios.
       A v24 store with no codec run opens at v25 with no run reshaped or recounted: only a non-`playwright-bdd`
       suite's `feature` is set to NULL, and every other row and the `rollups` are unchanged. (§S3)
-- [ ] **AC4 — the specification view reads the framework alone.** A migrated run opens in the specification view
+- [x] **AC4 — the specification view reads the framework alone.** A migrated run opens in the specification view
       (feature → scenario → step); a test run of codec `playwright` with no framework does not. `app.js` and
       `app-logic.mjs` read no `codec` to decide it; `isScenarioShape`, `BDD_SEP`, `featureOf` and `FEATURE_SEPARATOR`
       do not exist; a stored suite's `feature` is its name for a `playwright-bdd` run and NULL for any other, a junit
       suite named `A › B` included. In a scenario-shape run, a scenario's heat cell, and a synthetic cell (red and
       green), each locate a scenario row as §S4 states; the heat-cell-reveal e2e scenarios pass. (§S4)
-- [ ] **AC5 — no test posts Playwright JSON.** `git grep -nE "ingestPlaywright|parsePlaywright" -- tests` finds
+- [x] **AC5 — no test posts Playwright JSON.** `git grep -nE "ingestPlaywright|parsePlaywright" -- tests` finds
       nothing, and every match of `git grep -nE "[\"']playwright[\"']" -- tests` names the framework `playwright`, the
       Playwright package or binary, or the value of a refused key, never a codec posted or listed;
       `tests/playwright-codec.test.ts` does not exist; the tests that took their expected steps from the codec take
       them from a codec-free source; and the e2e scenarios that seeded a BDD run through the codec seed it through the
       stream and pass in the e2e target. (§S7)
-- [ ] **AC6 — the readings follow the framework.** Through `POST /api/v2/runs`, codec `junit`:
+- [x] **AC6 — the readings follow the framework.** Through `POST /api/v2/runs`, codec `junit`:
       - a one-suite report named `pytest` whose cases carry classnames is grouped by classname for framework `pytest`
         under stack `bun`, and not for framework `unittest`, or none, under stack `python`; under framework `pytest`,
         a report of two suites, or of one suite named otherwise, is not grouped;
@@ -193,14 +193,14 @@ recounts no run; only the `feature` NULLing above applies to it (user ruling 202
         and not for framework `vitest`, or none, under stack `bun`;
       - a close stating no framework reads under the framework its run was started with;
       - nothing under `src/codecs/` reads the run's stack for a test run. (§S5)
-- [ ] **AC7 — the python client states its runner.** Each run filed by `test` (under `unittest` and under `pytest`),
+- [x] **AC7 — the python client states its runner.** Each run filed by `test` (under `unittest` and under `pytest`),
       `regression`, every `pre-merge-gate` tier and the run each opens states framework = its runner; `auto-ingest`
       states `pytest` when the project's `crucible.toml` declares `[python] runner = "pytest"`, `unittest` when it
       declares nothing, and with `runner = "nose"` emits a refusal envelope and posts nothing. (§S6)
-- [ ] **AC8 — the record.** `CHANGELOG.md` `[Unreleased]` holds the §S8 entries; the DN and PRD §4.4 state the codec
+- [x] **AC8 — the record.** `CHANGELOG.md` `[Unreleased]` holds the §S8 entries; the DN and PRD §4.4 state the codec
       retired and the readings keyed by framework; PRD §4.12 and §8 do not name the `playwright` codec; the PRD's
       `framework` and `codec` rows, §4.4's vocabulary and gate lines and the DN's gate line say what §S8 lists. (§S8)
-- [ ] **AC9 — the gate.** `pre-merge-gate` runs every declared stack's suite through its own client, green; this
+- [x] **AC9 — the gate.** `pre-merge-gate` runs every declared stack's suite through its own client, green; this
       repo's `test:e2e` still files through the stream. (all)
 
 ## Non-goals
