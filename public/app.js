@@ -565,9 +565,24 @@
         // key subscribes to nothing, so the agent row and the running card
         // would never follow the first batch. An empty slot (null) reads as
         // "no batch yet" everywhere, and it also clears the counts a settled
-        // run left in the slot a new run now takes.
+        // run left in the slot a new run now takes. The same holds one level
+        // down: a run's `live` omits its total and its current file until the
+        // runner gives them, so each is held empty (null) too, and an answer
+        // that first adds either reaches the row and the card even when the
+        // done count has not moved. An empty total or file reads as absent.
         vanX.replace(state.openRuns, () =>
-          (events.openRuns ?? []).map((run) => (run.live === undefined ? { ...run, live: null } : run)),
+          (events.openRuns ?? []).map((run) =>
+            run.live === undefined || run.live === null
+              ? { ...run, live: null }
+              : {
+                  ...run,
+                  live: {
+                    ...run.live,
+                    total: run.live.total ?? null,
+                    currentFile: run.live.currentFile ?? null,
+                  },
+                },
+          ),
         );
         markSynced();
       } catch {
@@ -1451,7 +1466,7 @@
             ? div(
                 { class: "app-evt-line app-card-meta app-running-line" },
                 span({ "data-testid": "running-count", class: "app-running-count" }, liveCountText(live)),
-                live.currentFile !== undefined
+                live.currentFile !== undefined && live.currentFile !== null
                   ? span({ "data-testid": "running-file", class: "app-running-file" }, live.currentFile)
                   : null,
                 RunningElapsed(run.startedAt),
