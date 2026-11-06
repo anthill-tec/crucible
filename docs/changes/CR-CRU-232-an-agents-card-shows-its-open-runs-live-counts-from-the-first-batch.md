@@ -1,11 +1,14 @@
 # CR-CRU-232 — an agent's card shows its open run's live counts from the first batch
 
 **Type** fix · **Points** 2 (confirmed at its gap analysis, 2026-11-06) · **Wave** 8 (0.4.0) · **Depends on** — ·
-**Status** PENDING · Pre-review: none — no trigger
+**Status** DONE · Pre-review: none — no trigger
 - **Filed 2026-11-06** by user ruling, as a bug fix in the current wave, from a defect the user saw on the dashboard
   during a baseline run: the orchestrator's agent card read "gated test run starting" for the whole run.
 - **Gap analysis 2026-11-06**, on develop `44839b75`: baseline bun 4683/0 (`evt-1793970764263-1`), python 6082/0
   (`evt-1793972157561-2`).
+- **Done 2026-11-06** (plan 234): cycle 862 RED + GREEN (§S1–§S5), VERIFY 863 PASS with one suggestion, which the
+  user ruled fixed in FIX cycle 864 (§S6, AC7: RED + FIX). Pre-merge gate in cycle 864: 10788/0 (bun 4706, python
+  6082; `evt-1793981620823-41`, `evt-1793982980038-42`).
 
 ## Problem
 
@@ -73,27 +76,27 @@
 
 ## Acceptance criteria
 
-- [ ] **AC1 (§S1, §S2).** A workspace page that first receives an open run for an agent without `live` shows the
+- [x] **AC1 (§S1, §S2).** A workspace page that first receives an open run for an agent without `live` shows the
   agent's message on its row; when a later answer carries the run's `live` (e.g. 5 of 40, current file `a.py`) the row
   reads `running 5/40 · a.py` without a reload, and a further answer (12 of 40, `b.py`) moves it to
   `running 12/40 · b.py`.
-- [ ] **AC2 (§S1, §S2).** The same holds for a run that opens in a slot a settled run held before: run A settles,
+- [x] **AC2 (§S1, §S2).** The same holds for a run that opens in a slot a settled run held before: run A settles,
   run B opens without `live`, then B's `live` arrives and the row reads B's counts.
-- [ ] **AC3 (§S4).** With the Runs tab on screen, a running card first rendered without `live` is plain (no progress,
+- [x] **AC3 (§S4).** With the Runs tab on screen, a running card first rendered without `live` is plain (no progress,
   not clickable); when `live` arrives it shows the progress line with the counts and becomes clickable into the live
   drill-in, without a reload.
-- [ ] **AC4 (§S3).** With the run's `live` landed, the agent row reads its `running N/M` line on each workspace tab,
+- [x] **AC4 (§S3).** With the run's `live` landed, the agent row reads its `running N/M` line on each workspace tab,
   and still reads it after switching tabs back and forth; a later answer's counts reach the row on whichever tab is
   open.
-- [ ] **AC5 (§S5).** A run with no batch yet still reads the agent's message on its row and a plain running card; the
+- [x] **AC5 (§S5).** A run with no batch yet still reads the agent's message on its row and a plain running card; the
   board's open-run brief still omits `live` before the first batch (the existing server tests pass unchanged); every
   existing test passes unchanged.
-- [ ] **AC6 (BDD).** A new e2e feature in `tests/e2e/features/` opens a project's board on the Roadmap tab, opens a run
+- [x] **AC6 (BDD).** A new e2e feature in `tests/e2e/features/` opens a project's board on the Roadmap tab, opens a run
   for an agent against the real board (no live double), checks the agent row reads the agent's message, then posts
   the run's first stream batch and checks the row reads `running N/M` with that batch's counts without a reload;
   switches to Runs and checks the row still reads it and the running card shows the counts; then, with Runs on screen,
   opens a second run, posts its first batch, and checks the running card turns live and the row follows it.
-- [ ] **AC7 (§S6).** A page holding an open run whose `live` carries its done count but no current file (and, in a
+- [x] **AC7 (§S6).** A page holding an open run whose `live` carries its done count but no current file (and, in a
   second case, no total) shows the row and the card for those counts; when a later answer adds the current file (or
   the total) with the done count unchanged, the row and the card show it on that answer, without a reload and without
   a further count change. A `live` whose total or current file is absent reads as it does today.
