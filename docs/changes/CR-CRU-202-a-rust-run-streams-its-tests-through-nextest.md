@@ -10,6 +10,11 @@ CR-CRU-200 · **Status** PENDING · Pre-review: ran — 8 points; user rulings a
   the timeout and always-failing-retry exemptions (AC3), the message rule (§S3), same-name binaries (§S7, by user
   ruling: the client supplies the binary ids), ignored results above the total (§S4), a total of 0 (§S5), and the PRD
   and DN amended (a `chore(docs)` commit on develop).
+- **VERIFY 2026-11-06** (cycle 866): all eight ACs met, FINDINGS(4), all four ruled fixed by the user in a FIX cycle
+  (§S8, AC9–AC11). GREEN's open points accepted by user ruling: the list's table is written by the store's base pass
+  (no schema step, as for the gate acceptances); a list posted to a `crucible-events` run is taken; a binary of
+  another kind is `<crate>::<kind>/<name>`, nextest's own rule; an aborted run whose codec throws keeps an empty
+  record, flagged with the error; the refusal wordings as shipped.
 - **Gap analysis 2026-11-06**, on develop `6afc06b7`: baseline bun 4706/0 (`evt-1793985219460-3`), python 6082/0
   (`evt-1793986841461-4`).
 
@@ -107,6 +112,13 @@ test past its `slow-timeout`) and on three crates of a real consumer (`nai`: 143
     when no such binary or more than one holds it, the binary's kind from the stream's suite lines (kept per
     `<crate>::<binary name>` between batches) gives the id; when that key names more than one kind or none, the
     suite is `<crate>::<binary name>` and §S5 flags the run.
+- **§S8 — the list's life** (VERIFY findings, user ruling 2026-11-06).
+  - An existing store opened by this board gains the list's table and nothing else changes.
+  - A run's list is gone once the run closes or aborts, and when its project is deleted.
+  - A run that is gone by the time its list is taken (its project deleted meanwhile) is refused as an unknown run
+    (400), never as a settled one.
+  - The list is read once, when the run takes it; each batch resolves its results from what was read then, not by
+    reading the list again.
 
 ## Acceptance criteria
 
@@ -145,6 +157,13 @@ under the test tree with the commands that wrote them.
   (`health-lists-the-record-stream-codecs`, `health-names-the-codecs-it-decodes`,
   `view-codecs-live-in-their-own-registry`, `gate-milestone-scope-and-suites`, `codec-registry`, and the python
   harness's `HEALTH_CODECS`); every other existing test passes unchanged.
+- [ ] **AC9 (§S8).** A store aged to the schema before this CR, without the list's table, opened by the board gains
+  the table; its other tables and its schema version are unchanged.
+- [ ] **AC10 (§S8).** A run's stored list is gone after the run closes, after it aborts, and after its project is
+  deleted.
+- [ ] **AC11 (§S8).** A list posted for a run that disappears before it is taken is a 400 naming the run as unknown;
+  over several batches of a run with a list, the list is read once, and each batch's results still land in their
+  listed suites.
 
 ## Non-goals
 
