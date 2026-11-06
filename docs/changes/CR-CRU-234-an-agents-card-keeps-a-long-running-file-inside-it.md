@@ -1,10 +1,12 @@
 # CR-CRU-234 — an agent's card keeps a long running file inside it
 
-**Type** fix · **Points** 2 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING · Pre-review: none — no
+**Type** fix · **Points** 3 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING · Pre-review: none — no
 trigger
 - **Filed 2026-11-06** by user ruling, as a bug fix in the current wave sequenced after CR-CRU-202, from a defect the
   user has been seeing on the dashboard: in the project pane, a streaming agent's card runs a long test path out past
   its right edge.
+- **Gap analysis 2026-11-07** (user rulings): the cut is visual only; the layout is checked at three screen sizes in
+  three densities; re-scored 2 → 3 because every layout claim needs a real browser across that matrix.
 
 ## Problem
 
@@ -22,7 +24,12 @@ trigger
 - **§S1 — the count stays, the file is cut from its start** (user ruling 2026-11-06). The streaming card's live line
   shows `running <done>/<total>` whole, always; the current file fills the rest of the line and, when it does not fit,
   loses characters from its start behind a leading `…`, so its end (the file name) stays visible. The line stays one
-  line, inside the card, at every pane width and density.
+  line, inside the card, at every pane width and density. The project pane has no resizer, so its widths are the
+  board's three screen bands (phone, tablet, desktop); its densities are comfortable, compact and ultra.
+- **§S1a — the cut is visual only** (user ruling 2026-11-07). The line's text stays `running <done>/<total> ·
+  <current file>` with the whole path, whether or not the file is cut on screen; only what is drawn loses the path's
+  start. The path's characters keep their order on screen: a `/` or `.` is never moved to the other end of the path by
+  the cut.
 - **§S2 — the whole path on hover.** The cut file carries its full path as its hover title, so nothing is lost.
 - **§S3 — no line of the card runs out of it.** The card's other lines (the agent's id, its message, its idle line)
   wrap inside the card rather than run past it when they hold a token too long for the line.
@@ -31,16 +38,19 @@ trigger
 
 ## Acceptance criteria
 
-- [ ] **AC1 (§S1).** A streaming agent's card whose current file is longer than the card shows `running N/M` in full
-  and the file's end (its file name) visible behind a leading `…`; the line does not run past the card and the
-  project pane has no horizontal overflow, in each of the board's densities.
-- [ ] **AC2 (§S1, §S4).** A current file that fits is shown whole, with no `…`; the line's text is unchanged.
+- [ ] **AC1 (§S1, §S1a — in a real browser).** A streaming agent's card whose current file is longer than the card,
+  at each of the three screen bands in each of the three densities: `running N/M` is drawn in full; the file's last
+  character is drawn inside the card and its first characters are not; a `…` is drawn at the file's left edge; the
+  path's characters are drawn in their own order; the line is one line inside the card, and the project pane has no
+  horizontal overflow.
+- [ ] **AC2 (§S1, §S1a, §S4).** The line's text is `running N/M · <whole current file>` for a file that is cut and for
+  one that fits; a file that fits is drawn whole, with no `…`.
 - [ ] **AC3 (§S2).** The file part's hover title is the full current file.
-- [ ] **AC4 (§S3).** A card whose agent id, message or idle line holds one very long token keeps it inside the card.
+- [ ] **AC4 (§S3 — in a real browser).** A card whose agent id, message or idle line holds one very long token keeps
+  it inside the card, and the project pane has no horizontal overflow.
 - [ ] **AC5 (BDD).** A new e2e feature opens a project's board, opens a run against the real board for an agent,
-  posts a stream batch whose current file is a long path, and checks in the browser that the card's live line keeps
-  the count, ends in the file name, has the full path as its title, and stays within the card with no horizontal
-  overflow of the pane.
+  posts a stream batch whose current file is a long path, and checks AC1 across the three bands and three densities
+  (a scenario outline), AC3's title, and AC4 for an agent whose message is one long token.
 - [ ] **AC6 (§S4).** Every existing test passes unchanged.
 
 ## Non-goals
