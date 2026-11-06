@@ -11,20 +11,27 @@
 - **The page is blocked most of the time.** Measured on the DEV board on 2026-11-06, project `Crucible v2`, Runs tab
   open, one GREEN run streaming, over 10 s: 26 main-thread long tasks totalling 7.5 s, the longest 1.36 s; 39,009 DOM
   nodes; only 18 DOM mutations in the window. The page spends its time computing, not changing the DOM.
+- **Only the Runs tab, only while a run is open** (user report 2026-11-06). The other tabs stay responsive during
+  the same run, and the Runs tab does too when no run is open.
 - **It reads every run on every update.** In the same window the page fetched
   `/api/v2/events?project=<key>&limit=5000` ten times: 1.86 MB each, the project's whole run history. It also read
   `plans` (219 KB), `queue` (45 KB), `releases`, `release-proposals`, the three analytics reads and `projects`
   about every 2 s. While a run streams, each landed batch emits an `events` frame, and each `events` frame re-reads
-  all of them.
-- **It renders every run.** The Runs timeline holds all 2,844 of the project's runs as cards (2,844 `[data-run-id]`
-  nodes, 8,945 pills), with no paging or windowing, so each update re-processes all of them.
+  all of them. That read is the same on every workspace tab (the events slice does not depend on the tab), so it is
+  not on its own what blocks the page.
+- **The Runs timeline redoes all of it on every update.** The timeline holds all 2,844 of the project's runs as
+  cards (2,844 `[data-run-id]` nodes, 8,945 pills, 428 transition markers, 193 milestones), with no paging or
+  windowing, and the replaced events slice re-runs its derivations over all of them. With a run open, the frames
+  come about once a second, faster than one pass (up to 1.36 s) finishes, so the passes queue back to back. The exact
+  hot spot is profiled at the gap analysis.
 - **It grows with the project.** The cost scales with the run history, not with what changed: a project with a long
   history is slowest exactly when a run is live.
 
 ## Design (outcomes; the mechanism is settled at the gap analysis)
 
-- **§S1 — an update costs what changed.** A streamed batch, or any `events` frame, makes the page read and process
-  what changed since its last answer, not the project's whole history.
+- **§S1 — an update costs what changed.** On the Runs tab, a streamed batch, or any `events` frame, makes the page
+  process what changed since its last answer, not the project's whole history; whether the read itself also shrinks
+  is settled at the gap analysis.
 - **§S2 — the Runs tab shows a bounded window of runs.** The timeline renders the runs in view (and a bounded
   margin), loading older ones as the user reaches them; what a run's card shows is unchanged.
 - **§S3 — the live views stay live.** The running card, the agent's card and the live drill-in still follow a
