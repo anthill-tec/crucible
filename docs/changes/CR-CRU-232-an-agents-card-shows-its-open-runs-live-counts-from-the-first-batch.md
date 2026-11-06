@@ -65,6 +65,11 @@
   clickable live card that opens the live drill-in, without a reload.
 - **§S5 — nothing else changes:** the board's answer, the client's withheld heartbeats, the live frame's throttle, and
   what the row and the card show once `live` is there; a run with no batch yet reads as it does today.
+- **§S6 — the optional counts inside `live` have their slots too** (VERIFY finding, fixed by user ruling 2026-11-06).
+  The board's `live` may omit its run's total and current file (a reader can name a file before any test in it
+  finishes). The page holds each of them empty when the board omits it, so an answer that first adds the current file
+  or the total, with the done count unchanged, reaches the agent row and the running card on that answer instead of
+  waiting for the next count change. What the row and the card show for a given `live` is unchanged.
 
 ## Acceptance criteria
 
@@ -88,6 +93,10 @@
   the run's first stream batch and checks the row reads `running N/M` with that batch's counts without a reload;
   switches to Runs and checks the row still reads it and the running card shows the counts; then, with Runs on screen,
   opens a second run, posts its first batch, and checks the running card turns live and the row follows it.
+- [ ] **AC7 (§S6).** A page holding an open run whose `live` carries its done count but no current file (and, in a
+  second case, no total) shows the row and the card for those counts; when a later answer adds the current file (or
+  the total) with the done count unchanged, the row and the card show it on that answer, without a reload and without
+  a further count change. A `live` whose total or current file is absent reads as it does today.
 
 ## Non-goals
 
