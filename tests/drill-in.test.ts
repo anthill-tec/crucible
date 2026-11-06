@@ -1439,7 +1439,9 @@ describe("§S4.5 — progressive payload (suites-first paging)", () => {
 //     click required.
 //   - `[data-testid="failures-footer"]` (test-kind events, when ≥1 failure
 //     exists) renders text matching `▸ N more failures · toggle raw output`
-//     (N = total failing leaves - 1); its `[data-testid="failure-jump"]`
+//     (N = the failures the jump has not yet opened — the run's failed
+//     count before any press; once all are opened it reads
+//     `▸ failure k of N`); its `[data-testid="failure-jump"]`
 //     control calls `scrollIntoView()` on the NEXT failing leaf-row when
 //     clicked; its `[data-testid="raw-toggle"]` toggles
 //     `[data-testid="raw-output"]` containing the event detail's stored
