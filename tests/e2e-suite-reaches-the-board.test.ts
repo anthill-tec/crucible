@@ -71,6 +71,8 @@ import { startServer } from "../src/server.ts";
 import type { ServerHandle } from "../src/server.ts";
 import { declareClientBoard } from "./helpers/client-board.ts";
 import { webkitEngineAvailable } from "./e2e/steps/webkit-docker-preflight.ts";
+import { parseFeatureFile } from "./helpers/gherkin-scenarios.ts";
+import type { DeclaredScenario } from "./helpers/gherkin-scenarios.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const CLIENT = join(REPO_ROOT, "clients", "bun-crucible.py");
@@ -148,48 +150,16 @@ Then("the step after the break never runs", async () => {});
 `;
 
 // ── the Gherkin on disk, read as the expectation ─────────────────────────
-
-interface DeclaredScenario {
-  /** The `Feature:` title the scenario lives under. */
-  feature: string;
-  /** The `Scenario:` title. */
-  scenario: string;
-  /** Its step lines, verbatim and in order — `Given …`, `And …`, `Then …`.
-   *  playwright-bdd carries the keyword through into the step title, so this
-   *  is the exact step name the stream carries. */
-  steps: string[];
-  /** `<feature> › <scenario>` — how this file names a placed test. */
-  node: string;
-}
-
-const STEP_LINE = /^(Given|When|Then|And|But)\s+\S/;
-
-/** One `.feature` file's scenarios. The suite declares no `Background` and no
- *  `Scenario Outline` (measured), so a scenario is its `Scenario:` line plus
- *  every step line under it; `#` comments and the feature's free-form
- *  description are not steps. */
-function parseFeatureFile(path: string): DeclaredScenario[] {
-  const scenarios: DeclaredScenario[] = [];
-  let feature = "";
-  let current: DeclaredScenario | undefined;
-  for (const raw of readFileSync(path, "utf8").split("\n")) {
-    const line = raw.trim();
-    if (line.startsWith("#")) continue;
-    if (line.startsWith("Feature:")) {
-      feature = line.slice("Feature:".length).trim();
-      current = undefined;
-      continue;
-    }
-    if (line.startsWith("Scenario:")) {
-      const scenario = line.slice("Scenario:".length).trim();
-      current = { feature, scenario, steps: [], node: `${feature} › ${scenario}` };
-      scenarios.push(current);
-      continue;
-    }
-    if (current !== undefined && STEP_LINE.test(line)) current.steps.push(line);
-  }
-  return scenarios;
-}
+//
+// The reader lives in tests/helpers/gherkin-scenarios.ts and is pinned on its
+// own by tests/gherkin-scenario-reader.test.ts. The suite declares no
+// `Background` (measured), but it does declare Scenario Outlines: each
+// Examples row is a scenario of its own, expected under the suite
+// `<feature> › <outline title>` (the outline's unfilled title, as the
+// reporter's describe chain names it) by its filled-in title, with its step
+// lines filled in from the row. A plain scenario is expected under its
+// feature with its own step lines only. `#` comments and the feature's
+// free-form description are not steps.
 
 /** Every scenario the suite declares RIGHT NOW, read off the `.feature` files
  *  the config's own glob collects. Derived, so CR-CRU-018's mobile scenarios
@@ -461,7 +431,7 @@ function placedTests(event: StoredEvent): PlacedTest[] {
 /** The stored tests of one declared scenario, under every browser that ran it. */
 function testsOf(event: StoredEvent, scenario: DeclaredScenario): StoredTest[] {
   return placedTests(event)
-    .filter((placed) => placed.suite === scenario.feature && placed.test.name === scenario.scenario)
+    .filter((placed) => placed.suite === scenario.suite && placed.test.name === scenario.scenario)
     .map((placed) => placed.test);
 }
 
@@ -566,14 +536,15 @@ describe("a real client drive of the e2e suite streams the Gherkin to the board"
       expect(event.tier).toBe("e2e");
       expect(event.framework).toBe(E2E_FRAMEWORK);
 
-      // Each stored suite is one feature under one browser: named by its
-      // `Feature:` title, and carrying the browser (Playwright project) it ran
-      // under.
-      const features = new Set(run.declared.map((scenario) => scenario.feature));
+      // Each stored suite is one feature, or one Scenario Outline of a
+      // feature, under one browser: named by its `Feature:` title (or
+      // `<feature> › <outline title>`), and carrying the browser (Playwright
+      // project) it ran under.
+      const declaredSuites = new Set(run.declared.map((scenario) => scenario.suite));
       const suites = event.tree ?? [];
       expect(suites.length).toBeGreaterThan(0);
       expect(suites.filter((suite) => (suite.browser ?? "") === "").map((suite) => suite.name)).toEqual([]);
-      expect(suites.filter((suite) => !features.has(suite.name)).map((suite) => suite.name)).toEqual([]);
+      expect(suites.filter((suite) => !declaredSuites.has(suite.name)).map((suite) => suite.name)).toEqual([]);
 
       // Every declared scenario is a test under its feature.
       const names = placedTests(event).map((placed) => `${placed.suite} › ${placed.test.name}`);
