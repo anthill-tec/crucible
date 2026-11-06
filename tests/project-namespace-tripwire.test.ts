@@ -1672,7 +1672,7 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // CR: §S1's streaming join at both ends (app.js:637, the reactive binding that
 // reads it, and app.js:1043, the predicate itself), §S2's narration standing
 // where the retired 🗺 shortcut stood (app.js:2541), and §S1's
-// `app-agent-streaming` keyframes block (styles.css:1756). The other five are
+// `app-agent-streaming` keyframes block (styles.css's `@keyframes app-stream-flow`). The other five are
 // the lineage those same new blocks cite, which is why they are prose and not
 // decoration: CR-CRU-014 / CR-CRU-076 / CR-CRU-079 in the §S2 narration (the
 // door's origin, the tab that displaced it, the pathname contract that

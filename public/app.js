@@ -1564,9 +1564,10 @@
 
     // CR-CRU-200 §S4 — the agent's line while it streams, composed here from
     // `state.openRuns`: the newest open run of the agent in this project that
-    // carries `live` (a newer run without it is passed over) reads
-    // `running <done of total> · <currentFile>`, the file part absent without
-    // one. Null when no such run is open, and the row reads its own line.
+    // carries `live` (a newer run without it is passed over) gives the line as
+    // an element of parts reading `running <done of total> · <currentFile>`, the
+    // separator and file parts absent without one. Nothing (null) when no such
+    // run is open, and the row reads its own line.
     //
     // The line is drawn in parts so the count stays whole and a file too long
     // for the card is clipped from its start behind a `…` (its name stays in
