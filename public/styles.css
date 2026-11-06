@@ -369,6 +369,16 @@ body {
 }
 .app-agent-id { font: 600 11px var(--mono); color: var(--ink); }
 .app-agent-msg { color: var(--ink-dim); font: 10.5px var(--mono); }
+/* No line of an agent's card runs out of it: a long token wraps inside the card. */
+.app-agent-row .app-agent-id, .app-agent-row .app-agent-msg { min-width: 0; overflow-wrap: anywhere; }
+/* The streaming line stays one line: the count is whole, the file fills the rest
+   and is clipped from its start behind a `…` (right-to-left box), while the path
+   inside is isolated left-to-right so its characters keep their order. */
+.app-agent-live { display: flex; min-width: 0; white-space: nowrap; }
+.app-agent-live-count { flex: 0 0 auto; }
+.app-agent-live-sep { flex: 0 0 auto; white-space: pre; }
+.app-agent-live-file { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.app-agent-live-path { direction: ltr; unicode-bidi: isolate; }
 .app-agent-row.tombstoned { opacity: 0.45; }
 
 /* ── Project pane (§S5.2 CR-CRU-007 — agents nested as ⌁-marked sub-rows) ── */
