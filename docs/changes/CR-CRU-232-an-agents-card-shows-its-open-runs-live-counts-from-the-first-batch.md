@@ -1,10 +1,11 @@
 # CR-CRU-232 — an agent's card shows its open run's live counts from the first batch
 
-**Type** fix · **Points** 2 (PROPOSED; scored at its gap analysis) · **Wave** 8 (0.4.0) · **Depends on** — ·
-**Status** PENDING · Pre-review: due
+**Type** fix · **Points** 2 (confirmed at its gap analysis, 2026-11-06) · **Wave** 8 (0.4.0) · **Depends on** — ·
+**Status** PENDING · Pre-review: none — no trigger
 - **Filed 2026-11-06** by user ruling, as a bug fix in the current wave, from a defect the user saw on the dashboard
-  during a baseline run: the orchestrator's agent card read "gated test run starting" for the whole run. It gets its
-  gap analysis when it comes up in the queue.
+  during a baseline run: the orchestrator's agent card read "gated test run starting" for the whole run.
+- **Gap analysis 2026-11-06**, on develop `44839b75`: baseline bun 4683/0 (`evt-1793970764263-1`), python 6082/0
+  (`evt-1793972157561-2`).
 
 ## Problem
 
@@ -26,30 +27,67 @@
   with `live` 5 and 9 leaves the derived line on the fallback; an item that carries `live` from its first answer moves
   through "running 5", "running 9".
 - **It depends on the tab's history.** A tab opened after the run's first batch shows the counts (seen:
-  `running 267/456 · tests/client/test_mvn_crucible_axi.py`), and a tab whose slot held a `live`-carrying run before
-  updates for the next run in that slot. A tab open from before the run's start, the common case, stays on the message.
-- **The running card may share it (suspected).** The Runs tab's running card (`RunningCard`) reads `run.live` the same
-  way to show its progress and to become clickable into the live drill-in. Confirmed or refuted at the gap analysis.
-- **No test covers the transition.** The tests that pin the live line seed an open run that carries `live` from the
-  first answer.
+  `running 267/456 · tests/client/test_mvn_crucible_axi.py`). A tab open from before the run's start, the common case,
+  stays on the message.
+- **The running card shares it (confirmed at the gap analysis).** The Runs tab's running card (`RunningCard`) reads
+  `run.live` the same way to show its progress and to become clickable into the live drill-in. With the Runs tab open
+  before a python run started, the card stayed plain ("running…", no progress, not clickable) and the agent row stayed
+  on "gated test run starting", while the board served the run's `live` at 321/456.
+- **A tab switch only masks it.** Switching tabs re-runs the row's binding, which then reads `live` and follows it from
+  there; the next run is stuck again. Seen on 2026-11-06: the row was stuck on the Roadmap tab, and a switch to Runs
+  made it live.
+- **No test covers the transition.** The unit tests that pin the live line and the live card seed an open run that
+  carries `live` from the first answer, and the e2e live double (`tests/e2e/steps/run-live-mock.ts`) adds `live` to
+  the run in every answer, the first included.
 
-## Design (PROPOSED; settled at the gap analysis)
+## What the gap analysis measured
 
-- **An open run's card and agent row follow `live` from the answer that first carries it**, without a reload, whatever
-  the tab held before: the agent row moves from its message to `running N/M · <current file>`, and the running card to
-  its live progress, on the first answer that carries `live`.
-- **Where the fix lives** (decided at the gap analysis): either the board serves `live` on every open run (empty until
-  the first batch), or the page gives every open run a `live` slot before it replaces the list.
-- **Nothing else changes:** the client's withheld heartbeats, the live frame's throttle, and what the row and the card
-  show once `live` is there.
+- **The board's answer is right and stays as it is.** An open run's brief carries `live` only once a batch has landed;
+  six server tests pin that the key is absent before then (the run-live read surface, the run start's total, the
+  batch fill, the atomic batch). The defect is the page's alone.
+- **One place fills the slice.** `refetchEvents` is the only writer of `state.openRuns`; the agent row
+  (`agentLiveLine`), the streaming highlight and the running card all read it.
+- **Where the rows live.** The agent rows sit in the workspace's project pane, shown beside every workspace tab
+  (Roadmap, Runs, Workflow, Coverage, BDD, Compile). The home page has no agent rows.
+
+## Design
+
+- **§S1 — every open run the page holds has a `live` slot.** As `refetchEvents` puts an answer's open runs into
+  `state.openRuns`, a run the board served without `live` is held with `live` empty (null), so a binding that reads
+  it subscribes to it and re-runs when the board's first batch fills it. The board's answer is unchanged.
+- **§S2 — the agent row follows its run from the first batch.** On the first answer that carries the run's `live`, the
+  row moves from the agent's message to `running N/M · <current file>`, without a reload, and moves with each later
+  answer, whatever the tab held before.
+- **§S3 — on every tab** (user ruling 2026-11-06). The agent row shows what the agent is doing whatever the main panel
+  shows: on each workspace tab it reads the same line, and switching tabs never takes it away or brings it back.
+- **§S4 — the running card follows its run from the first batch.** A running card on screen when the run's first
+  batch lands takes its live progress (failures so far, the bar, done of total, the current file) and becomes the
+  clickable live card that opens the live drill-in, without a reload.
+- **§S5 — nothing else changes:** the board's answer, the client's withheld heartbeats, the live frame's throttle, and
+  what the row and the card show once `live` is there; a run with no batch yet reads as it does today.
 
 ## Acceptance criteria
 
-To be written at the gap analysis. Each pins what the row and the card show after `live` arrives, not only that the
-board serves it.
-- **A BDD scenario on the UI:** an e2e feature in `tests/e2e/features/` opens a project's board, opens a run for an
-  agent with no batch yet, checks the agent row reads the agent's message, then posts the run's first batch and checks
-  the row reads `running N/M` with the run's counts, without a reload; and the same for the running card.
+- [ ] **AC1 (§S1, §S2).** A workspace page that first receives an open run for an agent without `live` shows the
+  agent's message on its row; when a later answer carries the run's `live` (e.g. 5 of 40, current file `a.py`) the row
+  reads `running 5/40 · a.py` without a reload, and a further answer (12 of 40, `b.py`) moves it to
+  `running 12/40 · b.py`.
+- [ ] **AC2 (§S1, §S2).** The same holds for a run that opens in a slot a settled run held before: run A settles,
+  run B opens without `live`, then B's `live` arrives and the row reads B's counts.
+- [ ] **AC3 (§S4).** With the Runs tab on screen, a running card first rendered without `live` is plain (no progress,
+  not clickable); when `live` arrives it shows the progress line with the counts and becomes clickable into the live
+  drill-in, without a reload.
+- [ ] **AC4 (§S3).** With the run's `live` landed, the agent row reads its `running N/M` line on each workspace tab,
+  and still reads it after switching tabs back and forth; a later answer's counts reach the row on whichever tab is
+  open.
+- [ ] **AC5 (§S5).** A run with no batch yet still reads the agent's message on its row and a plain running card; the
+  board's open-run brief still omits `live` before the first batch (the existing server tests pass unchanged); every
+  existing test passes unchanged.
+- [ ] **AC6 (BDD).** A new e2e feature in `tests/e2e/features/` opens a project's board on the Roadmap tab, opens a run
+  for an agent against the real board (no live double), checks the agent row reads the agent's message, then posts
+  the run's first stream batch and checks the row reads `running N/M` with that batch's counts without a reload;
+  switches to Runs and checks the row still reads it and the running card shows the counts; then, with Runs on screen,
+  opens a second run, posts its first batch, and checks the running card turns live and the row follows it.
 
 ## Non-goals
 
