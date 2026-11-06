@@ -1,0 +1,6 @@
+{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"nxshapes","test_binary":"shapes","kind":"test"}}
+{"type":"test","event":"started","name":"nxshapes::shapes$prints_then_panics"}
+{"type":"test","event":"started","name":"nxshapes::shapes$passes"}
+{"type":"test","event":"failed","name":"nxshapes::shapes$prints_then_panics","exec_time":0.002492365,"stdout":"some output first\n\nthread 'prints_then_panics' (1241652) panicked at tests/shapes.rs:23:5:\nline one\nline two\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"}
+{"type":"test","event":"ok","name":"nxshapes::shapes$passes","exec_time":0.003080817}
+{"type":"suite","event":"failed","passed":1,"failed":1,"ignored":0,"measured":0,"filtered_out":3,"exec_time":0.005573182,"nextest":{"crate":"nxshapes","test_binary":"shapes","kind":"test"}}

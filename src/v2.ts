@@ -5,6 +5,7 @@
 import { codecs, isRecordStreamCodec, parseRunBody, parseStreamBody, viewCodecs } from "./codecs/index.ts";
 import type { Codec, IngestWarning } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
+import { parseNextestList } from "./codecs/nextest.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
 import { burndown, forecast, planChanges, seededRandom, velocity } from "./analytics.ts";
@@ -1525,6 +1526,66 @@ async function handleRunStream(store: Store, runId: string, req: Request): Promi
 /** A batch for a run already settled: a 409 carrying its state and the event that settled it. */
 function settledStreamRefusal(runId: string, settled: Pick<RunRecord, "state" | "eventId">): Response {
   return fail(409, `run ${runId} is already ${settled.state} — a settled run takes no stream; ${STREAM_REFUSED}`, {
+    state: settled.state,
+    ...(settled.eventId !== undefined ? { eventId: settled.eventId } : {}),
+  });
+}
+
+/** An open run's test list: `/api/v2/runs/<runId>/tests`. */
+const RUN_TESTS_RE = /^\/api\/v2\/runs\/([^/]+)\/tests$/;
+
+/** The codec a test list is posted under: nextest's own list, as `cargo nextest list --message-format json` writes it. */
+const TEST_LIST_CODEC = "nextest-list";
+
+/**
+ * POST /api/v2/runs/<runId>/tests {projectKey, agentId, codec: "nextest-list",
+ * data}: an open run's test list, as nextest wrote it, taken once and
+ * answered `200 {ok, runId, total}` — the listed total, the tests whose
+ * `filter-match` is `matches`, which replaces the run start's total.
+ *  - the caller and run rules are the stream route's: `readIngestBody` (413),
+ *    `requireProject` (404), `requireRegisteredCaller` (409), and
+ *    `resolveRunClose` (an unknown run or another agent's a 400, a settled
+ *    one a 409);
+ *  - `codec` other than `nextest-list`, or `data` that is not nextest's test
+ *    list, is a 400;
+ *  - a second list is a 409.
+ * Every refusal stores nothing.
+ */
+async function handleRunTests(store: Store, runId: string, req: Request): Promise<Response> {
+  const body = await readIngestBody(req);
+  if (body instanceof Response) return body;
+  if (body === null) return fail(400, `malformed JSON body — ${STREAM_REFUSED}`);
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const close = resolveRunClose(store, pk.key, caller.agentId, { runId }, STREAM_REFUSED);
+  if (close.settled !== undefined) return settledListRefusal(runId, close.settled);
+  if (close.fail !== undefined) return close.fail;
+  if (body.codec !== TEST_LIST_CODEC) {
+    return fail(400, `codec ${String(body.codec)} is not ${TEST_LIST_CODEC} — ${STREAM_REFUSED}`);
+  }
+  const { data } = body;
+  if (typeof data !== "string") return fail(400, `data must be nextest's test list as its JSON text — ${STREAM_REFUSED}`);
+  let total: number;
+  try {
+    total = parseNextestList(data).total;
+  } catch (cause) {
+    return fail(400, `${cause instanceof Error ? cause.message : String(cause)} — ${STREAM_REFUSED}`);
+  }
+  const outcome = store.takeRunTestList(runId, data, total);
+  if (outcome.ok) return json({ ok: true, runId, total });
+  if (outcome.refused === "held") {
+    return fail(409, `run ${runId} already holds its test list — a run takes one; ${STREAM_REFUSED}`);
+  }
+  // A run gone meanwhile (its project deleted) is unknown, never settled.
+  if (outcome.run === null) return fail(400, `unknown runId: ${runId} — the run is gone; ${STREAM_REFUSED}`);
+  return settledListRefusal(runId, outcome.run);
+}
+
+/** A list for a run already settled: a 409 carrying its state and the event that settled it. */
+function settledListRefusal(runId: string, settled: Pick<RunRecord, "state" | "eventId">): Response {
+  return fail(409, `run ${runId} is already ${settled.state} — a settled run takes no test list; ${STREAM_REFUSED}`, {
     state: settled.state,
     ...(settled.eventId !== undefined ? { eventId: settled.eventId } : {}),
   });
@@ -5889,6 +5950,10 @@ export function handleV2(
   const streamRunId = RUN_STREAM_RE.exec(pathname)?.[1];
   if (req.method === "POST" && streamRunId !== undefined) {
     return handleRunStream(store, decodeURIComponent(streamRunId), req);
+  }
+  const listRunId = RUN_TESTS_RE.exec(pathname)?.[1];
+  if (req.method === "POST" && listRunId !== undefined) {
+    return handleRunTests(store, decodeURIComponent(listRunId), req);
   }
   const liveRunId = RUN_LIVE_RE.exec(pathname)?.[1];
   if (req.method === "GET" && liveRunId !== undefined) {

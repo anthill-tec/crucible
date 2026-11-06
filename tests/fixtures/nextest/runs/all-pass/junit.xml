@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="3" failures="0" errors="0" uuid="b07e6513-3152-4ea4-87d1-1001c4890501" timestamp="2026-11-06T23:37:56.290+05:30" time="0.003">
+    <testsuite name="nxpass::it" tests="1" disabled="0" errors="0" failures="0">
+        <testcase name="integration_adds" classname="nxpass::it" timestamp="2026-11-06T23:37:56.290+05:30" time="0.002">
+        </testcase>
+    </testsuite>
+    <testsuite name="nxpass" tests="2" disabled="0" errors="0" failures="0">
+        <testcase name="tests::adds" classname="nxpass" timestamp="2026-11-06T23:37:56.290+05:30" time="0.003">
+        </testcase>
+        <testcase name="tests::adds_zero" classname="nxpass" timestamp="2026-11-06T23:37:56.290+05:30" time="0.003">
+        </testcase>
+    </testsuite>
+</testsuites>

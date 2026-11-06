@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="2" failures="1" errors="0" uuid="589ea62f-242a-4619-8d35-f339837f3459" timestamp="2026-11-06T23:37:57.542+05:30" time="2.003">
+    <testsuite name="nxslow" tests="2" disabled="0" errors="0" failures="1">
+        <testcase name="waits::quick" classname="nxslow" timestamp="2026-11-06T23:37:57.542+05:30" time="0.003">
+        </testcase>
+        <testcase name="waits::hangs" classname="nxslow" timestamp="2026-11-06T23:37:57.542+05:30" time="2.003">
+            <failure type="test timeout"/>
+            <system-out>
+running 1 test
+</system-out>
+            <system-err>(stdout and stderr are combined)</system-err>
+        </testcase>
+    </testsuite>
+</testsuites>

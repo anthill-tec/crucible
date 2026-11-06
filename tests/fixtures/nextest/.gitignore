@@ -1,0 +1,4 @@
+# The scratch crates are built under /tmp by capture.sh, never here; an editor's
+# own cargo check of them leaves these behind, and none is a fixture.
+crates/*/target/
+crates/*/Cargo.lock

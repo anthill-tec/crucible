@@ -1,0 +1,4 @@
+{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"nxshapes","test_binary":"shapes","kind":"test"}}
+{"type":"test","event":"started","name":"nxshapes::shapes$returns_err"}
+{"type":"test","event":"failed","name":"nxshapes::shapes$returns_err","exec_time":0.002900083,"stdout":"Error: \"the result is an error\"\n"}
+{"type":"suite","event":"failed","passed":0,"failed":1,"ignored":0,"measured":0,"filtered_out":4,"exec_time":0.002900083,"nextest":{"crate":"nxshapes","test_binary":"shapes","kind":"test"}}

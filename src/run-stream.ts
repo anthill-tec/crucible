@@ -7,15 +7,18 @@
 // - `run_live`: one row per open run that has streamed — the counts, the
 //   runner's total, the last file, the offset up to which lines are decoded,
 //   the undecodable count, whether the stream was cut, the stream codec
-//   the run's first batch fixed, and a view codec's reader state between
+//   the run's first batch fixed, and a codec's reader state between
 //   batches (migration v22).
 // - `runs.total` (migration v22): the run start's own total, the live read's
 //   fallback when the stream states none.
 // - `run_live_failures`: the run's failures so far, in order.
+// - `run_test_lists`: an open run's test list, as read once when the run
+//   took it, and its listed total — at most one per run.
 import type { Database } from "bun:sqlite";
-import { leafNameOf, parseCrucibleEvents, readStreamLine, suiteNameOf } from "./codecs/crucible-events.ts";
-import { isRecordStreamCodec, viewCodecs, type ViewFill, type ViewLive } from "./codecs/index.ts";
+import { leafNameOf, suiteNameOf } from "./codecs/crucible-events.ts";
+import { codecs, decodeHeldStream, isRecordStreamCodec, viewCodecs, type ViewFill, type ViewLive } from "./codecs/index.ts";
 import { failureOf, nonBlank } from "./codecs/junit.ts";
+import { takeNextestList } from "./codecs/nextest.ts";
 import type { RunLive, RunLiveFailure, RunSchema } from "./types.ts";
 
 /** The tables a run's stream and live state are held in. */
@@ -63,6 +66,46 @@ export function createRunStreamTables(db: Database): void {
 
 /** A live failure's browser: added last, by the base pass's DDL and by the migration's ALTER alike. */
 export const LIVE_FAILURE_BROWSER_DDL = "ALTER TABLE run_live_failures ADD COLUMN browser TEXT";
+
+/**
+ * The table an open run's test list is held in: created by the base pass in
+ * its current shape, as every table a legacy store never had is.
+ */
+export function createRunTestListTable(db: Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS run_test_lists (
+      run_id TEXT PRIMARY KEY,
+      total INTEGER NOT NULL,
+      held TEXT NOT NULL
+    );
+  `);
+}
+
+/** The run's held test list and its listed total, or null when it was given none. */
+function testListOf(db: Database, runId: string): { total: number; held: string } | null {
+  return db
+    .query<{ total: number; held: string }, [string]>(`SELECT total, held FROM run_test_lists WHERE run_id = ?`)
+    .get(runId);
+}
+
+/**
+ * An open run's test list, nextest's text, read once into the form each batch
+ * and the close resolve from (`takeNextestList`), stored with its listed
+ * total, once: false, storing nothing, when the run holds one already.
+ * Called inside the list's transaction, after the run's open state was
+ * re-read.
+ */
+export function storeRunTestList(db: Database, runId: string, text: string, total: number): boolean {
+  if (testListOf(db, runId) !== null) return false;
+  const { held } = takeNextestList(text);
+  db.query(`INSERT INTO run_test_lists (run_id, total, held) VALUES (?, ?, ?)`).run(runId, total, held);
+  return true;
+}
+
+/** The run start's own total, or null when it stated none. */
+function startTotalOf(db: Database, runId: string): number | null {
+  return db.query<{ total: number | null }, [string]>(`SELECT total FROM runs WHERE run_id = ?`).get(runId)?.total ?? null;
+}
 
 /** What a batch did, or why it was refused; `held` is the stream's UTF-8 length either way. */
 export type StreamBatchOutcome =
@@ -134,13 +177,16 @@ function heldBytesFrom(db: Database, runId: string, offset: number): Buffer {
 
 /**
  * A run's held stream: the stream codec its first batch fixed, the whole text
- * held, and whether a batch was refused at `ingest_body_bytes` (the stream was
- * cut).
+ * held, whether a batch was refused at `ingest_body_bytes` (the stream was
+ * cut), and the run's test list (as read when the run took it) and start
+ * total, each only when held.
  */
 export interface HeldStream {
   codec: string;
   text: string;
   cut: boolean;
+  list?: string;
+  startTotal?: number;
 }
 
 /** The stream the run holds, or null when it has streamed nothing. */
@@ -152,17 +198,26 @@ export function heldStreamOf(db: Database, runId: string): HeldStream | null {
     .all(runId)
     .map((row) => row.text)
     .join("");
-  return { codec: live.codec, text, cut: live.cut === 1 };
+  const list = testListOf(db, runId);
+  const startTotal = startTotalOf(db, runId);
+  return {
+    codec: live.codec,
+    text,
+    cut: live.cut === 1,
+    ...(list !== null ? { list: list.held } : {}),
+    ...(startTotal !== null ? { startTotal } : {}),
+  };
 }
 
 /** Why an aborted run's stream is not trusted when the codec states no reason of its own. */
 export const ABORTED_BEFORE_CLOSE = "aborted before its close";
 
 /**
- * §S3 — what an aborted streamed run keeps: its held stream decoded with the
- * `crucible-events` codec — the tree and counts — and why it cannot be
+ * What an aborted streamed run keeps: its held stream decoded by its
+ * run's record stream codec — the tree and counts — and why it cannot be
  * trusted. An aborted streamed run is always incomplete: when the stream is
- * otherwise whole, the reason is that it was aborted before its close.
+ * otherwise whole, the reason is that it was aborted before its close; when
+ * the codec cannot decode it, the reason is why.
  *
  * Only a RECORD stream is decoded: a view stream is not the run's record, so
  * its run keeps nothing of it and is aborted as a run with no stream (null).
@@ -170,8 +225,12 @@ export const ABORTED_BEFORE_CLOSE = "aborted before its close";
 export function abortedStreamRecord(
   held: HeldStream,
 ): (Pick<RunSchema, "summary" | "tree"> & { incomplete: string }) | null {
-  if (!isRecordStreamCodec(held.codec)) return null;
-  const decoded = parseCrucibleEvents(held.text, held.cut);
+  const codec = codecs.get(held.codec);
+  if (codec === undefined || !isRecordStreamCodec(held.codec)) return null;
+  const decoded = decodeHeldStream(codec, held, held.codec);
+  if ("error" in decoded) {
+    return { summary: { total: 0, passed: 0, failed: 0, pending: 0, duration_ms: 0 }, tree: [], incomplete: decoded.error };
+  }
   return { summary: decoded.summary, tree: decoded.tree, incomplete: decoded.incomplete ?? ABORTED_BEFORE_CLOSE };
 }
 
@@ -282,7 +341,8 @@ function storeViewFill(db: Database, runId: string, live: ViewLive, known: numbe
  * The one caller of a view codec's `fill`: a view stream is handed, from its
  * decoded offset, to its codec (looked up in `viewCodecs` as it fills), which
  * answers the new offset and the reader state to hold. A record stream is
- * read line by line by the `crucible-events` line reading, unchanged.
+ * read line by line by its codec's line reader, opened on the run's test list
+ * and the reader state the last batch left, into the one test-end shape.
  */
 function fillRunLive(db: Database, runId: string): void {
   const live = liveRow(db, runId);
@@ -306,6 +366,10 @@ function fillRunLive(db: Database, runId: string): void {
   }
   const end = pending.lastIndexOf(0x0a);
   if (end === -1) return;
+  const lineReader = codecs.get(live.codec)?.lineReader;
+  if (lineReader === undefined) return;
+  const list = testListOf(db, runId);
+  const reader = lineReader({ ...(list !== null ? { list: list.held } : {}), state: live.reader_state });
   const state = { ...live };
   let position = db
     .query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM run_live_failures WHERE run_id = ?`)
@@ -316,7 +380,7 @@ function fillRunLive(db: Database, runId: string): void {
   );
   // A test's steps are never read here: the live state counts tests (its steps are in the stored run).
   for (const line of pending.subarray(0, end).toString("utf8").split("\n")) {
-    const read = readStreamLine(line);
+    const read = reader.read(line);
     if (read.event === "undecodable") state.undecodable += 1;
     else if (read.event === "run-start") state.total = read.total !== undefined && read.total > 0 ? read.total : null;
     else if (read.event === "test-end") {
@@ -346,7 +410,7 @@ function fillRunLive(db: Database, runId: string): void {
   }
   db.query(
     `UPDATE run_live SET completed = ?, total = ?, passed = ?, failed = ?, pending = ?, current_file = ?,
-       decoded_offset = ?, undecodable = ? WHERE run_id = ?`,
+       decoded_offset = ?, undecodable = ?, reader_state = ? WHERE run_id = ?`,
   ).run(
     state.completed,
     state.total,
@@ -356,6 +420,7 @@ function fillRunLive(db: Database, runId: string): void {
     state.current_file,
     live.decoded_offset + end + 1,
     state.undecodable,
+    reader.state(),
     runId,
   );
 }
@@ -371,7 +436,15 @@ export function liveStateToken(db: Database, runId: string): string | null {
   const failures = db
     .query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM run_live_failures WHERE run_id = ?`)
     .get(runId)!.n;
-  return JSON.stringify([live.completed, live.total, live.passed, live.failed, live.pending, live.current_file, failures]);
+  return JSON.stringify([
+    live.completed,
+    liveTotal(db, runId, live),
+    live.passed,
+    live.failed,
+    live.pending,
+    live.current_file,
+    failures,
+  ]);
 }
 
 /** §S4 — whether any OPEN run of the project still holds a stream. */
@@ -387,13 +460,16 @@ export function projectHasStreamingRun(db: Database, projectKey: string): boolea
 
 /**
  * The total the live read answers: the stream's own `run-start` total when
- * it states one, otherwise the run start's total; with either, never below
- * `completed`, and 0 read as no total. Null when there is none.
+ * it states one, otherwise the run's listed total when it was given a test
+ * list, otherwise the run start's total; 0 read as no total. A codec whose
+ * pending results lie outside the run's total adds the pending results seen.
+ * Never below `completed`. Null when there is none.
  */
 function liveTotal(db: Database, runId: string, live: LiveRow): number | null {
-  const started = db.query<{ total: number | null }, [string]>(`SELECT total FROM runs WHERE run_id = ?`).get(runId);
-  const stated = live.total ?? started?.total ?? null;
-  return stated !== null && stated > 0 ? Math.max(stated, live.completed) : null;
+  const stated = live.total ?? testListOf(db, runId)?.total ?? startTotalOf(db, runId);
+  if (stated === null || stated <= 0) return null;
+  const outside = codecs.get(live.codec)?.pendingOutsideTotal === true ? live.pending : 0;
+  return Math.max(stated + outside, live.completed);
 }
 
 /** §S4 — the run's live state, or null when it holds none. */
@@ -418,6 +494,7 @@ export function deleteRunStream(db: Database, runId: string): void {
   db.query(`DELETE FROM run_stream_batches WHERE run_id = ?`).run(runId);
   db.query(`DELETE FROM run_live WHERE run_id = ?`).run(runId);
   db.query(`DELETE FROM run_live_failures WHERE run_id = ?`).run(runId);
+  db.query(`DELETE FROM run_test_lists WHERE run_id = ?`).run(runId);
 }
 
 /** §S2 — a deleted project's runs' batches and live state, deleted while its runs remain. */
@@ -427,6 +504,9 @@ export function deleteProjectRunStreams(db: Database, projectKey: string): void 
   );
   db.query(`DELETE FROM run_live WHERE run_id IN (SELECT run_id FROM runs WHERE project_key = ?)`).run(projectKey);
   db.query(`DELETE FROM run_live_failures WHERE run_id IN (SELECT run_id FROM runs WHERE project_key = ?)`).run(
+    projectKey,
+  );
+  db.query(`DELETE FROM run_test_lists WHERE run_id IN (SELECT run_id FROM runs WHERE project_key = ?)`).run(
     projectKey,
   );
 }

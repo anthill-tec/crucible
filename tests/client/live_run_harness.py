@@ -47,7 +47,7 @@ INGEST_PATHS = ("/api/v2/runs", "/api/v2/runs/parsed", "/api/v2/runs/compile")
 # version. Both health routes answer it.
 HEALTH_PATHS = ("/api/health", "/api/v2/health")
 HEALTH_VERSION = "0.4.0"
-HEALTH_CODECS = {"test": ["crucible-events", "junit"],
+HEALTH_CODECS = {"test": ["crucible-events", "junit", "nextest"],
                  "coverage": ["jacoco", "lcov"]}
 # The stream codec a python unittest run's record is written in (CR-CRU-224),
 # and the open run's stream route a client relays it to (CR-CRU-200 §S2).
