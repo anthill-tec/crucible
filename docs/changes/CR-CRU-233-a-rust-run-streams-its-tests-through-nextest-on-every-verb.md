@@ -39,8 +39,10 @@ targets table Model B's scaffold writes)
 
 - **§S1 — every test-running verb streams.** Each of the four bodies runs nextest with the stream on stdout, relays
   it to the open run with codec `nextest`, and closes the run from the stream; llvm-cov's lcov stays a final report.
-- **§S2 — the total from `nextest list`.** Before the run the client lists the tests the run will run (its profile,
-  filter, features and selection; under `show-env` for a coverage run) and opens the run with that total.
+- **§S2 — the total and the binary ids from `nextest list`.** Once cargo has built and before the run, the client lists
+  the tests the run will run (its profile, filter, features and selection; under `show-env` for a coverage run) and
+  posts the list, as nextest wrote it, to the open run (`POST /api/v2/runs/<runId>/tests`, CR-CRU-202 §S7). The board
+  takes the run's total and each test's binary id from it; the client counts nothing.
 - **§S3 — the declaration.** A rust project declares its targets in `crucible.toml`, in the bun table's vocabulary:
   `framework = "nextest"` and `stream = { codec = "nextest", path = "stdout" }` (a new `path` value: the runner's
   stdout). Rust projects are upgraded to declare it through Model B's scaffold, and Crucible's installer helps create
@@ -58,7 +60,7 @@ targets table Model B's scaffold writes)
 To be made exact at the gap analysis. These hold under any design:
 - [ ] A rust run's tests reach the open run one by one while it runs, through the real client and real nextest, from
   each of the four bodies.
-- [ ] The open run's total is the listed total from the run's start.
+- [ ] The open run's total is the listed total, posted before the run's first result.
 - [ ] The stored result equals the JUnit report's for the same run, on every verb, asserted before the JUnit path is
   removed.
 - [ ] An unsupported nextest is refused before cargo builds, naming the minimum version.

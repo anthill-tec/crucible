@@ -1,11 +1,15 @@
 # CR-CRU-202 — the board decodes a rust run's nextest stream as its record and its live view
 
-**Type** feature · **Points** 8 (re-scored at its gap analysis, 2026-11-06) · **Wave** 8 (0.4.0) · **Depends on**
-CR-CRU-200 · **Status** PENDING · Pre-review: due — 8 points; user rulings at the gap analysis
+**Type** feature · **Points** 13 (re-scored at its gap analysis, 2026-11-06) · **Wave** 8 (0.4.0) · **Depends on**
+CR-CRU-200 · **Status** PENDING · Pre-review: ran — 8 points; user rulings at the gap analysis
 - **Filed 2026-10-20** (user rulings 2026-10-20; design in `DN-crucible-live-test-progress.md`).
 - **Split at its gap analysis 2026-11-06** (user ruling): this CR keeps the board's half (the codec, the live view, the
   record and its check); CR-CRU-233 takes the rust client's half (streaming on every verb, the total, the declaration,
   the JUnit path's removal).
+- **Pre-review 2026-11-06** (`CR-CRU-202-SPEC-REVIEW`): eight findings, all folded — health's lists re-pinned (AC8),
+  the timeout and always-failing-retry exemptions (AC3), the message rule (§S3), same-name binaries (§S7, by user
+  ruling: the client supplies the binary ids), ignored results above the total (§S4), a total of 0 (§S5), and the PRD
+  and DN amended (a `chore(docs)` commit on develop).
 - **Gap analysis 2026-11-06**, on develop `6afc06b7`: baseline bun 4706/0 (`evt-1793985219460-3`), python 6082/0
   (`evt-1793986841461-4`).
 
@@ -59,61 +63,88 @@ test past its `slow-timeout`) and on three crates of a real consumer (`nai`: 143
 ## Design
 
 - **§S1 — a `nextest` record stream codec.** The board decodes `nextest` streams (nextest's `libtest-json-plus`,
-  message-format version 0.1) as a record stream codec, listed in health's `stream` codecs, accepted by the stream
-  route and by the close.
+  message-format version 0.1) as a record stream codec: it joins `codecs.test` and `codecs.stream` in health, the
+  stream route accepts it, and the close decodes it.
 - **§S2 — one line reader per record codec.** Each record stream codec reads a held stream line by line into the
-  board's one test-end shape (and its run-start total, where it states one). The live fill, an aborted run's record
-  and the close read through the run's codec, never a named codec. `crucible-events` reads as it does today.
+  board's one test-end shape. The live fill, an aborted run's record and the close read through the run's codec,
+  never a named codec. `crucible-events` reads as it does today.
 - **§S3 — how a nextest line reads.**
   - A test result (`ok`, `failed`, `ignored`) is one test: `ok` passes, `failed` fails, `ignored` is pending (user
-    ruling 2026-11-06). `started` lines and suite result lines are not tests.
-  - Its suite is JUnit's classname, from the binary's kind on its suite `started` line: the crate for `lib` and for
-    `proc-macro`, `<crate>::bin/<binary>` for `bin`, `<crate>::<binary>` for every other kind. Its name is the path
-    after `$`, with a retry suffix `#<n>` removed. Its duration is `exec_time` in milliseconds.
-  - A failure's message is the first line of its `stdout` that starts `thread '`, cut at the `panicked at <location>`
-    it names (JUnit's message), else the first non-blank line of `stdout`, else its `reason`; its body is `stdout`
-    (or `reason`); it carries no type.
-  - The binary-to-kind map read from the suite lines is kept between batches as the live row's reader state.
+    ruling 2026-11-06). `started` lines and suite result lines are not tests, and a suite line's figures are never
+    read as counts.
+  - Its name is the path after `$`, with a retry suffix `#<n>` removed. Its duration is `exec_time` in milliseconds.
+  - Its suite is its test binary's id, which is JUnit's classname (`<crate>` for a lib, `<crate>::bin/<name>` for a
+    bin, `<crate>::<name>` for an integration test), resolved as §S7 states.
+  - A failure's message is the first of these found in its `stdout`: the line `thread '<the test's path>' (<tid>)
+    panicked at <location>:` (the test's own thread, cut before the trailing colon); a line starting `note: test did
+    not panic as expected`; the first line starting `thread '`, cut the same way; the first non-blank line. With no
+    `stdout`, it is the line's `reason` (a timeout's `time limit exceeded`). Its body is `stdout` (or `reason`); it
+    carries no type.
   - A line that is not JSON, or JSON of no known shape, is undecodable.
 - **§S4 — the live view.** An open nextest run's live state counts each result as it lands, its current file being
-  the result's suite; each failure joins the live failures with its message. The total is the run start's
-  (`runs.total`): nextest's stream states none.
+  the result's suite, and each failure joins the live failures with its message. Its total is the run's listed total
+  (§S7), else the run start's, plus the pending results seen (an ignored test is outside the listed total); 0 is no
+  total.
 - **§S5 — the record and its check.** At the close the held stream is the run's record: one suite node per suite in
-  first-seen order, one leaf per result in stream order. The run is flagged incomplete, with each reason, when:
-  - its passed and failed tests differ from the run start's total, when the run states one ("the run started with N
-    tests, the stream holds M");
+  first-seen order, one leaf per result in stream order. The run is stored flagged incomplete, with each reason, when:
+  - its passed and failed tests differ from its total (the listed total, else the start's) when that total is above
+    0 ("the run listed N tests, the stream holds M"); a total of 0, or none, is not checked;
+  - a result's binary cannot be resolved to one test binary (§S7), naming it;
   - it holds an undecodable line;
   - it was cut at `ingest_body_bytes`.
-  A run with no total stated is not checked against one. An aborted nextest run keeps its decoded record, flagged.
+  An aborted nextest run keeps its decoded record, flagged.
 - **§S6 — nothing else changes:** `crucible-events` streams, the `junit` codec (rust runs filed as JUnit still decode as
   today), the stream route's batch rules, the live view's shape and the clients.
+- **§S7 — an open run takes its test list** (user ruling 2026-11-06: the client supplies the binary ids). nextest's
+  stream names a result `<crate>::<binary name>$<path>`, and a crate's lib, bin and integration test can share one
+  binary name; `cargo nextest list --message-format json` names each test's binary by its id.
+  - `POST /api/v2/runs/<runId>/tests {projectKey, agentId, codec: "nextest-list", data}` gives an open run the list,
+    as nextest wrote it, once. The caller and run rules are the stream route's; the body is bounded by
+    `ingest_body_bytes` (413); `data` that is not a nextest list is a 400; a second list is a 409; a settled run is
+    a 409. Every refusal stores nothing.
+  - The run's listed total is the list's tests whose `filter-match` is `matches`; it replaces the start's total.
+  - A result resolves to the listed binary of its crate and binary name whose tests hold its path. With no list, or
+    when no such binary or more than one holds it, the binary's kind from the stream's suite lines (kept per
+    `<crate>::<binary name>` between batches) gives the id; when that key names more than one kind or none, the
+    suite is `<crate>::<binary name>` and §S5 flags the run.
 
 ## Acceptance criteria
 
-The fixtures are streams and JUnit reports captured from real nextest 0.9.130 runs of a scratch workspace, kept under
-the test tree with the command that wrote them.
-- [ ] **AC1 (§S1).** A stream batch with codec `nextest` is accepted on an open run (200), health lists `nextest` among
-  the stream codecs, and a run whose first batch fixed `nextest` refuses a `crucible-events` batch (400), as for any
-  stream.
+The fixtures are streams, lists and JUnit reports captured from real nextest 0.9.130 runs of scratch workspaces, kept
+under the test tree with the commands that wrote them.
+- [ ] **AC1 (§S1).** A stream batch with codec `nextest` is accepted on an open run (200); health lists `nextest` in
+  `codecs.test` and `codecs.stream`; a run whose first batch fixed `nextest` refuses a `crucible-events` batch (400),
+  as for any stream.
 - [ ] **AC2 (§S2).** `fillRunLive`, `abortedStreamRecord` and the close each read a held stream through its run's
-  codec; a test drives each of the three with a `nextest` run and with a `crucible-events` run, and the
-  `crucible-events` results are unchanged (its existing tests pass unchanged).
-- [ ] **AC3 (§S3, §S5 — the record equals JUnit's).** For each captured run (all pass; a failure; a bin, lib and
-  integration target; a flaky test under retries; a test past its timeout), the record the board stores from the
-  stream has the same suites, test names, statuses, passed and failed counts and failure messages as the board's
-  `junit` decoding of the JUnit report nextest wrote in the same run; durations agree within one
-  millisecond; its ignored tests are pending leaves where the stream names them, and JUnit has none.
+  codec; a test drives each of the three with a `nextest` run and with a `crucible-events` run.
+- [ ] **AC3 (§S3, §S5, §S7 — the record equals JUnit's).** For each captured run, with its list posted, the record the
+  board stores from the stream has the same suites, test names, statuses, passed and failed counts and failure
+  messages as the board's `junit` decoding of the JUnit report nextest wrote in the same run, and durations within
+  one millisecond. The runs: all pass; a failure; a lib, a bin and an integration target with distinct names; a
+  crate whose lib, bin and integration test share its name; a panic in a spawned thread; a `#[should_panic]` test
+  that does not panic; a test returning `Err`; a flaky test under retries. Ignored tests are pending leaves where the
+  stream names them, and JUnit has none. Exempt, each named in its test: a timeout's message (JUnit's timeout
+  failure has none); and, for a test failing every retried attempt, its thread id in the message and its duration
+  (JUnit keeps the first attempt, the stream the last).
 - [ ] **AC4 (§S3).** A retried test's `#<n>` suffix is gone from its name; a timeout's failure message is its reason;
   a test whose `started` line has no result is not a test; a suite line's repeated or miscounted figures change
   nothing.
-- [ ] **AC5 (§S4).** An open nextest run started with total 6 whose stream lands in two batches (the second holding a
-  binary's suite line and its tests) reads `completed`, `passed`, `failed`, `pending`, the total 6 and the current
-  file (the latest result's suite) after each batch, and each failure in the live failures with its message, in
-  order; the binary's kind from the first batch names the suites of the second.
-- [ ] **AC6 (§S5).** A nextest run whose passed and failed tests differ from its start total is stored flagged with a
-  reason naming both figures; one with an undecodable line, or cut, is flagged naming each; one that matches is not
-  flagged; one with no start total is not checked against one; an aborted one keeps its record, flagged.
-- [ ] **AC7 (§S6).** Every existing test passes unchanged.
+- [ ] **AC5 (§S4).** An open nextest run with a listed total of 6, whose stream lands in two batches (the second holding
+  a binary's suite line, its tests and one `ignored` result), reads after each batch: `completed`, `passed`, `failed`,
+  `pending`, the total (6, then 7 once the ignored result lands) and the current file (the latest result's suite),
+  and each failure in the live failures with its message, in order.
+- [ ] **AC6 (§S5).** A nextest run whose passed and failed tests differ from its total is stored flagged with a reason
+  naming both figures; one with an unresolvable binary, an undecodable line, or cut, is flagged naming each; one
+  that matches is not flagged; one with a total of 0, or none, is not checked against one; an aborted one keeps its
+  record, flagged.
+- [ ] **AC7 (§S7).** The test list route: an open run takes one list (200) and its listed total; a second is a 409, a
+  settled run's a 409, a body past `ingest_body_bytes` a 413, data that is not a nextest list a 400, an unknown run
+  or another agent's a 400, each storing nothing. With a list, the same-name crate's results land in its three
+  suites; without one, they land in one suite `<crate>::<name>` and the run is flagged naming it.
+- [ ] **AC8 (§S6).** The tests that pin health's codec lists and the registry's keys are re-pinned to add `nextest`
+  (`health-lists-the-record-stream-codecs`, `health-names-the-codecs-it-decodes`,
+  `view-codecs-live-in-their-own-registry`, `gate-milestone-scope-and-suites`, `codec-registry`, and the python
+  harness's `HEALTH_CODECS`); every other existing test passes unchanged.
 
 ## Non-goals
 
