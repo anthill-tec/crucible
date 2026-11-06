@@ -1,7 +1,7 @@
 # CR-CRU-202 — the board decodes a rust run's nextest stream as its record and its live view
 
 **Type** feature · **Points** 13 (re-scored at its gap analysis, 2026-11-06) · **Wave** 8 (0.4.0) · **Depends on**
-CR-CRU-200 · **Status** PENDING · Pre-review: ran — 8 points; user rulings at the gap analysis
+CR-CRU-200 · **Status** DONE · Pre-review: ran — 8 points; user rulings at the gap analysis
 - **Filed 2026-10-20** (user rulings 2026-10-20; design in `DN-crucible-live-test-progress.md`).
 - **Split at its gap analysis 2026-11-06** (user ruling): this CR keeps the board's half (the codec, the live view, the
   record and its check); CR-CRU-233 takes the rust client's half (streaming on every verb, the total, the declaration,
@@ -124,12 +124,12 @@ test past its `slow-timeout`) and on three crates of a real consumer (`nai`: 143
 
 The fixtures are streams, lists and JUnit reports captured from real nextest 0.9.130 runs of scratch workspaces, kept
 under the test tree with the commands that wrote them.
-- [ ] **AC1 (§S1).** A stream batch with codec `nextest` is accepted on an open run (200); health lists `nextest` in
+- [x] **AC1 (§S1).** A stream batch with codec `nextest` is accepted on an open run (200); health lists `nextest` in
   `codecs.test` and `codecs.stream`; a run whose first batch fixed `nextest` refuses a `crucible-events` batch (400),
   as for any stream.
-- [ ] **AC2 (§S2).** `fillRunLive`, `abortedStreamRecord` and the close each read a held stream through its run's
+- [x] **AC2 (§S2).** `fillRunLive`, `abortedStreamRecord` and the close each read a held stream through its run's
   codec; a test drives each of the three with a `nextest` run and with a `crucible-events` run.
-- [ ] **AC3 (§S3, §S5, §S7 — the record equals JUnit's).** For each captured run, with its list posted, the record the
+- [x] **AC3 (§S3, §S5, §S7 — the record equals JUnit's).** For each captured run, with its list posted, the record the
   board stores from the stream has the same suites, test names, statuses, passed and failed counts and failure
   messages as the board's `junit` decoding of the JUnit report nextest wrote in the same run, and durations within
   one millisecond. The runs: all pass; a failure; a lib, a bin and an integration target with distinct names; a
@@ -138,30 +138,30 @@ under the test tree with the commands that wrote them.
   stream names them, and JUnit has none. Exempt, each named in its test: a timeout's message (JUnit's timeout
   failure has none); and, for a test failing every retried attempt, its thread id in the message and its duration
   (JUnit keeps the first attempt, the stream the last).
-- [ ] **AC4 (§S3).** A retried test's `#<n>` suffix is gone from its name; a timeout's failure message is its reason;
+- [x] **AC4 (§S3).** A retried test's `#<n>` suffix is gone from its name; a timeout's failure message is its reason;
   a test whose `started` line has no result is not a test; a suite line's repeated or miscounted figures change
   nothing.
-- [ ] **AC5 (§S4).** An open nextest run with a listed total of 6, whose stream lands in two batches (the second holding
+- [x] **AC5 (§S4).** An open nextest run with a listed total of 6, whose stream lands in two batches (the second holding
   a binary's suite line, its tests and one `ignored` result), reads after each batch: `completed`, `passed`, `failed`,
   `pending`, the total (6, then 7 once the ignored result lands) and the current file (the latest result's suite),
   and each failure in the live failures with its message, in order.
-- [ ] **AC6 (§S5).** A nextest run whose passed and failed tests differ from its total is stored flagged with a reason
+- [x] **AC6 (§S5).** A nextest run whose passed and failed tests differ from its total is stored flagged with a reason
   naming both figures; one with an unresolvable binary, an undecodable line, or cut, is flagged naming each; one
   that matches is not flagged; one with a total of 0, or none, is not checked against one; an aborted one keeps its
   record, flagged.
-- [ ] **AC7 (§S7).** The test list route: an open run takes one list (200) and its listed total; a second is a 409, a
+- [x] **AC7 (§S7).** The test list route: an open run takes one list (200) and its listed total; a second is a 409, a
   settled run's a 409, a body past `ingest_body_bytes` a 413, data that is not a nextest list a 400, an unknown run
   or another agent's a 400, each storing nothing. With a list, the same-name crate's results land in its three
   suites; without one, they land in one suite `<crate>::<name>` and the run is flagged naming it.
-- [ ] **AC8 (§S6).** The tests that pin health's codec lists and the registry's keys are re-pinned to add `nextest`
+- [x] **AC8 (§S6).** The tests that pin health's codec lists and the registry's keys are re-pinned to add `nextest`
   (`health-lists-the-record-stream-codecs`, `health-names-the-codecs-it-decodes`,
   `view-codecs-live-in-their-own-registry`, `gate-milestone-scope-and-suites`, `codec-registry`, and the python
   harness's `HEALTH_CODECS`); every other existing test passes unchanged.
-- [ ] **AC9 (§S8).** A store aged to the schema before this CR, without the list's table, opened by the board gains
+- [x] **AC9 (§S8).** A store aged to the schema before this CR, without the list's table, opened by the board gains
   the table; its other tables and its schema version are unchanged.
-- [ ] **AC10 (§S8).** A run's stored list is gone after the run closes, after it aborts, and after its project is
+- [x] **AC10 (§S8).** A run's stored list is gone after the run closes, after it aborts, and after its project is
   deleted.
-- [ ] **AC11 (§S8).** A list posted for a run that disappears before it is taken is a 400 naming the run as unknown;
+- [x] **AC11 (§S8).** A list posted for a run that disappears before it is taken is a 400 naming the run as unknown;
   over several batches of a run with a list, the list is read once, and each batch's results still land in their
   listed suites.
 
