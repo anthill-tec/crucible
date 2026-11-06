@@ -1797,7 +1797,7 @@ describe("Failure-box degradation (user defect 2026-07-15)", () => {
 // this test keeps its original jump/raw-reveal behavioral assertions,
 // retargeted to query the controls at their new location.
 describe("F4 anatomy — failure-jump + raw-output (header controls, test events)", () => {
-  test("renders '▸ N more failures'; the jump calls scrollIntoView on the next failing leaf; the raw toggle reveals the event's stored raw output", async () => {
+  test("renders '▸ 3 more failures' before any press on a three-failure run; the first jump opens and scrolls to the FIRST failing leaf and the label drops to '▸ 2 more failures'; the raw toggle reveals the event's stored raw output", async () => {
     const now = Date.now();
     const eventId = "evt-anatomy-footer-1";
     const projectKey = "proj-anatomy-footer-1";
@@ -1868,13 +1868,15 @@ describe("F4 anatomy — failure-jump + raw-output (header controls, test events
     // query the relocated controls at `document`.
     expect(document.querySelector('[data-testid="failures-footer"]')).toBeNull();
 
-    // Jump: the SECOND failing leaf-row (f2) is the "next" failure — stub
-    // scrollIntoView (happy-dom has no real layout) and assert it fires on
-    // that leaf's row identified by its stable `data-leaf-key`. VanJS rebuilds
-    // the whole TestBody tree when focusedLeaf changes on the jump, so the
-    // freshly-rendered f2 row is a NEW DOM node — pre-render node identity can
-    // never survive that rebuild; key identity is the correct, layout-safe
-    // contract (mirrors inpane-drill-in.test.ts's §S2 focus-model pattern).
+    // Jump: nothing is open when the run loads, so the label counts every
+    // failure (3) and the FIRST press opens the FIRST failing leaf-row (f1)
+    // in walk order — stub scrollIntoView (happy-dom has no real layout) and
+    // assert it fires on that leaf's row identified by its stable
+    // `data-leaf-key`. VanJS rebuilds the whole TestBody tree when
+    // focusedLeaf changes on the jump, so the freshly-rendered f1 row is a
+    // NEW DOM node — pre-render node identity can never survive that
+    // rebuild; key identity is the correct, layout-safe contract (mirrors
+    // inpane-drill-in.test.ts's §S2 focus-model pattern).
     const scrollCalls: HTMLElement[] = [];
     (HTMLElement.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView =
       function (this: HTMLElement) {
@@ -1882,14 +1884,23 @@ describe("F4 anatomy — failure-jump + raw-output (header controls, test events
       };
     const jump = document.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
     expect(jump).not.toBeNull();
-    expect((jump!.textContent ?? "")).toContain("▸ 2 more failures");
+    expect((jump!.textContent ?? "").trim()).toBe("▸ 3 more failures");
+    // No failure box is open before the first press.
+    expect(overlay.querySelectorAll('[data-testid="failure-box"]').length).toBe(0);
     jump!.click();
     await settle();
     // CR-CRU-038 §S1 — the jump works from the COLLAPSED default: it loads
     // SuiteFooter on demand (no precondition that it was already fetched).
     expect(fetchLog.some((u) => u.includes("suite=SuiteFooter"))).toBe(true);
     expect(scrollCalls.length).toBe(1);
-    expect((scrollCalls[0] as HTMLElement).getAttribute("data-leaf-key")).toBe("SuiteFooter::f2");
+    expect((scrollCalls[0] as HTMLElement).getAttribute("data-leaf-key")).toBe("SuiteFooter::f1");
+    // Exactly one failure box is open, and it is f1's.
+    const boxesAfterJump = Array.from(overlay.querySelectorAll('[data-testid="failure-box"]'));
+    expect(boxesAfterJump.length).toBe(1);
+    expect(boxesAfterJump[0]!.previousElementSibling?.getAttribute("data-leaf-key")).toBe("SuiteFooter::f1");
+    // The label now counts the two failures the walk has not yet opened.
+    const jumpAfter = document.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
+    expect((jumpAfter!.textContent ?? "").trim()).toBe("▸ 2 more failures");
 
     // Raw toggle — test events too (not compile-only). CR-CRU-038 §S3
     // RETARGET: relocated to the header, query at `document` (was
