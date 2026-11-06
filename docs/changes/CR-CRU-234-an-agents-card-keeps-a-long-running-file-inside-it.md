@@ -52,6 +52,9 @@ trigger
   posts a stream batch whose current file is a long path, and checks AC1 across the three bands and three densities
   (a scenario outline), AC3's title, and AC4 for an agent whose message is one long token.
 - [ ] **AC6 (§S4).** Every existing test passes unchanged.
+- [ ] **AC7 (VERIFY findings, user ruling 2026-11-07).** The comment over the card's live line describes what it
+  returns now (the line's parts, or nothing). The namespace tripwire test's prose names the streaming highlight's
+  keyframes block by its name, not by a `styles.css` line number; the test's checks are unchanged.
 
 ## Non-goals
 
