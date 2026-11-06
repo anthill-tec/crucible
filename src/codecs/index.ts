@@ -4,8 +4,9 @@ import type { Coverage, RunLive, RunSchema, SuiteNode } from "../types.ts";
 import { bunConsoleView } from "./bun-console-view.ts";
 import { coverageCodecs, decodeCoverage } from "./coverage.ts";
 import type { CoverageCodec } from "./coverage.ts";
-import { parseCrucibleEvents } from "./crucible-events.ts";
+import { parseCrucibleEvents, readStreamLine, type StreamLine } from "./crucible-events.ts";
 import { parseJunit, parseJunitPath, readJunitRawOutput } from "./junit.ts";
+import { nextestLineReader, parseNextest } from "./nextest.ts";
 
 /**
  * What a codec is told about the run it decodes. `framework` is the run's
@@ -18,6 +19,20 @@ export interface DecodeOptions {
   onSkip?: (report: string, error: string) => void;
   /** CR-CRU-200 §S1 — a stream codec's stream was cut at `ingest_body_bytes`. */
   cut?: boolean;
+  /** A record stream codec's run's test list, as the open run was given it; absent when none. */
+  list?: string;
+  /** A record stream codec's run's start total; absent when the start stated none. */
+  startTotal?: number;
+}
+
+/**
+ * A record stream codec's line reader: one held line read into the board's
+ * one test-end shape (`StreamLine`), and the state it carries to the next
+ * batch (null when it carries none).
+ */
+export interface StreamLineReader {
+  read(line: string): StreamLine;
+  state(): string | null;
 }
 
 /**
@@ -43,6 +58,14 @@ export interface Codec {
    * (`POST /api/v2/runs/<runId>/stream`), synchronously, at the run's close.
    */
   stream?: true;
+  /**
+   * A RECORD stream codec's line reader, opened where the run's live fill left
+   * off: given the run's test list (absent when none) and the state the last
+   * batch's reader carried.
+   */
+  lineReader?(context: { list?: string; state: string | null }): StreamLineReader;
+  /** A record stream codec whose pending results lie outside the run's total (nextest's ignored tests). */
+  pendingOutsideTotal?: true;
 }
 
 /** One `warnings[]` entry of an ingest response, the shape the client envelopes use. */
@@ -67,6 +90,21 @@ export const codecs: Map<string, Codec> = new Map<string, Codec>([
     {
       parse: (data: string, options?: DecodeOptions) => parseCrucibleEvents(data, options?.cut === true),
       stream: true,
+      lineReader: () => ({ read: readStreamLine, state: () => null }),
+    },
+  ],
+  [
+    "nextest",
+    {
+      parse: (data: string, options?: DecodeOptions) =>
+        parseNextest(data, {
+          cut: options?.cut === true,
+          ...(options?.list !== undefined ? { list: options.list } : {}),
+          ...(options?.startTotal !== undefined ? { startTotal: options.startTotal } : {}),
+        }),
+      stream: true,
+      lineReader: ({ list, state }) => nextestLineReader(list, state),
+      pendingOutsideTotal: true,
     },
   ],
 ]);
@@ -262,6 +300,49 @@ export async function parseRunBody(
 }
 
 /**
+ * A run's held stream as its record stream codec is told it: whether it was
+ * cut, the run's test list and its start total, each only when held.
+ */
+export interface HeldStreamText {
+  text: string;
+  cut: boolean;
+  list?: string;
+  startTotal?: number;
+}
+
+/** The options a record stream codec decodes a run's held stream under. */
+function heldStreamOptions(held: HeldStreamText, framework?: string): DecodeOptions {
+  return {
+    ...(framework !== undefined ? { framework } : {}),
+    cut: held.cut,
+    ...(held.list !== undefined ? { list: held.list } : {}),
+    ...(held.startTotal !== undefined ? { startTotal: held.startTotal } : {}),
+  };
+}
+
+/**
+ * A run's held stream decoded by its record stream codec, synchronously, or
+ * why it could not be: the codec threw, or answered asynchronously.
+ */
+export function decodeHeldStream(
+  codec: Codec,
+  held: HeldStreamText,
+  codecName: string,
+  framework?: string,
+): DecodedRun | { error: string } {
+  let decoded: DecodedRun | Promise<DecodedRun>;
+  try {
+    decoded = codec.parse(held.text, heldStreamOptions(held, framework));
+  } catch (cause) {
+    return { error: errorText(cause) };
+  }
+  if (decoded instanceof Promise) {
+    return { error: `codec ${codecName} does not decode a stream synchronously` };
+  }
+  return decoded;
+}
+
+/**
  * CR-CRU-200 §S3 — a stream close's run: the run's held stream decoded by
  * the stream codec, SYNCHRONOUSLY so the store can decode it inside the
  * close's transaction, then read as `parseRunBody` reads a report — the
@@ -271,7 +352,7 @@ export async function parseRunBody(
  */
 export function parseStreamBody(
   codec: Codec,
-  held: { text: string; cut: boolean },
+  held: HeldStreamText,
   body: { raw?: unknown; coverage?: unknown },
   codecName: string,
   framework?: string,
@@ -279,16 +360,9 @@ export function parseStreamBody(
   const coverageBlock = readCoverageBlock(body.coverage);
   if ("error" in coverageBlock) return coverageBlock;
   const warnings: IngestWarning[] = [];
-  const options: DecodeOptions = { ...(framework !== undefined ? { framework } : {}), cut: held.cut };
-  let decoded: DecodedRun | Promise<DecodedRun>;
-  try {
-    decoded = codec.parse(held.text, options);
-  } catch (cause) {
-    return { error: `${errorText(cause)} — run NOT stored` };
-  }
-  if (decoded instanceof Promise) {
-    return { error: `codec ${codecName} does not decode a stream synchronously — run NOT stored` };
-  }
+  const options = heldStreamOptions(held, framework);
+  const decoded = decodeHeldStream(codec, held, codecName, framework);
+  if ("error" in decoded) return { error: `${decoded.error} — run NOT stored` };
   return {
     ...assembleRun(codec, [decoded], body, options, coverageBlock.block, warnings),
     warnings,

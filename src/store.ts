@@ -9,6 +9,7 @@ import {
   abortedStreamRecord,
   appendRunStream,
   createRunStreamTables,
+  createRunTestListTable,
   deleteProjectRunStreams,
   deleteRunStream,
   heldStreamOf,
@@ -17,6 +18,7 @@ import {
   projectHasStreamingRun,
   RUN_STREAM_TABLES,
   runLiveOf,
+  storeRunTestList,
 } from "./run-stream.ts";
 import type { HeldStream, StreamBatch, StreamBatchOutcome } from "./run-stream.ts";
 import { DEFAULT_LIVENESS } from "./types.ts";
@@ -3949,6 +3951,9 @@ export class Store {
     createRunDetailTables(this.db);
     // CR-CRU-200 §S2/§S4 — a run's held stream and live state, likewise.
     createRunStreamTables(this.db);
+    // An open run's test list: a table no older store had, so the base pass
+    // alone writes it, in its current shape.
+    createRunTestListTable(this.db);
   }
 
   /**
@@ -5531,6 +5536,32 @@ export class Store {
   }
 
   /**
+   * An open run's test list and its listed total, stored once, in ONE
+   * transaction that re-reads the run's open state inside it (as
+   * `appendRunStream` does). A run that settled meanwhile is answered
+   * `settled`, one already holding a list `held`; either stores nothing. A
+   * list that changes the run's live state sends its live frame.
+   */
+  takeRunTestList(
+    runId: string,
+    text: string,
+    total: number,
+  ): { ok: true } | { ok: false; refused: "held" } | { ok: false; refused: "settled"; run: RunRecord | null } {
+    let changed: string | null = null;
+    const answer = this.db.transaction(() => {
+      const run = this.getRun(runId);
+      if (run === null || run.state !== "open") return { ok: false as const, refused: "settled" as const, run };
+      const before = liveStateToken(this.db, runId);
+      if (!storeRunTestList(this.db, runId, text, total)) return { ok: false as const, refused: "held" as const };
+      if (liveStateToken(this.db, runId) !== before) changed = run.projectKey;
+      return { ok: true as const };
+    })();
+    // After the commit: a frame never announces a list that rolled back.
+    if (changed !== null) this.liveFrame(changed);
+    return answer;
+  }
+
+  /**
    * CR-CRU-017 §S1/§S3 — the OPEN runs a dashboard must paint as "running…",
    * newest first, optionally scoped to one project. Read-only: the caller
    * sweeps (`sweepOpenRuns`) BEFORE reading, so a dead run is already settled
@@ -5636,8 +5667,8 @@ export class Store {
    * readers skip `status: "aborted"` (§S2's rollup guard, `foldIntoRollup`).
    *
    * CR-CRU-200 §S3 — a run that streamed keeps what it streamed: its held
-   * stream, read inside the same transaction, is decoded with the
-   * `crucible-events` codec (`abortedStreamRecord`), and the event carries the
+   * stream, read inside the same transaction, is decoded by its run's record
+   * stream codec (`abortedStreamRecord`), and the event carries the
    * tree, the counts and `incomplete`. A run that streamed nothing, or that
    * holds a VIEW stream (never its record), is aborted exactly as before. The
    * batches and live state are deleted with it.

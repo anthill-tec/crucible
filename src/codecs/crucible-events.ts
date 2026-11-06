@@ -216,15 +216,23 @@ function figures(counts: Omit<RunSummary, "duration_ms">): string {
 }
 
 /**
- * A `crucible-events` stream decoded into the canonical run, synchronously:
- * one suite node per distinct (suite, browser) in first-seen order, one leaf per
- * `test-end` in stream order, counts from the leaves, the duration the last
- * `run-end`'s, else the leaves' sum. `incomplete` states, in §S1's order and
- * joined by "; ", why the stream cannot be trusted — `cut` (a batch the board
- * refused at `ingest_body_bytes`) being the last reason; it is absent when
- * nothing is wrong.
+ * A held stream read line by line into the board's one test-end shape by its
+ * codec's line reader, then assembled: one suite node per distinct (suite,
+ * browser) in first-seen order, one leaf per `test-end` in stream order, the
+ * files the tests name, the last `run-end`, whether a test came after it, and
+ * how many lines were undecodable. Every record stream codec builds its run
+ * through it, then states its own reasons the stream cannot be trusted.
  */
-export function parseCrucibleEvents(text: string, cut = false): DecodedRun {
+export interface AssembledStream {
+  tree: SuiteNode[];
+  leaves: TestLeaf[];
+  files: string[];
+  runEnd?: RunEndEvent;
+  afterRunEnd: boolean;
+  undecodable: number;
+}
+
+export function assembleStream(text: string, read: (line: string) => StreamLine): AssembledStream {
   // Keyed by (suite, browser): one node per distinct pair, in first-seen order.
   const suites = new Map<string, { name: string; browser?: string; children: TestLeaf[] }>();
   const leaves: TestLeaf[] = [];
@@ -233,20 +241,20 @@ export function parseCrucibleEvents(text: string, cut = false): DecodedRun {
   let afterRunEnd = false;
   let undecodable = 0;
   for (const line of text.split("\n")) {
-    const read = readStreamLine(line);
-    if (read.event === "undecodable") undecodable += 1;
-    else if (read.event === "run-end") runEnd = read;
-    else if (read.event === "test-end") {
+    const event = read(line);
+    if (event.event === "undecodable") undecodable += 1;
+    else if (event.event === "run-end") runEnd = event;
+    else if (event.event === "test-end") {
       if (runEnd !== undefined) afterRunEnd = true;
-      const leaf = toLeaf(read);
+      const leaf = toLeaf(event);
       leaves.push(leaf);
-      const name = suiteNameOf(read);
-      const key = JSON.stringify([name, read.browser ?? null]);
+      const name = suiteNameOf(event);
+      const key = JSON.stringify([name, event.browser ?? null]);
       const suite = suites.get(key);
       if (suite === undefined) {
-        suites.set(key, { name, ...(read.browser !== undefined ? { browser: read.browser } : {}), children: [leaf] });
+        suites.set(key, { name, ...(event.browser !== undefined ? { browser: event.browser } : {}), children: [leaf] });
       } else suite.children.push(leaf);
-      files.add(fileOf(read));
+      files.add(fileOf(event));
     }
   }
   const tree: SuiteNode[] = [...suites.values()].map(({ name, browser, children }) => ({
@@ -255,6 +263,33 @@ export function parseCrucibleEvents(text: string, cut = false): DecodedRun {
     ...(browser !== undefined ? { browser } : {}),
     children,
   }));
+  return { tree, leaves, files: [...files], ...(runEnd !== undefined ? { runEnd } : {}), afterRunEnd, undecodable };
+}
+
+/** The run's counts from its leaves, its duration their sum. */
+export function summaryOf(leaves: readonly TestLeaf[]): RunSummary {
+  return { ...countsOf(leaves), duration_ms: leaves.reduce((sum, leaf) => sum + leaf.duration_ms, 0) };
+}
+
+/** Why a stream holding `undecodable` lines cannot be trusted; none when it holds none. */
+export function undecodableReason(undecodable: number): string[] {
+  return undecodable > 0 ? [`${undecodable} undecodable ${undecodable === 1 ? "line" : "lines"}`] : [];
+}
+
+/** Why a stream cut at `ingest_body_bytes` cannot be trusted. */
+export const CUT_REASON = "cut at ingest_body_bytes";
+
+/**
+ * A `crucible-events` stream decoded into the canonical run, synchronously:
+ * the stream assembled (`assembleStream`) from its lines as `readStreamLine`
+ * reads them, counts from the leaves, the duration the last `run-end`'s, else
+ * the leaves' sum. `incomplete` states, in the codec's order and
+ * joined by "; ", why the stream cannot be trusted — `cut` (a batch the board
+ * refused at `ingest_body_bytes`) being the last reason; it is absent when
+ * nothing is wrong.
+ */
+export function parseCrucibleEvents(text: string, cut = false): DecodedRun {
+  const { tree, leaves, files, runEnd, afterRunEnd, undecodable } = assembleStream(text, readStreamLine);
   const counts = countsOf(leaves);
   const leafDuration = leaves.reduce((sum, leaf) => sum + leaf.duration_ms, 0);
   const summary: RunSummary = { ...counts, duration_ms: runEnd?.duration_ms ?? leafDuration };
@@ -266,12 +301,12 @@ export function parseCrucibleEvents(text: string, cut = false): DecodedRun {
     if (differs) reasons.push(`run-end states ${figures(stated)}, the tests count ${figures(counts)}`);
   }
   if (afterRunEnd) reasons.push("a test after run-end");
-  if (undecodable > 0) reasons.push(`${undecodable} undecodable ${undecodable === 1 ? "line" : "lines"}`);
-  if (cut) reasons.push("cut at ingest_body_bytes");
+  reasons.push(...undecodableReason(undecodable));
+  if (cut) reasons.push(CUT_REASON);
   return {
     summary,
     tree,
-    files: [...files],
+    files,
     ...(reasons.length > 0 ? { incomplete: reasons.join("; ") } : {}),
   };
 }
