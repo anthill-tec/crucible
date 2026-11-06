@@ -560,7 +560,15 @@
         // settled cards can never disagree about a run, because one response
         // carries both. A server without the field degrades to no running
         // cards, never to a stale one.
-        vanX.replace(state.openRuns, () => events.openRuns ?? []);
+        // Every open run is held with a `live` slot: the board omits `live`
+        // until a run's first batch lands, and a binding that reads an absent
+        // key subscribes to nothing, so the agent row and the running card
+        // would never follow the first batch. An empty slot (null) reads as
+        // "no batch yet" everywhere, and it also clears the counts a settled
+        // run left in the slot a new run now takes.
+        vanX.replace(state.openRuns, () =>
+          (events.openRuns ?? []).map((run) => (run.live === undefined ? { ...run, live: null } : run)),
+        );
         markSynced();
       } catch {
         // Keep the last-known feed visible.
