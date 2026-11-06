@@ -259,9 +259,9 @@ registry** translating each tool's native output into one **canonical RunSchema*
 - **Codecs follow the supported stacks' reporting strategies** (corrected 2026-09-24, codec audit).
   The five stacks (bun, python, maven, rust, arduino) all report test results as JUnit XML (bun
   `--reporter=junit`, `xmlrunner`, surefire, `cargo nextest`, the native g++ harness), so `junit`
-  serves them all (python unittest has streamed `crucible-events` instead since CR-CRU-224, below); frontend e2e streams `crucible-events` through the shipped Playwright reporter. `vitest`, `tap` and a separate `nextest` codec,
-  listed here before, are **not needed**: no supported stack emits those formats (nextest writes
-  JUnit). A codec is added when a supported stack's report needs one. Measured gaps against this
+  serves them all (python unittest has streamed `crucible-events` instead since CR-CRU-224, below); frontend e2e streams `crucible-events` through the shipped Playwright reporter. `vitest` and `tap` codecs,
+  listed here before, are **not needed**: no supported stack emits those formats. nextest's own libtest JSON stream is
+  decoded by the `nextest` record stream codec (CR-CRU-202, below). A codec is added when a supported stack's report needs one. Measured gaps against this
   section are filed as CR-CRU-151 (stack stamp), CR-CRU-152 (per-stack reports decoded on the server)
   and CR-CRU-153 (the arduino stack's g++ compile output).
 - Every event is stamped with `stack` + `codec` so the UI renders stack-aware views (§4.11); a tool
@@ -368,6 +368,16 @@ registry** translating each tool's native output into one **canonical RunSchema*
   - **The python client states its runner** as the framework on every run it files. `auto-ingest`, which runs
     nothing, states the runner `[python] runner` declares, else `unittest`, and refuses any other value before
     anything is posted.
+- **A rust run's nextest stream is its record (CR-CRU-202).** The board's `nextest` record stream codec decodes
+  nextest's `libtest-json-plus` stream (message-format version 0.1, which nextest marks experimental); health lists
+  `nextest` in `codecs.test` and `codecs.stream`, beside `crucible-events` and `junit`. Record stream codecs share one
+  line reader, so the live fill, an aborted run's record and the close read a stream through its run's codec.
+  - **No runner totals.** nextest's stream states no run total and no run-end. An open run takes nextest's own test
+    list (`cargo nextest list --message-format json`, as nextest wrote it) through `POST /api/v2/runs/<runId>/tests`;
+    the board takes the run's total (the tests the list `matches`) and each test's binary id from it, and checks the
+    stored record against that total.
+  - **The rust client streams on every verb** (CR-CRU-233): the stream rides stdout, the list is posted once cargo has
+    built, and the JUnit path goes once the stored record is shown equal to JUnit's.
 
 ### 4.5 Compile ingest
 - Structured parsers per format: `rustc` (`error[EXXXX]` + `--> file:line:col`), java/

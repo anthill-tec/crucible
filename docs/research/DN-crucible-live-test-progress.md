@@ -58,6 +58,8 @@ report is read.
   the record is JUnit's equal, written one test at a time instead of at exit.
 - **Completeness.** A run-end event carries the runner's own totals. The board checks the tests it
   holds against them; a mismatch flags the run instead of being trusted.
+  nextest's stream has no run-end and no runner totals (measured at CR-CRU-202's gap analysis): a nextest run is
+  checked against the total in the test list its client posts to the open run (`cargo nextest list`, CR-CRU-202 §S7).
 - **Where the stream is console only** (`bun test`, maven's surefire), the console lines give the
   live view and the JUnit report stays the record: bun's console failures are free text, with no
   structured message, type or trace.
@@ -166,8 +168,9 @@ A bun project declares, per `package.json` script, one table:
 
 ### Totals
 
-The run-start event carries the runner's own total where it has one (Playwright's `onBegin`,
-nextest's start, go's list). bun keeps its source scan, which already excludes nothing it should
+The run-start event carries the runner's own total where it has one (Playwright's `onBegin`, go's
+list). nextest's stream states none up front (a binary is announced only when it starts): its total is the test list
+the client posts once cargo has built (CR-CRU-202 §S7, CR-CRU-233). bun keeps its source scan, which already excludes nothing it should
 count.
 
 Vitest's `run-start` states no total (CR-CRU-225 P9): its `onTestRunStart` receives only the files,
@@ -190,7 +193,8 @@ CR-CRU-224:
 | CR-CRU-228 | the shipped Playwright reporter streams each scenario as a test with its steps; the specification view reads it (split from 225, 2026-11-01, user ruling) | 225 |
 | CR-CRU-226 | the clean break: `crucible.reportPath`, `crucible.rawReport` and `crucible.testScript` refused by every verb and by the gate before its tsc step; `test` runs the entry marked `"test": true`; the gate runs each non-`bun-test` suite in process | 225, 228 |
 | CR-CRU-229 | the `playwright` codec and Playwright's JSON report retire, its stored runs migrate, and the `junit` readings follow the framework (split from 226, 2026-11-04, user ruling) | 226, 228 |
-| CR-CRU-202 | rust streams through nextest's libtest JSON | 200 |
+| CR-CRU-202 | the board decodes nextest's libtest JSON as a rust run's record and live view; an open run takes nextest's test list (its total and binary ids) | 200 |
+| CR-CRU-233 | the rust client streams through nextest on every verb, posts the list, and its JUnit path goes (split from 202, 2026-11-06, user ruling) | 202 |
 | CR-CRU-203 | the arduino runner streams; maven's console live view, through CR-CRU-201's view-only mode | 200, 201 |
 
 Go's stream lands with its client (CR-CRU-195), which therefore also depends on CR-CRU-200.
