@@ -1,6 +1,6 @@
 # CR-CRU-234 — an agent's card keeps a long running file inside it
 
-**Type** fix · **Points** 5 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING · Pre-review: none — no
+**Type** fix · **Points** 5 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE · Pre-review: none — no
 trigger
 - **Filed 2026-11-06** by user ruling, as a bug fix in the current wave sequenced after CR-CRU-202, from a defect the
   user has been seeing on the dashboard: in the project pane, a streaming agent's card runs a long test path out past
@@ -48,25 +48,25 @@ trigger
 
 ## Acceptance criteria
 
-- [ ] **AC1 (§S1, §S1a — in a real browser).** A streaming agent's card whose current file is longer than the card,
+- [x] **AC1 (§S1, §S1a — in a real browser).** A streaming agent's card whose current file is longer than the card,
   at each of the three screen bands in each of the three densities: `running N/M` is drawn in full; the file's last
   character is drawn inside the card and its first characters are not; a `…` is drawn at the file's left edge; the
   path's characters are drawn in their own order; the line is one line inside the card, and the project pane has no
   horizontal overflow.
-- [ ] **AC2 (§S1, §S1a, §S4).** The line's text is `running N/M · <whole current file>` for a file that is cut and for
+- [x] **AC2 (§S1, §S1a, §S4).** The line's text is `running N/M · <whole current file>` for a file that is cut and for
   one that fits; a file that fits is drawn whole, with no `…`.
-- [ ] **AC3 (§S2).** The file part's hover title is the full current file.
-- [ ] **AC4 (§S3 — in a real browser).** A card whose agent id, message or idle line holds one very long token keeps
+- [x] **AC3 (§S2).** The file part's hover title is the full current file.
+- [x] **AC4 (§S3 — in a real browser).** A card whose agent id, message or idle line holds one very long token keeps
   it inside the card, and the project pane has no horizontal overflow.
-- [ ] **AC5 (BDD).** A new e2e feature opens a project's board, opens a run against the real board for an agent,
+- [x] **AC5 (BDD).** A new e2e feature opens a project's board, opens a run against the real board for an agent,
   posts a stream batch whose current file is a long path, and checks AC1 across the three bands and three densities
   (a scenario outline), AC3's title, and AC4 for an agent whose message is one long token.
-- [ ] **AC6 (§S4).** Every existing test passes unchanged, except the drive check §S5 changes.
-- [ ] **AC8 (§S5).** The drive check, with the suite holding outlines: every example of every outline is found under
+- [x] **AC6 (§S4).** Every existing test passes unchanged, except the drive check §S5 changes.
+- [x] **AC8 (§S5).** The drive check, with the suite holding outlines: every example of every outline is found under
   `<feature> › <outline title>` by its filled-in title, with its filled-in steps by name and status in order; no stored
   test is "declared by no feature file"; a plain scenario after an outline holds only its own steps. Its reader is
   pinned on its own by a fixture feature file holding an outline with two Examples rows beside a plain scenario.
-- [ ] **AC7 (VERIFY findings, user ruling 2026-11-07).** The comment over the card's live line describes what it
+- [x] **AC7 (VERIFY findings, user ruling 2026-11-07).** The comment over the card's live line describes what it
   returns now (the line's parts, or nothing). The namespace tripwire test's prose names the streaming highlight's
   keyframes block by its name, not by a `styles.css` line number; the test's checks are unchanged.
 
