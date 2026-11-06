@@ -543,7 +543,7 @@ describe("§S1 (CR-CRU-038) — error run opens minimized; failure-jump expands 
     expect(suiteBetaRow!.textContent ?? "").toContain("0 ✗ 1 ✓");
   });
 
-  test("clicking the failure-jump from the collapsed default still expands the target suite and focus-opens the failing leaf's failure box", async () => {
+  test("clicking the failure-jump from the collapsed default still expands the target suite and focus-opens the FIRST failing leaf's failure box", async () => {
     const now = Date.now();
     const eventId = "evt-s1-jump-from-collapsed";
     const detail: EventDetailFixture = {
@@ -583,6 +583,8 @@ describe("§S1 (CR-CRU-038) — error run opens minimized; failure-jump expands 
     expect(document.querySelector('[data-testid="failures-footer"]')).toBeNull();
     const jump = document.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
     expect(jump).not.toBeNull();
+    // Nothing is open yet, so the label counts both failures.
+    expect((jump!.textContent ?? "").trim()).toBe("▸ 2 more failures");
     jump!.click();
     await settle();
 
@@ -592,15 +594,21 @@ describe("§S1 (CR-CRU-038) — error run opens minimized; failure-jump expands 
     const suiteJumpRowAfter = findByText(overlay, '[data-testid="suite-row"]', "SuiteJump")!;
     expect(suiteJumpRowAfter.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▾");
 
-    // jumpPos starts at 0 and advances by 1 on the first click, so with 2
-    // failing leaves in input order [j1, j2] the target is j2 (index 1) —
-    // matching the existing jump-cursor convention (drill-in.test.ts's
-    // footer-anatomy test: 3 leaves, first click lands on the 2nd).
-    const j2Row = overlay.querySelector('[data-leaf-key="SuiteJump::j2"]');
-    expect(j2Row).not.toBeNull();
-    const failureBox = j2Row!.nextElementSibling;
+    // The first press opens the FIRST failing leaf in walk order: with 2
+    // failing leaves in input order [j1, j2] the target is j1 — matching
+    // drill-in.test.ts's header-controls anatomy test (3 leaves, first press
+    // lands on the 1st). Exactly one failure box is open, and it is j1's.
+    const boxes = Array.from(overlay.querySelectorAll('[data-testid="failure-box"]'));
+    expect(boxes.length).toBe(1);
+    expect(boxes[0]!.previousElementSibling?.getAttribute("data-leaf-key")).toBe("SuiteJump::j1");
+    const j1Row = overlay.querySelector('[data-leaf-key="SuiteJump::j1"]');
+    expect(j1Row).not.toBeNull();
+    const failureBox = j1Row!.nextElementSibling;
     expect(failureBox?.getAttribute("data-testid")).toBe("failure-box");
-    expect((failureBox?.textContent ?? "")).toContain("boom j2");
+    expect((failureBox?.textContent ?? "")).toContain("boom j1");
+    // One failure opened, one left: the singular form.
+    const jumpAfter = document.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
+    expect((jumpAfter!.textContent ?? "").trim()).toBe("▸ 1 more failure");
   });
 });
 
@@ -677,7 +685,9 @@ describe("§S3 (CR-CRU-038) — home-surface control placement (AC5 visible-band
     // as a sibling of that same density chip.
     const jumpInVisibleBand = visibleBand!.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
     expect(jumpInVisibleBand).not.toBeNull();
-    expect(jumpInVisibleBand!.textContent ?? "").toContain("more failures");
+    // Placement, not wording: a one-failure run reads the singular
+    // "▸ 1 more failure", so match the stem both forms share.
+    expect(jumpInVisibleBand!.textContent ?? "").toContain("more failure");
     expect(jumpInVisibleBand!.parentElement).toBe(densityToggle!.parentElement);
 
     // AC5 — the raw-toggle (raw exists via `detail.raw` above) must also be

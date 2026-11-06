@@ -1,7 +1,7 @@
 # CR-CRU-231 — the failure jump counts the failures not yet opened
 
 **Type** fix · **Points** 3 (re-scored at its gap analysis, 2026-11-06) · **Wave** 8 (0.4.0) · **Depends on** — ·
-**Status** PENDING · Pre-review: none — no trigger
+**Status** DONE · Pre-review: none — no trigger
 - **Filed 2026-11-04** by user ruling, from a defect the user found on the run detail of a one-failure run.
 - **Gap analysis 2026-11-06**, on develop `7f0eac21`: baseline bun 4676/0 (`evt-1793957921801-2`), python 6082/0 (`evt-1793959306528-3`).
 
@@ -19,9 +19,10 @@
   `jumpToNextFailure`) starts at 0 and is advanced before it is read, so with two or more failures the first press
   opens the second failing leaf in walk order, and the first is reached only after the walk wraps. The skip is the
   same leftover as the label: it was right while the first box opened on load.
-- **Two tests pin today's behaviour.** `tests/drill-in.test.ts` (the header-controls anatomy test) pins the label
+- **Three tests pin today's behaviour.** `tests/drill-in.test.ts` (the header-controls anatomy test) pins the label
   "▸ 2 more failures" on a three-failure run and its first press on the second leaf; `tests/density.test.ts` (the
-  jump from the minimized default) pins the first press on the second of two leaves. No test follows the label as the
+  jump from the minimized default) pins the first press on the second of two leaves, and its pinned-band test reads the
+  plural "more failures" on a one-failure run (found at RED). No test follows the label as the
   walk moves.
 
 ## What the gap analysis measured
@@ -53,24 +54,24 @@
 
 ## Acceptance criteria
 
-- [ ] **AC1 (§S1, §S2).** Before any press, a run with three failures shows "▸ 3 more failures" and a run with one
+- [x] **AC1 (§S1, §S2).** Before any press, a run with three failures shows "▸ 3 more failures" and a run with one
   shows "▸ 1 more failure"; no failure box is open.
-- [ ] **AC2 (§S1, §S3).** On a run with three failing leaves in walk order f1, f2, f3: the first press opens f1's
+- [x] **AC2 (§S1, §S3).** On a run with three failing leaves in walk order f1, f2, f3: the first press opens f1's
   failure box and the label reads "▸ 2 more failures"; the second opens f2's box and reads "▸ 1 more failure". Exactly
   one failure box is open after each press.
-- [ ] **AC3 (§S4).** On the same run, the third press opens f3's box and the label reads "▸ failure 3 of 3"; the
+- [x] **AC3 (§S4).** On the same run, the third press opens f3's box and the label reads "▸ failure 3 of 3"; the
   fourth opens f1's box and reads "▸ failure 1 of 3"; the fifth opens f2's and reads "▸ failure 2 of 3". On a
   one-failure run, the first press opens its box and reads "▸ failure 1 of 1", and a second press keeps both.
-- [ ] **AC4 (§S5).** A run whose failed count (3) is larger than the failing leaves its tree holds (2) reads
+- [x] **AC4 (§S5).** A run whose failed count (3) is larger than the failing leaves its tree holds (2) reads
   "▸ 3 more failures" before any press; after the first press it reads "▸ 1 more failure", and after the second
   "▸ failure 2 of 2".
-- [ ] **AC5 (§S6).** Opening a different failure by clicking its row, after the first press, leaves the label as it
+- [x] **AC5 (§S6).** Opening a different failure by clicking its row, after the first press, leaves the label as it
   was; the next press opens the failure after the one the walk last opened.
-- [ ] **AC6 (§S7).** The run still opens minimized with no suite fetched; the jump still loads the failing suites on
-  its first press; the raw toggle and the controls' place in the header are unchanged. The two tests that pin today's
-  label and first-press target (`tests/drill-in.test.ts`, `tests/density.test.ts`) are re-pinned to AC1–AC2, in the
+- [x] **AC6 (§S7).** The run still opens minimized with no suite fetched; the jump still loads the failing suites on
+  its first press; the raw toggle and the controls' place in the header are unchanged. The three tests that pin today's
+  label and first-press target (`tests/drill-in.test.ts` and two in `tests/density.test.ts`) are re-pinned to AC1–AC2, in the
   cycle that changes the cursor; every other existing test passes unchanged.
-- [ ] **AC7 (BDD, user ruling 2026-11-04).** A new e2e feature in `tests/e2e/features/` seeds a run with three
+- [x] **AC7 (BDD, user ruling 2026-11-04).** A new e2e feature in `tests/e2e/features/` seeds a run with three
   failing leaves, opens its run detail, and checks the label before any press and after each of five presses
   (AC1–AC3's sequence). After each press it checks that exactly one failure box is open and that it belongs to the
   failing leaf the label's place names in walk order.

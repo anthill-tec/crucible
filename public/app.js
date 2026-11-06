@@ -7757,7 +7757,11 @@
       // replaced node would go with it.
       const located = van.state(null);
       let locatedTimer = null;
-      let jumpPos = 0; // failures-footer jump cursor
+      let jumpPos = -1; // failure-jump cursor: the walk index it last opened
+      // The failure-jump's own walk: how many presses it has made, how many
+      // failing leaves it holds once loaded, and where it last landed. Row
+      // clicks never touch it, so the label speaks for the jump alone.
+      const jumpWalk = van.state({ presses: 0, total: 0, pos: -1 });
 
       // §S4.0 FINAL — purely tier-contextual presentation.
       const presentationOf = (ev) =>
@@ -8352,6 +8356,11 @@
         const keys = failingLeafKeys(d);
         if (keys.length === 0) return;
         jumpPos = (jumpPos + 1) % keys.length;
+        jumpWalk.val = {
+          presses: jumpWalk.val.presses + 1,
+          total: keys.length,
+          pos: jumpPos,
+        };
         const target = keys[jumpPos];
         const sep = target.indexOf("::");
         const suiteName = target.slice(0, sep);
@@ -8459,6 +8468,19 @@
         })();
       }
 
+      // The failure-jump label: the failures the walk has not yet opened —
+      // the run's failed count before the first press, then the walk's own
+      // failing-leaf count — and, once every one has been opened, the place
+      // in walk order of the failure the walk has open.
+      const moreFailures = (n) => `▸ ${n} more failure${n === 1 ? "" : "s"}`;
+      function failureJumpLabel(failed) {
+        const walk = jumpWalk.val;
+        if (walk.presses === 0) return moreFailures(failed);
+        const unopened = walk.total - walk.presses;
+        if (unopened > 0) return moreFailures(unopened);
+        return `▸ failure ${walk.pos + 1} of ${walk.total}`;
+      }
+
       // CR-CRU-038 §S3 — the failure-jump + raw-toggle relocate to the drill-in
       // HEADER (siblings of the density chip via DetailHeadContent's `controls`
       // slot); the FailuresFooter that used to carry them in the body is
@@ -8481,7 +8503,7 @@
               class: "app-chip app-drillin-headchip",
               onclick: () => jumpToNextFailure(d),
             },
-            `▸ ${failed - 1} more failures`,
+            () => failureJumpLabel(failed),
           );
         },
         () => {
