@@ -1,7 +1,7 @@
 // Health (`/api/health`, `/api/v2/health`) lists the record stream codecs
 // under `codecs.stream` (CR-CRU-225 §S1, AC1; P5): the report codecs that
 // decode a run's held stream at its close (`isRecordStreamCodec`) — today
-// `crucible-events` — so a client can check a declared `stream` codec before
+// `crucible-events` and `nextest` — so a client can check a declared `stream` codec before
 // the run opens. `codecs.test`, `codecs.coverage` and `codecs.view` are
 // unchanged: `crucible-events` stays a test codec too.
 //
@@ -27,15 +27,15 @@ async function health(route: string): Promise<Record<string, unknown>> {
 }
 
 const CODECS = {
-  test: ["crucible-events", "junit"],
+  test: ["crucible-events", "junit", "nextest"],
   coverage: ["jacoco", "lcov"],
   view: ["bun-console"],
-  stream: ["crucible-events"],
+  stream: ["crucible-events", "nextest"],
 };
 
 describe("health lists the record stream codecs under codecs.stream", () => {
   for (const route of ["/api/health", "/api/v2/health"]) {
-    test(`GET ${route} carries codecs.stream [crucible-events] beside test, coverage and view as before`, async () => {
+    test(`GET ${route} carries codecs.stream [crucible-events, nextest] beside test, coverage and view as before`, async () => {
       const body = await health(route);
       expect(body.ok).toBe(true);
       expect(body.codecs).toEqual(CODECS);
@@ -45,7 +45,7 @@ describe("health lists the record stream codecs under codecs.stream", () => {
   test("codecs.stream holds exactly the record stream codecs — no report-only codec, no view codec", async () => {
     const body = await health("/api/v2/health");
     const listed = body.codecs as Record<string, string[] | undefined>;
-    expect(listed.stream).toEqual(["crucible-events"]);
+    expect(listed.stream).toEqual(["crucible-events", "nextest"]);
     expect(listed.stream ?? []).not.toContain("junit");
     expect(listed.stream ?? []).not.toContain("playwright");
     expect(listed.stream ?? []).not.toContain("bun-console");
@@ -54,7 +54,7 @@ describe("health lists the record stream codecs under codecs.stream", () => {
 
   test("codecNames().stream is the report codecs isRecordStreamCodec accepts, sorted", () => {
     const expected = [...codecs.keys()].filter((name) => isRecordStreamCodec(name)).sort((a, b) => a.localeCompare(b));
-    expect(expected).toEqual(["crucible-events"]);
+    expect(expected).toEqual(["crucible-events", "nextest"]);
     const names = codecNames() as Record<string, string[] | undefined>;
     expect(names.stream).toEqual(expected);
   });

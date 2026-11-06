@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="4" failures="1" errors="0" uuid="948baf91-e69f-4c92-82b8-2bdb171f9be6" timestamp="2026-11-06T23:37:56.846+05:30" time="0.003">
+    <testsuite name="nxsame::bin/nxsame" tests="2" disabled="0" errors="0" failures="1">
+        <testcase name="bin_tests::bin_fails" classname="nxsame::bin/nxsame" timestamp="2026-11-06T23:37:56.846+05:30" time="0.003">
+            <failure message="thread &apos;bin_tests::bin_fails&apos; (1242381) panicked at src/main.rs:10:9" type="test failure with exit code 101">thread &apos;bin_tests::bin_fails&apos; (1242381) panicked at src/main.rs:10:9:
+the binary&apos;s own test fails
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test bin_tests::bin_fails ... FAILED
+
+failures:
+
+failures:
+    bin_tests::bin_fails
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s</failure>
+            <system-out>
+running 1 test
+
+thread &apos;bin_tests::bin_fails&apos; (1242381) panicked at src/main.rs:10:9:
+the binary&apos;s own test fails
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test bin_tests::bin_fails ... FAILED
+
+failures:
+
+failures:
+    bin_tests::bin_fails
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err>(stdout and stderr are combined)</system-err>
+        </testcase>
+        <testcase name="bin_tests::bin_ok" classname="nxsame::bin/nxsame" timestamp="2026-11-06T23:37:56.846+05:30" time="0.003">
+        </testcase>
+    </testsuite>
+    <testsuite name="nxsame" tests="1" disabled="0" errors="0" failures="0">
+        <testcase name="lib_tests::lib_ok" classname="nxsame" timestamp="2026-11-06T23:37:56.846+05:30" time="0.003">
+        </testcase>
+    </testsuite>
+    <testsuite name="nxsame::nxsame" tests="1" disabled="0" errors="0" failures="0">
+        <testcase name="integration_ok" classname="nxsame::nxsame" timestamp="2026-11-06T23:37:56.846+05:30" time="0.003">
+        </testcase>
+    </testsuite>
+</testsuites>

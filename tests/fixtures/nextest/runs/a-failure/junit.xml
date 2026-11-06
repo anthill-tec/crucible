@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="2" failures="1" errors="0" uuid="b02a47cd-4b9d-46a8-8f2a-8951ab5ef23d" timestamp="2026-11-06T23:37:56.480+05:30" time="0.003">
+    <testsuite name="nxshapes::shapes" tests="2" disabled="0" errors="0" failures="1">
+        <testcase name="prints_then_panics" classname="nxshapes::shapes" timestamp="2026-11-06T23:37:56.480+05:30" time="0.002">
+            <failure message="thread &apos;prints_then_panics&apos; (1241652) panicked at tests/shapes.rs:23:5" type="test failure with exit code 101">thread &apos;prints_then_panics&apos; (1241652) panicked at tests/shapes.rs:23:5:
+line one
+line two
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test prints_then_panics ... FAILED
+
+failures:
+
+failures:
+    prints_then_panics
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s</failure>
+            <system-out>
+running 1 test
+some output first
+
+thread &apos;prints_then_panics&apos; (1241652) panicked at tests/shapes.rs:23:5:
+line one
+line two
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test prints_then_panics ... FAILED
+
+failures:
+
+failures:
+    prints_then_panics
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err>(stdout and stderr are combined)</system-err>
+        </testcase>
+        <testcase name="passes" classname="nxshapes::shapes" timestamp="2026-11-06T23:37:56.480+05:30" time="0.003">
+        </testcase>
+    </testsuite>
+</testsuites>

@@ -1,0 +1,4 @@
+{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"nxshapes","test_binary":"shapes","kind":"test"}}
+{"type":"test","event":"started","name":"nxshapes::shapes$never_panics"}
+{"type":"test","event":"failed","name":"nxshapes::shapes$never_panics","exec_time":0.002928536,"stdout":"test never_panics - should panic ... FAILED\n\nfailures:\n\n---- never_panics stdout ----\nnote: test did not panic as expected at tests/shapes.rs:13:4\n\nfailures:\n    never_panics\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s\n\n"}
+{"type":"suite","event":"failed","passed":0,"failed":1,"ignored":0,"measured":0,"filtered_out":4,"exec_time":0.002928536,"nextest":{"crate":"nxshapes","test_binary":"shapes","kind":"test"}}

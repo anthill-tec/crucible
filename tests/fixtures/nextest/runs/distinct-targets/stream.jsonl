@@ -1,0 +1,18 @@
+{"type":"suite","event":"started","test_count":3,"nextest":{"crate":"nx-targets","test_binary":"nx_targets","kind":"lib"}}
+{"type":"test","event":"started","name":"nx-targets::nx_targets$tests::waits_for_a_fix"}
+{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"nx-targets","test_binary":"tool","kind":"bin"}}
+{"type":"test","event":"started","name":"nx-targets::tool$cli::tool_starts"}
+{"type":"test","event":"started","name":"nx-targets::nx_targets$tests::doubles_wrongly"}
+{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"nx-targets","test_binary":"it","kind":"test"}}
+{"type":"test","event":"started","name":"nx-targets::it$integration_doubles"}
+{"type":"test","event":"started","name":"nx-targets::nx_targets$tests::doubles"}
+{"type":"test","event":"ignored","name":"nx-targets::nx_targets$tests::waits_for_a_fix"}
+{"type":"test","event":"ok","name":"nx-targets::nx_targets$tests::doubles","exec_time":0.002667669}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.002667669,"nextest":{"crate":"nx-targets","test_binary":"nx_targets","kind":"lib"}}
+{"type":"suite","event":"started","test_count":3,"nextest":{"crate":"nx-targets","test_binary":"nx_targets","kind":"lib"}}
+{"type":"test","event":"failed","name":"nx-targets::nx_targets$tests::doubles_wrongly","exec_time":0.003123618,"stdout":"\nthread 'tests::doubles_wrongly' (1242016) panicked at src/lib.rs:16:9:\nassertion `left == right` failed: doubling broke\n  left: 4\n right: 5\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"}
+{"type":"test","event":"ok","name":"nx-targets::tool$cli::tool_starts","exec_time":0.003175357}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":0,"measured":0,"filtered_out":0,"exec_time":0.003175357,"nextest":{"crate":"nx-targets","test_binary":"tool","kind":"bin"}}
+{"type":"test","event":"ok","name":"nx-targets::it$integration_doubles","exec_time":0.003241544}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":0,"measured":0,"filtered_out":0,"exec_time":0.003241544,"nextest":{"crate":"nx-targets","test_binary":"it","kind":"test"}}
+{"type":"suite","event":"failed","passed":0,"failed":1,"ignored":1,"measured":0,"filtered_out":1,"exec_time":0.003123618,"nextest":{"crate":"nx-targets","test_binary":"nx_targets","kind":"lib"}}

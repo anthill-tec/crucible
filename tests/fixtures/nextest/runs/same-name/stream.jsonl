@@ -1,0 +1,14 @@
+{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"nxsame","test_binary":"nxsame","kind":"bin"}}
+{"type":"test","event":"started","name":"nxsame::nxsame$bin_tests::bin_ok"}
+{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"nxsame","test_binary":"nxsame","kind":"lib"}}
+{"type":"test","event":"started","name":"nxsame::nxsame$lib_tests::lib_ok"}
+{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"nxsame","test_binary":"nxsame","kind":"test"}}
+{"type":"test","event":"started","name":"nxsame::nxsame$integration_ok"}
+{"type":"test","event":"started","name":"nxsame::nxsame$bin_tests::bin_fails"}
+{"type":"test","event":"failed","name":"nxsame::nxsame$bin_tests::bin_fails","exec_time":0.002542791,"stdout":"\nthread 'bin_tests::bin_fails' (1242381) panicked at src/main.rs:10:9:\nthe binary's own test fails\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"}
+{"type":"test","event":"ok","name":"nxsame::nxsame$bin_tests::bin_ok","exec_time":0.002948885}
+{"type":"suite","event":"failed","passed":1,"failed":1,"ignored":0,"measured":0,"filtered_out":0,"exec_time":0.005491676,"nextest":{"crate":"nxsame","test_binary":"nxsame","kind":"bin"}}
+{"type":"test","event":"ok","name":"nxsame::nxsame$lib_tests::lib_ok","exec_time":0.003025952}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":0,"measured":0,"filtered_out":0,"exec_time":0.003025952,"nextest":{"crate":"nxsame","test_binary":"nxsame","kind":"lib"}}
+{"type":"test","event":"ok","name":"nxsame::nxsame$integration_ok","exec_time":0.003146082}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":0,"measured":0,"filtered_out":0,"exec_time":0.003146082,"nextest":{"crate":"nxsame","test_binary":"nxsame","kind":"test"}}

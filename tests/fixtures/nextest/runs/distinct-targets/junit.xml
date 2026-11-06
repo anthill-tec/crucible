@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="4" failures="1" errors="0" uuid="7baaf73d-77d1-494f-8b1e-f5e23a5889e5" timestamp="2026-11-06T23:37:56.664+05:30" time="0.004">
+    <testsuite name="nx-targets" tests="2" disabled="0" errors="0" failures="1">
+        <testcase name="tests::doubles" classname="nx-targets" timestamp="2026-11-06T23:37:56.664+05:30" time="0.003">
+        </testcase>
+        <testcase name="tests::doubles_wrongly" classname="nx-targets" timestamp="2026-11-06T23:37:56.664+05:30" time="0.003">
+            <failure message="thread &apos;tests::doubles_wrongly&apos; (1242016) panicked at src/lib.rs:16:9" type="test failure with exit code 101">thread &apos;tests::doubles_wrongly&apos; (1242016) panicked at src/lib.rs:16:9:
+assertion `left == right` failed: doubling broke
+  left: 4
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test tests::doubles_wrongly ... FAILED
+
+failures:
+
+failures:
+    tests::doubles_wrongly
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s</failure>
+            <system-out>
+running 1 test
+
+thread &apos;tests::doubles_wrongly&apos; (1242016) panicked at src/lib.rs:16:9:
+assertion `left == right` failed: doubling broke
+  left: 4
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test tests::doubles_wrongly ... FAILED
+
+failures:
+
+failures:
+    tests::doubles_wrongly
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err>(stdout and stderr are combined)</system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="nx-targets::bin/tool" tests="1" disabled="0" errors="0" failures="0">
+        <testcase name="cli::tool_starts" classname="nx-targets::bin/tool" timestamp="2026-11-06T23:37:56.664+05:30" time="0.003">
+        </testcase>
+    </testsuite>
+    <testsuite name="nx-targets::it" tests="1" disabled="0" errors="0" failures="0">
+        <testcase name="integration_doubles" classname="nx-targets::it" timestamp="2026-11-06T23:37:56.664+05:30" time="0.003">
+        </testcase>
+    </testsuite>
+</testsuites>
