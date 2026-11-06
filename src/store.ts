@@ -5536,10 +5536,12 @@ export class Store {
   }
 
   /**
-   * An open run's test list and its listed total, stored once, in ONE
-   * transaction that re-reads the run's open state inside it (as
-   * `appendRunStream` does). A run that settled meanwhile is answered
-   * `settled`, one already holding a list `held`; either stores nothing. A
+   * An open run's test list, as nextest wrote it, and its listed total,
+   * stored once, in ONE transaction that re-reads the run's open state inside
+   * it (as `appendRunStream` does); the list is read here, once, into the form
+   * each batch and the close resolve from (`storeRunTestList`). A run that
+   * settled meanwhile is answered `settled` with its record, or with null when
+   * it is gone; one already holding a list `held`; either stores nothing. A
    * list that changes the run's live state sends its live frame.
    */
   takeRunTestList(

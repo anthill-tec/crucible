@@ -1578,7 +1578,9 @@ async function handleRunTests(store: Store, runId: string, req: Request): Promis
   if (outcome.refused === "held") {
     return fail(409, `run ${runId} already holds its test list — a run takes one; ${STREAM_REFUSED}`);
   }
-  return settledListRefusal(runId, outcome.run ?? { state: "ended" });
+  // A run gone meanwhile (its project deleted) is unknown, never settled.
+  if (outcome.run === null) return fail(400, `unknown runId: ${runId} — the run is gone; ${STREAM_REFUSED}`);
+  return settledListRefusal(runId, outcome.run);
 }
 
 /** A list for a run already settled: a 409 carrying its state and the event that settled it. */

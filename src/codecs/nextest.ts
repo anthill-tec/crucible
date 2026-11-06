@@ -79,6 +79,36 @@ export function parseNextestList(text: string): NextestList {
   return { binaries, total };
 }
 
+/** A test list as a run holds it once taken: its total, and each binary's id, crate, binary name and test paths. */
+interface HeldList {
+  total: number;
+  binaries: Array<{ id: string; crate: string; binaryName: string; paths: string[] }>;
+}
+
+/**
+ * nextest's test list read once, as an open run takes it: its listed total,
+ * and `held`, the form the run keeps — only what a result's suite resolves
+ * from — which each batch and the close read in place of the list. Throws
+ * when the text is no such list.
+ */
+export function takeNextestList(text: string): { total: number; held: string } {
+  const list = parseNextestList(text);
+  const held: HeldList = {
+    total: list.total,
+    binaries: list.binaries.map(({ id, crate, binaryName, paths }) => ({ id, crate, binaryName, paths: [...paths] })),
+  };
+  return { total: list.total, held: JSON.stringify(held) };
+}
+
+/** A run's held test list (`takeNextestList`'s `held`) read back. */
+function heldListOf(held: string): NextestList {
+  const list = JSON.parse(held) as HeldList;
+  return {
+    total: list.total,
+    binaries: list.binaries.map((b) => ({ id: b.id, crate: b.crate, binaryName: b.binaryName, paths: new Set(b.paths) })),
+  };
+}
+
 /** The kinds the stream's suite lines state, per `<crate>::<binary name>`, in first-seen order. */
 type Kinds = Record<string, string[]>;
 
@@ -219,9 +249,9 @@ export class NextestLineReader {
   }
 }
 
-/** A nextest line reader over a run's held stream, given the run's test list text (absent when none). */
+/** A nextest line reader over a run's held stream, given the run's held test list (absent when none). */
 export function nextestLineReader(list: string | undefined, state: string | null): NextestLineReader {
-  return new NextestLineReader(list !== undefined ? parseNextestList(list) : undefined, state);
+  return new NextestLineReader(list !== undefined ? heldListOf(list) : undefined, state);
 }
 
 /**
@@ -231,12 +261,13 @@ export function nextestLineReader(list: string | undefined, state: string | null
  * passed and failed tests differing from the run's total (the listed total,
  * else `startTotal`) when that total is above 0; a result's binary resolving
  * to no one test binary; an undecodable line; a cut at `ingest_body_bytes`.
+ * `list` is the run's held test list (`takeNextestList`'s `held`).
  */
 export function parseNextest(
   text: string,
   options: { cut?: boolean; list?: string; startTotal?: number } = {},
 ): DecodedRun {
-  const list = options.list !== undefined ? parseNextestList(options.list) : undefined;
+  const list = options.list !== undefined ? heldListOf(options.list) : undefined;
   const reader = new NextestLineReader(list, null);
   const { tree, leaves, files, undecodable } = assembleStream(text, (line) => reader.read(line));
   const summary = summaryOf(leaves);

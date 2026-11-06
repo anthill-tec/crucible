@@ -19,7 +19,7 @@ export interface DecodeOptions {
   onSkip?: (report: string, error: string) => void;
   /** CR-CRU-200 §S1 — a stream codec's stream was cut at `ingest_body_bytes`. */
   cut?: boolean;
-  /** A record stream codec's run's test list, as the open run was given it; absent when none. */
+  /** A record stream codec's run's test list, as read once when the open run took it; absent when none. */
   list?: string;
   /** A record stream codec's run's start total; absent when the start stated none. */
   startTotal?: number;
@@ -60,8 +60,8 @@ export interface Codec {
   stream?: true;
   /**
    * A RECORD stream codec's line reader, opened where the run's live fill left
-   * off: given the run's test list (absent when none) and the state the last
-   * batch's reader carried.
+   * off: given the run's test list as read when the run took it (absent when
+   * none) and the state the last batch's reader carried.
    */
   lineReader?(context: { list?: string; state: string | null }): StreamLineReader;
   /** A record stream codec whose pending results lie outside the run's total (nextest's ignored tests). */

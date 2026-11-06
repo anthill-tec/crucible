@@ -12,12 +12,13 @@
 // - `runs.total` (migration v22): the run start's own total, the live read's
 //   fallback when the stream states none.
 // - `run_live_failures`: the run's failures so far, in order.
-// - `run_test_lists`: an open run's test list, as the client posted it, and
-//   its listed total — at most one per run.
+// - `run_test_lists`: an open run's test list, as read once when the run
+//   took it, and its listed total — at most one per run.
 import type { Database } from "bun:sqlite";
 import { leafNameOf, suiteNameOf } from "./codecs/crucible-events.ts";
 import { codecs, decodeHeldStream, isRecordStreamCodec, viewCodecs, type ViewFill, type ViewLive } from "./codecs/index.ts";
 import { failureOf, nonBlank } from "./codecs/junit.ts";
+import { takeNextestList } from "./codecs/nextest.ts";
 import type { RunLive, RunLiveFailure, RunSchema } from "./types.ts";
 
 /** The tables a run's stream and live state are held in. */
@@ -75,26 +76,29 @@ export function createRunTestListTable(db: Database): void {
     CREATE TABLE IF NOT EXISTS run_test_lists (
       run_id TEXT PRIMARY KEY,
       total INTEGER NOT NULL,
-      text TEXT NOT NULL
+      held TEXT NOT NULL
     );
   `);
 }
 
-/** The run's test list and its listed total, or null when it was given none. */
-function testListOf(db: Database, runId: string): { total: number; text: string } | null {
+/** The run's held test list and its listed total, or null when it was given none. */
+function testListOf(db: Database, runId: string): { total: number; held: string } | null {
   return db
-    .query<{ total: number; text: string }, [string]>(`SELECT total, text FROM run_test_lists WHERE run_id = ?`)
+    .query<{ total: number; held: string }, [string]>(`SELECT total, held FROM run_test_lists WHERE run_id = ?`)
     .get(runId);
 }
 
 /**
- * An open run's test list stored with its listed total, once: false, storing
- * nothing, when the run holds one already. Called inside the list's
- * transaction, after the run's open state was re-read.
+ * An open run's test list, nextest's text, read once into the form each batch
+ * and the close resolve from (`takeNextestList`), stored with its listed
+ * total, once: false, storing nothing, when the run holds one already.
+ * Called inside the list's transaction, after the run's open state was
+ * re-read.
  */
 export function storeRunTestList(db: Database, runId: string, text: string, total: number): boolean {
   if (testListOf(db, runId) !== null) return false;
-  db.query(`INSERT INTO run_test_lists (run_id, total, text) VALUES (?, ?, ?)`).run(runId, total, text);
+  const { held } = takeNextestList(text);
+  db.query(`INSERT INTO run_test_lists (run_id, total, held) VALUES (?, ?, ?)`).run(runId, total, held);
   return true;
 }
 
@@ -174,7 +178,8 @@ function heldBytesFrom(db: Database, runId: string, offset: number): Buffer {
 /**
  * A run's held stream: the stream codec its first batch fixed, the whole text
  * held, whether a batch was refused at `ingest_body_bytes` (the stream was
- * cut), and the run's test list and start total, each only when held.
+ * cut), and the run's test list (as read when the run took it) and start
+ * total, each only when held.
  */
 export interface HeldStream {
   codec: string;
@@ -199,7 +204,7 @@ export function heldStreamOf(db: Database, runId: string): HeldStream | null {
     codec: live.codec,
     text,
     cut: live.cut === 1,
-    ...(list !== null ? { list: list.text } : {}),
+    ...(list !== null ? { list: list.held } : {}),
     ...(startTotal !== null ? { startTotal } : {}),
   };
 }
@@ -364,7 +369,7 @@ function fillRunLive(db: Database, runId: string): void {
   const lineReader = codecs.get(live.codec)?.lineReader;
   if (lineReader === undefined) return;
   const list = testListOf(db, runId);
-  const reader = lineReader({ ...(list !== null ? { list: list.text } : {}), state: live.reader_state });
+  const reader = lineReader({ ...(list !== null ? { list: list.held } : {}), state: live.reader_state });
   const state = { ...live };
   let position = db
     .query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM run_live_failures WHERE run_id = ?`)
