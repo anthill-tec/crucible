@@ -254,8 +254,11 @@ naming what is missing. It never skips them.
   - **Narration.** The closing `ran N/M` counts the stream's results against the board's listed total.
   - **`--ignore-run-fail`.** It is refused on each verb that accepted it.
   - **Without an agent.** A run with no agent posts nothing, lists nothing and runs without the stream.
-  - **Refused binding.** A gated run whose `--cycle` binding the board refuses opens no run and files nothing. One
-    `ok: false` envelope names the refusal. The run is never filed unbound or with no cycle (VERIFY 880).
+  - **Refused binding.** When the board refuses a gated run's `--cycle` binding, the client never registers the agent
+    again without it, exactly as python's gated bracket does (VERIFY 880). With no live registration, the refused
+    start opens no run, and nothing is listed, streamed, closed or ingested. One `ok: false` envelope and a non-zero
+    exit name the refused start. An agent that was already registered unbound by its own caller keeps python's
+    behaviour (RED 881, orchestrator ruling).
 - [ ] **AC7 (§S6).** The bun, python, mvn and arduino clients' runs count, narrate, log and close exactly as before, and
   their existing tests pass unchanged.
 - [ ] **AC8 (§S5, §S6).** The shared fake cargo answers:
