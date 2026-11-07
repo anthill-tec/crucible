@@ -179,12 +179,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.fake_nextest import (  # noqa: E402
+    held_results,
+    private_fake_prelude,
+)
 from tests.client.live_run_harness import (  # noqa: E402
     START,
     STREAM_ROUTE,
     StreamingPost,
     get_answering_health,
-    junit_sent,
 )
 from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
     declare_and_require_board,
@@ -484,19 +487,6 @@ _JUNIT_SUITE_ONE_PASS = (
     '<testcase classname="TierProbeTest" name="probe" time="0.001"/>'
     '</testsuite>'
 )
-# CR-CRU-215 §S1 — the nextest report the fake `cargo` writes during a rust
-# workspace run, handed to it through FAKE_CARGO_JUNIT_CONTENT. Its counts
-# (3 run, 2 passed, 1 failed) are distinct from every other fixture here, so a
-# filed run carrying them can only have read the report the fake wrote.
-_NEXTEST_JUNIT_TWO_PASS_ONE_FAIL = (
-    '<?xml version="1.0" encoding="UTF-8"?>'
-    '<testsuites><testsuite name="probe-crate::tier" tests="3" failures="1" errors="0">'
-    '<testcase classname="probe-crate::tier" name="adds" time="0.001"/>'
-    '<testcase classname="probe-crate::tier" name="subtracts" time="0.001"/>'
-    '<testcase classname="probe-crate::tier" name="divides" time="0.001">'
-    '<failure message="boom">boom</failure></testcase>'
-    '</testsuite></testsuites>'
-)
 
 # `bun`: writes FAKE_BUN_JUNIT_CONTENT to --reporter-outfile= (empty content =
 # the no-XML collection failure), and answers `bun x tsc --noEmit` as a failing
@@ -580,14 +570,27 @@ if code:
 sys.exit(code)
 """
 
+# A streamed rust run's calls (the version, the list, the `libtest-json-plus`
+# stream, `llvm-cov show-env` and `llvm-cov report`) are answered first, by
+# `tests/client/fake_nextest.py`: the tests the stream holds are
+# FAKE_NEXTEST_CASES, a JSON list of `[name, status]` (one passing `probe` by
+# default), and FAKE_CARGO_EXIT_CODE set non-zero is a crate that does not
+# compile, so its list fails to build.
 # CR-CRU-215 §S1 — opt-in: with FAKE_CARGO_JUNIT_CONTENT set, a call naming
 # `nextest` writes that content to `target/nextest/<-P profile>/junit.xml` under
 # the working directory during the run, the shape `_RECORDING_CARGO` in
 # test_rust_regression_coverage_is_opt_in.py has. Unset, nothing is written.
 _FAKE_CARGO = """#!{python}
+import json
 import os
 import sys
 
+if os.environ.get("FAKE_CARGO_EXIT_CODE", "0") != "0":
+    os.environ["FAKE_LIST_COMPILE_ERROR"] = "1"
+""" + private_fake_prelude(
+    "[fake_nextest.case(name, status, crate='probe-crate', binary='tier') "
+    "for name, status in json.loads(os.environ.get('FAKE_NEXTEST_CASES') "
+    "or '[[\"probe\", \"ok\"]]')]") + """
 _args = sys.argv[1:]
 _junit = os.environ.get("FAKE_CARGO_JUNIT_CONTENT")
 if _junit is not None and "nextest" in _args:
@@ -969,6 +972,83 @@ class _RustCase(_ClientDriveCase):
         argv = [verb] + (["--crate", "probe_crate"] if crate else [])
         return argv + ["--agent", AGENT, "--project-dir", self.tmpdir] + list(extra)
 
+    def _streaming_post(self, calls, response):
+        """A `_post` that opens the run and holds its stream (`StreamingPost`,
+        kept as `self.stream`): a rust run is closed from the nextest stream
+        its runner wrote, and a run that opens no run files nothing."""
+        self.stream = StreamingPost()
+
+        def fake_post(path, payload, *_args, **_kwargs):
+            calls.append((path, copy.deepcopy(payload)))
+            if path == START or STREAM_ROUTE.match(path):
+                return self.stream(path, payload)
+            return copy.deepcopy(response if response is not None else _OK_RESPONSE)
+        return fake_post
+
+    def _transport(self, fake_post):
+        """The client's transport under `_post`, answered by the same board:
+        a POST the client sends past `_post` (its relay's, with a timeout)
+        is recorded too, never sent to a real address."""
+        health = get_answering_health(lambda _p: None)
+
+        def request(method, path, payload=None, timeout=None):
+            if method == "POST":
+                return fake_post(path, payload)
+            return health(path) if method == "GET" else {"ok": True}
+        return mock.patch.object(self.module, "_request", create=True,
+                                 side_effect=request)
+
+    def drive(self, argv, response=None):
+        calls = []
+        fake_post = self._streaming_post(calls, response)
+        with mock.patch.object(self.module, "_post", create=True,
+                               side_effect=fake_post), \
+                self._transport(fake_post), \
+                mock.patch.object(self.module, "_get", create=True,
+                                  side_effect=get_answering_health(lambda _p: None)), \
+                mock.patch.object(self.module, "_patch", return_value={"ok": True},
+                                  create=True):
+            code, out, err = _run_main(self.module, self.CLIENT, argv)
+        return _Drive(code, out, err, calls)
+
+    def drive_with_real_std(self, argv, response=None):
+        """The shared real-descriptor drive, its `_post` the streaming one."""
+        calls = []
+        out_path = os.path.join(self.tmpdir, "drive-stdout.txt")
+        err_path = os.path.join(self.tmpdir, "drive-stderr.txt")
+        fake_post = self._streaming_post(calls, response)
+        with open(out_path, "w") as out, open(err_path, "w") as err, \
+                mock.patch.object(self.module, "_post", create=True,
+                                  side_effect=fake_post), \
+                self._transport(fake_post), \
+                mock.patch.object(self.module, "_get", create=True,
+                                  side_effect=get_answering_health(lambda _p: None)), \
+                mock.patch.object(self.module, "_patch",
+                                  return_value={"ok": True}, create=True), \
+                mock.patch.object(sys, "argv",
+                                  [f"{self.CLIENT}-crucible.py"] + list(argv)), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                self.module.main()
+                code = 0
+            except SystemExit as exc:
+                code = (exc.code if isinstance(exc.code, int)
+                        else (0 if exc.code is None else 1))
+        return _Drive(code, Path(out_path).read_text(),
+                      Path(err_path).read_text(), calls)
+
+    def held(self):
+        """The results the stream the board held holds, by event."""
+        return held_results(self.stream.held.decode("utf-8"))
+
+    def assertClosedFromItsStream(self, drive, site):
+        closes = drive.payloads(RUNS)
+        self.assertEqual(
+            [(c.get("codec"), "data" in c) for c in closes], [("nextest", False)],
+            f"{site}: a rust run is closed once, from its nextest stream, "
+            f"carrying no report; paths={drive.paths()!r} "
+            f"stderr={drive.err[-1500:]!r}")
+
     def write_nextest_junit(self, profile="ci"):
         directory = Path(self.tmpdir, "target", "nextest", profile)
         directory.mkdir(parents=True, exist_ok=True)
@@ -1103,9 +1183,11 @@ class RustUnearnedTierTest(_RustCase):
     def test_rust_test_ingests_the_nextest_run_without_claiming_a_tier(self):
         """AC3, rust `cmd_test` — the profile (`-P ci`, `-P e2e`) is the
         caller's own tier statement and the client overwrites it with `unit`.
-        (AC12 rules on what the profile SHOULD carry; that is cycle 381's.)"""
-        self.write_nextest_junit()
+        (AC12 rules on what the profile SHOULD carry; that is cycle 381's.)
+        The run is closed from its nextest stream, and that close states no
+        tier."""
         drive = self.drive(self.rust_argv("test"))
+        self.assertClosedFromItsStream(drive, "rust cmd_test -> POST /runs")
         self.assertNoStatedTier(drive, RUNS, "rust cmd_test -> POST /runs")
 
     def test_rust_auto_ingest_ran_no_tests_so_it_claims_no_tier(self):
@@ -1272,30 +1354,22 @@ class RustEarnedTierTest(_RustCase):
         """§S2's converse, rust `_workspace_regression_run` — the tier verb's
         own body.
 
-        CR-CRU-215 §S1/AC1/AC2 — the report this run files is the run's own:
-        the fake `cargo` writes `target/nextest/ci/junit.xml` on its `nextest`
-        call, from FAKE_CARGO_JUNIT_CONTENT, and nothing is placed there before
-        the client starts (CR-CRU-212's `_written_since` refuses a report older
-        than the run's start, to the whole second). The filed run carries that
-        report's counts."""
-        report = Path(self.tmpdir, "target", "nextest", "ci", "junit.xml")
-        os.environ["FAKE_CARGO_JUNIT_CONTENT"] = _NEXTEST_JUNIT_TWO_PASS_ONE_FAIL
-        self.assertFalse(
-            report.exists(),
-            f"AC2 — nothing may exist at {report} when the client is started; "
-            f"the report must be written by the fake `cargo` during the run.")
+        The record this run files is the run's own: the stream the fake
+        `cargo` writes during its `nextest run`, three tests of which one
+        fails (FAKE_NEXTEST_CASES), counts distinct from every other fixture
+        here. The run is closed from that stream."""
+        os.environ["FAKE_NEXTEST_CASES"] = (
+            '[["adds", "ok"], ["subtracts", "ok"], ["divides", "failed"]]')
+        self.addCleanup(os.environ.pop, "FAKE_NEXTEST_CASES", None)
         drive = self.drive_with_real_std(self.rust_argv("regression", (), crate=False))
         self.assertStatedTier(drive, RUNS, "regression",
                               "rust regression -> POST /runs")
-        payload = self._ingest_payload(drive, RUNS,
-                                       "rust regression -> POST /runs")
-        summary = (junit_sent(payload) or {}).get("summary") or {}
+        self.assertClosedFromItsStream(drive, "rust regression -> POST /runs")
+        held = self.held()
         self.assertEqual(
-            {k: summary.get(k) for k in ("total", "passed", "failed", "pending")},
-            {"total": 3, "passed": 2, "failed": 1, "pending": 0},
-            f"AC2 — the filed run must carry the report the fake `cargo` wrote "
-            f"(3 run, 2 passed, 1 failed), its text sent inline; "
-            f"summary={summary!r}")
+            (held["ok"], held["failed"], held["ignored"]), (2, 1, 0),
+            f"the filed run must carry the stream the fake `cargo` wrote "
+            f"(3 run, 2 passed, 1 failed); held={held!r}")
         self.assertEqual(len(drive.payloads(RUNS)), 1,
                          f"exactly one ingest per run; paths={drive.paths()!r}")
         self.assertEqual(drive.payloads(PARSED), [],
@@ -1305,10 +1379,10 @@ class RustEarnedTierTest(_RustCase):
     def test_rust_regression_ingest_carries_the_per_crate_regression_tier(self):
         """§S2's converse, rust `_regression_ingest_run` — the per-crate body,
         which has posted `tier="regression"` since before this CR was cut."""
-        self.write_nextest_junit()
         drive = self.drive_with_real_std(self.rust_argv("regression-ingest"))
         self.assertStatedTier(drive, RUNS, "regression",
                               "rust regression-ingest -> POST /runs")
+        self.assertClosedFromItsStream(drive, "rust regression-ingest -> POST /runs")
 
 
 # ── AC13a: a compile ingest is not a test tier ─────────────────────────────

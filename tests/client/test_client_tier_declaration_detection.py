@@ -305,11 +305,10 @@ version = "0.1.0"
 edition = "2021"
 """
 
-# The `ci` sibling every real cargo project has, carrying junit of its own:
-# §S6/AC14a's measured trap. A profile does NOT inherit a sibling's junit
-# configuration (only `default`'s), so a fixture whose declaration stops at
-# `[profile.<tier>]` would run and produce no report — which is what makes the
-# junit sub-table below part of the declaration rather than decoration.
+# The `ci` sibling every real cargo project has, carrying junit of its own,
+# and the tier's profile with NO junit sub-table: a rust run's record is the
+# nextest stream it writes, so a profile `.config/nextest.toml` defines is the
+# whole declaration of its tier, with or without a junit table.
 NEXTEST_TOML = """[profile.default]
 retries = 0
 
@@ -322,9 +321,6 @@ path = "junit.xml"
 [profile.__PROFILE__]
 retries = 0
 fail-fast = false
-
-[profile.__PROFILE__.junit]
-path = "junit.xml"
 """
 
 # A backtick-quoted fragment of the refusal that is TOML: a table header, or a
@@ -777,20 +773,15 @@ class _RustDeclarationCase(_RustModalityCase, _DeclarationProbe):
         """Write `toml_text` as this project's `.config/nextest.toml` and NOTHING
         else — no report is planted here.
 
-        The fixture's fake cargo is nextest's own rule: it writes a report only
-        where the config it was handed asks for one, under the profile it ran.
-        So whether this cell can be ingested at all is decided by the
-        DECLARATION under test, which is the property a fixture that
-        hand-wrote `target/nextest/<profile>/junit.xml` destroyed — it supplied
-        the half the instruction omitted and reported success."""
+        The fixture's fake cargo streams the run it is asked for, under the
+        profile it ran, whatever junit table the config carries: whether this
+        cell runs at all is decided by the DECLARATION under test, and the
+        record it files is the stream that run wrote."""
         self.profile = profile
         self.declared_toml = toml_text
         config = Path(self.tmpdir, ".config")
         config.mkdir(parents=True, exist_ok=True)
         (config / "nextest.toml").write_text(toml_text)
-        # The RUN's output, exactly as bun's and python's fakes take theirs —
-        # what a passing suite prints, never where it is written to.
-        os.environ["FAKE_CARGO_JUNIT_CONTENT"] = _JUNIT_SUITES_ONE_PASS
         return []
 
     def declare(self, tier):
@@ -1108,8 +1099,6 @@ class RustRegressionCellRunsItsWorkspaceRegressionBodyTest(_RustDeclarationCase)
 
     def test_the_regression_cell_runs_the_regression_this_client_already_has(self):
         cell = "rust/regression"
-        self.write_nextest_junit(profile="ci")
-        self.write_nextest_junit(profile="regression")
         # The workspace body hands its child the client's own stream, which an
         # io.StringIO cannot back — cycle 379's real-fd drive, same recording.
         drive = self.drive_with_real_std(self.rust_argv("regression"))
@@ -1137,6 +1126,7 @@ class RustRegressionCellRunsItsWorkspaceRegressionBodyTest(_RustDeclarationCase)
                 f"AC14c — {cell}: `--lib` is cargo's UNIT selection; a "
                 f"regression that ran it would be the unit cell wearing the "
                 f"regression tier: {run['argv']!r}")
+        self.assertClosedFromItsStream(drive, f"AC14c — {cell}")
         self.assertIngestedVerbTier(drive, "regression", cell)
 
 

@@ -340,8 +340,34 @@ if _log:
 # unmaskable. Nothing is written unless a config asks for it AND the run's
 # output content is supplied, so every drive with no `.config/nextest.toml` is
 # unaffected.
+#
+# A streamed rust run's calls are answered by `tests/client/fake_nextest.py`:
+# the version before anything is logged (reading it runs nothing), the list,
+# `llvm-cov show-env`/`report` and the `libtest-json-plus` stream after. The
+# stream holds FAKE_NEXTEST_CASES, a JSON list of `[name, status]` (one
+# passing `probe` by default), whatever the profile's junit configuration
+# says: a streamed run's record is its stream. FAKE_CARGO_EXIT_CODE set
+# non-zero is a crate that does not compile, so its list fails to build.
+_CARGO_VERSION_HEAD = (
+    "import sys as _nx_sys\n"
+    f"_nx_sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+    "import fake_nextest\n"
+    "if _nx_sys.argv[1:3] in ([\"nextest\", \"--version\"], [\"nextest\", \"-V\"]):\n"
+    "    _nx_sys.exit(fake_nextest.preliminary(_nx_sys.argv[1:], []))\n")
+
 _CARGO_TAIL = """
 import tomllib
+
+if os.environ.get("FAKE_CARGO_EXIT_CODE", "0") != "0":
+    os.environ["FAKE_LIST_COMPILE_ERROR"] = "1"
+_nx_cases = [fake_nextest.case(_n, _s, crate="probe-crate", binary="tier")
+             for _n, _s in json.loads(os.environ.get("FAKE_NEXTEST_CASES")
+                                      or '[["probe", "ok"]]')]
+_nx_code = fake_nextest.preliminary(sys.argv[1:], _nx_cases)
+if _nx_code is None:
+    _nx_code = fake_nextest.streamed_run(sys.argv[1:], _nx_cases)
+if _nx_code is not None:
+    sys.exit(_nx_code)
 
 _argv = sys.argv[1:]
 if "nextest" in _argv:
@@ -454,13 +480,21 @@ _BIN_DIR = None
 _SAVED_PATH = None
 
 
+def _tool_text(name, tail):
+    """One recording fake's program: `_RECORD`, then `tail`. The `cargo`
+    fake answers nextest's version before it records anything."""
+    body = _RECORD.replace("__PYTHON__", sys.executable).replace("__TOOL__", name)
+    if name == "cargo":
+        body = body.replace("import json\n", _CARGO_VERSION_HEAD + "import json\n", 1)
+    return body + tail
+
+
 def setUpModule():
     global _BIN_DIR, _SAVED_PATH
     _BIN_DIR = tempfile.mkdtemp(prefix="cr111-modality-bin-")
     for name, tail in list(_PATH_TOOLS.items()) + list(_NAMED_TOOLS.items()):
         path = Path(_BIN_DIR) / name
-        body = _RECORD.replace("__PYTHON__", sys.executable).replace("__TOOL__", name)
-        path.write_text(body + tail)
+        path.write_text(_tool_text(name, tail))
         path.chmod(0o755)
     _SAVED_PATH = os.environ.get("PATH", "")
     os.environ["PATH"] = _BIN_DIR + os.pathsep + _SAVED_PATH
@@ -721,6 +755,17 @@ class _RustModalityCase(_ModalityCase):
     CLIENT = "rust"
     CRATE = "probe_crate"
 
+    # Cycle 378's rust drives (`_RustCase`): the board opens the run and
+    # holds its stream (`StreamingPost`), as a rust run is closed from the
+    # nextest stream its runner wrote and a run that opens no run files
+    # nothing.
+    _streaming_post = _HARNESS._RustCase._streaming_post
+    _transport = _HARNESS._RustCase._transport
+    drive = _HARNESS._RustCase.drive
+    drive_with_real_std = _HARNESS._RustCase.drive_with_real_std
+    held = _HARNESS._RustCase.held
+    assertClosedFromItsStream = _HARNESS._RustCase.assertClosedFromItsStream
+
     def rust_argv(self, verb, extra=()):
         return [verb, "--agent", AGENT, "--project-dir", self.tmpdir] + list(extra)
 
@@ -870,11 +915,11 @@ class RustSplitCellsTest(_RustModalityCase):
         `tests/` integration targets, which is precisely the tier confusion
         the split exists to prevent."""
         cell = "rust/unit"
-        self.write_nextest_junit()
         drive = self.drive(self.rust_argv("unit", ["--crate", self.CRATE]))
         runs = self.assertToolchainRan(drive, "cargo", cell)
         self.assertSelects(runs, ["--lib"], cell,
                            "cargo's own unit selection is `--lib`")
+        self.assertClosedFromItsStream(drive, cell)
         self.assertIngestedTier(drive, "unit", cell)
 
     def test_the_integration_cell_selects_a_cargo_test_target(self):
@@ -882,24 +927,24 @@ class RustSplitCellsTest(_RustModalityCase):
         by `--test <t>`. The flag exists on the untiered `test` verb today; no
         tier verb reaches it."""
         cell = "rust/integration"
-        self.write_nextest_junit()
         drive = self.drive(self.rust_argv(
             "integration", ["--crate", self.CRATE, "--test", "probe_it"]))
         runs = self.assertToolchainRan(drive, "cargo", cell)
         self.assertSelects(runs, ["--test", "probe_it"], cell,
                            "cargo selects an integration target by name")
+        self.assertClosedFromItsStream(drive, cell)
         self.assertIngestedTier(drive, "integration", cell)
 
     def test_the_e2e_cell_selects_its_nextest_profile(self):
         """RED — §S3 maps `e2e` onto the nextest PROFILE (`-P e2e`, the
         docker-infra tier `.config/nextest.toml` carves out)."""
         cell = "rust/e2e"
-        self.write_nextest_junit(profile="e2e")
         drive = self.drive(self.rust_argv(
             "e2e", ["--crate", self.CRATE, "--profile", "e2e"]))
         runs = self.assertToolchainRan(drive, "cargo", cell)
         self.assertSelects(runs, ["-P", "e2e"], cell,
                            "nextest selects the e2e tier by profile")
+        self.assertClosedFromItsStream(drive, cell)
         self.assertIngestedTier(drive, "e2e", cell)
 
 
@@ -1193,8 +1238,8 @@ class RustHigherTiersStopReportingAsUnitTest(_RustModalityCase):
         """Drive a gate verb with its ENVIRONMENT stubbed and its RUN intact:
         docker and the disk guard are the machine this test runs on, never the
         behaviour under test. `cargo` is still the recording fake, and the
-        junit the gate ingests is the fixture's."""
-        self.write_nextest_junit(profile=profile)
+        stream the gate closes from is the one it writes under `profile`."""
+        self.profile = profile
         with mock.patch.object(self.module, "_docker_up", return_value=0), \
                 mock.patch.object(self.module, "_docker_down", return_value=0), \
                 mock.patch.object(self.module, "_disk_guard", return_value=True):
@@ -1209,6 +1254,9 @@ class RustHigherTiersStopReportingAsUnitTest(_RustModalityCase):
             f"AC12 — rust `{verb}`: the gate ingested nothing, so this test "
             f"measured no tier. posted={[p for p, _ in drive.calls]!r} "
             f"exit={drive.code} stderr={drive.err[-1500:]!r}")
+        self.assertClosedFromItsStream(drive, f"AC12 — rust `{verb}`")
+        self.assertSelects(self.invocations("cargo"), ["-P", self.profile],
+                           f"rust/{verb}", "the gate runs nextest under its profile")
         for payload in payloads:
             self.assertEqual(
                 payload.get("tier"), expected,
