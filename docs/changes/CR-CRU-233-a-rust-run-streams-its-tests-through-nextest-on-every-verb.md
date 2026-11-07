@@ -102,6 +102,11 @@ an `e2e` profile selects.
   - **Unchanged.** What each verb cleans, selects and gates otherwise stays as it is.
   - **Without an agent.** A verb opens no run, as today. It runs `cargo nextest run` without the stream and without a
     list, with nextest's human output on the terminal, and files nothing.
+  - **A run the board refuses to open** is run unfiled, as python's streamed runs are. The tests still run with the
+    stream on, and the one `ok: false` envelope names the refusal and files nothing. Nothing is filed single-shot (RED
+    open point, 2026-11-07).
+  - **Registration.** The stream and list routes need a registered caller, so a gated run registers its agent for
+    them, as python's gated bracket does.
 - **§S2 — the list before the run.**
   - **The list.** Before the run, the client runs `cargo nextest list --message-format json` with the run's own
     profile, filter, features and crate and target selection, under the coverage environment for a coverage verb.
@@ -255,7 +260,11 @@ naming what is missing. It never skips them.
 
   These tests are re-pinned to the stream: those that pinned the rust client's JUnit filing on the four bodies, its
   human-line narration, `--ignore-run-fail`, and the JUnit requirement of a declared tier. `auto-ingest`'s JUnit tests
-  stay. Every other existing test passes unchanged.
+  stay.
+
+  An existing test whose own fake cargo cannot answer the version check, the list or the streamed run is moved to the
+  shared fake or taught those calls. Its assertions about the behaviour it is named for stay as strict as before (RED
+  finding, 2026-11-07). Every other existing test passes unchanged.
 - [ ] **AC9 (§S3).** The shipped `crucible.toml` documents the `[targets.<profile>]` table:
   - its fields;
   - the rust entry;
