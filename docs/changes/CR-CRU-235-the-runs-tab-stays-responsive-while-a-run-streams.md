@@ -1,7 +1,7 @@
 # CR-CRU-235 — the Runs tab stays responsive while a run streams
 
-**Type** fix · **Points** 5 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING · Pre-review: none — no
-trigger
+**Type** fix · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING · Pre-review: due — 8
+points; the gap analysis needed user rulings
 - **Filed 2026-11-06** by user ruling, as a bug fix in the current wave sequenced after CR-CRU-234, from a defect the
   user has been seeing on the dashboard: with the Runs tab open while a run streams (its running card on top, the
   agent's card in the project pane), the browser locks up and the display slows.
@@ -9,6 +9,11 @@ trigger
   leave the timeline's rendering and no live update replaces a node beside the timeline, and the timeline's rows are
   skipped by the browser while off screen. Windowing the timeline and shrinking the events read are non-goals.
   Re-scored 8 → 5. AC3 is a real-browser bound of 250 ms per main-thread task.
+- **Re-scoped 2026-11-07 during RED** (user rulings; folded in rather than filed as a patch CR, by user ruling): RED's
+  real-browser test found the first live batch and the run's opening still cost a ~3.4 s task under the targeted
+  fix, from the Tailwind browser runtime rewriting its stylesheet when the live card first adds class names. The
+  runtime is replaced by a static stylesheet (§S5), and the feed's scroll restore stays exact under §S2 (AC7).
+  Re-scored 5 → 8; the gap analysis re-ran for the new scope and the spec pre-review is due.
 
 ## Problem
 
@@ -29,6 +34,18 @@ trigger
 - **A run's start and close re-style the document once each.** Rules on the root that use `:has()` (the stylesheet's
   theme and modal rules, and two of the dashboard's own) make the browser re-style the whole document when the
   running card appears or goes: about 1.3 s each.
+- **The Tailwind runtime re-styles the document when a class first appears** (RED, 2026-11-07). The page loads
+  Tailwind as a browser runtime (`tailwind-browser`, 271 KB), which watches the DOM and regenerates its stylesheet
+  when a class name it has not seen enters it. A running card going live adds such names, so on a fresh page the
+  first live batch and the run's opening each cost a ~3.4 s task (2,500 settled runs) even with the targeted fix;
+  without the runtime that task disappears. What the runtime generates for every tab of the dashboard is 4,583
+  bytes: its theme variables, its base reset and two utilities (`.start` and `.end`, which the Roadmap's terminal
+  markers carry as class names). Nothing else on the page uses a Tailwind utility; the components come from daisyUI's
+  prebuilt stylesheet and the dashboard's own.
+- **The whole fix, measured** (re-run 2026-11-07 on a fresh page, a copy of the DEV store with a cycle active and a
+  cycle-bound run streaming, the run's opening and first batch inside the 20 s window): the running cards in a stable
+  container, the rows' `content-visibility`, scroll anchoring off on the feed's scroll box, and the runtime's output
+  as a static stylesheet gave 10 long tasks totalling 0.54 s, the longest 57 ms, and the timeline rendered once.
 - **Not the cause.** The events read re-reads the project's whole retention window on every frame (1.8 MB), but its
   parse and in-place diff cost about 40 ms per frame and do not re-render the timeline when nothing settled. The
   agent's card is not beside the timeline: a node inserted there costs 37 ms.
@@ -48,6 +65,10 @@ trigger
 - **§S3 — the live views stay live.** The running card, the agent's card and the live drill-in still follow a
   streaming run batch by batch, on every tab; a run that settles still leaves the running cards and joins the
   timeline in the same read.
+- **§S5 — the page's utility styles are static.** The page loads no stylesheet-generating runtime. What the Tailwind
+  runtime generates today (its theme variables, base reset and the two utilities) is served as a static stylesheet,
+  in the same cascade position (after the dashboard's own stylesheet), so every view looks as it does today and no
+  class name entering the DOM rewrites a stylesheet. The vendored runtime is removed.
 - **§S4 — nothing else changes:** what each tab shows, the run cards' content and order, the filters (including the
   release filter, which shows no running cards), the empty state when a project has neither runs nor an open run,
   and the board's reads.
@@ -66,12 +87,27 @@ trigger
   timeline when it closes.
 - [ ] **AC4 (§S2).** The timeline's rows carry `content-visibility: auto` with an intrinsic size, and the page still
   scrolls to a run on a `→ Runs` jump and keeps the feed's scroll position across a detail.
-- [ ] **AC5 (§S4).** Every existing test passes unchanged.
+- [ ] **AC5 (§S4).** Every existing test passes unchanged, except the tests that pin the Tailwind runtime's script
+  on the page (the SPA-serving and roadmap visual-grammar tests), which are updated to the static stylesheet
+  (user-approved).
+- [ ] **AC6 (§S5).** The page loads no Tailwind runtime script; the static stylesheet is linked after the dashboard's
+  own; and in a real browser no stylesheet in the document changes while a run opens, streams and closes, or when
+  the Roadmap view first renders. The computed styles of a sample of elements on each workspace tab (the Runs
+  timeline's cards, the running card, the agent's card, the Roadmap's terminal markers) equal those recorded under
+  the runtime before the change.
+- [ ] **AC7 (§S2).** With the rows' `content-visibility`, closing a run's detail restores the feed's scroll position
+  exactly (the existing drill-in scenario that restores it passes unchanged).
+- [ ] **AC8 (§S4, page level).** The Runs tab's empty state (`no runs yet …`) shows only when the project has neither
+  a settled run nor an open run: a project whose first run is still open shows its running card and no empty state,
+  and the release filter shows no running cards.
+- AC1 and AC2 read "a batch" as the read that opens a run and every streamed batch after it; the read that closes a
+  run changes the settled history and may rebuild the timeline once (RED's reading, accepted).
 
 ## Non-goals
 
 - Windowing or paging the timeline (its rows stay in the DOM).
 - Shrinking the events read or reading only what changed.
-- Changing the component stylesheet or its `:has()` rules.
+- Changing the component stylesheet (daisyUI) or its `:has()` rules.
+- A CSS build step: the static stylesheet is the runtime's output, committed.
 - The board's per-tab live connection and the browser's connection limit.
 - The long running-file line in the agent's card (CR-CRU-234).
