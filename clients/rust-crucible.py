@@ -8,13 +8,13 @@ green,fix,verify} agent lifecycle ops AND for running Cargo targets (nextest,
 check, clippy, llvm-cov). Replaces inline python / loose shell so each
 invocation has a stable command signature.
 
-This script is tool-specific (Cargo / Nextest / JUnit-XML / llvm-cov / Clippy),
+This script is tool-specific (Cargo / Nextest / llvm-cov / Clippy),
 not project-specific — the project path is parameterizable.
 
 Subcommands:
   register, unregister  Agent lifecycle.
   test                  cargo nextest run -p <crate> -P <profile> [--features ...]
-                        [--filter EXPR]. If --agent passed, auto-ingests JUnit.
+                        [--filter EXPR]. If --agent passed, streams the run.
   check                 cargo check -p <crate> [--features ...]. If --agent passed,
                         ingests stderr to /api/v2/runs/compile.
   clippy                cargo clippy -p <crate> [--features ...] [--deny-warnings].
@@ -22,13 +22,13 @@ Subcommands:
   auto-ingest           Ingest only: if JUnit XML exists fresh, ingest as junit;
                         otherwise run `cargo check` and ingest as compile.
                         For when caller has already run `cargo nextest` separately.
-  regression-ingest     cargo clean -p ... → llvm-cov nextest -p ... → junit + lcov
-                        sent to /api/v2/runs for the board to decode. Per-crate scope.
+  regression-ingest     cargo clean -p ... → the run streamed through nextest under
+                        llvm-cov, its lcov filed with it. Per-crate scope.
   workspace-regression  cargo clean → cargo llvm-cov nextest --workspace
                         --all-features -P <profile> → ingest. ORCHESTRATOR
                         pre-merge gate path (no docker).
   smoke-test            cargo nextest run --workspace [--all-features|--features X]
-                        -P <profile> --no-fail-fast → ingest JUnit (no
+                        -P <profile> --no-fail-fast → streamed (no
                         coverage). Faster than workspace-regression — used for
                         the raw smoke pass that rust-orchestration.md (Pre-merge gate, smoke×2)
                         prescribes BEFORE the llvm-cov pass. Less prone to
@@ -51,9 +51,10 @@ Project + Crucible endpoint:
   containing the current directory. No project is hardcoded — works in ANY Cargo repo.
   Posts to the board the project's `crucible.toml` declares (`[client] url`,
   shipped default http://localhost:3849), v2 endpoints ONLY:
-  /api/v2/agents/register|unregister, /api/v2/runs (codec junit, coverage
-  codec lcov), /api/v2/runs/compile. Every report travels inline, as its
-  text; the client parses none of them.
+  /api/v2/agents/register|unregister, /api/v2/runs/start, the run's
+  /tests list and /stream (codec nextest), /api/v2/runs (the stream's close,
+  coverage codec lcov; `auto-ingest`'s codec junit), /api/v2/runs/compile.
+  Every report travels as its text; the client parses none of them.
 
 Examples:
   # Run targeted tests + ingest in one call
@@ -80,9 +81,11 @@ Examples:
 import argparse  # noqa: I001
 import atexit
 import contextlib
+import glob
 import importlib.util
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -230,8 +233,8 @@ def _request(method, path, payload=None, timeout=None):
     return _axi().http_request(_base_url(), method, path, payload, timeout)
 
 
-def _post(path, payload):
-    return _request("POST", path, payload)
+def _post(path, payload, timeout=None):
+    return _request("POST", path, payload, timeout=timeout)
 
 
 def _get(path, timeout=10):
@@ -596,11 +599,14 @@ def _acquire_gate_lock(project_dir, agent):
     return True
 
 
-def _run_logged(cmd, cwd, env, log_path, narrator=None, capture=False):
+def _run_logged(cmd, cwd, env, log_path, narrator=None, capture=False,
+                stdout_path=None):
     """Run `cmd` on the shared run path (`run_streamed`): the combined
     stdout+stderr streams live to STDERR and to `log_path` while cargo works,
     the optional `narrator` observes every line, and the returned capture is
     byte-identical to a capture-after-exit. Returns the `CompletedProcess`.
+    With `stdout_path` the runner's stdout goes to that file instead, and
+    only its stderr is echoed, logged and captured.
 
     CR-CRU-058 §S3 — the echo goes to STDERR, matching the rest of the fleet: a
     cargo/nextest run's own output on stdout would put megabytes of prose in
@@ -608,7 +614,8 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None, capture=False):
     narrates off stdout too (the gate bodies, whose stdout is the envelope
     alone). With none of the three, the runner inherits stdio.
     """
-    return _axi().run_streamed(cmd, cwd, env, log_path, narrator, capture=capture)
+    return _axi().run_streamed(cmd, cwd, env, log_path, narrator, capture=capture,
+                               stdout_path=stdout_path)
 
 
 # cargo-nextest's own human-reporter lines: the run states its total up front
@@ -646,23 +653,417 @@ class _NextestProgress:
         return not self._summarised and _NEXTEST_VERDICT_LINE.match(text) is not None
 
 
-def _narrator(project_dir, agent_id, identity=None):
-    """This client's `RunNarrator`: nextest's recogniser, the total nextest
-    itself stated (`running N/M`, then `ran M/M`), and the shared role-optional
-    heartbeat tick (`narration_poster`), observed by a gated `identity`."""
-    progress = _NextestProgress()
-    return _axi().RunNarrator(
-        _axi().narration_poster(_post, _project_key(project_dir), agent_id,
-                                identity),
-        progress.recognise, total=lambda: progress.total)
-
-
 def _start_run(project_dir, agent_id, tier=None, context=None, release=None):
-    """Open the run BEFORE cargo is spawned, through the shared `open_run`.
-    Returns `(run_id, warnings)`; a refusal degrades to a single-shot ingest
-    with a warning naming the fallback."""
+    """Open the run BEFORE cargo is spawned, through the shared `open_run`,
+    stating its framework, nextest. Returns `(run_id, warnings)`."""
     return _axi().open_run(_post, _project_key(project_dir), agent_id, _STACK,
-                           tier=tier, context=context, release=release)
+                           tier=tier, context=context, release=release,
+                           framework=NEXTEST_CODEC)
+
+
+# ── the streamed run: nextest's own stream is the run's record ──────────────
+#
+# With an agent, every test-running verb lists its tests, posts the list to
+# the open run, then runs `cargo nextest run --no-fail-fast` with nextest's
+# `libtest-json-plus` stream on its stdout, which the shared relay sends to the
+# open run; the run is closed from that stream. A coverage verb lists and runs
+# under `cargo llvm-cov show-env`'s environment in its own target directory and
+# files the lcov `cargo llvm-cov report` writes.
+
+#: The stream codec, and the framework every streamed run states.
+NEXTEST_CODEC = "nextest"
+#: The codec a run's test list is posted under.
+NEXTEST_LIST_CODEC = "nextest-list"
+#: The oldest cargo-nextest whose stream the board's decoder is proven on.
+MIN_NEXTEST = (0, 9, 130)
+MIN_NEXTEST_TEXT = ".".join(map(str, MIN_NEXTEST))
+_NEXTEST_VERSION = re.compile(r"cargo-nextest (\d+)\.(\d+)\.(\d+)")
+#: The variable that turns nextest's experimental stream on, and its flags.
+_STREAM_SWITCH = "NEXTEST_EXPERIMENTAL_LIBTEST_JSON"
+_STREAM_FLAGS = ("--message-format", "libtest-json-plus",
+                 "--message-format-version", "0.1")
+#: Where a run keeps its stream and its list, in its own reports directory.
+_STREAM_FILE = "nextest-stream.jsonl"
+_LIST_FILE = "nextest-list.json"
+#: The instrumented build's own target directory, under the target root.
+_COVERAGE_TARGET_DIR = "llvm-cov-target"
+#: How long the relay's `finish` may take once the runner exited, and once a
+#: signal interrupted the run.
+_STREAM_FINISH_SECONDS = 60.0
+_INTERRUPTED_FINISH_SECONDS = 5.0
+#: A project's `[targets.<profile>]` entry for a rust run, field by field, and
+#: the fields a rust entry may not declare (its record is its stream, and its
+#: coverage follows the verb).
+_TARGETS_FRAMEWORK = NEXTEST_CODEC
+_TARGETS_STREAM = {"codec": NEXTEST_CODEC, "path": "stdout"}
+_TARGETS_REFUSED_FIELDS = ("junit", "console", "coverage")
+
+
+def _nextest_refusal(args, verb, project_dir, profile, coverage=False, gate=False):
+    """The checks a streamed run makes before anything else runs: the
+    cargo-nextest version, the project's `[targets.<profile>]` entry and the
+    board's health. A refused run emits ONE `ok: false` envelope naming why
+    (a `gate` naming its whole suite unreported too) and answers its exit;
+    otherwise None, and the health read is kept on `args` for the run's relay,
+    so a body run on behalf of an already-checked verb checks nothing again.
+    A health that cannot be read refuses nothing here: the run goes on
+    unfiled (`_nextest_run`). Without an agent nothing is checked: such a
+    run streams nothing."""
+    if not getattr(args, "agent", None) or getattr(args, "nextest_health", None):
+        return None
+    refusal = (_nextest_version_refusal(project_dir)
+               or _targets_refusal(project_dir, profile))
+    if refusal is None:
+        health = _get(_axi().INGEST_HEALTH_PATH)
+        refusal = _stream_health_refusal(health, coverage)
+        if refusal is None:
+            args.nextest_health = health
+            return None
+    print(f"[crucible] ERROR: {refusal}", file=sys.stderr)
+    warnings = (_axi().whole_suite_unreported_warnings(
+        _STACK, {"ok": False, "error": refusal}) if gate else [])
+    _emit_axi(verb, False,
+              {"run": _UNFILED_RUN, "error": refusal,
+               "help": [f"fix what the error names, then re-run {verb} "
+                        f"--agent <agentId>", "status"]},
+              _axi_context(project_dir, agent_id=args.agent), warnings,
+              f"{verb}: ok=False — {refusal}")
+    return 1
+
+
+#: The `run:` block of a run that was not filed: no figures.
+_UNFILED_RUN = dict.fromkeys(("passed", "failed", "pending", "total", "files"))
+
+
+def _health_unreadable(health):
+    """(PURE) Whether a health answer could not be read at all."""
+    return not isinstance(health, dict) or health.get("ok") is False
+
+
+def _nextest_version_refusal(project_dir):
+    """Why the cargo-nextest here cannot stream a run (older than
+    `MIN_NEXTEST`, or no version read from `cargo nextest --version`), or None."""
+    try:
+        read = subprocess.run(["cargo", "nextest", "--version"], cwd=project_dir,
+                              capture_output=True, text=True, check=False)
+        said = read.stdout if read.returncode == 0 else ""
+    except OSError as error:
+        said = ""
+        print(f"[crucible] WARN: `cargo nextest --version` could not run ({error})",
+              file=sys.stderr)
+    found = _NEXTEST_VERSION.search(said or "")
+    version = tuple(int(part) for part in found.groups()) if found else None
+    if version is not None and version >= MIN_NEXTEST:
+        return None
+    seen = ("version " + ".".join(map(str, version)) if version
+            else "no version `cargo nextest --version` could read")
+    return (f"a rust run streams its tests through cargo-nextest "
+            f"{MIN_NEXTEST_TEXT} or later, and the cargo-nextest here reports "
+            f"{seen}; nothing was run — install cargo-nextest "
+            f"{MIN_NEXTEST_TEXT} or later")
+
+
+def _targets_refusal(project_dir, profile):
+    """Why the project's own `crucible.toml` refuses a run of `profile` (it
+    does not parse, or its `[targets.<profile>]` entry is not the rust
+    entry), or None. A project with no file, or no entry for the profile,
+    runs as if it declared the rust entry; the install's file never declares."""
+    path = os.path.join(project_dir, "crucible.toml")
+    try:
+        with open(path, "rb") as handle:
+            declared = tomllib.load(handle)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as error:
+        return (f"the project's crucible.toml ({path}) does not parse ({error}), "
+                f"so its `[targets.{profile}]` entry cannot be read; nothing "
+                f"was run — fix crucible.toml")
+    targets = declared.get("targets")
+    entry = targets.get(profile) if isinstance(targets, dict) else None
+    fault = None if entry is None else _targets_fault(entry)
+    if fault is None:
+        return None
+    field, value = fault
+    return (f"`[targets.{profile}]` in {path} declares `{field}` = {value!r}, "
+            f"which a rust run cannot take: a rust run is declared framework = "
+            f"\"{_TARGETS_FRAMEWORK}\" with stream = {{ codec = "
+            f"\"{_TARGETS_STREAM['codec']}\", path = \"{_TARGETS_STREAM['path']}\" "
+            f"}} and nothing else; nothing was run")
+
+
+def _targets_fault(entry):
+    """(PURE) The first field of a `[targets.<profile>]` entry a rust run
+    cannot take, as `(field, value)`, or None. A field left out takes the
+    rust entry's value."""
+    if not isinstance(entry, dict):
+        return "targets", entry
+    for field in _TARGETS_REFUSED_FIELDS:
+        if field in entry:
+            return field, entry[field]
+    framework = entry.get("framework", _TARGETS_FRAMEWORK)
+    if framework != _TARGETS_FRAMEWORK:
+        return "framework", framework
+    stream = entry.get("stream", _TARGETS_STREAM)
+    if not isinstance(stream, dict):
+        return "stream", stream
+    for key, wanted in _TARGETS_STREAM.items():
+        if stream.get(key, wanted) != wanted:
+            return f"stream.{key}", stream.get(key)
+    return None
+
+
+def _stream_health_refusal(health, coverage):
+    """(PURE) Why the board whose health is `health` cannot take a streamed
+    rust run (no `nextest` under `codecs.stream`, or, for a `coverage` run,
+    no `lcov` coverage codec), or None. A health that cannot be read is no
+    refusal (`_health_unreadable`)."""
+    if _health_unreadable(health):
+        return None
+    version = health.get("version") or "an unstated version"
+    floor = _axi().INGEST_CODEC_VERSION_FLOOR
+    codecs = health.get("codecs")
+    codecs = codecs if isinstance(codecs, dict) else {}
+    streams = codecs.get("stream")
+    if not isinstance(streams, list) or NEXTEST_CODEC not in streams:
+        return (f"the board (version {version}) lists no `{NEXTEST_CODEC}` under "
+                f"`codecs.stream`, so it takes no nextest stream: a rust run "
+                f"streams its tests, which needs a board of version {floor} or "
+                f"later; nothing was run")
+    kept = codecs.get("coverage")
+    if coverage and not (isinstance(kept, list) and LCOV_CODEC in kept):
+        return (f"the board (version {version}) does not decode `{LCOV_CODEC}` "
+                f"reports: a coverage run files its lcov, which needs a board of "
+                f"version {floor} or later; nothing was run")
+    return None
+
+
+def _open_streamed_run(project_dir, agent, tier, context, release):
+    """Open the streamed run: `(run_id, None, warnings)`, or `(None, why,
+    warnings)` naming the board when it opened none, the run then made
+    unfiled."""
+    run_id, warnings = _start_run(project_dir, agent, tier=tier, context=context,
+                                  release=release)
+    if run_id:
+        return run_id, None, warnings
+    cause = (warnings[0].get("detail") if warnings and isinstance(warnings[0], dict)
+             else None) or "it answered no runId"
+    return None, (f"the board at {_base_url()} opened no run ({cause}); the "
+                  f"tests ran with no stream relayed and nothing was filed"), warnings
+
+
+def _coverage_env(project_dir, env, target):
+    """`env` with `cargo llvm-cov show-env`'s environment laid over it, the
+    instrumented build in `target`, and the old profiles there cleared."""
+    env = {**env, "CARGO_TARGET_DIR": target}
+    shown = subprocess.run(["cargo", "llvm-cov", "show-env"], cwd=project_dir,
+                           env=env, capture_output=True, text=True, check=False)
+    if shown.stderr:
+        sys.stderr.write(shown.stderr)
+    for line in (shown.stdout or "").splitlines():
+        key, sep, value = line.strip().removeprefix("export ").partition("=")
+        if sep and key:
+            env[key] = "".join(shlex.split(value)) if value else ""
+    env["CARGO_TARGET_DIR"] = target
+    for stale in glob.glob(os.path.join(target, "**", "*.profraw"), recursive=True):
+        os.remove(stale)
+    return env
+
+
+def _post_test_list(project_dir, agent, run_id, list_text):
+    """Post the run's test list as nextest wrote it: `(total, warnings)`, the
+    board's listed total (None when it took no list) and the warning naming a
+    list it did not take, and why."""
+    resp = _post(f"/api/v2/runs/{run_id}/tests",
+                 {"projectKey": _project_key(project_dir), "agentId": agent,
+                  "codec": NEXTEST_LIST_CODEC, "data": list_text})
+    total = resp.get("total") if isinstance(resp, dict) and resp.get("ok") else None
+    if isinstance(total, int) and not isinstance(total, bool):
+        return total, []
+    error = (resp.get("error") if isinstance(resp, dict) else None) or "no answer"
+    print(f"[crucible] WARN: the board did not take the test list ({error})",
+          file=sys.stderr)
+    return None, [{"code": "test-list-not-taken",
+                   "detail": (f"the board did not take the run's test list "
+                              f"({error}); the run streamed on, with no "
+                              f"completeness check against it")}]
+
+
+def _finish_relay(relay, deadline_seconds):
+    """Stop the relay (when one runs) within `deadline_seconds`; answer the
+    `held` the board confirmed (0 when no relay ran)."""
+    if relay is None:
+        return 0
+    held, _stopped = relay.finish(deadline_seconds)
+    return held
+
+
+def _streamed_envelope(verb, project_dir, agent, *, run_help=True,
+                       exit_verdict=False, coverage=False):
+    """A body's envelope for its streamed run's close: `emit(resp,
+    help_steps, warnings, ok, exit_code)`. With `run_help` the next step is
+    derived from the run state and an unfiled close carries the
+    `ingest-failed` warning; `exit_verdict` makes the verb's exit the
+    verdict; `coverage` states the board's kept coverage."""
+    def emit(resp, help_steps, warnings, ok, exit_code):
+        found = list(warnings)
+        if run_help:
+            help_steps = help_steps or _axi().run_help(
+                verb, exit_code == 0, _axi().filed_run(resp).get("failed"),
+                _base_url())
+            if not resp.get("ok"):
+                found.append(_axi().ingest_failed_warning(verb, _base_url()))
+        if ok is None and exit_verdict:
+            ok = exit_code == 0
+        return _emit_run_axi(verb, resp, project_dir, agent, ok=ok,
+                             help_steps=help_steps, warnings=found,
+                             coverage=coverage)
+    return emit
+
+
+def _nextest_run(verb, args, project_dir, identity, *, selection, env, tier,
+                 context, release, warnings, envelope, coverage_output=None,
+                 log_path=None, gate=False, measure_wall=False):
+    """A streamed run with an agent: list, post the list, run with the stream
+    relayed, close from the stream. `selection` is the run's profile, crates,
+    targets, features and filter; `coverage_output` the lcov path of a
+    coverage run; `envelope` the body's `_streamed_envelope`. A list that
+    exits non-zero is a build failure filed as one, closing the run, and no
+    run follows. Returns the verb's exit code."""
+    agent = args.agent
+    key = _project_key(project_dir)
+    warnings = list(warnings)
+    own_dir = _run_reports_dir(args, project_dir) or os.path.join(project_dir, "target")
+    os.makedirs(own_dir, exist_ok=True)
+    stream_path = os.path.join(own_dir, _STREAM_FILE)
+    target = env.get("CARGO_TARGET_DIR") or os.path.join(project_dir, "target")
+    run_env = dict(env)
+    if coverage_output is not None:
+        target = os.path.join(target, _COVERAGE_TARGET_DIR)
+        run_env = _coverage_env(project_dir, run_env, target)
+    health = getattr(args, "nextest_health", None)
+    if _health_unreadable(health):
+        # Nothing shows the board takes the stream: no run is opened, the
+        # tests run with the stream on, and nothing is filed.
+        run_id, unfiled = None, _axi()._ingest_health_refusal(
+            health, NEXTEST_CODEC, None)
+    else:
+        run_id, unfiled, opened = _open_streamed_run(project_dir, agent, tier,
+                                                     context, release)
+        warnings += opened
+    list_cmd = ["cargo", "nextest", "list", "--message-format", "json", *selection]
+    run_cmd = ["cargo", "nextest", "run", *selection, "--no-fail-fast", *_STREAM_FLAGS]
+    relay, narrator, listed_total = None, None, None
+    started = time.time()
+    try:
+        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
+            print(f"[crucible] listing: {' '.join(list_cmd)}", file=sys.stderr)
+            listed = _run_logged(list_cmd, project_dir, run_env, None, capture=True,
+                                 stdout_path=os.path.join(own_dir, _LIST_FILE))
+            if listed.returncode != 0:
+                return _list_build_failure(verb, project_dir, agent, listed,
+                                           run_id, release, warnings, unfiled)
+            if run_id:
+                with open(os.path.join(own_dir, _LIST_FILE), encoding="utf-8") as handle:
+                    listed_total, refused = _post_test_list(project_dir, agent, run_id,
+                                                            handle.read())
+                warnings += refused
+                relay, narrator = _axi().start_stream_relay(
+                    _post, _axi().narration_poster(_post, key, agent, identity), key,
+                    agent, run_id, stream_path, NEXTEST_CODEC,
+                    _axi()._ingest_body_limit(health), listed_total)
+            print(f"[crucible] running: {' '.join(run_cmd)}", file=sys.stderr)
+            result = _run_logged(run_cmd, project_dir, {**run_env, _STREAM_SWITCH: "1"},
+                                 log_path, capture=True, stdout_path=stream_path)
+    except _axi().RunAbandoned as abandoned:
+        # What the run streamed before the signal reaches the board first.
+        _finish_relay(relay, _INTERRUPTED_FINISH_SECONDS)
+        return _axi().emit_run_abandoned(verb, key, agent, run_id, abandoned,
+                                         warnings, post_fn=_post)
+    except BaseException:
+        _finish_relay(relay, 0)
+        raise
+    held = _finish_relay(relay, _STREAM_FINISH_SECONDS)
+    print(f"[crucible] cargo nextest exit={result.returncode}", file=sys.stderr)
+    _claim_leftover_junit(project_dir, target, selection, own_dir, started)
+    runner_exit = _axi().runner_exit_code(result.returncode)
+
+    def collect_coverage():
+        return _write_lcov(project_dir, run_env, coverage_output, own_dir)
+    return _axi().close_streamed_run(
+        verb, result, run_id=run_id, held=held, stream_path=stream_path,
+        stack=_STACK, framework=NEXTEST_CODEC, post_fn=_post, project_key=key,
+        agent_id=agent, tier=tier, context=context, release=release,
+        warnings=warnings,
+        emit=lambda ok, fields, found, line: _emit_axi(
+            verb, ok, {"run": _UNFILED_RUN, **fields},
+            _axi_context(project_dir, agent_id=agent), found, line),
+        emit_ingest=lambda resp, help_steps, found, ok: envelope(
+            resp, help_steps, found, ok, _axi().verb_exit(runner_exit, resp)),
+        ingest_compile=None,
+        no_report_warning=lambda ran: _axi().no_report_warning(
+            verb, _STREAM_FILE, ran.returncode, ran.stdout or ""),
+        collect_coverage=collect_coverage if coverage_output is not None else None,
+        narrator=narrator, unfiled=unfiled, gate=gate, codec=NEXTEST_CODEC,
+        coverage_codec=LCOV_CODEC, base_url=_base_url(),
+        close_warnings=(_axi().unit_run_wall_vs_cpu_warnings(tier, "rust", timing)
+                        if measure_wall else ()),
+        listed_total=listed_total)
+
+
+def _list_build_failure(verb, project_dir, agent, listed, run_id, release,
+                        warnings, unfiled):
+    """The exit of a list that did not build: its rustc errors are filed as
+    a compile failure closing the open run (nothing is filed for a run the
+    board did not open), and ONE `ok: false` envelope says so."""
+    print(f"[crucible] cargo nextest list exit={listed.returncode} — the tests "
+          f"did not build; no run follows", file=sys.stderr)
+    fields = {"run": _UNFILED_RUN,
+              "help": _axi().no_report_help(
+                  verb, _STREAM_FILE,
+                  remedy="fix the build errors `cargo nextest list` reported")}
+    if run_id:
+        _ingest_rustc_stderr(project_dir, agent, listed.stdout or "",
+                             kind="test-compile", run_id=run_id, release=release)
+    else:
+        fields["error"] = unfiled
+    _emit_axi(verb, False, fields, _axi_context(project_dir, agent_id=agent),
+              warnings, f"{verb}: ok=False — the tests did not build")
+    return listed.returncode or 1
+
+
+def _claim_leftover_junit(project_dir, target, selection, own_dir, started):
+    """Move a JUnit report the run's profile still wrote out of
+    `target/nextest/<profile>/` into the run's own directory, so
+    `auto-ingest` never files a run already streamed. Only a report written
+    since `started` (a `time.time()` taken before the run, compared to the
+    whole second) is this run's; another run's is left where it lies."""
+    profile = next((selection[i + 1] for i, flag in enumerate(selection[:-1])
+                    if flag in ("-P", "--profile")), "default")
+    for root in dict.fromkeys((target, os.path.join(project_dir, "target"))):
+        written = os.path.join(root, "nextest", profile, _OWN_JUNIT_FILE)
+        try:
+            own = os.path.getmtime(written) >= int(started)
+        except OSError:
+            own = False
+        if own:
+            _claim_output(written, own_dir, _OWN_JUNIT_FILE)
+
+
+def _write_lcov(project_dir, env, lcov_output, own_dir):
+    """`cargo llvm-cov report --failure-mode all --lcov` over the run's
+    profiles, written to `lcov_output` and claimed into the run's own
+    directory: `([lcov_path], [])`, or `([], [warning])` when no lcov was
+    written."""
+    cmd = ["cargo", "llvm-cov", "report", "--failure-mode", "all", "--lcov",
+           "--output-path", lcov_output]
+    print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
+    report = _run_logged(cmd, project_dir, env, None, capture=True)
+    lcov = _claim_output(os.path.join(project_dir, lcov_output), own_dir, _OWN_LCOV_FILE)
+    if report.returncode == 0 and lcov and os.path.exists(lcov):
+        return [lcov], []
+    return [], [_axi().coverage_not_measured_warning(
+        f"`cargo llvm-cov report` exited {report.returncode} and wrote no lcov "
+        f"at {lcov_output}")]
 
 
 def cmd_register(args):
@@ -700,6 +1101,23 @@ def _open_gate_identity(project_dir, agent_id, cycle_id, message):
     `_crucible_axi.open_gate_identity`, which owns the role-optional heartbeat
     touch and the documented-enum identity `source`."""
     return _axi().open_gate_identity(project_dir, agent_id, cycle_id, message, _ops())
+
+
+def _open_streaming_gate_identity(project_dir, agent_id, cycle_id, message):
+    """A streamed run's gated identity: `_open_gate_identity`, and, because
+    the run's list and stream routes need a registered caller, a second
+    touch with no cycle binding when the board refused the first one's, so
+    the run it opens can stream (its context still carries the `--cycle`)."""
+    identity = _open_gate_identity(project_dir, agent_id, cycle_id, message)
+    if identity is not None and not identity.confirmed and cycle_id is not None:
+        unbound = _axi().GatedRunIdentity(agent_id)
+        resp = _post(unbound.PATH, unbound.open_payload(_project_key(project_dir),
+                                                        message=message))
+        identity.observe(resp)
+        print(f"[crucible] the cycle {cycle_id} binding was refused; agent "
+              f"{agent_id} touched unbound so its run can stream "
+              f"(ok={resp.get('ok')})", file=sys.stderr)
+    return identity
 
 
 def _close_gate_identity(project_dir, identity):
@@ -763,17 +1181,6 @@ def _claim_output(written_path, own_dir, name):
     claimed = os.path.join(own_dir, name)
     shutil.move(written_path, claimed)
     return claimed
-
-
-def _written_since(path, started):
-    """Whether the file at `path` exists and was last written at or after
-    `started`, a `time.time()` taken before the run's tool began. The
-    comparison is to the whole second, so a report the run itself wrote is
-    never refused on a filesystem that stores mtimes coarsely."""
-    try:
-        return os.path.getmtime(path) >= int(started)
-    except OSError:
-        return False
 
 
 def cmd_auto_ingest(args):
@@ -870,10 +1277,14 @@ def cmd_regression_ingest(args):
     CR-CRU-056 — the cleanup fires ONLY for an identity this run created; a
     caller who registered BEFORE the run keeps its registration and binding."""
     project_dir = _resolve_project_dir(args.project_dir)
+    refused = _nextest_refusal(args, "regression-ingest", project_dir, "ci",
+                               coverage=True)
+    if refused is not None:
+        return refused
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
                           "gated regression run starting",
-                          open_fn=_open_gate_identity,
+                          open_fn=_open_streaming_gate_identity,
                           close_fn=_close_gate_identity) as identity:
         preflight_warnings = []
         if getattr(args, "agent", None):
@@ -888,15 +1299,16 @@ def cmd_regression_ingest(args):
 
 
 def _regression_ingest_run(args, preflight_warnings=(), identity=None):
-    """Full regression: cargo clean → llvm-cov nextest → the junit and lcov
-    texts sent to /api/v2/runs for the board to decode. The lcov is sent on a
-    red run as on a green one; the board discards a red run's coverage.
+    """Per-crate coverage regression: cargo clean -p → list, run and close
+    the run from its nextest stream under llvm-cov's environment
+    (`_nextest_run`), the lcov `cargo llvm-cov report` writes filed with it.
+    The lcov is sent on a red run as on a green one; the board discards a red
+    run's coverage.
 
     CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight finding,
     decided BEFORE the sweep started; it rides every envelope this body can
     emit, ahead of whatever the run itself discovers. `identity` is the gated
     run's identity, observing every narration tick."""
-    preflight_warnings = list(preflight_warnings)
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
     project_dir = _resolve_project_dir(args.project_dir)
@@ -906,103 +1318,18 @@ def _regression_ingest_run(args, preflight_warnings=(), identity=None):
         subprocess.run(["cargo", "clean", "-p", c], cwd=project_dir, capture_output=True)
     # §S3 — human narration on stderr; stdout carries the §S1 envelope alone.
     print(f"[crucible] cleaned: {', '.join(crates)}", file=sys.stderr)
-    own_dir = _run_reports_dir(args, project_dir)
 
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", "12")  # dev machine cap, per rust-orchestration.md
-    cmd = ["cargo", "llvm-cov", "--failure-mode", "all", "nextest"]  # tolerate killed-subprocess corrupt .profraw (CR-385)
-    for c in crates:
-        cmd += ["-p", c]
-    cmd += [
-        "--lcov", "--output-path", "target/lcov.info",
-        "-P", "ci", "--ignore-run-fail",
-    ]
+    selection = [flag for c in crates for flag in ("-p", c)] + ["-P", "ci"]
     if args.features:
-        cmd += ["--features", args.features]
-    # The shared run path: open the run BEFORE llvm-cov spawns, stream its
-    # output live, and narrate against nextest's own stated total.
-    narrator = _narrator(project_dir, args.agent, identity)
-    run_id, run_warnings = _start_run(project_dir, args.agent, tier="regression",
-                                      context=_run_context(), release=release)
-    preflight_warnings += run_warnings
-    try:
-        with _axi().abandon_trap(run_id):
-            result = _run_logged(cmd, project_dir, env, None, narrator,
-                                 capture=True)
-    except _axi().RunAbandoned as abandoned:
-        return _axi().emit_run_abandoned("regression-ingest",
-                                         _project_key(project_dir), args.agent,
-                                         run_id, abandoned, preflight_warnings,
-                                         post_fn=_post)
-    print(f"[crucible] llvm-cov nextest exit={result.returncode}", file=sys.stderr)
-    runner_exit = _axi().runner_exit_code(result.returncode)
-
-    junit_path = _claim_output(f"{project_dir}/target/nextest/ci/junit.xml",
-                               own_dir, _OWN_JUNIT_FILE)
-    lcov_path = _claim_output(f"{project_dir}/target/lcov.info",
-                              own_dir, _OWN_LCOV_FILE)
-    if not os.path.exists(junit_path):
-        _emit_axi("regression-ingest", False,
-                  {"help": _axi().no_report_help("regression-ingest",
-                                                 "junit.xml")},
-                  _axi_context(project_dir, agent_id=args.agent),
-                  preflight_warnings
-                  + [_axi().no_report_warning(
-                      "regression-ingest", "junit.xml", result.returncode,
-                      result.stdout or "")]
-                  + _axi().no_report_left_open_warnings(
-                      run_id, "junit.xml", post_fn=_post,
-                      project_key=_project_key(project_dir),
-                      agent_id=args.agent),
-                  "[crucible] ERROR: no junit.xml after llvm-cov nextest")
-        return 1
-
-    if _axi().ran_nothing(result.returncode,
-                          _axi().junit_testcase_count([junit_path])):
-        return _axi().emit_ran_nothing(
-            "regression-ingest", "junit.xml", result.returncode,
-            result.stdout or "", run_id, preflight_warnings, post_fn=_post,
-            project_key=_project_key(project_dir), agent_id=args.agent)
-
-    # The lcov is sent passing or failing: the board discards a red run's
-    # coverage. A run that left none is filed with no coverage, and says so.
-    coverage_paths = [lcov_path] if lcov_path and os.path.exists(lcov_path) else []
-    if not coverage_paths:
-        preflight_warnings.append(_axi().coverage_not_measured_warning(
-            f"llvm-cov wrote no lcov at {lcov_path}"))
-
-    # The final count, then `ingesting…`, both ahead of the ingest below.
-    _axi().close_narration(narrator)
-    resp = _file_reports(project_dir, args.agent, [junit_path],
-                         raw=result.stdout, coverage_paths=coverage_paths,
-                         tier="regression", context=_run_context(),
-                         run_id=run_id, release=release,
-                         runner_exit=runner_exit)
-    # The exit carries the runner's verdict and the filed run's, and a refused
-    # ingest is never green. A run that was not filed has no failure count.
-    exit_code = _axi().verb_exit(runner_exit, resp)
-    _emit_run_axi("regression-ingest", resp, project_dir, args.agent,
-                  help_steps=_axi().run_help(
-                      "regression-ingest", exit_code == 0,
-                      _axi().filed_run(resp).get("failed"), _base_url()),
-                  warnings=preflight_warnings + (
-                      [] if resp.get("ok") else [_axi().ingest_failed_warning(
-                          "regression-ingest", _base_url())]),
-                  coverage=True)
-    return exit_code
-
-
-def _resolve_junit_path(project_dir, profile=None):
-    """The freshest junit xml path — profile-aware (nextest writes to
-    target/nextest/<profile>/junit.xml), or None if none present."""
-    candidates = []
-    if profile:
-        candidates.append(f"{project_dir}/target/nextest/{profile}/junit.xml")
-    candidates += [
-        f"{project_dir}/target/nextest/ci/junit.xml",
-        f"{project_dir}/target/nextest/default/junit.xml",
-    ]
-    return next((p for p in candidates if os.path.exists(p)), None)
+        selection += ["--features", args.features]
+    return _nextest_run(
+        "regression-ingest", args, project_dir, identity, selection=selection,
+        env=env, tier="regression", context=_run_context(), release=release,
+        warnings=preflight_warnings, coverage_output="target/lcov.info",
+        envelope=_streamed_envelope("regression-ingest", project_dir, args.agent,
+                                    coverage=True))
 
 
 JUNIT_CODEC = "junit"
@@ -1056,8 +1383,8 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check", run_i
 
 def cmd_test(args, tier=None, select=(), profile=None):
     """cargo nextest run -p <crate> [target selection] [--features ...]
-    [--filter EXPR] -P <profile>. If --agent passed, also auto-ingest junit
-    afterwards.
+    [--filter EXPR] -P <profile>. With --agent the run streams through
+    nextest and is closed from its stream (`_nextest_run`).
 
     §S6 — `profile` is a DECLARED nextest profile detected for a tier verb; it
     overrides `--profile` because on a declared cell the profile IS the
@@ -1079,36 +1406,50 @@ def cmd_test(args, tier=None, select=(), profile=None):
     `--workspace`, cargo's own way to say "every crate" — so a tier verb never
     fails on argparse where cargo itself would have run."""
     project_dir = _resolve_project_dir(args.project_dir)
+    refused = _nextest_refusal(args, tier or "test", project_dir,
+                               profile or args.profile)
+    if refused is not None:
+        return refused
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
                           "gated test run starting",
-                          open_fn=_open_gate_identity,
+                          open_fn=_open_streaming_gate_identity,
                           close_fn=_close_gate_identity) as identity:
         return _test_run(args, tier, select, profile, project_dir, identity)
 
 
 def _test_run(args, tier, select, profile, project_dir, identity):
-    """`cmd_test`'s run body, inside its gated-identity bracket."""
+    """`cmd_test`'s run body, inside its gated-identity bracket. With an
+    agent the run streams (`_nextest_run`); without one it runs `cargo
+    nextest run` with nextest's human output on the terminal, lists nothing
+    and files nothing."""
     # §S1's one-document rule, as `_smoke_test` already applies it: a tier verb
     # runs THIS body, so the envelope must carry the verb the caller actually
     # invoked (`unit`, `integration`, `e2e`) and not the body's own name.
     verb = tier or "test"
     profile = profile or args.profile
-    _clean_stale_junit(project_dir, profile)
-    own_dir = _run_reports_dir(args, project_dir)
     crate_selection = ["-p", args.crate] if args.crate else ["--workspace"]
-    cmd = (["cargo", "nextest", "run"] + crate_selection + list(select)
-           + ["-P", profile])
+    selection = crate_selection + list(select) + ["-P", profile]
     if args.features:
-        cmd += ["--features", args.features]
-    if args.no_fail_fast:
-        cmd += ["--no-fail-fast"]
+        selection += ["--features", args.features]
     if getattr(args, "test", None):
-        cmd += ["--test", args.test]
+        selection += ["--test", args.test]
     if args.filter:
-        cmd += ["-E", args.filter]
+        selection += ["-E", args.filter]
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", "12")
+    if not args.agent:
+        cmd = (["cargo", "nextest", "run"] + selection
+               + (["--no-fail-fast"] if args.no_fail_fast else []))
+        print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
+        try:
+            with _axi().abandon_trap(None):
+                result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
+        except _axi().RunAbandoned as abandoned:
+            return _axi().emit_run_abandoned(verb, _project_key(project_dir), None,
+                                             None, abandoned, [], post_fn=_post)
+        print(f"[crucible] cargo nextest exit={result.returncode}", file=sys.stderr)
+        return result.returncode
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
     # CR-CRU-094 §S3 — PRE-FLIGHT, before nextest spawns and while `--cycle`
@@ -1119,73 +1460,15 @@ def _test_run(args, tier, select, profile, project_dir, identity):
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
         context=_run_context(), release=release)
-    print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
-    narrator, run_id = None, None
-    if args.agent:
-        # The shared run path: narrate per-test progress against nextest's own
-        # stated total, and open the run BEFORE nextest is spawned.
-        narrator = _narrator(project_dir, args.agent, identity)
-        run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
-                                          context=_run_context(),
-                                          release=release)
-        preflight_warnings = list(preflight_warnings) + run_warnings
-    # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: a `unit`
-    # run that spends its wall clock waiting says so in its own envelope. The
-    # other tiers run this same body and are left alone, because the shared
-    # check is scoped to `unit` by the tier it is handed.
-    # A signal while the run is open is trapped and the open run disclosed.
-    try:
-        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
-            result = _run_logged(cmd, project_dir, env,
-                                 getattr(args, "log", None), narrator)
-    except _axi().RunAbandoned as abandoned:
-        return _axi().emit_run_abandoned(verb, _project_key(project_dir),
-                                         args.agent, run_id, abandoned,
-                                         preflight_warnings,
-                                         post_fn=_post)
-    print(f"[crucible] cargo nextest exit={result.returncode}", file=sys.stderr)
-    if args.agent:
-        runner_exit = _axi().runner_exit_code(result.returncode)
-        # The final count, then `ingesting…`, both ahead of either ingest below.
-        _axi().close_narration(narrator)
-        # Test may have failed; ingest result regardless (junit captures fail state).
-        # Profile-aware: nextest writes junit to target/nextest/<profile>/junit.xml.
-        junit_path = _claim_output(_resolve_junit_path(project_dir, profile),
-                                   own_dir, _OWN_JUNIT_FILE)
-        if junit_path:
-            if _axi().ran_nothing(result.returncode,
-                                  _axi().junit_testcase_count([junit_path])):
-                return _axi().emit_ran_nothing(
-                    verb, "junit.xml", result.returncode, result.stdout or "",
-                    run_id, preflight_warnings, post_fn=_post,
-                    project_key=_project_key(project_dir),
-                    agent_id=args.agent)
-            resp = _file_reports(project_dir, args.agent, [junit_path],
-                                 raw=result.stdout, tier=tier,
-                                 context=_run_context(), run_id=run_id,
-                                 release=release, runner_exit=runner_exit)
-            # The envelope states the run as the board filed it.
-            _emit_run_axi(verb, resp, project_dir, args.agent,
-                          warnings=list(preflight_warnings)
-                          + _axi().unit_run_wall_vs_cpu_warnings(
-                              tier, "rust", timing))
-            # The exit carries the runner's verdict and the filed run's, and
-            # a refused ingest is never green.
-            return _axi().verb_exit(runner_exit, resp)
-        # If tests didn't even compile, capture cargo check stderr → ingest compile
-        # and emit an ok:false test envelope (no junit run to report).
-        check_cmd = ["cargo", "check"] + crate_selection + ["--tests"]
-        if args.features:
-            check_cmd += ["--features", args.features]
-        check_result = subprocess.run(check_cmd, capture_output=True, text=True,
-                                      cwd=project_dir, env=env)
-        _ingest_rustc_stderr(project_dir, args.agent, check_result.stderr,
-                             kind="test-compile", run_id=run_id, release=release)
-        _emit_axi(verb, False, {"help": _axi().HELP_STEPS["test"]},
-                  _axi_context(project_dir, agent_id=args.agent),
-                  preflight_warnings)
-        return result.returncode or 1
-    return result.returncode
+    # A `unit` run that spends its wall clock waiting
+    # says so in its own envelope; the shared check is scoped to `unit` by the
+    # tier it is handed.
+    return _nextest_run(
+        verb, args, project_dir, identity, selection=selection, env=env,
+        tier=tier, context=_run_context(), release=release,
+        warnings=preflight_warnings,
+        envelope=_streamed_envelope(verb, project_dir, args.agent, run_help=False),
+        log_path=getattr(args, "log", None), measure_wall=True)
 
 
 # ── CR-CRU-111 §S3/AC6 — cargo's own tier split, reachable from a tier verb ─
@@ -1446,22 +1729,23 @@ def cmd_smoke_test(args):
     """Raw workspace nextest run (no llvm-cov). Per rust-orchestration.md (Pre-merge gate, smoke×2).
 
     Steps: (optional cargo clean) → (optional docker-up) → cargo nextest run
-    --workspace [--all-features|--features X] -P <profile> --no-fail-fast →
-    the junit text sent to /api/v2/runs (`codec: junit`) for the board to
-    decode. NO coverage.
+    --workspace [--all-features|--features X] -P <profile> --no-fail-fast,
+    streamed to the board and filed from its nextest stream. NO coverage.
     """
     project_dir = _resolve_project_dir(args.project_dir)
     _refuse_unattributed(args, project_dir)
     # The gate-lock and disk-guard refusals come FIRST, outside the identity
     # bracket, as `cmd_workspace_regression` orders them: a run refused
-    # before it starts opens no identity, so it posts nothing.
-    refused = _smoke_refusal(args, "smoke-test", project_dir)
+    # before it starts opens no identity, so it posts nothing. The streamed
+    # run's own checks come before them.
+    refused = (_nextest_refusal(args, "smoke-test", project_dir, args.profile)
+               or _smoke_refusal(args, "smoke-test", project_dir))
     if refused is not None:
         return refused
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
                           "gated smoke-test run starting",
-                          open_fn=_open_gate_identity,
+                          open_fn=_open_streaming_gate_identity,
                           close_fn=_close_gate_identity) as identity:
         return _smoke_run(args, "smoke-test", project_dir, identity)
 
@@ -1490,7 +1774,8 @@ def _smoke_test(args, verb):
     `--cycle` rides the run's context instead."""
     project_dir = _resolve_project_dir(args.project_dir)
     _refuse_unattributed(args, project_dir)
-    refused = _smoke_refusal(args, verb, project_dir)
+    refused = (_nextest_refusal(args, verb, project_dir, args.profile)
+               or _smoke_refusal(args, verb, project_dir))
     if refused is not None:
         return refused
     return _smoke_run(args, verb, project_dir)
@@ -1568,8 +1853,6 @@ def _smoke_run(args, verb, project_dir, identity=None):
 
     smoke_rc = 1
     try:
-        _clean_stale_junit(project_dir)
-        own_dir = _run_reports_dir(args, project_dir)
         env = os.environ.copy()
         env.setdefault("CARGO_BUILD_JOBS", WORKSPACE_BUILD_JOBS)  # full-workspace compile — see constant
         if args.with_docker:
@@ -1580,18 +1863,14 @@ def _smoke_run(args, verb, project_dir, identity=None):
             # Real process env still wins (setdefault). General pattern, not redis-specific.
             for _k, _v in _read_env(project_dir).items():
                 env.setdefault(_k, _v)
-        cmd = ["cargo", "nextest", "run", "--workspace"]
+        selection = ["--workspace"]
         if args.all_features:
-            cmd += ["--all-features"]
+            selection += ["--all-features"]
         elif args.features:
-            cmd += ["--features", args.features]
-        cmd += ["-P", args.profile, "--no-fail-fast"]
-        # §S3 — the narration AND the nextest child's own stream are
-        # interactive-only (the child's output streams live to stderr, so the
-        # run is still watched live); stdout carries the §S1 envelope alone.
-        print(f"[smoke-test] running: {' '.join(cmd)}", file=sys.stderr)
-        # The shared run path: open the run BEFORE nextest spawns and narrate
-        # against nextest's own stated total.
+            selection += ["--features", args.features]
+        selection += ["-P", args.profile]
+        # This run EARNS its tier: it is stated by the verb the caller drove
+        # and the profile it ran under, never assumed from a path.
         tier = _smoke_run_tier(verb, args.profile)
         # §S1 — the release this run is filed under (None: a cycle's run).
         release = getattr(args, "release", None)
@@ -1599,77 +1878,16 @@ def _smoke_run(args, verb, project_dir, identity=None):
         # docker-e2e-gate) the run's own context carries it.
         context = _axi().cycle_context(
             _run_context(), None if identity is not None else getattr(args, "cycle", None))
-        narrator, run_id, run_warnings = None, None, []
-        if args.agent:
-            narrator = _narrator(project_dir, args.agent, identity)
-            run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
-                                              context=context,
-                                              release=release)
-            # §S1 — this body makes no pre-flight, so a release run's note
-            # rides ahead of the run's own warnings, where the pre-flight's
-            # would.
-            if release:
-                run_warnings = [_axi().release_run_note(release)] + run_warnings
-        try:
-            with _axi().abandon_trap(run_id):
-                result = _run_logged(cmd, project_dir, env, None, narrator,
-                                     capture=True)
-        except _axi().RunAbandoned as abandoned:
-            return _axi().emit_run_abandoned(verb, _project_key(project_dir),
-                                             args.agent, run_id, abandoned,
-                                             run_warnings,
-                                             post_fn=_post)
-        print(f"[smoke-test] cargo nextest exit={result.returncode}", file=sys.stderr)
-        runner_exit = _axi().runner_exit_code(result.returncode)
-
-        # Ingest JUnit regardless of exit code (failed tests still report).
-        ci_junit = f"{project_dir}/target/nextest/{args.profile}/junit.xml"
-        default_junit = f"{project_dir}/target/nextest/default/junit.xml"
-        junit_path = _claim_output(
-            ci_junit if os.path.exists(ci_junit) else (
-                default_junit if os.path.exists(default_junit) else None),
-            own_dir, _OWN_JUNIT_FILE)
-        if not junit_path:
-            _emit_axi(verb, False,
-                      {"help": _axi().no_report_help(verb, "junit.xml")},
-                      _axi_context(project_dir, agent_id=args.agent),
-                      run_warnings
-                      + [_axi().no_report_warning(verb, "junit.xml",
-                                                  result.returncode, "")]
-                      + _axi().no_report_left_open_warnings(
-                          run_id, "junit.xml", post_fn=_post,
-                          project_key=_project_key(project_dir),
-                          agent_id=args.agent),
-                      "[smoke-test] no junit.xml found — nothing to ingest")
-            return 1
-        if _axi().ran_nothing(result.returncode,
-                              _axi().junit_testcase_count([junit_path])):
-            return _axi().emit_ran_nothing(
-                verb, "junit.xml", result.returncode, result.stdout or "",
-                run_id, run_warnings, post_fn=_post,
-                project_key=_project_key(project_dir), agent_id=args.agent)
-
-        # The final count, then `ingesting…`, both ahead of the ingest below.
-        _axi().close_narration(narrator)
-        # This run EARNS its tier: it is stated by the verb the caller drove
-        # and the profile it ran under, never assumed from a path.
-        resp = _file_reports(project_dir, args.agent, [junit_path],
-                             raw=result.stdout, tier=tier, context=context,
-                             run_id=run_id, release=release,
-                             runner_exit=runner_exit)
+        # This body makes no pre-flight, so a release run's note rides
+        # ahead of the run's own warnings, where the pre-flight's would.
+        warnings = [_axi().release_run_note(release)] if release else []
         # The exit carries the runner's verdict and the filed run's, and a
         # refused ingest is never green.
-        smoke_rc = _axi().verb_exit(runner_exit, resp)
-        ok = smoke_rc == 0
-        # The envelope states the run as the board filed it; a run that was
-        # not filed has no failure count.
-        _emit_run_axi(verb, resp, project_dir, args.agent, ok=ok,
-                      help_steps=_axi().run_help(
-                          verb, ok, _axi().filed_run(resp).get("failed"),
-                          _base_url()),
-                      warnings=run_warnings + (
-                          [] if resp.get("ok")
-                          else [_axi().ingest_failed_warning(verb, _base_url())]))
+        smoke_rc = _nextest_run(
+            verb, args, project_dir, identity, selection=selection, env=env,
+            tier=tier, context=context, release=release, warnings=warnings,
+            envelope=_streamed_envelope(verb, project_dir, args.agent,
+                                        exit_verdict=True))
     finally:
         if docker_brought_up:
             down_args = argparse.Namespace(
@@ -1686,10 +1904,10 @@ def cmd_workspace_regression(args, verb="workspace-regression", coverage=True,
                              name_unfiled=False):
     """Full workspace coverage regression — orchestrator pre-merge gate path.
 
-    Steps: cargo clean → DISK GUARD (decide/abort) → cargo llvm-cov nextest --workspace
-    [--all-features|--features X] -P <profile> [--ignore-run-fail] --lcov --output-path
-    <lcov-output> → junit + lcov texts sent to /api/v2/runs for the board to
-    decode (the lcov on a red run as on a green one; the board discards a red
+    Steps: cargo clean → DISK GUARD (decide/abort) → the workspace listed and
+    run under `cargo llvm-cov show-env`, streamed to the board through nextest
+    → `cargo llvm-cov report --lcov --output-path <lcov-output>`, filed with
+    the run (the lcov on a red run as on a green one; the board discards a red
     run's coverage) → POST-RUN RECLAIM.
 
     Disk hygiene (user-directed 2026-05-31): clean FIRST, then `_disk_guard` measures
@@ -1710,8 +1928,15 @@ def cmd_workspace_regression(args, verb="workspace-regression", coverage=True,
     that composes no declared suites): its envelope then names the run
     unreported when it was not filed. A composing gate names it itself.
     """
+    retired = _refuse_retired_ignore_run_fail(args, verb)
+    if retired is not None:
+        return retired
     project_dir = _resolve_project_dir(args.project_dir)
     _refuse_unattributed(args, project_dir)
+    refused = _nextest_refusal(args, verb, project_dir, args.profile,
+                               coverage=coverage, gate=name_unfiled)
+    if refused is not None:
+        return refused
     # crucible OWNS the gate-lock FILE: refuse to start if one is already present
     # (no double-runs), else create it + auto-remove on exit/kill.
     if not _acquire_gate_lock(project_dir, getattr(args, "agent", None)):
@@ -1744,7 +1969,7 @@ def cmd_workspace_regression(args, verb="workspace-regression", coverage=True,
         with _axi().gated_run(project_dir, getattr(args, "agent", None),
                               getattr(args, "cycle", None),
                               "gated workspace-regression run starting",
-                              open_fn=_open_gate_identity,
+                              open_fn=_open_streaming_gate_identity,
                               close_fn=_close_gate_identity) as identity:
             return _workspace_regression_run(args, project_dir, verb, identity,
                                              coverage=coverage,
@@ -1754,155 +1979,73 @@ def cmd_workspace_regression(args, verb="workspace-regression", coverage=True,
             _reclaim_disk(project_dir, "workspace-regression")
 
 
-def _workspace_regression_cmd(args, coverage):
-    """The workspace run's cargo argv: llvm-cov's nextest writing lcov when
-    `coverage` is on, else plain nextest that never fails fast."""
-    if not coverage:
-        cmd = ["cargo", "nextest", "run", "--workspace"]
-        if args.all_features:
-            cmd += ["--all-features"]
-        elif args.features:
-            cmd += ["--features", args.features]
-        return cmd + ["-P", args.profile, "--no-fail-fast"]
-    # --failure-mode all: tolerate corrupt .profraw from tests that spawn + SIGKILL an
-    # instrumented child (crash-resume / lifecycle / nai-subprocess e2e) — llvm-profdata
-    # drops those with a warning and merges the rest, so coverage still produces a valid
-    # lcov instead of aborting on the first bad profile. Universally safe (default `any`
-    # aborts on ANY corrupt profile). CR-385.
-    cmd = ["cargo", "llvm-cov", "--failure-mode", "all", "nextest", "--workspace"]
+#: The help of the retired `--ignore-run-fail`, on every verb that took it.
+_IGNORE_RUN_FAIL_RETIRED_HELP = (
+    "Retired: refused. A coverage run now always writes its lcov (`cargo "
+    "llvm-cov report --failure-mode all`), whether or not a test failed.")
+
+
+def _refuse_retired_ignore_run_fail(args, verb):
+    """Refuse the retired `--ignore-run-fail`, before the board, the gate
+    lock or cargo: a coverage run now always writes its lcov. Emits ONE
+    `ok: false` envelope and answers its exit, or None when it was not given."""
+    if not getattr(args, "ignore_run_fail", None):
+        return None
+    error = ("--ignore-run-fail is retired and refused: a coverage run now always "
+             "writes its lcov (`cargo llvm-cov report --failure-mode all`), "
+             "whether or not a test failed; nothing was run")
+    _emit_axi(verb, False, {"error": error,
+                            "help": [f"drop --ignore-run-fail and re-run {verb}",
+                                     "status"]},
+              _axi_context(_resolve_project_dir(args.project_dir),
+                           agent_id=getattr(args, "agent", None)),
+              [], f"{verb}: ok=False — {error}")
+    return 1
+
+
+def _workspace_selection(args):
+    """The workspace run's selection: every crate, its features, its profile."""
+    selection = ["--workspace"]
     if args.all_features:
-        cmd += ["--all-features"]
+        selection += ["--all-features"]
     elif args.features:
-        cmd += ["--features", args.features]
-    cmd += [
-        "--lcov", "--output-path", args.lcov_output,
-        "-P", args.profile,
-    ]
-    if args.ignore_run_fail:
-        cmd += ["--ignore-run-fail"]
-    return cmd
+        selection += ["--features", args.features]
+    return selection + ["-P", args.profile]
 
 
 def _workspace_regression_run(args, project_dir, verb="workspace-regression",
                               identity=None, coverage=True, name_unfiled=False):
-    """Build + run + ingest body (wrapped by cmd_workspace_regression's disk guard +
-    post-run reclaim). With `coverage` on it assumes the workspace was already
-    `cargo clean`ed; with it off nothing cleaned `target/`, so the profile's
-    stale junit is cleared before the run and no lcov is read or sent."""
-    own_dir = _run_reports_dir(args, project_dir)
+    """Build + run + close body (wrapped by cmd_workspace_regression's disk
+    guard + post-run reclaim): the workspace listed, run and closed from its
+    nextest stream (`_nextest_run`). With `coverage` on it assumes the
+    workspace was already `cargo clean`ed, and lists and runs under
+    llvm-cov's environment, filing the lcov `cargo llvm-cov report` writes at
+    `--lcov-output`, passing or failing (the board discards a red run's
+    coverage)."""
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", WORKSPACE_BUILD_JOBS)  # full-workspace compile — see constant
-    if not coverage:
-        _clean_stale_junit(project_dir, args.profile)
-    cmd = _workspace_regression_cmd(args, coverage)
-    # §S3 — narration and the llvm-cov child's own stream are interactive-only
-    # (the child's output streams live to stderr, so the run is watched live);
-    # stdout carries the §S1 envelope alone.
-    print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
-    # The shared run path: open the run BEFORE llvm-cov spawns and narrate
-    # against nextest's own stated total.
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
-    narrator, run_id, run_warnings = None, None, []
-    if args.agent:
-        # The pre-flight attribution check every other run verb makes, before
-        # llvm-cov spawns: an unbound run while the project has an active cycle
-        # is refused here, and with no active cycle it carries `no-cycle`. A
-        # release run keeps its own note below and is never refused.
-        preflight_warnings = [] if release else _axi().preflight_cycle_warnings(
-            _get, _project_key(project_dir), args.agent,
-            cycle_id=getattr(args, "cycle", None), context=_run_context())
-        narrator = _narrator(project_dir, args.agent, identity)
-        run_id, run_warnings = _start_run(project_dir, args.agent, tier="regression",
-                                          context=_run_context(), release=release)
-        run_warnings = list(preflight_warnings) + run_warnings
-        # §S1 — the release run's note, as `_smoke_test` carries it.
-        if release:
-            run_warnings = [_axi().release_run_note(release)] + run_warnings
-    # When the runner begins: a junit at the profile's path that is older than
-    # this was written by some other run, however young it is, and is never
-    # read as this run's.
-    run_started = time.time()
-    try:
-        with _axi().abandon_trap(run_id):
-            result = _run_logged(cmd, project_dir, env, None, narrator,
-                                 capture=True)
-    except _axi().RunAbandoned as abandoned:
-        return _axi().emit_run_abandoned(verb, _project_key(project_dir),
-                                         args.agent, run_id, abandoned,
-                                         run_warnings,
-                                         post_fn=_post)
-    runner_name = "llvm-cov nextest" if coverage else "nextest"
-    print(f"[crucible] {runner_name} exit={result.returncode}", file=sys.stderr)
-    runner_exit = _axi().runner_exit_code(result.returncode)
-
-    # Only a junit this run's tool wrote is claimed; another run's report is
-    # left where it lies, for the run that wrote it, and this run takes the
-    # no-report path.
-    junit_written = f"{project_dir}/target/nextest/{args.profile}/junit.xml"
-    own_junit = _written_since(junit_written, run_started)
-    junit_path = (_claim_output(junit_written, own_dir, _OWN_JUNIT_FILE)
-                  if own_junit else junit_written)
-    lcov_path = (_claim_output(f"{project_dir}/{args.lcov_output}",
-                               own_dir, _OWN_LCOV_FILE)
-                 if coverage else None)
-    if not own_junit or not os.path.exists(junit_path):
-        _emit_axi(verb, False,
-                  {"help": _axi().no_report_help(verb, "junit.xml")},
-                  _axi_context(project_dir, agent_id=args.agent),
-                  run_warnings
-                  + [_axi().no_report_warning(verb, "junit.xml",
-                                              result.returncode, "")]
-                  + _axi().no_report_left_open_warnings(
-                      run_id, "junit.xml", post_fn=_post,
-                      project_key=_project_key(project_dir),
-                      agent_id=args.agent),
-                  f"[crucible] ERROR: no junit.xml written by this run at "
-                  f"{junit_path}")
-        return 1
-    if _axi().ran_nothing(result.returncode,
-                          _axi().junit_testcase_count([junit_path])):
-        return _axi().emit_ran_nothing(
-            verb, "junit.xml", result.returncode, result.stdout or "",
-            run_id, run_warnings, post_fn=_post,
-            project_key=_project_key(project_dir), agent_id=args.agent)
-
-    # A coverage run sends the lcov llvm-cov wrote, passing or failing: the
-    # board discards a red run's coverage. A coverage run that left none is
-    # filed with no coverage, and says so; a coverage-free run reads none.
-    coverage_paths = ([lcov_path] if lcov_path and os.path.exists(lcov_path)
-                      else [])
-    if coverage and not coverage_paths:
-        run_warnings = list(run_warnings) + [_axi().coverage_not_measured_warning(
-            f"llvm-cov wrote no lcov at {lcov_path}")]
-
-    # The final count, then `ingesting…`, both ahead of the ingest below.
-    _axi().close_narration(narrator)
+    # The pre-flight attribution check every other run verb makes, before the
+    # run: an unbound run while the project has an active cycle is refused
+    # here, and with no active cycle it carries `no-cycle`. A release run
+    # keeps its own note instead and is never refused.
+    warnings = ([_axi().release_run_note(release)] if release
+                else _axi().preflight_cycle_warnings(
+                    _get, _project_key(project_dir), args.agent,
+                    cycle_id=getattr(args, "cycle", None), context=_run_context()))
     # This body runs the WHOLE workspace under nextest, which is what
     # `regression` means: classification is by the tier of the RUN, never by
-    # the enclosing verb's name, so a gate verb that drives this body ingests
-    # a regression too.
-    resp = _file_reports(project_dir, args.agent, [junit_path],
-                         raw=result.stdout, coverage_paths=coverage_paths,
-                         tier="regression", context=_run_context(),
-                         run_id=run_id, release=release,
-                         runner_exit=runner_exit)
-    # The exit carries the runner's verdict and the filed run's, and a refused
-    # ingest is never green. A run that was not filed has no failure count.
-    exit_code = _axi().verb_exit(runner_exit, resp)
-    ingest_ok = bool(resp.get("ok"))
-    warnings = list(run_warnings) + (
-        [] if ingest_ok else [_axi().ingest_failed_warning(verb, _base_url())])
-    # A gate whose one whole-suite run was not filed cannot say what it
-    # covered: it names that suite unreported, as a composed gate does.
-    if name_unfiled:
-        warnings += _axi().whole_suite_unreported_warnings(_STACK, resp)
-    _emit_run_axi(verb, resp, project_dir, args.agent, ok=ingest_ok,
-                  help_steps=_axi().run_help(
-                      verb, exit_code == 0,
-                      _axi().filed_run(resp).get("failed"), _base_url()),
-                  warnings=warnings, coverage=True)
-    return exit_code
+    # the enclosing verb's name, so a gate verb that drives this body files a
+    # regression too. A gate whose one whole-suite run was not filed names
+    # that suite unreported (`name_unfiled`), as a composed gate does.
+    return _nextest_run(
+        verb, args, project_dir, identity, selection=_workspace_selection(args),
+        env=env, tier="regression", context=_run_context(), release=release,
+        warnings=warnings, gate=name_unfiled,
+        coverage_output=args.lcov_output if coverage else None,
+        envelope=_streamed_envelope(verb, project_dir, args.agent,
+                                    coverage=True))
 
 
 def _clean_stale_bind_mounts(project_dir):
@@ -2052,6 +2195,12 @@ def cmd_pre_merge_gate(args):
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
         release=getattr(args, "release", None), context=_run_context())
+    # The streamed run's checks come before the clippy step: a gate that
+    # cannot stream runs nothing.
+    refused = _nextest_refusal(args, "pre-merge-gate", project_dir, args.profile,
+                               coverage=True, gate=True)
+    if refused is not None:
+        return refused
     if not getattr(args, "skip_clippy", False):
         gate = _clippy_workspace_gate(project_dir, args.agent,
                                       cycle_id=getattr(args, "cycle", None))
@@ -2082,7 +2231,7 @@ def cmd_pre_merge_gate(args):
         features=None,
         profile=args.profile,
         lcov_output=args.lcov_output,
-        ignore_run_fail=True,
+        nextest_health=getattr(args, "nextest_health", None),
         min_free_g=getattr(args, "min_free_g", 80),
         keep_target=getattr(args, "keep_target", False),
         release=getattr(args, "release", None),
@@ -2117,8 +2266,8 @@ def cmd_docker_e2e_gate(args):
     Brings docker up, runs ONLY the docker-infra tier (-P e2e default-filter in
     .config/nextest.toml) as a RAW nextest run (no llvm-cov — e2e runs connector
     subprocesses that instrumentation can't reach, so coverage signal is ~0 and
-    instrumentation only masks timing races), brings docker down (always), ingests
-    junit. Thin wrapper over smoke-test with profile=e2e + docker forced on.
+    instrumentation only masks timing races), brings docker down (always), and
+    streams the run to the board. Thin wrapper over smoke-test with profile=e2e + docker forced on.
 
     NOT part of the per-cycle or default pre-merge gate. Run it when the gap analysis
     flags NaiApp boot / connector registration / Bridge / provider wiring (only
@@ -2523,10 +2672,11 @@ def _add_log_arg(p):
 
 
 _REPORTS_HELP = (_axi().REPORTS_HELP
-                 + " nextest's junit and llvm-cov's lcov are written by the tool "
-                   "to its fixed target/ paths and moved here right after the run, "
-                   "before they are read: the window between the tool writing and "
-                   "the client moving is narrowed, not closed.")
+                 + " A run keeps its nextest stream and list here. The junit a "
+                   "profile still writes and llvm-cov's lcov are written by the "
+                   "tool to its fixed target/ paths and moved here right after "
+                   "the run, before they are read: the window between the tool "
+                   "writing and the client moving is narrowed, not closed.")
 
 
 def _add_reports_arg(p):
@@ -2551,37 +2701,12 @@ def _add_declared_tier_args(p):
     _add_cargo_tier_run_args(p)
 
 
-# §S6 ruling 5 — the report half of rust's ONE declaration template, named
-# once so the lookup below and the refusal's own example cannot drift apart.
-#
-# A bare `[profile.<tier>]` is only HALF a declaration: nextest runs it happily
-# and writes no report at all, because it emits JUnit only where the profile
-# carries its own `[profile.<tier>.junit]` sub-table (or inherits
-# `[profile.default.junit]` — the one profile every other inherits from; a `ci`
-# sibling's junit confers nothing on a new profile). Declaring only the profile
-# therefore runs the tests and leaves nothing to ingest: the run falls through
-# to the compile path and the envelope states no tier — an instruction that
-# changes nothing when followed, which is the defect §S6 exists to remove.
-#
-# The file name is pinned, not merely required to exist, because
-# `_resolve_junit_path` reads exactly this name back out of
-# `target/nextest/<profile>/`: a profile pointing its report somewhere else is
-# as unreachable-past as one declaring no report.
-_DECLARED_NEXTEST_JUNIT_FILE = "junit.xml"
-
-
 def _read_declared_nextest_profile(args, target):
     """§S6, cargo's READ — a profile in `.config/nextest.toml` whose name IS
-    the tier, WITH the junit sub-table that makes nextest write a report for
-    it. Parsed as TOML rather than pattern-matched, so a profile named in a
-    comment is not a declaration.
-
-    Both halves are the ONE declaration (see `_DECLARED_NEXTEST_JUNIT_FILE`):
-    a profile that produces no ingestable report is an INCOMPLETE declaration,
-    and it is refused as such — with the specific reason on stderr, so a
-    caller who wrote half of it is told which half is missing rather than
-    reading the same 'nothing is declared' refusal over a file they can see
-    their profile in."""
+    the tier. Parsed as TOML rather than pattern-matched, so a profile named
+    in a comment is not a declaration. The profile is the whole declaration:
+    a streamed run's record is its nextest stream, so a profile with no
+    `junit` table declares its tier as fully as one with."""
     project_dir = _resolve_project_dir(args.project_dir)
     config = os.path.join(project_dir, ".config", "nextest.toml")
     try:
@@ -2593,24 +2718,7 @@ def _read_declared_nextest_profile(args, target):
         print(f"[crucible] WARN: {config} does not parse ({error}) — no "
               f"declared tier profile can be read from it", file=sys.stderr)
         return None
-    profile = profiles.get(target)
-    if not isinstance(profile, dict):
-        return None
-    junit = profile.get("junit")
-    if not isinstance(junit, dict):
-        junit = (profiles.get("default") or {}).get("junit")
-    path = junit.get("path") if isinstance(junit, dict) else None
-    if path != _DECLARED_NEXTEST_JUNIT_FILE:
-        why = (f"points its report at {path!r}, which is not the "
-               f"`{_DECLARED_NEXTEST_JUNIT_FILE}` this client reads back from "
-               f"target/nextest/{target}/" if path else
-               "declares no junit report, so nextest runs it and writes "
-               "nothing to ingest")
-        print(f"[crucible] WARN: `[profile.{target}]` in {config} {why} — an "
-              f"INCOMPLETE declaration; add `[profile.{target}.junit]` with "
-              f"`path = \"{_DECLARED_NEXTEST_JUNIT_FILE}\"`", file=sys.stderr)
-        return None
-    return target
+    return target if isinstance(profiles.get(target), dict) else None
 
 
 def _run_declared_nextest_profile(args, tier, profile):
@@ -2633,14 +2741,15 @@ def cmd_regression(args):
     nextest, coverage-free; with it, the workspace-regression coverage run.
     A coverage-only flag given without `--coverage` is refused first, before
     the board, the gate lock, the disk guard or cargo."""
+    retired = _refuse_retired_ignore_run_fail(args, "regression")
+    if retired is not None:
+        return retired
     _axi().refuse_coverage_only_flags(args, _REGRESSION_COVERAGE_ONLY_FLAGS)
     if not getattr(args, "coverage", False):
         return cmd_workspace_regression(args, verb="regression", coverage=False)
     # The coverage run's effective values for the flags left unset.
     if args.lcov_output is None:
         args.lcov_output = "target/lcov.info"
-    if args.ignore_run_fail is None:
-        args.ignore_run_fail = True
     if args.keep_target is None:
         args.keep_target = False
     return cmd_workspace_regression(args, verb="regression")
@@ -2650,15 +2759,14 @@ def cmd_regression(args):
 # defaults to None on `regression`, so a given flag is detectable.
 _REGRESSION_COVERAGE_ONLY_FLAGS = {
     "lcov_output": "--lcov-output",
-    "ignore_run_fail": "--ignore-run-fail",
     "keep_target": "--keep-target",
 }
 
 
 def _add_regression_tier_args(p):
     """§S1/AC5 — `regression`'s own flags: the `workspace-regression` flags,
-    the coverage-only ones (`--lcov-output`, `--ignore-run-fail`,
-    `--keep-target`) applying only with the `--coverage` switch, minus the
+    the coverage-only ones (`--lcov-output`, `--keep-target`) applying only
+    with the `--coverage` switch, the retired `--ignore-run-fail`, minus the
     project-dir flag the shared registration already applies to all six. The
     coverage-only flags default to None so a given one is detectable without
     `--coverage`."""
@@ -2673,11 +2781,7 @@ def _add_regression_tier_args(p):
                    help="lcov output path relative to project root (default: "
                         "target/lcov.info). Applies only with --coverage.")
     p.add_argument("--ignore-run-fail", action="store_true", default=None,
-                   help="Pass --ignore-run-fail to llvm-cov so a failing test does not "
-                        "stop the run; its lcov is sent on a red run as on a green "
-                        "one, and the board discards a red run's coverage "
-                        "(default: on). Applies only with "
-                        "--coverage; the coverage-free run never fails fast.")
+                   help=_IGNORE_RUN_FAIL_RETIRED_HELP)
     p.add_argument("--min-free-g", type=int, default=80,
                    help="Disk-guard floor in GB: hard-abort if free /home is below "
                         "this before a coverage run (after its pre-run clean) or a "
@@ -2692,18 +2796,14 @@ def _add_regression_tier_args(p):
 
 _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
     target="<tier>",
-    names=("a profile for it in `.config/nextest.toml` WITH the junit "
-           "sub-table that makes nextest write a report for it: "
-           "`[profile.<target>]` `[profile.<target>.junit]` "
-           f'`path = "{_DECLARED_NEXTEST_JUNIT_FILE}"`, run by '
-           "`cargo nextest run -P <target>`"),
+    names=("a profile for it in `.config/nextest.toml`: `[profile.<target>]`, "
+           "run by `cargo nextest run -P <target>`"),
     read=_read_declared_nextest_profile,
     run=_run_declared_nextest_profile,
     add_args=(_add_declared_tier_args,),
     # CR-CRU-112 §S1 — this stack's declarable target NAMES are the tier
     # vocabulary itself, so the enumeration is the lookup above asked for each
-    # tier: the same parse (junit sub-table completeness included), without the
-    # single-name filter.
+    # tier: the same parse, without the single-name filter.
     suites=_axi().template_declared_suites,
 )
 
@@ -2720,7 +2820,7 @@ def _add_cargo_tier_run_args(p):
     p.add_argument("--features", help="Comma-separated feature flags")
     p.add_argument("--filter", help="Nextest -E filter expression")
     p.add_argument("--no-fail-fast", action="store_true", help="Pass --no-fail-fast to nextest")
-    p.add_argument("--agent", help="If set, auto-ingest junit after the run")
+    p.add_argument("--agent", help="If set, stream the run to Crucible through nextest and file it")
     _add_gate_cycle_arg(p)
     _add_run_release_arg(p)
     _add_log_arg(p)
@@ -2755,9 +2855,18 @@ _CLI_DESCRIPTION = (
     "Rust + Cargo Crucible CLI — one entry point for the orchestrator and for the "
     "rust-{red,green,fix,verify} agent lifecycle, and for running Cargo targets "
     "(nextest, check, clippy, llvm-cov) with the result ingested to Crucible.\n\n"
-    "Tool-specific (Cargo / Nextest / JUnit-XML / llvm-cov / Clippy), never "
+    "Tool-specific (Cargo / Nextest / llvm-cov / Clippy), never "
     "project-specific: the project path is parameterizable. Run `<verb> --help` "
-    "for a verb's own flags.\n\n" + _axi().BOARD_CONFIGURATION_HELP
+    "for a verb's own flags.\n\n"
+    "With --agent, every test-running verb streams its run through "
+    f"cargo-nextest {MIN_NEXTEST_TEXT} or later (an older one is refused): it "
+    "lists its tests, runs them with nextest's libtest-json-plus stream on, "
+    "and the board files the run from that stream. A project declares its runs "
+    "in its own crucible.toml as [targets.<profile>], keyed by nextest profile: "
+    'framework = "nextest", stream = { codec = "nextest", path = "stdout" }. '
+    "A profile with no entry runs as if it declared that entry; any other "
+    "entry is refused before anything runs.\n\n"
+    + _axi().BOARD_CONFIGURATION_HELP
 )
 
 
@@ -2840,8 +2949,8 @@ def main():
 
     g = sub.add_parser(
         "regression-ingest",
-        help="Per-crate coverage regression: clean + llvm-cov nextest + junit and "
-             "lcov sent to the board.",
+        help="Per-crate coverage regression: clean + the run streamed through "
+             "nextest under llvm-cov, its lcov filed with it.",
     )
     g.add_argument("--agent", required=True,
                    help="Agent id to ingest under — REQUIRED. A free-form identifier that "
@@ -2864,7 +2973,7 @@ def main():
 
     t = sub.add_parser(
         "test",
-        help="cargo nextest run -p <crate>. With --agent: also ingest junit afterwards.",
+        help="cargo nextest run -p <crate>. With --agent: the run is streamed to the board.",
     )
     t.add_argument("--crate", required=True,
                    help="Cargo package to run (`-p`); required — this verb never falls back "
@@ -2874,7 +2983,7 @@ def main():
     t.add_argument("--test", help="Single test binary, e.g. window_pipeline_e2e")
     t.add_argument("--filter", help="Nextest -E filter expression")
     t.add_argument("--no-fail-fast", action="store_true", help="Pass --no-fail-fast to nextest")
-    t.add_argument("--agent", help="If set, auto-ingest junit after the run")
+    t.add_argument("--agent", help="If set, stream the run to Crucible through nextest and file it")
     _add_gate_cycle_arg(t)
     _add_run_release_arg(t)
     _add_project_dir_arg(t)
@@ -2948,10 +3057,8 @@ def main():
     w.add_argument(
         "--ignore-run-fail",
         action="store_true",
-        default=True,
-        help="Pass --ignore-run-fail to llvm-cov so a failing test does not stop "
-             "the run; its lcov is sent on a red run as on a green one, and the "
-             "board discards a red run's coverage",
+        default=False,
+        help=_IGNORE_RUN_FAIL_RETIRED_HELP,
     )
     w.add_argument(
         "--min-free-g", type=int, default=80,
@@ -3341,17 +3448,17 @@ def main():
         dict(unit=tier_verb(  # noqa: C408
                  cmd_unit,
                  "Runs `cargo nextest run --lib` — cargo's own in-crate unit "
-                 "target — and ingests junit.",
+                 "target — and streams the run.",
                  (_add_unit_tier_args,)),
              integration=tier_verb(
                  cmd_integration,
                  "Runs cargo's `tests/` integration targets "
-                 "(`--test <name>`, else `--tests`) and ingests junit.",
+                 "(`--test <name>`, else `--tests`) and streams the run.",
                  (_add_integration_tier_args,)),
              e2e=tier_verb(
                  cmd_e2e,
                  "Runs the nextest profile that carves out this tier "
-                 "(`-P e2e`) and ingests junit.",
+                 "(`-P e2e`) and streams the run.",
                  (_add_e2e_tier_args,)),
              regression=tier_verb(
                  cmd_regression,
