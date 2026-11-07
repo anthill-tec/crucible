@@ -1,44 +1,53 @@
-"""The rust client sends its runner's reports and parses nothing.
+"""The rust client sends its runner's record and parses nothing.
 
-Every rust verb that files a report (`test`, `unit`, `smoke-test`,
-`docker-e2e-gate`, `workspace-regression`, `regression`, `pre-merge-gate`,
-`regression-ingest` and `auto-ingest`) files it through the shared ingest
-(`ingest_reports`, clients/_crucible_run.py): the board's health is read
-first, then ONE `POST /api/v2/runs` goes out carrying `codec: "junit"`,
-`data` (the text of the nextest `junit.xml` the verb reads),
-`coverage: {codec: "lcov", data}` on a run that measured coverage and found
-its lcov (passing or failing), `raw` (the captured runner output, on every
-verb but `auto-ingest`) and `runnerExit`. Nothing goes to
-`/api/v2/runs/parsed`, and no body carries a `dataPath`.
+Every rust verb that files a run reads the board's health first, then files
+ONE `POST /api/v2/runs`. Nothing goes to `/api/v2/runs/parsed`, and no body
+carries a `dataPath`, a `summary` or a `tree`.
+
+- **A test-running verb is filed from its stream** (`test`, `unit`,
+  `smoke-test`, `docker-e2e-gate`, `workspace-regression`, `regression`,
+  `pre-merge-gate` and `regression-ingest`): nextest's `libtest-json-plus`
+  stream is relayed to the open run, and the close is `POST /api/v2/runs`
+  with the `runId`, `codec: "nextest"` and no `data`, carrying `coverage:
+  {codec: "lcov", data}` on a run that measured coverage and found its lcov
+  (passing or failing), `raw` (the runner's captured human output, its
+  stderr) and `runnerExit`.
+- **`auto-ingest` keeps its JUnit record** (unchanged): `codec: "junit"` and
+  `data`, the text of the nextest `junit.xml` an earlier run left.
 
 Every figure the envelope reports is the board's: its `run:` block is the
 answer's `run` block (`files` included, on every run verb), the regression
 verbs' `coverage:` field is the answer's `run.coverage` percents (absent when
 the board kept none), the one stderr `ingest:` line reads the answer, and the
 answer's `warnings[]` join the envelope's. With no board there are no
-figures. A board that cannot decode the run (no `codecs`, or no `lcov` for a
-coverage run), or whose advertised `ingest_body_bytes` the body exceeds, is
-refused before anything is sent, and the run the verb opened is aborted.
+figures. A board whose health lists no `nextest` stream codec refuses a run
+before anything runs; a coverage run on a board with no `lcov` is refused and
+files nothing; `auto-ingest`'s body over the advertised `ingest_body_bytes`
+is refused before it is sent. A run the verb opened and did not file is
+aborted.
 
-The client still decides locally whether a run "ran nothing" (a non-zero
-runner over a report with no `<testcase>`, `junit_testcase_count`) — in
-`regression-ingest` too — and its exit by `verb_exit` over the runner's exit
-and the board's answer; `auto-ingest`, which runs no runner, exits 0 only on
-an `ok` answer whose run records no failure. The no-report exit is unchanged:
-a run that wrote no report files its rustc compile ingest and no run. The
-shared `ingest:` line is the run's one ingest line (none of rust's own result
-lines is left in the client), and the shared module does not grow past its
-line budget.
+The client still decides locally whether a run "ran nothing" (a list with no
+matching test and a stream with no result) — in `regression-ingest` too —
+and its exit by `verb_exit` over the runner's exit and the board's answer;
+`auto-ingest`, which runs no runner, exits 0 only on an `ok` answer whose run
+records no failure. The no-report exits: a list that fails to build files its
+rustc compile ingest and runs nothing; a run that writes no stream line is a
+no-report failure and files no compile ingest. The shared `ingest:` line is
+the run's one ingest line (none of rust's own result lines is left in the
+client), and the shared module does not grow past its line budget.
 
 Every drive runs the real `clients/rust-crucible.py` over a scratch project
 (outside git, so no gate lock is taken; `--min-free-g 0` and `--keep-target`
 keep the disk guard and the reclaim off the host) with a fake `cargo` and a
-fake `docker` first on PATH. The fake `cargo` writes the exact report and lcov
-texts below where nextest and llvm-cov write them. Most drive it as a
-subprocess against a `RecordingBoard` whose `/api/v2/runs` answer the test
-scripts; the ones that need a board that cannot be reached at one route drive
-`main()` in-process with that one route answered as the transport answers an
-unreachable board.
+fake `docker` first on PATH. The fake `cargo` answers a streamed run's calls
+as nextest and llvm-cov answer them (`tests/client/fake_nextest.py`): the
+version, the list, `llvm-cov show-env`, `llvm-cov report` writing the exact
+lcov text below, and the stream of the FAKE_VARIANT tests; its run step also
+writes the exact JUnit report below where nextest writes one. Most drive it
+as a subprocess against a `RecordingBoard` whose `/api/v2/runs` answer the
+test scripts; the ones that need a board that cannot be reached at one route
+drive `main()` in-process with that one route answered as the transport
+answers an unreachable board.
 
 Invocation:
     python3 clients/python-crucible.py test \
@@ -60,6 +69,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.fake_nextest import held_results, read_calls
 from tests.client.live_run_harness import (
     CLIENTS,
     RecordingBoard,
@@ -79,6 +89,7 @@ PARSED = "/api/v2/runs/parsed"
 COMPILE = "/api/v2/runs/compile"
 HEALTH = "/api/health"
 FIRST_RUN = "run-live-1"
+START = "/api/v2/runs/start"
 
 # The line the fake prints on stdout: the captured output `raw` carries.
 OUTPUT_MARKER = "fake-cargo-output-line-9c41"
@@ -130,22 +141,38 @@ BOARD_COVERAGE_FIELD = {"lines": 61.5, "functions": 42.5}
 
 _SCRUBBED = ("CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY",
              "RUST_CRUCIBLE_PROJECT_DIR", "RUST_CRUCIBLE_COMPOSE_FILE",
-             "CARGO_TARGET_DIR")
-_FAKE_KEYS = ("FAKE_EXIT", "FAKE_VARIANT", "FAKE_NO_LCOV")
+             "CARGO_TARGET_DIR", "NEXTEST_EXPERIMENTAL_LIBTEST_JSON")
+_FAKE_KEYS = ("FAKE_EXIT", "FAKE_VARIANT", "FAKE_NO_LCOV", "FAKE_LIST_COMPILE_ERROR")
 
-# A fake `cargo`. `clean`, `cache` and `clippy` succeed silently; `check` (the
-# client's compile fallback) prints one rustc error on stderr and exits 101.
-# Any run naming `nextest` (plain `nextest run`, or `llvm-cov ... nextest`)
-# prints OUTPUT_MARKER and nextest's start line on stdout, writes the
-# FAKE_VARIANT report (`pass` by default; `fail`, `zero`, or `none` for no
-# report) at `target/nextest/<-P profile>/junit.xml` under its cwd, and, when
-# given `--output-path`, the lcov there unless FAKE_NO_LCOV=1. It exits
-# FAKE_EXIT (default 0).
+# The tests each FAKE_VARIANT's stream holds, by binary: the cases of the
+# JUnit report above of the same name (`none`'s run writes no stream line).
+STREAMED = {
+    "pass": (("demo", "lib", "adds", "ok"), ("parity", "test", "evens", "ok")),
+    "fail": (("demo", "lib", "adds", "ok"), ("parity", "test", "evens", "failed")),
+    "zero": (),
+    "none": (("demo", "lib", "adds", "ok"), ("parity", "test", "evens", "ok")),
+}
+
+# A fake `cargo`. A streamed run's calls are answered by
+# `tests/client/fake_nextest.py`: the version, the list and the stream of the
+# FAKE_VARIANT tests (`pass` by default; `fail`, `zero`, or `none` for a run
+# that writes no stream line), `llvm-cov show-env`, and `llvm-cov report`
+# writing LCOV (nothing, and exit 1, under FAKE_NO_LCOV=1). The run step
+# prints OUTPUT_MARKER on stderr, nextest's human output, and writes the
+# FAKE_VARIANT JUnit report at `target/nextest/<-P profile>/junit.xml` as
+# nextest does (none for `none`); it exits FAKE_EXIT (by default 100 when a
+# test failed, else 0). FAKE_LIST_COMPILE_ERROR=1 is a crate that does not
+# build: its list fails with a rustc error. `clean`, `cache` and `clippy`
+# succeed silently; `check` prints one rustc error on stderr and exits 101.
+# Every call is recorded in FAKE_CARGO_CALLS.
 _FAKE_CARGO = r'''
 import os
 import sys
 
-JUNIT, LCOV, MARKER = ''' + repr((JUNIT, LCOV, OUTPUT_MARKER)) + r'''
+sys.path.insert(0, ''' + repr(str(Path(__file__).resolve().parent)) + r''')
+import fake_nextest
+
+JUNIT, LCOV, MARKER, STREAMED = ''' + repr((JUNIT, LCOV, OUTPUT_MARKER, STREAMED)) + r'''
 
 def write(path, text):
     directory = os.path.dirname(path)
@@ -155,6 +182,22 @@ def write(path, text):
         handle.write(text)
 
 args = sys.argv[1:]
+variant = os.environ.get("FAKE_VARIANT", "pass")
+os.environ["FAKE_LCOV"] = LCOV
+if "FAKE_EXIT" in os.environ:
+    os.environ["FAKE_RUN_EXIT"] = os.environ["FAKE_EXIT"]
+if variant == "none":
+    os.environ["FAKE_STREAM_SILENT"] = "1"
+if args[:2] == ["llvm-cov", "report"] and os.environ.get("FAKE_NO_LCOV") == "1":
+    fake_nextest.record_call(args)
+    sys.stderr.write("error: no profile data was found to report\n")
+    sys.exit(1)
+cases = [fake_nextest.case(name, status, crate="demo", binary=binary, kind=kind)
+         for binary, kind, name, status in STREAMED[variant]]
+code = fake_nextest.preliminary(args, cases)
+if code is not None:
+    sys.exit(code)
+fake_nextest.record_call(args)
 if not args or args[0] in ("clean", "cache", "clippy"):
     sys.exit(0)
 if args[0] == "check":
@@ -162,23 +205,14 @@ if args[0] == "check":
     sys.exit(101)
 if "nextest" not in args:
     sys.exit(0)
-profile = "default"
-lcov = None
-for i, arg in enumerate(args):
-    if arg == "-P" and i + 1 < len(args):
-        profile = args[i + 1]
-    if arg == "--output-path" and i + 1 < len(args):
-        lcov = args[i + 1]
-variant = os.environ.get("FAKE_VARIANT", "pass")
-sys.stdout.write(MARKER + "\n")
-sys.stdout.write("    Starting 2 tests across 2 binaries\n")
-sys.stdout.flush()
+profile = fake_nextest.option(args, "-P") or fake_nextest.option(args, "--profile") or "default"
+sys.stderr.write(MARKER + "\n")
+sys.stderr.flush()
 if variant != "none":
     write(os.path.join(os.getcwd(), "target", "nextest", profile, "junit.xml"),
           JUNIT[variant])
-if lcov and os.environ.get("FAKE_NO_LCOV") != "1":
-    write(os.path.join(os.getcwd(), lcov), LCOV)
-sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
+code = fake_nextest.streamed_run(args, cases)
+sys.exit(int(os.environ.get("FAKE_EXIT", "0")) if code is None else code)
 '''
 
 # A `docker` stand-in for the e2e gate's compose bring-up and teardown: it
@@ -269,25 +303,31 @@ class _RustProject:
         shutil.rmtree(self.bin_dir, ignore_errors=True)
 
     def declare_tier_profile(self, tier):
-        """A `.config/nextest.toml` declaring one tier profile, `<tier>`, with
-        the junit sub-table that makes it a whole declaration."""
+        """A `.config/nextest.toml` declaring one tier profile, `<tier>`: the
+        profile alone is the whole declaration."""
         config = Path(self.project, ".config", "nextest.toml")
         config.parent.mkdir(parents=True, exist_ok=True)
-        config.write_text(f'[profile.{tier}]\n[profile.{tier}.junit]\n'
-                          f'path = "junit.xml"\n')
+        config.write_text(f'[profile.{tier}]\ndefault-filter = "all()"\n')
 
     def env(self, **fake_env):
         env = scrubbed_env(self.bin_dir, **fake_env)
         for key in _SCRUBBED + _FAKE_KEYS:
             if key not in fake_env:
                 env.pop(key, None)
+        env["FAKE_CARGO_CALLS"] = os.path.join(self.bin_dir, "cargo-calls.jsonl")
         return env
+
+    def cargo_calls(self, *head):
+        """Every cargo call the fake recorded whose argv starts `head`."""
+        return [c["argv"] for c in read_calls(os.path.join(self.bin_dir, "cargo-calls.jsonl"))
+                if c["argv"][:len(head)] == list(head)]
 
     def argv(self, verb, agent, *extra):
         return [verb, "--agent", agent, "--project-dir", self.project,
                 *VERB_FLAGS[verb], *extra]
 
     def drive(self, verb, agent, *extra, **fake_env):
+        self.last_verb = verb
         cmd = [sys.executable, str(RUST_CLIENT), *self.argv(verb, agent, *extra)]
         return subprocess.run(cmd, cwd=self.project, env=self.env(**fake_env),
                               capture_output=True, text=True, timeout=TIMEOUT,
@@ -331,12 +371,25 @@ class _RustProject:
                          f"reports travel inline, never as a path; body={body!r}")
         self.assertEqual(body.get("stack"), "rust",  # type: ignore[attr-defined]
                          f"body={body!r}")
-        self.assertEqual(body.get("codec"), "junit",  # type: ignore[attr-defined]
+        # `auto-ingest` files the JUnit report a run left; every verb that
+        # runs the tests closes its run from nextest's stream.
+        streamed = getattr(self, "last_verb", None) != "auto-ingest"
+        self.assertEqual(body.get("codec"), "nextest" if streamed else "junit",  # type: ignore[attr-defined]
                          f"body={body!r}")
+        if streamed:
+            self.assertNotIn("data", body,  # type: ignore[attr-defined]
+                             f"a stream close carries no report; body={body!r}")
+            self.assertIn(body.get("runId"), self.board.run_ids_opened(),  # type: ignore[attr-defined]
+                          f"the close names the run the verb opened; body={body!r}")
         for key in ("summary", "tree"):
             self.assertNotIn(key, body,  # type: ignore[attr-defined]
                              f"the client sends no parse of its own; body={body!r}")
         return body
+
+    def held_results_of(self, body):
+        """The results the board holds in the stream of the run `body`
+        closes, by event."""
+        return held_results(self.board.held_stream(body.get("runId") or ""))
 
     def assert_health_read_before_the_ingest(self, result):
         events = [(m, p) for _t, m, p, _b in self.board.events]
@@ -356,8 +409,9 @@ class _RustProject:
 # ── AC7 — every report verb sends one /api/v2/runs with raw and runnerExit ──
 
 class EveryRustReportVerbSendsOneRunsIngestTest(_RustProject, unittest.TestCase):
-    """The route, the codec, the inline report text, `raw` and `runnerExit`,
-    for every rust verb that files a report."""
+    """The route, the codec, `raw` and `runnerExit` for every rust verb that
+    files a run: a test-running verb's stream close, `auto-ingest`'s inline
+    JUnit text."""
 
     def setUp(self):
         self.make()
@@ -365,53 +419,61 @@ class EveryRustReportVerbSendsOneRunsIngestTest(_RustProject, unittest.TestCase)
     def tearDown(self):
         self.cleanup()
 
-    def assert_report_inline_with_raw_and_exit(self, result, text=JUNIT["pass"],
-                                               runner_exit=0):
+    def assert_stream_close_with_raw_and_exit(self, result, variant="pass",
+                                              runner_exit=0):
+        """The run's one `POST /api/v2/runs` closes the run the verb opened
+        from the stream its relay sent: `codec: "nextest"`, no `data`, `raw`
+        (the runner's captured human output, which is not the stream) and
+        `runnerExit`; the board holds the stream of the `variant` tests."""
         body = self.the_one_runs_ingest(result)
-        self.assertEqual(body.get("data"), [text],
-                         f"`data` is the junit.xml text the run wrote, inline, "
-                         f"byte for byte; body={body!r}")
         self.assertIsInstance(body.get("raw"), str, f"body={body!r}")
         self.assertIn(OUTPUT_MARKER, body.get("raw") or "",
                       f"`raw` is the runner's captured output; body={body!r}")
+        self.assertNotIn('"type":"test"', body.get("raw") or "",
+                         f"`raw` is not the stream; body={body!r}")
         self.assertEqual(body.get("runnerExit"), runner_exit,
                          f"`runnerExit` is the runner's exit; body={body!r}")
         self.assert_health_read_before_the_ingest(result)
+        expected = {"ok": 0, "failed": 0, "ignored": 0}
+        for _binary, _kind, _name, status in STREAMED[variant]:
+            expected[status] += 1
+        self.assertEqual(self.held_results_of(body), expected,
+                         f"the board holds the run's own stream; "
+                         f"{self.diagnostics(result)}")
         return body
 
-    def test_test_sends_its_junit_text_with_raw_and_the_runner_exit(self):
+    def test_test_closes_its_stream_with_raw_and_the_runner_exit(self):
         self.board.script_run(passed=2, total=2, files=2)
         result = self.drive("test", "rust-sends-test")
-        body = self.assert_report_inline_with_raw_and_exit(result)
+        body = self.assert_stream_close_with_raw_and_exit(result)
         self.assertNotIn("tier", body, f"a `test` run claims no tier; body={body!r}")
         self.assertNotIn("coverage", body, f"`test` measures none; body={body!r}")
         self.assertEqual(result.returncode, 0, self.diagnostics(result))
 
-    def test_a_failing_runner_sends_its_non_zero_exit_as_runner_exit(self):
+    def test_a_failing_runner_closes_its_stream_with_its_non_zero_exit_as_runner_exit(self):
         self.board.script_run(passed=1, failed=1, total=2, files=2)
         result = self.drive("test", "rust-sends-test-exit-100",
                             FAKE_VARIANT="fail", FAKE_EXIT="100")
-        self.assert_report_inline_with_raw_and_exit(result, JUNIT["fail"],
-                                                    runner_exit=100)
+        self.assert_stream_close_with_raw_and_exit(result, "fail", runner_exit=100)
         self.assertEqual(result.returncode, 1, self.diagnostics(result))
 
-    def test_unit_sends_its_junit_text_under_its_tier(self):
+    def test_unit_closes_its_stream_under_its_tier(self):
         self.board.script_run(passed=2, total=2, files=2)
         result = self.drive("unit", "rust-sends-unit")
-        body = self.assert_report_inline_with_raw_and_exit(result)
+        body = self.assert_stream_close_with_raw_and_exit(result)
         self.assertEqual(body.get("tier"), "unit", f"body={body!r}")
 
-    def test_smoke_test_and_docker_e2e_gate_send_their_junit_text_under_their_tier(self):
+    def test_smoke_test_and_docker_e2e_gate_close_their_stream_under_their_tier(self):
         for verb in ("smoke-test", "docker-e2e-gate"):
             with self.subTest(verb=verb):
                 self.fresh_board().script_run(passed=2, total=2, files=2)
                 result = self.drive(verb, f"rust-sends-{verb}")
-                body = self.assert_report_inline_with_raw_and_exit(result)
+                body = self.assert_stream_close_with_raw_and_exit(result)
                 self.assertEqual(body.get("tier"), TIERS[verb], f"body={body!r}")
                 self.assertNotIn("coverage", body,
                                  f"a smoke run measures none; body={body!r}")
 
-    def test_the_regression_verbs_send_their_junit_text_as_a_regression(self):
+    def test_the_regression_verbs_close_their_stream_as_a_regression(self):
         for verb, extra in (("workspace-regression", ()),
                             ("regression", ()),
                             ("regression", COVERAGE_REGRESSION),
@@ -420,7 +482,7 @@ class EveryRustReportVerbSendsOneRunsIngestTest(_RustProject, unittest.TestCase)
             with self.subTest(verb=verb, extra=extra):
                 self.fresh_board().script_run(passed=2, total=2, files=2)
                 result = self.drive(verb, f"rust-sends-{verb}", *extra)
-                body = self.assert_report_inline_with_raw_and_exit(result)
+                body = self.assert_stream_close_with_raw_and_exit(result)
                 self.assertEqual(body.get("tier"), "regression", f"body={body!r}")
                 self.assertEqual(result.returncode, 0, self.diagnostics(result))
 
@@ -483,7 +545,10 @@ class CoverageTravelsAsItsReportTest(_RustProject, unittest.TestCase):
                 result = self.drive(verb, f"rust-coverage-red-{verb}", *extra,
                                     FAKE_VARIANT="fail")
                 body = self.the_one_runs_ingest(result)
-                self.assertEqual(body.get("data"), [JUNIT["fail"]], f"body={body!r}")
+                self.assertEqual(self.held_results_of(body),
+                                 {"ok": 1, "failed": 1, "ignored": 0},
+                                 f"the board holds the failing run's stream; "
+                                 f"{self.diagnostics(result)}")
                 self.assertEqual(body.get("coverage"), LCOV_BLOCK,
                                  f"coverage is sent whether or not the run "
                                  f"passed; body={body!r}")
@@ -531,19 +596,20 @@ class CoverageTravelsAsItsReportTest(_RustProject, unittest.TestCase):
                          f"{self.diagnostics(result)}")
 
     def test_health_lacking_lcov_refuses_the_coverage_run(self):
+        # A board that takes nextest's stream but decodes no lcov: the
+        # coverage run is refused and files nothing.
         health = self.board.default_health()
-        health["codecs"] = {"test": ["junit"], "coverage": ["jacoco"]}
+        health["codecs"] = {"test": ["junit", "nextest"], "stream": ["nextest"],
+                            "coverage": ["jacoco"]}
         health["version"] = "0.3.9"
-        self.board.script_health(health)
         for verb in ("regression-ingest", "workspace-regression"):
             with self.subTest(verb=verb):
-                before = len(self.board.events)
+                self.fresh_board().script_health(health)
                 result = self.drive(verb, f"rust-board-without-lcov-{verb}")
-                del self.board.events[:before]
                 self.assertEqual(self.posts_to(RUNS), [], self.diagnostics(result))
                 self.assertEqual(self.posts_to(PARSED), [], self.diagnostics(result))
-                self.assertEqual(len(self.board.aborts()), 1,
-                                 f"the run the verb opened is aborted; "
+                self.assertEqual(len(self.board.aborts()), len(self.posts_to(START)),
+                                 f"every run the verb opened is aborted; "
                                  f"{self.diagnostics(result)}")
                 envelope = self.envelope_of(result)
                 said = json.dumps(envelope)
@@ -758,27 +824,9 @@ class ABoardThatCannotTakeTheRunIsRefusedBeforeSendingTest(_RustProject,
     def tearDown(self):
         self.cleanup()
 
-    def assert_refused_before_sending(self, result, *named):
-        self.assertEqual(self.posts_to(RUNS), [],
-                         f"nothing is sent to {RUNS}; {self.diagnostics(result)}")
-        self.assertEqual(self.posts_to(PARSED), [], self.diagnostics(result))
-        aborts = self.board.aborts()
-        self.assertEqual(len(aborts), 1,
-                         f"the run the verb opened is aborted; aborts={aborts!r} "
-                         f"{self.diagnostics(result)}")
-        self.assertIn(FIRST_RUN, aborts[0][0] if aborts else "", f"aborts={aborts!r}")
-        envelope = self.envelope_of(result)
-        self.assertIs(envelope.get("ok"), False, f"envelope={envelope!r}")
-        self.assertIn("run-aborted", _codes(envelope), f"envelope={envelope!r}")
-        self.assertEqual(_figures(envelope), {},
-                         f"a run that was not filed carries no figures; "
-                         f"envelope={envelope!r}")
-        said = json.dumps(envelope)
-        for text in named:
-            self.assertIn(text, said, f"the refusal names {text!r}; envelope={envelope!r}")
-        self.assertNotEqual(result.returncode, 0, self.diagnostics(result))
-
-    def test_health_with_no_codecs_is_refused_naming_the_version_and_the_floor(self):
+    def test_health_with_no_codecs_is_refused_before_anything_runs(self):
+        # A board that states no codecs takes no nextest stream: the run is
+        # refused before it is opened or the tests are listed or run.
         health = self.board.default_health()
         health.pop("codecs")
         health["version"] = "0.3.7"
@@ -786,14 +834,40 @@ class ABoardThatCannotTakeTheRunIsRefusedBeforeSendingTest(_RustProject,
             with self.subTest(verb=verb):
                 self.fresh_board().script_health(health)
                 result = self.drive(verb, f"rust-older-board-{verb}")
-                self.assert_refused_before_sending(result, "0.3.7", "0.4.0")
+                paths = [p for p, _b in self.board.posts()]
+                self.assertNotIn(START, paths,
+                                 f"refused before the run is opened; {self.diagnostics(result)}")
+                self.assertEqual([p for p in paths if p.startswith("/api/v2/runs")], [],
+                                 f"nothing reaches a run route; {self.diagnostics(result)}")
+                self.assertEqual(self.cargo_calls("nextest", "list")
+                                 + self.cargo_calls("nextest", "run"), [],
+                                 f"nothing is listed or run; {self.diagnostics(result)}")
+                envelope = self.envelope_of(result)
+                self.assertIs(envelope.get("ok"), False, f"envelope={envelope!r}")
+                said = json.dumps(envelope)
+                for text in ("nextest", "codecs.stream"):
+                    self.assertIn(text, said,
+                                  f"the refusal names {text!r}; envelope={envelope!r}")
+                self.assertEqual(_figures(envelope), {}, f"envelope={envelope!r}")
+                self.assertNotEqual(result.returncode, 0, self.diagnostics(result))
 
-    def test_health_that_cannot_be_read_is_refused_before_sending(self):
+    def test_health_that_cannot_be_read_files_nothing(self):
         self.board.fail_health(status=503, error="health unavailable")
         result = self.drive("regression-ingest", "rust-health-unreadable")
-        self.assert_refused_before_sending(result)
+        self.assertEqual(self.posts_to(RUNS), [],
+                         f"nothing is sent to {RUNS}; {self.diagnostics(result)}")
+        self.assertEqual(self.posts_to(PARSED), [], self.diagnostics(result))
+        self.assertEqual(len(self.board.aborts()), len(self.posts_to(START)),
+                         f"no run the verb opened is left open; "
+                         f"{self.diagnostics(result)}")
+        envelope = self.envelope_of(result)
+        self.assertIs(envelope.get("ok"), False, f"envelope={envelope!r}")
+        self.assertEqual(_figures(envelope), {},
+                         f"a run that was not filed carries no figures; "
+                         f"envelope={envelope!r}")
+        self.assertNotEqual(result.returncode, 0, self.diagnostics(result))
 
-    def test_health_with_codecs_but_no_limits_still_sends(self):
+    def test_health_with_codecs_but_no_limits_still_closes_the_stream(self):
         health = self.board.default_health()
         health.pop("limits")
         self.board.script_health(health)
@@ -802,12 +876,24 @@ class ABoardThatCannotTakeTheRunIsRefusedBeforeSendingTest(_RustProject,
         self.the_one_runs_ingest(result)
         self.assertEqual(result.returncode, 0, self.diagnostics(result))
 
-    def test_a_body_over_the_advertised_limit_is_refused_naming_ingest_body_bytes(self):
-        for verb in ("test", "regression-ingest"):
-            with self.subTest(verb=verb):
-                self.fresh_board(RecordingBoard(ingest_body_bytes=64))
-                result = self.drive(verb, f"rust-body-too-large-{verb}")
-                self.assert_refused_before_sending(result, "ingest_body_bytes", "64")
+    def test_an_auto_ingest_body_over_the_advertised_limit_is_refused_naming_ingest_body_bytes(self):
+        # `auto-ingest` sends the JUnit text a run left; a body over the
+        # board's advertised limit is refused before it is sent.
+        self.fresh_board(RecordingBoard(ingest_body_bytes=64))
+        self.write_existing_report()
+        result = self.drive("auto-ingest", "rust-body-too-large-auto-ingest")
+        self.assertEqual(self.posts_to(RUNS), [],
+                         f"nothing is sent to {RUNS}; {self.diagnostics(result)}")
+        self.assertEqual(self.posts_to(PARSED), [], self.diagnostics(result))
+        self.assertEqual(len(self.board.aborts()), len(self.posts_to(START)),
+                         f"no run is left open; {self.diagnostics(result)}")
+        envelope = self.envelope_of(result)
+        self.assertIs(envelope.get("ok"), False, f"envelope={envelope!r}")
+        self.assertEqual(_figures(envelope), {}, f"envelope={envelope!r}")
+        said = json.dumps(envelope)
+        for text in ("ingest_body_bytes", "64"):
+            self.assertIn(text, said, f"the refusal names {text!r}; envelope={envelope!r}")
+        self.assertNotEqual(result.returncode, 0, self.diagnostics(result))
 
     def test_a_413_from_the_board_is_reported_naming_ingest_body_bytes(self):
         for verb in ("test", "workspace-regression"):
@@ -902,7 +988,8 @@ class NoBoardNoFiguresTest(_RustProject, unittest.TestCase):
                 self.assert_no_figures_and_not_filed(code, stdout, stderr)
                 self.assertEqual(self.posts_to(RUNS), [], stdout)
                 self.assertEqual(self.posts_to(PARSED), [], stdout)
-                self.assertIn("run-aborted", _codes(_envelope(stdout)), stdout)
+                self.assertEqual(len(self.board.aborts()), len(self.posts_to(START)),
+                                 f"no run the verb opened is left open; {stdout}")
 
     def assert_gate_unreported(self, code, stdout, stderr):
         where = f"exit={code} stdout={stdout!r} stderr={stderr[-2500:]!r}"
@@ -1007,7 +1094,7 @@ class TheRustClientPrintsOnlyTheSharedIngestLineTest(unittest.TestCase):
                     f"{budget}")
 
 
-# ── the no-report exit, unchanged ──────────────────────────────────────────
+# ── the no-report exits ───────────────────────────────────────────────────
 
 class TheNoReportExitIsUnchangedTest(_RustProject, unittest.TestCase):
 
@@ -1017,12 +1104,12 @@ class TheNoReportExitIsUnchangedTest(_RustProject, unittest.TestCase):
     def tearDown(self):
         self.cleanup()
 
-    def test_a_test_run_with_no_report_files_its_compile_ingest_and_no_run(self):
+    def test_a_test_run_whose_list_does_not_build_files_its_compile_ingest_and_no_run(self):
         for verb in ("test", "unit"):
             with self.subTest(verb=verb):
                 self.fresh_board()
                 result = self.drive(verb, f"rust-no-report-{verb}",
-                                    FAKE_VARIANT="none", FAKE_EXIT="101")
+                                    FAKE_LIST_COMPILE_ERROR="1")
                 compiles = self.posts_to(COMPILE)
                 self.assertEqual(len(compiles), 1, self.diagnostics(result))
                 self.assertIn("cannot find value",
@@ -1030,6 +1117,24 @@ class TheNoReportExitIsUnchangedTest(_RustProject, unittest.TestCase):
                               f"compiles={compiles!r}")
                 self.assertEqual(self.posts_to(RUNS), [], self.diagnostics(result))
                 self.assertEqual(self.posts_to(PARSED), [], self.diagnostics(result))
+                self.assertEqual(self.cargo_calls("nextest", "run"), [],
+                                 f"no run step follows a list that does not build; "
+                                 f"{self.diagnostics(result)}")
+                self.assertNotEqual(result.returncode, 0, self.diagnostics(result))
+
+    def test_a_test_run_that_writes_no_stream_line_files_no_compile_ingest_and_no_run(self):
+        for verb in ("test", "unit"):
+            with self.subTest(verb=verb):
+                self.fresh_board()
+                result = self.drive(verb, f"rust-no-stream-{verb}",
+                                    FAKE_VARIANT="none", FAKE_EXIT="101")
+                self.assertEqual(self.posts_to(COMPILE), [],
+                                 f"a run with no stream line is never a compile "
+                                 f"failure; {self.diagnostics(result)}")
+                self.assertEqual(self.posts_to(RUNS), [], self.diagnostics(result))
+                self.assertEqual(self.posts_to(PARSED), [], self.diagnostics(result))
+                self.assertIn("no-test-reports", _codes(self.envelope_of(result)),
+                              f"a no-report failure; {self.diagnostics(result)}")
                 self.assertNotEqual(result.returncode, 0, self.diagnostics(result))
 
 
