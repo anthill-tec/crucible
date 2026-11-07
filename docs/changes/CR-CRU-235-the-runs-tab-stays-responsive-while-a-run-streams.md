@@ -1,6 +1,6 @@
 # CR-CRU-235 — the Runs tab stays responsive while a run streams
 
-**Type** fix · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING · Pre-review: ran — 8
+**Type** fix · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE · Pre-review: ran — 8
 points; the gap analysis needed user rulings · **Design reference** `docs/research/PRD-crucible-v2.md`, UI stack
 - **Filed 2026-11-06** by user ruling, as a bug fix in the current wave sequenced after CR-CRU-234, from a defect the
   user has been seeing on the dashboard: with the Runs tab open while a run streams (its running card on top, the
@@ -26,6 +26,9 @@ points; the gap analysis needed user rulings · **Design reference** `docs/resea
   spill past its card (paint containment clips it), so the card grew to hold it and pushed its ratio pill off screen.
   User ruling: the id truncates with an ellipsis inside the card (AC12); the sideways-scroll scenario that used a long
   id to force horizontal overflow is updated to force it another way (user-approved test edit, AC5).
+- **Done 2026-11-07.** Merged as `93436c37` (plan 238, cycles 875–878). Pre-merge gate 10,950/0 (bun 4868/0, python
+  client 6082/0); full e2e 164/0. AC3: no long task from a run's opening through its last batch; the close's longest
+  task measured 141–151 ms across runs (recorded figure ≈150 ms, under 250 ms).
 
 ## Problem
 
@@ -96,34 +99,35 @@ points; the gap analysis needed user rulings · **Design reference** `docs/resea
 
 ## Acceptance criteria
 
-- [ ] **AC1 (§S1, page level).** In the page harness, with the Runs tab open, a settled history and a run streaming:
+- [x] **AC1 (§S1, page level).** In the page harness, with the Runs tab open, a settled history and a run streaming:
   across batches that change only the open run, the timeline's element and its first card's element are the same
   nodes before and after, and the running card's count follows each batch. When the run settles, it leaves the
   running cards and its card joins the timeline. When the run is aborted instead (swept as abandoned or its agent
   dead), its running card leaves, its aborted card joins the timeline, and the container is the same node. With two
   runs open, a second opening while one streams, or one closing while the other streams, keeps the container the same
   node, keeps the surviving card following its batches, and keeps the cards in the page's open-runs order.
-- [ ] **AC2 (§S1, page level).** The running cards' container is the same node from before a run opens to after it
+- [x] **AC2 (§S1, page level).** The running cards' container is the same node from before a run opens to after it
   closes, and no batch adds or removes a child of the pane's runway, including for a project with no settled runs
   (its empty state is inside the container).
-- [ ] **AC3 (§S1–§S3, real browser, BDD).** A new e2e feature against the real board seeds a project with at least
+- [x] **AC3 (§S1–§S3, real browser, BDD).** A new e2e feature against the real board seeds a project with at least
   2,500 settled runs, opens its Runs tab, and streams a run in at least five batches: no main-thread task from the
   read that opens the run through the last batch exceeds 250 ms (the window starts before the run opens), the running card and the agent's card move with each batch, and the run's card joins the
   timeline when it closes. The longest task during the read that closes the run is measured and reported by the
   feature (not bounded); its value is recorded in this spec at close-out, and above 250 ms it is an accepted limit.
-- [ ] **AC4 (§S2).** Every row kind §S2 names, on the Runs tab and on home, carries `content-visibility: auto` with an
+  Recorded at close-out: about 150 ms (141–151 ms across runs).
+- [x] **AC4 (§S2).** Every row kind §S2 names, on the Runs tab and on home, carries `content-visibility: auto` with an
   intrinsic size (or is named here as left out, with the reason; running cards are not timeline rows), and the page still scrolls to a run on a `→ Runs` jump and keeps the feed's
   scroll position across a detail.
-- [ ] **AC12 (§S2, §S4).** No row is wider than the pane, at 1280 px and at the phone band: a compile card's
+- [x] **AC12 (§S2, §S4).** No row is wider than the pane, at 1280 px and at the phone band: a compile card's
   diagnostic preview line still ends in an ellipsis inside its card, and a run card whose agent id is wider than the
   card shows the id cut with an ellipsis inside the card, its ratio pill in view at the card's right edge (user
   ruling). The dual-axis scroll scenario still proves the pane's horizontal scroll stays reachable at any vertical
   position, with its horizontal overflow forced by something other than a row's long id.
-- [ ] **AC13 (§S1).** The timeline's rendering takes no open runs at all, so no caller can make it read them.
-- [ ] **AC5 (§S4).** Every existing test passes unchanged, except the tests that pin the Tailwind runtime's script
+- [x] **AC13 (§S1).** The timeline's rendering takes no open runs at all, so no caller can make it read them.
+- [x] **AC5 (§S4).** Every existing test passes unchanged, except the tests that pin the Tailwind runtime's script
   on the page (the SPA-serving and roadmap visual-grammar tests), which are updated to the static stylesheet, and the
   dual-axis scroll scenario's long-id overflow source, which is replaced as AC12 states (both user-approved).
-- [ ] **AC6 (§S5).** The page loads no Tailwind runtime script; the static stylesheet is linked after the dashboard's
+- [x] **AC6 (§S5).** The page loads no Tailwind runtime script; the static stylesheet is linked after the dashboard's
   own; and in a real browser no stylesheet in the document changes while a run opens, streams and closes, or when
   the Roadmap view first renders, apart from uPlot's own stylesheet link, which the page adds once when a chart first
   loads (uPlot stays off the page load; RED, 2026-11-07). The computed styles of a named set of elements equal a baseline recorded under the
@@ -131,17 +135,17 @@ points; the gap analysis needed user rulings · **Design reference** `docs/resea
   computed properties compared, and the viewport, `data-theme` and density it was taken at. The set covers: a Runs
   timeline card, the running card, the agent's card, the Roadmap's terminal markers (`start`/`end`), a home timeline
   card, a run detail's header, a button and a form control, and the manager drawer.
-- [ ] **AC7 (§S2).** With the rows' `content-visibility`, closing a run's detail restores the feed's scroll position
+- [x] **AC7 (§S2).** With the rows' `content-visibility`, closing a run's detail restores the feed's scroll position
   exactly (the existing drill-in scenario that restores it passes unchanged).
-- [ ] **AC8 (§S4, page level).** The Runs tab's empty state (`no runs yet …`) shows only when the project has neither
+- [x] **AC8 (§S4, page level).** The Runs tab's empty state (`no runs yet …`) shows only when the project has neither
   a settled run nor an open run: a project whose first run is still open shows its running card and no empty state,
   and the release filter shows no running cards. When that first run settles, the empty state stays hidden and the
   run's card joins the timeline.
-- [ ] **AC9 (§S1–§S3, home).** On the home timeline, a streaming run's running card still shows and follows its
+- [x] **AC9 (§S1–§S3, home).** On the home timeline, a streaming run's running card still shows and follows its
   batches, and closing a run's detail opened from home restores the home feed's exact scroll position.
-- [ ] **AC10 (§S5).** The PRD's UI-stack line names Tailwind 4's generated theme and base reset as a static vendored
+- [x] **AC10 (§S5).** The PRD's UI-stack line names Tailwind 4's generated theme and base reset as a static vendored
   stylesheet, not the browser runtime; "no CDN/build step" and "all UI assets vendored" stay.
-- [ ] **AC11 (§S5).** A test fails if the dashboard's source (`public/`) uses a Tailwind utility class that the
+- [x] **AC11 (§S5).** A test fails if the dashboard's source (`public/`) uses a Tailwind utility class that the
   static stylesheet does not define (the two it defines, `start` and `end`, stay allowed).
 - AC1 and AC2 read "a batch" as the read that opens a run and every streamed batch after it; the read that closes a
   run changes the settled history and may rebuild the timeline once (RED's reading, accepted).
