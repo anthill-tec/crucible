@@ -5,8 +5,8 @@ Every rust body that runs a test runner — `_test_run` (reached through
 profiles), `_smoke_test` (`smoke-test`, `docker-e2e-gate`),
 `_workspace_regression_run` (`workspace-regression`, `regression`,
 `pre-merge-gate`) and `_regression_ingest_run` (`regression-ingest`) — sends
-the runner's exit as `runnerExit` on its one `/api/v2/runs` ingest (the shared
-ingest: nextest's JUnit travels inline and the board decodes it), builds its
+the runner's exit as `runnerExit` on its one `/api/v2/runs` ingest (the
+close of the run nextest's stream was relayed to), builds its
 envelope's `run:` counts from the ingest
 response's `run`, and exits non-zero whenever the runner exited non-zero, the
 ingest was not `ok`, or the run it filed has a failure. The board, handed a
@@ -31,9 +31,9 @@ case — suite `runner`, case `exit <n>`.
     runner that exited non-zero and wrote no report.
 
 Every run drives the real `clients/rust-crucible.py` as a subprocess, with a
-fake `cargo` (and `docker`) first on `PATH`: the fake writes nextest's JUnit
-at `target/nextest/<profile>/junit.xml` under the project, as nextest does,
-and exits as the test asks.
+fake `cargo` (and `docker`) first on `PATH`: the fake answers nextest's
+version and list and streams the run's results as nextest's
+`libtest-json-plus`, and exits as the test asks.
 
 Invocation:
     python3 -m unittest tests.client.test_rust_exits_and_files_on_its_runners_exit -v
@@ -48,6 +48,7 @@ import sys
 import unittest
 from pathlib import Path
 
+from tests.client.fake_nextest import private_fake_prelude
 from tests.client.live_run_harness import (
     CLIENTS,
     RecordingBoard,
@@ -84,15 +85,32 @@ _VERB_FLAGS = {
     "pre-merge-gate": ("--skip-clippy", "--min-free-g", "0", "--keep-target"),
 }
 
-# A fake `cargo`. `clean`, `check`, `cache` and `clippy` succeed silently. A
+# A fake `cargo`. A streamed run's calls are answered by
+# `tests/client/fake_nextest.py`: the version, the list, `llvm-cov show-env`
+# and `llvm-cov report`, and a streamed `nextest run` that streams the same
+# cases as below (no stream line at all when FAKE_REPORT=none) and exits
+# FAKE_EXIT, or kills itself with FAKE_SIGNAL. Otherwise `clean`, `check`,
+# `cache` and `clippy` succeed silently. A
 # `nextest run` — bare or under `llvm-cov` — writes one nextest JUnit report
 # at `target/nextest/<-P profile>/junit.xml` under its cwd: one passing case,
 # plus one failing case when FAKE_FAILING=1, none at all when
 # FAKE_REPORT=none; then it exits FAKE_EXIT, or kills itself with FAKE_SIGNAL.
-_FAKE_CARGO = r'''
+_FAKE_CARGO = private_fake_prelude(
+    "[fake_nextest.case('adds_two_numbers', crate='demo', binary='runner_exit')]"
+    " + ([fake_nextest.case('planted_failure', 'failed', crate='demo',"
+    " binary='runner_exit', message='planted failure')]"
+    " if __import__('os').environ.get('FAKE_FAILING') == '1' else [])",
+    streamed=False) + r'''
 import os
 import signal
 import sys
+
+if fake_nextest.streamed_run(_nx_args, _nx_cases,
+                             silent=os.environ.get("FAKE_REPORT") == "none") is not None:
+    name = os.environ.get("FAKE_SIGNAL")
+    if name:
+        os.kill(os.getpid(), getattr(signal, "SIG" + name))
+    sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 
 args = sys.argv[1:]
 if not args or args[0] in ("clean", "check", "cache", "clippy"):
@@ -219,7 +237,15 @@ class RustRunnerExitOnARealBoardTest(_FakeCargoProject, unittest.TestCase):
         shutil.rmtree(self.project, ignore_errors=True)
 
     def drive_filed(self, verb, agent, **fake_env):
+        """Drive `verb` as `agent`, registered first: an open run's list and
+        stream routes take a registered caller only."""
         self.board.install(self.project)
+        registered = subprocess.run(
+            [sys.executable, str(RUST_CLIENT), "register", "--agent", agent,
+             "--role", "report", "--project-dir", self.project],
+            cwd=self.project, env=scrubbed_env(self.bin_dir), capture_output=True,
+            text=True, timeout=TIMEOUT, check=False)
+        self.assertEqual(registered.returncode, 0, _diagnostics(registered))
         return self.drive(verb, agent, **fake_env)
 
     def the_one_stored_run(self, agent, result):
