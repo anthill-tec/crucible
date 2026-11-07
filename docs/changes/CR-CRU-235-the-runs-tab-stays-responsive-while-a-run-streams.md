@@ -72,7 +72,8 @@ points; the gap analysis needed user rulings · **Design reference** `docs/resea
 - **§S2 — off-screen rows cost nothing.** The timeline's rows are skipped by the browser's style and layout while off screen, so a document-wide re-style (a run opening or closing,
   a settled run arriving) costs what is in view. What a row shows, its order and its scroll position are unchanged. The rows are every kind the
   timeline draws: event (run) cards, aborted cards, transition markers, milestone entries, gate cards, merge markers,
-  open cycle-span rows and declared markers. A row kind may be left out only if the spec's AC4 says so and why; a
+  open cycle-span rows and declared markers, on the Runs tab and on home (home's compact gate and merge rows
+  included). A row kind may be left out only if the spec's AC4 says so and why; a
   declared marker that skips off-screen work still serves the `→ Runs` jump and its blink.
 - **§S3 — the live views stay live.** The running card, the agent's card and the live drill-in still follow a
   streaming run batch by batch, on every tab; a run that settles still leaves the running cards and joins the
