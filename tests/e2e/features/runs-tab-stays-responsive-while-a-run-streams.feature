@@ -18,7 +18,9 @@ Feature: The Runs tab stays responsive while a run streams over a long settled h
   through the browser's own long-task entries. The watch starts before the run
   opens, once the main thread has gone a second without a long task after the
   history was drawn, and runs to the last batch; a second watch covers the
-  close.
+  close. A check made while a watch runs reads only the elements it names, so
+  the tasks the watch counts are the page's own and never the check's: no
+  query over the whole document's text, roles or visibility.
 
   Scenario: A run opens and streams five batches over 2,500 settled runs and no main-thread task takes longer than 250 ms
     Given a project named "Responsive Runs Project" is registered
@@ -34,20 +36,20 @@ Feature: The Runs tab stays responsive while a run streams over a long settled h
     And a run is started for agent "steady-streamer" on that project
     Then the running card for "steady-streamer" is on the Runs tab within 10 seconds
     When the run streams batch 1 of its five-batch stream through the stream route
-    Then the running card for "steady-streamer" reads "1/5" in "src/batch-1.test.ts" within 10 seconds
-    And the project pane's agent row for "steady-streamer" reads "running 1/5 · src/batch-1.test.ts" within 10 seconds
+    Then the Runs tab's running card for "steady-streamer" reads "1/5" in "src/batch-1.test.ts" within 10 seconds
+    And the project pane's row for agent "steady-streamer" reads "running 1/5 · src/batch-1.test.ts" within 10 seconds
     When the run streams batch 2 of its five-batch stream through the stream route
-    Then the running card for "steady-streamer" reads "2/5" in "src/batch-2.test.ts" within 10 seconds
-    And the project pane's agent row for "steady-streamer" reads "running 2/5 · src/batch-2.test.ts" within 10 seconds
+    Then the Runs tab's running card for "steady-streamer" reads "2/5" in "src/batch-2.test.ts" within 10 seconds
+    And the project pane's row for agent "steady-streamer" reads "running 2/5 · src/batch-2.test.ts" within 10 seconds
     When the run streams batch 3 of its five-batch stream through the stream route
-    Then the running card for "steady-streamer" reads "3/5" in "src/batch-3.test.ts" within 10 seconds
-    And the project pane's agent row for "steady-streamer" reads "running 3/5 · src/batch-3.test.ts" within 10 seconds
+    Then the Runs tab's running card for "steady-streamer" reads "3/5" in "src/batch-3.test.ts" within 10 seconds
+    And the project pane's row for agent "steady-streamer" reads "running 3/5 · src/batch-3.test.ts" within 10 seconds
     When the run streams batch 4 of its five-batch stream through the stream route
-    Then the running card for "steady-streamer" reads "4/5" in "src/batch-4.test.ts" within 10 seconds
-    And the project pane's agent row for "steady-streamer" reads "running 4/5 · src/batch-4.test.ts" within 10 seconds
+    Then the Runs tab's running card for "steady-streamer" reads "4/5" in "src/batch-4.test.ts" within 10 seconds
+    And the project pane's row for agent "steady-streamer" reads "running 4/5 · src/batch-4.test.ts" within 10 seconds
     When the run streams batch 5 of its five-batch stream through the stream route
-    Then the running card for "steady-streamer" reads "5/5" in "src/batch-5.test.ts" within 10 seconds
-    And the project pane's agent row for "steady-streamer" reads "running 5/5 · src/batch-5.test.ts" within 10 seconds
+    Then the Runs tab's running card for "steady-streamer" reads "5/5" in "src/batch-5.test.ts" within 10 seconds
+    And the project pane's row for agent "steady-streamer" reads "running 5/5 · src/batch-5.test.ts" within 10 seconds
     And no main-thread task the page ran from the run's opening through its last batch took longer than 250 ms
     When I start watching the page's main-thread tasks
     And the run is closed through POST /api/v2/runs naming the crucible-events codec

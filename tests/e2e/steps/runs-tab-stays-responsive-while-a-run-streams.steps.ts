@@ -11,11 +11,28 @@
 // stream and runs routes. Every wait is on the page, bounded by a few of the
 // board's frame cadences.
 //
+// The checks inside a watched window cost the page nothing measurable. Every
+// Playwright locator, `expect` and `page.evaluate` runs work in the page's own
+// main thread, and over 2,500 cards that work is itself a long task the watch
+// would count against the page:
+//   - a text or role locator walks the whole document, and every unmet
+//     `expect` poll renders an aria snapshot (of the whole body when its
+//     element is absent);
+//   - the trace recorder (`trace: "retain-on-failure"` records every test)
+//     serialises the whole DOM around each page action; after the close
+//     re-renders the timeline that one serialisation is a multi-second task.
+// So from the start of a watch to its read, the steps reach the page only
+// through the browser's own protocol (`Runtime.evaluate` on a CDP session,
+// which the trace recorder does not snapshot), and every check is a probe that
+// finds its few elements by a CSS selector and reads their text or attributes,
+// polled in the page until it reads what is expected or its time runs out.
+// The probe's last reading is what the assertion compares, so a failure names
+// what the page showed. Chromium only, as the long-task entries are.
+//
 // Reuses seeding.steps.ts (project, agent), workflow.steps.ts (the tab click),
 // run-lifecycle.steps.ts (the run start), run-stream-live-page.steps.ts (the
-// streaming agent, the running card's count and file, the agent row's line,
-// the close) and navigation.steps.ts (opening the workspace).
-import { expect, type Locator, type Page } from "@playwright/test";
+// streaming agent, the close) and navigation.steps.ts (opening the workspace).
+import { expect, type CDPSession, type Locator, type Page } from "@playwright/test";
 import { Step } from "./world.ts";
 import { registerAgent } from "./harness.ts";
 
@@ -58,6 +75,137 @@ const HISTORY_AGENTS = ["history-RED", "history-GREEN", "history-VERIFY", "histo
 const SEED_CONCURRENCY = 50;
 
 const runsPane = (page: Page): Locator => page.getByTestId("workspace-runs");
+
+/** How often a probe is re-read while a step waits on the page. */
+const PROBE_POLL_MS = 100;
+
+/** A flat record a probe reads off the page, compared key by key. */
+type ProbeReading = Record<string, string | number | boolean | null>;
+
+/** The reading as one string with its keys in order, so the page and the test compare it alike. */
+function canonical(reading: ProbeReading): string {
+  return JSON.stringify(reading, Object.keys(reading).sort());
+}
+
+/** One CDP session per page, opened on first use. */
+const protocolSessions = new WeakMap<Page, CDPSession>();
+
+async function protocolSession(page: Page): Promise<CDPSession> {
+  const open = protocolSessions.get(page);
+  if (open !== undefined) return open;
+  const session = await page.context().newCDPSession(page);
+  protocolSessions.set(page, session);
+  return session;
+}
+
+/**
+ * Runs `fn(...args)` in the page's main world through `Runtime.evaluate` and
+ * returns its (awaited) value. `fn` is sent as source, so it must be
+ * self-contained; every argument must survive JSON.
+ */
+async function inThePage<T>(page: Page, fn: (...args: never[]) => T | Promise<T>, ...args: readonly unknown[]): Promise<T> {
+  const session = await protocolSession(page);
+  const passed = args.map((a) => (typeof a === "function" ? `(${a.toString()})` : JSON.stringify(a))).join(", ");
+  const { result, exceptionDetails } = await session.send("Runtime.evaluate", {
+    expression: `(${fn.toString()})(${passed})`,
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  if (exceptionDetails !== undefined) {
+    throw new Error(`the page threw: ${exceptionDetails.exception?.description ?? exceptionDetails.text}`);
+  }
+  return result.value as T;
+}
+
+/** Re-reads `read(arg)` in the page until it reads `want` or `timeoutMs` passes; resolves to the last reading. */
+function pollTheReading(
+  read: (arg: string) => Record<string, unknown>,
+  arg: string,
+  want: string,
+  timeoutMs: number,
+  pollMs: number,
+): Promise<Record<string, unknown>> {
+  const deadline = performance.now() + timeoutMs;
+  return new Promise((resolve) => {
+    const tick = (): void => {
+      const reading = read(arg);
+      if (JSON.stringify(reading, Object.keys(reading).sort()) === want || performance.now() >= deadline) resolve(reading);
+      else setTimeout(tick, pollMs);
+    };
+    tick();
+  });
+}
+
+/**
+ * Waits until `probe(arg)`, read in the page, reads `expected`, and asserts
+ * its last reading, so a timeout fails naming what the page showed. The probe
+ * must be self-contained and touch only the few elements it reads.
+ */
+async function untilThePageReads(
+  page: Page,
+  probe: (arg: string) => ProbeReading,
+  arg: string,
+  expected: ProbeReading,
+  timeoutMs: number,
+  what: string,
+): Promise<void> {
+  const reading = await inThePage(page, pollTheReading, probe, arg, canonical(expected), timeoutMs, PROBE_POLL_MS);
+  expect(reading, what).toEqual(expected);
+}
+
+/**
+ * The running cards on the Runs tab that name the agent, and whether the one
+ * card is on screen (rendered, with a box). Reads the running cards only.
+ */
+function runningCardOnTheRunsTab(agentId: string): ProbeReading {
+  const cards = Array.from(
+    document.querySelectorAll('[data-testid="workspace-runs"] [data-testid="running-card"]'),
+  ).filter((card) => (card.textContent ?? "").includes(agentId));
+  const card = cards.length === 1 ? (cards[0] as HTMLElement) : null;
+  const box = card?.getBoundingClientRect();
+  const visible = card !== null && card.checkVisibility() && box !== undefined && box.width > 0 && box.height > 0;
+  return { cards: cards.length, visible };
+}
+
+/** The Runs tab's running cards that name the agent, and the one card's count and file, whitespace-normalised. */
+function runningCardProgress(agentId: string): ProbeReading {
+  const text = (el: Element | null | undefined): string | null =>
+    el ? (el.textContent ?? "").replace(/[\u200b\u00ad]/g, "").trim().replace(/\s+/g, " ") : null;
+  const cards = Array.from(
+    document.querySelectorAll('[data-testid="workspace-runs"] [data-testid="running-card"]'),
+  ).filter((card) => (card.textContent ?? "").includes(agentId));
+  const card = cards.length === 1 ? cards[0] : null;
+  return {
+    cards: cards.length,
+    count: text(card?.querySelector('[data-testid="running-count"]')),
+    file: text(card?.querySelector('[data-testid="running-file"]')),
+  };
+}
+
+/** The project pane's rows that name the agent, and the one row's line, whitespace-normalised. */
+function agentRowLine(agentId: string): ProbeReading {
+  const text = (el: Element | null | undefined): string | null =>
+    el ? (el.textContent ?? "").replace(/[\u200b\u00ad]/g, "").trim().replace(/\s+/g, " ") : null;
+  const rows = Array.from(
+    document.querySelectorAll('[data-testid="project-pane"] [data-testid="agent-row"]'),
+  ).filter((row) => (row.textContent ?? "").includes(agentId));
+  const row = rows.length === 1 ? rows[0] : null;
+  const lines = row ? row.querySelectorAll(".app-agent-msg") : [];
+  return { rows: rows.length, lines: lines.length, line: text(lines.length === 1 ? lines[0] : null) };
+}
+
+/** The Runs timeline: its running cards, its settled cards, the run id heading it, and how many cards carry the given run id. */
+function runsTimelineHead(eventId: string): ProbeReading {
+  const pane = document.querySelector('[data-testid="workspace-runs"]');
+  if (pane === null) return { running: null, cards: null, head: null, carrying: null };
+  const cards = pane.querySelectorAll('[data-testid="event-card"]');
+  return {
+    running: pane.querySelectorAll('[data-testid="running-card"]').length,
+    cards: cards.length,
+    head: cards[0]?.getAttribute("data-run-id") ?? null,
+    carrying: Array.from(cards).filter((card) => card.getAttribute("data-run-id") === eventId).length,
+  };
+}
 
 Step("that project keeps its newest {int} runs", async ({ request, world }, retention: number) => {
   const res = await request.patch(`/api/v2/projects/${world.projectKey as string}`, { data: { retention } });
@@ -112,9 +260,42 @@ Step(
 Step(
   "the running card for {string} is on the Runs tab within {int} seconds",
   async ({ page }, agentId: string, seconds: number) => {
-    const card = runsPane(page).getByTestId("running-card").filter({ hasText: agentId });
-    await expect(card).toHaveCount(1, { timeout: secondsToMs(seconds) });
-    await expect(card).toBeVisible();
+    await untilThePageReads(
+      page,
+      runningCardOnTheRunsTab,
+      agentId,
+      { cards: 1, visible: true },
+      secondsToMs(seconds),
+      `one running card for ${agentId}, on screen, on the Runs tab`,
+    );
+  },
+);
+
+Step(
+  "the Runs tab's running card for {string} reads {string} in {string} within {int} seconds",
+  async ({ page }, agentId: string, count: string, file: string, seconds: number) => {
+    await untilThePageReads(
+      page,
+      runningCardProgress,
+      agentId,
+      { cards: 1, count, file },
+      secondsToMs(seconds),
+      `the running card for ${agentId} reads ${count} in ${file}`,
+    );
+  },
+);
+
+Step(
+  "the project pane's row for agent {string} reads {string} within {int} seconds",
+  async ({ page }, agentId: string, line: string, seconds: number) => {
+    await untilThePageReads(
+      page,
+      agentRowLine,
+      agentId,
+      { rows: 1, lines: 1, line },
+      secondsToMs(seconds),
+      `the project pane's row for ${agentId} reads "${line}"`,
+    );
   },
 );
 
@@ -179,7 +360,7 @@ Step(
 );
 
 Step("I start watching the page's main-thread tasks", async ({ page }) => {
-  await page.evaluate(() => {
+  await inThePage(page, () => {
     const watch = {
       since: performance.now(),
       tasks: [] as { startTime: number; duration: number }[],
@@ -196,10 +377,11 @@ Step("I start watching the page's main-thread tasks", async ({ page }) => {
 /** The long tasks the current watch saw (start ms after it began, duration ms); the watch then stops. */
 async function watchedTasks(page: Page): Promise<WatchedTask[]> {
   // Let the last frame's work finish and its entries be delivered.
-  await page.evaluate(
+  await inThePage(
+    page,
     () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(() => resolve(), 300))),
   );
-  const tasks = await page.evaluate(() => {
+  const tasks = await inThePage(page, (): WatchedTask[] | null => {
       const watch = (window as unknown as { __mainThreadWatch?: TaskWatch }).__mainThreadWatch;
       if (watch === undefined) return null;
       for (const entry of watch.observer.takeRecords()) {
@@ -246,10 +428,13 @@ Step(
   "the closed run's card heads the Runs timeline of {int} settled run cards and no running card is left within {int} seconds",
   async ({ page, world }, count: number, seconds: number) => {
     const eventId = world.eventId as string;
-    await expect(runsPane(page).getByTestId("running-card")).toHaveCount(0, { timeout: secondsToMs(seconds) });
-    const cards = runsPane(page).getByTestId("event-card");
-    await expect(cards.first()).toHaveAttribute("data-run-id", eventId, { timeout: secondsToMs(seconds) });
-    await expect(cards).toHaveCount(count);
-    await expect(runsPane(page).locator(`[data-testid="event-card"][data-run-id="${eventId}"]`)).toHaveCount(1);
+    await untilThePageReads(
+      page,
+      runsTimelineHead,
+      eventId,
+      { running: 0, cards: count, head: eventId, carrying: 1 },
+      secondsToMs(seconds),
+      `the Runs timeline holds no running card and ${String(count)} settled cards, headed by the closed run ${eventId} and carrying it once`,
+    );
   },
 );
