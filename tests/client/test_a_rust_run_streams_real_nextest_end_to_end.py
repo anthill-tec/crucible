@@ -115,7 +115,7 @@ COVERAGE_RUNS = ("workspace-regression", "regression-ingest")
 
 # A `cargo` shim: every call is handed to the real cargo with stdout
 # inherited (the stream reaches the client untouched), stderr echoed and kept
-# per call, and after a `nextest run` each JUnit report written during it
+# per call, and after a `nextest run` each JUnit report it wrote or rewrote
 # copied aside. One JSON record per call in $CARGO_SHIM_DIR/calls.jsonl.
 _SHIM = r'''
 import glob, json, os, shutil, subprocess, sys, time
@@ -125,6 +125,13 @@ argv = sys.argv[1:]
 seq = "%d-%d" % (time.time_ns(), os.getpid())
 err_path = os.path.join(log_dir, seq + ".stderr")
 started = time.time()
+root = os.environ["CARGO_SHIM_PROJECT"]
+def reports():
+    found = {}
+    for path in glob.glob(os.path.join(root, "**", "junit.xml"), recursive=True):
+        found[path] = os.stat(path).st_mtime_ns
+    return found
+before = reports() if argv[:2] == ["nextest", "run"] else {}
 proc = subprocess.Popen([real] + argv, stderr=subprocess.PIPE)
 with open(err_path, "wb") as kept:
     for line in proc.stderr:
@@ -134,9 +141,8 @@ with open(err_path, "wb") as kept:
 code = proc.wait()
 junit = []
 if argv[:2] == ["nextest", "run"]:
-    root = os.environ["CARGO_SHIM_PROJECT"]
-    for path in glob.glob(os.path.join(root, "**", "junit.xml"), recursive=True):
-        if os.path.getmtime(path) >= started - 1:
+    for path, written in sorted(reports().items()):
+        if before.get(path) != written:
             kept_junit = os.path.join(log_dir, seq + "-" + str(len(junit)) + ".junit.xml")
             shutil.copyfile(path, kept_junit)
             junit.append(kept_junit)
