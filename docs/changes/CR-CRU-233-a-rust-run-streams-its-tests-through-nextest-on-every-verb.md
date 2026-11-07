@@ -16,6 +16,11 @@ ran — 13 points; the gap analysis needed user rulings
   - `--ignore-run-fail` retires (§S1);
   - the real-runner tests live in `test:client` and require the rust toolchain (ACs).
 
+  On approval (user, 2026-11-07), the standard rust profiles were added. They follow nai's backend pattern: `default`
+  (ad hoc, excluding the docker tier), `ci` (the gate's run, the same exclusion) and `e2e` (only the docker tier). They
+  are the profiles Model B's scaffold sets up in the table, documented in the shipped `crucible.toml` and in the
+  release note's "Stack declaration changes" (AC9). Another profile is not refused; it runs with the default entry.
+
   Also folded:
   - coverage gets its own target dir and clears old profiles (§S1);
   - the stream variable is forced (§S1);
@@ -122,7 +127,8 @@ an `e2e` profile selects.
       run's record is its stream, and its coverage follows the verb). The refusal names `targets.<profile>` and the
       field at fault;
     - a board whose health does not list `nextest` under `codecs.stream`.
-  - **Documentation.** The shipped `crucible.toml` documents the table as the one vocabulary every stack uses.
+  - **Documentation.** The shipped `crucible.toml` documents the table as the one vocabulary every stack uses. It also
+    names the standard rust profiles a scaffold sets up: `default`, `ci` and `e2e`, each with what it selects.
 - **§S4 — an unsupported nextest is refused.**
   - **The check.** With an agent, the client reads `cargo nextest --version` before anything else runs. Below 0.9.130,
     or when the version cannot be read, the verb is refused, naming 0.9.130 and the version found.
@@ -255,9 +261,17 @@ naming what is missing. It never skips them.
   - the rust entry;
   - that only a project's own file declares;
   - the default for an undeclared profile;
-  - that bun's `crucible.targets` uses the same vocabulary.
+  - that bun's `crucible.targets` uses the same vocabulary;
+  - the standard rust profiles `default`, `ci` and `e2e`, and what each selects.
 
-  The rust client's help names the table and the minimum nextest.
+  The rust client's help names the table and the minimum nextest. The CHANGELOG's `[Unreleased]` entry carries a
+  "Stack declaration changes" section, the part Model B reads in the release note. That section names:
+  - the `[targets.<profile>]` table;
+  - the rust entry;
+  - the standard profiles;
+  - that undeclared profiles stream by default;
+  - the minimum nextest;
+  - the retirement of `--ignore-run-fail`.
 
 ## Non-goals
 
