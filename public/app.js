@@ -1962,15 +1962,11 @@
     // unlinked runs / planless projects keep the heuristic byte-identical.
     // CR-CRU-013 §S4b — `surface` ("home" | "workspace") scopes gate/merge to
     // compact on home, and milestone-entries to workspace only.
-    function runFeed(events, surface, openRuns = visibleOpenRuns()) {
+    // It draws settled history only and takes no open runs: those are drawn by
+    // `RunningCards`, so no caller can make the timeline read them.
+    function runFeed(events, surface) {
       const home = surface === "home";
       const rows = [];
-      // CR-CRU-017 §S3 — a run that is happening NOW belongs at the head of a
-      // newest-first feed, above every settled row. They live outside
-      // `timelineRows` on purpose: an open run has no event, so it takes part in
-      // no transition pair, no declared span and no rollup — it is a card, not
-      // history.
-      for (const run of openRuns) rows.push(RunningCard(run));
       for (const row of L.timelineRows(events, state.plans)) {
         if (row.kind === "marker") rows.push(TransitionMarkerRow(row.marker));
         else if (row.kind === "cycle-span-open") rows.push(CycleSpanOpenRow(row.cycle, row.plan));
@@ -2002,6 +1998,15 @@
     // open run) is never re-rendered and no sibling of it is replaced. With no
     // run open the container holds what `idle` draws (the empty state), and
     // while `hidden` holds it holds nothing.
+    // CR-CRU-017 §S3 — a run that is happening NOW belongs at the head of a
+    // newest-first feed, above every settled row. Open runs live outside
+    // `timelineRows` on purpose: an open run has no event, so it takes part in
+    // no transition pair, no declared span and no rollup — it is a card, not
+    // history.
+    // CR-CRU-017 §S3 — a live run is content: while one is running the feed
+    // has something to show, so the "no runs yet" face yields to it — `idle`
+    // is drawn only while no run is open (the no-projects face is unaffected —
+    // there is no project to run under).
     const RunningCards = (idle, hidden = () => false) =>
       div({ class: "app-running-cards" }, () => {
         if (hidden()) return span();
@@ -2010,10 +2015,6 @@
       });
 
     const EmptyState = () => {
-      // CR-CRU-017 §S3 — a live run is content: while one is running the feed
-      // has something to show, so the "no runs yet" face must yield to it (the
-      // no-projects face is unaffected — there is no project to run under).
-      if (visibleOpenRuns().length > 0) return null;
       const empty = L.emptyStates({ projects: state.projects, events: state.events });
       if (empty === null) return null;
       return div(
@@ -2131,7 +2132,7 @@
           RunningCards(() => EmptyState() ?? span()),
           () => {
             const runs = visibleEvents();
-            return runs.length === 0 ? span() : div(runFeed(runs, "home", []));
+            return runs.length === 0 ? span() : div(runFeed(runs, "home"));
           },
         ),
       );
@@ -2886,7 +2887,7 @@
             const filtered = ReleaseRunsFeed();
             if (filtered !== null) return filtered;
             const runs = visibleEvents();
-            return runs.length === 0 ? span() : div(runFeed(runs, "workspace", []));
+            return runs.length === 0 ? span() : div(runFeed(runs, "workspace"));
           },
         ),
       );
@@ -2951,7 +2952,7 @@
       const runs = L.filterEvents(held.events, activeFilters()).filter((e) => e.kind !== "lifecycle");
       return runs.length === 0
         ? div({ class: "app-empty" }, `no runs filed under ${release}`)
-        : div(runFeed(runs, "workspace", []));
+        : div(runFeed(runs, "workspace"));
     }
 
     const WorkspaceRuns = () =>
