@@ -151,6 +151,9 @@ export interface LiveMountOpts {
   holdLive?: (url: string) => Promise<void> | null;
   /** What the plans reads answer (the project's and the board-wide one); absent = no plans. */
   plans?: unknown[];
+  /** A rewrite of public/app.js's source before it evaluates — a test reaching
+   *  one of the page's own functions exposes it this way; absent = verbatim. */
+  appSource?: (src: string) => string;
 }
 
 export interface LiveMounted {
@@ -284,7 +287,7 @@ export async function mountLive(opts: LiveMountOpts): Promise<LiveMounted> {
   (0, eval)(VAN_X_SRC);
   cacheBust += 1;
   await import(`${APP_LOGIC_PATH}?liveRunHarness=${cacheBust}`);
-  (0, eval)(APP_JS_SRC);
+  (0, eval)(opts.appSource !== undefined ? opts.appSource(APP_JS_SRC) : APP_JS_SRC);
   await settle();
 
   return {

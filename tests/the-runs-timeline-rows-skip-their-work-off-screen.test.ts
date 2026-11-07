@@ -1,6 +1,7 @@
-// The Runs timeline's rows — every kind it draws: run cards, aborted run cards,
+// The timeline's rows — every kind it draws: run cards, aborted run cards,
 // transition markers, milestone entries, gate cards, merge markers, the open
-// cycle-span row and declared markers — let the browser skip their style and layout while
+// cycle-span row and declared markers, on the Runs tab and on home (home's
+// compact gate and merge rows included) — let the browser skip their style and layout while
 // they are off screen: each carries `content-visibility: auto` with an
 // intrinsic size (`contain-intrinsic-size`), so a document-wide re-style (a
 // run opening or closing, a settled run arriving) costs only what is in view.
@@ -130,10 +131,10 @@ function plannedEvents(): EventBriefFixture[] {
   return [merge, gate, inActive, inDone];
 }
 
-function workspace(planned = false): LiveMountOpts {
+function workspace(planned = false, pathname = `/p/${PROJECT_KEY}`): LiveMountOpts {
   return {
     ...(planned ? { plans: structuredClone(PLANS) } : {}),
-    pathname: `/p/${PROJECT_KEY}`,
+    pathname,
     projects: [
       {
         key: PROJECT_KEY,
@@ -167,6 +168,16 @@ function rowsOf(testid: string): HTMLElement[] {
   return Array.from(
     document.querySelectorAll<HTMLElement>(`[data-testid="workspace-runs"] [data-testid="${testid}"]`),
   );
+}
+
+/** Home: the all-projects timeline, drawn with home's compact gate and merge rows. */
+async function mountOnHome(planned = false): Promise<void> {
+  await mountLive(workspace(planned, "/"));
+  expect(document.querySelectorAll('[data-testid="timeline"]').length, "home draws its one timeline").toBe(1);
+}
+
+function homeRowsOf(testid: string): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>(`[data-testid="timeline"] [data-testid="${testid}"]`));
 }
 
 /**
@@ -205,6 +216,43 @@ describe("the Runs timeline's rows are skipped by the browser while off screen",
       await mountOnRuns(planned);
       const rows = rowsOf(testid);
       expect(rows.length, `the Runs timeline draws its ${testid} rows`).toBe(drawn);
+      for (const row of rows) {
+        expect(cascaded(row, "content-visibility")).toBe("auto");
+        const size = cascaded(row, "contain-intrinsic-size");
+        expect(INTRINSIC_SIZE.test(size), `contain-intrinsic-size "${size}" is a positive px size`).toBe(true);
+      }
+    });
+  }
+});
+
+describe("the home timeline's rows are skipped by the browser while off screen", () => {
+  // How many of each row home draws from the fixture's history. Home draws no
+  // milestone entry (those are the workspace's only).
+  const HOME_ROWS: Record<string, number> = {
+    "event-card": 3,
+    "aborted-card": 1,
+    "transition-marker": 1,
+  };
+
+  // How many of each row home draws from the planned project's history: its
+  // gate and merge rows are home's own compact ones.
+  const HOME_PLANNED_ROWS: Record<string, number> = {
+    "gate-card-compact": 1,
+    "merge-marker-compact": 1,
+    "cycle-span-open": 1,
+    "declared-marker": 1,
+  };
+
+  const cases: [string, number, boolean][] = [
+    ...Object.entries(HOME_ROWS).map(([t, n]): [string, number, boolean] => [t, n, false]),
+    ...Object.entries(HOME_PLANNED_ROWS).map(([t, n]): [string, number, boolean] => [t, n, true]),
+  ];
+
+  for (const [testid, drawn, planned] of cases) {
+    test(`every ${testid} row on the home timeline carries content-visibility: auto with an intrinsic size`, async () => {
+      await mountOnHome(planned);
+      const rows = homeRowsOf(testid);
+      expect(rows.length, `the home timeline draws its ${testid} rows`).toBe(drawn);
       for (const row of rows) {
         expect(cascaded(row, "content-visibility")).toBe("auto");
         const size = cascaded(row, "contain-intrinsic-size");
