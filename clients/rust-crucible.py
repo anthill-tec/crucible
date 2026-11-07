@@ -918,6 +918,13 @@ def _nextest_run(verb, args, project_dir, identity, *, selection, env, tier,
     run_cmd = ["cargo", "nextest", "run", *selection, "--no-fail-fast", *_STREAM_FLAGS]
     relay, narrator, listed_total = None, None, None
     started = time.time()
+    # CR-CRU-111 §S4/AC6b — the child that runs the tests, bracketed: a `unit`
+    # run that spends its wall clock waiting says so in its own envelope. The
+    # other tiers run this same body and are left alone, because the shared
+    # check is scoped to `unit` by the tier it is handed. The bracket opens
+    # before the `cargo nextest list` that precedes the run, so that second
+    # child's wall clock and CPU are inside the figures too.
+    # A signal while the run is open is trapped and the open run disclosed.
     try:
         with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
             print(f"[crucible] listing: {' '.join(list_cmd)}", file=sys.stderr)
