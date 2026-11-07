@@ -14,12 +14,10 @@ Feature: An agent's card follows its streaming run batch by batch, whenever the 
   The page moves on the board's own throttled frames, so every wait is on
   the page, bounded by a few frame cadences.
 
-  Background:
+  Scenario: The run's first batch lands before the page first reads the open run
     Given a project named "Card Follows Its Run Project" is registered
     And an online agent "card-follower" with message "between runs" is registered on that project
     And agent "card-follower" is the run's streaming agent
-
-  Scenario: The run's first batch lands before the page first reads the open run
     When a run is started for agent "card-follower" on that project
     And an online agent "card-follower" with message "gated test run starting" is registered on that project
     And the run streams batch 1 of its test stream through the stream route
@@ -35,6 +33,9 @@ Feature: An agent's card follows its streaming run batch by batch, whenever the 
     And the page was never reloaded
 
   Scenario: The run's first batch lands after the page first reads the open run
+    Given a project named "Card Follows Its Run Project" is registered
+    And an online agent "card-follower" with message "between runs" is registered on that project
+    And agent "card-follower" is the run's streaming agent
     Given I open the workspace for that project
     And the agent row for "card-follower" reads the agent's own line the board serves, unmarked, within 6 seconds
     And I mark the page so a reload would be detectable
@@ -52,6 +53,9 @@ Feature: An agent's card follows its streaming run batch by batch, whenever the 
     And the page was never reloaded
 
   Scenario: The page is reloaded mid-run and the card follows the rest of the run
+    Given a project named "Card Follows Its Run Project" is registered
+    And an online agent "card-follower" with message "between runs" is registered on that project
+    And agent "card-follower" is the run's streaming agent
     Given I open the workspace for that project
     When a run is started for agent "card-follower" on that project
     And an online agent "card-follower" with message "gated test run starting" is registered on that project
