@@ -72,6 +72,7 @@ from tests.client.live_run_harness import (
     CLIENTS,
     INGEST_PATHS,
     RecordingBoard,
+    board_health,
     install_project,
     load_toon,
     new_scratch,
@@ -657,7 +658,9 @@ class RustCoverageOnlyFlagWithoutCoverageIsRefusedTest(_RustProject,
     gate lock or cargo; the retired `--ignore-run-fail` is refused as early."""
 
     def setUp(self):
-        self.board = ActiveCycleBoard()
+        # A board whose health lists `nextest` under `codecs.stream`, so a run
+        # that gets past the board's health reaches the gate lock.
+        self.board = ActiveCycleBoard(health=board_health())
         self.addCleanup(self.board.close)
         # The project key must not spell the refusal's code: the envelope's
         # context carries it, and the code is looked for in both streams.

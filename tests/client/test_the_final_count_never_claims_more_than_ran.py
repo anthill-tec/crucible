@@ -9,8 +9,9 @@ names its unit after the count (mvn counts test classes: `running N/M
 classes`, `ran N/M classes`).
 
 And a verdict line that says a test ran is a completion, whatever the verdict:
-nextest's SIGSEGV / TIMEOUT / ABORT lines and Unity's IGNORE lines are counted
-by their stacks' recognisers like PASS and FAIL.
+Unity's IGNORE lines are counted by its recogniser like PASS and FAIL. (A
+streamed rust run counts its results from its nextest stream, not from
+nextest's human lines.)
 """
 
 import unittest
@@ -71,26 +72,6 @@ class TheFinalCountIsWhatRanTest(unittest.TestCase):
 
 
 class EveryVerdictLineIsACompletionTest(unittest.TestCase):
-
-    def test_nextest_counts_signal_timeout_and_abort_verdicts(self):
-        rust = load_client("rust-crucible.py")
-        progress = rust._NextestProgress()
-        lines = [
-            "    Starting 6 tests across 1 binary\n",
-            "        PASS [   0.001s] crate tests::a\n",
-            "        FAIL [   0.001s] crate tests::b\n",
-            "     SIGSEGV [   0.002s] crate tests::c\n",
-            "     TIMEOUT [  60.000s] crate tests::d\n",
-            "       ABORT [   0.001s] crate tests::e\n",
-            "     SIGABRT [   0.001s] crate tests::f\n",
-            "------------\n",
-            "     Summary [  60.010s] 6 tests run: 1 passed, 5 failed\n",
-            "     SIGSEGV [   0.002s] crate tests::c\n",
-            "     TIMEOUT [  60.000s] crate tests::d\n",
-        ]
-        counted = sum(1 for line in lines if progress.recognise(line))
-        self.assertEqual(counted, 6, "every verdict before the summary is one test")
-        self.assertEqual(progress.total, 6)
 
     def test_unity_counts_ignore_verdicts(self):
         arduino = load_client("arduino-crucible.py")

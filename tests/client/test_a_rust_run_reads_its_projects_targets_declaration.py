@@ -37,7 +37,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from tests.client.live_run_harness import CLIENTS, RecordingBoard
+from tests.client.live_run_harness import CLIENTS, RecordingBoard, board_health
 from tests.client.rust_stream_harness import (
     RUN_ID,
     VERBS,
@@ -209,11 +209,20 @@ class JUnitNoLongerDeclaresATierTest(_DeclarationCase):
         self.assertEqual([s.get("tier") for s in p.starts()], ["module"], where)
         self.assert_streamed(p, result, "module")
 
+    # A board that records a gate's scope and suites, so a scoped gate is
+    # taken up to its declaration check, and the cycle the gate belongs to.
+    GATE_CAPABLE_MILESTONES = {"gate": ["scope", "suites"]}
+    GATE_CYCLE = "879"
+
     def test_a_tier_profile_with_no_junit_table_is_declared_for_the_scoped_pre_merge_gate(self):
         p = self.project(nextest_toml=self.NEXTEST_TOML)
+        health = board_health()
+        health["milestones"] = dict(self.GATE_CAPABLE_MILESTONES)
+        p.board.script_health(health)
         result = p.drive("pre-merge-gate",
                          verb_argv=("pre-merge-gate", "--skip-clippy", "--min-free-g", "0",
-                                    "--keep-target", "--suites", "module"),
+                                    "--keep-target", "--suites", "module",
+                                    "--cycle", self.GATE_CYCLE),
                          FAKE_TOTAL="2")
         where = diagnostics(result)
         axi = envelope(result.stdout) or {}

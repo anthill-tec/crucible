@@ -344,7 +344,8 @@ class EachStateOnEveryVerbTest(_Streamed):
                 result = p.drive(label, FAKE_TOTAL="0")
                 where = f"{label}: {diagnostics(result)}"
                 self.assertEqual(len(p.board.list_posts()), 1, f"the empty list is posted; {where}")
-                self.assertEqual([b.get("runId") for _p, b in p.board.aborts()], [RUN_ID],
+                self.assertEqual([path for path, _b in p.board.aborts()],
+                                 [f"/api/v2/runs/{RUN_ID}/abort"],
                                  f"the run that ran nothing is aborted; {where}")
                 self.assertEqual(p.closes(), [], f"nothing is filed; {where}")
                 self.assertEqual(p.compiles(), [], where)
@@ -402,7 +403,8 @@ class EachStateOnEveryVerbTest(_Streamed):
                             proc.wait()
                 where = f"{label}: exit={proc.returncode} stderr={Path(err_path).read_text()[-1500:]!r}"
                 self.assertTrue(relayed, f"the two results before the block were relayed; {where}")
-                self.assertEqual([b.get("runId") for _p, b in p.board.aborts()], [RUN_ID],
+                self.assertEqual([path for path, _b in p.board.aborts()],
+                                 [f"/api/v2/runs/{RUN_ID}/abort"],
                                  f"the interrupted run is aborted; {where}")
                 self.assertEqual(p.closes(), [], f"no close follows an abort; {where}")
                 self.assertEqual(len(results(p.held(), "ok")), 2,
