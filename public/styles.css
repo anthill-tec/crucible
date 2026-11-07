@@ -2757,7 +2757,7 @@ body {
    long agent id): the overflow stays the row's own and the feed still
    scrolls sideways to it. The running cards sit above the timeline, always
    in view, and keep their own truncation: they are not timeline rows. */
-.app-evt:not(.app-evt-running), .app-transition-marker, .app-milestone-entry, .app-cycle-span-open, .app-merge-compact {
+.app-evt:not(.app-evt-running), .app-transition-marker, .app-milestone-entry, .app-cycle-span-open, .app-gate-compact, .app-merge-compact {
   content-visibility: auto;
   contain-intrinsic-size: auto 64px;
   min-width: min-content;
