@@ -1,6 +1,6 @@
 # CR-CRU-233 — a rust run streams its tests through nextest on every verb
 
-**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-202 · **Status** PENDING · Pre-review:
+**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-202 · **Status** DONE · Pre-review:
 ran — 13 points; the gap analysis needed user rulings
 - **Filed 2026-11-06**, split from CR-CRU-202 at its gap analysis (user ruling): CR-CRU-202 keeps the board's `nextest`
   codec; this CR takes the rust client's half.
@@ -38,6 +38,9 @@ ran — 13 points; the gap analysis needed user rulings
     python's does (AC6);
   - the retired human-line narrator's dead code goes;
   - the narration re-pin's dropped in-run tick is recorded as python's precedent (AC8).
+
+- **Done 2026-11-08.** Merged as `93b80a9d` (plan 239, cycles 879–881). Pre-merge gate 11,362/0 (bun 4868/0, python
+  client 6494/0); full e2e 164/0. `_crucible_run.py`'s line budget re-recorded 1731 → 1780.
 
 ## Problem
 
@@ -191,7 +194,7 @@ is shared by these tests. Nothing builds in the repository's tree.
 
 **A missing toolchain fails them.** A missing cargo-nextest (0.9.130 or later) or cargo-llvm-cov fails these tests,
 naming what is missing. It never skips them.
-- [ ] **AC1 (§S1, real).** For each of `test`, `regression-ingest`, `smoke-test` and `workspace-regression
+- [x] **AC1 (§S1, real).** For each of `test`, `regression-ingest`, `smoke-test` and `workspace-regression
   --coverage`:
   - while the slow test is still running, the open run on the board holds at least one decoded result and fewer than
     its total;
@@ -199,7 +202,7 @@ naming what is missing. It never skips them.
   - the run states `framework: "nextest"`;
   - the run closes from its stream with the workspace's passed, failed and pending counts, every listed test run
     despite the failure.
-- [ ] **AC2 (§S2, real).** In each AC1 run, the list is posted before the first stream batch, and the open run's total
+- [x] **AC2 (§S2, real).** In each AC1 run, the list is posted before the first stream batch, and the open run's total
   equals the list's matching tests. In particular:
   - under the profile's `default-filter` (every verb);
   - with `--features` (`test`, `smoke-test`, `workspace-regression`);
@@ -211,7 +214,7 @@ naming what is missing. It never skips them.
   - a coverage run's run step prints no `Compiling` line and files its lcov even though a test failed;
   - after it, a plain `test` run compiles its crates again, and no `*.profraw` file exists outside the coverage
     target directory.
-- [ ] **AC3 (§S5, real — the stored result equals JUnit's).** For each AC1 run, the record the board stores equals the
+- [x] **AC3 (§S5, real — the stored result equals JUnit's).** For each AC1 run, the record the board stores equals the
   board's `junit` decoding of the JUnit report nextest wrote in the same run. Equal means:
   - the same suites, test names, statuses, passed and failed counts, and failure messages, with CR-CRU-202 AC3's
     exemptions.
@@ -219,14 +222,14 @@ naming what is missing. It never skips them.
   Also:
   - no verb of the four bodies posts a `junit` ingest;
   - an `auto-ingest` run straight after files nothing.
-- [ ] **AC4 (§S4).** A cargo-nextest reporting 0.9.129, and one whose version cannot be read, are each refused on every
+- [x] **AC4 (§S4).** A cargo-nextest reporting 0.9.129, and one whose version cannot be read, are each refused on every
   verb of the four bodies. In each case:
   - no run is opened;
   - cargo cleans, builds and lists nothing;
   - `pre-merge-gate` runs no clippy and `docker-e2e-gate` brings no docker up;
   - no gate lock is taken;
   - the `ok: false` envelope names 0.9.130 and the version found.
-- [ ] **AC5 (§S3).**
+- [x] **AC5 (§S3).**
   - **These stream as declared:**
     - a project with no `crucible.toml`;
     - a project whose `crucible.toml` has no entry for the run's profile;
@@ -239,7 +242,7 @@ naming what is missing. It never skips them.
     - a board whose health does not list `nextest` under `codecs.stream`.
   - **JUnit no longer declares a tier.** A tier profile with no `junit` table counts as declared, for the tier verbs and
     for the scoped `pre-merge-gate`.
-- [ ] **AC6 (§S1, §S2, §S6 — each state).** On the fake cargo, for every verb of the four bodies:
+- [x] **AC6 (§S1, §S2, §S6 — each state).** On the fake cargo, for every verb of the four bodies:
   - **Compile error at the list.** A compile failure is filed, closing the run; no run step follows.
   - **List refused or unreachable.** A list the board refuses (each of 400, 409 and 413), or a board unreachable for
     the list, lets the run stream on with a warning naming the refusal.
@@ -259,9 +262,9 @@ naming what is missing. It never skips them.
     start opens no run, and nothing is listed, streamed, closed or ingested. One `ok: false` envelope and a non-zero
     exit name the refused start. An agent that was already registered unbound by its own caller keeps python's
     behaviour (RED 881, orchestrator ruling).
-- [ ] **AC7 (§S6).** The bun, python, mvn and arduino clients' runs count, narrate, log and close exactly as before, and
+- [x] **AC7 (§S6).** The bun, python, mvn and arduino clients' runs count, narrate, log and close exactly as before, and
   their existing tests pass unchanged.
-- [ ] **AC8 (§S5, §S6).** The shared fake cargo answers:
+- [x] **AC8 (§S5, §S6).** The shared fake cargo answers:
   - `nextest --version`;
   - `nextest list`;
   - `llvm-cov show-env`;
@@ -277,7 +280,7 @@ naming what is missing. It never skips them.
   finding, 2026-11-07). The rust live-run lifecycle test's narration pin follows python's precedent: the closing `ran
   N/M` against the listed total is pinned, and no in-run `running N/M` tick is required, because ticks are held while
   the relay lands (VERIFY 880, orchestrator ruling). Every other existing test passes unchanged.
-- [ ] **AC9 (§S3).** The shipped `crucible.toml` documents the `[targets.<profile>]` table:
+- [x] **AC9 (§S3).** The shipped `crucible.toml` documents the `[targets.<profile>]` table:
   - its fields;
   - the rust entry;
   - that only a project's own file declares;
