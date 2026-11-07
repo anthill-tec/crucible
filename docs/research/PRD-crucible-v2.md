@@ -55,7 +55,7 @@ around two commitments:
   to v2 + AXI idioms, and the shim retires once the fleet is migrated. A gh-axi-style
   **`crucible-axi` npx CLI** wraps the v2 API for agents.
 - **UI stack (decided 2026-07-14):** hybrid — **VanJS 1.5 + VanX 0.6** drive the
-  reactive DOM; **Tailwind 4 browser runtime + DaisyUI 5** supply styling/components
+  reactive DOM; **Tailwind 4's generated theme and base reset, as a static vendored stylesheet, + DaisyUI 5** supply styling/components
   (all vendored, no CDN/build step — the same environment lavish-axi uses, verified
   from its source via opensrc). The forge palette ships as a custom DaisyUI theme.
   Single page, served by the same process. Dashboard backbone: **A + B hybrid** —

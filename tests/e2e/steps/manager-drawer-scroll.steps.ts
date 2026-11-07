@@ -30,7 +30,7 @@ import { seedProject } from "./harness.ts";
 // opportunities under normal text layout; measured, a plain multi-segment
 // `/a/b/c/...` path wraps fine at each slash and never reproduces the
 // defect) long token, same technique mobile-viewport.steps.ts's
-// "unbreakable long agent id" step uses to force genuine content-driven
+// unbroken project-name word uses to force genuine content-driven
 // overflow rather than a value normal word-wrap would already have handled.
 const LONG_SUT_ROOT = `/home/dev/${"overflowsegment".repeat(20)}/crucible-project-root`;
 

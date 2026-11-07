@@ -149,6 +149,11 @@ export interface LiveMountOpts {
   /** When set and it returns a promise for a /live URL, that read waits for
    *  it before answering — and computes its answer only then, from `live`. */
   holdLive?: (url: string) => Promise<void> | null;
+  /** What the plans reads answer (the project's and the board-wide one); absent = no plans. */
+  plans?: unknown[];
+  /** A rewrite of public/app.js's source before it evaluates — a test reaching
+   *  one of the page's own functions exposes it this way; absent = verbatim. */
+  appSource?: (src: string) => string;
 }
 
 export interface LiveMounted {
@@ -260,7 +265,8 @@ export async function mountLive(opts: LiveMountOpts): Promise<LiveMounted> {
     }
     if (/\/api\/v2\/projects\/[^/?]+\/releases/.test(url)) return respond(200, { ok: true, releases: [] });
     if (/\/api\/v2\/projects\/[^/?]+\/queue/.test(url)) return respond(200, { ok: true, entries: [] });
-    if (/\/api\/v2\/projects\/[^/?]+\/plans/.test(url)) return respond(200, { ok: true, plans: [] });
+    if (/\/api\/v2\/projects\/[^/?]+\/plans/.test(url)) return respond(200, { ok: true, plans: opts.plans ?? [] });
+    if (opts.plans !== undefined && /^\/api\/v2\/plans(?:\?|$)/.test(url)) return respond(200, { ok: true, plans: opts.plans });
     if (/\/api\/v2\/projects\/[^/?]+\/history/.test(url)) return respond(200, { ok: true, releases: [] });
     if (url.startsWith("/api/v2/projects")) return respond(200, { ok: true, projects: opts.projects });
     if (url.includes("/api/v2/agents")) return respond(200, { ok: true, agents: opts.agents });
@@ -281,7 +287,7 @@ export async function mountLive(opts: LiveMountOpts): Promise<LiveMounted> {
   (0, eval)(VAN_X_SRC);
   cacheBust += 1;
   await import(`${APP_LOGIC_PATH}?liveRunHarness=${cacheBust}`);
-  (0, eval)(APP_JS_SRC);
+  (0, eval)(opts.appSource !== undefined ? opts.appSource(APP_JS_SRC) : APP_JS_SRC);
   await settle();
 
   return {

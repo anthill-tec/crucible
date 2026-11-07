@@ -15,7 +15,7 @@
 // own header states for `cycle-to-runs`.
 import { expect } from "@playwright/test";
 import { Step } from "./world.ts";
-import { ingestCompile, ingestJunit, ingestParsed, junit60 } from "./harness.ts";
+import { ingestCompile, ingestJunit, junit60, seedProject } from "./harness.ts";
 import { mountedPaneScroll, mountedPaneScrollGeometry } from "./pane-mount.ts";
 
 // CR-CRU-018/DN decision 5 desktop-band re-point support.
@@ -25,22 +25,24 @@ import { mountedPaneScroll, mountedPaneScrollGeometry } from "./pane-mount.ts";
 // via the grid alone (688px at exactly 1025px, 872px at 1280px), so the
 // CR-CRU-023 660px floor can no longer force overflow for the CR-CRU-029/
 // 034 dual-axis SCROLL-MECHANISM scenarios once they move off their
-// original narrow (now tablet-band) viewports. An UNBREAKABLE (no hyphen or
-// space -- both are CSS break opportunities) 200-char agent id forces
-// genuine content-driven overflow at any width this suite uses, so those
-// scenarios keep testing the scroll mechanism itself rather than the (now
-// vacuous at this band) floor mechanism.
+// original narrow (now tablet-band) viewports. Genuine content-driven
+// overflow is forced instead, so those scenarios keep testing the scroll
+// mechanism itself rather than the (now vacuous at this band) floor
+// mechanism.
+//
+// The overflow is the Runs pane's own heading, "Run timeline — <project
+// name>", for a project whose name ends in a word with no break opportunity
+// in it (no space, hyphen or slash). A timeline row cannot be the source: a
+// run card cuts a long agent id inside the card, and no row is wider than
+// the pane. The heading is not a row and nothing cuts it, so the pane
+// scrolls sideways to its end. The name is plain project data, registered
+// through the real project route like any other.
 Step(
-  "a filler run with an unbreakable long agent id is ingested on that project",
-  async ({ request, world }) => {
-    const wideAgentId = `wideoverflowagentid${"x".repeat(180)}`;
-    await ingestParsed(request, world.projectKey as string, wideAgentId, {
-      total: 1,
-      passed: 1,
-      failed: 0,
-      pending: 0,
-      duration_ms: 5,
-    });
+  "a project named {string} followed by a {int}-character word with no break in it is registered",
+  async ({ request, world }, name: string, length: number) => {
+    const word = "DualAxisOverflow".repeat(Math.ceil(length / 16)).slice(0, length);
+    expect(word.length, "the unbroken word has the length the scenario names").toBe(length);
+    world.projectKey = await seedProject(request, `${name} ${word}`);
   },
 );
 
