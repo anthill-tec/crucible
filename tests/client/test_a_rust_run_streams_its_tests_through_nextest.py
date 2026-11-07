@@ -24,13 +24,15 @@ With an agent, each verb:
 Each state: a compile error at the list, a list the board refuses or cannot
 take, a run that ran nothing, a run with no stream line, the stream switch
 set to 0, an interrupted run, a stream cut short, a failing run (fail-fast),
-the closing narration, `--ignore-run-fail`, and a run without an agent.
+the closing narration, `--ignore-run-fail`, a gated run whose cycle binding
+the board refuses, and a run without an agent.
 
 Invocation:
     .venv/bin/python clients/python-crucible.py test \
         --tests tests.client.test_a_rust_run_streams_its_tests_through_nextest
 """
 
+import json
 import os
 import re
 import signal
@@ -39,11 +41,14 @@ import unittest
 from pathlib import Path
 
 from tests.client.fake_nextest import DEFAULT_LCOV
+from tests.client.live_run_harness import RecordingBoard
 from tests.client.rust_stream_harness import (
+    AGENT,
     AGENT_OPTIONAL_VERBS,
     COVERAGE_VERBS,
     IGNORE_RUN_FAIL_VERBS,
     RUN_ID,
+    START,
     TIMEOUT,
     VERBS,
     StreamedRustProject,
@@ -61,6 +66,10 @@ STREAM_FLAGS = ("--message-format", "libtest-json-plus")
 FORMAT_VERSION = ("--message-format-version", "0.1")
 COVERAGE_TARGET = os.path.join("target", "llvm-cov-target")
 DISTINCT_LCOV = "SF:src/streamed.rs\nDA:7,1\nLF:1\nLH:1\nend_of_record\n"
+# One gated verb of each test-running body that opens an agent's identity
+# with `--cycle` as its binding.
+GATED_VERBS = ("test", "regression-ingest", "smoke-test",
+               "workspace-regression", "pre-merge-gate")
 
 
 def _flag_pair(argv, pair):
@@ -473,6 +482,61 @@ class EachStateOnEveryVerbTest(_Streamed):
                 self.assertEqual(p.starts(), [], f"no run is opened; {where}")
                 self.assertEqual(p.calls_of("nextest"), [], f"nothing is run; {where}")
                 self.assertEqual(p.calls_of("llvm-cov"), [], where)
+
+    def test_a_gated_run_whose_cycle_binding_the_board_refuses_opens_no_run_and_files_nothing(self):
+        """A cycle is active and `--cycle` names a done one: the board refuses
+        the gated touch's binding 409, and the agent is registered nowhere
+        else. The client never touches the agent again without the binding,
+        as python's gated bracket does. With no live registration its start
+        (when it posts one) is refused, so no run is opened and nothing is
+        listed, streamed, closed, compiled or ingested; one `ok: false`
+        envelope and a non-zero exit name the refused start."""
+        active, refused = 4241, 4242
+        touches = ("/api/v2/agents/register", "/api/v2/agents/heartbeat")
+        for label in GATED_VERBS:
+            with self.subTest(verb=label):
+                board = RecordingBoard()
+                board.refuse_cycle_binding(refused, active)
+                p = StreamedRustProject(self, board=board)
+                result = p.drive(label, "--cycle", str(refused), FAKE_TOTAL="2")
+                where = f"{label}: {diagnostics(result)}"
+                posts = p.posts()
+                bound = [i for i, (path, b) in enumerate(posts)
+                         if path in touches and isinstance(b, dict)
+                         and b.get("cycleId") == refused]
+                self.assertEqual(len(bound), 1,
+                                 f"the gated touch asks for the binding once; {where}")
+                # A touch without the binding after the refused one registers
+                # the agent again for its run. The gate's outcome post opens
+                # its own identity after the run (every client's gate does),
+                # so the touch straight before a milestone post is not the
+                # run's. Anything on a run route but the start is a run
+                # listed, streamed, closed, compiled or ingested.
+                retouches = [b for i, (path, b) in enumerate(posts)
+                             if i > bound[0] and path in touches
+                             and isinstance(b, dict) and b.get("cycleId") is None
+                             and not (i + 1 < len(posts)
+                                      and "/milestones" in posts[i + 1][0])]
+                filings = [path for path, _b in posts
+                           if path.startswith("/api/v2/runs") and path != START]
+                self.assertEqual(
+                    (retouches, filings), ([], []),
+                    f"no unbound touch follows the refused binding, and no "
+                    f"run is listed, streamed, closed, compiled or ingested; {where}")
+                self.assertEqual(board.run_ids_opened(), [],
+                                 f"the board opens no run; {where}")
+                starts = p.starts()
+                self.assertLessEqual(len(starts), 1, f"at most one start; {where}")
+                self.assertEqual([line for line in result.stdout.splitlines()
+                                  if line == "axi:"], ["axi:"],
+                                 f"exactly one envelope; {where}")
+                axi = envelope(result.stdout) or {}
+                self.assertIs(axi.get("ok"), False, f"the envelope is ok: false; {where}")
+                self.assertNotEqual(result.returncode, 0, where)
+                if starts:
+                    self.assertIn(f"agent {AGENT} is not registered",
+                                  json.dumps(axi, ensure_ascii=False),
+                                  f"the envelope names the refused start; {where}")
 
     def test_a_run_without_an_agent_posts_nothing_lists_nothing_and_runs_without_the_stream(self):
         for label in AGENT_OPTIONAL_VERBS:

@@ -399,6 +399,15 @@ class _AScopedOwnStackGate(_OnTheBoard):
         (project_dir / ".env").write_text("".join(env_lines))
         _declare_own_stack_suites(cls.CLIENT, project_dir)
         cycle_id = cls.file_plan(cr)
+        if cls.CLIENT == "rust":
+            # The plan's cycle is done, so the gate's own touch bound to it is
+            # refused, and a streamed nextest run whose binding is refused
+            # files nothing: the gate's agent is registered unbound first, so
+            # its run opens, as the bun gate's dispatched python suite's does.
+            reg = board.http("/api/v2/agents/register",
+                             {"projectKey": board.key, "agentId": agent,
+                              "role": "ORCHESTRATOR"})
+            assert reg.get("ok"), f"gate agent registration failed: {reg!r}"
         argv = ([GATE_VERB, "--agent", agent, "--project-dir", str(project_dir),
                  "--cycle", str(cycle_id)] + list(cls.EXTRA) + list(extra))
         result = drive_verb(CLIENT_FILES[cls.CLIENT], argv, project_dir, bin_dir,

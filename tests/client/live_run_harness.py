@@ -228,6 +228,11 @@ class RecordingBoard:
         # `drop_next`. None by default, like the scripted refusals above.
         self._drops = []
         self._refuse_abort_error = "abort refused"
+        # A scripted refusal of one cycle binding: None by default, like the
+        # scripted refusals above. See `refuse_cycle_binding`.
+        self._refused_binding = None
+        self._active_cycle = None
+        self._held_agents = set()
         board = self
 
         class _Handler(http.server.BaseHTTPRequestHandler):
@@ -273,7 +278,7 @@ class RecordingBoard:
                     else:
                         self._reply(health)
                 elif "/plans" in self.path:
-                    self._reply({"ok": True, "plans": []})
+                    self._reply({"ok": True, "plans": board._open_plans()})
                 else:
                     self._reply({"ok": True, "agents": []})
 
@@ -322,6 +327,10 @@ class RecordingBoard:
                     return
                 if held:
                     board._hold_released.wait(timeout=30)
+                refused = board._caller_refusal(self.path, body)
+                if refused is not None:
+                    self._reply_status(*refused)
+                    return
                 listed = TESTS_ROUTE.match(self.path)
                 streamed = STREAM_ROUTE.match(self.path)
                 if listed is not None:
@@ -618,6 +627,53 @@ class RecordingBoard:
         with self._lock:
             self._refuse_start_remaining = times
             self._refuse_start_error = error
+
+    def refuse_cycle_binding(self, cycle_id, active_cycle_id):
+        """Answer as a board whose project has `active_cycle_id` active and
+        `cycle_id` done, from now on: a register or heartbeat binding
+        `cycle_id` is refused 409 with the real board's words
+        (`validateCycleBinding`, src/v2.ts) and touches no agent; the open
+        plans read names both cycles; and, as the real board's
+        `requireRegisteredCaller` does, every `/api/v2/runs` POST from an
+        agent no accepted touch has registered is refused 409."""
+        with self._lock:
+            self._refused_binding = cycle_id
+            self._active_cycle = active_cycle_id
+
+    def binding_refusal_error(self):
+        """The words a refused binding is answered with."""
+        return (f"cycle {self._refused_binding} is done \u2014 bindings "
+                f"require an ACTIVE cycle")
+
+    def _open_plans(self):
+        with self._lock:
+            active, done = self._active_cycle, self._refused_binding
+        if active is None:
+            return []
+        return [{"planId": 1, "cr": "CR-T-BINDING", "status": "open",
+                 "cycles": [{"id": active, "status": "active"},
+                            {"id": done, "status": "done"}]}]
+
+    def _caller_refusal(self, path, body):
+        """`(status, answer)` for a POST the scripted binding refusal
+        refuses, or None (always None until `refuse_cycle_binding`)."""
+        body = body if isinstance(body, dict) else {}
+        agent = body.get("agentId")
+        with self._lock:
+            if self._refused_binding is None:
+                return None
+            if path in ("/api/v2/agents/register", "/api/v2/agents/heartbeat"):
+                if body.get("cycleId") == self._refused_binding:
+                    return 409, {"ok": False,
+                                 "error": self.binding_refusal_error()}
+                if agent:
+                    self._held_agents.add(agent)
+                return None
+            if path.startswith("/api/v2/runs") and agent not in self._held_agents:
+                return 409, {"ok": False, "error": (
+                    f"agent {agent} is not registered with this project "
+                    f"\u2014 refused")}
+        return None
 
     def refuse_ingest_for(self, run_id, times=1, status=409):
         """CR-CRU-170 \u00a7S2 \u2014 script the next `times` ingest POSTs (any of
