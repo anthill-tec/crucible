@@ -33,6 +33,11 @@ ran — 13 points; the gap analysis needed user rulings
   - AC2's variants are mapped to the verbs that take them;
   - the narrator and fake cargo are re-pinned (AC8);
   - the framework travels with the run, and only the project's own file declares (§S1, §S3).
+- **VERIFY 2026-11-07** (cycle 880, fixed in-CR):
+  - a refused `--cycle` binding was re-touched unbound and its run filed with no cycle; it now files nothing, as
+    python's does (AC6);
+  - the retired human-line narrator's dead code goes;
+  - the narration re-pin's dropped in-run tick is recorded as python's precedent (AC8).
 
 ## Problem
 
@@ -249,6 +254,8 @@ naming what is missing. It never skips them.
   - **Narration.** The closing `ran N/M` counts the stream's results against the board's listed total.
   - **`--ignore-run-fail`.** It is refused on each verb that accepted it.
   - **Without an agent.** A run with no agent posts nothing, lists nothing and runs without the stream.
+  - **Refused binding.** A gated run whose `--cycle` binding the board refuses opens no run and files nothing. One
+    `ok: false` envelope names the refusal. The run is never filed unbound or with no cycle (VERIFY 880).
 - [ ] **AC7 (§S6).** The bun, python, mvn and arduino clients' runs count, narrate, log and close exactly as before, and
   their existing tests pass unchanged.
 - [ ] **AC8 (§S5, §S6).** The shared fake cargo answers:
@@ -264,7 +271,9 @@ naming what is missing. It never skips them.
 
   An existing test whose own fake cargo cannot answer the version check, the list or the streamed run is moved to the
   shared fake or taught those calls. Its assertions about the behaviour it is named for stay as strict as before (RED
-  finding, 2026-11-07). Every other existing test passes unchanged.
+  finding, 2026-11-07). The rust live-run lifecycle test's narration pin follows python's precedent: the closing `ran
+  N/M` against the listed total is pinned, and no in-run `running N/M` tick is required, because ticks are held while
+  the relay lands (VERIFY 880, orchestrator ruling). Every other existing test passes unchanged.
 - [ ] **AC9 (§S3).** The shipped `crucible.toml` documents the `[targets.<profile>]` table:
   - its fields;
   - the rust entry;
