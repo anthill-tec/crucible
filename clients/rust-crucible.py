@@ -599,58 +599,22 @@ def _acquire_gate_lock(project_dir, agent):
     return True
 
 
-def _run_logged(cmd, cwd, env, log_path, narrator=None, capture=False,
-                stdout_path=None):
+def _run_logged(cmd, cwd, env, log_path, capture=False, stdout_path=None):
     """Run `cmd` on the shared run path (`run_streamed`): the combined
     stdout+stderr streams live to STDERR and to `log_path` while cargo works,
-    the optional `narrator` observes every line, and the returned capture is
-    byte-identical to a capture-after-exit. Returns the `CompletedProcess`.
+    and the returned capture is byte-identical to a capture-after-exit.
+    Returns the `CompletedProcess`.
     With `stdout_path` the runner's stdout goes to that file instead, and
     only its stderr is echoed, logged and captured.
 
     CR-CRU-058 §S3 — the echo goes to STDERR, matching the rest of the fleet: a
     cargo/nextest run's own output on stdout would put megabytes of prose in
-    front of the verb's envelope. `capture` keeps a run that neither logs nor
-    narrates off stdout too (the gate bodies, whose stdout is the envelope
-    alone). With none of the three, the runner inherits stdio.
+    front of the verb's envelope. `capture` keeps a run that does not log off
+    stdout too (the gate bodies, whose stdout is the envelope alone). With
+    neither of the two, the runner inherits stdio.
     """
-    return _axi().run_streamed(cmd, cwd, env, log_path, narrator, capture=capture,
+    return _axi().run_streamed(cmd, cwd, env, log_path, None, capture=capture,
                                stdout_path=stdout_path)
-
-
-# cargo-nextest's own human-reporter lines: the run states its total up front
-# (`Starting N tests across ...`), then one verdict line per finished test —
-# `PASS [ <time>]`, `FAIL [ <time>]`, or the verdict of a test that ran and
-# died: `SIGSEGV`/`SIGABRT`/… (a signal), `TIMEOUT`, `ABORT` — then a
-# `Summary [ <time>]` block that RE-LISTS the failures (not new completions).
-_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
-_NEXTEST_START_LINE = re.compile(r"^\s*Starting (\d+) tests?\b")
-_NEXTEST_VERDICT_LINE = re.compile(
-    r"^\s*(?:PASS|FAIL|SIG[A-Z0-9]+|TIMEOUT|ABORT)\s+\[")
-_NEXTEST_SUMMARY_LINE = re.compile(r"^\s*Summary\s+\[")
-
-
-class _NextestProgress:
-    """rust's half of the shared narration: reads nextest's start line for the
-    run's total and counts one completion per verdict line (a test that
-    crashed, timed out or aborted RAN, so it counts like a PASS or a FAIL),
-    until the closing summary (whose lines repeat ones already counted)."""
-
-    def __init__(self):
-        self.total = 0
-        self._summarised = False
-
-    def recognise(self, line):
-        """True when `line` is one finished test; records the stated total."""
-        text = _ANSI_ESCAPE.sub("", line.rstrip("\r\n"))
-        start = _NEXTEST_START_LINE.match(text)
-        if start:
-            self.total = int(start.group(1))
-            return False
-        if _NEXTEST_SUMMARY_LINE.match(text):
-            self._summarised = True
-            return False
-        return not self._summarised and _NEXTEST_VERDICT_LINE.match(text) is not None
 
 
 def _start_run(project_dir, agent_id, tier=None, context=None, release=None):
@@ -1112,14 +1076,12 @@ def _close_gate_identity(project_dir, identity):
                                       remove_fn=_remove_agent_silent)
 
 
-def _clean_stale_junit(project_dir, profile=None):
+def _clean_stale_junit(project_dir):
     now = time.time()
     paths = [
         f"{project_dir}/target/nextest/ci/junit.xml",
         f"{project_dir}/target/nextest/default/junit.xml",
     ]
-    if profile and profile not in ("ci", "default"):
-        paths.append(f"{project_dir}/target/nextest/{profile}/junit.xml")
     for p in paths:
         if os.path.exists(p):
             age = now - os.path.getmtime(p)
