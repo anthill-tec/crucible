@@ -711,9 +711,10 @@ class RustFixtureFiledThroughTheRustClientEndToEndTest(_FiledThroughTheClient):
         wrote, its ignored test a pending leaf JUnit does not have."""
         agent = "real-rust-through-client"
         captured = NEXTEST_FIXTURES / "distinct-targets"
-        registered = self.drive(RUST_CLIENT, ["register", "--agent", agent, "--role",
-                                              "report", "--project-dir", self.project])
-        self.assertEqual(registered.returncode, 0, self.diagnostics(registered))
+        for caller in (agent, "real-rust-junit-oracle"):
+            registered = self.drive(RUST_CLIENT, ["register", "--agent", caller, "--role",
+                                                  "report", "--project-dir", self.project])
+            self.assertEqual(registered.returncode, 0, self.diagnostics(registered))
         result = self.drive(RUST_CLIENT, self.argv("test", agent, "--crate", "nx-targets"),
                             FAKE_NEXTEST_FIXTURE=str(captured))
         event = self.stored_run(agent, result)
