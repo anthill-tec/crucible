@@ -228,7 +228,9 @@ class PythonRegressionFollowsTheLiveRunLifecycleTest(_LiveVerbCase):
 
 
 class RustGateVerbsFollowTheLiveRunLifecycleTest(_LiveVerbCase):
-    """These three take no --log: the live stream is pinned on stderr."""
+    """These three take no --log: the live stream is pinned on stderr. Each
+    relays nextest's stream, so, like python's streamed run, it posts no
+    in-run `running N`: the board shows the stream's count."""
 
     def setUp(self):
         super().setUp()
@@ -241,41 +243,40 @@ class RustGateVerbsFollowTheLiveRunLifecycleTest(_LiveVerbCase):
         return drive_live(cmd, self.project, self.env(), self.scratch, MARKER)
 
     def assert_report_rode_inline(self):
-        """rust sends its runner's report: the run's ingest is its one
-        `/api/v2/runs` post, nextest's one junit.xml inline."""
+        """rust relays nextest's stream: the run's close is its one
+        `/api/v2/runs` post, codec `nextest` with no report of its own, and
+        the board holds the stream's results, one per case."""
         paths = [p for p, _ in self.board.posts()]
         self.assertNotIn("/api/v2/runs/parsed", paths, f"paths={paths!r}")
         body = next(b for p, b in self.board.posts() if p == "/api/v2/runs")
-        self.assertEqual(body.get("codec"), "junit", f"body={body!r}")
+        self.assertEqual((body.get("codec"), "data" in body), ("nextest", False),
+                         f"body={body!r}")
         self.assertNotIn("dataPath", body, f"body={body!r}")
-        data = body.get("data")
-        self.assertTrue(
-            isinstance(data, list) and len(data) == 1
-            and data[0].count("<testcase") == TOTAL,
-            f"the run's one junit.xml, holding its {TOTAL} cases, rides "
-            f"inline; body={body!r}")
+        held = self.board.held_stream("run-live-1").splitlines()
+        self.assertEqual(
+            sum('"type":"test"' in line and '"event":"ok"' in line for line in held),
+            TOTAL,
+            f"the board holds the run's {TOTAL} results from its stream; "
+            f"held={len(held)} lines")
         self.assertIn(MARKER, body.get("raw") or "",
                       f"the captured runner output rides as `raw`; body={body!r}")
 
     def test_rust_smoke_test(self):
         drive = self._drive("smoke-test")
-        self.assert_live_lifecycle(drive, "/api/v2/runs",
-                                   rf"^running \d+/{TOTAL}$",
+        self.assert_live_lifecycle(drive, "/api/v2/runs", None,
                                    f"ran {TOTAL}/{TOTAL}", with_log=False)
         self.assert_report_rode_inline()
 
     def test_rust_workspace_regression(self):
         drive = self._drive("workspace-regression", "--min-free-g", "0",
                             "--keep-target")
-        self.assert_live_lifecycle(drive, "/api/v2/runs",
-                                   rf"^running \d+/{TOTAL}$",
+        self.assert_live_lifecycle(drive, "/api/v2/runs", None,
                                    f"ran {TOTAL}/{TOTAL}", with_log=False)
         self.assert_report_rode_inline()
 
     def test_rust_regression_ingest(self):
         drive = self._drive("regression-ingest", "--crates", "fake-crate")
-        self.assert_live_lifecycle(drive, "/api/v2/runs",
-                                   rf"^running \d+/{TOTAL}$",
+        self.assert_live_lifecycle(drive, "/api/v2/runs", None,
                                    f"ran {TOTAL}/{TOTAL}", with_log=False)
         self.assert_report_rode_inline()
 

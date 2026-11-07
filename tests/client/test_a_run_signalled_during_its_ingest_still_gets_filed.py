@@ -177,7 +177,7 @@ class _IngestHeldSignalCase(unittest.TestCase):
 
     def _assert_ingest_signal_filed_the_run(self, label, signum, code, stdout,
                                             stderr, ingest_path, inline=None,
-                                            streamed=False):
+                                            streamed: str | bool = False):
         signame = signal.Signals(signum).name
         run_ids = self.board.run_ids_opened()
         self.assertEqual(
@@ -230,9 +230,8 @@ class _IngestHeldSignalCase(unittest.TestCase):
                 body.get("codec"), "junit",
                 f"{label}: the report ingest names its codec; got {body!r}")
             data = body.get("data")
-            self.assertIsInstance(data, list,
-                                  f"{label}: `data` carries the report texts; "
-                                  f"got {body!r}")
+            if not isinstance(data, list):
+                self.fail(f"{label}: `data` carries the report texts; got {body!r}")
             self.assertEqual(
                 len(data), inline,
                 f"{label}: {inline} JUnit report(s); got {body!r}")
