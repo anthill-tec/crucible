@@ -36,6 +36,13 @@ Feature: CR-CRU-029 §S1+§S2 — dual-axis scroll stays operable in narrow view
   shape this suite's steps assume (`workspace-runs`/`pane-scroll` inside
   the desktop two-column grid).
 
+  At 1280px the pane is wider than the 660px floor, so the first scenario
+  forces its horizontal overflow with content: the Runs pane's own heading
+  names the project, and the project's name ends in a word with no break in
+  it, wider than the pane. A timeline row is not the source: a run card cuts
+  a long agent id inside the card, and no row is wider than the pane. Thirty
+  filler runs give the vertical overflow.
+
   This file's POSITION governs nothing: shell-storyboard.feature's F1 states
   its empty-DB precondition with its own `@empty-db` tag, in the
   `chromium-empty-db` project every other project depends on (see
@@ -46,9 +53,8 @@ Feature: CR-CRU-029 §S1+§S2 — dual-axis scroll stays operable in narrow view
 
   Scenario: §S1 the horizontal scroll affordance on a dual-axis-overflowing Runs pane stays within the viewport at the top, middle, and bottom of the vertical scroll range, and the horizontal axis stays operable throughout
     Given the viewport is 1280x640
-    And a project named "DAS Dual Axis Project" is registered
+    And a project named "DAS Dual Axis Project" followed by a 160-character word with no break in it is registered
     And 30 filler passing runs are ingested on that project
-    And a filler run with an unbreakable long agent id is ingested on that project
     When I open the workspace for that project
     And I click the "Runs" workspace tab
     Then the pane-scroll element's bounding box stays within the viewport when the workspace Runs pane is scrolled to the top
