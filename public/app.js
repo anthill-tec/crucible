@@ -1564,9 +1564,15 @@
 
     // CR-CRU-200 §S4 — the agent's line while it streams, composed here from
     // `state.openRuns`: the newest open run of the agent in this project that
-    // carries `live` (a newer run without it is passed over) reads
-    // `running <done of total> · <currentFile>`, the file part absent without
-    // one. Null when no such run is open, and the row reads its own line.
+    // carries `live` (a newer run without it is passed over) gives the line as
+    // an element of parts reading `running <done of total> · <currentFile>`, the
+    // separator and file parts absent without one. Nothing (null) when no such
+    // run is open, and the row reads its own line.
+    //
+    // The line is drawn in parts so the count stays whole and a file too long
+    // for the card is clipped from its start behind a `…` (its name stays in
+    // view); the file part carries the whole path as its hover title, and its
+    // text stays the whole path, so the line still reads the full file.
     function agentLiveLine(agent) {
       let newest = null;
       for (const run of state.openRuns) {
@@ -1576,8 +1582,20 @@
       }
       if (newest === null) return null;
       const live = newest.live;
-      const file = typeof live.currentFile === "string" && live.currentFile !== "" ? ` · ${live.currentFile}` : "";
-      return `running ${liveCountText(live)}${file}`;
+      const file = typeof live.currentFile === "string" && live.currentFile !== "" ? live.currentFile : null;
+      return span(
+        { class: "app-agent-live" },
+        span({ class: "app-agent-live-count" }, `running ${liveCountText(live)}`),
+        file === null
+          ? null
+          : [
+              span({ class: "app-agent-live-sep" }, " · "),
+              span(
+                { class: "app-agent-live-file", title: file },
+                span({ class: "app-agent-live-path" }, file),
+              ),
+            ],
+      );
     }
 
     // ── §S2 (CR-CRU-007) — RED→GREEN transition markers (= Cycles) ──────
