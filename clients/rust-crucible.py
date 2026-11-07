@@ -1103,23 +1103,6 @@ def _open_gate_identity(project_dir, agent_id, cycle_id, message):
     return _axi().open_gate_identity(project_dir, agent_id, cycle_id, message, _ops())
 
 
-def _open_streaming_gate_identity(project_dir, agent_id, cycle_id, message):
-    """A streamed run's gated identity: `_open_gate_identity`, and, because
-    the run's list and stream routes need a registered caller, a second
-    touch with no cycle binding when the board refused the first one's, so
-    the run it opens can stream (its context still carries the `--cycle`)."""
-    identity = _open_gate_identity(project_dir, agent_id, cycle_id, message)
-    if identity is not None and not identity.confirmed and cycle_id is not None:
-        unbound = _axi().GatedRunIdentity(agent_id)
-        resp = _post(unbound.PATH, unbound.open_payload(_project_key(project_dir),
-                                                        message=message))
-        identity.observe(resp)
-        print(f"[crucible] the cycle {cycle_id} binding was refused; agent "
-              f"{agent_id} touched unbound so its run can stream "
-              f"(ok={resp.get('ok')})", file=sys.stderr)
-    return identity
-
-
 def _close_gate_identity(project_dir, identity):
     """CR-CRU-056 — the closing half of the gated-run bracket. CR-CRU-054 §S2b —
     a thin delegator to `_crucible_axi.close_gate_identity`, which owns the
@@ -1284,7 +1267,7 @@ def cmd_regression_ingest(args):
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
                           "gated regression run starting",
-                          open_fn=_open_streaming_gate_identity,
+                          open_fn=_open_gate_identity,
                           close_fn=_close_gate_identity) as identity:
         preflight_warnings = []
         if getattr(args, "agent", None):
@@ -1413,7 +1396,7 @@ def cmd_test(args, tier=None, select=(), profile=None):
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
                           "gated test run starting",
-                          open_fn=_open_streaming_gate_identity,
+                          open_fn=_open_gate_identity,
                           close_fn=_close_gate_identity) as identity:
         return _test_run(args, tier, select, profile, project_dir, identity)
 
@@ -1745,7 +1728,7 @@ def cmd_smoke_test(args):
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
                           "gated smoke-test run starting",
-                          open_fn=_open_streaming_gate_identity,
+                          open_fn=_open_gate_identity,
                           close_fn=_close_gate_identity) as identity:
         return _smoke_run(args, "smoke-test", project_dir, identity)
 
@@ -1969,7 +1952,7 @@ def cmd_workspace_regression(args, verb="workspace-regression", coverage=True,
         with _axi().gated_run(project_dir, getattr(args, "agent", None),
                               getattr(args, "cycle", None),
                               "gated workspace-regression run starting",
-                              open_fn=_open_streaming_gate_identity,
+                              open_fn=_open_gate_identity,
                               close_fn=_close_gate_identity) as identity:
             return _workspace_regression_run(args, project_dir, verb, identity,
                                              coverage=coverage,
