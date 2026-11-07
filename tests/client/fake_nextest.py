@@ -307,22 +307,25 @@ def streamed_run(argv, cases, before_case=None, empty_exit=None, silent=False):
     return int(os.environ.get("FAKE_RUN_EXIT", default))
 
 
-def private_fake_prelude(cases="[]"):
+def private_fake_prelude(cases="[]", streamed=True):
     """The lines a test's own fake `cargo` starts with to answer a streamed
     run's calls: `cases` is a python expression, evaluated in the fake, for
-    the tests it runs. A call this module does not answer falls through to
-    the fake's own body, unchanged."""
-    return ("import sys as _nx_sys\n"
+    the tests it runs (bound to `_nx_cases`). A call this module does not
+    answer falls through to the fake's own body, unchanged. With `streamed`
+    False only the calls before the run step are answered: the fake's body
+    answers the streamed run itself (`streamed_run(_nx_args, _nx_cases)`)."""
+    text = ("import sys as _nx_sys\n"
             f"_nx_sys.path.insert(0, {HERE!r})\n"
             "import fake_nextest\n"
             "_nx_args = _nx_sys.argv[1:]\n"
             f"_nx_cases = {cases}\n"
             "_nx_code = fake_nextest.preliminary(_nx_args, _nx_cases)\n"
             "if _nx_code is None:\n"
-            "    fake_nextest.record_call(_nx_args)\n"
-            "    _nx_code = fake_nextest.streamed_run(_nx_args, _nx_cases)\n"
-            "if _nx_code is not None:\n"
-            "    _nx_sys.exit(_nx_code)\n")
+            "    fake_nextest.record_call(_nx_args)\n")
+    if streamed:
+        text += "    _nx_code = fake_nextest.streamed_run(_nx_args, _nx_cases)\n"
+    return text + ("if _nx_code is not None:\n"
+                   "    _nx_sys.exit(_nx_code)\n")
 
 
 def held_results(text):
