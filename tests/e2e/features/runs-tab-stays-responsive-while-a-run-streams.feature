@@ -1,0 +1,51 @@
+Feature: The Runs tab stays responsive while a run streams over a long settled history
+
+  A project with thousands of settled runs keeps every one of them on its Runs
+  timeline. While a run streams on that tab, each batch the board takes must
+  touch only what is live: the running card and the agent's card in the
+  Project pane follow the batch, the timeline of settled runs is left alone,
+  and no main-thread task the page runs while the batches land takes longer
+  than 250 ms. Once the run closes, its card heads the timeline and the
+  running card is gone.
+
+  Everything here is the real board: the history is ingested through the
+  parsed runs route, the project's own retention is set through the project
+  route so the page reads all of it, the run opens through the run-start
+  route, its batches go to the stream route and it closes through the runs
+  route. The page moves on the board's own throttled frames, so every wait is
+  on the page, bounded by a few frame cadences. The main thread is watched
+  through the browser's own long-task entries, from the first batch to the
+  last; the run's opening is rendered before the watch begins, once the main
+  thread has gone a second without a long task.
+
+  Scenario: A run streams five batches over 2,500 settled runs and no main-thread task takes longer than 250 ms
+    Given a project named "Responsive Runs Project" is registered
+    And that project keeps its newest 5000 runs
+    And 2500 settled runs are ingested on that project through the parsed runs route
+    And an online agent "steady-streamer" with message "between runs" is registered on that project
+    And agent "steady-streamer" is the run's streaming agent
+    When I open the workspace for that project
+    And I click the "Runs" workspace tab
+    Then the Runs timeline shows 2500 settled run cards within 30 seconds
+    When a run is started for agent "steady-streamer" on that project
+    Then the running card for "steady-streamer" is on the Runs tab within 10 seconds
+    And the page's main thread has been quiet for 1000 ms within 20 seconds
+    When I start watching the page's main-thread tasks
+    And the run streams batch 1 of its five-batch stream through the stream route
+    Then the running card for "steady-streamer" reads "1/5" in "src/batch-1.test.ts" within 10 seconds
+    And the project pane's agent row for "steady-streamer" reads "running 1/5 · src/batch-1.test.ts" within 10 seconds
+    When the run streams batch 2 of its five-batch stream through the stream route
+    Then the running card for "steady-streamer" reads "2/5" in "src/batch-2.test.ts" within 10 seconds
+    And the project pane's agent row for "steady-streamer" reads "running 2/5 · src/batch-2.test.ts" within 10 seconds
+    When the run streams batch 3 of its five-batch stream through the stream route
+    Then the running card for "steady-streamer" reads "3/5" in "src/batch-3.test.ts" within 10 seconds
+    And the project pane's agent row for "steady-streamer" reads "running 3/5 · src/batch-3.test.ts" within 10 seconds
+    When the run streams batch 4 of its five-batch stream through the stream route
+    Then the running card for "steady-streamer" reads "4/5" in "src/batch-4.test.ts" within 10 seconds
+    And the project pane's agent row for "steady-streamer" reads "running 4/5 · src/batch-4.test.ts" within 10 seconds
+    When the run streams batch 5 of its five-batch stream through the stream route
+    Then the running card for "steady-streamer" reads "5/5" in "src/batch-5.test.ts" within 10 seconds
+    And the project pane's agent row for "steady-streamer" reads "running 5/5 · src/batch-5.test.ts" within 10 seconds
+    And no main-thread task the page ran while the batches landed took longer than 250 ms
+    When the run is closed through POST /api/v2/runs naming the crucible-events codec
+    Then the closed run's card heads the Runs timeline of 2501 settled run cards and no running card is left within 10 seconds
