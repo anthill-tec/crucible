@@ -22,6 +22,10 @@ points; the gap analysis needed user rulings · **Design reference** `docs/resea
 - **VERIFY 2026-11-07** (cycle 876, fixed in-CR): GREEN's row minimum width stopped a compile card's diagnostic line
   truncating and widened the feed (AC12); home's compact gate row lacked the row rule (AC4 now names home's rows); the
   timeline's unused open-runs parameter, which would let a caller bring the defect back, goes (AC13).
+- **VERIFY 2026-11-07** (cycle 877): with rows skipping off-screen work, a long unbreakable agent id can no longer
+  spill past its card (paint containment clips it), so the card grew to hold it and pushed its ratio pill off screen.
+  User ruling: the id truncates with an ellipsis inside the card (AC12); the sideways-scroll scenario that used a long
+  id to force horizontal overflow is updated to force it another way (user-approved test edit, AC5).
 
 ## Problem
 
@@ -70,7 +74,7 @@ points; the gap analysis needed user rulings · **Design reference** `docs/resea
   inserts a node that is a sibling of the timeline. The same holds on the home timeline, which draws its running cards
   and rows through the same rendering.
 - **§S2 — off-screen rows cost nothing.** The timeline's rows are skipped by the browser's style and layout while off screen, so a document-wide re-style (a run opening or closing,
-  a settled run arriving) costs what is in view. What a row shows, its order and its scroll position are unchanged. The rows are every kind the
+  a settled run arriving) costs what is in view. What a row shows (except as AC12 states), its order and its scroll position are unchanged. The rows are every kind the
   timeline draws: event (run) cards, aborted cards, transition markers, milestone entries, gate cards, merge markers,
   open cycle-span rows and declared markers, on the Runs tab and on home (home's compact gate and merge rows
   included). A row kind may be left out only if the spec's AC4 says so and why; a
@@ -110,13 +114,15 @@ points; the gap analysis needed user rulings · **Design reference** `docs/resea
 - [ ] **AC4 (§S2).** Every row kind §S2 names, on the Runs tab and on home, carries `content-visibility: auto` with an
   intrinsic size (or is named here as left out, with the reason; running cards are not timeline rows), and the page still scrolls to a run on a `→ Runs` jump and keeps the feed's
   scroll position across a detail.
-- [ ] **AC12 (§S2, §S4).** The row rule leaves a row's width and truncation as they were: a compile card's diagnostic
-  preview line still ends in an ellipsis inside its card, and the card is no wider than the pane, at 1280 px and at the
-  phone band; a row whose unbreakable content (a long agent id) overflows still lets the pane scroll sideways to it.
+- [ ] **AC12 (§S2, §S4).** No row is wider than the pane, at 1280 px and at the phone band: a compile card's
+  diagnostic preview line still ends in an ellipsis inside its card, and a run card whose agent id is wider than the
+  card shows the id cut with an ellipsis inside the card, its ratio pill in view at the card's right edge (user
+  ruling). The dual-axis scroll scenario still proves the pane's horizontal scroll stays reachable at any vertical
+  position, with its horizontal overflow forced by something other than a row's long id.
 - [ ] **AC13 (§S1).** The timeline's rendering takes no open runs at all, so no caller can make it read them.
 - [ ] **AC5 (§S4).** Every existing test passes unchanged, except the tests that pin the Tailwind runtime's script
-  on the page (the SPA-serving and roadmap visual-grammar tests), which are updated to the static stylesheet
-  (user-approved).
+  on the page (the SPA-serving and roadmap visual-grammar tests), which are updated to the static stylesheet, and the
+  dual-axis scroll scenario's long-id overflow source, which is replaced as AC12 states (both user-approved).
 - [ ] **AC6 (§S5).** The page loads no Tailwind runtime script; the static stylesheet is linked after the dashboard's
   own; and in a real browser no stylesheet in the document changes while a run opens, streams and closes, or when
   the Roadmap view first renders, apart from uPlot's own stylesheet link, which the page adds once when a chart first
