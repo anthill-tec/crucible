@@ -47,7 +47,10 @@ trigger
   the count, the total and the current file — from the run's opening to its close, whatever the order in which the
   agents and events reads land, and without a reload. When the run settles the card reads its own line again. The
   card's line and its streaming mark are re-evaluated on every replacement of the page's open-run slice, whatever they
-  read when they last ran, so neither can be left subscribed to nothing. How is GREEN's choice.
+  read when they last ran, so neither can be left subscribed to nothing. The same holds for the agents slice (user
+  ruling 2026-11-07, from RED's finding): the card's line is re-evaluated on every replacement of the page's agents,
+  so an idle line that arrives as a key the agent's record did not hold is read even when no other field of the agent
+  changes. How is GREEN's choice.
 - **§S2 — the page drops a settled run.** When the board no longer serves an open run, the page's open-run slice no
   longer holds it after the next read.
 - **§S3 — a runtime is never negative.** A tombstoned agent's runtime is measured from its latest registration to its
@@ -72,6 +75,8 @@ trigger
   without a new run reads a runtime ≥ 0, measured from its latest registration; one with a run since reads from that
   registration to that run.
 - [ ] **AC5 (§S4).** Every existing test passes unchanged.
+- [ ] **AC7 (§S1 — fails today).** In the page harness: a card reading its agent's message, whose agents read then
+  serves an idle line for the agent with no other field of the agent changed, reads that idle line.
 - [ ] **AC6 (§S1 — checked live by the user).** After the merge and a board restart, the user watches at least two
   consecutive real client runs in their own long-lived tab on the DEV board, and the agent's card follows every batch
   of each.
