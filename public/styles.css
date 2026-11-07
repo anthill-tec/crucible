@@ -2762,4 +2762,8 @@ body {
   contain-intrinsic-size: auto 64px;
   min-width: min-content;
 }
+/* A compile card's diagnostic lines truncate to the card rather than set its
+   width: sized as if empty, the preview adds nothing to the row's min-content,
+   so a long message ends in an ellipsis instead of widening the card. */
+.app-diag-preview { contain: inline-size; }
 .app-pane-content { overflow-anchor: none; }
