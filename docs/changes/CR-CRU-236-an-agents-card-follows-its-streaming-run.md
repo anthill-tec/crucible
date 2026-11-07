@@ -1,10 +1,12 @@
 # CR-CRU-236 — an agent's card follows its streaming run, and its runtime is never negative
 
-**Type** fix · **Points** 5 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING · Pre-review: none — no
+**Type** fix · **Points** 5 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** DONE · Pre-review: none — no
 trigger
 - **Filed 2026-11-06** by user ruling, as a bug fix in the current wave sequenced after CR-CRU-234 (the same card),
   from a defect the user reported on the DEV board: the tests of a streaming run move in the Runs view but not in the
   active agent's card.
+- **Done 2026-11-07.** Merged `d7258faf` after a pre-merge gate on cycle 874 (10908 passed, 0 failed); AC6 checked
+  live by the user on the DEV board over two consecutive real client runs.
 - **Gap analysis 2026-11-07** (user ruling): the stuck card is not reproduced outside the user's own Chrome tab (below);
   §S1 is a robust fix that removes the defect's class, checked live by the user on the DEV board after merge (AC6),
   since no automated test fails for it today. The negative runtime's cause is confirmed and is fixed test-first.
@@ -67,30 +69,30 @@ trigger
 
 ## Acceptance criteria
 
-- [ ] **AC1 (§S1, BDD — a regression guard; passes today).** A new e2e feature, in a real browser against the real
+- [x] **AC1 (§S1, BDD — a regression guard; passes today).** A new e2e feature, in a real browser against the real
   board: an agent re-registered with a new message as its run opens (as a client does), the run's stream landing in at
   least three batches, and after each batch the agent's card reads `running <done>/<total> · <current file>` with
   that batch's figures; after the close it reads the agent's own line. It runs once with the run's first batch landing
   before the page first reads the open run, once after, and once with the page reloaded mid-run.
-- [ ] **AC2 (§S1 — page level).** In the page harness: an agent's card built while the page holds no open run for the
+- [x] **AC2 (§S1 — page level).** In the page harness: an agent's card built while the page holds no open run for the
   agent, and whose agent's fields do not change again, follows the run's batches once the run arrives — in both
   orders of the agents and events reads, and for a run whose first read carries no live state.
-- [ ] **AC3 (§S2 — a regression guard).** A page holding an open run the board no longer serves drops it on its next
+- [x] **AC3 (§S2 — a regression guard).** A page holding an open run the board no longer serves drops it on its next
   read; the agent's card reads its own line and the Runs view shows no running card for it.
-- [ ] **AC4 (§S3 — fails today).** An agent that ran, was unregistered and registered again, and then tombstoned
+- [x] **AC4 (§S3 — fails today).** An agent that ran, was unregistered and registered again, and then tombstoned
   without a new run reads a runtime ≥ 0, measured from its latest registration; one with a run since reads from that
   registration to that run.
-- [ ] **AC5 (§S4).** Every existing test passes unchanged.
-- [ ] **AC7 (§S1 — fails today).** In the page harness: a card reading its agent's message, whose agents read then
+- [x] **AC5 (§S4).** Every existing test passes unchanged.
+- [x] **AC7 (§S1 — fails today).** In the page harness: a card reading its agent's message, whose agents read then
   serves an idle line for the agent with no other field of the agent changed, reads that idle line.
-- [ ] **AC8 (§S1a — page level).** In the page harness, each of these first absent and then served by a read with no
+- [x] **AC8 (§S1a — page level).** In the page harness, each of these first absent and then served by a read with no
   other field changed is shown on the card: an agent's display name, its runtime, its last seen, and an open run's
   cycle (the card's cycle span names the run as running).
-- [ ] **AC9 (§S1a — page level).** In the page harness, while a run streams: a read that serves the same live state
+- [x] **AC9 (§S1a — page level).** In the page harness, while a run streams: a read that serves the same live state
   leaves the card's line element in place (the same node); a read that changes it replaces the text.
-- [ ] **AC10 (§S3).** A tombstoned agent whose last run is at the instant of its latest registration reads a runtime
+- [x] **AC10 (§S3).** A tombstoned agent whose last run is at the instant of its latest registration reads a runtime
   of 0, measured to that run.
-- [ ] **AC6 (§S1 — checked live by the user).** After the merge and a board restart, the user watches at least two
+- [x] **AC6 (§S1 — checked live by the user).** After the merge and a board restart, the user watches at least two
   consecutive real client runs in their own long-lived tab on the DEV board, and the agent's card follows every batch
   of each.
 
