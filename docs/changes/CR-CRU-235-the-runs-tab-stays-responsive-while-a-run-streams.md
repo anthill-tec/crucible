@@ -111,7 +111,8 @@ points; the gap analysis needed user rulings · **Design reference** `docs/resea
   (user-approved).
 - [ ] **AC6 (§S5).** The page loads no Tailwind runtime script; the static stylesheet is linked after the dashboard's
   own; and in a real browser no stylesheet in the document changes while a run opens, streams and closes, or when
-  the Roadmap view first renders. The computed styles of a named set of elements equal a baseline recorded under the
+  the Roadmap view first renders, apart from uPlot's own stylesheet link, which the page adds once when a chart first
+  loads (uPlot stays off the page load; RED, 2026-11-07). The computed styles of a named set of elements equal a baseline recorded under the
   runtime before it is removed and committed as a test fixture. The fixture names each element's selector, the
   computed properties compared, and the viewport, `data-theme` and density it was taken at. The set covers: a Runs
   timeline card, the running card, the agent's card, the Roadmap's terminal markers (`start`/`end`), a home timeline
