@@ -110,6 +110,28 @@ For the python stack (`crucible.toml`):
   `pytest` nor `unittest` is refused, with an envelope and nothing posted, as the running verbs
   refuse it. `auto-ingest` takes no `--runner` and does not check that pytest imports.
 
+For the rust stack (`crucible.toml` and `.config/nextest.toml`):
+
+- **Every run streams through nextest.** With an agent, `test`, `unit`, `integration`, `e2e`,
+  `regression-ingest`, `smoke-test`, `docker-e2e-gate`, `workspace-regression`, `regression` and
+  `pre-merge-gate` list their tests, run them with nextest's `libtest-json-plus` stream on, and the
+  board files the run from that stream. They no longer file nextest's JUnit report; `auto-ingest`
+  still does.
+- **The `[targets.<profile>]` table.** A project declares its runs in its own `crucible.toml`, keyed
+  by nextest profile, with bun's `crucible.targets` vocabulary. The rust entry is
+  `framework = "nextest"` with `stream = { codec = "nextest", path = "stdout" }`. Undeclared
+  profiles (no entry, or no `crucible.toml`) stream by default as if they declared it. Any other
+  entry, or a project file that does not parse, is refused before anything runs. The install's file
+  never declares.
+- **The standard profiles.** A scaffold sets up `default` and `ci` (every test but the docker tier)
+  and `e2e` (the docker tier alone, run by `docker-e2e-gate`) in `.config/nextest.toml`. A declared
+  tier profile no longer needs a `junit` table.
+- **The minimum nextest.** cargo-nextest 0.9.130 or later is required; an older one, or one whose
+  version cannot be read, is refused before anything runs.
+- **`--ignore-run-fail` is retired.** `workspace-regression` and `regression` refuse it: a coverage
+  run now always writes its lcov with `cargo llvm-cov report --failure-mode all`.
+- **A board that lists no `nextest` under `codecs.stream`** refuses the run before anything runs.
+
 ## [0.3.0] - 2026-10-10
 
 38 change requests (wave 7).
