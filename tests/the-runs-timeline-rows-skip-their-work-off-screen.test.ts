@@ -1,5 +1,6 @@
-// The Runs timeline's rows — run cards, aborted run cards, transition markers
-// and milestone entries — let the browser skip their style and layout while
+// The Runs timeline's rows — every kind it draws: run cards, aborted run cards,
+// transition markers, milestone entries, gate cards, merge markers, the open
+// cycle-span row and declared markers — let the browser skip their style and layout while
 // they are off screen: each carries `content-visibility: auto` with an
 // intrinsic size (`contain-intrinsic-size`), so a document-wide re-style (a
 // run opening or closing, a settled run arriving) costs only what is in view.
@@ -71,8 +72,67 @@ function events(): EventBriefFixture[] {
   ];
 }
 
-function workspace(): LiveMountOpts {
+/**
+ * A planned project's history, newest first: a merge marker, a gate card, a
+ * run in the active cycle (under the open cycle-span row) and a run in a done
+ * cycle (under its declared marker). A project with plans narrates its cycles
+ * only from them, so this history draws no transition marker: it is mounted
+ * on its own.
+ */
+const ACTIVE_CYCLE = 101;
+const DONE_CYCLE = 100;
+
+const PLANS = [
+  {
+    planId: 7,
+    projectKey: PROJECT_KEY,
+    cr: "CR-ROWS-1",
+    status: "open",
+    cycles: [
+      { id: DONE_CYCLE, label: "c1", status: "done", activatedAt: NOW - 60 * 60_000, doneAt: NOW - 30 * 60_000 },
+      { id: ACTIVE_CYCLE, label: "c2", status: "active", activatedAt: NOW - 20 * 60_000 },
+    ],
+  },
+];
+
+function plannedEvents(): EventBriefFixture[] {
+  const merge = {
+    id: "evt-merge",
+    projectKey: PROJECT_KEY,
+    agentId: "orchestrator",
+    kind: "milestone",
+    type: "cr-merged",
+    label: "CR-ROWS-0",
+    commit: "abc1234def5678",
+    timestamp: NOW - 60_000,
+  } as unknown as EventBriefFixture;
+  const gate = {
+    id: "evt-gate",
+    projectKey: PROJECT_KEY,
+    agentId: "orchestrator",
+    kind: "gate",
+    codec: "no-mistakes",
+    context: { wave: "3", track: "A" },
+    gate: {
+      intent: "wave 3 gate",
+      outcome: "passed",
+      steps: [
+        { name: "intent", status: "passed" },
+        { name: "test", status: "passed" },
+        { name: "push", status: "passed", fixRounds: 0 },
+      ],
+      push: { commit: "abc1234", remote: "origin/main" },
+    },
+    timestamp: NOW - 2 * 60_000,
+  } as unknown as EventBriefFixture;
+  const inActive = { ...run("evt-active-cycle", "cycle-GREEN", 3, 0), context: { cycleId: ACTIVE_CYCLE } } as EventBriefFixture;
+  const inDone = { ...run("evt-done-cycle", "cycle-RED", 40, 1), context: { cycleId: DONE_CYCLE } } as EventBriefFixture;
+  return [merge, gate, inActive, inDone];
+}
+
+function workspace(planned = false): LiveMountOpts {
   return {
+    ...(planned ? { plans: structuredClone(PLANS) } : {}),
     pathname: `/p/${PROJECT_KEY}`,
     projects: [
       {
@@ -86,15 +146,15 @@ function workspace(): LiveMountOpts {
       },
     ],
     agents: [],
-    events: events(),
+    events: planned ? plannedEvents() : events(),
     eventDetails: {},
     openRuns: [],
     live: {},
   };
 }
 
-async function mountOnRuns(): Promise<void> {
-  await mountLive(workspace());
+async function mountOnRuns(planned = false): Promise<void> {
+  await mountLive(workspace(planned));
   const tabs = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]')).filter(
     (t) => (t.textContent ?? "").trim() === "Runs",
   );
@@ -127,9 +187,22 @@ describe("the Runs timeline's rows are skipped by the browser while off screen",
     "milestone-entry": 1,
   };
 
-  for (const [testid, drawn] of Object.entries(ROWS)) {
+  // How many of each row the planned project's history draws.
+  const PLANNED_ROWS: Record<string, number> = {
+    "gate-card": 1,
+    "merge-marker": 1,
+    "cycle-span-open": 1,
+    "declared-marker": 1,
+  };
+
+  const cases: [string, number, boolean][] = [
+    ...Object.entries(ROWS).map(([t, n]): [string, number, boolean] => [t, n, false]),
+    ...Object.entries(PLANNED_ROWS).map(([t, n]): [string, number, boolean] => [t, n, true]),
+  ];
+
+  for (const [testid, drawn, planned] of cases) {
     test(`every ${testid} row on the Runs timeline carries content-visibility: auto with an intrinsic size`, async () => {
-      await mountOnRuns();
+      await mountOnRuns(planned);
       const rows = rowsOf(testid);
       expect(rows.length, `the Runs timeline draws its ${testid} rows`).toBe(drawn);
       for (const row of rows) {

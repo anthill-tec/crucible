@@ -135,7 +135,13 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
     expect(body).toContain("styles.css");
     expect(body).toContain("van-1.5.5.nomodule.min.js");
     expect(body).toContain("van-x-0.6.3.nomodule.min.js");
-    expect(body).toContain("tailwind-browser-4.2.4.js");
+    // Tailwind's generated output is linked as a static, vendored stylesheet
+    // after the dashboard's own; the browser runtime is gone.
+    expect(body).not.toContain("tailwind-browser-4.2.4.js");
+    const hrefs = [...body.matchAll(/<link[^>]*\shref="([^"]+)"/g)].map((m) => m[1] ?? "");
+    const stylesAt = hrefs.indexOf("/styles.css");
+    expect(stylesAt).toBeGreaterThanOrEqual(0);
+    expect(hrefs.slice(stylesAt + 1).filter((h) => /^\/vendor\/tailwind[\w.-]*4\.2\.4[\w.-]*\.css$/.test(h))).toHaveLength(1);
     expect(body).toContain("daisyui-5.5.19.css");
     expect(body).toContain("daisyui-themes-5.5.19.css");
     expect(body).toContain("app.js");

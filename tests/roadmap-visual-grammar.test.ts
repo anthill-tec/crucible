@@ -2456,11 +2456,15 @@ describe("AC26 — position comes from declared data, never a layout engine", ()
         ).toBe(false);
       }
     }
-    // And the loaded set is exactly the shell's own five scripts — three
-    // vendored, plus the pure logic module and the shell itself — so a sixth
-    // has to be justified by editing this assertion.
+    // And the loaded set is exactly the shell's own four scripts — two
+    // vendored, plus the pure logic module and the shell itself — so a fifth
+    // has to be justified by editing this assertion. Tailwind is no longer a
+    // script: its generated output is a static stylesheet linked after the
+    // dashboard's own.
+    const stylesAt = hrefs.indexOf("/styles.css");
+    expect(stylesAt).toBeGreaterThanOrEqual(0);
+    expect(hrefs.slice(stylesAt + 1).filter((h) => /^\/vendor\/tailwind[\w.-]*4\.2\.4[\w.-]*\.css$/.test(h))).toHaveLength(1);
     expect(srcs).toEqual([
-      "/vendor/tailwind-browser-4.2.4.js",
       "/vendor/van-1.5.5.nomodule.min.js",
       "/vendor/van-x-0.6.3.nomodule.min.js",
       "/app-logic.mjs",

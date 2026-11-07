@@ -150,9 +150,8 @@ interface TaskWatch {
   observer: PerformanceObserver;
 }
 
-// The page renders a run's opening after the running card is in the DOM; the
-// batches are watched only once that work is done, so the opening is never
-// counted as a batch.
+// The history's first render is done before the watch begins, so the window
+// from the run's opening to its last batch counts only what the run costs.
 Step(
   "the page's main thread has been quiet for {int} ms within {int} seconds",
   async ({ page }, quietMs: number, seconds: number) => {
@@ -194,14 +193,13 @@ Step("I start watching the page's main-thread tasks", async ({ page }) => {
   });
 });
 
-Step(
-  "no main-thread task the page ran while the batches landed took longer than {int} ms",
-  async ({ page, $testInfo }, boundMs: number) => {
-    // Let the last frame's work finish and its entries be delivered.
-    await page.evaluate(
-      () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(() => resolve(), 300))),
-    );
-    const tasks = await page.evaluate(() => {
+/** The long tasks the current watch saw (start ms after it began, duration ms); the watch then stops. */
+async function watchedTasks(page: Page): Promise<WatchedTask[]> {
+  // Let the last frame's work finish and its entries be delivered.
+  await page.evaluate(
+    () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(() => resolve(), 300))),
+  );
+  const tasks = await page.evaluate(() => {
       const watch = (window as unknown as { __mainThreadWatch?: TaskWatch }).__mainThreadWatch;
       if (watch === undefined) return null;
       for (const entry of watch.observer.takeRecords()) {
@@ -211,17 +209,38 @@ Step(
       return watch.tasks
         .filter((t) => t.startTime >= watch.since)
         .map((t) => ({ startTime: Math.round(t.startTime - watch.since), duration: Math.round(t.duration) }));
-    });
-    expect(tasks, "the page's main-thread tasks were being watched").not.toBeNull();
-    const watched = tasks ?? [];
-    const longest = watched.reduce((max, t) => Math.max(max, t.duration), 0);
-    const total = watched.reduce((sum, t) => sum + t.duration, 0);
-    const summary = `${String(watched.length)} long tasks, ${String(total)} ms in all, the longest ${String(longest)} ms`;
-    $testInfo.annotations.push({ type: "main-thread long tasks while the batches landed", description: summary });
+  });
+  expect(tasks, "the page's main-thread tasks were being watched").not.toBeNull();
+  return tasks ?? [];
+}
+
+function summarise(watched: readonly WatchedTask[]): { longest: number; summary: string } {
+  const longest = watched.reduce((max, t) => Math.max(max, t.duration), 0);
+  const total = watched.reduce((sum, t) => sum + t.duration, 0);
+  return { longest, summary: `${String(watched.length)} long tasks, ${String(total)} ms in all, the longest ${String(longest)} ms` };
+}
+
+Step(
+  "no main-thread task the page ran from the run's opening through its last batch took longer than {int} ms",
+  async ({ page, $testInfo }, boundMs: number) => {
+    const watched = await watchedTasks(page);
+    const { summary } = summarise(watched);
+    $testInfo.annotations.push({ type: "main-thread long tasks from the run's opening through its last batch", description: summary });
+    console.log(`[runs-tab responsiveness] opening through the last batch: ${summary}`);
     const over = watched.filter((t) => t.duration > boundMs);
     expect(over, `${summary}; tasks over ${String(boundMs)} ms (start ms after watching began, duration ms)`).toEqual([]);
   },
 );
+
+// The close is measured, never bounded: the read that closes a run changes the
+// settled history and may rebuild the timeline once.
+Step("the longest main-thread task the page ran while the run closed is reported", async ({ page, $testInfo }) => {
+  const watched = await watchedTasks(page);
+  const { longest, summary } = summarise(watched);
+  $testInfo.annotations.push({ type: "main-thread long tasks while the run closed", description: summary });
+  console.log(`[runs-tab responsiveness] the close: ${summary}`);
+  expect(Number.isFinite(longest) && longest >= 0, `the close's longest task was measured: ${summary}`).toBe(true);
+});
 
 Step(
   "the closed run's card heads the Runs timeline of {int} settled run cards and no running card is left within {int} seconds",

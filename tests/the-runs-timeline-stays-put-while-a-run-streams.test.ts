@@ -86,13 +86,17 @@ function history(): EventBriefFixture[] {
   );
 }
 
-function workspace(openRuns: OpenRunFixture[]): LiveMountOpts {
+function workspace(
+  openRuns: OpenRunFixture[],
+  events: EventBriefFixture[] = history(),
+  pathname = `/p/${PROJECT_KEY}`,
+): LiveMountOpts {
   const agents: AgentFixture[] = [
     { agentId: STREAMING_AGENT, projectKey: PROJECT_KEY, liveness: "online", lastSeen: NOW, message: "gated test run starting" },
     { agentId: HISTORY_AGENT, projectKey: PROJECT_KEY, liveness: "online", lastSeen: NOW, message: "between runs" },
   ];
   return {
-    pathname: `/p/${PROJECT_KEY}`,
+    pathname,
     projects: [
       {
         key: PROJECT_KEY,
@@ -105,7 +109,7 @@ function workspace(openRuns: OpenRunFixture[]): LiveMountOpts {
       },
     ],
     agents,
-    events: history(),
+    events,
     eventDetails: {},
     openRuns,
     live: {},
@@ -316,5 +320,313 @@ describe("the running cards keep one container and the runway keeps its children
       childrenAfter.every((child, i) => child === childrenBefore[i]),
       "the runway holds the same children, in the same order",
     ).toBe(true);
+  });
+});
+
+// ── An aborted run, two runs at once, a project with no settled runs ──────
+
+const SECOND_RUN_ID = "run-second-streaming-run";
+const SECOND_AGENT = "second-agent";
+const ABORTED_ID = "evt-the-streamed-run-aborted";
+
+function secondRun(live?: LiveCounts): OpenRunFixture {
+  return {
+    runId: SECOND_RUN_ID,
+    projectKey: PROJECT_KEY,
+    agentId: SECOND_AGENT,
+    startedAt: NOW - 2_000,
+    tier: "unit",
+    ...(live !== undefined ? { live: { ...live } } : {}),
+  };
+}
+
+/** The done-of-total of the running card for `runId` (there is exactly one). */
+function runningCountOf(runId: string): string {
+  const cards = runningCards().filter((card) => card.getAttribute("data-run-id") === runId);
+  expect(cards.length, `exactly one running card for ${runId}`).toBe(1);
+  return squash(cards[0]?.querySelector('[data-testid="running-count"]'));
+}
+
+function abortedBrief(): EventBriefFixture {
+  return {
+    ...settledBrief(ABORTED_ID, STREAMING_AGENT, NOW + 1_000),
+    passed: 2,
+    status: "aborted",
+    abortReason: "agent died",
+  };
+}
+
+/** The running cards' container once one run is open: found from the card, against the page before it opened. */
+function containerOf(runId: string, before: ReadonlySet<Element>): HTMLElement {
+  const card = runningCards().find((c) => c.getAttribute("data-run-id") === runId);
+  expect(card !== undefined, `the page shows a running card for ${runId}`).toBe(true);
+  const container = runningContainer(card as HTMLElement, before);
+  expect(container !== null, "the running card sits in a container that was in the page before any run opened").toBe(true);
+  return container as HTMLElement;
+}
+
+/** The container holds every running card, still sits in the runway, and holds no settled or aborted card. */
+function expectContainerHolds(container: HTMLElement, label: string): void {
+  expect(container.isConnected && runway().contains(container), `${label}: the container is still in the runway`).toBe(true);
+  expect(
+    runningCards().every((card) => container.contains(card)),
+    `${label}: every running card is in the same container`,
+  ).toBe(true);
+  expect(
+    container.querySelector('[data-testid="event-card"], [data-testid="aborted-card"]') === null,
+    `${label}: the container holds no settled or aborted card`,
+  ).toBe(true);
+}
+
+describe("an aborted run and two runs at once leave the running cards' container in place", () => {
+  test("a run that is aborted instead of closed leaves the running cards, its aborted card joins the timeline, and the container is the same node", async () => {
+    const opts = workspace([]);
+    const page = await mountOnRuns(opts);
+    const before = new Set<Element>(runway().querySelectorAll("*"));
+
+    await nextEventsAnswer(page, opts, [openRun()]);
+    const container = containerOf(RUN_ID, before);
+    for (let n = 1; n <= 2; n += 1) {
+      await nextEventsAnswer(page, opts, [openRun(counts(n))]);
+      expect(runningCount()).toBe(`${String(n)}/${String(BATCHES)}`);
+      expectContainerHolds(container, `batch ${String(n)}`);
+    }
+
+    // The board swept the run as abandoned: it is no longer open, and its
+    // aborted record heads the history.
+    await nextEventsAnswer(page, opts, [], [abortedBrief(), ...history()]);
+    expect(runningCardIds()).toEqual([]);
+    const aborted = Array.from(runway().querySelectorAll<HTMLElement>('[data-testid="aborted-card"]')).map((c) =>
+      c.getAttribute("data-run-id"),
+    );
+    expect(aborted).toEqual([ABORTED_ID]);
+    expect(settledCardIds()).toHaveLength(HISTORY_SIZE);
+    expectContainerHolds(container, "after the abort");
+
+    // The same container takes the next run that opens.
+    await nextEventsAnswer(page, opts, [secondRun()], [abortedBrief(), ...history()]);
+    expect(runningCardIds()).toEqual([SECOND_RUN_ID]);
+    expectContainerHolds(container, "the next run");
+  });
+
+  test("a second run opening while one streams keeps the container, the timeline and its first card, and shows the cards in the page's open-runs order", async () => {
+    const opts = workspace([]);
+    const page = await mountOnRuns(opts);
+    const before = new Set<Element>(runway().querySelectorAll("*"));
+    const timelineBefore = timeline();
+    const firstBefore = firstCard();
+
+    await nextEventsAnswer(page, opts, [openRun(counts(1))]);
+    const container = containerOf(RUN_ID, before);
+
+    // The board serves the newer run first.
+    await nextEventsAnswer(page, opts, [secondRun(), openRun(counts(2))]);
+    expect(runningCardIds()).toEqual([SECOND_RUN_ID, RUN_ID]);
+    expect(runningCountOf(RUN_ID)).toBe(`2/${String(BATCHES)}`);
+    expectContainerHolds(container, "the second run opens");
+    expect(timeline() === timelineBefore, "the second run's opening keeps the timeline the same node").toBe(true);
+    expect(firstCard() === firstBefore, "the second run's opening keeps the first card the same node").toBe(true);
+
+    for (let n = 1; n <= 3; n += 1) {
+      await nextEventsAnswer(page, opts, [secondRun(counts(n)), openRun(counts(n + 2))]);
+      expect(runningCardIds()).toEqual([SECOND_RUN_ID, RUN_ID]);
+      expect(runningCountOf(SECOND_RUN_ID)).toBe(`${String(n)}/${String(BATCHES)}`);
+      expect(runningCountOf(RUN_ID)).toBe(`${String(n + 2)}/${String(BATCHES)}`);
+      expectContainerHolds(container, `batch ${String(n)} of both runs`);
+      expect(timeline() === timelineBefore, `batch ${String(n)} of both runs keeps the timeline the same node`).toBe(true);
+      expect(firstCard() === firstBefore, `batch ${String(n)} of both runs keeps the first card the same node`).toBe(true);
+    }
+  });
+
+  test("one run closing while the other streams keeps the container and the surviving card following its batches", async () => {
+    const opts = workspace([]);
+    const page = await mountOnRuns(opts);
+    const before = new Set<Element>(runway().querySelectorAll("*"));
+
+    await nextEventsAnswer(page, opts, [openRun(counts(1))]);
+    const container = containerOf(RUN_ID, before);
+    await nextEventsAnswer(page, opts, [secondRun(counts(1)), openRun(counts(2))]);
+    expect(runningCardIds()).toEqual([SECOND_RUN_ID, RUN_ID]);
+
+    // The first run closes; the second keeps streaming.
+    const afterClose = [settledBrief(SETTLED_ID, STREAMING_AGENT, NOW + 1_000), ...history()];
+    await nextEventsAnswer(page, opts, [secondRun(counts(2))], afterClose);
+    expect(runningCardIds()).toEqual([SECOND_RUN_ID]);
+    expect(runningCountOf(SECOND_RUN_ID)).toBe(`2/${String(BATCHES)}`);
+    expect(settledCardIds()[0]).toBe(SETTLED_ID);
+    expect(settledCardIds()).toHaveLength(HISTORY_SIZE + 1);
+    expectContainerHolds(container, "the first run closes");
+
+    const timelineAfterClose = timeline();
+    const firstAfterClose = firstCard();
+    for (let n = 3; n <= BATCHES; n += 1) {
+      await nextEventsAnswer(page, opts, [secondRun(counts(n))], afterClose);
+      expect(runningCardIds()).toEqual([SECOND_RUN_ID]);
+      expect(runningCountOf(SECOND_RUN_ID)).toBe(`${String(n)}/${String(BATCHES)}`);
+      expectContainerHolds(container, `the surviving run's batch ${String(n)}`);
+      expect(timeline() === timelineAfterClose, `batch ${String(n)} keeps the timeline the same node`).toBe(true);
+      expect(firstCard() === firstAfterClose, `batch ${String(n)} keeps the first card the same node`).toBe(true);
+    }
+  });
+});
+
+/** The Runs pane's empty-state elements ("no runs yet …"). */
+function emptyStates(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-testid="workspace-runs"] .app-empty')).filter((el) =>
+    squash(el).startsWith("no runs yet"),
+  );
+}
+
+describe("a project with no settled runs keeps its runway children while its first run opens and streams", () => {
+  test("the empty state sits in the running cards' container, and neither the read that opens the first run nor its batches add or remove a child of the runway", async () => {
+    const opts = workspace([], []);
+    const page = await mountOnRuns(opts);
+    const empty = emptyStates();
+    expect(empty.length, "the project with no runs shows its empty state once").toBe(1);
+    const emptyAncestors = new Set<Element>();
+    for (let node = empty[0]?.parentElement ?? null; node !== null && node !== runway(); node = node.parentElement) {
+      emptyAncestors.add(node);
+    }
+    const before = new Set<Element>(runway().querySelectorAll("*"));
+    const pane = runway();
+    const childrenBefore = Array.from(pane.children);
+    let added = 0;
+    let removed = 0;
+    const observer = new MutationObserver((records) => {
+      for (const r of records) {
+        added += r.addedNodes.length;
+        removed += r.removedNodes.length;
+      }
+    });
+    observer.observe(pane, { childList: true });
+
+    await nextEventsAnswer(page, opts, [openRun()], []);
+    expect(runningCardIds()).toEqual([RUN_ID]);
+    expect(emptyStates()).toHaveLength(0);
+    const container = containerOf(RUN_ID, before);
+    expect(emptyAncestors.has(container), "the running cards' container is the one the empty state sat in").toBe(true);
+
+    for (let n = 1; n <= BATCHES; n += 1) {
+      await nextEventsAnswer(page, opts, [openRun(counts(n))], []);
+      expect(runningCount()).toBe(`${String(n)}/${String(BATCHES)}`);
+      expectContainerHolds(container, `batch ${String(n)}`);
+    }
+    for (const r of observer.takeRecords()) {
+      added += r.addedNodes.length;
+      removed += r.removedNodes.length;
+    }
+    observer.disconnect();
+
+    expect({ added, removed }).toEqual({ added: 0, removed: 0 });
+    const childrenAfter = Array.from(pane.children);
+    expect(childrenAfter.length).toBe(childrenBefore.length);
+    expect(
+      childrenAfter.every((child, i) => child === childrenBefore[i]),
+      "the runway holds the same children, in the same order",
+    ).toBe(true);
+  });
+});
+
+describe("the Runs tab's empty state shows only when a project has neither a settled run nor an open run", () => {
+  test("a project with neither a settled run nor an open run shows the empty state once, and no running card", async () => {
+    await mountOnRuns(workspace([], []));
+    const empty = emptyStates();
+    expect(empty.map((el) => squash(el))).toEqual(["no runs yet — ingest a run to light the forge"]);
+    expect(runningCardIds()).toEqual([]);
+  });
+
+  test("a project whose first run is still open shows its running card and no empty state", async () => {
+    await mountOnRuns(workspace([openRun(counts(1))], []));
+    expect(runningCardIds()).toEqual([RUN_ID]);
+    expect(runningCount()).toBe(`1/${String(BATCHES)}`);
+    expect(emptyStates()).toHaveLength(0);
+  });
+
+  test("when a project's first run settles, the empty state stays hidden throughout and the run's card joins the timeline", async () => {
+    const opts = workspace([], []);
+    const page = await mountOnRuns(opts);
+    expect(emptyStates()).toHaveLength(1);
+    await nextEventsAnswer(page, opts, [openRun(counts(1))], []);
+    expect(emptyStates()).toHaveLength(0);
+
+    let emptyShown = 0;
+    const observer = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const n of Array.from(r.addedNodes)) {
+          if (n instanceof Element && (n.textContent ?? "").includes("no runs yet")) emptyShown += 1;
+        }
+      }
+    });
+    observer.observe(runway(), { childList: true, subtree: true });
+    for (let n = 2; n <= BATCHES; n += 1) {
+      await nextEventsAnswer(page, opts, [openRun(counts(n))], []);
+      expect(emptyStates()).toHaveLength(0);
+    }
+    await nextEventsAnswer(page, opts, [], [settledBrief(SETTLED_ID, STREAMING_AGENT, NOW + 1_000)]);
+    for (const r of observer.takeRecords()) {
+      for (const n of Array.from(r.addedNodes)) {
+        if (n instanceof Element && (n.textContent ?? "").includes("no runs yet")) emptyShown += 1;
+      }
+    }
+    observer.disconnect();
+
+    expect(emptyShown, "times the empty state was drawn while the first run streamed and settled").toBe(0);
+    expect(emptyStates()).toHaveLength(0);
+    expect(runningCardIds()).toEqual([]);
+    expect(settledCardIds()).toEqual([SETTLED_ID]);
+  });
+
+  test("the Runs tab filtered to a release shows no running card, before or after a batch", async () => {
+    const opts = workspace([openRun(counts(1))], history(), `/p/${PROJECT_KEY}?release=0.9.0`);
+    const page = await mountLive(opts);
+    await settle();
+    page.source().open();
+    expect(document.querySelectorAll('[data-testid="runs-release-filter"]').length, "the release filter banner").toBe(1);
+    expect(runningCardIds()).toEqual([]);
+    expect(settledCardIds()).toHaveLength(HISTORY_SIZE);
+
+    await nextEventsAnswer(page, opts, [openRun(counts(2))]);
+    expect(runningCardIds()).toEqual([]);
+    expect(settledCardIds()).toHaveLength(HISTORY_SIZE);
+  });
+});
+
+// ── The home timeline ─────────────────────────────────────────────────────
+
+/** The home timeline's first settled card. */
+function homeFirstCard(): HTMLElement {
+  const card = document.querySelector<HTMLElement>('[data-testid="timeline"] [data-testid="event-card"]');
+  expect(card !== null, "the home timeline shows a settled card").toBe(true);
+  return card as HTMLElement;
+}
+
+describe("the home timeline's running card follows a streaming run", () => {
+  test("on the home timeline a streaming run's running card shows and follows each batch, and the settled run then joins the timeline", async () => {
+    const opts = workspace([openRun(counts(1))], history(), "/");
+    const page = await mountLive(opts);
+    page.source().open();
+    expect(runningCardIds()).toEqual([RUN_ID]);
+    expect(runningCount()).toBe(`1/${String(BATCHES)}`);
+    for (let n = 2; n <= BATCHES; n += 1) {
+      await nextEventsAnswer(page, opts, [openRun(counts(n))]);
+      expect(runningCardIds()).toEqual([RUN_ID]);
+      expect(runningCount()).toBe(`${String(n)}/${String(BATCHES)}`);
+    }
+    await nextEventsAnswer(page, opts, [], [settledBrief(SETTLED_ID, STREAMING_AGENT, NOW + 1_000), ...history()]);
+    expect(runningCardIds()).toEqual([]);
+    expect(homeFirstCard().getAttribute("data-run-id")).toBe(SETTLED_ID);
+  });
+
+  test("on the home timeline batches that change only the open run keep the first settled card the same node", async () => {
+    const opts = workspace([openRun(counts(1))], history(), "/");
+    const page = await mountLive(opts);
+    page.source().open();
+    const firstBefore = homeFirstCard();
+    expect(firstBefore.getAttribute("data-run-id")).toBe("evt-history-00");
+    for (let n = 2; n <= BATCHES; n += 1) {
+      await nextEventsAnswer(page, opts, [openRun(counts(n))]);
+      expect(runningCount()).toBe(`${String(n)}/${String(BATCHES)}`);
+      expect(homeFirstCard() === firstBefore, `after batch ${String(n)} the home timeline's first card is the same node`).toBe(true);
+    }
   });
 });
