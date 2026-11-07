@@ -80,6 +80,18 @@ STEP_VERBS = {
 
 INVOCATION_LOG = "invocations.log"
 
+# Inserted after the fake `cargo`'s shebang, before its log line: the rust
+# client reads `cargo nextest --version` before anything else runs, and that
+# read builds and runs nothing, so it is answered (as nextest 0.9.130 answers
+# it, `tests/client/fake_nextest.py`) and not logged as an invocation.
+_CARGO_VERSION_SNIPPET = (
+    "import sys as _vs\n"
+    "if _vs.argv[1:3] in (['nextest', '--version'], ['nextest', '-V']):\n"
+    f"    _vs.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+    "    import fake_nextest as _vf\n"
+    "    _vs.exit(_vf.preliminary(_vs.argv[1:], []))\n"
+)
+
 # Inserted after each fake tool's shebang: one line per invocation, in the
 # tool's own bin directory, so a drive can be asked whether anything ran.
 _LOG_SNIPPET = (
@@ -131,8 +143,9 @@ def _build_recording_bin_dir():
     for name, body in _FAKE_TOOLS.items():
         shebang, rest = body.split("\n", 1)
         path = bin_dir / name
-        path.write_text(shebang + "\n" + _LOG_SNIPPET
-                        + _FAIL_SNIPPETS.get(name, "") + rest)
+        path.write_text(shebang + "\n"
+                        + (_CARGO_VERSION_SNIPPET if name == "cargo" else "")
+                        + _LOG_SNIPPET + _FAIL_SNIPPETS.get(name, "") + rest)
         path.chmod(0o755)
     wrapper = bin_dir / _PYTHON_WRAPPER
     wrapper.write_text(

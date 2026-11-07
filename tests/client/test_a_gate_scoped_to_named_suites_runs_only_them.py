@@ -491,7 +491,9 @@ class AScopedRustGateRunsTheWholeSuiteTest(_AScopedOwnStackGate):
     GATED = ("unit", "integration")
     EXCLUDED = "e2e"
     STEP_0 = ("cargo", "clippy")
-    WHOLE_SUITE = ("cargo", "nextest")
+    # The streamed `cargo nextest run`: not the version read or the list it
+    # makes before the run.
+    WHOLE_SUITE = ("cargo", "nextest", "run")
     EXTRA = ("--min-free-g", "1")
 
 class AScopedArduinoGateRunsTheWholeSuiteTest(_AScopedOwnStackGate):

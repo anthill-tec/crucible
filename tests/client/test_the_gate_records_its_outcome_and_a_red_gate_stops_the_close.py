@@ -95,6 +95,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from tests.client.fake_nextest import private_fake_prelude
 from tests.client.test_client_fleet_envelope_census import (
     CLIENT_FILES,
     _build_fake_bin_dir,
@@ -184,7 +185,19 @@ if argv and argv[0] == "test":
 sys.exit(0)
 '''
 
-_FAIL_CARGO_BODY = f'''#!/usr/bin/env python3
+# The failing `cargo` answers a streamed rust run's calls (the version, the
+# list, `llvm-cov show-env` and `llvm-cov report` writing the same lcov, and
+# the `libtest-json-plus` stream) by `tests/client/fake_nextest.py`, its
+# stream holding the same two tests as its JUnit report, the second failing.
+_FAIL_CARGO_BODY = ("#!/usr/bin/env python3\n"
+                    "import os as _nx_os\n"
+                    f"_nx_os.environ['FAKE_LCOV'] = {_LCOV_ONE!r}\n"
+                    + private_fake_prelude(
+                        f"[fake_nextest.case({PASSING_TEST_NAME!r}, crate='gate-fixture', "
+                        f"binary='gate_fixture'), fake_nextest.case({FAILING_TEST_MARKER!r}, "
+                        f"'failed', crate='gate-fixture', binary='gate_fixture', "
+                        f"message='assertion violated: expected 2 got 3')]")
+                    + f'''
 import os
 import sys
 
@@ -210,7 +223,7 @@ if "nextest" in argv:
         with open(out_path, "w") as f:
             f.write(LCOV)
 sys.exit(0)
-'''
+''')
 
 _FAIL_MVN_BODY = f'''#!/usr/bin/env python3
 import os
