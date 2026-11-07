@@ -79,6 +79,7 @@ from tests.client.test_client_fleet_envelope_census import (
     drive_verb,
     enumerate_verbs,
 )
+from tests.client.fake_nextest import private_fake_prelude
 from tests.client.live_run_harness import HEALTH_PATHS, board_health
 
 # ── §S2 fail-fast toolchain overrides ───────────────────────────────────────
@@ -88,7 +89,11 @@ from tests.client.live_run_harness import HEALTH_PATHS, board_health
 # default), so only the ONE step under test genuinely fails while every
 # other stubbed tool behaves exactly as it does for the "passing" run.
 
-_FAIL_CARGO_CLIPPY_BODY = r'''#!/usr/bin/env python3
+# The clippy-failing `cargo` answers a streamed rust run's calls (the version
+# first of all, then the list and the stream) as the passing run's does, by
+# `tests/client/fake_nextest.py`, so the step that fails is clippy's alone.
+_FAIL_CARGO_CLIPPY_BODY = ("#!/usr/bin/env python3\n" + private_fake_prelude(
+    "[fake_nextest.case('probe', crate='detector', binary='detector')]") + r'''
 import sys
 argv = sys.argv[1:]
 if "clippy" in argv:
@@ -98,7 +103,7 @@ if "clippy" in argv:
     )
     sys.exit(101)
 sys.exit(0)
-'''
+''')
 
 _FAIL_DOCKER_UP_BODY = r'''#!/usr/bin/env python3
 import sys

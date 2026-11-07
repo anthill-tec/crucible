@@ -33,6 +33,11 @@ ran — 13 points; the gap analysis needed user rulings
   - AC2's variants are mapped to the verbs that take them;
   - the narrator and fake cargo are re-pinned (AC8);
   - the framework travels with the run, and only the project's own file declares (§S1, §S3).
+- **VERIFY 2026-11-07** (cycle 880, fixed in-CR):
+  - a refused `--cycle` binding was re-touched unbound and its run filed with no cycle; it now files nothing, as
+    python's does (AC6);
+  - the retired human-line narrator's dead code goes;
+  - the narration re-pin's dropped in-run tick is recorded as python's precedent (AC8).
 
 ## Problem
 
@@ -102,6 +107,11 @@ an `e2e` profile selects.
   - **Unchanged.** What each verb cleans, selects and gates otherwise stays as it is.
   - **Without an agent.** A verb opens no run, as today. It runs `cargo nextest run` without the stream and without a
     list, with nextest's human output on the terminal, and files nothing.
+  - **A run the board refuses to open** is run unfiled, as python's streamed runs are. The tests still run with the
+    stream on, and the one `ok: false` envelope names the refusal and files nothing. Nothing is filed single-shot (RED
+    open point, 2026-11-07).
+  - **Registration.** The stream and list routes need a registered caller, so a gated run registers its agent for
+    them, as python's gated bracket does.
 - **§S2 — the list before the run.**
   - **The list.** Before the run, the client runs `cargo nextest list --message-format json` with the run's own
     profile, filter, features and crate and target selection, under the coverage environment for a coverage verb.
@@ -244,6 +254,11 @@ naming what is missing. It never skips them.
   - **Narration.** The closing `ran N/M` counts the stream's results against the board's listed total.
   - **`--ignore-run-fail`.** It is refused on each verb that accepted it.
   - **Without an agent.** A run with no agent posts nothing, lists nothing and runs without the stream.
+  - **Refused binding.** When the board refuses a gated run's `--cycle` binding, the client never registers the agent
+    again without it, exactly as python's gated bracket does (VERIFY 880). With no live registration, the refused
+    start opens no run, and nothing is listed, streamed, closed or ingested. One `ok: false` envelope and a non-zero
+    exit name the refused start. An agent that was already registered unbound by its own caller keeps python's
+    behaviour (RED 881, orchestrator ruling).
 - [ ] **AC7 (§S6).** The bun, python, mvn and arduino clients' runs count, narrate, log and close exactly as before, and
   their existing tests pass unchanged.
 - [ ] **AC8 (§S5, §S6).** The shared fake cargo answers:
@@ -255,7 +270,13 @@ naming what is missing. It never skips them.
 
   These tests are re-pinned to the stream: those that pinned the rust client's JUnit filing on the four bodies, its
   human-line narration, `--ignore-run-fail`, and the JUnit requirement of a declared tier. `auto-ingest`'s JUnit tests
-  stay. Every other existing test passes unchanged.
+  stay.
+
+  An existing test whose own fake cargo cannot answer the version check, the list or the streamed run is moved to the
+  shared fake or taught those calls. Its assertions about the behaviour it is named for stay as strict as before (RED
+  finding, 2026-11-07). The rust live-run lifecycle test's narration pin follows python's precedent: the closing `ran
+  N/M` against the listed total is pinned, and no in-run `running N/M` tick is required, because ticks are held while
+  the relay lands (VERIFY 880, orchestrator ruling). Every other existing test passes unchanged.
 - [ ] **AC9 (§S3).** The shipped `crucible.toml` documents the `[targets.<profile>]` table:
   - its fields;
   - the rust entry;

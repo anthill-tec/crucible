@@ -257,10 +257,7 @@ def setUpModule():
     tools = list(_MODALITY._PATH_TOOLS.items()) + list(_MODALITY._NAMED_TOOLS.items())
     for name, tail in tools:
         path = Path(_BIN_DIR) / name
-        body = (_MODALITY._RECORD
-                .replace("__PYTHON__", sys.executable)
-                .replace("__TOOL__", name))
-        path.write_text(body + _BURN + tail)
+        path.write_text(_MODALITY._tool_text(name, _BURN + tail))
         path.chmod(0o755)
     _SAVED_PATH = os.environ.get("PATH", "")
     os.environ["PATH"] = _BIN_DIR + os.pathsep + _SAVED_PATH
@@ -691,7 +688,18 @@ class AttributionBoundTest(unittest.TestCase):
     THAT child only while the verb spawns exactly one. Every `unit` verb does
     today; `mvn e2e` already does not (docker, then mvnw). This test holds the
     bound AC6b's mechanism rests on, so a `unit` verb that grew a second child
-    fails here rather than silently reporting the pair's CPU as the suite's."""
+    fails here rather than silently reporting the pair's CPU as the suite's.
+
+    rust's streamed run lists its tests before it runs them
+    (`cargo nextest list`, which runs no test), so its one test-running child
+    is the `cargo nextest run` that follows that list: the list has exited
+    before the run starts, and a delta taken around the run holds the run
+    alone."""
+
+    # The children each client's `unit` verb spawns, in order, where that is
+    # more than the one test-running child: the head of each child's argv.
+    LISTED_FIRST = {"rust": [("cargo", ["nextest", "list"]),
+                             ("cargo", ["nextest", "run"])]}
 
     def test_every_runnable_unit_verb_spawns_exactly_one_child(self):
         offenders = {}
@@ -705,7 +713,11 @@ class AttributionBoundTest(unittest.TestCase):
                     continue
                 probed += 1
                 children = [r["tool"] for r in case.invocations()]
-                if len(children) != 1:
+                if client in self.LISTED_FIRST:
+                    heads = [(r["tool"], r["argv"][:2]) for r in case.invocations()]
+                    if heads != self.LISTED_FIRST[client]:
+                        offenders[client] = heads
+                elif len(children) != 1:
                     offenders[client] = children
             finally:
                 case.tearDown()

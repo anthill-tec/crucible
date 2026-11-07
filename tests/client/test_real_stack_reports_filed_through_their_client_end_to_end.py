@@ -9,8 +9,9 @@ figures through the CLIENT VERB: `bun-crucible.py test`,
 `python-crucible.py test` (unittest and pytest) and `mvn-crucible.py
 regression` (a two-module reactor's surefire and failsafe reports, compared
 by `(suite, case)`, since the client reads them from one pooled directory in
-name order), `rust-crucible.py test` (nextest's one report, written where
-nextest writes it, compared by `(suite, case)`) and `arduino-crucible.py unit`
+name order), `rust-crucible.py test` (a captured nextest run's list and
+stream, relayed to the open run and stored as the board decodes the JUnit
+report the same run wrote, compared by `(suite, case)`) and `arduino-crucible.py unit`
 (the native harness's three reports, written into the run's own reports
 directory, compared by `(suite, case)`) run a faithful fake runner
 that writes the fixture's own report bytes where the client tells it to (and,
@@ -56,6 +57,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from tests.client.fake_nextest import private_fake_prelude
 from tests.client.live_run_harness import load_toon, scrubbed_env
 from tests.client.test_client_fleet_envelope_census import declare_and_require_board
 
@@ -64,6 +66,7 @@ CLIENTS_DIR = REPO_ROOT / "clients"
 BUN_CLIENT = CLIENTS_DIR / "bun-crucible.py"
 PYTHON_CLIENT = CLIENTS_DIR / "python-crucible.py"
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "reports"
+NEXTEST_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "nextest" / "runs"
 TIMEOUT = 180
 TOON = load_toon()
 
@@ -241,12 +244,22 @@ GREEN_NEXTEST_JUNIT = (
     '  </testsuite>\n'
     '</testsuites>\n')
 
-# A `cargo` stand-in, faithful to where nextest and llvm-cov write: `clean`
-# and `check` succeed silently; a run naming `nextest` (bare, or under
-# `llvm-cov`) copies FAKE_JUNIT to `target/nextest/<-P profile>/junit.xml`
-# under its cwd and, when given `--output-path`, FAKE_LCOV there; then it
-# exits FAKE_EXIT.
-_FAKE_CARGO = r'''
+# A `cargo` stand-in, faithful to nextest and llvm-cov. A streamed run's
+# calls (`tests/client/fake_nextest.py`) are answered first: the version, the
+# list and the `libtest-json-plus` stream of the captured run named by
+# FAKE_NEXTEST_FIXTURE (else one passing `scratch_calc` test), `llvm-cov
+# show-env`, and `llvm-cov report` writing FAKE_LCOV (a file) to its
+# `--output-path`. Otherwise `clean` and `check` succeed silently; a run
+# naming `nextest` (bare, or under `llvm-cov`) copies FAKE_JUNIT to
+# `target/nextest/<-P profile>/junit.xml` under its cwd and, when given
+# `--output-path`, FAKE_LCOV there; then it exits FAKE_EXIT.
+_FAKE_CARGO = (
+    "import os as _nx_os\n"
+    "if _nx_os.environ.get('FAKE_LCOV'):\n"
+    "    _nx_os.environ['FAKE_LCOV_FILE'] = _nx_os.environ['FAKE_LCOV']\n"
+    + private_fake_prelude(
+        "[fake_nextest.case('tests::adds_two_numbers', crate='scratch_calc', "
+        "binary='scratch_calc')]")) + r'''
 import os
 import shutil
 import sys
@@ -691,35 +704,47 @@ class RustFixtureFiledThroughTheRustClientEndToEndTest(_FiledThroughTheClient):
         return [verb, "--agent", agent, "--project-dir", self.project, *extra]
 
     def test_the_rust_fixture_filed_by_test_stores_its_expected_counts_and_statuses(self):
+        """A rust run's record is nextest's stream: the captured
+        `distinct-targets` run (a lib, a bin and an integration target, a
+        failure and an ignored test), streamed by `test --crate nx-targets`,
+        is stored as the board decodes the JUnit report the same nextest run
+        wrote, its ignored test a pending leaf JUnit does not have."""
         agent = "real-rust-through-client"
-        expected = _expected("rust")["client"]
-        result = self.drive(RUST_CLIENT, self.argv("test", agent, "--crate", "c"),
-                            FAKE_JUNIT=str(FIXTURES / "rust" / "junit.xml"),
-                            FAKE_EXIT="100")
+        captured = NEXTEST_FIXTURES / "distinct-targets"
+        for caller in (agent, "real-rust-junit-oracle"):
+            registered = self.drive(RUST_CLIENT, ["register", "--agent", caller, "--role",
+                                                  "report", "--project-dir", self.project])
+            self.assertEqual(registered.returncode, 0, self.diagnostics(registered))
+        result = self.drive(RUST_CLIENT, self.argv("test", agent, "--crate", "nx-targets"),
+                            FAKE_NEXTEST_FIXTURE=str(captured))
         event = self.stored_run(agent, result)
         where = f"event={json.dumps(event)[:3000]} {self.diagnostics(result)}"
-        self.assertEqual(event.get("codec"), "junit",
-                         f"the board decoded the report the client sent; {where}")
-        self.assertEqual(_counts(event.get("summary")), _counts(expected["summary"]),
-                         f"the stored counts are the fixture's; {where}")
+        self.assertEqual(event.get("codec"), "nextest",
+                         f"the board decoded the stream the client relayed; {where}")
+        oracle = _http(self.base, "/api/v2/runs", {
+            "projectKey": self.key, "agentId": "real-rust-junit-oracle",
+            "codec": "junit", "stack": "rust",
+            "data": [(captured / "junit.xml").read_text(encoding="utf-8")]})
+        self.assertTrue(oracle.get("ok"), f"the oracle's JUnit was decoded: {oracle!r}")
+        junit = _http(self.base, f"/api/v2/events/{oracle['event']}").get("event") or {}
         self.assertEqual(_counts(event.get("summary")),
-                         {"total": 7, "passed": 5, "failed": 2, "pending": 0},
+                         {"total": 5, "passed": 3, "failed": 1, "pending": 1},
                          f"fixture sanity; {where}")
-        self.assertEqual(_cases(event.get("tree")), _cases(expected["tree"]),
-                         f"every case is stored with the fixture's status, by "
-                         f"(suite, case); {where}")
+        self.assertEqual([c for c in _cases(event.get("tree")) if c[2] != "pending"],
+                         _cases(junit.get("tree")),
+                         f"every result is stored as the board decodes the same "
+                         f"run's JUnit, by (suite, case); {where}")
         envelope = _envelope(result.stdout) or {}
         self.assertEqual(_counts(envelope.get("run")), _counts(event.get("summary")),
                          f"the envelope's run: counts are the stored ones; {where}")
-        self.assertEqual((envelope.get("run") or {}).get("files"), expected["files"],
-                         f"the envelope's run.files is the answer's, the "
-                         f"fixture's {expected['files']}; {where}")
-        self.assertEqual(expected["files"], 3, "fixture sanity")
         self.assertNotEqual(result.returncode, 0,
                             f"a run with failures is not green; {where}")
 
     def test_the_rust_fixtures_lcov_filed_by_regression_ingest_stores_its_expected_coverage(self):
         agent = "real-rust-coverage-through-client"
+        registered = self.drive(RUST_CLIENT, ["register", "--agent", agent, "--role",
+                                              "report", "--project-dir", self.project])
+        self.assertEqual(registered.returncode, 0, self.diagnostics(registered))
         green = Path(self.scratch, "green", "junit.xml")
         green.parent.mkdir(parents=True)
         green.write_text(GREEN_NEXTEST_JUNIT, encoding="utf-8")
@@ -732,8 +757,8 @@ class RustFixtureFiledThroughTheRustClientEndToEndTest(_FiledThroughTheClient):
                             FAKE_EXIT="0")
         self.assert_coverage_stored("rust", agent, result)
         event = self.stored_run(agent, result)
-        self.assertEqual(event.get("codec"), "junit",
-                         f"the board decoded the report and the lcov the client "
+        self.assertEqual(event.get("codec"), "nextest",
+                         f"the board decoded the stream and the lcov the client "
                          f"sent; event={json.dumps(event)[:3000]} "
                          f"{self.diagnostics(result)}")
 

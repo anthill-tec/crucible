@@ -333,9 +333,15 @@ def _callee_name(call):
 
 # The ingest calls the census recognises: `post_ingest`, and the shared ingest
 # in `clients/_crucible_axi.py`, which sends through `post_ingest` itself and
-# puts the `runner_exit=` it is handed on the body as `runnerExit`.
+# puts the `runner_exit=` it is handed on the body as `runnerExit`. Beside them,
+# the shared streamed close, which files a streamed run once its runner exited:
+# handed the runner's completed process, it computes the runner's exit itself,
+# sends it as `runnerExit` on the one close it posts, and returns `verb_exit`
+# over that close's answer. A call of it is therefore a filing that carries
+# the runner's exit, and its return is the filed run's verdict.
 SHARED_INGEST = "ingest_reports"
-INGEST_CALLEES = ("post_ingest", SHARED_INGEST)
+SHARED_STREAMED_CLOSE = "close_streamed_run"
+INGEST_CALLEES = ("post_ingest", SHARED_INGEST, SHARED_STREAMED_CLOSE)
 
 
 def _shared_ingest_name():
@@ -344,6 +350,13 @@ def _shared_ingest_name():
     axi = _load_module(CLIENTS_DIR / "_crucible_axi.py",
                        "runner_exit_census_shared_ingest_name")
     return getattr(axi, SHARED_INGEST).__name__
+
+
+def _shared_streamed_close_name():
+    """`SHARED_STREAMED_CLOSE`, once the shared module is shown to carry it."""
+    axi = _load_module(CLIENTS_DIR / "_crucible_axi.py",
+                       "runner_exit_census_shared_streamed_close_name")
+    return getattr(axi, SHARED_STREAMED_CLOSE).__name__
 
 
 class ClientSource:
@@ -366,7 +379,8 @@ class ClientSource:
             name for name in self.posts_ingest
             if any(isinstance(n, ast.Constant) and n.value == "runnerExit"
                    for n in ast.walk(self.functions[name]))
-            or self._hands_the_shared_ingest_a_runner_exit(self.functions[name])}
+            or self._hands_the_shared_ingest_a_runner_exit(self.functions[name])
+            or self._calls(self.functions[name], SHARED_STREAMED_CLOSE)}
         self._returns_memo = {}
 
     @staticmethod
@@ -442,6 +456,9 @@ class ClientSource:
                 if not isinstance(n, ast.Call):
                     continue
                 callee = _callee_name(n)
+                if callee == SHARED_STREAMED_CLOSE:
+                    # It returns `verb_exit` over the close it filed.
+                    return True
                 if callee == "verb_exit":
                     arguments = list(n.args) + [k.value for k in n.keywords]
                     if any(from_ingest(a) for a in arguments):
@@ -1036,6 +1053,113 @@ class TheCensusReadsTheSharedIngestAsTheIngestCallTest(unittest.TestCase):
         self.assertEqual(len(self.findings), 5, "\n".join(self.findings))
 
 
+_SYNTHETIC_STREAMED_CLOSE_CLIENT = textwrap.dedent('''
+    """A synthetic client whose verbs close a streamed run through the shared
+    streamed close: one compliant body, and the mutants around it."""
+    import argparse
+
+    _STACK = "synthetic"
+
+
+    def _axi():
+        raise RuntimeError("never run: the census only reads this source")
+
+
+    def _post(path, payload):
+        raise RuntimeError("never run")
+
+
+    def _streamed_body(args):
+        result = _axi().spawn(args)
+        runner_exit = _axi().runner_exit_code(result.returncode)
+        return _axi().{close}("test", result, run_id=args.run_id, held=0,
+                              stream_path=args.stream, stack=_STACK,
+                              post_fn=_post)
+
+
+    def cmd_streamed(args):
+        return _streamed_body(args)
+
+
+    def _unclosed_body(args):
+        result = _axi().spawn(args)
+        runner_exit = _axi().runner_exit_code(result.returncode)
+        return runner_exit
+
+
+    def cmd_unclosed(args):
+        return _unclosed_body(args)
+
+
+    def cmd_quietly_closes(args):
+        _axi().{close}("test", args.result, run_id=args.run_id, held=0,
+                       stream_path=args.stream, stack=_STACK, post_fn=_post)
+        return 0
+
+
+    def main():
+        p = argparse.ArgumentParser()
+        sub = p.add_subparsers(dest="cmd", required=True)
+        for verb, func in (("streamed", cmd_streamed), ("unclosed", cmd_unclosed),
+                           ("quietly-closes", cmd_quietly_closes)):
+            sub.add_parser(verb).set_defaults(func=func)
+        args = p.parse_args()
+        return args.func(args)
+''')
+
+_SYNTHETIC_STREAMED_CLOSE_CENSUS = {
+    "streamed": applies("_streamed_body"),
+    "unclosed": applies("_unclosed_body"),
+    "quietly-closes": not_ingesting("claims to file nothing"),
+}
+
+
+class TheCensusReadsTheSharedStreamedCloseAsAFilingThatCarriesTheRunnersExitTest(
+        unittest.TestCase):
+    """A client-module call of the shared streamed close files the run with
+    the runner's exit as `runnerExit`, and returns `verb_exit` over that
+    close: a body returning it applies the rule; reaching it is filing."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.source = _SYNTHETIC_STREAMED_CLOSE_CLIENT.replace(
+            "{close}", _shared_streamed_close_name())
+        cls.tmpdir = tempfile.mkdtemp(prefix="runner-exit-census-streamed-")
+        path = Path(cls.tmpdir) / "synthetic-streamed-crucible.py"
+        path.write_text(cls.source)
+        cls.handlers = verb_handlers(path, "runner_exit_census_synthetic_streamed")
+        cls.findings = census_findings("streamed", cls.source, cls.handlers,
+                                       _SYNTHETIC_STREAMED_CLOSE_CENSUS)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def about(self, needle):
+        return [f for f in self.findings if needle in f]
+
+    def test_a_body_returning_the_shared_streamed_close_applies_the_rule(self):
+        self.assertEqual(self.about("`streamed`"), [])
+        self.assertEqual(self.about("body `_streamed_body`"), [])
+
+    def test_a_body_that_runs_a_runner_but_never_closes_its_run_is_named(self):
+        self.assertEqual(
+            self.about("body `_unclosed_body`"),
+            ["streamed body `_unclosed_body`: sends no `runnerExit` \u2014 it "
+             "reaches no ingest that puts `runnerExit` in the payload it posts",
+             "streamed body `_unclosed_body`: does not return verb_exit \u2014 "
+             "its exit is not the runner's and the filed run's"])
+
+    def test_a_not_ingesting_verb_that_calls_the_shared_streamed_close_is_named(self):
+        self.assertEqual(
+            self.about("`quietly-closes`"),
+            ["streamed `quietly-closes`: classified not-ingesting, yet it "
+             "reaches the ingest helper(s) ['cmd_quietly_closes']"])
+
+    def test_the_synthetic_streamed_client_raises_exactly_the_mutants_findings(self):
+        self.assertEqual(len(self.findings), 3, "\n".join(self.findings))
+
+
 # ── the per-verb route-and-call-site table ─────────────────────────────────
 #
 # Every verb the census classifies as filing something (`applies` or `exempt`)
@@ -1051,16 +1175,19 @@ class TheCensusReadsTheSharedIngestAsTheIngestCallTest(unittest.TestCase):
 # ingest it calls (`post_ingest`, with its literal route, or the shared ingest,
 # whose one route is `/api/v2/runs`). A call of the shared ingest is its own
 # call site, whichever client function holds it, so its owner reads `SHARED`.
+# The shared streamed close is read the same way: it closes a streamed run on
+# `/api/v2/runs`, and its owner reads `SHARED_CLOSE`.
 #
 # The table is shaped per client. Every client files every report through
-# the shared ingest, and nothing else; what each files beside it is a
-# compile ingest, which carries no report.
+# the shared ingest or the shared streamed close, and nothing else; what each
+# files beside it is a compile ingest, which carries no report.
 
 RUNS_ROUTE = "/api/v2/runs"
 PARSED_ROUTE = "/api/v2/runs/parsed"
 COMPILE_ROUTE = "/api/v2/runs/compile"
 REPORT_ROUTES = (RUNS_ROUTE, PARSED_ROUTE)
 SHARED = "<the shared ingest>"
+SHARED_CLOSE = "<the shared streamed close>"
 
 
 class Routes(NamedTuple):
@@ -1085,6 +1212,8 @@ def ingest_sites(source):
             callee = _callee_name(call)
             if callee == SHARED_INGEST:
                 site = (SHARED, SHARED_INGEST, RUNS_ROUTE)
+            elif callee == SHARED_STREAMED_CLOSE:
+                site = (SHARED_CLOSE, SHARED_STREAMED_CLOSE, RUNS_ROUTE)
             elif callee == "post_ingest":
                 route = (call.args[1].value if len(call.args) >= 2
                          and isinstance(call.args[1], ast.Constant)
@@ -1114,6 +1243,10 @@ def verb_routes(source, handlers, census):
 
 
 _THROUGH_THE_SHARED_INGEST = {(SHARED, SHARED_INGEST, RUNS_ROUTE)}
+_THROUGH_THE_SHARED_CLOSE = {(SHARED_CLOSE, SHARED_STREAMED_CLOSE, RUNS_ROUTE)}
+# A client whose run verbs stream a declared target and file a JUnit report
+# otherwise reaches both.
+_THROUGH_THE_SHARED_INGEST_OR_CLOSE = _THROUGH_THE_SHARED_INGEST | _THROUGH_THE_SHARED_CLOSE
 _BUN_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 _PY_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 _MVN_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
@@ -1126,18 +1259,18 @@ ROUTE_TABLE = {
         # report. A declared tier verb, and `regression` through a declared
         # script, run a stream target; one whose runner wrote nothing is
         # closed by the compile ingest: no report.
-        **{verb: routes(_THROUGH_THE_SHARED_INGEST, _BUN_COMPILE)
+        **{verb: routes(_THROUGH_THE_SHARED_INGEST_OR_CLOSE, _BUN_COMPILE)
            for verb in ("test", "regression", "unit", "module", "integration",
                         "e2e", "bdd")},
         # Its tsc step files a compile ingest: no report.
-        "pre-merge-gate": routes(_THROUGH_THE_SHARED_INGEST, _BUN_COMPILE),
+        "pre-merge-gate": routes(_THROUGH_THE_SHARED_INGEST_OR_CLOSE, _BUN_COMPILE),
         "auto-ingest": routes(_THROUGH_THE_SHARED_INGEST),
         "check": routes((), _BUN_COMPILE),
     },
     "python": {
         # Each suite verb's no-report exit (no JUnit, or pytest failed as a
         # runner) files the synthetic compile ingest: no report.
-        **{verb: routes(_THROUGH_THE_SHARED_INGEST, _PY_COMPILE)
+        **{verb: routes(_THROUGH_THE_SHARED_INGEST_OR_CLOSE, _PY_COMPILE)
            for verb in ("test", "unit", "module", "integration", "e2e",
                         "bdd", "regression", "pre-merge-gate")},
         "auto-ingest": routes(_THROUGH_THE_SHARED_INGEST),
@@ -1153,19 +1286,18 @@ ROUTE_TABLE = {
         "compile": routes((), _MVN_COMPILE),
     },
     "rust": {
-        # Each `cargo nextest` verb's no-report exit (no junit.xml) files the
-        # rustc compile ingest of `cargo check --tests`: no report.
-        **{verb: routes(_THROUGH_THE_SHARED_INGEST, _RUST_RUSTC)
-           for verb in ("test", "unit", "integration", "e2e", "module", "bdd")},
-        "smoke-test": routes(_THROUGH_THE_SHARED_INGEST),
-        "docker-e2e-gate": routes(_THROUGH_THE_SHARED_INGEST),
-        "workspace-regression": routes(_THROUGH_THE_SHARED_INGEST),
-        "regression": routes(_THROUGH_THE_SHARED_INGEST),
+        # Every `cargo nextest` verb closes its run from its nextest stream
+        # through the shared streamed close; a list that does not build files
+        # its rustc output as a compile ingest: no report.
+        **{verb: routes(_THROUGH_THE_SHARED_CLOSE, _RUST_RUSTC)
+           for verb in ("test", "unit", "integration", "e2e", "module", "bdd",
+                        "smoke-test", "docker-e2e-gate", "workspace-regression",
+                        "regression", "regression-ingest")},
         # The gate's clippy step files a rustc compile ingest: no report. Its
         # declared profiles (`_test_run`) and its whole suite
-        # (`_workspace_regression_run`) both file through the shared ingest.
-        "pre-merge-gate": routes(_THROUGH_THE_SHARED_INGEST, _RUST_RUSTC),
-        "regression-ingest": routes(_THROUGH_THE_SHARED_INGEST),
+        # (`_workspace_regression_run`) both close through the shared
+        # streamed close.
+        "pre-merge-gate": routes(_THROUGH_THE_SHARED_CLOSE, _RUST_RUSTC),
         # With no junit.xml it runs `cargo check` and files its stderr: no
         # report.
         "auto-ingest": routes(

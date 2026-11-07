@@ -5,7 +5,7 @@ referred to here only by symbol, never by file:line).
 
 Drives the REAL `clients/rust-crucible.py` `test` verb as a genuine OS
 subprocess, against a real (but fake) `cargo` executable placed first on
-`PATH`, and the same kind of stand-in HTTP board (`_RecordingBoard`) as the
+`PATH`, and the shared stand-in HTTP board (`RecordingBoard`) as the
 sibling bun/mvn/python run-lifecycle tests -- never the live :3849/:3850
 Crucible server, and never a real `cargo`/`nextest` toolchain run.
 
@@ -53,19 +53,16 @@ the KNOWN `running N/M` shape from nextest's own start line, posts the final
 assertion here with room to spare.
 """
 
-import http.server
-import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from pathlib import Path
 
-from tests.client.live_run_harness import HEALTH_PATHS, board_health
+from tests.client.live_run_harness import RecordingBoard, write_fake_cargo
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUST_SCRIPT = REPO_ROOT / "clients" / "rust-crucible.py"
@@ -77,157 +74,13 @@ PROJECT_KEY = "test-key-rust-run-lifecycle"
 ENV_KEYS_TO_SCRUB = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID",
                      "WORKFLOW_CYCLE")
 
-# A fake `cargo`, resolved via PATH (the client spawns the literal string
-# "cargo" -- it takes no `--cargo-bin`/similar override): understands only
-# `nextest run [--workspace|-p <crate>] [...] -P <profile>`, prints
-# cargo-nextest's OWN real human-reporter shape (see the module docstring --
-# the start line stating N up front, then one PASS line per completed test),
-# writes the client's expected junit.xml under `target/nextest/<profile>/`,
-# and -- only when told to -- blocks after a named test, until a release
-# file appears.
-FAKE_CARGO_TEMPLATE = """#!{python}
-import os
-import sys
-import time
-
-args = sys.argv[1:]  # ["nextest", "run", "--workspace"/"-p", ..., "-P", profile, ...]
-profile = "ci"
-for i, a in enumerate(args):
-    if a == "-P" and i + 1 < len(args):
-        profile = args[i + 1]
-
-stamp = os.environ.get("FAKE_CARGO_SPAWN_STAMP")
-if stamp:
-    with open(stamp, "w") as f:
-        f.write(repr(time.time()))
-
-total = int(os.environ.get("FAKE_CARGO_TOTAL", "1"))
-block_after = int(os.environ.get("FAKE_CARGO_BLOCK_AFTER_INDEX", "0"))
-release_file = os.environ.get("FAKE_CARGO_RELEASE_FILE")
-marker = os.environ.get("FAKE_CARGO_MARKER_LINE")
-
-sys.stdout.write(
-    "    Starting %d tests across 1 binary (run ID: deadbeef, nextest profile: %s)\\n"
-    % (total, profile))
-sys.stdout.flush()
-
-cases = []
-for i in range(1, total + 1):
-    name = "tests::narration_case_%d" % i
-    if i == block_after:
-        if marker:
-            sys.stdout.write(marker + "\\n")
-            sys.stdout.flush()
-        deadline = time.time() + 10
-        while release_file and not os.path.exists(release_file) and time.time() < deadline:
-            time.sleep(0.02)
-    sys.stdout.write("        PASS [   0.001s] fake-crate %s\\n" % name)
-    sys.stdout.flush()
-    cases.append('<testcase name="%s" classname="fake-crate" time="0.001"></testcase>' % name)
-
-sys.stdout.write("------------\\n")
-sys.stdout.write("     Summary [   0.010s] %d tests run: %d passed, 0 skipped\\n" % (total, total))
-sys.stdout.flush()
-
-junit_dir = os.path.join(os.getcwd(), "target", "nextest", profile)
-os.makedirs(junit_dir, exist_ok=True)
-content = (
-    '<?xml version="1.0"?><testsuites><testsuite name="fake-crate" tests="%d" '
-    'failures="0">%s</testsuite></testsuites>' % (total, "".join(cases))
-)
-with open(os.path.join(junit_dir, "junit.xml"), "w") as f:
-    f.write(content)
-
-sys.exit(0)
-"""
-
-
-class _RecordingBoard:
-    """Identical in shape to the sibling run-lifecycle tests' `_RecordingBoard`:
-    a real `http.server.ThreadingHTTPServer` on loopback, recording every
-    request in wire order with its receipt wall-clock time. Its health is a
-    board's that decodes the reports the client sends (`board_health`), and
-    it answers the ingest with the `run` block of the passing run it was
-    sent."""
-
-    def __init__(self):
-        self.events = []  # [(wall_clock_received_at, method, path, body)]
-        self._lock = threading.Lock()
-        self._run_seq = 0
-        board = self
-
-        class _Handler(http.server.BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.0"
-
-            def _body(self):
-                length = int(self.headers.get("Content-Length") or 0)
-                raw = self.rfile.read(length) if length else b""
-                try:
-                    return json.loads(raw.decode() or "null")
-                except ValueError:
-                    return None
-
-            def _reply(self, payload):
-                encoded = json.dumps(payload).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(encoded)))
-                self.end_headers()
-                self.wfile.write(encoded)
-
-            def do_GET(self):
-                with board._lock:
-                    board.events.append((time.time(), "GET", self.path, None))
-                if self.path in HEALTH_PATHS:
-                    self._reply(board_health())
-                elif "/plans" in self.path:
-                    self._reply({"ok": True, "plans": []})
-                else:
-                    self._reply({"ok": True, "agents": []})
-
-            def do_POST(self):
-                body = self._body()
-                with board._lock:
-                    board.events.append((time.time(), "POST", self.path, body))
-                if self.path == "/api/v2/runs/start":
-                    with board._lock:
-                        board._run_seq += 1
-                        run_id = f"run-rust-lifecycle-{board._run_seq}"
-                    self._reply({"ok": True, "changed": True, "runId": run_id,
-                                 "startedAt": int(time.time() * 1000)})
-                elif self.path == "/api/v2/runs":
-                    sent = len((body or {}).get("data") or []) if isinstance(body, dict) else 0
-                    self._reply({"ok": True, "changed": True,
-                                 "run": {"passed": sent, "failed": 0, "pending": 0,
-                                         "total": sent, "files": sent}})
-                else:
-                    self._reply({"ok": True, "changed": True})
-
-            def do_PATCH(self):
-                self.do_POST()
-
-            def log_message(self, format, *args):
-                pass
-
-        self._httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-        self.url = f"http://127.0.0.1:{self._httpd.server_address[1]}"
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
-        self._thread.start()
-
-    def close(self):
-        self._httpd.shutdown()
-        self._httpd.server_close()
-        self._thread.join(timeout=5)
-
-    def posts(self):
-        """`[(path, body), ...]` for every POST, in wire order."""
-        with self._lock:
-            return [(p, b) for _, m, p, b in self.events if m == "POST"]
-
-    def received_at(self, post_index):
-        with self._lock:
-            post_events = [(t, p, b) for t, m, p, b in self.events if m == "POST"]
-        return post_events[post_index][0]
+# The shared fake `cargo` (`live_run_harness.FAKE_CARGO`), resolved via
+# PATH (the client spawns the literal string "cargo"): it answers a streamed
+# run's version read and list, then streams FAKE_TOTAL passing tests as
+# nextest's `libtest-json-plus` on stdout and its human output on stderr, and
+# -- only when told to -- blocks after a named test until a release file
+# appears, its marker line on stderr. The board is the shared
+# `RecordingBoard`, which takes the list and holds the stream.
 
 
 def _first_matching_index(posts, predicate):
@@ -255,14 +108,6 @@ def _install_project(project_dir, board_url):
         f.write(toml_text)
 
 
-def _write_fake_cargo(bin_dir):
-    path = os.path.join(bin_dir, "cargo")
-    with open(path, "w") as f:
-        f.write(FAKE_CARGO_TEMPLATE.format(python=sys.executable))
-    os.chmod(path, 0o700)
-    return path
-
-
 def _scrubbed_env(fake_bin_dir):
     env = os.environ.copy()
     for k in ENV_KEYS_TO_SCRUB:
@@ -280,9 +125,9 @@ class NarratedRustTestRunFinalizesThroughTheSharedPathTest(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="rust-run-lifecycle-")
         self.fake_bin_dir = tempfile.mkdtemp(prefix="rust-run-lifecycle-bin-")
-        self.board = _RecordingBoard()
+        self.board = RecordingBoard()
         _install_project(self.tmpdir, self.board.url)
-        _write_fake_cargo(self.fake_bin_dir)
+        write_fake_cargo(self.fake_bin_dir)
 
     def tearDown(self):
         self.board.close()
@@ -293,8 +138,8 @@ class NarratedRustTestRunFinalizesThroughTheSharedPathTest(unittest.TestCase):
         spawn_stamp = os.path.join(self.tmpdir, "spawn-stamp")
         log_path = os.path.join(self.tmpdir, "run.log")
         env = _scrubbed_env(self.fake_bin_dir)
-        env["FAKE_CARGO_TOTAL"] = str(self.TOTAL)
-        env["FAKE_CARGO_SPAWN_STAMP"] = spawn_stamp
+        env["FAKE_TOTAL"] = str(self.TOTAL)
+        env["FAKE_SPAWN_STAMP"] = spawn_stamp
         cmd = [sys.executable, str(RUST_SCRIPT), "test",
                "--crate", "fake-crate",
                "--project-dir", self.tmpdir,
@@ -331,32 +176,28 @@ class NarratedRustTestRunFinalizesThroughTheSharedPathTest(unittest.TestCase):
             "AC1: /api/v2/runs/start must reach the board BEFORE the fake "
             "cargo process (the suite) is even spawned")
 
-        # -- AC3/AC5: narration is the shared wire shape with a KNOWN total --
-        # unlike python/arduino, nextest states its total on its OWN start
-        # line before any test completes, so this stack's narration carries
-        # a denominator from the very first heartbeat.
+        # -- AC3/AC5: narration is the stream's count against the board's
+        # listed total. The run is streamed, so while its relay lands no
+        # in-run tick is posted (the board shows the stream's own count);
+        # any tick that is posted reads 'running N/<listed total>'.
         running_msgs = []
         for _path, b in posts:
             msg = b.get("message") if isinstance(b, dict) else None
             if isinstance(msg, str) and msg.startswith("running"):
                 running_msgs.append(msg)
-        self.assertTrue(
-            running_msgs,
-            f"AC3/AC5: the shared narration path must have posted at least "
-            f"one 'running N/M' heartbeat while the suite was in flight -- "
-            f"rust's cmd_test has NO narrator at all today; "
-            f"posted messages={all_messages!r}")
         for m in running_msgs:
             self.assertRegex(
                 m, rf"^running \d+/{self.TOTAL}$",
-                f"AC3/AC5: rust's total is KNOWN from nextest's own start "
-                f"line, so the shared path's narration must read "
-                f"'running N/{self.TOTAL}' -- never the bare 'running N' "
-                f"form python/arduino use for an unknown total; got {m!r}")
+                f"AC3/AC5: the total is the board's listed one, so any "
+                f"in-run narration reads 'running N/{self.TOTAL}'; got {m!r}")
             n = int(m.split()[1].split("/")[0])
             self.assertTrue(
                 1 <= n <= self.TOTAL,
                 f"narrated count must be within the run's real range; got {m!r}")
+        self.assertEqual(
+            [b.get("codec") for p, b in posts if p.endswith("/stream")][:1], ["nextest"],
+            f"the run's results reach the board as nextest's stream; "
+            f"posted paths={paths!r}")
 
         # -- §S1 + §S2: the final count lands unconditionally, BEFORE
         # 'ingesting…', which precedes the ingest.
@@ -394,9 +235,9 @@ class RustTestRunnerOutputReachesStderrAndLogWhileTheSuiteIsStillRunningTest(uni
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="rust-run-live-stream-")
         self.fake_bin_dir = tempfile.mkdtemp(prefix="rust-run-live-stream-bin-")
-        self.board = _RecordingBoard()
+        self.board = RecordingBoard()
         _install_project(self.tmpdir, self.board.url)
-        _write_fake_cargo(self.fake_bin_dir)
+        write_fake_cargo(self.fake_bin_dir)
         self.release_file = os.path.join(self.tmpdir, "release")
         self.log_path = os.path.join(self.tmpdir, "run.log")
         self.stderr_path = os.path.join(self.tmpdir, "stderr.txt")
@@ -409,10 +250,10 @@ class RustTestRunnerOutputReachesStderrAndLogWhileTheSuiteIsStillRunningTest(uni
     def test_a_line_printed_before_a_blocking_test_is_visible_before_that_test_ends(self):
         env = _scrubbed_env(self.fake_bin_dir)
         env.update({
-            "FAKE_CARGO_TOTAL": "2",
-            "FAKE_CARGO_BLOCK_AFTER_INDEX": "1",
-            "FAKE_CARGO_RELEASE_FILE": self.release_file,
-            "FAKE_CARGO_MARKER_LINE": self.MARKER,
+            "FAKE_TOTAL": "2",
+            "FAKE_BLOCK_AFTER_INDEX": "1",
+            "FAKE_RELEASE_FILE": self.release_file,
+            "FAKE_MARKER_LINE": self.MARKER,
         })
         cmd = [sys.executable, str(RUST_SCRIPT), "test",
                "--crate", "fake-crate",

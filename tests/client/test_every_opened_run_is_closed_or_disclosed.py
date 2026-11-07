@@ -162,18 +162,21 @@ class NoReportRunsAreDisclosedTest(_OpenRunCase):
         self.assertNotEqual(result.returncode, 0)
         return self.axi(result.stdout)
 
-    def test_rust_regression_ingest_without_junit(self):
+    # A rust run's record is nextest's stream: the shared fake's no-report
+    # run writes no stream line and exits non-zero, and the abort's reason
+    # names the stream it never got.
+    def test_rust_regression_ingest_without_a_stream_line(self):
         axi = self._rust("regression-ingest", "--crates", "fake-crate")
-        self.assert_disclosed(axi, "regression-ingest", "junit.xml")
+        self.assert_disclosed(axi, "regression-ingest", "stream")
 
-    def test_rust_smoke_test_without_junit(self):
+    def test_rust_smoke_test_without_a_stream_line(self):
         axi = self._rust("smoke-test")
-        self.assert_disclosed(axi, "smoke-test", "junit.xml")
+        self.assert_disclosed(axi, "smoke-test", "stream")
 
-    def test_rust_workspace_regression_without_junit(self):
+    def test_rust_workspace_regression_without_a_stream_line(self):
         axi = self._rust("workspace-regression", "--min-free-g", "0",
                          "--keep-target")
-        self.assert_disclosed(axi, "workspace-regression", "junit.xml")
+        self.assert_disclosed(axi, "workspace-regression", "stream")
 
     def test_arduino_unit_without_a_report(self):
         write_fake_native(self.project)

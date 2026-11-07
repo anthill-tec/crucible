@@ -155,11 +155,16 @@ class ActiveCycleBoard:
     """A loopback stand-in board that records EVERY request (GET and POST)
     and answers that the project has one active cycle while the agent asking
     is bound to none — the board state that makes an unbound run with no
-    `--cycle` the unattributed-run refusal."""
+    `--cycle` the unattributed-run refusal.
+
+    `health`, when given, is answered whole on the health routes; without it
+    they answer a bare `{ok: true}` like every other unscripted read."""
 
     ACTIVE_CYCLE_ID = 4242
+    HEALTH_PATHS = ("/api/health", "/api/v2/health")
 
-    def __init__(self):
+    def __init__(self, health=None):
+        self.health = health
         self.requests = []
         self._lock = threading.Lock()
         board = self
@@ -178,7 +183,9 @@ class ActiveCycleBoard:
             def do_GET(self):
                 with board._lock:
                     board.requests.append(("GET", self.path))
-                if "/plans" in self.path:
+                if board.health is not None and self.path in board.HEALTH_PATHS:
+                    self._reply(board.health)
+                elif "/plans" in self.path:
                     self._reply({"ok": True, "plans": [{
                         "id": 1, "status": "open",
                         "cycles": [{"id": board.ACTIVE_CYCLE_ID,

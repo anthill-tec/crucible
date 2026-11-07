@@ -194,6 +194,7 @@ Fallback:
     python3 tests/client/test_client_tier_run_envelope.py
 """
 
+import contextlib
 import copy
 import importlib.util
 import os
@@ -205,6 +206,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.fake_nextest import held_results
 from tests.client.live_run_harness import (
     START,
     STREAM_CODEC,
@@ -423,10 +425,7 @@ def setUpModule():
     tools["fake-python-runner"] = _PY_RUNNER_TAIL
     for name, tail in tools.items():
         path = Path(_BIN_DIR) / name
-        body = (_MODALITY._RECORD
-                .replace("__PYTHON__", sys.executable)
-                .replace("__TOOL__", name))
-        path.write_text(body + tail)
+        path.write_text(_MODALITY._tool_text(name, tail))
         path.chmod(0o755)
     _SAVED_PATH = os.environ.get("PATH", "")
     os.environ["PATH"] = _BIN_DIR + os.pathsep + _SAVED_PATH
@@ -471,7 +470,9 @@ class _EnvelopeTierProbe:
         For python the board also opens the run and holds its stream
         (`StreamingPost`): a unittest run is closed from the stream its
         runner wrote (CR-CRU-224), and that close is answered with the
-        counts of the stream held."""
+        counts of the stream held. So does it for rust: a rust run is closed
+        from the nextest stream its runner wrote, and that close is answered
+        with the results the stream held."""
         if response is not None:
             return super().drive(argv, response)  # type: ignore[misc]
         harness = _MODALITY._HARNESS
@@ -480,7 +481,7 @@ class _EnvelopeTierProbe:
         # maven, rust and arduino among them; the others' `/api/v2/runs`
         # bodies are answered as before.
         inline = self.CLIENT in ("bun", "python", "mvn", "rust", "arduino")  # type: ignore[attr-defined]
-        streams = self.CLIENT == "python"  # type: ignore[attr-defined]
+        streams = self.CLIENT in ("python", "rust")  # type: ignore[attr-defined]
         stream = StreamingPost()
 
         def fake_post(path, payload, *_args, **_kwargs):
@@ -492,6 +493,11 @@ class _EnvelopeTierProbe:
             if (not isinstance(summary, dict) and streams
                     and (payload or {}).get("codec") == STREAM_CODEC):
                 summary = stream.summary()
+            if (not isinstance(summary, dict) and streams
+                    and (payload or {}).get("codec") == "nextest"):
+                held = held_results(stream.held.decode("utf-8"))
+                summary = {"total": sum(held.values()), "passed": held["ok"],
+                           "failed": held["failed"], "pending": held["ignored"]}
             if not isinstance(summary, dict) and inline:
                 summary = (junit_sent(payload) or {}).get("summary")
             if isinstance(summary, dict):
@@ -500,8 +506,11 @@ class _EnvelopeTierProbe:
             return answer
 
         module = self.module  # type: ignore[attr-defined]
+        transport = (self._transport(fake_post)  # type: ignore[attr-defined]
+                     if self.CLIENT == "rust"  # type: ignore[attr-defined]
+                     else contextlib.nullcontext())
         with mock.patch.object(module, "_post", side_effect=fake_post,
-                               create=True), \
+                               create=True), transport, \
                 mock.patch.object(module, "_get", create=True,
                                   side_effect=get_answering_health(lambda _p: None)), \
                 mock.patch.object(module, "_patch", return_value={"ok": True},
@@ -855,37 +864,48 @@ class RustIngestedTierEnvelopeTest(_EnvelopeTierProbe, _MODALITY._RustModalityCa
 
     RED — `rust-crucible.py` emits no tier on any envelope. This client's
     envelope counts come from the SERVER response rather than a client-side
-    parse, so the failing and empty drives supply the response the junit they
-    wrote would parse to; the tier statement itself is still read off the
-    envelope and compared against the POST body."""
+    parse, so the failing and empty drives supply the response the stream
+    they wrote would decode to; the tier statement itself is still read off
+    the envelope and compared against the POST body. The run is closed from
+    the nextest stream the fake `cargo` writes (FAKE_NEXTEST_CASES)."""
 
-    def write_junit(self, content, profile="ci"):
-        directory = Path(self.tmpdir, "target", "nextest", profile)
-        directory.mkdir(parents=True, exist_ok=True)
-        junit = directory / "junit.xml"
-        junit.write_text(content)
-        return str(junit)
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(os.environ.pop, "FAKE_NEXTEST_CASES", None)
+
+    def assertReachedZeroDiscovery(self, drive, where):
+        """A rust run that found no test: nextest ran, and the stream the
+        board held holds no result."""
+        runs = [r for r in self.invocations("cargo") if r["argv"][:2] == ["nextest", "run"]]
+        self.assertEqual(
+            len(runs), 1,
+            f"{where}: this drive was meant to run nextest once and find no "
+            f"test; it ran {[r['argv'] for r in self.invocations('cargo')]!r} "
+            f"exit={drive.code} stderr={drive.err[-800:]!r}")
+        self.assertEqual(
+            self.held(), {"ok": 0, "failed": 0, "ignored": 0},
+            f"{where}: the zero-discovery stream holds no result")
 
     def test_a_successful_tiered_run_states_the_tier_it_ingested(self):
         where = "rust unit / success"
-        self.write_junit(_JUNIT_SUITES_ONE_PASS)
         drive = self.drive(self.rust_argv(TIER_VERB_DRIVEN["rust"]))
         self.assertVerbAcceptedTheInvocation(drive, where)
+        self.assertClosedFromItsStream(drive, where)
         self.assertReachedSuccess(drive, where)
         self.assertEnvelopeStatesIngestedTier(drive, where)
 
     def test_a_failing_suite_still_states_the_tier_it_ingested(self):
         where = "rust unit / failing suite"
-        self.write_junit(_JUNIT_SUITES_ONE_FAIL)
-        os.environ["FAKE_CARGO_EXIT_CODE"] = "100"
+        os.environ["FAKE_NEXTEST_CASES"] = '[["probe", "failed"]]'
         drive = self.drive(self.rust_argv(TIER_VERB_DRIVEN["rust"]),
                            response=_FAILED_RESPONSE)
+        self.assertClosedFromItsStream(drive, where)
         self.assertReachedFailingSuite(drive, where)
         self.assertEnvelopeStatesIngestedTier(drive, where)
 
     def test_a_zero_discovery_run_states_what_it_ingested(self):
         where = "rust unit / zero-discovery"
-        self.write_junit(_JUNIT_SUITES_ZERO)
+        os.environ["FAKE_NEXTEST_CASES"] = "[]"
         drive = self.drive(self.rust_argv(TIER_VERB_DRIVEN["rust"]),
                            response=_EMPTY_RESPONSE)
         self.assertReachedZeroDiscovery(drive, where)
@@ -1127,7 +1147,7 @@ class RustTierLessEnvelopeTest(_TierLessProbe, _MODALITY._RustModalityCase):
         # drives carry it and the tiered ones above do not.
         crate = ["--crate", self.CRATE]
         return {
-            "test": (self.rust_argv("test", crate), self.write_nextest_junit),
+            "test": (self.rust_argv("test", crate), lambda: None),
             "auto-ingest": (self.rust_argv("auto-ingest", crate),
                             self.write_nextest_junit),
         }

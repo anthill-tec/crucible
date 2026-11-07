@@ -1125,11 +1125,16 @@ def _take_down_runner_group(proc):
         signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
 
 
-def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
+def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False,
+                 stdout_path=None):
     """Run `cmd`, streaming its combined stdout+stderr LIVE: every line goes to
     stderr and to `log_path` as the runner produces it, and to `narrator` for
     progress. Returns a `CompletedProcess` whose `stdout` is the whole capture,
     byte-identical to a capture-after-exit (the parsers read it unchanged).
+
+    `stdout_path` splits the runner's output: its stdout is written to that
+    file (a stream a relay follows) and only its stderr is echoed, logged,
+    narrated and captured, the run always teed.
 
     stdout stays the client's envelope channel, so the echo is on stderr. With
     neither a log nor a narrator there is nothing to tee, and the runner
@@ -1144,7 +1149,7 @@ def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
     (`_take_down_runner_group`), so no descendant is left behind. A runner
     that exits on its own is never signalled. The group no longer receives a
     terminal's Ctrl-C directly; the client does, and takes it down."""
-    if not log_path and narrator is None and not capture:
+    if not log_path and narrator is None and not capture and not stdout_path:
         with subprocess.Popen(cmd, cwd=cwd, env=env,
                               start_new_session=True) as proc:
             try:
@@ -1162,12 +1167,15 @@ def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
             except OSError as e:
                 print(f"[crucible] WARN: could not write run log to {log_path}: {e}",
                       file=sys.stderr)
+        split = (stack.enter_context(open(stdout_path, "w", encoding="utf-8"))
+                 if stdout_path else None)
         proc = stack.enter_context(subprocess.Popen(
             cmd, cwd=cwd, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            bufsize=1, start_new_session=True,
+            stdout=split if split is not None else subprocess.PIPE,
+            stderr=subprocess.PIPE if split is not None else subprocess.STDOUT,
+            text=True, bufsize=1, start_new_session=True,
         ))
-        stream = proc.stdout
+        stream = proc.stderr if split is not None else proc.stdout
         assert stream is not None  # stdout=PIPE always yields a stream
         echo = True
         try:
@@ -1480,11 +1488,12 @@ class StreamTicks:
     to the `test-end`s read so far (`RunNarrator.reach`). `finish(timeout)`
     stops it and joins it within `timeout`."""
 
-    def __init__(self, post, path):
+    def __init__(self, post, path, codec=None, stated=None):
         self._path = path
+        self._codec = codec or STREAM_RECORD_CODEC
         self._read_to = 0
         self._ends = 0
-        self._stated = 0
+        self._stated = int(stated or 0)
         self._halt = threading.Event()
         self._thread = None
         self.narrator = RunNarrator(post, lambda _line: False,
@@ -1523,25 +1532,25 @@ class StreamTicks:
                 event = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(event, dict):
-                continue
-            given = event.get("total")
-            if event.get("event") == "test-end":
+            kind, given = _counted_event(event, self._codec)
+            if kind == "result":
                 self._ends += 1
-            elif (event.get("event") == "run-start" and isinstance(given, int)
-                  and not isinstance(given, bool)):
-                self._stated = given
+            elif kind == "start":
+                self._stated = int(given or 0)
 
 
 def start_stream_relay(post_fn, tick_post, project_key, agent_id, run_id,
-                       path, codec, batch_limit):
+                       path, codec, batch_limit, listed_total=None):
     """Start a streamed run's relay: answer `(relay, narrator)`, the started
     `StreamRelay` sending the stream at `path` through a `LandingPoster` over
     `post_fn`, and the narrator its `StreamTicks` drives, posting through
-    `tick_post` (no in-run tick while the relay lands). The narrator also
-    says the close's messages (`close_streamed_run`)."""
+    `tick_post` (no in-run tick while the relay lands), counting the stream
+    through `codec` against `listed_total` (the board's answer to the run's
+    test list) when one is known. The narrator also says the close's
+    messages (`close_streamed_run`)."""
     poster = LandingPoster(post_fn)
-    ticks = StreamTicks(poster.withhold_ticks(tick_post), path)
+    ticks = StreamTicks(poster.withhold_ticks(tick_post), path, codec,
+                        listed_total)
     relay = StreamRelay(poster, project_key, agent_id, run_id, path, codec,
                         batch_limit, ticks=ticks)
     relay.start()
@@ -1559,16 +1568,50 @@ def start_stream_relay(post_fn, tick_post, project_key, agent_id, run_id,
 
 #: The record stream codec the shipped runners and reporters write.
 STREAM_RECORD_CODEC = "crucible-events"
+#: nextest's `libtest-json-plus` stream, the rust client's record.
+NEXTEST_STREAM_CODEC = "nextest"
 
 
-def stream_counts(path):
-    """The one reading of a stream file: `(test_ends, run_end_total,
-    run_start_total, ran)`. `run_end_total` is None when the stream holds no
-    `run-end` (a `run-end` stating no int total counts its `test-end`s so
-    far), `run_start_total` None when no `run-start` states an int total, and
-    `ran` counts the `test-end`s that passed or failed. A missing file holds
-    nothing; an unreadable one is said on stderr and holds nothing."""
+def _counted_event(event, codec):
+    """(PURE) What one decoded stream line counts as under `codec`, as
+    `(kind, value)`: `("result", ran)` for one test's result (`ran` when it
+    passed or failed), `("end", total)` for a `crucible-events` `run-end`
+    (its int total, else None), `("start", total)` for a `run-start` stating
+    an int total, `("started", name)` for a nextest test that began, and
+    `(None, None)` for anything else."""
+    if not isinstance(event, dict):
+        return None, None
+    kind = event.get("event")
+    if codec == NEXTEST_STREAM_CODEC:
+        if event.get("type") != "test":
+            return None, None
+        if kind in ("ok", "failed", "ignored"):
+            return "result", kind != "ignored"
+        return ("started", event.get("name")) if kind == "started" else (None, None)
+    given = event.get("total")
+    given = given if isinstance(given, int) and not isinstance(given, bool) else None
+    if kind == "test-end":
+        return "result", event.get("status") in ("pass", "fail")
+    if kind == "run-end":
+        return "end", given
+    if kind == "run-start" and given is not None:
+        return "start", given
+    return None, None
+
+
+def stream_counts(path, codec=STREAM_RECORD_CODEC):
+    """The one reading of a stream file through its `codec`: `(results,
+    run_end_total, run_start_total, ran)`. For `crucible-events` a result is
+    a `test-end`; `run_end_total` is None when the stream holds no `run-end`
+    (a `run-end` stating no int total counts its `test-end`s so far), and
+    `run_start_total` None when no `run-start` states an int total. For
+    `nextest` a result is an `ok`, `failed` or `ignored` test line; the
+    stream states no total, so its end total is its result count when no
+    test began without a result, else None. `ran` counts the results that
+    passed or failed. A missing file holds nothing; an unreadable one is
+    said on stderr and holds nothing."""
     count, ran, total, stated = 0, 0, None, None
+    unfinished = set()
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
             for line in handle:
@@ -1576,25 +1619,25 @@ def stream_counts(path):
                     event = json.loads(line)
                 except ValueError:
                     continue
-                if not isinstance(event, dict):
-                    continue
-                kind = event.get("event")
-                given = event.get("total")
-                given = (given if isinstance(given, int)
-                         and not isinstance(given, bool) else None)
-                if kind == "test-end":
+                kind, value = _counted_event(event, codec)
+                if kind == "result":
                     count += 1
-                    ran += event.get("status") in ("pass", "fail")
-                elif kind == "run-end":
-                    total = count if given is None else given
-                elif kind == "run-start" and given is not None:
-                    stated = given
+                    ran += bool(value)
+                    unfinished.discard(event.get("name"))
+                elif kind == "started":
+                    unfinished.add(value)
+                elif kind == "end":
+                    total = count if value is None else value
+                elif kind == "start":
+                    stated = value
     except FileNotFoundError:
         return 0, None, None, 0
     except OSError as exc:
         print(f"[crucible] WARN: could not read the stream {path} ({exc}) — "
               f"it counts as holding no test", file=sys.stderr)
         return 0, None, None, 0
+    if codec == NEXTEST_STREAM_CODEC and not unfinished:
+        total = count
     return count, total, stated, ran
 
 
@@ -1642,7 +1685,8 @@ def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
                        ingest_compile, no_report_warning, zero_discovery=None,
                        collect_coverage=None, narrator=None, unfiled=None,
                        gate=False, codec=STREAM_RECORD_CODEC,
-                       coverage_codec=None, base_url=None, close_warnings=()):
+                       coverage_codec=None, base_url=None, close_warnings=(),
+                       listed_total=None):
     """Close a streamed run once its runner exited and its relay finished:
     `result` is the runner's `CompletedProcess`, `held` the bytes of the
     stream the board confirmed, `stream_path` the stream file. Returns the
@@ -1651,8 +1695,9 @@ def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
     The client's own facts arrive as hooks: `emit(ok, fields, warnings,
     legacy_line)` writes its envelope, `emit_ingest(resp, help_steps,
     warnings, ok)` its filed run's envelope, `ingest_compile(result)` files
-    the runner's output as a compile failure closing `run_id`,
-    `no_report_warning(result)` names a run that wrote no test, and
+    the runner's output as a compile failure closing `run_id` (None for a
+    runner whose compile failure is filed before it runs: its stream is then
+    closed), `no_report_warning(result)` names a run that wrote no test, and
     `zero_discovery(result)` (None for a runner with no such reading) answers
     `(warning, help_step)` for an honest empty discovery, else None.
 
@@ -1666,7 +1711,9 @@ def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
     `coverage_codec`), with the no-report warning when no `test-end` was
     written. `close_warnings` join only a run closed by its stream; `gate`
     derives its help from the run state (`run_help`, at `base_url`) and adds
-    the whole-suite-unreported warning."""
+    the whole-suite-unreported warning. The stream is counted through
+    `codec`; `listed_total`, the board's answer to the run's test list, is
+    the closing narration's total when known."""
     artifact = os.path.basename(stream_path)
     warnings = list(warnings)
     if run_id is None:
@@ -1674,7 +1721,7 @@ def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
             verb, result, unfiled or "the board opened no run", warnings,
             artifact=artifact, emit=emit, no_report_warning=no_report_warning,
             zero_discovery=zero_discovery, stack=stack, gate=gate)
-    count, total, stated, _ran = stream_counts(stream_path)
+    count, total, stated, _ran = stream_counts(stream_path, codec)
     zero = (zero_discovery(result)
             if count == 0 and zero_discovery is not None else None)
     if zero is not None:
@@ -1694,16 +1741,18 @@ def close_streamed_run(verb, result, *, run_id, held, stream_path, stack,
     # nothing of the stream held by the board too; a stream the board holds
     # (a `run-start` the runner wrote before it died) is closed as a stream.
     no_test_end = bool(result.returncode) and count == 0
-    wrote_no_test = no_test_end and held == 0
+    wrote_no_test = no_test_end and held == 0 and ingest_compile is not None
     coverage_paths = []
     if collect_coverage is not None and not wrote_no_test:
         coverage_paths, missing = collect_coverage()
         warnings += missing
     if narrator is not None:
         # The final count, then `ingesting…`, both ahead of the close.
-        narrator.say(f"ran {count}/{_narrated_total(count, total, stated)}")
+        narrated = (_narrated_total(count, total, stated) if listed_total is None
+                    else max(count, listed_total))
+        narrator.say(f"ran {count}/{narrated}")
         narrator.say(INGESTING_MESSAGE)
-    if wrote_no_test:
+    if wrote_no_test and ingest_compile is not None:
         # Its captured output is filed as a compile failure, closing the run.
         ingest_compile(result)
         emit(False, {"help": _core.no_report_help(verb, artifact)},

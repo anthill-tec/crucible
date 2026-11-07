@@ -1,36 +1,39 @@
 """rust's `regression` measures coverage only when `--coverage` is given.
 
-  * Coverage-free by default — `regression` without `--coverage` runs the
-    whole workspace under plain nextest, exactly
+  * Coverage-free by default — `regression` without `--coverage` lists the
+    whole workspace's tests and runs them under plain nextest, exactly
     `cargo nextest run --workspace [--all-features | --features X]
-    -P <profile> --no-fail-fast`: no `cargo llvm-cov`, no `cargo clean`
-    (neither before the run nor as a post-run reclaim). It files its junit
-    text through `/api/v2/runs` (the shared ingest) as a `regression` run
-    whose envelope states the board's `files` and whose ingest body carries
-    no `coverage` key, and it does so under `--cycle` and under `--release`
-    alike.
+    -P <profile> --no-fail-fast` with nextest's stream on
+    (`--message-format libtest-json-plus --message-format-version 0.1`): no
+    `cargo llvm-cov`, no `cargo clean` (neither before the run nor as a
+    post-run reclaim). It closes the run from that stream through
+    `/api/v2/runs` as a `regression` run whose envelope states the board's
+    `files` and whose close carries no `coverage` key, and it does so under
+    `--cycle` and under `--release` alike.
 
-  * Stale reports — because nothing cleans `target/`, the run clears the
-    profile's stale `target/nextest/<profile>/junit.xml` before it starts: a
-    report an earlier run left there is never read as this run's.
+  * Leftover reports — a junit an earlier or another run left under
+    `target/nextest/<profile>/` is never filed as this run's: a run whose
+    stream holds no line files nothing.
 
   * The disk guard — an `--all-features` run is still guarded by
     `--min-free-g`: free space below the floor refuses the run before cargo
     builds anything, and a floor below the free space lets it proceed.
 
-  * Coverage when asked — `regression --coverage` keeps today's coverage
-    run: `cargo clean`, then `cargo llvm-cov … nextest` writing lcov, the
-    lcov text sent as the ingest's `coverage: {codec: "lcov", data}`, and the
+  * Coverage when asked — `regression --coverage`: `cargo clean`, then the
+    list and the streamed run under `cargo llvm-cov show-env`'s environment,
+    then `cargo llvm-cov report --failure-mode all --lcov` writing the lcov,
+    its text sent as the close's `coverage: {codec: "lcov", data}`, and the
     post-run reclaim; `--lcov-output` and `--keep-target` take effect with
     it.
 
-  * The refusals — `--lcov-output X`, `--ignore-run-fail` and
-    `--keep-target`, each without `--coverage`, are the typed
-    `coverage-flag-refused` hard stop, the verb's first act: one `ok:false`
-    envelope naming the flag and that it applies only with `--coverage`,
-    `help[]` saying to add `--coverage` or drop the flag, a non-zero exit, no
-    request of any kind to the board, no cargo launched (`cargo clean`
-    included), and the gate lock never reached. Each runs with `--agent` and
+  * The refusals — `--lcov-output X` and `--keep-target`, each without
+    `--coverage`, are the typed `coverage-flag-refused` hard stop, the verb's
+    first act: one `ok:false` envelope naming the flag and that it applies
+    only with `--coverage`, `help[]` saying to add `--coverage` or drop the
+    flag, a non-zero exit, no request of any kind to the board, no cargo
+    launched (`cargo clean` included), and the gate lock never reached. The
+    retired `--ignore-run-fail` is refused as early, its envelope naming the
+    flag and the lcov now always written. Each runs with `--agent` and
     no `--cycle` against a board reporting an active cycle, and over a
     project whose gate lock is held by a live cargo-like process — so a check
     placed after the board is consulted surfaces as a request (or the
@@ -40,12 +43,14 @@
 Every case drives the real `clients/rust-crucible.py` as a subprocess over a
 scratch project in the temp directory, steered only by that project's own
 `crucible.toml` `[client] url` and `--project-dir`. `cargo` and `df` are
-stand-ins on PATH. The recording `cargo` appends every launch's argv to a
-record file beside it, outside the project; a `nextest`/`llvm-cov` launch
-writes `target/nextest/<profile>/junit.xml` (three passing cases over two
-test binaries) and, when given `--output-path`, an lcov there. Its `clean`
-is a recorded no-op, so a stale report's removal can only be the client's
-own act. The `df` stand-in reports a fixed free figure for `/home`.
+stand-ins on PATH. The recording `cargo` answers `nextest --version` (which
+builds and runs nothing, so it is not recorded), then appends every other
+launch's argv to a record file beside it, outside the project; a streamed
+run's calls are answered by `tests/client/fake_nextest.py`: the list and the
+stream of three passing cases over two test binaries, `llvm-cov show-env`,
+and `llvm-cov report` writing EXPECTED_LCOV_TEXT. With FAKE_NO_REPORT=1 the
+run writes no stream line. Its `clean` is a recorded no-op. The `df`
+stand-in reports a fixed free figure for `/home`.
 
 Invocation:
     python3 -m unittest tests.client.test_rust_regression_coverage_is_opt_in -v
@@ -62,12 +67,13 @@ import time
 import unittest
 from pathlib import Path
 
+from tests.client.fake_nextest import held_results
 from tests.client.live_run_harness import (
     CLIENTS,
     INGEST_PATHS,
     RecordingBoard,
+    board_health,
     install_project,
-    junit_sent,
     load_toon,
     new_scratch,
     scrubbed_env,
@@ -132,44 +138,25 @@ import json
 import os
 import sys
 
-here = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, ''' + repr(str(Path(__file__).resolve().parent)) + r''')
+import fake_nextest
+
 args = sys.argv[1:]
+if args[:2] in (["nextest", "--version"], ["nextest", "-V"]):
+    sys.exit(fake_nextest.preliminary(args, []))
+here = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(here, "cargo_launches.jsonl"), "a") as handle:
     handle.write(json.dumps(args) + "\n")
-if not args or "nextest" not in args:
-    sys.exit(0)
-profile = "default"
-lcov = None
-for i, a in enumerate(args):
-    if a == "-P" and i + 1 < len(args):
-        profile = args[i + 1]
-    if a == "--output-path" and i + 1 < len(args):
-        lcov = args[i + 1]
-cases = [("probe-crate::alpha", "adds"), ("probe-crate::alpha", "subtracts"),
-         ("probe-crate::beta", "multiplies")]
-sys.stdout.write("    Starting %d tests across 2 binaries (run ID: deadbeef, "
-                 "nextest profile: %s)\n" % (len(cases), profile))
-for classname, name in cases:
-    sys.stdout.write("        PASS [   0.001s] %s %s\n" % (classname, name))
-sys.stdout.write("------------\n     Summary [   0.010s] %d tests run: %d "
-                 "passed, 0 skipped\n" % (len(cases), len(cases)))
-sys.stdout.flush()
+os.environ["FAKE_LCOV"] = ''' + repr(EXPECTED_LCOV_TEXT) + r'''
 if os.environ.get("FAKE_NO_REPORT") == "1":
-    sys.exit(0)
-junit_dir = os.path.join(os.getcwd(), "target", "nextest", profile)
-os.makedirs(junit_dir, exist_ok=True)
-with open(os.path.join(junit_dir, "junit.xml"), "w") as handle:
-    handle.write('<?xml version="1.0"?><testsuites><testsuite name="probe" '
-                 'tests="%d" failures="0">%s</testsuite></testsuites>'
-                 % (len(cases), "".join(
-                     '<testcase name="%s" classname="%s" time="0.001">'
-                     '</testcase>' % (n, c) for c, n in cases)))
-if lcov:
-    target = os.path.join(os.getcwd(), lcov)
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    with open(target, "w") as handle:
-        handle.write(''' + repr(EXPECTED_LCOV_TEXT) + r''')
-sys.exit(0)
+    os.environ["FAKE_STREAM_SILENT"] = "1"
+cases = [fake_nextest.case(name, crate="probe-crate", binary=binary, kind="test")
+         for binary, name in (("alpha", "adds"), ("alpha", "subtracts"),
+                              ("beta", "multiplies"))]
+code = fake_nextest.preliminary(args, cases)
+if code is None:
+    code = fake_nextest.streamed_run(args, cases)
+sys.exit(0 if code is None else code)
 '''
 
 
@@ -224,16 +211,44 @@ def _tree(project):
 
 
 def _plain_nextest(*selection, profile="ci"):
-    """The coverage-free run's argv after `cargo`."""
+    """The coverage-free run's argv after `cargo`, its stream flags aside."""
     return ["nextest", "run", "--workspace", *selection,
             "-P", profile, "--no-fail-fast"]
 
 
-def _coverage_run(lcov_output="target/lcov.info", profile="ci"):
-    """Today's coverage run's argv after `cargo`, its defaults resolved."""
-    return ["llvm-cov", "--failure-mode", "all", "nextest", "--workspace",
-            "--lcov", "--output-path", lcov_output, "-P", profile,
-            "--ignore-run-fail"]
+# The flag pairs that turn nextest's stream on, wherever the run places them.
+_STREAM_PAIRS = (("--message-format", "libtest-json-plus"),
+                 ("--message-format-version", "0.1"))
+
+
+def _without_pairs(argv, pairs):
+    """`(argv with each of `pairs` removed, the pairs that were found)`."""
+    rest, found, i = [], [], 0
+    while i < len(argv):
+        pair = tuple(argv[i:i + 2])
+        if pair in pairs:
+            found.append(pair)
+            i += 2
+            continue
+        rest.append(argv[i])
+        i += 1
+    return rest, found
+
+
+def _plain_streamed(argv):
+    """A streamed run's argv with its stream flags aside, or None when it
+    does not carry both of them."""
+    rest, found = _without_pairs(argv, _STREAM_PAIRS)
+    return rest if sorted(found) == sorted(_STREAM_PAIRS) else None
+
+
+def _listed_selection(argv):
+    """A `nextest list` launch's selection, its json format aside, sorted;
+    None when it is not a json list."""
+    if argv[:2] != ["nextest", "list"]:
+        return None
+    rest, found = _without_pairs(argv[2:], (("--message-format", "json"),))
+    return sorted(rest) if found else None
 
 
 class _RustProject:
@@ -261,12 +276,29 @@ class _RustProject:
                               check=False)
 
     def launches(self):
-        """Every recorded cargo launch's argv (after `cargo`), in order."""
+        """Every recorded cargo launch's argv (after `cargo`), in order: every
+        launch but the version read, which builds and runs nothing."""
         path = Path(self.bin_dir, "cargo_launches.jsonl")
         if not path.exists():
             return []
         return [json.loads(line) for line in path.read_text().splitlines()
                 if line.strip()]
+
+    def assert_lists_then_runs_plain_nextest(self, result, *selection, profile="ci"):
+        """The run's cargo launches are exactly two: the json list of the
+        run's own selection, then plain nextest over the workspace with its
+        stream on — no llvm-cov, no cargo clean before or after."""
+        launches = self.launches()
+        where = f"launches={launches!r} {_diagnostics(result)}"
+        self.assertEqual(len(launches), 2, where)  # type: ignore[attr-defined]
+        listed, ran = (launches + [[], []])[:2]
+        self.assertEqual(  # type: ignore[attr-defined]
+            _listed_selection(listed),
+            sorted(["--workspace", *selection, "-P", profile]),
+            f"first the json list of the run's own selection; {where}")
+        self.assertEqual(  # type: ignore[attr-defined]
+            _plain_streamed(ran), _plain_nextest(*selection, profile=profile),
+            f"then plain nextest over the workspace, its stream on; {where}")
 
     def plant_stale_junit(self, profile, age_s=3600, case=STALE_CASE):
         """A junit another run left for `profile`, `age_s` seconds old (an
@@ -328,11 +360,14 @@ class _RustProject:
                          f"body={body!r}")
         self.assertNotIn("summary", body,  # type: ignore[attr-defined]
                          f"the client sends no parse of its own; body={body!r}")
-        sent = (junit_sent(body) or {}).get("summary") or {}
         self.assertEqual(  # type: ignore[attr-defined]
-            (sent.get("total"), sent.get("passed")),
-            (EXPECTED_TOTAL, EXPECTED_TOTAL),
-            f"the junit text sent inline is this run's own; body={body!r}")
+            (body.get("codec"), "data" in body), ("nextest", False),
+            f"the run is closed from its nextest stream, carrying no report; "
+            f"body={body!r}")
+        held = held_results(board.held_stream(body.get("runId") or ""))
+        self.assertEqual(  # type: ignore[attr-defined]
+            (held["ok"], held["failed"]), (EXPECTED_TOTAL, 0),
+            f"the stream the board holds is this run's own; held={held!r}")
         return body
 
 
@@ -350,11 +385,7 @@ class RustRegressionWithoutCoverageRunsPlainNextestTest(_RustProject,
 
     def test_regression_without_coverage_runs_only_plain_nextest_over_the_workspace(self):
         result = self.drive(agent="rust-regression-plain")
-        self.assertEqual(
-            self.launches(), [_plain_nextest()],
-            f"the one cargo launch is `cargo nextest run --workspace -P ci "
-            f"--no-fail-fast` — no llvm-cov, no cargo clean before or after; "
-            f"{_diagnostics(result)}")
+        self.assert_lists_then_runs_plain_nextest(result)
 
     def test_regression_without_coverage_files_a_regression_run_with_files_and_no_coverage_key(self):
         result = self.drive(agent="rust-regression-plain-filed")
@@ -363,24 +394,19 @@ class RustRegressionWithoutCoverageRunsPlainNextestTest(_RustProject,
     def test_regression_with_features_passes_that_feature_set_to_plain_nextest(self):
         result = self.drive("--features", FEATURES,
                             agent="rust-regression-plain-features")
-        self.assertEqual(
-            self.launches(), [_plain_nextest("--features", FEATURES)],
-            f"the feature set rides plain nextest; {_diagnostics(result)}")
+        self.assert_lists_then_runs_plain_nextest(result, "--features", FEATURES)
         self.assert_coverage_free_regression_filed(self.board, result)
 
     def test_regression_with_a_named_profile_runs_plain_nextest_under_it(self):
         result = self.drive("--profile", "nightly",
                             agent="rust-regression-plain-profile")
-        self.assertEqual(
-            self.launches(), [_plain_nextest(profile="nightly")],
-            f"the named profile is nextest's -P; {_diagnostics(result)}")
+        self.assert_lists_then_runs_plain_nextest(result, profile="nightly")
         self.assert_coverage_free_regression_filed(self.board, result)
 
     def test_regression_without_coverage_under_cycle_binds_the_run_and_stays_coverage_free(self):
         result = self.drive("--cycle", str(CYCLE),
                             agent="rust-regression-plain-cycle")
-        self.assertEqual(self.launches(), [_plain_nextest()],
-                         f"plain nextest under --cycle; {_diagnostics(result)}")
+        self.assert_lists_then_runs_plain_nextest(result)
         self.assert_coverage_free_regression_filed(self.board, result)
         bound = [b for p, b in self.board.posts()
                  if p.endswith("/agents/heartbeat") and isinstance(b, dict)
@@ -394,20 +420,19 @@ class RustRegressionWithoutCoverageRunsPlainNextestTest(_RustProject,
     def test_regression_without_coverage_under_release_files_the_release_and_stays_coverage_free(self):
         result = self.drive("--release", RELEASE,
                             agent="rust-regression-plain-release")
-        self.assertEqual(self.launches(), [_plain_nextest()],
-                         f"plain nextest under --release; {_diagnostics(result)}")
+        self.assert_lists_then_runs_plain_nextest(result)
         body = self.assert_coverage_free_regression_filed(self.board, result)
         self.assertEqual(body.get("release"), RELEASE,
                          f"the ingest is filed under the release; body={body!r}")
 
 
-# ── stale reports are cleared first ─────────────────────────────────────────
+# ── a stale report is never this run's ──────────────────────────────────────
 
 class RustRegressionWithoutCoverageClearsStaleJunitTest(_RustProject,
                                                         unittest.TestCase):
     """With no `cargo clean`, a junit an earlier run left for the profile is
-    cleared before the run, so it is never read as this run's. The suite run
-    here writes no report, so a stale one still in place would be ingested."""
+    never read as this run's. The suite run here writes no stream line, so a
+    run that read the stale report would file it."""
 
     def setUp(self):
         self.board = _answering_board()
@@ -427,19 +452,16 @@ class RustRegressionWithoutCoverageClearsStaleJunitTest(_RustProject,
         self.assertNotEqual(result.returncode, 0,
                             f"a run with no report of its own is a failure; "
                             f"{_diagnostics(result)}")
-        self.assertFalse(stale.exists(),
-                         f"the stale junit was cleared before the run; "
-                         f"{_diagnostics(result)}")
         self.assertNotIn(["clean"], self.launches(),
-                         f"the clearing is the client's own, not a cargo "
-                         f"clean; launches={self.launches()!r}")
+                         f"nothing runs a cargo clean; "
+                         f"launches={self.launches()!r}")
 
-    def test_stale_junit_for_the_default_profile_is_cleared_and_never_ingested(self):
+    def test_stale_junit_for_the_default_profile_is_never_filed_as_this_runs(self):
         stale = self.plant_stale_junit("ci")
         result = self.drive(agent="rust-regression-stale-ci", FAKE_NO_REPORT="1")
         self.assert_stale_report_not_read(result, stale)
 
-    def test_stale_junit_for_a_named_profile_is_cleared_and_never_ingested(self):
+    def test_stale_junit_for_a_named_profile_is_never_filed_as_this_runs(self):
         stale = self.plant_stale_junit("nightly")
         result = self.drive("--profile", "nightly",
                             agent="rust-regression-stale-named",
@@ -450,14 +472,13 @@ class RustRegressionWithoutCoverageClearsStaleJunitTest(_RustProject,
 # ── a report another run wrote moments ago is never this run's ─────────
 
 class RustRegressionFilesOnlyItsOwnReportTest(_RustProject, unittest.TestCase):
-    """A junit too young for the stale-report clearing — another run wrote it
-    seconds before this one started — is not this run's report. A plain
-    `regression` whose suite run writes none takes the no-report path: it
-    files nothing, aborts the run it opened and exits non-zero, and it leaves
-    the other run's report where that run wrote it."""
+    """A junit another run wrote seconds before this one started is not this
+    run's report. A plain `regression` whose suite run writes no stream line
+    takes the no-report path: it files nothing, aborts the run it opened and
+    exits non-zero, and it leaves the other run's report where that run wrote
+    it."""
 
-    # Seconds old: well inside the clearing's window, so only the run's own
-    # start time can tell the report is not this run's.
+    # Seconds old: a report as fresh as this run's own would be.
     AGE_S = 5
 
     def setUp(self):
@@ -540,18 +561,18 @@ class RustRegressionWithoutCoverageKeepsTheDiskGuardTest(_RustProject,
     def test_run_without_all_features_below_the_floor_is_not_guarded(self):
         result = self.drive("--min-free-g", "50",
                             agent="rust-regression-disk-unguarded")
-        self.assertEqual(
-            self.launches(), [_plain_nextest()],
-            f"a coverage-free run without --all-features is not disk-heavy, "
-            f"so free space below the floor still runs plain nextest; "
-            f"{_diagnostics(result)}")
+        # A coverage-free run without --all-features is not disk-heavy, so
+        # free space below the floor still lists and runs plain nextest.
+        self.assert_lists_then_runs_plain_nextest(result)
         self.assert_coverage_free_regression_filed(self.board, result)
 
     def test_all_features_run_with_the_floor_below_free_space_runs_plain_nextest(self):
         result = self.drive("--all-features", "--min-free-g", "10",
                             agent="rust-regression-disk-proceeds")
+        self.assert_lists_then_runs_plain_nextest(result, "--all-features")
         self.assertEqual(
-            self.launches(), [_plain_nextest("--all-features")],
+            [_plain_streamed(argv) for argv in self.launches()[1:]],
+            [_plain_nextest("--all-features")],
             f"a floor below the free space lets the --all-features run "
             f"proceed under plain nextest; {_diagnostics(result)}")
         self.assert_coverage_free_regression_filed(self.board, result)
@@ -560,8 +581,9 @@ class RustRegressionWithoutCoverageKeepsTheDiskGuardTest(_RustProject,
 # ── with `--coverage`: today's coverage run ────────────────────────────────
 
 class RustRegressionWithCoverageTest(_RustProject, unittest.TestCase):
-    """`regression --coverage` cleans, runs llvm-cov's nextest, files the
-    lcov coverage and reclaims — today's coverage run."""
+    """`regression --coverage` cleans, lists and streams its run under
+    llvm-cov's environment, writes the lcov with `llvm-cov report`, files it
+    as the close's coverage and reclaims."""
 
     def setUp(self):
         self.board = _answering_board()
@@ -583,13 +605,37 @@ class RustRegressionWithCoverageTest(_RustProject, unittest.TestCase):
             f"the ingest sends the run's own lcov text as its coverage report; "
             f"body={body!r}")
 
+    def assert_coverage_launches(self, result, reclaim, lcov_output="target/lcov.info"):
+        """cargo clean; `llvm-cov show-env`; the json list and the streamed
+        plain nextest run of the workspace; `llvm-cov report --failure-mode
+        all --lcov`; and the post-run reclaim when `reclaim`. Clearing old
+        profiles with `llvm-cov clean` may come between them. No launch runs
+        the tests under `llvm-cov nextest`."""
+        launches = [argv for argv in self.launches() if argv[:2] != ["llvm-cov", "clean"]]
+        where = f"launches={self.launches()!r} {_diagnostics(result)}"
+        expected = [["clean"], ["llvm-cov", "show-env"], ["nextest", "list"],
+                    ["nextest", "run"], ["llvm-cov", "report"]] + (
+            [["clean"]] if reclaim else [])
+        self.assertEqual([argv[:1] if argv[:1] == ["clean"] else argv[:2]
+                          for argv in launches], expected, where)
+        if launches[:1] != [["clean"]] or len(launches) != len(expected):
+            return
+        self.assertEqual(_listed_selection(launches[2]),
+                         sorted(["--workspace", "-P", "ci"]), where)
+        self.assertEqual(_plain_streamed(launches[3]), _plain_nextest(), where)
+        report = launches[4]
+        self.assertIn("--lcov", report, where)
+        self.assertEqual(_without_pairs(report, (("--failure-mode", "all"),))[1],
+                         [("--failure-mode", "all")], where)
+        self.assertEqual(_without_pairs(report, (("--output-path", lcov_output),))[1],
+                         [("--output-path", lcov_output)],
+                         f"the report writes the lcov at {lcov_output}; {where}")
+        self.assertFalse(any(argv[:1] == ["llvm-cov"] and "nextest" in argv
+                             for argv in self.launches()), where)
+
     def test_coverage_cleans_runs_llvm_cov_nextest_and_reclaims(self):
         result = self.drive("--coverage", agent="rust-regression-coverage-run")
-        self.assertEqual(
-            self.launches(), [["clean"], _coverage_run(), ["clean"]],
-            f"cargo clean, then llvm-cov's nextest with today's defaults "
-            f"(target/lcov.info, --ignore-run-fail), then the post-run "
-            f"reclaim; {_diagnostics(result)}")
+        self.assert_coverage_launches(result, reclaim=True)
         self.assert_carries_the_lcov(result)
 
     def test_coverage_with_lcov_output_and_keep_target_writes_there_and_keeps_target(self):
@@ -597,11 +643,9 @@ class RustRegressionWithCoverageTest(_RustProject, unittest.TestCase):
         result = self.drive("--coverage", "--lcov-output", custom,
                             "--keep-target",
                             agent="rust-regression-coverage-flags")
-        self.assertEqual(
-            self.launches(), [["clean"], _coverage_run(lcov_output=custom)],
-            f"with --coverage, --lcov-output names llvm-cov's output and "
-            f"--keep-target skips the post-run reclaim; "
-            f"{_diagnostics(result)}")
+        # With --coverage, --lcov-output names where the report writes the
+        # lcov, and --keep-target skips the post-run reclaim.
+        self.assert_coverage_launches(result, reclaim=False, lcov_output=custom)
         self.assert_carries_the_lcov(result)
 
 
@@ -609,12 +653,14 @@ class RustRegressionWithCoverageTest(_RustProject, unittest.TestCase):
 
 class RustCoverageOnlyFlagWithoutCoverageIsRefusedTest(_RustProject,
                                                        unittest.TestCase):
-    """`--lcov-output`, `--ignore-run-fail` and `--keep-target` without
-    `--coverage` are the typed `coverage-flag-refused` hard stop, decided
-    before the board, the gate lock or cargo."""
+    """`--lcov-output` and `--keep-target` without `--coverage` are the
+    typed `coverage-flag-refused` hard stop, decided before the board, the
+    gate lock or cargo; the retired `--ignore-run-fail` is refused as early."""
 
     def setUp(self):
-        self.board = ActiveCycleBoard()
+        # A board whose health lists `nextest` under `codecs.stream`, so a run
+        # that gets past the board's health reaches the gate lock.
+        self.board = ActiveCycleBoard(health=board_health())
         self.addCleanup(self.board.close)
         # The project key must not spell the refusal's code: the envelope's
         # context carries it, and the code is looked for in both streams.
@@ -647,16 +693,7 @@ class RustCoverageOnlyFlagWithoutCoverageIsRefusedTest(_RustProject,
             REFUSED_CODE, streams,
             f"{flag} without --coverage is the typed {REFUSED_CODE} hard "
             f"stop; {_diagnostics(result)}")
-        self.assertNotIn(
-            UNATTRIBUTED_CODE, streams,
-            f"the coverage-flag refusal is the verb's first act; "
-            f"{_diagnostics(result)}")
-        self.assertEqual(_envelope_count(result.stdout), 1,
-                         f"exactly one envelope; {_diagnostics(result)}")
-        envelope = _envelope(result.stdout) or {}
-        self.assertEqual(
-            (envelope.get("verb"), envelope.get("ok")), ("regression", False),
-            f"an ok:false regression envelope; envelope={envelope!r}")
+        envelope = self.assert_one_refusal_and_nothing_ran(result, before)
         error = _plain(envelope.get("error") or "")
         self.assertIn(flag, error,
                       f"error names the refused flag; envelope={envelope!r}")
@@ -671,6 +708,23 @@ class RustCoverageOnlyFlagWithoutCoverageIsRefusedTest(_RustProject,
                       f"help[] says to add --coverage; help={help_steps!r}")
         self.assertIn("drop", help_text,
                       f"help[] says to drop the flag; help={help_steps!r}")
+
+    def assert_one_refusal_and_nothing_ran(self, result, before):
+        """One ok:false `regression` envelope, a non-zero exit that is not
+        the gate-locked one, and nothing reached: no board request, no cargo
+        launch, the held lock untouched, nothing written into the project.
+        Returns the envelope."""
+        streams = (result.stdout or "") + (result.stderr or "")
+        self.assertNotIn(
+            UNATTRIBUTED_CODE, streams,
+            f"the coverage-flag refusal is the verb's first act; "
+            f"{_diagnostics(result)}")
+        self.assertEqual(_envelope_count(result.stdout), 1,
+                         f"exactly one envelope; {_diagnostics(result)}")
+        envelope = _envelope(result.stdout) or {}
+        self.assertEqual(
+            (envelope.get("verb"), envelope.get("ok")), ("regression", False),
+            f"an ok:false regression envelope; envelope={envelope!r}")
         self.assertNotEqual(result.returncode, 0,
                             f"a refusal exits non-zero; {_diagnostics(result)}")
         self.assertNotEqual(result.returncode, 75,
@@ -692,14 +746,29 @@ class RustCoverageOnlyFlagWithoutCoverageIsRefusedTest(_RustProject,
             _tree(self.project), before,
             f"nothing is written into the project — no lock, no reports, no "
             f"target; {_diagnostics(result)}")
+        return envelope
 
     def test_lcov_output_without_coverage_is_refused_before_anything_runs(self):
         self.assert_refused_before_anything_runs(
             "--lcov-output", "--lcov-output", "target/cov/custom.info")
 
     def test_ignore_run_fail_without_coverage_is_refused_before_anything_runs(self):
-        self.assert_refused_before_anything_runs(
-            "--ignore-run-fail", "--ignore-run-fail")
+        """The retired flag is refused whether or not `--coverage` is given:
+        the refusal names it and says the lcov is now always written, and
+        never tells the caller to add `--coverage`."""
+        before = _tree(self.project)
+        result = self.drive("--ignore-run-fail", agent="rust-flag-alone-agent")
+        envelope = self.assert_one_refusal_and_nothing_ran(result, before)
+        said = _plain(" ".join([str(envelope.get("error") or "")]
+                               + [str(h) for h in envelope.get("help") or []]))
+        self.assertIn("--ignore-run-fail", said,
+                      f"the refusal names the retired flag; envelope={envelope!r}")
+        self.assertIn("lcov", said,
+                      f"the refusal says the lcov is now always written; "
+                      f"envelope={envelope!r}")
+        self.assertNotIn("add --coverage", said,
+                         f"--coverage does not make a retired flag valid; "
+                         f"envelope={envelope!r}")
 
     def test_keep_target_without_coverage_is_refused_before_anything_runs(self):
         self.assert_refused_before_anything_runs(

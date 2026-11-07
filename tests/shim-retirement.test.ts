@@ -877,13 +877,45 @@ describe("clients/bun-crucible.py — silent-cleanup swap (§S4 precondition 4)"
 // the silent-unregister call site to each script's gated-run path.
 //
 // TOOLCHAIN-FREE FIXTURE STRATEGY reused from
-// tests/clients-rust-mvn-crucible.test.ts: a no-op `cargo`/`mvnw`/`make` stub
-// on PATH, so pre-placed report fixtures are read without any real toolchain
-// invocation. python needs no stub: its unittest runner is the client's own
-// and needs only the standard library (CR-CRU-224), so a one-test `tests`
-// package is the whole fixture.
+// tests/clients-rust-mvn-crucible.test.ts: a no-op `mvnw`/`make` stub on
+// PATH, so pre-placed report fixtures are read without any real toolchain
+// invocation. rust's `cargo` is the shared fake-nextest stand-in instead: the
+// rust client reads the nextest version, lists, streams its run and asks
+// llvm-cov for its coverage before it reaches the gated-run cleanup, so a
+// no-op `cargo` stops it short of the call under test. python needs no stub:
+// its unittest runner is the client's own and needs only the standard
+// library (CR-CRU-224), so a one-test `tests` package is the whole fixture.
 // ─────────────────────────────────────────────────────────────────────────
 const NOOP_SCRIPT = "#!/bin/sh\nexit 0\n";
+
+/** The shared fake-nextest module (tests/client/fake_nextest.py): it answers
+ * the calls a streamed rust run makes of cargo the way cargo-nextest and
+ * cargo-llvm-cov answer them. */
+const FAKE_NEXTEST_DIR = join(import.meta.dir, "client");
+
+/** A fake `cargo` that answers `nextest --version`, `nextest list
+ * --message-format json` (the listed `cases`), the streamed `nextest run`
+ * (the stream of `cases` on stdout) and llvm-cov's `show-env`/`report`/`clean`
+ * through the shared fake-nextest module; every other call is a no-op that
+ * exits 0. The same stand-in tests/clients-rust-mvn-crucible.test.ts uses. */
+function fakeNextestCargo(cases: Array<{ name: string; fail?: boolean }>): string {
+  const listed = cases
+    .map((c) => `fake_nextest.case(${JSON.stringify(c.name)}, ${JSON.stringify(c.fail ? "failed" : "ok")})`)
+    .join(", ");
+  return (
+    "#!/usr/bin/env python3\n" +
+    "import sys\n" +
+    `sys.path.insert(0, ${JSON.stringify(FAKE_NEXTEST_DIR)})\n` +
+    "import fake_nextest\n" +
+    "args = sys.argv[1:]\n" +
+    `cases = [${listed}]\n` +
+    "code = fake_nextest.preliminary(args, cases)\n" +
+    "if code is None:\n" +
+    "    fake_nextest.record_call(args)\n" +
+    "    code = fake_nextest.streamed_run(args, cases)\n" +
+    "sys.exit(0 if code is None else code)\n"
+  );
+}
 
 function writeExecutable(filePath: string, script: string): void {
   writeFileSync(filePath, script);
@@ -962,11 +994,8 @@ describe("clients/{rust,mvn,python,arduino}-crucible.py — silent-cleanup swap 
     const key = await createProject(baseUrl, "silent-cleanup-rust-1");
     const dir = scratchDir("rust-crucible-silent-cleanup-");
     writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
-    const junitDir = join(dir, "target", "nextest", "ci");
-    mkdirSync(junitDir, { recursive: true });
-    writeJunitXmlFile(join(junitDir, "junit.xml"), "regression_fixture", [{ name: "alpha" }]);
     const binDir = scratchDir("fake-cargo-bin-");
-    writeExecutable(join(binDir, "cargo"), NOOP_SCRIPT);
+    writeExecutable(join(binDir, "cargo"), fakeNextestCargo([{ name: "alpha" }]));
 
     await runScript(
       ["regression-ingest", "--agent", "rust-gated-agent", "--crates", "demo-crate", "--project-dir", dir],

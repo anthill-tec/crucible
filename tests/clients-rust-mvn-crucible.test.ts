@@ -71,7 +71,7 @@
 // (register, unregister, junit ingest, parsed ingest) must move to v2 with
 // NO exception, and every test below pins v1 as NEVER hit.
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
@@ -329,6 +329,36 @@ function writeExecutable(path: string, script: string): void {
  * a report its own run wrote (CR-CRU-212 `_written_since`), so its fake
  * `cargo` writes the report during the run (CR-CRU-215 §S1). */
 const NOOP_SCRIPT = "#!/bin/sh\nexit 0\n";
+
+/** The shared fake-nextest module (tests/client/fake_nextest.py): it answers
+ * the calls a streamed rust run makes of cargo the way cargo-nextest and
+ * cargo-llvm-cov answer them. */
+const FAKE_NEXTEST_DIR = join(import.meta.dir, "client");
+
+/** A fake `cargo` that answers `nextest --version`, `nextest list
+ * --message-format json` (the listed `cases`), the streamed `nextest run`
+ * (the stream of `cases` on stdout) and llvm-cov's `show-env`/`report`/`clean`
+ * through the shared fake-nextest module; every other call (`cargo clean`,
+ * `cargo check`, …) is a no-op that exits 0. A `fail` case fails, a `skip`
+ * case is ignored. `llvm-cov report` writes the lcov at `FAKE_LCOV_FILE`. */
+function fakeNextestCargo(cases: Array<{ name: string; fail?: boolean; skip?: boolean }>): string {
+  const listed = cases
+    .map((c) => `fake_nextest.case(${JSON.stringify(c.name)}, ${JSON.stringify(c.fail ? "failed" : c.skip ? "ignored" : "ok")})`)
+    .join(", ");
+  return (
+    "#!/usr/bin/env python3\n" +
+    "import sys\n" +
+    `sys.path.insert(0, ${JSON.stringify(FAKE_NEXTEST_DIR)})\n` +
+    "import fake_nextest\n" +
+    "args = sys.argv[1:]\n" +
+    `cases = [${listed}]\n` +
+    "code = fake_nextest.preliminary(args, cases)\n" +
+    "if code is None:\n" +
+    "    fake_nextest.record_call(args)\n" +
+    "    code = fake_nextest.streamed_run(args, cases)\n" +
+    "sys.exit(0 if code is None else code)\n"
+  );
+}
 
 function writeEnvFile(dir: string, projectKey: string): void {
   writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${projectKey}\n`);
@@ -601,11 +631,10 @@ describe("clients/rust-crucible.py — a key no project holds is refused by ever
     const dir = scratch.dir("rust-crucible-unknown-key-test-");
     writeEnvFile(dir, UNKNOWN_PROJECT_KEY);
     const envPath = join(dir, ".env");
-    const junitDir = join(dir, "target", "nextest", "ci");
-    Bun.spawnSync({ cmd: ["mkdir", "-p", junitDir] });
-    writeJunitXml(join(junitDir, "junit.xml"), "unknown_key_fixture", [{ name: "alpha" }]);
+    // A fake cargo that answers nextest's version and its streamed calls, so
+    // the run is taken past its toolchain check to the board's refusal.
     const binDir = scratch.dir("fake-cargo-bin-");
-    writeExecutable(join(binDir, "cargo"), NOOP_SCRIPT);
+    writeExecutable(join(binDir, "cargo"), fakeNextestCargo([{ name: "alpha" }]));
 
     const res = await runScript(
       RUST_SCRIPT_PATH,
@@ -778,35 +807,32 @@ describe("clients/rust-crucible.py — regression-ingest: one POST /api/v2/runs,
     scratch.cleanup();
   });
 
-  function fixtureDirWithFakeCargo(key: string): { dir: string; path: string } {
+  // The fake cargo streams the run's two tests, and `llvm-cov report` writes
+  // the fixture lcov (FAKE_LCOV_FILE) as the run's coverage.
+  function fixtureDirWithFakeCargo(key: string): { dir: string; path: string; lcov: string } {
     const dir = scratch.dir("rust-crucible-regression-");
     writeEnvFile(dir, key);
-    const junitDir = join(dir, "target", "nextest", "ci");
-    Bun.spawnSync({ cmd: ["mkdir", "-p", junitDir] });
-    writeJunitXml(join(junitDir, "junit.xml"), "regression_fixture", [
-      { name: "alpha" },
-      { name: "beta" },
-    ]);
-    writeLcovInfo(join(dir, "target", "lcov.info"), { lf: 10, lh: 8, ff: 5, fh: 4 });
+    const lcov = join(scratch.dir("rust-crucible-regression-lcov-"), "lcov.info");
+    writeLcovInfo(lcov, { lf: 10, lh: 8, ff: 5, fh: 4 });
 
     const binDir = scratch.dir("fake-cargo-bin-");
-    writeExecutable(join(binDir, "cargo"), NOOP_SCRIPT);
+    writeExecutable(join(binDir, "cargo"), fakeNextestCargo([{ name: "alpha" }, { name: "beta" }]));
     const path = `${binDir}:${process.env.PATH ?? ""}`;
-    return { dir, path };
+    return { dir, path, lcov };
   }
 
   test("records tier:'regression' via one POST /api/v2/runs (never the parsed route, never v1 /api/ingest/parsed)", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-regression-ingest-tier");
-    const { dir, path } = fixtureDirWithFakeCargo(key);
+    const { dir, path, lcov } = fixtureDirWithFakeCargo(key);
     await ensureRegistered(RUST_SCRIPT_PATH, "rust-regression-agent", { cwd: dir, crucibleUrl: baseUrl });
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(
       RUST_SCRIPT_PATH,
       ["regression-ingest", "--agent", "rust-regression-agent", "--crates", "demo-crate", "--project-dir", dir],
-      { cwd: dir, crucibleUrl: proxy.url, env: { PATH: path } },
+      { cwd: dir, crucibleUrl: proxy.url, env: { PATH: path, FAKE_LCOV_FILE: lcov } },
     );
 
     const events = await nonLifecycleEvents(baseUrl, key);
@@ -815,7 +841,8 @@ describe("clients/rust-crucible.py — regression-ingest: one POST /api/v2/runs,
 
     expect(res.code).toBe(0);
     expect(event.tier).toBe("regression");
-    expect(event.codec).toBe("junit");
+    // The run is closed from its nextest stream.
+    expect(event.codec).toBe("nextest");
     expect(event.summary?.total).toBe(2);
     expect(event.summary?.passed).toBe(2);
     expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs")).toBe(true);
@@ -827,18 +854,19 @@ describe("clients/rust-crucible.py — regression-ingest: one POST /api/v2/runs,
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-regression-ingest-coverage");
-    const { dir, path } = fixtureDirWithFakeCargo(key);
+    const { dir, path, lcov } = fixtureDirWithFakeCargo(key);
     await ensureRegistered(RUST_SCRIPT_PATH, "rust-coverage-agent", { cwd: dir, crucibleUrl: baseUrl });
 
     await runScript(
       RUST_SCRIPT_PATH,
       ["regression-ingest", "--agent", "rust-coverage-agent", "--crates", "demo-crate", "--project-dir", dir],
-      { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } },
+      { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path, FAKE_LCOV_FILE: lcov } },
     );
 
     const events = await nonLifecycleEvents(baseUrl, key);
+    expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
-    expect(event.codec).toBe("junit");
+    expect(event.codec).toBe("nextest");
     expect(event.coverage?.lines?.total).toBe(10);
     expect(event.coverage?.lines?.covered).toBe(8);
     expect(event.coverage?.functions?.total).toBe(5);
@@ -898,11 +926,9 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 1 (regres
   ): { dir: string; path: string } {
     const dir = scratch.dir("rust-crucible-cr050-regression-");
     writeEnvFile(dir, key);
-    const junitDir = join(dir, "target", "nextest", "ci");
-    Bun.spawnSync({ cmd: ["mkdir", "-p", junitDir] });
-    writeJunitXml(join(junitDir, "junit.xml"), "cr050_regression_fixture", cases);
+    // The fake cargo streams `cases` as nextest runs them.
     const binDir = scratch.dir("fake-cargo-bin-cr050-");
-    writeExecutable(join(binDir, "cargo"), NOOP_SCRIPT);
+    writeExecutable(join(binDir, "cargo"), fakeNextestCargo(cases));
     const path = `${binDir}:${process.env.PATH ?? ""}`;
     return { dir, path };
   }
@@ -928,8 +954,8 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 1 (regres
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
-    // The board decoded the report the client sent.
-    expect(event.codec).toBe("junit");
+    // The board decoded the stream the client relayed.
+    expect(event.codec).toBe("nextest");
 
     // §S1 — counts.
     expect(event.summary?.total).toBe(3);
@@ -987,38 +1013,19 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (worksp
     writeFileSync(join(dir, ".gitkeep"), "");
     runGit(["add", "."], dir);
     runGit(["commit", "-q", "-m", "initial"], dir);
-    // CR-CRU-215 §S1/AC1: the report this run files is staged OUTSIDE
-    // `target/` — the fake `cargo` copies it into the nextest report path
-    // during the run, so the client (`_written_since`, CR-CRU-212) reads a
-    // report its own run wrote, never one placed ahead of the run.
-    const fixturesDir = join(dir, "fixtures");
-    Bun.spawnSync({ cmd: ["mkdir", "-p", fixturesDir] });
-    const stagedJunit = join(fixturesDir, "junit.xml");
-    writeJunitXml(stagedJunit, "cr050_workspace_fixture", [
-      { name: "delta" },
-      { name: "epsilon", fail: true },
-      { name: "zeta", skip: true },
-    ]);
-    const reportPath = join(dir, "target", "nextest", "ci", "junit.xml"); // default --profile
+    // The fake cargo streams the run's three tests as nextest runs them, so
+    // what the run files is what this run wrote.
     const binDir = scratch.dir("fake-cargo-bin-cr050-ws-");
-    // CR-CRU-215 §S1: this case's own fake `cargo` — on its `nextest` call
-    // (`cargo llvm-cov … nextest … -P ci`) it copies the staged fixture into
-    // the nextest report path, so the report is written during the run.
     writeExecutable(
       join(binDir, "cargo"),
-      "#!/bin/sh\n" +
-        'case " $* " in\n' +
-        `  *" nextest "*) mkdir -p '${join(dir, "target", "nextest", "ci")}' && cp '${stagedJunit}' '${reportPath}' || exit 1 ;;\n` +
-        "esac\n" +
-        "exit 0\n",
+      fakeNextestCargo([
+        { name: "delta" },
+        { name: "epsilon", fail: true },
+        { name: "zeta", skip: true },
+      ]),
     );
     const path = `${binDir}:${process.env.PATH ?? ""}`;
     await ensureRegistered(RUST_SCRIPT_PATH, "rust-cr050-workspace-agent", { cwd: dir, crucibleUrl: baseUrl });
-
-    // CR-CRU-215 AC2: nothing exists at the nextest report path when the
-    // client is started — the staged fixture is the only copy.
-    expect(existsSync(reportPath)).toBe(false);
-    expect(existsSync(stagedJunit)).toBe(true);
 
     const res = await runScript(
       RUST_SCRIPT_PATH,
@@ -1032,19 +1039,15 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (worksp
       { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } },
     );
 
-    // CR-CRU-215 AC1: the report was written by this run's fake `cargo`, so
-    // the client never takes its no-report path (`_written_since`).
-    expect(res.stderr).not.toContain("no junit.xml written by this run");
-
     const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
-    // The board decoded the report the client sent.
-    expect(event.codec).toBe("junit");
+    // The board decoded the stream the client relayed.
+    expect(event.codec).toBe("nextest");
 
-    // §S1 — counts; CR-CRU-215 AC2: exactly the staged report's counts, the
-    // report the fake `cargo` wrote during the run.
+    // §S1 — counts: exactly the streamed run's, the run the fake `cargo`
+    // made.
     expect(event.summary?.total).toBe(3);
     expect(event.summary?.failed).toBe(1);
     expect(event.summary?.passed).toBe(1);
@@ -1166,14 +1169,12 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S2 (extended): smoke-test's 
     writeFileSync(join(dir, ".gitkeep"), "");
     runGit(["add", "."], dir);
     runGit(["commit", "-q", "-m", "initial"], dir);
-    const junitDir = join(dir, "target", "nextest", "ci"); // default --profile
-    Bun.spawnSync({ cmd: ["mkdir", "-p", junitDir] });
-    writeJunitXml(join(junitDir, "junit.xml"), "cr050_smoke_fixture", [
-      { name: "smoke-one" },
-      { name: "smoke-two", skip: true },
-    ]);
+    // The fake cargo streams one passing and one ignored test.
     const binDir = scratch.dir("fake-cargo-bin-cr050-smoke-");
-    writeExecutable(join(binDir, "cargo"), NOOP_SCRIPT);
+    writeExecutable(
+      join(binDir, "cargo"),
+      fakeNextestCargo([{ name: "smoke-one" }, { name: "smoke-two", skip: true }]),
+    );
     const path = `${binDir}:${process.env.PATH ?? ""}`;
     await ensureRegistered(RUST_SCRIPT_PATH, "rust-cr050-smoke-agent", { cwd: dir, crucibleUrl: baseUrl });
 
@@ -1186,6 +1187,8 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S2 (extended): smoke-test's 
     const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
+    // The run is closed from its nextest stream.
+    expect(event.codec).toBe("nextest");
     expect(event.summary?.total).toBe(2);
     expect(event.summary?.passed).toBe(1);
     expect(event.summary?.pending).toBe(1);

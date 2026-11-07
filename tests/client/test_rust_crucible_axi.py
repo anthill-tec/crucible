@@ -36,10 +36,11 @@ the shared module + the bun reference; this file only proves
 rust-crucible.py is correctly WIRED to that shared behavior plus its own
 toolchain (`cargo nextest` / `cargo check`). The real `cargo`/`nextest`
 toolchain is NOT invoked here (too heavy for a unit test, and not installed
-in every CI sandbox) -- `subprocess.run` is mocked and a nextest-shaped
-JUnit fixture is pre-seeded at the path `cmd_test` already looks for, so
-the ingest/parse/envelope wiring is exercised for real while the actual
-compiler invocation is stubbed.
+in every CI sandbox) -- a test-running verb runs a fake `cargo` first on
+PATH that answers a streamed run's calls as nextest does
+(`tests/client/fake_nextest.py`), and `cargo check` has `subprocess.run`
+mocked, so the stream/close/envelope wiring is exercised for real while the
+actual compiler invocation is stubbed.
 
 Module-loading + HTTP-mocking convention copied verbatim from the sibling
 bun test harnesses: load by file path via `importlib`, mock the module's
@@ -71,7 +72,8 @@ from unittest import mock
 # installed project has; the fleet census owns that helper (one fixture shape
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
 from tests.client.test_client_fleet_envelope_census import install_project_limits
-from tests.client.live_run_harness import get_answering_health
+from tests.client.live_run_harness import StreamingPost, get_answering_health
+from tests.client.fake_nextest import held_results, private_fake_prelude
 
 # CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
 # this client register, and through what?", reused rather than re-derived.
@@ -1185,94 +1187,107 @@ class RustCrucibleCycleBindingTest(_BaseRustAxiTest):
 
 
 class RustCrucibleToolchainTest(_BaseRustAxiTest):
+    """The real cargo/nextest wiring, with a fake `cargo` first on PATH that
+    answers a streamed run's calls (`tests/client/fake_nextest.py`: the
+    version, the list, `llvm-cov show-env`/`report`, and the
+    `libtest-json-plus` stream of one passing test), printing RAW_MARKER on
+    its stderr during the run step. Everything downstream (relay, close,
+    envelope) is real; `_post` and the transport under it are a board that
+    opens the run and holds its stream."""
+
+    RAW_MARKER = "RUST_RAW_CAPTURE_MARKER_6624"
+
+    def _streamed_drive(self, argv, run_block=None, get_fallback=None):
+        bin_dir = tempfile.mkdtemp(prefix="rust-crucible-axi-bin-")
+        self.addCleanup(shutil.rmtree, bin_dir, ignore_errors=True)
+        cargo = Path(bin_dir, "cargo")
+        cargo.write_text("#!" + sys.executable + "\n" + private_fake_prelude(
+            "[fake_nextest.case('adds', crate='some-crate', binary='some_crate')]",
+            streamed=False) + (
+            "if fake_nextest.is_streamed_run(_nx_args):\n"
+            f"    _nx_sys.stderr.write({self.RAW_MARKER!r} + '\\n')\n"
+            "    _nx_sys.exit(fake_nextest.streamed_run(_nx_args, _nx_cases))\n"
+            "_nx_sys.exit(0)\n"))
+        cargo.chmod(0o755)
+        stream = StreamingPost(run=run_block)
+        health = get_answering_health(get_fallback)
+
+        def request(method, path, payload=None, timeout=None):
+            return stream(path, payload) if method == "POST" else health(path)
+
+        env = {"PATH": bin_dir + os.pathsep + os.environ.get("PATH", "")}
+        out_path = os.path.join(self.tmpdir, "drive-stdout.txt")
+        err_path = os.path.join(self.tmpdir, "drive-stderr.txt")
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(self.module, "_post", side_effect=stream,
+                                  create=True) as post_mock, \
+                mock.patch.object(self.module, "_request", side_effect=request,
+                                  create=True), \
+                mock.patch.object(self.module, "_get", side_effect=health, create=True), \
+                open(out_path, "w") as out, open(err_path, "w") as err, \
+                mock.patch.object(sys, "argv", ["rust-crucible.py"] + argv), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            for key in ("NEXTEST_EXPERIMENTAL_LIBTEST_JSON", "CARGO_TARGET_DIR"):
+                os.environ.pop(key, None)
+            try:
+                self.module.main()
+                code = 0
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        return code, Path(out_path).read_text(), Path(err_path).read_text(), post_mock, stream
+
+    def _close_of(self, post_mock, out, err):
+        closes = [call[0][1] for call in post_mock.call_args_list
+                  if call[0] and call[0][0] == "/api/v2/runs"]
+        self.assertEqual(
+            [(body.get("codec"), "data" in body) for body in closes], [("nextest", False)],
+            f"the run is closed once from its nextest stream, carrying no report; "
+            f"stdout={out!r} stderr={err[-1500:]!r}")
+        return closes[0] if closes else {}
+
     def test_test_verb_runs_cargo_nextest_and_ingests_with_run_summary(self):
         """CR-CRU-056 §S3 retarget: attachment is server-stamped now, not
         client-resolved -- keeps proving the real cargo/nextest wiring still
-        ingests correctly, dropping the dead active-cycle-plans fixture."""
+        files correctly, dropping the dead active-cycle-plans fixture."""
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
-        nextest_dir = os.path.join(self.tmpdir, "target", "nextest", "ci")
-        os.makedirs(nextest_dir, exist_ok=True)
-
-        def fake_subprocess_run(cmd, *args, **kwargs):
-            # Simulate `cargo nextest run` succeeding by writing the junit
-            # fixture at the path cmd_test already looks for -- the real
-            # cargo/nextest toolchain invocation is stubbed, everything
-            # downstream (junit discovery, ingest, envelope) is real.
-            with open(os.path.join(nextest_dir, "junit.xml"), "w") as f:
-                f.write(PASS_JUNIT_XML)
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-        with mock.patch.object(self.module.subprocess, "run",
-                                side_effect=fake_subprocess_run), \
-             mock.patch.object(self.module._axi(), "run_streamed",
-                                side_effect=fake_subprocess_run), \
-             mock.patch.object(self.module, "_post",
-                                return_value={"ok": True,
-                                               "run": {"passed": 1, "failed": 0, "total": 1}},
-                                create=True) as post_mock, \
-             mock.patch.object(self.module, "_get", side_effect=get_answering_health(),
-                               create=True):
-            code, out, _err = _run_main(self.module, [
-                "test", "--project-dir", self.tmpdir, "--crate", "some-crate",
-                "--agent", "CR-Y-toolchain",
-            ])
-        self.assertEqual(code, 0, f"stdout={out!r}")
+        code, out, err, post_mock, stream = self._streamed_drive(
+            ["test", "--project-dir", self.tmpdir, "--crate", "some-crate",
+             "--agent", "CR-Y-toolchain"],
+            run_block={"passed": 1, "failed": 0, "total": 1})
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err[-1500:]!r}")
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "test")
         self.assertIs(axi.get("ok"), True)
         run = axi.get("run", {})
         self.assertEqual(run.get("passed"), 1)
         self.assertEqual(run.get("failed"), 0)
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
-        self.assertIsNotNone(ingest_call)
+        close = self._close_of(post_mock, out, err)
+        self.assertEqual(held_results(stream.held.decode("utf-8")),
+                         {"ok": 1, "failed": 0, "ignored": 0},
+                         "the board holds the run's stream: one passing test")
         self.assertNotIn(
-            "cycleId", ingest_call[0][1].get("context", {}),
-            "the nextest run's ingest payload must send no client-resolved "
+            "cycleId", close.get("context", {}),
+            "the nextest run's close must send no client-resolved "
             "cycleId -- attachment is server-stamped",
         )
 
     def test_regression_ingest_verb_includes_captured_runner_output_as_raw_in_its_runs_ingest(self):
-        """`regression-ingest` files through the shared ingest. Its `cargo
-        llvm-cov nextest` subprocess call is captured with
-        `capture_output=True`; that captured output flows into the
-        `/api/v2/runs` body as `raw`."""
+        """`regression-ingest` streams its tests and closes the run from the
+        stream. The runner's human output, on its stderr, is captured; that
+        captured output flows into the `/api/v2/runs` close as `raw`."""
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
-        nextest_dir = os.path.join(self.tmpdir, "target", "nextest", "ci")
-        os.makedirs(nextest_dir, exist_ok=True)
-        marker = "RUST_RAW_CAPTURE_MARKER_6624"
-
-        def fake_subprocess_run(cmd, *args, **kwargs):
-            if len(cmd) >= 2 and cmd[0] == "cargo" and cmd[1] == "llvm-cov":
-                with open(os.path.join(nextest_dir, "junit.xml"), "w") as f:
-                    f.write(PASS_JUNIT_XML)
-                return subprocess.CompletedProcess(cmd, 0, stdout=marker + "\n", stderr="")
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-        with mock.patch.object(self.module.subprocess, "run",
-                                side_effect=fake_subprocess_run), \
-             mock.patch.object(self.module._axi(), "run_streamed",
-                                side_effect=fake_subprocess_run), \
-             mock.patch.object(self.module, "_post", return_value={"ok": True},
-                                create=True) as post_mock, \
-             mock.patch.object(self.module, "_get",
-                                side_effect=get_answering_health(
-                                    self._active_cycle_plans(51)),
-                                create=True):
-            code, out, _err = _run_main(self.module, [
-                "regression-ingest", "--project-dir", self.tmpdir,
-                "--crates", "some-crate", "--agent", "CR-Y-raw",
-            ])
-        self.assertEqual(code, 0, f"stdout={out!r}")
+        code, out, err, post_mock, _stream = self._streamed_drive(
+            ["regression-ingest", "--project-dir", self.tmpdir,
+             "--crates", "some-crate", "--agent", "CR-Y-raw"],
+            get_fallback=self._active_cycle_plans(51))
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err[-1500:]!r}")
         self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"),
                           "the regression-ingest run is never posted to the parsed route")
-        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
-        self.assertIsNotNone(ingest_call,
-                             "the regression-ingest run must actually be POSTed to /runs")
-        payload = ingest_call[0][1]
+        payload = self._close_of(post_mock, out, err)
         self.assertIn(
-            marker, payload.get("raw") or "",
-            f"the real captured cargo llvm-cov nextest output must flow into "
-            f"the ingest payload's `raw` field; got payload keys={sorted(payload)!r}",
+            self.RAW_MARKER, payload.get("raw") or "",
+            f"the runner's captured output must flow into the close's `raw` "
+            f"field; got payload keys={sorted(payload)!r}",
         )
 
     def test_check_verb_runs_cargo_check_and_ingests_compile_errors(self):

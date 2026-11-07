@@ -85,6 +85,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests.client import cr098_next_oracle
+from tests.client.fake_nextest import private_fake_prelude
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
@@ -133,7 +134,17 @@ _PROBE_UNITTEST_BODY = (
 # used, then exits 0. None of them shells out to a real toolchain even if
 # one happens to be installed on this machine.
 
-_FAKE_CARGO_BODY = r'''#!/usr/bin/env python3
+# A streamed rust run's calls (the version, the list, the `libtest-json-plus`
+# stream of the one passing `detector` test, `llvm-cov show-env` and `llvm-cov
+# report` writing the same lcov) are answered first, by
+# `tests/client/fake_nextest.py`; every other call falls through unchanged.
+_FAKE_CARGO_BODY = ("#!/usr/bin/env python3\n"
+                    "import os as _nx_os\n"
+                    "_nx_os.environ.setdefault('FAKE_LCOV', 'SF:detector.src\\nDA:1,1\\n"
+                    "LF:1\\nLH:1\\nFNF:0\\nFNH:0\\nend_of_record\\n')\n"
+                    + private_fake_prelude(
+                        "[fake_nextest.case('probe', crate='detector', binary='detector')]")
+                    + r'''
 import os
 import sys
 
@@ -164,7 +175,7 @@ if "nextest" in argv:
         with open(out_path, "w") as f:
             f.write(LCOV)
 sys.exit(0)
-'''
+''')
 
 _FAKE_DOCKER_BODY = r'''#!/usr/bin/env python3
 import sys

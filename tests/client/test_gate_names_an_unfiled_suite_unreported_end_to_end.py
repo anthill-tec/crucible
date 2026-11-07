@@ -66,6 +66,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from tests.client.fake_nextest import private_fake_prelude
 from tests.client.live_run_harness import load_toon, scrubbed_env
 from tests.client.test_client_fleet_envelope_census import declare_and_require_board
 
@@ -207,18 +208,32 @@ sys.stdout.flush()
 sys.exit(0)
 '''
 
-# `cargo`'s stand-in: anything but a run naming `nextest` (the gate's
+# `cargo`'s stand-in: a streamed run's calls are answered by
+# `tests/client/fake_nextest.py` (the version, the list, `llvm-cov show-env`,
+# `llvm-cov report` writing GREEN_LCOV), and its streamed `nextest run`
+# streams the one passing `green` test, makes the cut FAKE_CARGO_CUT names
+# and exits 0. Otherwise anything but a run naming `nextest` (the gate's
 # `cargo clean`) exits 0; a `nextest` run (bare, or under `llvm-cov`) writes
 # GREEN_NEXTEST_JUNIT to `target/nextest/<-P profile>/junit.xml`, GREEN_LCOV to
 # its `--output-path` when given one, makes the cut FAKE_CARGO_CUT names, and
 # exits 0.
-_FAKE_CARGO = r'''
+_FAKE_CARGO = ("import os as _nx_os\n"
+               f"_nx_os.environ.setdefault('FAKE_LCOV', {GREEN_LCOV!r})\n"
+               + private_fake_prelude(
+                   "[fake_nextest.case('tests::passes', crate='green', binary='green')]",
+                   streamed=False) + r'''
 import os
 import sys
 import urllib.request
 
 CUT_VAR = "FAKE_CARGO_CUT"
 JUNIT, LCOV = ''' + repr((GREEN_NEXTEST_JUNIT, GREEN_LCOV)) + r'''
+_nx_streamed = fake_nextest.streamed_run(_nx_args, _nx_cases)
+if _nx_streamed is not None:
+    cut = os.environ.get(CUT_VAR)
+    if cut:
+        urllib.request.urlopen(cut, timeout=60).read()
+    sys.exit(_nx_streamed)
 
 def write(path, text):
     directory = os.path.dirname(path)
@@ -245,7 +260,7 @@ sys.stdout.write("    Starting 1 test across 1 binary\n"
 sys.stdout.flush()
 ''' + _CUT + r'''
 sys.exit(0)
-'''
+''')
 
 
 def _free_port():

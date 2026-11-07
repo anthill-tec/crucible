@@ -151,7 +151,7 @@ class _PipeCloseCase(unittest.TestCase):
         return bool(filed)
 
     def assert_filed_inline_on_the_run_route(self, run_id=RUN_ID):
-        """CR-CRU-204 — bun, python, rust and arduino send their runner's
+        """CR-CRU-204 — bun and arduino send their runner's
         reports: the run it filed was
         filed by ONE `POST /api/v2/runs` carrying the JUnit report's text
         inline, never the parsed route."""
@@ -168,6 +168,25 @@ class _PipeCloseCase(unittest.TestCase):
             and data[0].count("<testcase") == 3,
             f"the ingest carries the runner's own report (3 cases) inline; "
             f"body={body!r}")
+
+    def assert_filed_from_its_nextest_stream_on_the_run_route(self, run_id=RUN_ID):
+        """A rust run is closed from nextest's stream: ONE `POST
+        /api/v2/runs` carrying `codec: "nextest"` and no `data`, never the
+        parsed route, and the board holds the runner's 3 results."""
+        filed = self.filed_posts(run_id)
+        self.assertEqual(
+            [p for p, _ in filed], [RUNS],
+            f"the run is filed by one {RUNS} close, never {PARSED}; "
+            f"posts={self.board.posts()!r}")
+        body = filed[0][1]
+        self.assertEqual((body.get("codec"), "data" in body), ("nextest", False),
+                         f"body={body!r}")
+        results = [line for line in self.board.held_stream(run_id).splitlines()
+                   if '"type":"test"' in line
+                   and any(f'"event":"{e}"' in line for e in ("ok", "failed", "ignored"))]
+        self.assertEqual(len(results), 3,
+                         f"the board holds the runner's 3 results from its stream; "
+                         f"held={self.board.held_stream(run_id)!r}")
 
     def assert_filed_from_its_stream_on_the_run_route(self, run_id=RUN_ID):
         """CR-CRU-224: a python unittest run is closed from its runner's
@@ -269,7 +288,7 @@ class StdoutClosedTest(_PipeCloseCase):
              "--crate", "fake-crate", "--project-dir", self.project,
              "--reports", "reports", "--agent", AGENT], self.env())
         self.assert_clean_exit_despite_closed_stdout(rc, err)
-        self.assert_filed_inline_on_the_run_route()
+        self.assert_filed_from_its_nextest_stream_on_the_run_route()
 
     def test_arduino_unit_with_stdout_closed(self):
         write_fake_native(self.project)
@@ -347,7 +366,7 @@ class StderrClosedTest(_PipeCloseCase):
              "--reports", "reports", "--agent", AGENT], self.env())
         self.assert_run_opened()
         if self.assert_run_settled("stderr"):
-            self.assert_filed_inline_on_the_run_route()
+            self.assert_filed_from_its_nextest_stream_on_the_run_route()
         self.assertNotIn(PARSED, [p for p, _ in self.board.posts()],
                          f"rust never files on {PARSED}; posts={self.board.posts()!r}")
 

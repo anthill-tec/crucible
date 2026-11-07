@@ -48,11 +48,20 @@ INGEST_PATHS = ("/api/v2/runs", "/api/v2/runs/parsed", "/api/v2/runs/compile")
 HEALTH_PATHS = ("/api/health", "/api/v2/health")
 HEALTH_VERSION = "0.4.0"
 HEALTH_CODECS = {"test": ["crucible-events", "junit", "nextest"],
-                 "coverage": ["jacoco", "lcov"]}
+                 "coverage": ["jacoco", "lcov"],
+                 "stream": ["crucible-events", "nextest"]}
 # The stream codec a python unittest run's record is written in (CR-CRU-224),
 # and the open run's stream route a client relays it to (CR-CRU-200 §S2).
 STREAM_CODEC = "crucible-events"
 STREAM_ROUTE = re.compile(r"^/api/v2/runs/([^/]+)/stream$")
+# The record stream nextest writes (`libtest-json-plus`), and every codec an
+# open run's stream route takes: a run's first batch fixes its codec.
+NEXTEST_STREAM_CODEC = "nextest"
+STREAM_CODECS = (STREAM_CODEC, NEXTEST_STREAM_CODEC)
+# An open run's test list route, and the codec nextest's own list is posted
+# under (`cargo nextest list --message-format json`).
+TESTS_ROUTE = re.compile(r"^/api/v2/runs/([^/]+)/tests$")
+TEST_LIST_CODEC = "nextest-list"
 # The shipped recommendation for `ingest_body_bytes` (128 MiB).
 DEFAULT_INGEST_BODY_BYTES = 128 * 1024 * 1024
 # The `run` block `/api/v2/runs` answers with until a test scripts its own.
@@ -61,13 +70,32 @@ DEFAULT_RUN_BLOCK = {"total": 0, "passed": 0, "failed": 0}
 DROP_SHAPES = ("close", "reset", "truncate", "truncate-error", "garble")
 
 
-def _health_codecs(stream_codec=True):
+def _health_codecs(stream_codec=True, nextest_stream=True):
     """A copy of `HEALTH_CODECS`, without the stream codec when the board is
-    one that decodes no stream."""
+    one that decodes no stream, and without `nextest` under `codecs.stream`
+    when it is one that takes no nextest stream."""
     codecs = json.loads(json.dumps(HEALTH_CODECS))
     if not stream_codec:
         codecs["test"] = [name for name in codecs["test"] if name != STREAM_CODEC]
+        codecs["stream"] = [name for name in codecs["stream"] if name != STREAM_CODEC]
+    if not nextest_stream:
+        codecs["stream"] = [name for name in codecs["stream"]
+                            if name != NEXTEST_STREAM_CODEC]
     return codecs
+
+
+def nextest_list_matches(text):
+    """The tests a nextest list (`--message-format json`) matches: those whose
+    `filter-match` is `matches`, as the board counts the listed total. None
+    when `text` is not a nextest list."""
+    try:
+        listed = json.loads(text)
+        suites = listed["rust-suites"]
+        return sum(1 for suite in suites.values()
+                   for case in (suite.get("testcases") or {}).values()
+                   if (case.get("filter-match") or {}).get("status") == "matches")
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
 
 
 def board_health(ingest_body_bytes=DEFAULT_INGEST_BODY_BYTES, stream_codec=True):
@@ -136,7 +164,17 @@ class RecordingBoard:
     board with no stream route at all (every batch a 404)."""
 
     def __init__(self, ingest_body_bytes=DEFAULT_INGEST_BODY_BYTES,
-                 stream_codec=True, stream_route=True, stream_limit=None):
+                 stream_codec=True, stream_route=True, stream_limit=None,
+                 nextest_stream=True):
+        self.nextest_stream = nextest_stream
+        # Each open run's stream codec, fixed by its first batch, and its
+        # test list (`/api/v2/runs/<runId>/tests`): the list's text, and the
+        # scripted answer to the next list (a refusal status, or a total
+        # that replaces the counted one). Default off.
+        self._stream_codecs = {}
+        self._lists = {}
+        self._list_refusals = []
+        self._list_total = None
         self.events = []  # [(received_at, method, path, body)]
         self.ingest_body_bytes = ingest_body_bytes
         self.stream_codec = stream_codec
@@ -190,6 +228,11 @@ class RecordingBoard:
         # `drop_next`. None by default, like the scripted refusals above.
         self._drops = []
         self._refuse_abort_error = "abort refused"
+        # A scripted refusal of one cycle binding: None by default, like the
+        # scripted refusals above. See `refuse_cycle_binding`.
+        self._refused_binding = None
+        self._active_cycle = None
+        self._held_agents = set()
         board = self
 
         class _Handler(http.server.BaseHTTPRequestHandler):
@@ -235,7 +278,7 @@ class RecordingBoard:
                     else:
                         self._reply(health)
                 elif "/plans" in self.path:
-                    self._reply({"ok": True, "plans": []})
+                    self._reply({"ok": True, "plans": board._open_plans()})
                 else:
                     self._reply({"ok": True, "agents": []})
 
@@ -284,8 +327,20 @@ class RecordingBoard:
                     return
                 if held:
                     board._hold_released.wait(timeout=30)
+                refused = board._caller_refusal(self.path, body)
+                if refused is not None:
+                    self._reply_status(*refused)
+                    return
+                listed = TESTS_ROUTE.match(self.path)
                 streamed = STREAM_ROUTE.match(self.path)
-                if streamed is not None:
+                if listed is not None:
+                    status, answer = board._take_list(
+                        urllib.parse.unquote(listed.group(1)), body)
+                    if status == 200:
+                        self._reply(answer)
+                    else:
+                        self._reply_status(status, answer)
+                elif streamed is not None:
                     status, answer = board._append_stream(
                         urllib.parse.unquote(streamed.group(1)), body)
                     if status == 200:
@@ -366,8 +421,66 @@ class RecordingBoard:
         if self._health_override is not None:
             return json.loads(json.dumps(self._health_override))
         return {"ok": True, "status": "healthy", "version": HEALTH_VERSION,
-                "codecs": _health_codecs(self.stream_codec),
+                "codecs": _health_codecs(self.stream_codec, self.nextest_stream),
                 "limits": {"ingest_body_bytes": self.ingest_body_bytes}}
+
+    def _take_list(self, run_id, body):
+        """One test list, taken as the real board takes it (`handleRunTests`,
+        src/v2.ts): codec `nextest-list` and a nextest list's text, once per
+        run, answered `200 {ok, runId, total}` with the listed total (the
+        matching tests). A scripted refusal answers its status instead and
+        takes nothing. Returns `(status, answer)`."""
+        body = body if isinstance(body, dict) else {}
+        with self._lock:
+            if self._list_refusals:
+                status, error = self._list_refusals.pop(0)
+                return status, {"ok": False, "error": error}
+            if body.get("codec") != TEST_LIST_CODEC:
+                return 400, {"ok": False, "error": (
+                    f"codec {body.get('codec')!r} is not {TEST_LIST_CODEC} — "
+                    f"nothing stored")}
+            data = body.get("data")
+            total = nextest_list_matches(data) if isinstance(data, str) else None
+            if total is None:
+                return 400, {"ok": False, "error": (
+                    "data must be nextest's test list as its JSON text — "
+                    "nothing stored")}
+            if run_id in self._lists:
+                return 409, {"ok": False, "error": (
+                    f"run {run_id} already holds its test list — nothing stored")}
+            self._lists[run_id] = data
+            if self._list_total is not None:
+                total = self._list_total
+            return 200, {"ok": True, "runId": run_id, "total": total}
+
+    def refuse_next_list(self, status, error=None):
+        """Answer the next test list `status` (`{ok: False, error}`) and take
+        nothing: 400 (not a list), 409 (a settled run, or a second list) or
+        413 (past `ingest_body_bytes`). Each call scripts one more."""
+        with self._lock:
+            self._list_refusals.append(
+                (status, error or f"the test list is refused ({status}) — "
+                                  f"nothing stored"))
+
+    def script_list_total(self, total):
+        """Answer every test list taken from now on with this `total`, in
+        place of the count of its matching tests."""
+        with self._lock:
+            self._list_total = total
+
+    def list_posts(self):
+        """`[(path, body), ...]` for every test list POST, in wire order."""
+        return [(p, b) for p, b in self.posts() if TESTS_ROUTE.match(p)]
+
+    def held_list(self, run_id):
+        """The test list text the board took for `run_id`, or None."""
+        with self._lock:
+            return self._lists.get(run_id)
+
+    def stream_codec_of(self, run_id):
+        """The codec `run_id`'s first stream batch fixed, or None."""
+        with self._lock:
+            return self._stream_codecs.get(run_id)
 
     def _append_stream(self, run_id, body):
         """One stream batch, held as the real board holds it. Returns
@@ -379,10 +492,15 @@ class RecordingBoard:
         if (isinstance(start, bool) or not isinstance(start, int) or start < 0
                 or not isinstance(data, str)):
             return 400, {"ok": False, "error": "malformed stream batch — nothing stored"}
-        if body.get("codec", STREAM_CODEC) != STREAM_CODEC:
+        codec = body.get("codec", STREAM_CODEC)
+        if codec not in STREAM_CODECS:
             return 400, {"ok": False, "error": "not a stream codec — nothing stored"}
         incoming = data.encode("utf-8")
         with self._lock:
+            fixed = self._stream_codecs.setdefault(run_id, codec)
+            if fixed != codec:
+                return 400, {"ok": False, "error": (
+                    f"the run's stream is {fixed}, not {codec} — nothing stored")}
             held = self._streams.setdefault(run_id, bytearray())
             size = len(held)
             if start > size:
@@ -509,6 +627,53 @@ class RecordingBoard:
         with self._lock:
             self._refuse_start_remaining = times
             self._refuse_start_error = error
+
+    def refuse_cycle_binding(self, cycle_id, active_cycle_id):
+        """Answer as a board whose project has `active_cycle_id` active and
+        `cycle_id` done, from now on: a register or heartbeat binding
+        `cycle_id` is refused 409 with the real board's words
+        (`validateCycleBinding`, src/v2.ts) and touches no agent; the open
+        plans read names both cycles; and, as the real board's
+        `requireRegisteredCaller` does, every `/api/v2/runs` POST from an
+        agent no accepted touch has registered is refused 409."""
+        with self._lock:
+            self._refused_binding = cycle_id
+            self._active_cycle = active_cycle_id
+
+    def binding_refusal_error(self):
+        """The words a refused binding is answered with."""
+        return (f"cycle {self._refused_binding} is done \u2014 bindings "
+                f"require an ACTIVE cycle")
+
+    def _open_plans(self):
+        with self._lock:
+            active, done = self._active_cycle, self._refused_binding
+        if active is None:
+            return []
+        return [{"planId": 1, "cr": "CR-T-BINDING", "status": "open",
+                 "cycles": [{"id": active, "status": "active"},
+                            {"id": done, "status": "done"}]}]
+
+    def _caller_refusal(self, path, body):
+        """`(status, answer)` for a POST the scripted binding refusal
+        refuses, or None (always None until `refuse_cycle_binding`)."""
+        body = body if isinstance(body, dict) else {}
+        agent = body.get("agentId")
+        with self._lock:
+            if self._refused_binding is None:
+                return None
+            if path in ("/api/v2/agents/register", "/api/v2/agents/heartbeat"):
+                if body.get("cycleId") == self._refused_binding:
+                    return 409, {"ok": False,
+                                 "error": self.binding_refusal_error()}
+                if agent:
+                    self._held_agents.add(agent)
+                return None
+            if path.startswith("/api/v2/runs") and agent not in self._held_agents:
+                return 409, {"ok": False, "error": (
+                    f"agent {agent} is not registered with this project "
+                    f"\u2014 refused")}
+        return None
 
     def refuse_ingest_for(self, run_id, times=1, status=409):
         """CR-CRU-170 \u00a7S2 \u2014 script the next `times` ingest POSTs (any of
@@ -997,10 +1162,35 @@ write_junit(cases)
 sys.exit(1 if failed else 0)
 """
 
-FAKE_CARGO = "#!{python}\n" + _PROLOGUE + """
+# The streamed run's calls (`tests/client/fake_nextest.py`), answered before
+# the prologue so its stamp, marker and grandchild belong to the run step: the
+# fake's cases are FAKE_TOTAL tests `tests::case_<i>` (none for a zero
+# report), each `ok`, or `failed` under FAKE_CARGO_VERDICT=FAIL. No brace
+# appears here: `write_fake_cargo` formats the whole text.
+_CARGO_NEXTEST_PRELUDE = (
+    "import os\nimport sys\nsys.path.insert(0, " + repr(str(Path(__file__).resolve().parent))
+    + ")\nimport fake_nextest\n" + """
+_nx_status = "failed" if os.environ.get("FAKE_CARGO_VERDICT") == "FAIL" else "ok"
+_nx_total = 0 if os.environ.get("FAKE_ZERO_REPORT") == "1" else int(os.environ.get("FAKE_TOTAL", "1"))
+NEXTEST_CASES = [fake_nextest.case("tests::case_%d" % _nx_i, _nx_status)
+                 for _nx_i in range(1, _nx_total + 1)]
+_nx_code = fake_nextest.preliminary(sys.argv[1:], NEXTEST_CASES)
+if _nx_code is not None:
+    sys.exit(_nx_code)
+""")
+
+FAKE_CARGO = "#!{python}\n" + _CARGO_NEXTEST_PRELUDE + _PROLOGUE + """
 args = sys.argv[1:]
+fake_nextest.record_call(args)
 if not args or args[0] in ("clean", "check", "cache"):
     sys.exit(0)
+# A zero report streams no result and exits FAKE_EXIT_CODE; no report
+# streams no line at all.
+_nx_code = fake_nextest.streamed_run(
+    args, NEXTEST_CASES, lambda i: maybe_block(i, sys.stderr),
+    empty_exit=zero_report_exit_code if zero_report else None, silent=no_report)
+if _nx_code is not None:
+    sys.exit(_nx_code)
 profile = "ci"
 lcov = None
 for i, a in enumerate(args):

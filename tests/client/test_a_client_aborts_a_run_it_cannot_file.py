@@ -258,29 +258,32 @@ class NoReportExitAbortsTheRunTest(_RunAbortCase):
         self.assertNotEqual(result.returncode, 0)
         return self.axi(result.stdout)
 
-    def test_rust_regression_ingest_without_junit_aborts_the_run(self):
+    # A rust run's record is nextest's stream: the shared fake's no-report
+    # run writes no stream line and exits non-zero, and the abort names the
+    # stream it never got.
+    def test_rust_regression_ingest_without_a_stream_line_aborts_the_run(self):
         axi = self._rust("regression-ingest", "--crates", "fake-crate")
-        self.assert_aborted_cleanly(axi, "regression-ingest", RUN_ID, "junit.xml")
+        self.assert_aborted_cleanly(axi, "regression-ingest", RUN_ID, "stream")
 
-    def test_rust_regression_ingest_without_junit_and_a_refused_abort_leaves_the_run_open(self):
+    def test_rust_regression_ingest_without_a_stream_line_and_a_refused_abort_leaves_the_run_open(self):
         axi = self._rust("regression-ingest", "--crates", "fake-crate", refuse=True)
-        self.assert_left_open_after_refused_abort(axi, "regression-ingest", RUN_ID, "junit.xml")
+        self.assert_left_open_after_refused_abort(axi, "regression-ingest", RUN_ID, "stream")
 
-    def test_rust_smoke_test_without_junit_aborts_the_run(self):
+    def test_rust_smoke_test_without_a_stream_line_aborts_the_run(self):
         axi = self._rust("smoke-test")
-        self.assert_aborted_cleanly(axi, "smoke-test", RUN_ID, "junit.xml")
+        self.assert_aborted_cleanly(axi, "smoke-test", RUN_ID, "stream")
 
-    def test_rust_smoke_test_without_junit_and_a_refused_abort_leaves_the_run_open(self):
+    def test_rust_smoke_test_without_a_stream_line_and_a_refused_abort_leaves_the_run_open(self):
         axi = self._rust("smoke-test", refuse=True)
-        self.assert_left_open_after_refused_abort(axi, "smoke-test", RUN_ID, "junit.xml")
+        self.assert_left_open_after_refused_abort(axi, "smoke-test", RUN_ID, "stream")
 
-    def test_rust_workspace_regression_without_junit_aborts_the_run(self):
+    def test_rust_workspace_regression_without_a_stream_line_aborts_the_run(self):
         axi = self._rust("workspace-regression", "--min-free-g", "0", "--keep-target")
-        self.assert_aborted_cleanly(axi, "workspace-regression", RUN_ID, "junit.xml")
+        self.assert_aborted_cleanly(axi, "workspace-regression", RUN_ID, "stream")
 
-    def test_rust_workspace_regression_without_junit_and_a_refused_abort_leaves_the_run_open(self):
+    def test_rust_workspace_regression_without_a_stream_line_and_a_refused_abort_leaves_the_run_open(self):
         axi = self._rust("workspace-regression", "--min-free-g", "0", "--keep-target", refuse=True)
-        self.assert_left_open_after_refused_abort(axi, "workspace-regression", RUN_ID, "junit.xml")
+        self.assert_left_open_after_refused_abort(axi, "workspace-regression", RUN_ID, "stream")
 
     def test_arduino_unit_without_a_report_aborts_the_run(self):
         write_fake_native(self.project)

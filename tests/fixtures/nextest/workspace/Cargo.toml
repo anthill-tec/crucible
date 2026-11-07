@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+# `nxpass` and `nx-targets` are the captured-run crates under ../crates: the
+# real-runner tests copy them in beside this workspace's own two crates when
+# they copy the workspace to /tmp. Nothing is built in this tree.
+members = ["crates/nxpass", "crates/nx-targets", "crates/nxlive", "crates/nxdock"]

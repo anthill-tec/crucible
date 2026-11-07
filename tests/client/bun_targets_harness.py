@@ -166,6 +166,8 @@ class TargetsBoard(ConsoleBoard):
         codecs = health["codecs"]
         if stream is not None:
             codecs["stream"] = list(stream)
+        else:
+            codecs.pop("stream", None)
         if view is not None:
             codecs["view"] = list(view)
         if coverage is not None:

@@ -67,11 +67,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.fake_nextest import held_results, private_fake_prelude
 from tests.client.live_run_harness import (
     CLIENTS,
     ENV_KEYS_TO_SCRUB,
     RecordingBoard,
-    junit_sent,
     load_client,
 )
 from tests.client.test_client_fleet_envelope_census import (
@@ -104,12 +104,17 @@ _GATE_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 _CASES = (("probe-crate::alpha", "adds"), ("probe-crate::alpha", "subtracts"),
           ("probe-crate::beta", "multiplies"))
 
-# The stand-in `cargo`: `clean` and anything without `nextest` is a no-op;
+# The stand-in `cargo`: a streamed run's calls (the version, the list, the
+# `libtest-json-plus` stream of these three cases, `llvm-cov show-env` and
+# `llvm-cov report`) are answered first, by `tests/client/fake_nextest.py`.
+# Otherwise `clean` and anything without `nextest` is a no-op;
 # a run naming `nextest` (here `llvm-cov … nextest`) writes the profile's
 # junit under the working directory and, when given `--output-path`, an lcov
 # there — the shape `_RECORDING_CARGO` in
 # test_rust_regression_coverage_is_opt_in.py has.
-_FAKE_CARGO = r'''
+_FAKE_CARGO = private_fake_prelude(
+    "[fake_nextest.case(name, crate='probe-crate', binary=suite.split('::')[1]) "
+    f"for suite, name in {_CASES!r}]") + r'''
 import os
 import sys
 
@@ -600,12 +605,13 @@ class _InProcessGatedRun(unittest.TestCase):
                 else {})
         self.assertEqual(body.get("agentId"), AGENT,
                          f"the ingest is this run's own; body={body!r}")
-        summary = (junit_sent(body) or {}).get("summary") or {}
+        self.assertEqual((body.get("codec"), "data" in body), ("nextest", False),
+                         f"the run is closed from nextest's stream; body={body!r}")
+        held = held_results(self.board.held_stream(body.get("runId") or ""))
         self.assertEqual(
-            (summary.get("total"), summary.get("passed"), summary.get("failed")),
-            (len(_CASES), len(_CASES), 0),
-            f"the filed run carries the report the stand-in cargo wrote during "
-            f"the run, its text sent inline; summary={summary!r}")
+            (held["ok"], held["failed"], held["ignored"]), (len(_CASES), 0, 0),
+            f"the board holds the stream the stand-in cargo wrote during the "
+            f"run; held={held!r}")
         self.assertEqual(code, 0, f"an all-green run exits 0; {diagnostics}")
 
 

@@ -30,11 +30,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.fake_nextest import read_calls
 from tests.client.live_run_harness import (
     STREAM_CODEC,
     STREAM_ROUTE,
     get_answering_health,
     write_fake_bun,
+    write_fake_cargo,
     write_fake_mvnw,
 )
 from tests.client.test_client_fleet_envelope_census import (
@@ -703,46 +705,113 @@ class PythonStatesItsStackOnEveryIngestTest(_ClientIngestCase):
 
 class RustStatesItsStackOnEveryIngestTest(_ClientIngestCase):
     """rust: the `test` and `regression-ingest` verbs (`main`), which open
-    the run themselves and send their reports through the shared ingest (their
-    `cargo` replaced by fakes, nextest's by one that writes one passing
-    report), and `_start_run` then `_ingest_rustc_stderr` with whatever runId
-    came back."""
+    the run themselves and stream their tests through nextest (the shared fake
+    `cargo` first on PATH, running one passing test), closing the run from
+    that stream; and `_start_run` then `_ingest_rustc_stderr` with whatever
+    runId came back. A rust run whose start opened no run still runs its
+    tests with the stream on and files nothing: one `ok: false` envelope names
+    the refusal, and the run start is the one body that states the stack."""
 
     CLIENT = "rust"
+    REFUSAL = START_REFUSED["error"]
+
+    def setUp(self):
+        super().setUp()
+        self.bin_dir = tempfile.mkdtemp(prefix="stack-census-rust-bin-")
+        self.addCleanup(shutil.rmtree, self.bin_dir, ignore_errors=True)
+        write_fake_cargo(self.bin_dir)
+        self.calls_path = os.path.join(self.project_dir, "cargo-calls.jsonl")
+        Path(self.project_dir, "Cargo.toml").write_text(
+            '[package]\nname = "probe"\nversion = "0.1.0"\nedition = "2021"\n')
+        self.stdout = ""
 
     def _compile(self, run_id):
         self.module._ingest_rustc_stderr(self.project_dir, AGENT,
                                          "error[E0425]: cannot find value `x`",
                                          run_id=run_id)
 
-    def _verb(self, verb, *extra):
-        real_run = subprocess.run
+    def drive_verb(self, start_reply, verb, *extra):
+        """The whole verb through `main`, its every POST recorded (`_post`,
+        and the transport under it), its streams real files, and the fake
+        `cargo` first on PATH. The envelope it printed is kept as
+        `self.stdout`."""
+        recorder = _RecordingPost(start_reply)
+        health = get_answering_health(BOARD_OFFLINE)
 
-        def no_cargo(cmd, *a, **kw):
-            if cmd and cmd[0] == "cargo":
-                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-            return real_run(cmd, *a, **kw)
+        def request(method, path, payload=None, timeout=None):
+            if method == "POST":
+                return recorder(path, payload)
+            return health(path)
 
-        def fake_nextest(cmd, cwd, _env, _log_path, _narrator=None, capture=False):
-            self.write_junit(os.path.join(cwd, "target", "nextest", "ci",
-                                          "junit.xml"))
-            return subprocess.CompletedProcess(cmd, 0, stdout="PASS [ 0.001s]\n",
-                                               stderr="")
-
+        env = {"PATH": self.bin_dir + os.pathsep + os.environ.get("PATH", ""),
+               "FAKE_CARGO_CALLS": self.calls_path, "FAKE_TOTAL": "1"}
         argv = ["rust-crucible.py", verb, "--project-dir", self.project_dir,
                 "--agent", AGENT, *extra]
-        with mock.patch.object(sys, "argv", argv), \
-                mock.patch.object(self.module.subprocess, "run", side_effect=no_cargo), \
-                mock.patch.object(self.module, "_run_logged",
-                                  side_effect=fake_nextest):
+        out_path = os.path.join(self.project_dir, "drive-stdout.txt")
+        err_path = os.path.join(self.project_dir, "drive-stderr.txt")
+        with open(out_path, "w") as out, open(err_path, "w") as err, \
+                mock.patch.dict(os.environ, env), \
+                mock.patch.object(sys, "argv", argv), \
+                mock.patch.object(self.module, "_post", side_effect=recorder,
+                                  create=True), \
+                mock.patch.object(self.module, "_request", side_effect=request,
+                                  create=True), \
+                mock.patch.object(self.module, "_get", create=True, side_effect=health), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                contextlib.suppress(SystemExit):
+            for key in ("NEXTEST_EXPERIMENTAL_LIBTEST_JSON", "CARGO_TARGET_DIR",
+                        "CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY"):
+                os.environ.pop(key, None)
             self.module.main()
+        self.stdout = Path(out_path).read_text()
+        self.stderr = Path(err_path).read_text()
+        return recorder
 
-    def assert_report_ingest_states_the_stack(self, verb, extra, start_reply):
-        recorder = self.drive(start_reply, lambda: self._verb(verb, *extra))
-        self.assert_ingest_states_the_stack(recorder, RUNS, start_reply)
+    def assert_the_tests_ran_streamed(self, recorder):
+        runs = [c for c in read_calls(self.calls_path) if c["argv"][:2] == ["nextest", "run"]]
+        where = f"posted to {recorder.paths()!r} stderr={self.stderr[-1200:]!r}"
+        self.assertEqual(len(runs), 1, f"rust: the tests ran once; {where}")
+        self.assertIn("libtest-json-plus", runs[0]["argv"] if runs else [],
+                      f"rust: the run writes nextest's stream; {where}")
+        self.assertEqual((runs[0]["env"] if runs else {}).get(
+            "NEXTEST_EXPERIMENTAL_LIBTEST_JSON"), "1",
+            f"rust: the run has the stream on; {where}")
+
+    def assert_closed_from_its_stream(self, recorder):
+        closes = recorder.bodies(RUNS)
+        self.assertEqual(
+            [(body.get("codec"), "data" in body) for body in closes],
+            [("nextest", False)],
+            f"rust: a run is closed once from its nextest stream, carrying no "
+            f"report; posted to {recorder.paths()!r}")
+
+    def assert_report_ingest_states_the_stack(self, verb, extra):
+        recorder = self.drive_verb(START_ACCEPTED, verb, *extra)
+        self.assert_the_tests_ran_streamed(recorder)
+        self.assert_closed_from_its_stream(recorder)
+        self.assert_ingest_states_the_stack(recorder, RUNS, START_ACCEPTED)
         self.assertEqual(recorder.bodies(PARSED), [],
                          f"rust files no report on {PARSED}; posted to "
                          f"{recorder.paths()!r}")
+
+    def assert_a_refused_start_runs_streamed_and_files_nothing(self, verb, extra):
+        recorder = self.drive_verb(START_REFUSED, verb, *extra)
+        self.assert_the_tests_ran_streamed(recorder)
+        filed = [path for path in recorder.paths() if path in INGEST_ROUTES]
+        self.assertEqual(
+            filed, [],
+            f"rust: a run whose start opened no run files nothing, never a "
+            f"single-shot body; posted to {recorder.paths()!r}")
+        starts = recorder.bodies(RUN_START)
+        self.assertEqual(
+            [body.get("stack") for body in starts], [self.stack],
+            f"rust: the one run start names the rust stack; posted to "
+            f"{recorder.paths()!r}")
+        envelopes = [line for line in self.stdout.splitlines() if line == "axi:"]
+        self.assertEqual(len(envelopes), 1, f"one envelope; stdout={self.stdout!r}")
+        self.assertIn("ok: false", self.stdout, f"stdout={self.stdout!r}")
+        self.assertIn(self.REFUSAL, self.stdout,
+                      f"the envelope names the refusal; stdout={self.stdout!r}")
 
     def test_a_compile_ingest_states_the_rust_stack_when_its_start_was_accepted(self):
         recorder = self.start_then(START_ACCEPTED, self._compile)
@@ -753,20 +822,18 @@ class RustStatesItsStackOnEveryIngestTest(_ClientIngestCase):
         self.assert_ingest_states_the_stack(recorder, COMPILE, START_REFUSED)
 
     def test_a_test_report_ingest_states_the_rust_stack_when_its_start_was_accepted(self):
-        self.assert_report_ingest_states_the_stack(
-            "test", ("--crate", "probe"), START_ACCEPTED)
+        self.assert_report_ingest_states_the_stack("test", ("--crate", "probe"))
 
-    def test_a_test_report_ingest_states_the_rust_stack_when_its_start_was_refused(self):
-        self.assert_report_ingest_states_the_stack(
-            "test", ("--crate", "probe"), START_REFUSED)
+    def test_a_refused_start_runs_the_rust_test_streamed_and_files_nothing(self):
+        self.assert_a_refused_start_runs_streamed_and_files_nothing(
+            "test", ("--crate", "probe"))
 
     def test_a_regression_ingest_report_states_the_rust_stack_when_its_start_was_accepted(self):
-        self.assert_report_ingest_states_the_stack(
-            "regression-ingest", ("--crates", "probe"), START_ACCEPTED)
+        self.assert_report_ingest_states_the_stack("regression-ingest", ("--crates", "probe"))
 
-    def test_a_regression_ingest_report_states_the_rust_stack_when_its_start_was_refused(self):
-        self.assert_report_ingest_states_the_stack(
-            "regression-ingest", ("--crates", "probe"), START_REFUSED)
+    def test_a_refused_start_runs_the_rust_regression_ingest_streamed_and_files_nothing(self):
+        self.assert_a_refused_start_runs_streamed_and_files_nothing(
+            "regression-ingest", ("--crates", "probe"))
 
 
 if __name__ == "__main__":
