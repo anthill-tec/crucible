@@ -19,6 +19,9 @@ points; the gap analysis needed user rulings · **Design reference** `docs/resea
   empty state lives inside the stable container (AC2, AC8). Also folded: AC6's baseline is a committed fixture recorded
   before the runtime goes; the PRD's UI-stack line is amended (AC10); no new Tailwind utilities, with a guard (AC11);
   two runs at once and an aborted run (AC1, AC2); every row kind named (§S2, AC4).
+- **VERIFY 2026-11-07** (cycle 876, fixed in-CR): GREEN's row minimum width stopped a compile card's diagnostic line
+  truncating and widened the feed (AC12); home's compact gate row lacked the row rule (AC4 now names home's rows); the
+  timeline's unused open-runs parameter, which would let a caller bring the defect back, goes (AC13).
 
 ## Problem
 
@@ -103,9 +106,13 @@ points; the gap analysis needed user rulings · **Design reference** `docs/resea
   read that opens the run through the last batch exceeds 250 ms (the window starts before the run opens), the running card and the agent's card move with each batch, and the run's card joins the
   timeline when it closes. The longest task during the read that closes the run is measured and reported by the
   feature (not bounded); its value is recorded in this spec at close-out, and above 250 ms it is an accepted limit.
-- [ ] **AC4 (§S2).** Every row kind §S2 names carries `content-visibility: auto` with an intrinsic size (or is named
-  here as left out, with the reason), and the page still scrolls to a run on a `→ Runs` jump and keeps the feed's
+- [ ] **AC4 (§S2).** Every row kind §S2 names, on the Runs tab and on home, carries `content-visibility: auto` with an
+  intrinsic size (or is named here as left out, with the reason; running cards are not timeline rows), and the page still scrolls to a run on a `→ Runs` jump and keeps the feed's
   scroll position across a detail.
+- [ ] **AC12 (§S2, §S4).** The row rule leaves a row's width and truncation as they were: a compile card's diagnostic
+  preview line still ends in an ellipsis inside its card, and the card is no wider than the pane, at 1280 px and at the
+  phone band; a row whose unbreakable content (a long agent id) overflows still lets the pane scroll sideways to it.
+- [ ] **AC13 (§S1).** The timeline's rendering takes no open runs at all, so no caller can make it read them.
 - [ ] **AC5 (§S4).** Every existing test passes unchanged, except the tests that pin the Tailwind runtime's script
   on the page (the SPA-serving and roadmap visual-grammar tests), which are updated to the static stylesheet
   (user-approved).
