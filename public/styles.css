@@ -2752,15 +2752,22 @@ body {
    document-wide re-style (a run opening or closing, a settled run arriving)
    costs only what is in view. Scroll anchoring is off on the feed's scroll
    box: a skipped row standing in at its intrinsic size must not shift a
-   restored scroll position. A skipped row's paint containment clips what
-   overflows it, so a row is at least as wide as its unbreakable content (a
-   long agent id): the overflow stays the row's own and the feed still
-   scrolls sideways to it. The running cards sit above the timeline, always
-   in view, and keep their own truncation: they are not timeline rows. */
+   restored scroll position. A row's paint containment clips what overflows
+   it, so what could overflow a row truncates inside it instead. The running
+   cards sit above the timeline, always in view, and keep their own
+   truncation: they are not timeline rows. */
 .app-evt:not(.app-evt-running), .app-transition-marker, .app-milestone-entry, .app-cycle-span-open, .app-gate-compact, .app-merge-compact {
   content-visibility: auto;
   contain-intrinsic-size: auto 64px;
-  min-width: min-content;
+}
+/* A run card's agent id wider than the card ends in an ellipsis inside it,
+   its ratio pill still at the card's right edge; a shorter id is unchanged. */
+.app-evt:not(.app-evt-running) .app-evt-line > .app-agent-id {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* A compile card's diagnostic lines truncate to the card rather than set its
    width: sized as if empty, the preview adds nothing to the row's min-content,
