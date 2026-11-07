@@ -61,6 +61,17 @@ Releases before 0.3.0 are described only on GitHub Releases.
   and nothing is stored. `GET /api/health` lists `codecs.test` as `crucible-events` and `junit`. A
   Playwright run files through the shipped reporter's `crucible-events` stream instead.
 
+### Fixed
+
+- **The Runs tab stays responsive while a run streams.** A streamed batch updates only the running
+  cards, which sit in a container of their own; the timeline of settled runs is no longer rebuilt
+  and re-styled on every batch. The timeline's rows skip their style and layout while off screen.
+  The same holds on the home timeline.
+  - The dashboard no longer loads the Tailwind browser runtime. What it generated (its theme
+    variables, base reset and two utilities) is served as a static, vendored stylesheet
+    (`/vendor/tailwind-4.2.4.css`) linked after the dashboard's own, so a class name entering the
+    page no longer rewrites a stylesheet. The page looks as before.
+
 ### Stack declaration changes
 
 For the bun stack (`package.json`'s `crucible` block):

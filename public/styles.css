@@ -2747,3 +2747,19 @@ body {
 
 /* A CR that closed over a red pre-merge gate, on its History row. */
 .app-cr-accepted-failing-gate { color: var(--fail); }
+
+/* Timeline rows skip their style and layout while off screen, so a
+   document-wide re-style (a run opening or closing, a settled run arriving)
+   costs only what is in view. Scroll anchoring is off on the feed's scroll
+   box: a skipped row standing in at its intrinsic size must not shift a
+   restored scroll position. A skipped row's paint containment clips what
+   overflows it, so a row is at least as wide as its unbreakable content (a
+   long agent id): the overflow stays the row's own and the feed still
+   scrolls sideways to it. The running cards sit above the timeline, always
+   in view, and keep their own truncation: they are not timeline rows. */
+.app-evt:not(.app-evt-running), .app-transition-marker, .app-milestone-entry, .app-cycle-span-open, .app-merge-compact {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
+  min-width: min-content;
+}
+.app-pane-content { overflow-anchor: none; }

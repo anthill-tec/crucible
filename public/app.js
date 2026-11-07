@@ -1996,6 +1996,19 @@
       return rows;
     }
 
+    // The running cards live in a container of their own, beside the timeline,
+    // that stays in place while runs open, stream and close: a streamed batch
+    // changes only the container's contents, so the timeline (which reads no
+    // open run) is never re-rendered and no sibling of it is replaced. With no
+    // run open the container holds what `idle` draws (the empty state), and
+    // while `hidden` holds it holds nothing.
+    const RunningCards = (idle, hidden = () => false) =>
+      div({ class: "app-running-cards" }, () => {
+        if (hidden()) return span();
+        const open = visibleOpenRuns();
+        return open.length > 0 ? div(open.map((run) => RunningCard(run))) : idle();
+      });
+
     const EmptyState = () => {
       // CR-CRU-017 §S3 — a live run is content: while one is running the feed
       // has something to show, so the "no runs yet" face must yield to it (the
@@ -2115,7 +2128,11 @@
           ),
           () =>
             state.backendUp ? span() : span({ class: "app-synced" }, syncedStamp()),
-          () => EmptyState() ?? div(runFeed(visibleEvents(), "home")),
+          RunningCards(() => EmptyState() ?? span()),
+          () => {
+            const runs = visibleEvents();
+            return runs.length === 0 ? span() : div(runFeed(runs, "home", []));
+          },
         ),
       );
 
@@ -2853,17 +2870,23 @@
             }),
             div({ class: "app-pane-controls" }, DensityToggle()),
           ),
+          // The release filter shows settled runs only, so no running card.
+          // CR-CRU-017 §S3 — a project whose FIRST run is still running has
+          // no events yet, and "no runs yet" would be a lie: the run is right
+          // there. The empty state is therefore about having nothing at all,
+          // open or settled.
+          RunningCards(
+            () =>
+              visibleEvents().length === 0
+                ? div({ class: "app-empty" }, "no runs yet — ingest a run to light the forge")
+                : span(),
+            () => state.runsRelease !== null,
+          ),
           () => {
             const filtered = ReleaseRunsFeed();
             if (filtered !== null) return filtered;
             const runs = visibleEvents();
-            // CR-CRU-017 §S3 — a project whose FIRST run is still running has
-            // no events yet, and "no runs yet" would be a lie: the run is right
-            // there. The empty state is therefore about having nothing at all,
-            // open or settled.
-            return runs.length === 0 && visibleOpenRuns().length === 0
-              ? div({ class: "app-empty" }, "no runs yet — ingest a run to light the forge")
-              : div(runFeed(runs, "workspace"));
+            return runs.length === 0 ? span() : div(runFeed(runs, "workspace", []));
           },
         ),
       );
