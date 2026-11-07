@@ -103,6 +103,16 @@
     if (state.route.roadmap === true) state.workspaceTab = "Roadmap";
     runsTabFollows(state.route);
 
+    // Bumped on every wholesale replacement of `state.openRuns` and of
+    // `state.agents`. A binding subscribes only to the fields it read when it
+    // last ran, so one that read an absent key (a run's `live`, an agent's
+    // `idleLine`), or a run list that did not yet hold its run, is left
+    // subscribed to nothing a later read changes. The agent card's line and
+    // its streaming mark read these counters too, so every replacement
+    // re-evaluates them whatever they read before.
+    const openRunsReplaced = van.state(0);
+    const agentsReplaced = van.state(0);
+
     // CR-CRU-022 §S5 — the analytics reads (DN-crucible-analytics §10). Velocity
     // (the release's pace so far), burndown and forecast all belong to the
     // FOCUSED release; burndown + forecast are held as one pair keyed by that
@@ -525,6 +535,7 @@
       try {
         const agents = await getJson("/api/v2/agents");
         vanX.replace(state.agents, () => agents.agents ?? []);
+        agentsReplaced.val += 1;
         markSynced();
       } catch {
         // Keep the last-known agents visible.
@@ -584,6 +595,7 @@
                 },
           ),
         );
+        openRunsReplaced.val += 1;
         markSynced();
       } catch {
         // Keep the last-known feed visible.
@@ -1071,10 +1083,14 @@
           // binding, deliberately not hoisted beside `busy` above: both would
           // satisfy the AC today (the rows rebuild on every poll), but only
           // the binding re-runs when the `openRuns` slice itself changes.
-          class: () =>
-            `app-agent-row app-card app-agent-subrow${glyph.tombstone ? " tombstoned" : ""}${
+          // Reading `openRunsReplaced` re-evaluates the mark on every
+          // replacement of the open-run slice, whatever the join read before.
+          class: () => {
+            void openRunsReplaced.val;
+            return `app-agent-row app-card app-agent-subrow${glyph.tombstone ? " tombstoned" : ""}${
               state.selectedAgent === agent.agentId ? " on" : ""
-            }${isStreamingAgent(agent) ? " app-agent-streaming" : ""}`,
+            }${isStreamingAgent(agent) ? " app-agent-streaming" : ""}`;
+          },
           onclick: () => {
             state.selectedAgent =
               state.selectedAgent === agent.agentId ? null : agent.agentId;
@@ -1095,7 +1111,14 @@
         // `running …` line instead, re-read as `events` frames move the slice.
         span(
           { class: "app-agent-msg" },
-          () => agentLiveLine(agent) ?? agent.idleLine ?? (agent.message || "—"),
+          // Reading both counters re-evaluates the line on every replacement
+          // of the open-run slice and of the agents, so a key the records did
+          // not hold when the line last ran is still read once it arrives.
+          () => {
+            void openRunsReplaced.val;
+            void agentsReplaced.val;
+            return agentLiveLine(agent) ?? agent.idleLine ?? (agent.message || "—");
+          },
         ),
         // CR-CRU-011 §S2 — server-computed runtime: live rows tick with each
         // refetched runtime_ms; tombstoned rows render the sealed value.
