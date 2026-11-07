@@ -880,6 +880,9 @@ async function handleAgentUnregister(store: Store, req: Request): Promise<Respon
  * `now − firstSeen` (ticking); tombstoned (never unregistered) →
  * `lastRunTimestamp − firstSeen` (sealed; lastSeen fallback when the agent
  * never ingested a run). Unregistered agents live on the lifecycle event.
+ * `firstSeen` is the agent's latest registration, so a run from before it is
+ * not the agent's last run: the sealed runtime falls back to lastSeen then,
+ * and is never below 0.
  */
 function handleAgentsList(store: Store, req: Request, url: URL): Response {
   const project = url.searchParams.get("project") ?? undefined;
@@ -909,11 +912,13 @@ function handleAgentsList(store: Store, req: Request, url: URL): Response {
     const lastRunAt = store.lastRunTimestamp(agent.projectKey, agent.agentId);
     const idle =
       agent.liveness !== "tombstoned" && !running.has(`${agent.projectKey}\u0000${agent.agentId}`);
+    const sealedAt =
+      lastRunAt !== null && lastRunAt >= agent.firstSeen ? lastRunAt : agent.lastSeen;
     return {
       ...agent,
       runtime_ms:
         agent.liveness === "tombstoned"
-          ? (lastRunAt ?? agent.lastSeen) - agent.firstSeen
+          ? Math.max(0, sealedAt - agent.firstSeen)
           : now - agent.firstSeen,
       ...(idle
         ? {

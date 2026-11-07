@@ -1,6 +1,6 @@
 # CR-CRU-236 — an agent's card follows its streaming run, and its runtime is never negative
 
-**Type** fix · **Points** 3 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING · Pre-review: none — no
+**Type** fix · **Points** 5 · **Wave** 8 (0.4.0) · **Depends on** — · **Status** PENDING · Pre-review: none — no
 trigger
 - **Filed 2026-11-06** by user ruling, as a bug fix in the current wave sequenced after CR-CRU-234 (the same card),
   from a defect the user reported on the DEV board: the tests of a streaming run move in the Runs view but not in the
@@ -47,7 +47,16 @@ trigger
   the count, the total and the current file — from the run's opening to its close, whatever the order in which the
   agents and events reads land, and without a reload. When the run settles the card reads its own line again. The
   card's line and its streaming mark are re-evaluated on every replacement of the page's open-run slice, whatever they
-  read when they last ran, so neither can be left subscribed to nothing. How is GREEN's choice.
+  read when they last ran, so neither can be left subscribed to nothing. The same holds for the agents slice (user
+  ruling 2026-11-07, from RED's finding): the card's line is re-evaluated on every replacement of the page's agents,
+  so an idle line that arrives as a key the agent's record did not hold is read even when no other field of the agent
+  changes. How is GREEN's choice.
+- **§S1a — no other part of the card can stick, and the line keeps its element** (user ruling 2026-11-07, from
+  VERIFY's findings; re-scored 3 → 5). Every other part of an agent's card that reads a field which can arrive later as
+  a new key — the agent's display name, its runtime and last seen, and the running run the card's cycle span names (a
+  run's cycle) — shows that field once a read serves it, with no other field of the agent or run changed. And the
+  card's line keeps its element while its text is unchanged: a read that serves the same line leaves the element in
+  place, so its hover title and a selection in it survive a frame. How is FIX's choice.
 - **§S2 — the page drops a settled run.** When the board no longer serves an open run, the page's open-run slice no
   longer holds it after the next read.
 - **§S3 — a runtime is never negative.** A tombstoned agent's runtime is measured from its latest registration to its
@@ -72,6 +81,15 @@ trigger
   without a new run reads a runtime ≥ 0, measured from its latest registration; one with a run since reads from that
   registration to that run.
 - [ ] **AC5 (§S4).** Every existing test passes unchanged.
+- [ ] **AC7 (§S1 — fails today).** In the page harness: a card reading its agent's message, whose agents read then
+  serves an idle line for the agent with no other field of the agent changed, reads that idle line.
+- [ ] **AC8 (§S1a — page level).** In the page harness, each of these first absent and then served by a read with no
+  other field changed is shown on the card: an agent's display name, its runtime, its last seen, and an open run's
+  cycle (the card's cycle span names the run as running).
+- [ ] **AC9 (§S1a — page level).** In the page harness, while a run streams: a read that serves the same live state
+  leaves the card's line element in place (the same node); a read that changes it replaces the text.
+- [ ] **AC10 (§S3).** A tombstoned agent whose last run is at the instant of its latest registration reads a runtime
+  of 0, measured to that run.
 - [ ] **AC6 (§S1 — checked live by the user).** After the merge and a board restart, the user watches at least two
   consecutive real client runs in their own long-lived tab on the DEV board, and the agent's card follows every batch
   of each.

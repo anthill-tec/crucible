@@ -103,6 +103,16 @@
     if (state.route.roadmap === true) state.workspaceTab = "Roadmap";
     runsTabFollows(state.route);
 
+    // Bumped on every wholesale replacement of `state.openRuns` and of
+    // `state.agents`. A binding subscribes only to the fields it read when it
+    // last ran, so one that read an absent key (a run's `live`, an agent's
+    // `idleLine`), or a run list that did not yet hold its run, is left
+    // subscribed to nothing a later read changes. The agent card's line and
+    // its streaming mark read these counters too, so every replacement
+    // re-evaluates them whatever they read before.
+    const openRunsReplaced = van.state(0);
+    const agentsReplaced = van.state(0);
+
     // CR-CRU-022 §S5 — the analytics reads (DN-crucible-analytics §10). Velocity
     // (the release's pace so far), burndown and forecast all belong to the
     // FOCUSED release; burndown + forecast are held as one pair keyed by that
@@ -525,6 +535,7 @@
       try {
         const agents = await getJson("/api/v2/agents");
         vanX.replace(state.agents, () => agents.agents ?? []);
+        agentsReplaced.val += 1;
         markSynced();
       } catch {
         // Keep the last-known agents visible.
@@ -570,20 +581,26 @@
         // runner gives them, so each is held empty (null) too, and an answer
         // that first adds either reaches the row and the card even when the
         // done count has not moved. An empty total or file reads as absent.
+        // A run's cycle is held the same way: its `context` carries a
+        // `cycleId` slot (null when the board serves none), so the active
+        // cycle's span names a run whose cycle a later read first serves.
+        // Only `context.cycleId` is read from an open run, and null reads as
+        // no cycle.
         vanX.replace(state.openRuns, () =>
-          (events.openRuns ?? []).map((run) =>
-            run.live === undefined || run.live === null
-              ? { ...run, live: null }
-              : {
-                  ...run,
-                  live: {
+          (events.openRuns ?? []).map((run) => ({
+            ...run,
+            context: { ...run.context, cycleId: run.context?.cycleId ?? null },
+            live:
+              run.live === undefined || run.live === null
+                ? null
+                : {
                     ...run.live,
                     total: run.live.total ?? null,
                     currentFile: run.live.currentFile ?? null,
                   },
-                },
-          ),
+          })),
         );
+        openRunsReplaced.val += 1;
         markSynced();
       } catch {
         // Keep the last-known feed visible.
@@ -1071,10 +1088,14 @@
           // binding, deliberately not hoisted beside `busy` above: both would
           // satisfy the AC today (the rows rebuild on every poll), but only
           // the binding re-runs when the `openRuns` slice itself changes.
-          class: () =>
-            `app-agent-row app-card app-agent-subrow${glyph.tombstone ? " tombstoned" : ""}${
+          // Reading `openRunsReplaced` re-evaluates the mark on every
+          // replacement of the open-run slice, whatever the join read before.
+          class: () => {
+            void openRunsReplaced.val;
+            return `app-agent-row app-card app-agent-subrow${glyph.tombstone ? " tombstoned" : ""}${
               state.selectedAgent === agent.agentId ? " on" : ""
-            }${isStreamingAgent(agent) ? " app-agent-streaming" : ""}`,
+            }${isStreamingAgent(agent) ? " app-agent-streaming" : ""}`;
+          },
           onclick: () => {
             state.selectedAgent =
               state.selectedAgent === agent.agentId ? null : agent.agentId;
@@ -1086,7 +1107,13 @@
           glyph.tombstone
             ? span("⚰ ")
             : span({ class: `app-dot ${busy ? "r" : glyph.cls}` }),
-          agent.identity?.displayName ?? agent.agentId,
+          // The name, the runtime and the last-seen line each re-read on every
+          // replacement of the agents, so a key the agent's record did not
+          // hold when the card was built is shown once a read serves it.
+          () => {
+            void agentsReplaced.val;
+            return agent.identity?.displayName ?? agent.agentId;
+          },
         ),
         // Between runs the server serves the agent's composed idle line (role,
         // binding, last run and its age); while a run is open it serves none,
@@ -1095,24 +1122,56 @@
         // `running …` line instead, re-read as `events` frames move the slice.
         span(
           { class: "app-agent-msg" },
-          () => agentLiveLine(agent) ?? agent.idleLine ?? (agent.message || "—"),
+          // Reading both counters re-evaluates the line on every replacement
+          // of the open-run slice and of the agents, so a key the records did
+          // not hold when the line last ran is still read once it arrives.
+          // A line whose text is unchanged keeps its node, so its hover title
+          // and a selection in it survive the frame.
+          (dom) => {
+            void openRunsReplaced.val;
+            void agentsReplaced.val;
+            const line = agentLiveLine(agent) ?? agent.idleLine ?? (agent.message || "—");
+            return keepSameLine(dom, line);
+          },
         ),
         // CR-CRU-011 §S2 — server-computed runtime: live rows tick with each
         // refetched runtime_ms; tombstoned rows render the sealed value.
-        typeof agent.runtime_ms === "number"
-          ? span(
-              { "data-testid": "agent-runtime", class: "app-card-meta" },
-              fmtDuration(agent.runtime_ms),
-            )
-          : null,
+        // An absent runtime or last seen binds an empty text node, never null:
+        // a binding that returns null drops its node for good.
+        () => {
+          void agentsReplaced.val;
+          return typeof agent.runtime_ms === "number"
+            ? span(
+                { "data-testid": "agent-runtime", class: "app-card-meta" },
+                fmtDuration(agent.runtime_ms),
+              )
+            : "";
+        },
         // Small last-seen / died-ago line (card-meta family).
-        glyph.tombstone
-          ? span({ class: "app-card-meta" }, `died ${glyph.diedAgo}`)
-          : agent.lastSeen !== undefined
-            ? span({ class: "app-card-meta" }, `seen ${rel(agent.lastSeen)}`)
-            : null,
+        () => {
+          void agentsReplaced.val;
+          return glyph.tombstone
+            ? span({ class: "app-card-meta" }, `died ${glyph.diedAgo}`)
+            : agent.lastSeen !== undefined
+              ? span({ class: "app-card-meta" }, `seen ${rel(agent.lastSeen)}`)
+              : "";
+        },
       );
     };
+
+    // The card's line as its binding returns it: the node it already shows
+    // when the new line reads the same — the same running line, or the same
+    // text — else the new line (a running-line element, or text).
+    function keepSameLine(dom, line) {
+      if (typeof line === "string") {
+        return dom?.nodeType === 3 && dom.data === line ? dom : line;
+      }
+      return dom?.nodeType === 1 &&
+        dom.classList.contains("app-agent-live") &&
+        dom.textContent === line.textContent
+        ? dom
+        : line;
+    }
 
     // ── §S1 (CR-CRU-007) — run card anatomy ─────────────────────────────
     function fmtDuration(ms) {
