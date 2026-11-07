@@ -323,3 +323,18 @@ def private_fake_prelude(cases="[]"):
             "    _nx_code = fake_nextest.streamed_run(_nx_args, _nx_cases)\n"
             "if _nx_code is not None:\n"
             "    _nx_sys.exit(_nx_code)\n")
+
+
+def held_results(text):
+    """The results a held nextest stream holds, by event: `{"ok": n,
+    "failed": n, "ignored": n}`."""
+    counts = {"ok": 0, "failed": 0, "ignored": 0}
+    for line in (text or "").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if (isinstance(event, dict) and event.get("type") == "test"
+                and event.get("event") in counts):
+            counts[event["event"]] += 1
+    return counts
