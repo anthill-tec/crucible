@@ -195,7 +195,21 @@ class _IngestHeldSignalCase(unittest.TestCase):
             body.get("runId"), run_id,
             f"{label}: the ingest must carry the runId it closes; got "
             f"{body!r}")
-        if streamed:
+        if streamed == "nextest":
+            # A rust run is closed from nextest's stream, carrying no report
+            # and no parse; the board holds the runner's 3 passing results.
+            self.assertEqual(
+                (body.get("codec"), "data" in body, "summary" in body),
+                ("nextest", False, False),
+                f"{label}: the close names the stream codec and carries no "
+                f"report; got {body!r}")
+            lines = self.board.held_stream(run_id).splitlines()
+            self.assertEqual(
+                (sum('"event":"ok"' in ln and '"type":"test"' in ln for ln in lines),
+                 sum('"event":"failed"' in ln for ln in lines)), (3, 0),
+                f"{label}: the board holds the runner's 3 results from its "
+                f"stream; held={self.board.held_stream(run_id)!r}")
+        elif streamed:
             # CR-CRU-224: a python unittest run is closed from its runner's
             # stream, carrying no report and no parse; the board holds the
             # runner's 3 cases.
@@ -284,12 +298,11 @@ INGEST_HELD_SITES = (
 # The clients that send their runner's reports inline through the shared
 # ingest (CR-CRU-204), each with the number of report files its fake runner
 # writes for the 3-case run: their ingest body carries `data`, never a parse.
-# bun, rust and arduino write one report; maven's surefire writes one per
-# class.
-INLINE_REPORT_CLIENTS = {"bun": 1, "mvn": 3, "rust": 1, "arduino": 1}
-# The clients whose `test` run is closed from its runner's stream: python's
-# unittest run (CR-CRU-224).
-STREAMED_CLIENTS = {"python"}
+# bun and arduino write one report; maven's surefire writes one per class.
+INLINE_REPORT_CLIENTS = {"bun": 1, "mvn": 3, "arduino": 1}
+# The clients whose `test` run is closed from its runner's stream, by the
+# stream's codec: python's unittest run (CR-CRU-224) and rust's nextest run.
+STREAMED_CLIENTS = {"python": STREAM_CODEC, "rust": "nextest"}
 
 
 class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):
@@ -310,7 +323,7 @@ class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):
                 self._assert_ingest_signal_filed_the_run(
                     f"{key} test", signal.SIGTERM, code, stdout, stderr,
                     ingest_path, inline=INLINE_REPORT_CLIENTS.get(key),
-                    streamed=key in STREAMED_CLIENTS)
+                    streamed=STREAMED_CLIENTS.get(key, False))
 
 
 if __name__ == "__main__":

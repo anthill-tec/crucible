@@ -29,7 +29,8 @@ Knobs, all read from the environment:
   FAKE_HUMAN_TOTAL       the total nextest's human `Starting` line states.
   FAKE_RUN_EXIT          the run's exit code (default: 100 when a test
                          failed, 4 when no test ran, else 0).
-  FAKE_LCOV              the lcov text `llvm-cov report` writes.
+  FAKE_LCOV              the lcov text `llvm-cov report` writes
+                         (FAKE_LCOV_FILE: a file holding it, read instead).
   FAKE_CARGO_CALLS       a file each call appends one JSON line to: its argv,
                          cwd, the stream and coverage variables it saw, and
                          the `.profraw` files under the target directory.
@@ -48,6 +49,7 @@ RUSTC_ERROR = ("error[E0425]: cannot find value `undefined_value` in this scope\
                " --> src/lib.rs:3:5\n  |\n3 |     undefined_value\n  |     "
                "^^^^^^^^^^^^^^^ not found in this scope\n\nerror: could not "
                "compile `fake-crate` (lib test) due to 1 previous error\n")
+HERE = os.path.dirname(os.path.abspath(__file__))
 RECORDED_ENV = ("NEXTEST_EXPERIMENTAL_LIBTEST_JSON", "LLVM_PROFILE_FILE",
                 "CARGO_LLVM_COV", "CARGO_LLVM_COV_TARGET_DIR", "CARGO_TARGET_DIR",
                 "RUSTC_WRAPPER")
@@ -174,7 +176,12 @@ def _show_env(argv):
 
 
 def _report(argv):
-    text = os.environ.get("FAKE_LCOV", DEFAULT_LCOV)
+    lcov_file = os.environ.get("FAKE_LCOV_FILE")
+    if lcov_file:
+        with open(lcov_file, encoding="utf-8") as handle:
+            text = handle.read()
+    else:
+        text = os.environ.get("FAKE_LCOV", DEFAULT_LCOV)
     output = option(argv, "--output-path")
     if output:
         path = output if os.path.isabs(output) else os.path.join(os.getcwd(), output)
@@ -233,8 +240,10 @@ def _human(text):
     sys.stderr.flush()
 
 
-def streamed_run(argv, cases, before_case=None):
-    """Answer a streamed `nextest run`, or None for any other call."""
+def streamed_run(argv, cases, before_case=None, empty_exit=None, silent=False):
+    """Answer a streamed `nextest run`, or None for any other call.
+    `empty_exit` is the exit of a run with no case (nextest's own is 4);
+    `silent` writes no stream line, as FAKE_STREAM_SILENT does."""
     if not is_streamed_run(argv):
         return None
     if os.environ.get(STREAM_VARIABLE) != "1":
@@ -251,12 +260,13 @@ def streamed_run(argv, cases, before_case=None):
     stated = int(os.environ.get("FAKE_HUMAN_TOTAL", len(cases)))
     _human(f"    Starting {stated} tests across 1 binary (run ID: deadbeef, "
            f"nextest profile: {profile})")
-    if os.environ.get("FAKE_STREAM_SILENT") == "1":
+    if silent or os.environ.get("FAKE_STREAM_SILENT") == "1":
         _human("error: test binary fake_crate exited abnormally")
         return int(os.environ.get("FAKE_RUN_EXIT", "101"))
     if not cases:
         _human("error: no tests to run")
-        return int(os.environ.get("FAKE_RUN_EXIT", "4"))
+        return int(os.environ.get("FAKE_RUN_EXIT",
+                                  "4" if empty_exit is None else empty_exit))
     cut_after = int(os.environ.get("FAKE_STREAM_CUT_AFTER", "0"))
     fail_fast = "--no-fail-fast" not in argv
     out = sys.stdout
@@ -295,3 +305,21 @@ def streamed_run(argv, cases, before_case=None):
            f"{counts['ignored']} skipped")
     default = "100" if counts["failed"] else "0"
     return int(os.environ.get("FAKE_RUN_EXIT", default))
+
+
+def private_fake_prelude(cases="[]"):
+    """The lines a test's own fake `cargo` starts with to answer a streamed
+    run's calls: `cases` is a python expression, evaluated in the fake, for
+    the tests it runs. A call this module does not answer falls through to
+    the fake's own body, unchanged."""
+    return ("import sys as _nx_sys\n"
+            f"_nx_sys.path.insert(0, {HERE!r})\n"
+            "import fake_nextest\n"
+            "_nx_args = _nx_sys.argv[1:]\n"
+            f"_nx_cases = {cases}\n"
+            "_nx_code = fake_nextest.preliminary(_nx_args, _nx_cases)\n"
+            "if _nx_code is None:\n"
+            "    fake_nextest.record_call(_nx_args)\n"
+            "    _nx_code = fake_nextest.streamed_run(_nx_args, _nx_cases)\n"
+            "if _nx_code is not None:\n"
+            "    _nx_sys.exit(_nx_code)\n")

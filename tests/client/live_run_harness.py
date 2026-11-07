@@ -1128,8 +1128,11 @@ args = sys.argv[1:]
 fake_nextest.record_call(args)
 if not args or args[0] in ("clean", "check", "cache"):
     sys.exit(0)
-_nx_code = fake_nextest.streamed_run(args, NEXTEST_CASES,
-                                     lambda i: maybe_block(i, sys.stderr))
+# A zero report streams no result and exits FAKE_EXIT_CODE; no report
+# streams no line at all.
+_nx_code = fake_nextest.streamed_run(
+    args, NEXTEST_CASES, lambda i: maybe_block(i, sys.stderr),
+    empty_exit=zero_report_exit_code if zero_report else None, silent=no_report)
 if _nx_code is not None:
     sys.exit(_nx_code)
 profile = "ci"
