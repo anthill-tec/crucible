@@ -15,14 +15,14 @@ unless `--coverage` is given. The help has to say so, in four places:
   * the help of each coverage-only flag on `regression` — maven's
     `--coverage-profile` (and wherever the root or `regression` help names
     `CRUCIBLE_COVERAGE_PROFILE`), python's `--cov-source`, rust's
-    `--lcov-output`, `--ignore-run-fail` and `--keep-target` — says the flag
-    applies only with `--coverage`;
+    `--lcov-output` and `--keep-target` — says the flag applies only with
+    `--coverage`, and rust's retired `--ignore-run-fail` says it is retired;
   * bun's and python's `pre-merge-gate` help no longer claims to be "the only
     coverage path" — `regression --coverage` is one too.
 
 GREEN-GUARDS (already true, pinned so they stay true): every client's
 `regression --help` lists `--coverage` with the one shared sentence (the run
-is coverage-free without it); rust's three coverage-only flags already say
+is coverage-free without it); rust's two coverage-only flags already say
 they apply only with `--coverage`; bun's, python's and arduino's root
 `regression` lines already name `--coverage`.
 
@@ -315,9 +315,23 @@ class CoverageOnlyFlagHelpSaysItNeedsCoverageTest(unittest.TestCase):
         """GREEN-GUARD: already true."""
         self._assert_only_with_coverage("rust", "--lcov-output")
 
-    def test_rust_regression_ignore_run_fail_help_says_only_with_coverage_guard(self):
-        """GREEN-GUARD: already true."""
-        self._assert_only_with_coverage("rust", "--ignore-run-fail")
+    def test_rust_regression_ignore_run_fail_help_says_the_flag_is_retired(self):
+        """`--ignore-run-fail` retires: a coverage run's lcov is now always
+        written, so the flag is refused. Its help, where it is shown at all,
+        says so and names the lcov."""
+        text = _flag_help("rust", "regression", "--ignore-run-fail")
+        if text == argparse.SUPPRESS:
+            return
+        plain = _plain(text)
+        self.assertRegex(
+            plain, r"\b(retired|retires|refused|refuses|no longer accepted)\b",
+            f"rust `regression --ignore-run-fail` help does not say the flag "
+            f"is retired: {text!r}")
+        self.assertIn("lcov", plain,
+                      f"the help says the lcov is now always written: {text!r}")
+        self.assertFalse(
+            _says_only_with_coverage(text),
+            f"a retired flag is not a coverage-only flag: {text!r}")
 
     def test_rust_regression_keep_target_help_says_only_with_coverage_guard(self):
         """GREEN-GUARD: already true."""
