@@ -76,6 +76,9 @@ STEP_VERBS = {
     "rust": ("check", "auto-ingest", "clippy", "workspace-clippy",
              "pre-merge-gate", "smoke-test", "docker-e2e-gate", "regression"),
     "arduino": ("check", "compile", "auto-ingest", "pre-merge-gate"),
+    # go files a streamed run from each of its three running verbs; it has no
+    # compile or lint step of its own yet.
+    "go": ("test", "regression", "pre-merge-gate"),
 }
 
 INVOCATION_LOG = "invocations.log"

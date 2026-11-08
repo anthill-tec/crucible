@@ -72,7 +72,7 @@ This RED slice pins the exact package layout + API GREEN must build:
             {"version": <str>, "clients": {<stack>: <path>, ...},
              "status": <path ending in "STATUS-CONTRACT.md">,
              "config": <path ending in "crucible.toml">}
-            "clients" covers exactly {"bun","python","rust","mvn","arduino"}.
+            "clients" covers exactly {"bun","python","rust","mvn","arduino","go"}.
         write_manifest(target_dir, manifest_dict) -> str
             Writes "crucible-clients.json" (single JSON document, overwriting
             -- never appending) into target_dir; returns the written path.
@@ -102,7 +102,7 @@ PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 TOON_PATH = REPO_ROOT / "clients" / "toon.py"
 STATUS_CONTRACT_PATH = REPO_ROOT / "clients" / "STATUS-CONTRACT.md"
 
-EXPECTED_CLIENT_STACKS = {"bun", "python", "rust", "mvn", "arduino"}
+EXPECTED_CLIENT_STACKS = {"bun", "python", "rust", "mvn", "arduino", "go"}
 
 # The manifest's top-level key set, DECLARED ONCE in `manifest_contract` and
 # imported here rather than restated: three suites pin it, and three copies of
@@ -566,7 +566,7 @@ class DiscoveryManifestTest(unittest.TestCase):
         6th/'vscode' entry, since vscode is clientless per the CR context)."""
         manifest_mod, = _import_fresh("crucible_axi.manifest")
         manifest = manifest_mod.build_manifest(self.tmp)
-        self.assertEqual(len(manifest["clients"]), 5)
+        self.assertEqual(len(manifest["clients"]), 6)
 
     def test_build_manifest_carries_a_version_key_and_status_contract_reference(self):
         manifest_mod, = _import_fresh("crucible_axi.manifest")

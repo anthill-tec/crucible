@@ -74,9 +74,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 UV_BINARY = shutil.which("uv")
 
-# The five client stacks that ship a `*-crucible.py` client, matching
+# The six client stacks that ship a `*-crucible.py` client, matching
 # `crucible_axi/manifest.py`'s `CLIENT_STACKS` tuple exactly.
-CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino")
+CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino", "go")
 
 BUILD_TIMEOUT_SECONDS = 600
 UV_TIMEOUT_SECONDS = 120

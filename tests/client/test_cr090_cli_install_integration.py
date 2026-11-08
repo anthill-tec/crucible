@@ -81,6 +81,7 @@ EXPECTED_FLEET_FILES = frozenset({
     "rust-crucible.py",
     "mvn-crucible.py",
     "arduino-crucible.py",
+    "go-crucible.py",
     "_crucible_axi.py",
     # The run pipeline `_crucible_axi.py` loads BY FILE PATH from its own
     # directory and re-exports.
@@ -116,7 +117,7 @@ def _landed_fleet_listing(clients_dir):
             listing.add(Path(relative).as_posix())
     return listing
 
-CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino")
+CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino", "go")
 
 FLEET_STAGE_NAME = "fleet"
 MANIFEST_STAGE_NAME = "manifest"

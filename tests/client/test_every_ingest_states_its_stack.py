@@ -41,7 +41,9 @@ from tests.client.live_run_harness import (
 )
 from tests.client.test_client_fleet_envelope_census import (
     declare_board,
+    fake_go_body,
     install_project_limits,
+    write_go_module,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -56,7 +58,7 @@ INGEST_ROUTES = (RUNS, PARSED, COMPILE)
 
 # Each client's own stack name, as the board will store it.
 CLIENT_STACKS = {"arduino": "arduino", "bun": "bun", "mvn": "mvn",
-                 "python": "python", "rust": "rust"}
+                 "python": "python", "rust": "rust", "go": "go"}
 
 AGENT = "stack-census-probe"
 PROJECT_KEY = "stack-census-project-key"
@@ -834,6 +836,102 @@ class RustStatesItsStackOnEveryIngestTest(_ClientIngestCase):
     def test_a_refused_start_runs_the_rust_regression_ingest_streamed_and_files_nothing(self):
         self.assert_a_refused_start_runs_streamed_and_files_nothing(
             "regression-ingest", ("--crates", "probe"))
+
+
+
+class GoStatesItsStackOnEveryIngestTest(_ClientIngestCase):
+    """go: each running verb (`test`, `regression`, `pre-merge-gate`) opens
+    its run and streams `go test -json` (a fake `go` first on PATH, its tests
+    passing) to it, closing the run from that stream: the run start and the
+    close each name the go stack. A start that opened no run files nothing,
+    and one `ok: false` envelope names the refusal."""
+
+    CLIENT = "go"
+    REFUSAL = START_REFUSED["error"]
+
+    def setUp(self):
+        super().setUp()
+        self.bin_dir = tempfile.mkdtemp(prefix="stack-census-go-bin-")
+        self.addCleanup(shutil.rmtree, self.bin_dir, ignore_errors=True)
+        go = Path(self.bin_dir, "go")
+        go.write_text(fake_go_body("pass"))
+        go.chmod(go.stat().st_mode | stat.S_IEXEC)
+        write_go_module(self.project_dir)
+        self.stdout = ""
+        self.stderr = ""
+
+    def drive_verb(self, start_reply, verb):
+        """The whole verb through `main`, from inside the module, its every
+        POST recorded and its every read answered as a board that decodes
+        `go-test`."""
+        recorder = _RecordingPost(start_reply)
+        health = get_answering_health(BOARD_OFFLINE)
+
+        def request(method, path, payload=None, timeout=None):
+            if method == "POST":
+                return recorder(path, payload)
+            return health(path)
+
+        env = {"PATH": self.bin_dir + os.pathsep + os.environ.get("PATH", "")}
+        argv = ["go-crucible.py", verb, "--project-dir", self.project_dir,
+                "--agent", AGENT]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.chdir(self.project_dir), \
+                mock.patch.dict(os.environ, env), \
+                mock.patch.object(sys, "argv", argv), \
+                mock.patch.object(self.module, "_post", side_effect=recorder,
+                                  create=True), \
+                mock.patch.object(self.module, "_request", side_effect=request,
+                                  create=True), \
+                mock.patch.object(self.module, "_get", create=True, side_effect=health), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                contextlib.suppress(SystemExit):
+            for key in ("CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY",
+                        "GO_CRUCIBLE_MODULE_DIR", "GO_CRUCIBLE_PROJECT_DIR"):
+                os.environ.pop(key, None)
+            self.module.main()
+        self.stdout, self.stderr = out.getvalue(), err.getvalue()
+        return recorder
+
+    def assert_the_run_states_the_go_stack(self, verb):
+        recorder = self.drive_verb(START_ACCEPTED, verb)
+        where = f"posted to {recorder.paths()!r} stderr={self.stderr[-1200:]!r}"
+        self.assertEqual([body.get("stack") for body in recorder.bodies(RUN_START)],
+                         ["go"], f"go {verb}: one run start, naming the go stack; {where}")
+        closes = recorder.bodies(RUNS)
+        self.assertEqual([(body.get("codec"), body.get("stack")) for body in closes],
+                         [("go-test", "go")],
+                         f"go {verb}: the run is closed once from its go-test "
+                         f"stream, naming the go stack; {where}")
+        self.assert_ingest_states_the_stack(recorder, RUNS, START_ACCEPTED)
+        self.assertEqual([path for path in recorder.paths() if path in (PARSED, COMPILE)],
+                         [], f"go {verb} files no report; {where}")
+
+    def assert_a_refused_start_files_nothing(self, verb):
+        recorder = self.drive_verb(START_REFUSED, verb)
+        filed = [path for path in recorder.paths() if path in INGEST_ROUTES]
+        self.assertEqual(filed, [], f"go {verb}: a run whose start opened no run "
+                                    f"files nothing; posted to {recorder.paths()!r}")
+        self.assertEqual([body.get("stack") for body in recorder.bodies(RUN_START)],
+                         ["go"], f"go {verb}: the one run start names the go stack")
+        envelopes = [line for line in self.stdout.splitlines() if line == "axi:"]
+        self.assertEqual(len(envelopes), 1, f"one envelope; stdout={self.stdout!r}")
+        self.assertIn("ok: false", self.stdout, f"stdout={self.stdout!r}")
+
+    def test_a_test_run_states_the_go_stack_on_its_start_and_its_close(self):
+        self.assert_the_run_states_the_go_stack("test")
+
+    def test_a_refused_start_files_no_go_test_run(self):
+        self.assert_a_refused_start_files_nothing("test")
+
+    def test_a_regression_run_states_the_go_stack_on_its_start_and_its_close(self):
+        self.assert_the_run_states_the_go_stack("regression")
+
+    def test_a_refused_start_files_no_go_regression_run(self):
+        self.assert_a_refused_start_files_nothing("regression")
+
+    def test_a_pre_merge_gate_run_states_the_go_stack_on_its_start_and_its_close(self):
+        self.assert_the_run_states_the_go_stack("pre-merge-gate")
 
 
 if __name__ == "__main__":

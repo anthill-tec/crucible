@@ -105,11 +105,12 @@ from tests.client.test_client_fleet_envelope_census import (
     classify_envelope,
     drive_verb,
     enumerate_verbs,
+    fake_go_body,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-CLIENT_KEYS = ("bun", "python", "rust", "mvn", "arduino")
+CLIENT_KEYS = ("bun", "python", "rust", "mvn", "arduino", "go")
 
 # The one failing test identifier every client's FAIL fixture carries, so a
 # milestone's `failingTests` can be checked for a REAL, specific value rather
@@ -289,6 +290,8 @@ def _fail_bin_dir_for(client_key):
         _overwrite_fake_tool(bin_dir, "cargo", _FAIL_CARGO_BODY)
     elif client_key == "mvn":
         _overwrite_fake_tool(bin_dir, "mvn", _FAIL_MVN_BODY)
+    elif client_key == "go":
+        _overwrite_fake_tool(bin_dir, "go", fake_go_body("fail"))
     return bin_dir
 
 
@@ -514,7 +517,7 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
             head_sha = _git_commit_fixture(project_dir)
             bin_dir = pass_bin if outcome == "pass" else fail_bin
             agent_id = f"gate-fixture-{client_key}-{case}-agent"
-            if client_key in ("python", "rust"):
+            if client_key in ("python", "rust", "go"):
                 # The plan's cycle is done, so the client's own registration
                 # bound to it is refused, and a streamed run (python's
                 # unittest, rust's nextest) whose binding is refused or whose
