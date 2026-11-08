@@ -77,10 +77,10 @@ function viewCodecs(): Map<string, ViewCodecShape> | undefined {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("bun-console is a view codec, held in the view registry and not in the report registry", () => {
-  test("viewCodecs holds exactly bun-console, a codec stating its name and a fill method and no parse", () => {
+  test("viewCodecs holds exactly bun-console then surefire-console, bun-console a codec stating its name and a fill method and no parse", () => {
     const registry = viewCodecs();
     expect(registry instanceof Map, "src/codecs/index.ts exports a viewCodecs Map").toBe(true);
-    expect([...(registry?.keys() ?? [])]).toEqual([VIEW_CODEC]);
+    expect([...(registry?.keys() ?? [])]).toEqual([VIEW_CODEC, "surefire-console"]);
     const codec = registry?.get(VIEW_CODEC);
     expect(codec?.name).toBe(VIEW_CODEC);
     expect(typeof codec?.fill).toBe("function");
@@ -96,13 +96,13 @@ describe("bun-console is a view codec, held in the view registry and not in the 
 
 describe("health lists the view codecs under codecs.view", () => {
   for (const route of ["/api/health", "/api/v2/health"]) {
-    test(`GET ${route} carries codecs {test, coverage} as before, view: [bun-console] and stream: [crucible-events, nextest], and no other list`, async () => {
+    test(`GET ${route} carries codecs {test, coverage} as before, view: [bun-console, surefire-console] and stream: [crucible-events, nextest], and no other list`, async () => {
       const body = await getJson(boot(), route);
       expect(body.ok).toBe(true);
       expect(body.codecs).toEqual({
         test: ["crucible-events", "junit", "nextest"],
         coverage: ["jacoco", "lcov"],
-        view: ["bun-console"],
+        view: ["bun-console", "surefire-console"],
         stream: ["crucible-events", "nextest"],
       });
     });
