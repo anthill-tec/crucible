@@ -1,9 +1,14 @@
 # CR-CRU-203 — the arduino runner streams its tests
 
 **Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-200, CR-CRU-225 ·
-**Status** PENDING — filed 2026-10-20; made exact at gap analysis 2026-11-08; pre-review folded
+**Status** DONE — merged 2026-11-08 (`9f5cf27e`); filed 2026-10-20; made exact at gap analysis 2026-11-08; pre-review folded
 2026-11-08 (user rulings 2026-11-08). Maven's live console split out to CR-CRU-237 · Pre-review:
 ran — 13 points and user rulings (17 findings; the arduino ones folded, maven's to CR-CRU-237)
+
+**Done 2026-11-08.** Cycles 882 (red-green) and 883 (verify). VERIFY approved with no blocking
+findings. The pre-merge gate passed 11461/0 (bun 4868, client 6593). `_crucible_run.py`'s line
+budget was re-recorded at 1780→1796 for the shared `junit_totals`.
+
 
 ## Problem
 
@@ -106,7 +111,7 @@ stream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }
 
 ## Acceptance criteria
 
-- [ ] **AC1 — a declared target's tests reach the open run one by one.**
+- [x] **AC1 — a declared target's tests reach the open run one by one.**
   - On `test`, every tier verb and `pre-merge-gate`, a declared run gets these steps:
     1. The client empties the stream file.
     2. It runs `make <target>` with `CRUCIBLE_STREAM` set beside `REPORTS_DIR` (and `COVERAGE_DIR`
@@ -116,17 +121,17 @@ stream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }
     shows each test on the open run before the next ends.
   - The heartbeat counts the stream's `test-end` lines.
   - With no `--agent`, `CRUCIBLE_STREAM` is unset.
-- [ ] **AC2 — the stream is the record, and the JUnit checks it.**
+- [x] **AC2 — the stream is the record, and the JUnit checks it.**
   - A green declared run with two binaries exits 0 and is stored without `incomplete`.
   - Its counts and failures (by suite, name and message) equal what its JUnit would store.
   - Its stored framework is `arduino-native`.
   - A stream whose test count differs from its JUnit's is stored flagged incomplete.
   - Proved on one real run with passes, a failure and an ignored test across two binaries.
-- [ ] **AC3 — coverage rides the close.**
+- [x] **AC3 — coverage rides the close.**
   - A declared `regression --coverage` or `pre-merge-gate` closes its stream with `COVERAGE_DIR`'s
     `lcov`. The stored coverage equals the same run's coverage from the JUnit path.
   - With no lcov, the run carries the existing `coverage-not-measured` warning.
-- [ ] **AC4 — a crash is filed red and incomplete.**
+- [x] **AC4 — a crash is filed red and incomplete.**
   - A binary killed by SIGSEGV after k tests is filed red from its stream. The record holds:
     - the k tests;
     - the `exit <n>` leaf;
@@ -134,7 +139,7 @@ stream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }
       set. A cut last line counts as undecodable.
   - Later binaries that never ran are absent.
   - Proved with a real `g++` harness.
-- [ ] **AC5 — a declared run with no stream is not hidden.**
+- [x] **AC5 — a declared run with no stream is not hidden.**
   - **Nothing held:** when the board holds no `test-end` (the file is empty, or the relay stopped),
     the run is filed from its `TEST-*.xml` if there are any. It carries one warning naming the
     declared key and the missing stream, and the exit follows the runner's.
@@ -144,7 +149,7 @@ stream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }
     as having run nothing. The narrowing warnings still read the JUnit when it is present.
   - **No open run:** when the board opens no run, the run is filed single-shot from its JUnit, as
     today, with one warning.
-- [ ] **AC6 — the declaration is read and refused as specified.**
+- [x] **AC6 — the declaration is read and refused as specified.**
   - Every refusal in "The declaration" is covered, each before any board call, the `arduino-cli`
     compile and `make`.
   - This includes the board-health refusals and two native dirs that each have a `junit` target,
@@ -152,7 +157,7 @@ stream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }
   - Another stack's entry is skipped.
   - An undeclared target behaves exactly as before this CR, with the same posts, the same envelope
     and the Unity narration.
-- [ ] **AC7 — the make contract is written down.**
+- [x] **AC7 — the make contract is written down.**
   - The client's `--help` make contract states:
     - `CRUCIBLE_STREAM`;
     - the `test-end` line shape and its statuses;
@@ -160,14 +165,14 @@ stream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }
     - that there is no `run-start` or `run-end`;
     - that an unset variable means write nothing.
   - `clients/crucible.toml`'s commented reference names the arduino entry and its key.
-- [ ] **AC8 — every caller is kept green.**
+- [x] **AC8 — every caller is kept green.**
   - Every test in both suites (bun `tests/*.ts` and `tests/client/*.py`) that drives
     `arduino-crucible.py` passes. At gap analysis there were 76 files. A test's call sequence is
     re-pinned only where this CR changes what a run posts.
   - Every test of the shared module passes.
   - Any growth of `_crucible_run.py` or `_crucible_axi.py` re-records `SHARED_MODULE_LINE_BUDGETS`
     in all three files that pin it, in the same change.
-- [ ] **AC9 — the docs follow.**
+- [x] **AC9 — the docs follow.**
   - The DN's lines that call arduino a runner Crucible owns are amended (§S3).
   - The CHANGELOG `[Unreleased]` names the declaration and the `CRUCIBLE_STREAM` make contract, under
     "Stack declaration changes" for the release notes to Model B.
