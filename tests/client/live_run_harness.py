@@ -47,9 +47,9 @@ INGEST_PATHS = ("/api/v2/runs", "/api/v2/runs/parsed", "/api/v2/runs/compile")
 # version. Both health routes answer it.
 HEALTH_PATHS = ("/api/health", "/api/v2/health")
 HEALTH_VERSION = "0.4.0"
-HEALTH_CODECS = {"test": ["crucible-events", "junit", "nextest"],
+HEALTH_CODECS = {"test": ["crucible-events", "go-test", "junit", "nextest"],
                  "coverage": ["jacoco", "lcov"],
-                 "stream": ["crucible-events", "nextest"]}
+                 "stream": ["crucible-events", "go-test", "nextest"]}
 # The stream codec a python unittest run's record is written in (CR-CRU-224),
 # and the open run's stream route a client relays it to (CR-CRU-200 §S2).
 STREAM_CODEC = "crucible-events"
@@ -57,7 +57,9 @@ STREAM_ROUTE = re.compile(r"^/api/v2/runs/([^/]+)/stream$")
 # The record stream nextest writes (`libtest-json-plus`), and every codec an
 # open run's stream route takes: a run's first batch fixes its codec.
 NEXTEST_STREAM_CODEC = "nextest"
-STREAM_CODECS = (STREAM_CODEC, NEXTEST_STREAM_CODEC)
+# The stream `go test -json` writes, decoded on the board by `go-test`.
+GO_TEST_STREAM_CODEC = "go-test"
+STREAM_CODECS = (STREAM_CODEC, NEXTEST_STREAM_CODEC, GO_TEST_STREAM_CODEC)
 # An open run's test list route, and the codec nextest's own list is posted
 # under (`cargo nextest list --message-format json`).
 TESTS_ROUTE = re.compile(r"^/api/v2/runs/([^/]+)/tests$")
