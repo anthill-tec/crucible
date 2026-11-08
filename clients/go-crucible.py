@@ -498,8 +498,8 @@ def _gate_run(verb, args):
                        f"no go module was found: no go.mod under the project dir "
                        f"{project_dir} (outside {', '.join(_SKIPPED_MODULE_DIRS)} "
                        f"and hidden dirs); nothing was run",
-                       ["run the gate from the project dir that holds the go modules "
-                        "(--project-dir <dir>)"])
+                       [("run the gate from the project dir that holds the go modules "
+                         "(--project-dir <dir>)")])
     return _gated_go_run(verb, args, project_dir, agent, modules)
 
 
@@ -519,8 +519,8 @@ def _toolchain_refusal():
         return ("no `go` toolchain was found on PATH",
                 [f"install go {GO_FLOOR_TEXT} or later and put it on PATH"])
     if not acceptable:
-        return (f"go {shown} is older than go {GO_FLOOR_TEXT}, the first whose "
-                f"`go test -json` the board decodes; nothing was run",
+        return ((f"go {shown} is older than go {GO_FLOOR_TEXT}, the first whose "
+                 f"`go test -json` the board decodes; nothing was run"),
                 [f"install go {GO_FLOOR_TEXT} or later"])
     return None
 
@@ -969,12 +969,12 @@ def _add_gate_verbs(sub):
     its only suite-wide run verbs."""
     for name, func, help_text in (
             ("regression", cmd_regression,
-             "go test -json ./... in EVERY module under the project dir (skipping "
-             "vendor, testdata, node_modules and hidden dirs), into one run "
-             "streamed to the board."),
+             ("go test -json ./... in EVERY module under the project dir (skipping "
+              "vendor, testdata, node_modules and hidden dirs), into one run "
+              "streamed to the board.")),
             ("pre-merge-gate", cmd_pre_merge_gate,
-             "ORCHESTRATOR pre-merge gate: the regression over every module, its "
-             "outcome posted as the pre-merge-gate milestone.")):
+             ("ORCHESTRATOR pre-merge gate: the regression over every module, its "
+              "outcome posted as the pre-merge-gate milestone."))):
         g = sub.add_parser(name, help=help_text)
         g.add_argument("--agent",
                        help="Registered agent id to file the run under — REQUIRED, "
