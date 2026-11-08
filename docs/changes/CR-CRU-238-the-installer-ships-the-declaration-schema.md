@@ -1,9 +1,7 @@
 # CR-CRU-238 — the installer ships the declaration schema
 
 **Type** feature · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-225, CR-CRU-233,
-CR-CRU-203, CR-CRU-237 · **Status** PENDING — filed 2026-11-08 at Model B's request (Sandesh 1547)
-with the user's rulings of 2026-11-08; made exact at gap analysis 2026-11-08 (user rulings
-2026-11-08) · Pre-review: ran — 8 points and user rulings (findings F1–F11, all folded)
+CR-CRU-203, CR-CRU-237 · **Status** DONE — merged 2026-11-08 (`c6e9c821`) · Pre-review: ran — 8 points and user rulings (findings F1–F11, all folded)
 
 ## Problem
 
@@ -91,7 +89,7 @@ Every project declares how its tests run, in its own Crucible declaration: bun i
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the installer ships and lists the schema.**
+- [x] **AC1 — the installer ships and lists the schema.**
   - An install lays down `crucible-declaration.schema.json` beside the clients. An upgrade overwrites
     it. Like every fleet file, an uninstall leaves it (uninstall has no fleet stage).
   - `crucible-clients.json` lists it as `declaration_schema: {path, version}`. The version is read
@@ -101,11 +99,11 @@ Every project declares how its tests run, in its own Crucible declaration: bun i
     fail-fast, naming the path.
   - The closed pins that move: `EXPECTED_MANIFEST_KEYS` (`tests/client/manifest_contract.py`) and
     `EXPECTED_FLEET_FILES` in `test_cr090_fleet_stage.py` and `test_cr090_cli_install_integration.py`.
-- [ ] **AC2 — the schema states every stack's declaration as the clients accept it.** For bun, rust,
+- [x] **AC2 — the schema states every stack's declaration as the clients accept it.** For bun, rust,
   arduino, maven and python: location, key form, fields, allowed values (all four forms), defaults,
   required fields, open or closed entries, cross-field rules, refused fields (entry and package
   level), its stack table, the shape and parse rules, and the reserved frameworks.
-- [ ] **AC3 — the clients and the schema agree.** A test drives every client's declaration check
+- [x] **AC3 — the clients and the schema agree.** A test drives every client's declaration check
   with entries generated from the schema:
   - every allowed value is accepted (a sample value for a pattern), and every refused field and
     wrong value is refused;
@@ -120,16 +118,18 @@ Every project declares how its tests run, in its own Crucible declaration: bun i
   `package.json`; python's `_resolve_runner` with `probe=False` (the probe checks the interpreter,
   not the declaration); the board-listed codecs through bun's `_target_board_refusal` with a stub
   health that lists, and one that omits, a sample codec.
-- [ ] **AC4 — the versioning rule is written down.** The schema and the CHANGELOG state the writer
+- [x] **AC4 — the versioning rule is written down.** The schema and the CHANGELOG state the writer
   rule: write known stacks and fields, warn on a newer version, never remove an unknown field, and
   write nothing it cannot check when there is no schema.
-- [ ] **AC5 — the docs follow.** CHANGELOG `[Unreleased]` "Stack declaration changes" names:
+- [x] **AC5 — the docs follow.** CHANGELOG `[Unreleased]` "Stack declaration changes" names:
   - the schema file, its path and its version;
   - rust's new skip;
   - `go-test` joining the arduino and maven skip sets (an entry those clients refuse today is
     skipped).
 
   README and RUNBOOK name the manifest's `declaration_schema` key.
+
+**Done 2026-11-08.** Merged `c6e9c821` (plan 242: U1 889, U2 890, VERIFY 891 APPROVE, FIX 892 for VERIFY's four suggestions). The schema ships at version 1 beside the clients and the manifest lists it as `declaration_schema`; an agreement test drives all five clients' checks from it; rust skips another stack's `[targets]` entry before any field check; `go-test` joins every skip set. Pre-merge gate 11957 passed / 0 failed.
 
 ## Non-goals
 
