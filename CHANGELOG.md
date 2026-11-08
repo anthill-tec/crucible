@@ -75,7 +75,7 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ### Stack declaration changes
 
-The stack declaration schema (CR-CRU-238):
+The stack declaration schema:
 
 - **The installer ships `crucible-declaration.schema.json`, version 1.** It lands beside the clients
   at `<target-dir>/clients/crucible-declaration.schema.json` (`~/.crucible/clients/` by default).
