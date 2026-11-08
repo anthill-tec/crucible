@@ -348,8 +348,8 @@ def build_manifest(install_dir: str, server_config: str | None = None) -> dict:
     """Build the discovery manifest for clients laid down under `install_dir`.
 
     Returns a dict with the top-level keys `version`, `clients`, `status`,
-    `config` and `shipped_config`, plus `server_config` when the install laid
-    the server's file down. `clients` maps each of the five stacks to its
+    `config`, `shipped_config` and `declaration_schema`, plus `server_config`
+    when the install laid the server's file down. `clients` maps each of the five stacks to its
     installed client path under `install_dir`; `status` references the
     STATUS-CONTRACT; `config` is the operator-editable configuration the
     install laid down (CR-CRU-131 §S1c — a file the installer WRITES belongs
