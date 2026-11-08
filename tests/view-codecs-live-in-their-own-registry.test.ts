@@ -87,23 +87,23 @@ describe("bun-console is a view codec, held in the view registry and not in the 
     expect(codec).not.toHaveProperty("parse");
   });
 
-  test("the report registry does not hold bun-console, and holds exactly junit, crucible-events and nextest", () => {
+  test("the report registry does not hold bun-console, and holds exactly junit, crucible-events, go-test and nextest", () => {
     expect(viewCodecs()?.has(VIEW_CODEC)).toBe(true);
     expect(codecs.has(VIEW_CODEC)).toBe(false);
-    expect([...codecs.keys()].sort()).toEqual(["crucible-events", "junit", "nextest"]);
+    expect([...codecs.keys()].sort()).toEqual(["crucible-events", "go-test", "junit", "nextest"]);
   });
 });
 
 describe("health lists the view codecs under codecs.view", () => {
   for (const route of ["/api/health", "/api/v2/health"]) {
-    test(`GET ${route} carries codecs {test, coverage} as before, view: [bun-console, surefire-console] and stream: [crucible-events, nextest], and no other list`, async () => {
+    test(`GET ${route} carries codecs {test, coverage} as before, view: [bun-console, surefire-console] and stream: [crucible-events, go-test, nextest], and no other list`, async () => {
       const body = await getJson(boot(), route);
       expect(body.ok).toBe(true);
       expect(body.codecs).toEqual({
-        test: ["crucible-events", "junit", "nextest"],
+        test: ["crucible-events", "go-test", "junit", "nextest"],
         coverage: ["jacoco", "lcov"],
         view: ["bun-console", "surefire-console"],
-        stream: ["crucible-events", "nextest"],
+        stream: ["crucible-events", "go-test", "nextest"],
       });
     });
   }

@@ -97,11 +97,11 @@ describe("a stream batch under the nextest codec is accepted on an open run", ()
 
 describe("health lists nextest as a test codec and a record stream codec", () => {
   for (const route of ["/api/health", "/api/v2/health"]) {
-    test(`GET ${route} lists nextest in codecs.test and codecs.stream, beside crucible-events, and not as a view codec`, async () => {
+    test(`GET ${route} lists nextest in codecs.test and codecs.stream, beside crucible-events and go-test, and not as a view codec`, async () => {
       const body = await getJson(boot(), route);
       const codecs = body.codecs as Record<string, string[] | undefined>;
-      expect(codecs.test).toEqual(["crucible-events", "junit", "nextest"]);
-      expect(codecs.stream).toEqual(["crucible-events", "nextest"]);
+      expect(codecs.test).toEqual(["crucible-events", "go-test", "junit", "nextest"]);
+      expect(codecs.stream).toEqual(["crucible-events", "go-test", "nextest"]);
       expect(codecs.view ?? []).not.toContain("nextest");
       expect(codecs.coverage ?? []).not.toContain("nextest");
     });

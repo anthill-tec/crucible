@@ -27,15 +27,15 @@ async function health(route: string): Promise<Record<string, unknown>> {
 }
 
 const CODECS = {
-  test: ["crucible-events", "junit", "nextest"],
+  test: ["crucible-events", "go-test", "junit", "nextest"],
   coverage: ["jacoco", "lcov"],
   view: ["bun-console", "surefire-console"],
-  stream: ["crucible-events", "nextest"],
+  stream: ["crucible-events", "go-test", "nextest"],
 };
 
 describe("health lists the record stream codecs under codecs.stream", () => {
   for (const route of ["/api/health", "/api/v2/health"]) {
-    test(`GET ${route} carries codecs.stream [crucible-events, nextest] beside test, coverage and view as before`, async () => {
+    test(`GET ${route} carries codecs.stream [crucible-events, go-test, nextest] beside test, coverage and view as before`, async () => {
       const body = await health(route);
       expect(body.ok).toBe(true);
       expect(body.codecs).toEqual(CODECS);
@@ -45,7 +45,7 @@ describe("health lists the record stream codecs under codecs.stream", () => {
   test("codecs.stream holds exactly the record stream codecs — no report-only codec, no view codec", async () => {
     const body = await health("/api/v2/health");
     const listed = body.codecs as Record<string, string[] | undefined>;
-    expect(listed.stream).toEqual(["crucible-events", "nextest"]);
+    expect(listed.stream).toEqual(["crucible-events", "go-test", "nextest"]);
     expect(listed.stream ?? []).not.toContain("junit");
     expect(listed.stream ?? []).not.toContain("playwright");
     expect(listed.stream ?? []).not.toContain("bun-console");
@@ -55,7 +55,7 @@ describe("health lists the record stream codecs under codecs.stream", () => {
 
   test("codecNames().stream is the report codecs isRecordStreamCodec accepts, sorted", () => {
     const expected = [...codecs.keys()].filter((name) => isRecordStreamCodec(name)).sort((a, b) => a.localeCompare(b));
-    expect(expected).toEqual(["crucible-events", "nextest"]);
+    expect(expected).toEqual(["crucible-events", "go-test", "nextest"]);
     const names = codecNames() as Record<string, string[] | undefined>;
     expect(names.stream).toEqual(expected);
   });
