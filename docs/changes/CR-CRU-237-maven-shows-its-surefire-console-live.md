@@ -205,5 +205,5 @@ The codec reads surefire's lines on the board, never as a record:
 - A JUnit Platform listener for maven, which would be a structured maven stream.
 - A total in advance: maven states none.
 - Namespacing `[targets.<key>]`. Rust keys its entries by nextest profile (`default`, `ci`, `e2e`),
-  so a project with both stacks cannot declare a rust `e2e` and a maven `e2e`. Each client skips
-  the other's framework, so reading stays safe.
+  so a project with both stacks cannot declare a rust `e2e` and a maven `e2e`. Arduino and maven
+  skip another stack's framework; rust refuses it until CR-CRU-238 makes it skip too.
