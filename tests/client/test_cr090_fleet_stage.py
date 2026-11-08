@@ -1127,6 +1127,15 @@ AC4_CLIENT_STACK = "python"
 RUN_MODULE_LOADER = "_axi_run"
 SHARED_MODULE_LOADERS = (("_axi", "_crucible_axi.py"), ("_toon", "toon.py"),
                          (RUN_MODULE_LOADER, "_crucible_run.py"))
+# The go client loads only the shared modules it uses: it encodes nothing
+# itself, so it has no `_toon()` loader (orchestrator-approved re-seed fix).
+GO_SHARED_MODULE_LOADERS = tuple(loader for loader in SHARED_MODULE_LOADERS
+                                 if loader[0] != "_toon")
+
+
+def _shared_module_loaders(stack):
+    """The by-path loaders `stack`'s copied client is probed through."""
+    return GO_SHARED_MODULE_LOADERS if stack == "go" else SHARED_MODULE_LOADERS
 
 # Bounded so a wedged interpreter fails the test instead of hanging the suite.
 # `--help` is argparse-only work; a second would do, 60 is slack for a loaded
@@ -1303,11 +1312,11 @@ class CopiedClientsActuallyRunTest(_ScratchInstallCase):
         COPIED clients dir. Bare importability is not enough -- a module
         resolved out of the repo checkout would import fine and still mean the
         install laid nothing down."""
-        probe = _SHARED_MODULE_PROBE % {"loaders": SHARED_MODULE_LOADERS,
-                                        "run_loader": RUN_MODULE_LOADER}
         expected_dir = os.path.realpath(self.clients_dir())
         broken = []
         for stack in COPIED_CLIENT_STACKS:
+            probe = _SHARED_MODULE_PROBE % {"loaders": _shared_module_loaders(stack),
+                                            "run_loader": RUN_MODULE_LOADER}
             client = self.copied_client(stack)
             try:
                 completed = self.run_from_the_copy("-c", probe, client)
@@ -1322,7 +1331,7 @@ class CopiedClientsActuallyRunTest(_ScratchInstallCase):
             resolved = dict(
                 line.split(":", 1)
                 for line in completed.stdout.splitlines() if ":" in line)
-            for loader_name, filename in SHARED_MODULE_LOADERS:
+            for loader_name, filename in _shared_module_loaders(stack):
                 path = resolved.get(loader_name)
                 if path is None:
                     broken.append(

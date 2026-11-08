@@ -436,9 +436,9 @@ class CliMainInstallManifestResolvesTest(_CliInstallCase):
         published = [clients[stack] for stack in CLIENT_STACKS]
         published.append(document.get("status"))
         self.assertEqual(
-            6, len(published),
-            f"AC3/AC8 -- six published paths expected (five clients + "
-            f"status); got {published!r}. envelope:\n{stdout}")
+            len(CLIENT_STACKS) + 1, len(published),
+            f"AC3/AC8 -- {len(CLIENT_STACKS) + 1} published paths expected "
+            f"(six clients + status); got {published!r}. envelope:\n{stdout}")
         anchor = self.clients_dir() + os.sep
         for path in published:
             self.assertTrue(

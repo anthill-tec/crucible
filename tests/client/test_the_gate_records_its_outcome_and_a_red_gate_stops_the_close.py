@@ -274,6 +274,13 @@ def _overwrite_fake_tool(bin_dir, name, body):
     return path
 
 
+# The passing fake `go`, cut to its first (passing) test.
+_ONE_PASSING_GO_BODY = fake_go_body("pass").replace(
+    'TESTS = ["Test_alpha_behaviour_passes", "Test_gate_fixture_known_failure"]',
+    'TESTS = ["Test_alpha_behaviour_passes"]')
+assert _ONE_PASSING_GO_BODY != fake_go_body("pass"), "the fake go's test list moved"
+
+
 def _fail_bin_dir_for(client_key):
     """A copy of the census module's standard PASSING fake-tool dir, with the
     ONE tool that produces this client's suite result overwritten to report a
@@ -499,6 +506,10 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
         pass_bin = _build_fake_bin_dir()
         if client_key == "arduino":
             _overwrite_fake_tool(pass_bin, "make", _SILENT_MAKE_BODY)
+        if client_key == "go":
+            # The passing fixture runs ONE passing test, as every other
+            # client's does (orchestrator-approved re-seed fix).
+            _overwrite_fake_tool(pass_bin, "go", _ONE_PASSING_GO_BODY)
         cls._scratch_dirs.append(pass_bin)
         fail_bin = _fail_bin_dir_for(client_key)
         cls._scratch_dirs.append(fail_bin)
