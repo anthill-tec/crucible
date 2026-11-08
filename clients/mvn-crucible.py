@@ -758,7 +758,8 @@ _TARGETS_REFUSED_FIELDS = ("junit", "stream", "coverage")
 #: The frameworks other stacks declare in the same `[targets.*]` table: an
 #: entry naming one is another stack's, skipped rather than refused.
 _OTHER_STACKS_FRAMEWORKS = ("nextest", "arduino-native", "unittest", "pytest",
-                            "bun-test", "vitest", "playwright", "playwright-bdd")
+                            "bun-test", "vitest", "playwright", "playwright-bdd",
+                            "go-test")
 
 
 def _check_console_declaration(args, key):

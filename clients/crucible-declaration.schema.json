@@ -1,0 +1,235 @@
+{
+  "version": 1,
+  "description": "Crucible's stack declaration: how each stack declares how its tests run. A plain JSON descriptor, readable with any runtime's standard library; it is not a JSON Schema and no JSON Schema validator reads it. Under each stack: `location` names the file and table its declaration lives in; `entry` describes one declared target (null where the stack reads no target entry); `fields` lists each field with the `values` it may take, its `default` and whether it is `required`. A `values` is a list of the exact values, a {\"pattern\": [...]} of templates in which <NAME> stands for any non-blank name, a {\"board-listed\": \"codecs.<kind>\"} codec name the board must list at run time, or a {\"path\": {\"holds\": \"<file>\"}} directory that must hold that file. `requires` names a field that must be present (true) or must hold one of the listed values; `excludes` names the fields that may not appear beside it; `when` is a rule for one value. An `open` entry accepts fields it does not list; `refused` names the fields it never accepts.",
+  "stacks": {
+    "bun": {
+      "description": "A bun project declares its targets in package.json under crucible.targets, one entry per script.",
+      "location": {"file": "package.json", "table": "crucible.targets"},
+      "entry": {
+        "key": {
+          "form": "script",
+          "description": "any name in package.json scripts",
+          "gate": {"template": "test:<tier>", "exempt": ["bun-test"], "in": "scripts"},
+          "marker": {
+            "field": "test",
+            "values": [true],
+            "at_most": 1,
+            "script": "present-with-body",
+            "entry_not_a_table": "skipped"
+          }
+        },
+        "open": true,
+        "other_stacks": "refused",
+        "refused": [],
+        "requires": {"one_of": ["stream", "junit"]},
+        "fields": {
+          "framework": {
+            "description": "the framework the script runs",
+            "values": ["bun-test", "vitest", "playwright", "playwright-bdd"],
+            "default": null,
+            "required": true
+          },
+          "stream": {
+            "description": "the script streams its results; it accepts subfields it does not list",
+            "default": null,
+            "required": false,
+            "excludes": ["junit", "console"],
+            "fields": {
+              "codec": {
+                "description": "the stream codec, which the board must list under codecs.stream",
+                "values": {"board-listed": "codecs.stream"},
+                "default": null,
+                "required": true
+              },
+              "path": {
+                "description": "the one variable the shipped reporters read",
+                "values": ["env:CRUCIBLE_STREAM"],
+                "default": null,
+                "required": true
+              }
+            }
+          },
+          "junit": {
+            "description": "the script writes a JUnit report, either at the client's flag or at the path an env:<VAR> names",
+            "values": {"pattern": ["flag", "env:<VAR>"]},
+            "default": null,
+            "required": false,
+            "excludes": ["stream"]
+          },
+          "console": {
+            "description": "a view codec, which the board must list under codecs.view; only on a junit entry, and bun-console only with framework bun-test",
+            "values": {"board-listed": "codecs.view"},
+            "default": null,
+            "required": false,
+            "requires": {"junit": true},
+            "excludes": ["stream"],
+            "when": {"bun-console": {"requires": {"framework": ["bun-test"]}}}
+          },
+          "coverage": {
+            "description": "only lcov, on a junit: flag entry of framework bun-test",
+            "values": ["lcov"],
+            "default": null,
+            "required": false,
+            "requires": {"junit": ["flag"], "framework": ["bun-test"]}
+          }
+        },
+        "shape": {"targets_not_a_table": "undeclared", "entry_not_a_table": "refused"}
+      },
+      "package": {
+        "description": "package-level keys a bun project may no longer declare",
+        "file": "package.json",
+        "refused": ["crucible.reportPath", "crucible.rawReport", "crucible.testScript"]
+      },
+      "stack_table": {
+        "file": "crucible.toml",
+        "table": "bun",
+        "fields": {
+          "package_dir": {
+            "description": "the directory holding package.json, when it is not the project dir",
+            "values": {"path": {"holds": "package.json"}},
+            "default": null,
+            "required": false
+          }
+        },
+        "shape": {"file_does_not_parse": "undeclared"}
+      }
+    },
+    "rust": {
+      "description": "A rust project declares its targets in crucible.toml, one [targets.<profile>] entry per nextest profile. An entry with no framework is rust's.",
+      "location": {"file": "crucible.toml", "table": "targets.<key>"},
+      "entry": {
+        "key": {"form": "profile", "description": "the nextest profile"},
+        "open": true,
+        "other_stacks": "skipped",
+        "refused": ["junit", "console", "coverage"],
+        "fields": {
+          "framework": {
+            "description": "nextest, the default",
+            "values": ["nextest"],
+            "default": "nextest",
+            "required": false
+          },
+          "stream": {
+            "description": "the run streams nextest's output on stdout, the default",
+            "default": {"codec": "nextest", "path": "stdout"},
+            "required": false,
+            "fields": {
+              "codec": {"values": ["nextest"], "default": "nextest", "required": false},
+              "path": {"values": ["stdout"], "default": "stdout", "required": false}
+            }
+          }
+        },
+        "shape": {
+          "targets_not_a_table": "undeclared",
+          "entry_not_a_table": "refused",
+          "file_does_not_parse": "refused"
+        }
+      }
+    },
+    "arduino": {
+      "description": "An arduino project declares its native test targets in crucible.toml, one [targets.\"<dir>/<target>\"] entry per make target.",
+      "location": {"file": "crucible.toml", "table": "targets.<key>"},
+      "entry": {
+        "key": {
+          "form": "dir/target",
+          "dir_default": "tests/native",
+          "description": "the native dir relative to the project dir, joined by / to the make target"
+        },
+        "open": true,
+        "other_stacks": "skipped",
+        "refused": ["junit", "console", "coverage"],
+        "fields": {
+          "framework": {
+            "description": "arduino-native",
+            "values": ["arduino-native"],
+            "default": null,
+            "required": true
+          },
+          "stream": {
+            "description": "make writes crucible events to the file CRUCIBLE_STREAM names",
+            "default": null,
+            "required": true,
+            "fields": {
+              "codec": {"values": ["crucible-events"], "default": null, "required": true},
+              "path": {"values": ["env:CRUCIBLE_STREAM"], "default": null, "required": true}
+            }
+          }
+        },
+        "shape": {
+          "targets_not_a_table": "undeclared",
+          "entry_not_a_table": "refused",
+          "file_does_not_parse": "refused"
+        }
+      }
+    },
+    "maven": {
+      "description": "A maven project declares its targets in crucible.toml, one [targets.<tier>] entry per tier.",
+      "location": {"file": "crucible.toml", "table": "targets.<key>"},
+      "entry": {
+        "key": {"form": "tier", "description": "the tier"},
+        "open": true,
+        "other_stacks": "skipped",
+        "refused": ["junit", "stream", "coverage"],
+        "fields": {
+          "framework": {
+            "description": "surefire",
+            "values": ["surefire"],
+            "default": null,
+            "required": true
+          },
+          "console": {
+            "description": "surefire-console; the board must list it under codecs.view at run time",
+            "values": ["surefire-console"],
+            "default": null,
+            "required": true
+          }
+        },
+        "shape": {
+          "targets_not_a_table": "undeclared",
+          "entry_not_a_table": "refused",
+          "file_does_not_parse": "refused"
+        }
+      }
+    },
+    "python": {
+      "description": "A python project reads no [targets] entry; it declares its runner in crucible.toml [python].",
+      "location": {"file": "crucible.toml", "table": "python"},
+      "entry": null,
+      "stack_table": {
+        "file": "crucible.toml",
+        "table": "python",
+        "fields": {
+          "runner": {
+            "description": "the test runner; --runner overrides it",
+            "values": ["unittest", "pytest"],
+            "default": "unittest",
+            "required": false,
+            "overridden_by": "--runner"
+          }
+        },
+        "shape": {"file_does_not_parse": "undeclared"}
+      }
+    }
+  },
+  "reserved_frameworks": {
+    "bun": ["bun-test", "vitest", "playwright", "playwright-bdd"],
+    "rust": ["nextest"],
+    "python": ["pytest", "unittest"],
+    "maven": ["surefire"],
+    "arduino": ["arduino-native"],
+    "go": ["go-test"]
+  },
+  "skip_rule": {
+    "description": "crucible.toml [targets.<key>] is one flat namespace: a key holds one stack's entry. The rust, arduino and maven clients skip an entry that names another stack's framework, and refuse nothing in it; the skip is decided on framework before any other field is checked. An entry with no framework is rust's.",
+    "readers": ["rust", "arduino", "maven"],
+    "decided_on": "framework"
+  },
+  "writer": {
+    "description": "A writer writes the stacks and fields it knows. On a schema version newer than it knows it still writes what it knows, warns naming the schema version, and is not blocked. It never removes a field it does not know. With no schema (no declaration_schema key in crucible-clients.json, or the file missing) it writes nothing it cannot check, warns, and is not blocked. It always writes framework, even where a reader has a default.",
+    "writes": "known",
+    "always_writes": ["framework"],
+    "unknown_field": "keep",
+    "newer_version": {"writes": "known", "warn": true, "names_version": true, "blocked": false},
+    "no_schema": {"writes": "nothing-unchecked", "warn": true, "blocked": false}
+  }
+}
