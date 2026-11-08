@@ -164,6 +164,50 @@ class EveryGeneratedEntryGetsTheSchemasVerdictTest(_AgreementCase):
         self.assert_refused_fields_and_unlisted_field("maven")
 
 
+class EveryStreamTableKeepsAnUnlistedSubfieldTest(_AgreementCase):
+    """An unlisted `stream` subfield is kept by every client that reads a
+    `stream` table, and the generated entries carry one."""
+
+    STREAM_STACKS = ("bun", "rust", "arduino")
+
+    def stream_entries(self, stack, unlisted):
+        return [c for c in candidate_entries(self.schema, stack)
+                if isinstance(c, dict) and isinstance(c.get("stream"), dict)
+                and (UNLISTED_FIELD in c["stream"]) is unlisted]
+
+    def test_the_generated_entries_carry_an_unlisted_stream_subfield(self):
+        for stack in self.STREAM_STACKS:
+            with self.subTest(stack=stack):
+                carrying = self.stream_entries(stack, True)
+                self.assertTrue(carrying, f"no generated {stack} entry carries an "
+                                          f"unlisted `stream` subfield")
+                self.assertTrue(all(c["stream"][UNLISTED_FIELD] == "kept" for c in carrying))
+                self.assertTrue(any(schema_verdict(self.schema, stack, c) == ACCEPTED
+                                    for c in carrying))
+
+    def test_every_stream_reader_accepts_a_complete_stream_with_an_unlisted_subfield(self):
+        project = new_project(self)
+        for stack in self.STREAM_STACKS:
+            for entry in complete_entries(self.schema, stack):
+                if not isinstance(entry.get("stream"), dict):
+                    continue
+                extended = {**entry, "stream": {**entry["stream"], UNLISTED_FIELD: "kept"}}
+                with self.subTest(stack=stack, entry=_short(extended)):
+                    self.assertEqual(schema_verdict(self.schema, stack, extended), ACCEPTED)
+                    self.assertEqual(entry_verdict(stack, project, extended), ACCEPTED)
+
+    def test_an_unlisted_subfield_does_not_excuse_a_wrong_stream_value(self):
+        project = new_project(self)
+        for stack in self.STREAM_STACKS:
+            entry = next(e for e in complete_entries(self.schema, stack)
+                         if isinstance(e.get("stream"), dict))
+            wrong = {**entry, "stream": {**entry["stream"], "path": "env:OTHER_STREAM",
+                                         UNLISTED_FIELD: "kept"}}
+            with self.subTest(stack=stack):
+                self.assertEqual(schema_verdict(self.schema, stack, wrong), REFUSED)
+                self.assertEqual(entry_verdict(stack, project, wrong), REFUSED)
+
+
 class BunsCrossFieldRulesHoldTest(_AgreementCase):
     """Each rule the schema states for bun, driven on its edge."""
 
@@ -277,6 +321,34 @@ class TheTargetsReadersSkipEveryOtherStacksCompleteEntryTest(_AgreementCase):
             entry = {**complete_entries(self.schema, reader)[0], "framework": "cargo-test"}
             with self.subTest(reader=reader):
                 self.assertEqual(entry_verdict(reader, project, entry), REFUSED)
+
+
+class EachReadersSkipSetIsTheOtherStacksReservedFrameworksTest(_AgreementCase):
+    """Each `[targets]` reader's skip set holds exactly the frameworks every
+    other owner reserves in the schema, `go-test` included: no framework the
+    schema does not reserve (which a generated entry would never name), and
+    none left out."""
+
+    def assert_skip_set(self, reader):
+        skip_set = client(reader)._OTHER_STACKS_FRAMEWORKS
+        expected = other_frameworks(self.schema, reader)
+        self.assertEqual(set(skip_set), expected,
+                         f"{reader} skips {sorted(set(skip_set) - expected)} the schema "
+                         f"does not reserve for another stack, and misses "
+                         f"{sorted(expected - set(skip_set))}")
+        self.assertEqual(len(skip_set), len(set(skip_set)), f"{reader} repeats a framework")
+        self.assertIn("go-test", skip_set)
+        self.assertNotIn(self.entry_desc(reader)["fields"]["framework"]["values"][0],
+                         skip_set)
+
+    def test_rusts_skip_set_is_every_other_owners_reserved_frameworks(self):
+        self.assert_skip_set("rust")
+
+    def test_arduinos_skip_set_is_every_other_owners_reserved_frameworks(self):
+        self.assert_skip_set("arduino")
+
+    def test_mavens_skip_set_is_every_other_owners_reserved_frameworks(self):
+        self.assert_skip_set("maven")
 
 
 class AFrameworklessEntryIsRustsTest(_AgreementCase):

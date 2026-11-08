@@ -26,6 +26,9 @@ A field descriptor carries `default`, `required`, and either nested `fields`
 and optionally the cross-field rules `requires` (`{field: true}` for "must be
 present", `{field: [v, ...]}` for "must hold one of"), `excludes` ([field,
 ...]) and `when` (`{value: {"requires": {...}}}`, a rule for one value).
+
+An object field (`stream`) is open the way an entry is (`"open": true`): a
+subfield it does not list is kept, so the generated entries carry one.
 """
 
 import importlib.util
@@ -282,10 +285,12 @@ def sample_values(desc):
 def wrong_values(desc):
     """Values generated from a field's form to probe its edges: values it
     refuses, and for an object field each subfield left out or wrong (which
-    the descriptor may still allow, where a subfield has a default)."""
+    the descriptor may still allow, where a subfield has a default) and the
+    complete value with one subfield it does not list (which an open object
+    field keeps)."""
     if "fields" in desc:
         base = complete_value(desc)
-        probes: list[object] = ["not-a-table"]
+        probes: list[object] = ["not-a-table", {**base, UNLISTED_FIELD: "kept"}]
         for name, sub in desc["fields"].items():
             probes.append({k: v for k, v in base.items() if k != name})
             probes.extend({**base, name: w} for w in wrong_values(sub))
@@ -314,7 +319,7 @@ def complete_entries(schema, stack, framework=None):
     fullest `junit` entry and its `stream` entry alike), so a skip is tested on
     a full entry, never a bare framework."""
     candidates = [c for c in candidate_entries(schema, stack)
-                  if isinstance(c, dict) and UNLISTED_FIELD not in c
+                  if isinstance(c, dict) and not carries_unlisted(c)
                   and schema_verdict(schema, stack, c) == ACCEPTED
                   and (framework is None or c.get("framework", framework) == framework)]
     if framework is not None:
@@ -325,6 +330,13 @@ def complete_entries(schema, stack, framework=None):
         if not any(frozenset(c) < shape for shape in shapes) and c not in out:
             out.append(c)
     return out
+
+
+def carries_unlisted(entry):
+    """Whether a generated entry carries the unlisted field, at entry level or
+    inside an object field."""
+    return UNLISTED_FIELD in entry or any(
+        isinstance(v, dict) and UNLISTED_FIELD in v for v in entry.values())
 
 
 def candidate_entries(schema, stack):

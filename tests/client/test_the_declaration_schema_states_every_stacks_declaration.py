@@ -176,6 +176,18 @@ class EachStacksFieldsAreStatedExactlyTest(_SchemaCase):
             with self.subTest(stack=stack):
                 self.assertIs(self.entry(stack)["open"], True)
 
+    def test_every_stream_table_keeps_a_subfield_it_does_not_list(self):
+        for stack in ("bun", "rust", "arduino"):
+            with self.subTest(stack=stack):
+                stream = self.field(stack, "stream")
+                self.assertEqual(set(stream["fields"]), {"codec", "path"})
+                self.assertIs(stream.get("open"), True,
+                              f"{stack}'s `stream` does not state it is open")
+
+    def test_maven_has_no_stream_table_to_state_open(self):
+        self.assertNotIn("stream", self.entry("maven")["fields"])
+        self.assertIn("stream", self.entry("maven")["refused"])
+
     def test_each_stack_names_its_refused_entry_fields(self):
         self.assertEqual(self.entry("bun")["refused"], [])
         self.assertEqual(self.entry("rust")["refused"], ["junit", "console", "coverage"])
