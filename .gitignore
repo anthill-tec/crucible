@@ -50,3 +50,8 @@ uv.lock
 .pi/
 # Model B's per-CR worktrees (worktree-flow start), each a checkout of its own feature branch.
 /.worktrees/
+# Build output a fixture project's own build leaves behind (the live e2e runs
+# `mvn clean test` on a /tmp copy, so its target/ is never an input). The
+# hand-written report fixtures under tests/fixtures/reports/mvn/*/target/ are
+# tracked and stay tracked; a NEW file there must be added with `git add -f`.
+tests/fixtures/**/target/
