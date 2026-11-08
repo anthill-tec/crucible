@@ -84,7 +84,8 @@ Examples:
   MVN_CRUCIBLE_PROJECT_DIR=/path/to/repo mvn-crucible.py module --agent X
 """
 
-import argparse
+# pi-lens-ignore: I001 — pi-lens lints with its own ruff configuration, which sets no target version, so ruff files `tomllib` as third-party whatever the declared floor
+import argparse  # noqa: I001
 import glob
 import importlib.util
 import os
@@ -93,6 +94,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 import xml.etree.ElementTree as ET
 
 STALE_THRESHOLD_S = 120
@@ -730,11 +732,111 @@ def _compile_fallback(maven_dir, project_dir, agent, common_flags, run_id=None,
 
 
 # --------------------------------------------------------------------------- #
+# The declared console: a `[targets.<tier>]` entry
+# --------------------------------------------------------------------------- #
+#: A project's `[targets.<tier>]` entry for a maven run, field by field, and
+#: the fields a maven entry may not declare (its record is its JUnit reports,
+#: and its coverage follows the verb).
+_CONSOLE_FRAMEWORK = "surefire"
+_CONSOLE_CODEC = "surefire-console"
+_TARGETS_REFUSED_FIELDS = ("junit", "stream", "coverage")
+#: The frameworks other stacks declare in the same `[targets.*]` table: an
+#: entry naming one is another stack's, skipped rather than refused.
+_OTHER_STACKS_FRAMEWORKS = ("nextest", "arduino-native", "unittest", "pytest",
+                            "bun-test", "vitest", "playwright", "playwright-bdd")
+
+
+def _check_console_declaration(args, key):
+    """Read the run's `[targets.<key>]` entry from the project's own
+    `crucible.toml` and, for a declared run with an agent, the board's health,
+    before any board call, `docker-up` or maven. A refusal raises the shared
+    `DeclarationRefused` hard stop. A key already checked on `args` is not
+    checked again, so a body run on behalf of a checked verb reads nothing
+    twice."""
+    checked = getattr(args, "console_checked", None) or set()
+    if key in checked:
+        return
+    path = os.path.join(_resolve_project_dir(args.project_dir), "crucible.toml")
+    if _declared_entry(path, key) and getattr(args, "agent", None):
+        refusal = _console_health_refusal(_get(_axi().INGEST_HEALTH_PATH), key)
+        if refusal is not None:
+            raise _axi().DeclarationRefused(
+                refusal, ["run against a board that reads the console", "status"])
+    args.console_checked = checked | {key}
+
+
+def _declared_entry(path, key):
+    """Whether the project's `crucible.toml` at `path` declares the maven
+    entry under `key`. No file, no entry, or another stack's entry is
+    undeclared; a file that does not parse, or an entry at fault, raises the
+    `DeclarationRefused` hard stop naming the table and the field."""
+    table = f"[targets.{key}]"
+    help_steps = [f"fix {table} in {path}, then re-run", "status"]
+    try:
+        with open(path, "rb") as handle:
+            declared = tomllib.load(handle)
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as error:
+        raise _axi().DeclarationRefused(
+            f"the project's crucible.toml ({path}) does not parse ({error}), so "
+            f"its {table} entry cannot be read; nothing was run", help_steps) from error
+    targets = declared.get("targets")
+    entry = targets.get(key) if isinstance(targets, dict) else None
+    if entry is None or (isinstance(entry, dict)
+                         and entry.get("framework") in _OTHER_STACKS_FRAMEWORKS):
+        return False
+    fault = _targets_fault(entry)
+    if fault is None:
+        return True
+    field, value = fault
+    raise _axi().DeclarationRefused(
+        f"{table} in {path} declares `{field}` = {value!r}, which a maven run "
+        f"cannot take: a maven run is declared framework = \"{_CONSOLE_FRAMEWORK}\" "
+        f"with console = \"{_CONSOLE_CODEC}\" and nothing else; nothing was run",
+        help_steps)
+
+
+def _targets_fault(entry):
+    """(PURE) The first field of a maven `[targets.*]` entry a run cannot
+    take, as `(field, value)`, or None. Every field is required."""
+    if not isinstance(entry, dict):
+        return "targets", entry
+    for field in _TARGETS_REFUSED_FIELDS:
+        if field in entry:
+            return field, entry[field]
+    if entry.get("framework") != _CONSOLE_FRAMEWORK:
+        return "framework", entry.get("framework")
+    if entry.get("console") != _CONSOLE_CODEC:
+        return "console", entry.get("console")
+    return None
+
+
+def _console_health_refusal(health, key):
+    """(PURE) Why the board whose health is `health` cannot take the console
+    `[targets.<key>]` declares (no `surefire-console` under `codecs.view`), or
+    None. A health that cannot be read is no refusal."""
+    if not isinstance(health, dict) or health.get("ok") is False:
+        return None
+    codecs = health.get("codecs")
+    views = codecs.get("view") if isinstance(codecs, dict) else None
+    if isinstance(views, list) and _CONSOLE_CODEC in views:
+        return None
+    version = health.get("version") or "an unstated version"
+    return (f"[targets.{key}] declares console = \"{_CONSOLE_CODEC}\", but the "
+            f"board (version {version}) lists no `{_CONSOLE_CODEC}` under "
+            f"`codecs.view`, so it cannot read the declared console; nothing "
+            f"was run")
+
+
+# --------------------------------------------------------------------------- #
 # Test-tier commands
 # --------------------------------------------------------------------------- #
 def _run_surefire_tier(args, goal_extra, label):
     """Shared body for `unit` and `module`: mvn clean test [...], then ingest
-    surefire. On no-reports, compile fallback. Surefire only, NEVER coverage."""
+    surefire. On no-reports, compile fallback. Surefire only, NEVER coverage.
+    The run's `[targets.<label>]` declaration is checked first."""
+    _check_console_declaration(args, label)
     project_dir = _resolve_project_dir(args.project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
@@ -962,7 +1064,9 @@ def _run_failsafe_tier(args, goals, label):
     Both ingest failsafe (the IT results) AND surefire (the unit tests the
     lifecycle runs on the way to that phase) together, because both were
     produced by this one run; on no reports at all the run is a build failure
-    and takes the compile fallback, like every other tier verb here."""
+    and takes the compile fallback, like every other tier verb here. The
+    run's `[targets.<label>]` declaration is checked first."""
+    _check_console_declaration(args, label)
     project_dir = _resolve_project_dir(args.project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
@@ -1127,6 +1231,9 @@ def _docker_clean_check(maven_dir):
 def cmd_e2e(args):
     """E2E tier — failsafe integration tests (*IT.java / @QuarkusIntegrationTest),
     optionally native. No coverage. Optional docker compose lifecycle."""
+    # The `[targets.e2e]` declaration is checked before any board call or
+    # docker.
+    _check_console_declaration(args, "e2e")
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     # Refused before docker is touched; the tier body's own pre-flight carries
@@ -1192,6 +1299,7 @@ def cmd_regression(args, verb="regression"):
     # project, the board, a lock, docker or maven is touched.
     _axi().refuse_coverage_only_flags(
         args, {"coverage_profile": "--coverage-profile"})
+    _check_console_declaration(args, "regression")
     project_dir = _resolve_project_dir(args.project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
@@ -1345,7 +1453,9 @@ def cmd_test(args, tier=None):
 
     An ingesting run always has an agent, so its reports sit in ONE directory
     (the run's own; every module writes there), and every report in it is
-    sent inline for the board to decode."""
+    sent inline for the board to decode. `test` reads the `[targets.unit]`
+    declaration, checked first."""
+    _check_console_declaration(args, "unit")
     project_dir = _resolve_project_dir(args.project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
@@ -1642,6 +1752,9 @@ def _docker_down(args, project_dir):
 
 def cmd_pre_merge_gate(args):
     """ORCHESTRATOR one-shot: docker-up → regression → docker-down (always)."""
+    # The regression's `[targets.regression]` declaration is checked before
+    # anything else: any board call, docker or maven.
+    _check_console_declaration(args, "regression")
     # A gate scoped to named suites that cannot run as asked is refused before
     # anything else.
     _axi().refuse_unrunnable_scoped_gate(
@@ -2201,6 +2314,19 @@ _CLI_DESCRIPTION = (
     "Tool-specific (Maven / Surefire / Failsafe / JUnit-XML / JaCoCo), never\n"
     "project-specific: the project path and the maven dir are parameterizable,\n"
     "nothing is hardcoded. Run `<verb> --help` for a verb's own flags.\n"
+    "\n"
+    "A tier's console is declared in the project's own crucible.toml, one\n"
+    "[targets.<tier>] table per tier (unit, module, integration, e2e, bdd,\n"
+    "regression; `test` reads unit):\n"
+    "\n"
+    "    [targets.regression]\n"
+    "    framework = \"surefire\"\n"
+    "    console = \"surefire-console\"\n"
+    "\n"
+    "Both fields are required; junit, stream and coverage are refused, as is a\n"
+    "project file that does not parse, and so is a declared run on a board whose\n"
+    "health lists no surefire-console under codecs.view. Another stack's entry is\n"
+    "skipped. A tier with no entry runs as before.\n"
     "\n" + _axi().BOARD_CONFIGURATION_HELP
 )
 
