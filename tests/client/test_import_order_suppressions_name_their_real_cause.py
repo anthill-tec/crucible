@@ -1,7 +1,7 @@
-"""The three `I001` suppressions stay, and say why they are needed.
+"""The four `I001` suppressions stay, and say why they are needed.
 
-`clients/_crucible_axi.py`, `clients/rust-crucible.py` and
-`crucible_axi/install.py` each suppress ruff's `I001` twice: a
+`clients/_crucible_axi.py`, `clients/rust-crucible.py`,
+`clients/arduino-crucible.py` and `crucible_axi/install.py` each suppress ruff's `I001` twice: a
 `# pi-lens-ignore: I001 ...` comment on the line above the first import,
 and a `# noqa: I001` on that import. Both stay.
 
@@ -27,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SUPPRESSION_SITES = (
     "clients/_crucible_axi.py",
     "clients/rust-crucible.py",
+    "clients/arduino-crucible.py",
     "crucible_axi/install.py",
 )
 

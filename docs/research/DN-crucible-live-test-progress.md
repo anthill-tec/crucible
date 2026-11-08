@@ -31,7 +31,7 @@ A run's live progress is a count, not data.
 | python | Crucible's own `subtest_runner.py` | ours to emit |
 | go | `go test -json` | native, stable |
 | maven | surefire | none built in (a JUnit Platform listener would be one); console lines per class |
-| arduino | native g++ harness | ours to emit |
+| arduino | the project's own native harness | the project's own to emit: `crucible-events` under the `CRUCIBLE_STREAM` make contract |
 
 ## The design
 
@@ -76,7 +76,7 @@ report is read.
 
 | Source | The record | The live view |
 |---|---|---|
-| Structured stream: Vitest and Playwright (shipped reporters), nextest libtest JSON, go `-json`, the python and arduino runners Crucible owns | the stream file | the same stream, as it is written |
+| Structured stream: Vitest and Playwright (shipped reporters), nextest libtest JSON, go `-json`, the python runner Crucible owns, arduino's harness (the project's own, under `CRUCIBLE_STREAM`) | the stream file | the same stream, as it is written |
 | Console only: `bun test`, maven | the JUnit report | the console result lines, read on the board by a view codec (`bun test`'s by CR-CRU-201's `bun-console`) |
 
 ### Event format (user ruling)

@@ -1116,7 +1116,7 @@ class NoBoardNoFiguresTest(_ArduinoProject, unittest.TestCase):
 # close-out re-records it once more (the shared streamed-run close and the
 # stream-counted narration in). A change that grows a shared module
 # re-records its budget here, in the same change.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9160, "_crucible_run.py": 1780}
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9160, "_crucible_run.py": 1796}
 
 # Names the arduino client's move to the shared ingest retires: its own
 # parsers and its own figures' emitter from the client, and the client-figure

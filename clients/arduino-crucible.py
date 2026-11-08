@@ -64,14 +64,17 @@ Subcommands:
   gate-run / gate-report / milestone
                         Fleet gate + milestone verbs (§S8).
 """
-import argparse
+# pi-lens-ignore: I001 — pi-lens lints with its own ruff configuration, which sets no target version, so ruff files `tomllib` as third-party whatever the declared floor
+import argparse  # noqa: I001
 import glob
 import importlib.util
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tomllib
 
 ARDUINO_CLI = os.environ.get(
     "ARDUINO_CLI", "/opt/arduino-ide/resources/app/lib/backend/resources/arduino-cli")
@@ -160,8 +163,8 @@ def _request(method, path, payload=None, timeout=None):
     return _axi().http_request(_base_url(), method, path, payload, timeout)
 
 
-def _post(path, payload):
-    return _request("POST", path, payload)
+def _post(path, payload, timeout=None):
+    return _request("POST", path, payload, timeout=timeout)
 
 
 def _get(path, timeout=10):
@@ -398,6 +401,183 @@ def _close_gate_identity(project_dir, identity):
                                       remove_fn=_remove_agent_silent)
 
 
+# ── The declared stream: a `[targets."<dir>/<target>"]` entry ───────────────
+
+
+#: A project's `[targets."<dir>/<target>"]` entry for an arduino run, field
+#: by field, and the fields an arduino entry may not declare (its record is
+#: its stream, and its coverage follows the verb).
+_STREAM_FRAMEWORK = "arduino-native"
+_STREAM_CODEC = "crucible-events"
+_TARGETS_STREAM = {"codec": _STREAM_CODEC, "path": "env:CRUCIBLE_STREAM"}
+_TARGETS_REFUSED_FIELDS = ("junit", "console", "coverage")
+#: The frameworks other stacks declare in the same `[targets.*]` table: an
+#: entry naming one is another stack's, skipped rather than refused.
+_OTHER_STACKS_FRAMEWORKS = ("nextest", "surefire", "unittest", "pytest",
+                            "bun-test", "vitest", "playwright", "playwright-bdd")
+#: The stream file `make` is handed in CRUCIBLE_STREAM, in the run's own
+#: reports dir, and how long the relay may take to finish once `make` exited
+#: and once a signal interrupted the run.
+_STREAM_FILE = "crucible-events.ndjson"
+_STREAM_FINISH_SECONDS = 60.0
+_INTERRUPTED_FINISH_SECONDS = 5.0
+
+
+def _declared_key(args, target):
+    """(PURE) The run's `[targets.*]` key: the native dir (`--dir`, relative to
+    the project dir) joined by `/` to the make target."""
+    sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/").strip("/")
+    return f"{sub}/{target}"
+
+
+def _check_stream_declaration(args, target, coverage):
+    """Read the run's `[targets.*]` entry from the project's own
+    `crucible.toml` and, for a declared run with an agent, the board's health,
+    before any board call, compile or `make`. A refusal raises the shared
+    `DeclarationRefused` hard stop. Otherwise the run's key (None when it is
+    undeclared) and the health read are kept on `args`, so a body run on
+    behalf of an already-checked verb checks nothing again."""
+    if getattr(args, "stream_checked", False):
+        return
+    pd = _project_dir(args)
+    key = _declared_key(args, target)
+    path = os.path.join(pd, "crucible.toml")
+    declared = _declared_entry(path, key)
+    health = None
+    if declared and getattr(args, "agent", None):
+        health = _get(_axi().INGEST_HEALTH_PATH)
+        refusal = _stream_health_refusal(health, coverage)
+        if refusal is not None:
+            raise _axi().DeclarationRefused(
+                refusal, ["run against a board that takes the stream", "status"])
+    args.stream_checked = True
+    args.stream_key = key if declared else None
+    args.stream_health = health
+
+
+def _declared_entry(path, key):
+    """Whether the project's `crucible.toml` at `path` declares the arduino
+    entry under `key`. No file, no entry, or another stack's entry is
+    undeclared; a file that does not parse, or an entry at fault, raises the
+    `DeclarationRefused` hard stop naming the table and the field."""
+    table = f'[targets."{key}"]'
+    help_steps = [f"fix {table} in {path}, then re-run", "status"]
+    try:
+        with open(path, "rb") as handle:
+            declared = tomllib.load(handle)
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as error:
+        raise _axi().DeclarationRefused(
+            f"the project's crucible.toml ({path}) does not parse ({error}), so "
+            f"its {table} entry cannot be read; nothing was run", help_steps) from error
+    targets = declared.get("targets")
+    entry = targets.get(key) if isinstance(targets, dict) else None
+    if entry is None or (isinstance(entry, dict)
+                         and entry.get("framework") in _OTHER_STACKS_FRAMEWORKS):
+        return False
+    fault = _targets_fault(entry)
+    if fault is None:
+        return True
+    field, value = fault
+    raise _axi().DeclarationRefused(
+        f"{table} in {path} declares `{field}` = {value!r}, which an arduino "
+        f"run cannot take: an arduino run is declared framework = "
+        f"\"{_STREAM_FRAMEWORK}\" with stream = {{ codec = "
+        f"\"{_TARGETS_STREAM['codec']}\", path = \"{_TARGETS_STREAM['path']}\" }} "
+        f"and nothing else; nothing was run", help_steps)
+
+
+def _targets_fault(entry):
+    """(PURE) The first field of an arduino `[targets.*]` entry a run cannot
+    take, as `(field, value)`, or None. Every field is required."""
+    if not isinstance(entry, dict):
+        return "targets", entry
+    for field in _TARGETS_REFUSED_FIELDS:
+        if field in entry:
+            return field, entry[field]
+    if entry.get("framework") != _STREAM_FRAMEWORK:
+        return "framework", entry.get("framework")
+    stream = entry.get("stream")
+    if not isinstance(stream, dict):
+        return "stream", stream
+    for field, wanted in _TARGETS_STREAM.items():
+        if stream.get(field) != wanted:
+            return f"stream.{field}", stream.get(field)
+    return None
+
+
+def _stream_health_refusal(health, coverage):
+    """(PURE) Why the board whose health is `health` cannot take a declared
+    arduino run (no `crucible-events` under `codecs.stream`, or, for a
+    `coverage` run, no `lcov` coverage codec), or None. A health that cannot
+    be read is no refusal."""
+    if not isinstance(health, dict) or health.get("ok") is False:
+        return None
+    version = health.get("version") or "an unstated version"
+    codecs = health.get("codecs")
+    codecs = codecs if isinstance(codecs, dict) else {}
+    streams = codecs.get("stream")
+    if not isinstance(streams, list) or _STREAM_CODEC not in streams:
+        return (f"the board (version {version}) lists no `{_STREAM_CODEC}` under "
+                f"`codecs.stream`, so it takes no declared arduino stream; "
+                f"nothing was run")
+    kept = codecs.get("coverage")
+    if coverage and not (isinstance(kept, list) and "lcov" in kept):
+        return (f"the board (version {version}) does not decode `lcov` reports: "
+                f"a declared coverage run files its lcov with its stream; "
+                f"nothing was run")
+    return None
+
+
+def _stream_env(make_env, own_dir, agent_id):
+    """The declared run's stream file, emptied, set as CRUCIBLE_STREAM in
+    `make_env`; with no agent the variable is removed and None answered, so
+    the harness writes nothing."""
+    if not agent_id:
+        make_env.pop("CRUCIBLE_STREAM", None)
+        return None
+    stream_path = os.path.join(own_dir, _STREAM_FILE)
+    with open(stream_path, "w", encoding="utf-8"):
+        pass
+    make_env["CRUCIBLE_STREAM"] = stream_path
+    return stream_path
+
+
+def _finish_relay(relay, deadline_seconds):
+    """Finish a declared run's relay within `deadline_seconds`, answering the
+    bytes of the stream the board holds; no relay holds nothing."""
+    if relay is None:
+        return 0
+    held, _stopped = relay.finish(deadline_seconds)
+    return held
+
+
+def _stream_not_held_warning(key):
+    """The one warning of a declared run the board holds no `test-end` of,
+    filed from its TEST-*.xml instead."""
+    detail = (f"the declared target `{key}` streamed no test-end the board holds "
+              f"(its {_STREAM_FILE} is empty, or the relay stopped); the run is "
+              f"filed from its TEST-*.xml")
+    print(f"[crucible] WARN: {detail}", file=sys.stderr)
+    return {"code": "declared-stream-not-held", "detail": detail}
+
+
+def _append_run_end(stream_path, reports):
+    """Append the client's `run-end` to a stream that holds a `test-end`,
+    stating the totals of the run's own `TEST-*.xml`. A stream holding none,
+    or a run that wrote no readable report, gets no `run-end`."""
+    if not reports or not _axi().stream_counts(stream_path)[0]:
+        return
+    totals = _axi().junit_totals(reports)
+    if totals is None:
+        return
+    total, passed, failed, pending = totals
+    with open(stream_path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"event": "run-end", "total": total, "passed": passed,
+                                 "failed": failed, "pending": pending}) + "\n")
+
+
 # ── Toolchain: native host tests + arduino-cli compile ───────────────────────
 
 
@@ -424,12 +604,14 @@ def _narrator(pd, agent_id, identity=None):
         _recognise_completion)
 
 
-def _start_run(pd, agent_id, tier=None, context=None, release=None):
-    """Open the run BEFORE `make` is spawned, through the shared `open_run`.
+def _start_run(pd, agent_id, tier=None, context=None, release=None, framework=None):
+    """Open the run BEFORE `make` is spawned, through the shared `open_run`,
+    stating the declared `framework` when there is one.
     Returns `(run_id, warnings)`; a refusal degrades to a single-shot ingest
     with a warning naming the fallback."""
     return _axi().open_run(_post, _project_key(pd), agent_id, _STACK,
-                           tier=tier, context=context, release=release)
+                           tier=tier, context=context, release=release,
+                           framework=framework)
 
 
 def _run_native_tests(args, verb, tier, want_coverage, target="junit",
@@ -453,8 +635,12 @@ def _run_native_tests(args, verb, tier, want_coverage, target="junit",
 
     `name_unfiled` is set when this run IS the gate's whole answer (a gate
     that composes no declared suites): its envelope then names the run
-    unreported when it was not filed. A composing gate names it itself."""
+    unreported when it was not filed. A composing gate names it itself.
+
+    The run's `[targets.*]` declaration is checked next, before any board
+    call (`_check_stream_declaration`)."""
     _refuse_ill_formed_narrowing(args)
+    _check_stream_declaration(args, target, want_coverage)
     pd = _project_dir(args)
     preflight_warnings = []
     # Open under the SAME id the run will ingest under. The body
@@ -739,13 +925,25 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     own_dir = _run_reports_dir(args, pd)
     make_env = _child_env(args, _make_reports_env(own_dir, want_coverage, args))
     narrowed = bool(getattr(args, "tests", None)) or getattr(args, "name", None) is not None
-    narrator, run_id = None, None
+    # A declared target's stream file is emptied and handed to `make`; the run
+    # states the declared framework, and the relay's stream-counted heartbeat
+    # stands in for Unity's narrator.
+    stream_key = getattr(args, "stream_key", None)
+    stream_path = _stream_env(make_env, own_dir, agent_id) if stream_key else None
+    narrator, run_id, relay = None, None, None
     if agent_id:
-        narrator = _narrator(pd, agent_id, identity)
-        run_id, run_warnings = _start_run(pd, agent_id, tier=tier,
-                                          context=_run_context(),
-                                          release=release)
+        if stream_key is None:
+            narrator = _narrator(pd, agent_id, identity)
+        run_id, run_warnings = _start_run(
+            pd, agent_id, tier=tier, context=_run_context(), release=release,
+            framework=_STREAM_FRAMEWORK if stream_key else None)
         preflight_warnings += run_warnings
+        if stream_path and run_id:
+            key = _project_key(pd)
+            relay, narrator = _axi().start_stream_relay(
+                _post, _axi().narration_poster(_post, key, agent_id, identity), key,
+                agent_id, run_id, stream_path, _STREAM_CODEC,
+                _axi()._ingest_body_limit(getattr(args, "stream_health", None)))
     # CR-CRU-111 §S4/AC6b — the ONE child this body spawns, bracketed: a `unit`
     # run that spends its wall clock waiting says so in its own envelope. The
     # untiered `test` verb and `regression` run this same body and are left
@@ -759,15 +957,32 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                                       getattr(args, "log", None), narrator,
                                       capture=True)
     except _axi().RunAbandoned as abandoned:
+        # The tests the harness wrote before the signal reach the board
+        # before the run is aborted.
+        _finish_relay(relay, _INTERRUPTED_FINISH_SECONDS)
         return _axi().emit_run_abandoned(verb, _project_key(pd), agent_id, run_id,
                                          abandoned, preflight_warnings,
                                          post_fn=_post)
+    except BaseException:
+        _finish_relay(relay, 0)
+        raise
     # A Makefile that ignored REPORTS_DIR/COVERAGE_DIR wrote to its own fixed
     # dirs: its output is moved into the run's own directory, and said so.
     preflight_warnings += _move_ignored_outputs(native_dir, own_dir, want_coverage)
     reports_dir = own_dir or os.path.join(native_dir, "reports")
     reports = sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml")))
-    if not reports:
+    # A declared run's `run-end` is appended before the relay's last flush.
+    # A run whose stream the board holds is closed from it; one whose board
+    # holds no `test-end` is filed from its TEST-*.xml, and said so.
+    held = 0
+    if relay is not None:
+        _append_run_end(stream_path, reports)
+        held = _finish_relay(relay, _STREAM_FINISH_SECONDS)
+        if not held:
+            narrator = None
+            if reports and not narrowed:
+                preflight_warnings.append(_stream_not_held_warning(stream_key))
+    if not reports and not held:
         # CR-CRU-064 §S4 — was `sys.exit(<message>)`, which wrote the message to
         # stderr and exited 1 with EMPTY stdout. The runner's own output already
         # reached stderr live, and the message and exit code are preserved
@@ -789,14 +1004,15 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     # A Makefile that ignored TESTS or TEST_NAME is named, before the
     # ran-nothing check so the warning rides every envelope this run emits.
     # Its cases are read through the shared reader; unreadable, none is judged.
-    if narrowed:
+    if narrowed and reports:
         preflight_warnings += _ignored_narrowing_warnings(
             args, _axi().junit_case_sources(reports), native_dir)
     total = _axi().junit_testcase_count(reports)
     # A narrowed run whose reports hold zero cases ran nothing whatever
-    # `make`'s exit: Unity with a `-f` that matches nothing exits 0.
-    if (_axi().ran_nothing(run.returncode, total)
-            or (narrowed and total == 0)):
+    # `make`'s exit: Unity with a `-f` that matches nothing exits 0. So does a
+    # narrowed declared run whose stream the board holds no `test-end` of.
+    if not held and (_axi().ran_nothing(run.returncode, total)
+                     or (narrowed and (total == 0 or relay is not None))):
         return _axi().emit_ran_nothing(
             verb, "TEST-*.xml", run.returncode, run.stdout or "", run_id,
             preflight_warnings, post_fn=_post, project_key=_project_key(pd),
@@ -837,15 +1053,28 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     # §S5 — past this point the run IS ingested under an agentId, so the
     # identity must be DECLARED (hard stop when it is not).
     agent_id = _agent_id(args)
-    # The final count, then `ingesting…`, both ahead of the ingest below.
-    _axi().close_narration(narrator)
     # The captured `make` output rides as `raw`, and `make`'s exit as
     # `runnerExit`, so the board files a runner that failed over a clean
     # report as failed. The tier rides only when the caller stated one.
-    resp = _file_reports(pd, agent_id, reports, raw=run.stdout or None,
-                         coverage_paths=coverage_paths, tier=tier,
-                         context=_run_context(), run_id=run_id,
-                         release=release, runner_exit=runner_exit)
+    if held:
+        # The stream-counted final count, then `ingesting…`, then the close.
+        count, end_total, stated, _ran = _axi().stream_counts(stream_path)
+        if narrator is not None:
+            narrator.say(f"ran {count}/{_axi()._narrated_total(count, end_total, stated)}")
+            narrator.say(_axi().INGESTING_MESSAGE)
+        resp = _axi().close_stream(
+            _post, stack=_STACK, project_key=_project_key(pd), agent_id=agent_id,
+            run_id=run_id, codec=_STREAM_CODEC, raw=run.stdout or None,
+            coverage_codec=LCOV_CODEC if coverage_paths else None,
+            coverage_paths=coverage_paths, tier=tier, context=_run_context(),
+            release=release, runner_exit=runner_exit, framework=_STREAM_FRAMEWORK)
+    else:
+        # The final count, then `ingesting…`, both ahead of the ingest below.
+        _axi().close_narration(narrator)
+        resp = _file_reports(pd, agent_id, reports, raw=run.stdout or None,
+                             coverage_paths=coverage_paths, tier=tier,
+                             context=_run_context(), run_id=run_id,
+                             release=release, runner_exit=runner_exit)
     # The exit carries the runner's verdict and the filed run's, and a refused
     # ingest is never green. A run that was not filed has no failure count.
     exit_code = _axi().verb_exit(runner_exit, resp)
@@ -1019,8 +1248,10 @@ def cmd_pre_merge_gate(args):
     `regression --coverage`. On compile failure the compile-failure event is
     posted and regression is SKIPPED (non-zero exit); on compile success the
     regression run posts the tier:'regression' event with coverage attached."""
-    # A gate scoped to named suites that cannot run as asked is refused before
-    # anything else.
+    # The regression's `[targets.*]` declaration is checked before anything
+    # else, the compile included; then a gate scoped to named suites that
+    # cannot run as asked is refused.
+    _check_stream_declaration(args, "junit", True)
     _axi().refuse_unrunnable_scoped_gate(
         args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK, get=_get,
         project_key=lambda: _project_key(_project_dir(args)))
@@ -1061,7 +1292,9 @@ def cmd_pre_merge_gate(args):
         agent=args.agent, project_dir=args.project_dir,
         dir=getattr(args, "dir", None), coverage=True,
         cycle=getattr(args, "cycle", None),
-        release=getattr(args, "release", None))
+        release=getattr(args, "release", None),
+        stream_checked=True, stream_key=args.stream_key,
+        stream_health=args.stream_health)
     # CR-CRU-112 §S1/§S2 — ADDITIVE: this client's own native regression always
     # runs, and every declared target it covers is a SUBSET of that run rather
     # than a replacement for it, so the gate's `suites[]` names them beside it.
@@ -1539,6 +1772,27 @@ _CLI_DESCRIPTION = (
     "A Makefile that ignores TESTS or TEST_NAME is named in a warning. A case's\n"
     "classname is judged against --tests only when it names a test source\n"
     "(<stem>.c, .cpp or .ino) under --dir; any other classname is not judged.\n"
+    "\n"
+    "A declared target streams its tests. The project's crucible.toml declares\n"
+    "it under its native dir (--dir, relative to --project-dir) joined by / to\n"
+    "the make target:\n"
+    "\n"
+    "    [targets.\"tests/native/junit\"]\n"
+    "    framework = \"arduino-native\"\n"
+    "    stream = { codec = \"crucible-events\", path = \"env:CRUCIBLE_STREAM\" }\n"
+    "\n"
+    "CRUCIBLE_STREAM  set for a declared target on a run with --agent: the absolute\n"
+    "              path of <REPORTS_DIR>/crucible-events.ndjson, emptied before\n"
+    "              make spawns. The harness opens it in append mode and, as each\n"
+    "              test ends, writes its line in one write and flushes after it\n"
+    "              (several binaries, possibly under make -j, append to it):\n"
+    "    {\"event\":\"test-end\",\"suite\":\"…\",\"name\":\"…\",\"status\":\"pass|fail|pending\",\n"
+    "     \"duration_ms\":…,\"failure\":{\"message\":\"…\"}}\n"
+    "              status is pass, fail or pending (Unity's IGNORE is pending).\n"
+    "              The harness writes no run-start and no run-end: the client\n"
+    "              appends the run-end from the run's TEST-*.xml, which the\n"
+    "              harness still writes. When the variable is unset, the harness\n"
+    "              writes nothing to it.\n"
     "\n" + _axi().BOARD_CONFIGURATION_HELP
 )
 

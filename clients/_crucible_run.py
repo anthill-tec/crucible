@@ -479,7 +479,19 @@ def junit_testcase_count(paths):
     `None` when a report cannot be read or parsed: the count is then unknown,
     so `ran_nothing` cannot claim the run ran nothing, and the report goes to
     the board as it stands (whose own decoder names what is wrong with it)."""
-    count = 0
+    totals = junit_totals(paths)
+    return None if totals is None else totals[0]
+
+
+def junit_totals(paths):
+    """`(total, passed, failed, pending)` across the `<testcase>` elements of
+    the JUnit reports at `paths`, each case judged as the board's JUnit
+    decoder judges it: a `<failure>` or `<error>` child fails it, else a
+    `<skipped>` child leaves it pending, else it passed.
+
+    `None` when a report cannot be read or parsed, as `junit_testcase_count`
+    answers: the totals are then unknown."""
+    total = failed = pending = 0
     for path in paths:
         try:
             # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the JUnit report the local runner just wrote; the clients are stdlib-only
@@ -488,8 +500,12 @@ def junit_testcase_count(paths):
             print(f"[crucible] WARN: could not count the results in {path} "
                   f"({exc}) \u2014 it is filed as it stands", file=sys.stderr)
             return None
-        count += sum(1 for _ in root.iter("testcase"))
-    return count
+        for case in root.iter("testcase"):
+            total += 1
+            tags = {child.tag for child in case}
+            failed += bool(tags & {"failure", "error"})
+            pending += "skipped" in tags and not tags & {"failure", "error"}
+    return total, total - failed - pending, failed, pending
 
 
 def junit_non_skipped_count(paths):

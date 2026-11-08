@@ -3,7 +3,7 @@
 **Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-200, CR-CRU-225 ·
 **Status** PENDING — filed 2026-10-20; made exact at gap analysis 2026-11-08; pre-review folded
 2026-11-08 (user rulings 2026-11-08). Maven's live console split out to CR-CRU-237 · Pre-review:
-done, 17 findings, the arduino ones folded
+ran — 13 points and user rulings (17 findings; the arduino ones folded, maven's to CR-CRU-237)
 
 ## Problem
 
@@ -38,11 +38,12 @@ An arduino run shows nothing on its open run until `make` exits.
 
 ### The declaration
 
-The declaration lives in the project's own `crucible.toml`. Its key is the native dir, relative to
-the project root, joined by `/` to the make target:
+The declaration lives in the project's own `crucible.toml`. Its key is the native dir (`--dir`),
+relative to the project dir (`--project-dir`, the dir holding the project's `.env` and
+`crucible.toml`), joined by `/` to the make target. Sheetal's project dir is `sheetal-firmware/`:
 
 ```toml
-[targets."sheetal-firmware/tests/native/junit"]
+[targets."tests/native/junit"]
 framework = "arduino-native"
 stream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }
 ```
