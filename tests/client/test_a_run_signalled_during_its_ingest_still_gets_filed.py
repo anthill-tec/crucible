@@ -41,6 +41,7 @@ import subprocess
 import sys
 import time
 import unittest
+from pathlib import Path
 
 from tests.client.live_run_harness import (
     CLIENTS,
@@ -57,6 +58,7 @@ from tests.client.live_run_harness import (
     write_fake_native,
     write_fake_python,
 )
+from tests.client.test_client_fleet_envelope_census import fake_go_body, write_go_module
 
 AGENT = "ingest-held-signal-fixture"
 PROJECT_KEY = "test-key-ingest-held-signal"
@@ -98,6 +100,12 @@ class _IngestHeldSignalCase(unittest.TestCase):
         write_fake_mvnw(self.project)
         write_fake_cargo(self.bin_dir)
         write_fake_native(self.project)
+        # go: a module at the project dir, and a fake `go` first on PATH whose
+        # `go test -json` passes the FAKE_TOTAL tests it lists.
+        write_go_module(self.project)
+        fake_go = Path(self.bin_dir, "go")
+        fake_go.write_text(fake_go_body("pass"))
+        fake_go.chmod(0o755)
 
     def tearDown(self):
         self.board.close()
@@ -139,6 +147,11 @@ class _IngestHeldSignalCase(unittest.TestCase):
         return [sys.executable, str(CLIENTS / "rust-crucible.py"), "test",
                 "--crate", "fake-crate", "--project-dir", self.project,
                 "--reports", "reports", "--agent", AGENT]
+
+    def _go_test_cmd(self):
+        return [sys.executable, str(CLIENTS / "go-crucible.py"), "test",
+                "--project-dir", self.project, "--reports", "reports",
+                "--agent", AGENT]
 
     def _arduino_test_cmd(self):
         return [sys.executable, str(CLIENTS / "arduino-crucible.py"), "test",
@@ -207,6 +220,20 @@ class _IngestHeldSignalCase(unittest.TestCase):
             self.assertEqual(
                 (sum('"event":"ok"' in ln and '"type":"test"' in ln for ln in lines),
                  sum('"event":"failed"' in ln for ln in lines)), (3, 0),
+                f"{label}: the board holds the runner's 3 results from its "
+                f"stream; held={self.board.held_stream(run_id)!r}")
+        elif streamed == "go-test":
+            # A go run is closed from `go test -json`'s stream, carrying no
+            # report and no parse; the board holds the runner's 3 passes.
+            self.assertEqual(
+                (body.get("codec"), "data" in body, "summary" in body),
+                ("go-test", False, False),
+                f"{label}: the close names the stream codec and carries no "
+                f"report; got {body!r}")
+            lines = self.board.held_stream(run_id).splitlines()
+            self.assertEqual(
+                (sum('"Action": "pass", "Test"' in ln for ln in lines),
+                 sum('"Action": "fail"' in ln for ln in lines)), (3, 0),
                 f"{label}: the board holds the runner's 3 results from its "
                 f"stream; held={self.board.held_stream(run_id)!r}")
         elif streamed:
@@ -293,6 +320,7 @@ INGEST_HELD_SITES = (
     ("mvn", "_mvn_test_cmd", "/api/v2/runs"),
     ("rust", "_rust_test_cmd", "/api/v2/runs"),
     ("arduino", "_arduino_test_cmd", "/api/v2/runs"),
+    ("go", "_go_test_cmd", "/api/v2/runs"),
 )
 # The clients that send their runner's reports inline through the shared
 # ingest (CR-CRU-204), each with the number of report files its fake runner
@@ -301,15 +329,15 @@ INGEST_HELD_SITES = (
 INLINE_REPORT_CLIENTS = {"bun": 1, "mvn": 3, "arduino": 1}
 # The clients whose `test` run is closed from its runner's stream, by the
 # stream's codec: python's unittest run (CR-CRU-224) and rust's nextest run.
-STREAMED_CLIENTS = {"python": STREAM_CODEC, "rust": "nextest"}
+STREAMED_CLIENTS = {"python": STREAM_CODEC, "rust": "nextest", "go": "go-test"}
 
 
 class IngestHeldSignalFilesTheRunInsteadOfAbortingItTest(_IngestHeldSignalCase):
 
-    def test_the_call_site_table_names_exactly_five_clients(self):
+    def test_the_call_site_table_names_exactly_six_clients(self):
         self.assertEqual(
             {key for key, *_rest in INGEST_HELD_SITES},
-            {"bun", "python", "mvn", "rust", "arduino"},
+            {"bun", "python", "mvn", "rust", "arduino", "go"},
             repr(INGEST_HELD_SITES))
 
     def test_every_clients_test_verb_files_the_run_on_sigterm_during_ingest(self):

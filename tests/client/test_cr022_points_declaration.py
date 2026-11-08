@@ -70,6 +70,7 @@ CLIENT_FILES = {
     "rust": CLIENTS_DIR / "rust-crucible.py",
     "mvn": CLIENTS_DIR / "mvn-crucible.py",
     "arduino": CLIENTS_DIR / "arduino-crucible.py",
+    "go": CLIENTS_DIR / "go-crucible.py",
 }
 
 PROJECT_KEY = "cr022-points-key"
@@ -239,6 +240,10 @@ class MvnPointsVerbTest(_AllPointsVerbTests, unittest.TestCase):
 
 class ArduinoPointsVerbTest(_AllPointsVerbTests, unittest.TestCase):
     CLIENT = "arduino"
+
+
+class GoPointsVerbTest(_AllPointsVerbTests, unittest.TestCase):
+    CLIENT = "go"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

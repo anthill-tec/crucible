@@ -100,6 +100,7 @@ from tests.client.live_run_harness import (
     write_fake_native,
     write_fake_python,
 )
+from tests.client.test_client_fleet_envelope_census import fake_go_body, write_go_module
 from tests.client.test_cr017_client_lifecycle import (
     MISSING_CYCLE_CODE,
     _Cr094PreflightBase,
@@ -129,6 +130,8 @@ HELP_VERBS = (
        ("test", "regression-ingest", "smoke-test", "workspace-regression", "pre-merge-gate")]
     + [("arduino-crucible.py", v) for v in
        ("test", "unit", "regression", "pre-merge-gate")]
+    # go: every verb that runs `go test` (it declares no tier).
+    + [("go-crucible.py", v) for v in ("test", "regression", "pre-merge-gate")]
 )
 
 
@@ -186,6 +189,14 @@ def _arduino_unit_setup(project_dir, bin_dir):
     return argv, {"FAKE_TOTAL": "1"}
 
 
+def _go_test_setup(project_dir, bin_dir):
+    write_go_module(project_dir)
+    fake = Path(bin_dir, "go")
+    fake.write_text(fake_go_body("pass"))
+    fake.chmod(0o755)
+    return ["--project-dir", project_dir, "--reports", "reports"], {"FAKE_TOTAL": "1"}
+
+
 # (client script, verb, setup fn) — every one of these verbs ALREADY has
 # `--cycle` today (see the module docstring's inventory), so the round trip
 # below exercises the real `--release`-beside-`--cycle` mechanism §S1 asks
@@ -196,6 +207,7 @@ ROUND_TRIP_CASES = (
     ("mvn-crucible.py", "regression", _mvn_regression_setup),
     ("rust-crucible.py", "regression-ingest", _rust_regression_ingest_setup),
     ("arduino-crucible.py", "unit", _arduino_unit_setup),
+    ("go-crucible.py", "test", _go_test_setup),
 )
 
 

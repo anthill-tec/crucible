@@ -146,7 +146,11 @@ V2_ROUTES_PATH = REPO_ROOT / "src" / "v2.ts"
 # The census walks the five clients AND the shared registrar: a flag routed
 # through `_crucible_axi.py` is declared once for the whole fleet, so an
 # undescribed one there is five undescribed flags.
-CENSUS_SOURCES = dict(CLIENT_FILES)
+# The go client joins the walk beside the five: the tier-surface table it is
+# reused from holds the clients that offer the tier verbs, which go does not.
+GO_CLIENT_PATH = AXI_MODULE_PATH.parent / "go-crucible.py"
+FLAG_HELP_CLIENTS = {**CLIENT_FILES, "go": GO_CLIENT_PATH}
+CENSUS_SOURCES = dict(FLAG_HELP_CLIENTS)
 CENSUS_SOURCES["axi"] = AXI_MODULE_PATH
 
 # Non-vacuity, measured 2026-09-13 on `release/0.2.0`. FLOORS, not pins: a
@@ -159,6 +163,7 @@ FLAG_COUNT_FLOOR = {
     "mvn": 74,
     "python": 62,
     "arduino": 40,
+    "go": 26,
     "axi": 29,
 }
 FLEET_FLAG_COUNT_FLOOR = 374
@@ -239,8 +244,11 @@ PRE_CR128_PARTIAL_HELP_RESIDUE = {
     "clients/mvn-crucible.py": 1,
     "clients/python-crucible.py": 1,
     "clients/rust-crucible.py": 1,
+    # go's `--agent` comes from the same shared-helper shape (`extra=` a
+    # caller value) the other four carry; its one place in the ceiling.
+    "clients/go-crucible.py": 1,
 }
-PRE_CR128_PARTIAL_HELP_RESIDUE_TOTAL = 4
+PRE_CR128_PARTIAL_HELP_RESIDUE_TOTAL = 5
 
 IF_SET_OPENER = "if set"
 
@@ -629,8 +637,9 @@ class FlagHelpCensusTest(unittest.TestCase):
         reading reports a clean fleet, which is indistinguishable from a
         described one until the counts are asserted."""
         self.assertEqual(EXPECTED_CLIENT_COUNT, len(CLIENT_FILES))
-        self.assertEqual(EXPECTED_CLIENT_COUNT + 1, len(CENSUS_SOURCES),
-                         "the census walks the five clients AND the shared "
+        self.assertEqual(EXPECTED_CLIENT_COUNT + 1, len(FLAG_HELP_CLIENTS))
+        self.assertEqual(len(FLAG_HELP_CLIENTS) + 1, len(CENSUS_SOURCES),
+                         "the census walks the six clients AND the shared "
                          "registrar; a missing source is a blind spot")
         found = Counter(d.source for d in census())
         self.assertEqual(set(FLAG_COUNT_FLOOR), set(CENSUS_SOURCES))
@@ -673,7 +682,7 @@ class FlagHelpCensusTest(unittest.TestCase):
             "fragment as if it were the whole description -- beyond the "
             "2026-09-13 ceiling:\n%s" % "\n".join(over))
 
-    def test_the_partial_help_ceiling_is_exactly_four_and_only_shrinks(self):
+    def test_the_partial_help_ceiling_is_exactly_five_and_only_shrinks(self):
         """GUARD. The ceiling above is a CEILING: every file may shrink freely,
         none may grow, and a file absent from the table must be at zero. The
         four are one shared `--agent` helper whose `extra=` is a caller value;
@@ -681,7 +690,7 @@ class FlagHelpCensusTest(unittest.TestCase):
         today. That is the reading being pinned, not a permission."""
         self.assertEqual(PRE_CR128_PARTIAL_HELP_RESIDUE_TOTAL,
                          sum(PRE_CR128_PARTIAL_HELP_RESIDUE.values()))
-        self.assertEqual(4, PRE_CR128_PARTIAL_HELP_RESIDUE_TOTAL)
+        self.assertEqual(5, PRE_CR128_PARTIAL_HELP_RESIDUE_TOTAL)
         partial = partially_resolved(census())
         self.assertLessEqual(
             len(partial), PRE_CR128_PARTIAL_HELP_RESIDUE_TOTAL,
@@ -1245,7 +1254,7 @@ class RunReadVerbFlagsDescribeThemselvesTest(unittest.TestCase):
 
     def test_every_flag_of_runs_and_run_carries_its_own_help_in_every_client(self):
         problems = []
-        for client, path in sorted(CLIENT_FILES.items()):
+        for client, path in sorted(FLAG_HELP_CLIENTS.items()):
             verbs = enumerate_verbs(client, Path(path))
             for verb, required in RUN_READ_VERB_FLAGS.items():
                 subparser = verbs.get(verb)

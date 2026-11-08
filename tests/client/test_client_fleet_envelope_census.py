@@ -292,7 +292,8 @@ sys.exit(1)
 # The go toolchain as the go client asks it: `go env GOVERSION` answers a Go
 # above the client's floor, `go test -list <re> -json ./...` lists one test
 # per package, and `go test -json ./...` runs them, each test passing (or,
-# with `OUTCOME = "fail"`, the second failing) in `go test -json`'s own event
+# with `OUTCOME = "fail"`, the second failing); `FAKE_TOTAL=<n>` in the
+# environment makes it `n` tests in `go test -json`'s own event
 # stream, which the board's `go-test` codec decodes. Every package is the
 # module path of the `go.mod` in the working directory, so a run made in two
 # modules names two packages.
@@ -322,6 +323,8 @@ try:
 except OSError:
     pass
 TESTS = ["Test_alpha_behaviour_passes", "Test_gate_fixture_known_failure"]
+if os.environ.get("FAKE_TOTAL"):
+    TESTS = ["Test_case_%d" % index for index in range(int(os.environ["FAKE_TOTAL"]))]
 
 
 def emit(**event):

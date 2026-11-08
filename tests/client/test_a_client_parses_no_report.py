@@ -65,6 +65,10 @@ RUST_EXEMPT = ()
 # The arduino client's exemptions: none. Its narrowing check reads each case's
 # name and file stem through the shared reader, which the run module defines.
 ARDUINO_EXEMPT = ()
+# The go client's exemptions: none. It sends `go test -json`'s own stream and
+# reads no JUnit, lcov or console report; the `go test -list` count it states
+# as the run-start total is a list, not a report.
+GO_EXEMPT = ()
 
 XML_MODULES = ("ET", "ElementTree", "etree", "minidom")
 XML_PARSERS = ("parse", "fromstring", "iterparse", "XML", "parseString")
@@ -488,6 +492,20 @@ class TheArduinoClientParsesNoReportTest(unittest.TestCase):
         self.assertEqual(
             findings, [],
             "the arduino client parses none of its runner's reports; found:\n"
+            + _lines(findings))
+
+
+
+class TheGoClientParsesNoReportTest(unittest.TestCase):
+
+    def test_the_go_client_module_defines_no_report_parse(self):
+        """No JUnit parse, no lcov summation, no console parse and no
+        classname grouping in `go-crucible.py`: nothing is exempt."""
+        findings = report_parse_findings(
+            (CLIENTS / "go-crucible.py").read_text(encoding="utf-8"), GO_EXEMPT)
+        self.assertEqual(
+            findings, [],
+            "the go client parses none of its runner's reports; found:\n"
             + _lines(findings))
 
 

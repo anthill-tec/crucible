@@ -7,7 +7,7 @@ Every client resolves its project as `--project-dir`, else its own
 client test that forgets `--project-dir` would register agents and file
 milestones there.
 
-The `tests/client` package therefore points all five variables at one fresh,
+The `tests/client` package therefore points all six variables at one fresh,
 empty directory for the suite's process. This guard reads the environment the
 suite's process actually carries -- it never sets the variables itself -- and
 proves that each client's resolution with no `--project-dir` lands in that
@@ -28,13 +28,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 
-#: The five client-steering variables, one per stack, and the client each steers.
+#: The six client-steering variables, one per stack, and the client each steers.
 STACK_VARIABLES = {
     "python": "PY_CRUCIBLE_PROJECT_DIR",
     "bun": "BUN_CRUCIBLE_PROJECT_DIR",
     "mvn": "MVN_CRUCIBLE_PROJECT_DIR",
     "rust": "RUST_CRUCIBLE_PROJECT_DIR",
     "arduino": "ARDUINO_CRUCIBLE_PROJECT_DIR",
+    "go": "GO_CRUCIBLE_PROJECT_DIR",
 }
 
 #: The two files that make a directory a Crucible project.
@@ -101,7 +102,7 @@ class TheClientSuiteCannotReachTheLiveProjectTest(unittest.TestCase):
 
     # ── the environment the suite's process carries ──────────────────────
 
-    def test_all_five_variables_name_one_existing_directory_that_holds_no_project(self):
+    def test_all_six_variables_name_one_existing_directory_that_holds_no_project(self):
         directory = self.isolation_dir()
         for var in STACK_VARIABLES.values():
             self.assertEqual(_real(os.environ[var]), directory,
@@ -145,6 +146,9 @@ class TheClientSuiteCannotReachTheLiveProjectTest(unittest.TestCase):
 
     def test_the_rust_client_with_no_project_dir_resolves_the_isolation_directory(self):
         self.assert_resolution_answers_the_isolation_directory("rust")
+
+    def test_the_go_client_with_no_project_dir_resolves_the_isolation_directory(self):
+        self.assert_resolution_answers_the_isolation_directory("go")
 
     def test_the_arduino_client_with_no_project_dir_resolves_the_isolation_directory_not_the_working_directory(self):
         """Arduino's `_project_dir(args)` takes the working directory itself,

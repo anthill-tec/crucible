@@ -362,7 +362,7 @@ class FleetIngestEnvelopeEchoesServerCycleTest(unittest.TestCase):
     uniformity)."""
 
     CLIENTS = ("bun-crucible.py", "python-crucible.py", "rust-crucible.py",
-               "mvn-crucible.py", "arduino-crucible.py")
+               "mvn-crucible.py", "arduino-crucible.py", "go-crucible.py")
 
     def test_every_client_feeds_the_server_echo_into_its_ingest_envelope_context(self):
         missing = []
@@ -524,7 +524,7 @@ class FleetGatedRunOwnsOnlyWhatItCreatedTest(unittest.TestCase):
     (the established AC pattern for fleet-wide uniformity)."""
 
     CLIENTS = ("bun-crucible.py", "python-crucible.py", "rust-crucible.py",
-               "mvn-crucible.py", "arduino-crucible.py")
+               "mvn-crucible.py", "arduino-crucible.py", "go-crucible.py")
 
     def test_every_client_routes_its_gated_cleanup_through_the_ownership_gate(self):
         missing = []
@@ -1293,7 +1293,7 @@ class SharedQueueFileImplementationLandsOnceTest(unittest.TestCase):
     """
 
     CLIENTS = ("bun-crucible.py", "python-crucible.py", "rust-crucible.py",
-               "mvn-crucible.py", "arduino-crucible.py")
+               "mvn-crucible.py", "arduino-crucible.py", "go-crucible.py")
 
     # The parse, the error it raises, and the verb that POSTs the parsed set.
     IMPLEMENTATION = ("parse_queue_table", "QueueParseError", "cmd_queue_file")
