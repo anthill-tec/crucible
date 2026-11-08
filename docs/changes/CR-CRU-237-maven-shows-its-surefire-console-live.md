@@ -1,10 +1,17 @@
 # CR-CRU-237 — maven shows its surefire console live
 
 **Type** feature · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-200, CR-CRU-201,
-CR-CRU-225, CR-CRU-203 · **Status** PENDING — filed 2026-11-08, split from CR-CRU-203 at its
+CR-CRU-225, CR-CRU-203 · **Status** DONE — merged 2026-11-08 (`d187e39b`); filed 2026-11-08, split from CR-CRU-203 at its
 pre-review, with the user's rulings of 2026-11-08; made exact at gap analysis 2026-11-08 (user
 rulings 2026-11-08) · Pre-review: ran — 8 points and user rulings (CR-CRU-203's pre-review,
 findings F9–F15 and F17)
+
+**Done 2026-11-08.** Plan 241: one red-green cycle per behaviour unit — 884 (the view codec), 885
+(the declaration and docs), 886 (the relay and record) — then 887 (verify) and 888 (fix). VERIFY
+approved with no blocking findings; the fix cycle wiped a previous run's console file, dropped
+committed fixture build output and moved the relay start inside the exception handling. The
+gate passed at 11649/0. Known differences, by ruling: a rerun class shows its last counts, and
+nested-class names follow the surefire version.
 
 ## Problem
 
@@ -140,7 +147,7 @@ The codec reads surefire's lines on the board, never as a record:
 
 ## Acceptance criteria
 
-- [ ] **AC1 — a declared verb's console reaches the open run.**
+- [x] **AC1 — a declared verb's console reaches the open run.**
   - Covers `test`, every tier verb, and `pre-merge-gate`'s regression.
   - A declared run relays its console under `surefire-console` while maven runs.
   - Its open run's view shows each class's counts as the class ends, and each failure as its line
@@ -148,11 +155,11 @@ The codec reads surefire's lines on the board, never as a record:
   - While the relay lands it posts no in-run tick. The closing count and `ingesting…` are posted,
     and the ticks resume when the board stops holding batches.
   - The relay runs in each of the four run bodies.
-- [ ] **AC2 — the relay is finished before the close.**
+- [x] **AC2 — the relay is finished before the close.**
   - On each exit path, an exception included, every relayed batch lands before the run is closed
     or aborted.
   - The capture, `--log` and `raw` are byte-identical to an unrelayed run.
-- [ ] **AC3 — the codec reads surefire's lines as specified.** Every rule in "The `surefire-console`
+- [x] **AC3 — the codec reads surefire's lines as specified.** Every rule in "The `surefire-console`
   view codec" is proved on real captures from surefire and failsafe 3.2.5 and 3.5.4, kept as
   fixtures, covering:
   - a nested class;
@@ -166,14 +173,14 @@ The codec reads surefire's lines on the board, never as a record:
   - a forked JVM that dies.
 
   The codec is registered in `viewCodecs` only.
-- [ ] **AC4 — maven's record is unchanged.** A relayed run stores the same counts, failures and
+- [x] **AC4 — maven's record is unchanged.** A relayed run stores the same counts, failures and
   coverage that the same run's JUnit stored before this CR, plus the framework `surefire`.
-- [ ] **AC5 — undeclared runs are unchanged.** An undeclared verb relays nothing and keeps its
+- [x] **AC5 — undeclared runs are unchanged.** An undeclared verb relays nothing and keeps its
   heartbeat, with the same posts and envelope as before this CR.
-- [ ] **AC6 — the declaration is read and refused as specified.** Every refusal in "The declaration"
+- [x] **AC6 — the declaration is read and refused as specified.** Every refusal in "The declaration"
   is covered, each before any board call, `docker-up` or maven, including `e2e --with-docker` and
   `pre-merge-gate`.
-- [ ] **AC7 — every caller is kept green.**
+- [x] **AC7 — every caller is kept green.**
   - Every test in both suites (bun `tests/*.ts` and `tests/client/*.py`) that drives
     `mvn-crucible.py` passes: 69 files at this CR's gap analysis (59 python, 10 bun).
   - Adding the codec changes health's `codecs.view`. The four bun tests that pin it as
@@ -188,7 +195,7 @@ The codec reads surefire's lines on the board, never as a record:
     keep their heartbeat.
   - Any change in the size of `_crucible_run.py` or `_crucible_axi.py` re-records
     `SHARED_MODULE_LINE_BUDGETS` in all three files that pin it, in the same change.
-- [ ] **AC8 — the docs follow.** The CHANGELOG's `[Unreleased]` names the declaration and the
+- [x] **AC8 — the docs follow.** The CHANGELOG's `[Unreleased]` names the declaration and the
   `surefire-console` codec, under "Stack declaration changes" for the release notes to Model B.
   `clients/crucible.toml`'s commented reference names the maven entry. `mvn-crucible.py --help`
   names the declaration. The DN's console-only row names `surefire-console` for maven.
