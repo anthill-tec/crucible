@@ -28,6 +28,9 @@ The Go client's `DeclaredTierSurface` reads a tier's declaration from the module
 constraints and runs it with the matching tag. A tier with no declaration is refused, as every
 client refuses one, and the refusal names what declares it.
 
+CR-CRU-195 ships the Go client with no tier verbs (user ruling 2026-11-08); this CR adds them. A
+tier's `go test -list` total carries the same `-tags` as its run.
+
 ### §S2 — the gate covers every declared tier
 
 `pre-merge-gate` enumerates the module's declared tiers and runs each under its tag.
