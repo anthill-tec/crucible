@@ -30,10 +30,11 @@
             "required": true
           },
           "stream": {
-            "description": "the script streams its results; it accepts subfields it does not list",
+            "description": "the script streams its results",
             "default": null,
             "required": false,
             "excludes": ["junit", "console"],
+            "open": true,
             "fields": {
               "codec": {
                 "description": "the stream codec, which the board must list under codecs.stream",
@@ -113,6 +114,7 @@
             "description": "the run streams nextest's output on stdout, the default",
             "default": {"codec": "nextest", "path": "stdout"},
             "required": false,
+            "open": true,
             "fields": {
               "codec": {"values": ["nextest"], "default": "nextest", "required": false},
               "path": {"values": ["stdout"], "default": "stdout", "required": false}
@@ -149,6 +151,7 @@
             "description": "make writes crucible events to the file CRUCIBLE_STREAM names",
             "default": null,
             "required": true,
+            "open": true,
             "fields": {
               "codec": {"values": ["crucible-events"], "default": null, "required": true},
               "path": {"values": ["env:CRUCIBLE_STREAM"], "default": null, "required": true}
