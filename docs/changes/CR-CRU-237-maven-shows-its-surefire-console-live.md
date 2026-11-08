@@ -2,8 +2,9 @@
 
 **Type** feature · **Points** 8 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-200, CR-CRU-201,
 CR-CRU-225, CR-CRU-203 · **Status** PENDING — filed 2026-11-08, split from CR-CRU-203 at its
-pre-review, with the user's rulings of 2026-11-08 · Pre-review: findings F9–F15 and F17 of CR-203's
-pre-review are folded in. A gap analysis is still due when the CR is picked up.
+pre-review, with the user's rulings of 2026-11-08; made exact at gap analysis 2026-11-08 (user
+rulings 2026-11-08) · Pre-review: ran — 8 points and user rulings (CR-CRU-203's pre-review,
+findings F9–F15 and F17)
 
 ## Problem
 
@@ -47,9 +48,14 @@ Real runs also show these cases:
   view in the one `[targets.<key>]` vocabulary, keyed by the verb's tier. The client relays maven's
   combined console to the open run under a new `surefire-console` view codec, which the board reads.
   The record stays maven's JUnit reports (DN: console-only runners).
-- **§S2 — the heartbeat retires where the view replaces it.** A relayed run posts no heartbeat
-  narration: its open run carries the live view, and the agent's card follows it (CR-CRU-236). An
-  undeclared verb keeps today's heartbeat, with the same posts.
+- **§S2 — the heartbeat steps back where the view replaces it.** A relayed run follows the fleet's
+  rule (the shared `LandingPoster`, as bun, python, rust and arduino do):
+  - no in-run `running N/M` tick while the relay lands, because its open run carries the live view
+    and the agent's card follows it (CR-CRU-236);
+  - the ticks resume if the board stops holding batches;
+  - the closing `ran N/M classes` and `ingesting…` are always posted.
+
+  An undeclared verb keeps today's heartbeat, with the same posts.
 
 ## Design (user rulings 2026-11-08)
 
@@ -78,24 +84,32 @@ console = "surefire-console"
   - an entry under the run's own key with a wrong value or a refused key;
   - a file that does not parse;
   - a declared console on a board whose health lists no `surefire-console` view codec (bun's and
-    rust's precedent, CR-CRU-225). An unreadable health refuses nothing.
+    rust's precedent, CR-CRU-225).
+- **An unreadable health** refuses nothing and relays nothing. The run goes ahead unrelayed, with
+  its heartbeat, as bun's does.
 
   The refusal names the table and the field. This holds for `e2e --with-docker` and
   `pre-merge-gate`, which check before `docker-up`.
 - **Framework:** a declared run sends its `framework`, `surefire`.
+- **Where the key is read:** `test` reads `unit`. `unit`, `module` and `bdd` read their own keys;
+  `bdd` is reached through the declared-profile cell. `integration` and `e2e` read theirs, and
+  `regression` and `pre-merge-gate`'s regression read `regression`. These are the four run bodies:
+  the surefire tier, the failsafe tier, regression and test.
 
 ### The relay
 
 - A tee writes maven's combined stdout and stderr to `<reports dir>/surefire-console.log` as it is
   read. The capture, `--log` and `raw` stay byte-identical. The tee moves from the bun client into
-  the shared module if both use it.
+  the shared module, because both use it. The bun client keeps its own names as thin delegates, so
+  no bun pin moves.
 - The shared `StreamRelay` follows the file under the view codec.
 - On every exit path, the relay finishes before the run is closed or aborted: 60 s, or 5 s when
   interrupted. The exit paths are:
   - the JUnit close;
   - the compile fallback;
   - ran-nothing;
-  - abandon.
+  - abandon;
+  - an exception from the run, where the relay finishes with 0 s and the exception is re-raised.
 
 ### The `surefire-console` view codec
 
@@ -121,6 +135,8 @@ The codec reads surefire's lines on the board, never as a record:
 - **Batches:** it resumes across batch boundaries and never re-reads a decoded byte.
 - **View vs record:** the view can differ from the record (for example, a test printing
   surefire-like lines). The record wins.
+- **Reader state:** the per-class counts and the open `Running` set are held compactly, as
+  `class → [run, failed, pending]`, because the state is written on every batch.
 
 ## Acceptance criteria
 
@@ -129,9 +145,12 @@ The codec reads surefire's lines on the board, never as a record:
   - A declared run relays its console under `surefire-console` while maven runs.
   - Its open run's view shows each class's counts as the class ends, and each failure as its line
     arrives.
-  - It posts no heartbeat.
+  - While the relay lands it posts no in-run tick. The closing count and `ingesting…` are posted,
+    and the ticks resume when the board stops holding batches.
+  - The relay runs in each of the four run bodies.
 - [ ] **AC2 — the relay is finished before the close.**
-  - On each exit path, every relayed batch lands before the run is closed or aborted.
+  - On each exit path, an exception included, every relayed batch lands before the run is closed
+    or aborted.
   - The capture, `--log` and `raw` are byte-identical to an unrelayed run.
 - [ ] **AC3 — the codec reads surefire's lines as specified.** Every rule in "The `surefire-console`
   view codec" is proved on real captures from surefire and failsafe 3.2.5 and 3.5.4, kept as
@@ -156,17 +175,28 @@ The codec reads surefire's lines on the board, never as a record:
   `pre-merge-gate`.
 - [ ] **AC7 — every caller is kept green.**
   - Every test in both suites (bun `tests/*.ts` and `tests/client/*.py`) that drives
-    `mvn-crucible.py` passes. There were 71 files at CR-203's gap analysis.
+    `mvn-crucible.py` passes: 69 files at this CR's gap analysis (59 python, 10 bun).
+  - Adding the codec changes health's `codecs.view`. The four bun tests that pin it as
+    `["bun-console"]` are re-pinned in the codec's own cycle:
+    - `tests/gate-milestone-scope-and-suites.test.ts`;
+    - `tests/health-lists-the-record-stream-codecs.test.ts`;
+    - `tests/health-names-the-codecs-it-decodes.test.ts`;
+    - `tests/view-codecs-live-in-their-own-registry.test.ts`.
   - The same holds for the tests of the shared module and of any client whose code moves.
   - A call sequence is re-pinned only where this CR changes what a run posts.
-  - A narration test that pins a relayed run's heartbeat is rewritten, and named in the CR.
+  - No narration test is rewritten: no existing test pins a relayed maven run, and undeclared runs
+    keep their heartbeat.
   - Any change in the size of `_crucible_run.py` or `_crucible_axi.py` re-records
     `SHARED_MODULE_LINE_BUDGETS` in all three files that pin it, in the same change.
 - [ ] **AC8 — the docs follow.** The CHANGELOG's `[Unreleased]` names the declaration and the
   `surefire-console` codec, under "Stack declaration changes" for the release notes to Model B.
-  `clients/crucible.toml`'s commented reference names the maven entry.
+  `clients/crucible.toml`'s commented reference names the maven entry. `mvn-crucible.py --help`
+  names the declaration. The DN's console-only row names `surefire-console` for maven.
 
 ## Non-goals
 
 - A JUnit Platform listener for maven, which would be a structured maven stream.
 - A total in advance: maven states none.
+- Namespacing `[targets.<key>]`. Rust keys its entries by nextest profile (`default`, `ci`, `e2e`),
+  so a project with both stacks cannot declare a rust `e2e` and a maven `e2e`. Each client skips
+  the other's framework, so reading stays safe.
