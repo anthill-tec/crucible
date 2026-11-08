@@ -86,6 +86,7 @@ Examples:
 
 # pi-lens-ignore: I001 — pi-lens lints with its own ruff configuration, which sets no target version, so ruff files `tomllib` as third-party whatever the declared floor
 import argparse  # noqa: I001
+import contextlib
 import glob
 import importlib.util
 import os
@@ -585,13 +586,18 @@ def _run_reports_dir(args, project_dir):
 
 
 def _prepare_reports_dir(reports_dir):
-    """Create the run's own reports dir and clear the TEST-*.xml a previous run
-    left there, so only this run's results are read. Nothing else is touched."""
+    """Create the run's own reports dir and clear the TEST-*.xml and the
+    console a previous run left there, so only this run's results are read and
+    only this run's console is relayed. Nothing else is touched."""
     if reports_dir is None:
         return
     os.makedirs(reports_dir, exist_ok=True)
     for stale in glob.glob(os.path.join(reports_dir, "TEST-*.xml")):
         os.remove(stale)
+    console = os.path.join(reports_dir, _CONSOLE_FILE)
+    if os.path.exists(console):
+        with contextlib.suppress(OSError):
+            os.remove(console)
 
 
 def _reports_dir_flags(reports_dir, kinds):
