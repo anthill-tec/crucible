@@ -77,7 +77,7 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 The stack declaration schema:
 
-- **The installer ships `crucible-declaration.schema.json`, version 1.** It lands beside the clients
+- **The installer ships `crucible-declaration.schema.json`, version 2.** It lands beside the clients
   at `<target-dir>/clients/crucible-declaration.schema.json` (`~/.crucible/clients/` by default).
   An upgrade overwrites it; an uninstall leaves it, like every fleet file.
 - **The manifest lists it.** `crucible-clients.json` gains `declaration_schema: {path, version}`,
@@ -86,6 +86,8 @@ The stack declaration schema:
 - **The writer rule.** A declaration writer writes only the stacks and fields it knows. It warns
   when the schema's `version` is newer than the one it was built for. It never removes a field it
   does not know. With no schema installed it writes nothing it cannot check.
+- **Version 2 adds the `go` stack.** `crucible-declaration.schema.json` gains a `go` stack, which
+  reads no `[targets]` entry and declares only its `[go] module_dir` table.
 
 For the bun stack (`package.json`'s `crucible` block):
 
@@ -178,6 +180,18 @@ For the maven stack (`crucible.toml`):
   `surefire-console` view codec. A board whose health lists no `surefire-console` under
   `codecs.view` refuses a declared run before anything runs; a health that cannot be read refuses
   nothing.
+
+For the go stack (`crucible.toml`):
+
+- **The `[go] module_dir` table.** A project may declare the directory holding its `go.mod` as
+  `[go] module_dir = "<dir>"`, relative to the project dir. `test` reads it after `--module-dir`,
+  `GO_CRUCIBLE_MODULE_DIR` and the nearest `go.mod` at or above the working directory. A project
+  file that does not parse declares nothing. `regression` and `pre-merge-gate` read no declaration:
+  they run every module under the project dir (skipping `vendor`, `testdata`, `node_modules` and
+  hidden dirs) into one run.
+- **`TestMain` runs twice per run.** The `go test -list` that counts the run's total builds and
+  starts every test binary once more, so a package's `TestMain` runs twice: once for the list and
+  once for the run. A `TestMain` with side effects should tolerate that.
 
 ## [0.3.0] - 2026-10-10
 

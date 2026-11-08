@@ -6,7 +6,7 @@ workflow. It is two cooperating stacks behind one product:
 - a **Bun server** (`src/server.ts`) that ingests test runs, tracks agents,
   cycles and events, and streams live changes over SSE; and
 - a **Python client fleet** (`crucible-axi` — `_crucible_axi.py` plus the
-  per-stack `{bun,python,rust,mvn,arduino}-crucible.py` scripts) that runs a
+  per-stack `{bun,python,rust,mvn,arduino,go}-crucible.py` scripts) that runs a
   stack's tests AND ingests the results to the server under an agent id.
 
 RED/GREEN/VERIFY agents report every run through the stack client; the server
@@ -41,7 +41,7 @@ fails outright with that remedy), provisions the server user-scoped via
 `bun add -g @anthill-tec/crucible-server@<pinned>` — Bun's global prefix lives
 under `$HOME`, so there is no system-permission problem — then creates its
 target directory (`--target-dir`, default `~/.crucible`), lays the
-`*-crucible.py` **client fleet** (the five clients, the three shared modules
+`*-crucible.py` **client fleet** (the six clients, the three shared modules
 they load by path — `_crucible_axi.py`, `_crucible_run.py` and `toon.py` — the
 `subtest_runner.py` the Python client runs, `STATUS-CONTRACT.md`, the
 shipped `crucible.toml` limit defaults and the stack-declaration schema
@@ -162,8 +162,10 @@ pip install -e '.[dev]'
 - [docs/RUNBOOK.md](docs/RUNBOOK.md) — operating the server (start/stop, db
   path, health, port/bind config).
 - `clients/` — the per-stack reporting clients
-  (`{bun,python,rust,mvn,arduino}-crucible.py`) plus the shared TOON-AXI
-  envelope module every one of them emits through.
+  (`{bun,python,rust,mvn,arduino,go}-crucible.py`) plus the shared TOON-AXI
+  envelope module every one of them emits through. The Go client,
+  `go-crucible.py`, streams `go test -json` to the board; it needs go 1.24 or
+  later.
 - `clients/STATUS-CONTRACT.md` — the status/dashboard payload contract the
   orchestrators read.
 
