@@ -97,6 +97,10 @@ _JUNIT_ONE_GREEN = (
 
 GATED = "gated"
 FILING = "filing"
+#: The kinds each client's census must observe. The go client has no filing
+#: verb (no check, compile or auto-ingest): each of its run verbs opens a gated
+#: identity (orchestrator-approved re-seed fix).
+CLIENT_KINDS = {"go": [GATED]}
 
 
 def _shared():
@@ -287,7 +291,7 @@ class CycleHelpMatchesTheVerbTest(unittest.TestCase):
                         if c == client_key}
                 kinds = sorted({_expected(row) for row in rows.values()})
                 self.assertEqual(
-                    kinds, [FILING, GATED],
+                    kinds, CLIENT_KINDS.get(client_key, [FILING, GATED]),
                     f"{client_key}: the census must observe at least one verb "
                     f"opening a gated identity and one filing without it; "
                     f"measured {sorted((v, _expected(r)) for v, r in rows.items())}")
