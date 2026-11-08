@@ -461,48 +461,18 @@ def _finish_console_relay(relay, deadline_seconds):
     return held
 
 
-class _ConsoleTee:
-    """The line observer `run_streamed` is handed on a relayed run: each line
-    of the runner's combined output is written to the console file as read,
-    then handed to the narrator. A write that fails is said once on stderr and
-    ends the writing, never the run."""
-
-    def __init__(self, handle, path, narrator):
-        self._handle = handle
-        self._path = path
-        self._narrator = narrator
-
-    def observe(self, line):
-        """Write one line to the console file, then hand it to the narrator."""
-        if self._handle is not None:
-            try:
-                self._handle.write(line)
-                self._handle.flush()
-            except OSError as exc:
-                self._handle = None
-                print(f"[crucible] WARN: the console {self._path} could not be "
-                      f"written ({exc}) \u2014 the run continues", file=sys.stderr)
-        if self._narrator is not None:
-            self._narrator.observe(line)
+def _ConsoleTee(handle, path, narrator):
+    """The shared `ConsoleTee`: each line written to the console file, then
+    handed to the narrator."""
+    return _axi().ConsoleTee(handle, path, narrator)
 
 
-@contextlib.contextmanager
 def _console_observer(relay, reports_dir, narrator):
-    """The observer the run is handed: the narrator itself when nothing
-    relays, otherwise a `_ConsoleTee` writing `<reports_dir>/bun-console.log`
-    for the relay to follow. A console file that cannot be opened is said
-    once on stderr, and the run goes on with the narrator alone."""
-    path = os.path.join(reports_dir, CONSOLE_FILE)
-    with contextlib.ExitStack() as stack:
-        handle = None
-        if relay is not None:
-            try:
-                handle = stack.enter_context(
-                    open(path, "w", encoding="utf-8", newline=""))
-            except OSError as exc:
-                print(f"[crucible] WARN: the console {path} could not be opened "
-                      f"({exc}) \u2014 nothing of it is relayed", file=sys.stderr)
-        yield narrator if handle is None else _ConsoleTee(handle, path, narrator)
+    """The shared `console_observer` over `<reports_dir>/bun-console.log`:
+    the narrator itself when nothing relays, otherwise a tee writing that
+    file for the relay to follow."""
+    return _axi().console_observer(relay, os.path.join(reports_dir, CONSOLE_FILE),
+                                   narrator)
 
 
 @contextlib.contextmanager
