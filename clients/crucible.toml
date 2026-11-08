@@ -211,6 +211,20 @@ max = 500
 # `coverage`, is REFUSED before anything runs; another stack's entry is
 # skipped. The harness writes the stream under the `CRUCIBLE_STREAM` make
 # contract (`arduino-crucible.py --help`).
+#
+# A maven run keys its entry by tier: `unit`, `module`, `integration`, `e2e`,
+# `bdd` or `regression` (`test` reads `unit`, `pre-merge-gate` reads
+# `regression`). The maven entry, which declares a tier's console:
+#
+#     [targets.<tier>]
+#     framework = "surefire"
+#     console = "surefire-console"
+#
+# Both fields are required. A tier with no entry runs as before. An entry
+# under the run's key naming another `framework` or `console`, or declaring
+# `junit`, `stream` or `coverage`, is REFUSED before anything runs, as is a
+# declared run on a board whose health lists no `surefire-console` under
+# `codecs.view`; another stack's entry is skipped.
 
 # ── The BOARD this fleet posts to ──────────────────────────────────────────
 #

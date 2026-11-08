@@ -5,6 +5,7 @@ import { bunConsoleView } from "./bun-console-view.ts";
 import { coverageCodecs, decodeCoverage } from "./coverage.ts";
 import type { CoverageCodec } from "./coverage.ts";
 import { parseCrucibleEvents, readStreamLine, type StreamLine } from "./crucible-events.ts";
+import { surefireConsoleView } from "./surefire-console-view.ts";
 import { parseJunit, parseJunitPath, readJunitRawOutput } from "./junit.ts";
 import { nextestLineReader, parseNextest } from "./nextest.ts";
 
@@ -135,7 +136,10 @@ export interface ViewCodec {
 }
 
 /** The view codecs, by name, in a registry of their own beside the report codecs. */
-export const viewCodecs: Map<string, ViewCodec> = new Map<string, ViewCodec>([[bunConsoleView.name, bunConsoleView]]);
+export const viewCodecs: Map<string, ViewCodec> = new Map<string, ViewCodec>([
+  [bunConsoleView.name, bunConsoleView],
+  [surefireConsoleView.name, surefireConsoleView],
+]);
 
 /**
  * The names this board decodes, for health: test, coverage and view codecs,

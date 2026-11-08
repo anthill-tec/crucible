@@ -29,7 +29,7 @@ async function health(route: string): Promise<Record<string, unknown>> {
 const CODECS = {
   test: ["crucible-events", "junit", "nextest"],
   coverage: ["jacoco", "lcov"],
-  view: ["bun-console"],
+  view: ["bun-console", "surefire-console"],
   stream: ["crucible-events", "nextest"],
 };
 
@@ -49,6 +49,7 @@ describe("health lists the record stream codecs under codecs.stream", () => {
     expect(listed.stream ?? []).not.toContain("junit");
     expect(listed.stream ?? []).not.toContain("playwright");
     expect(listed.stream ?? []).not.toContain("bun-console");
+    expect(listed.stream ?? []).not.toContain("surefire-console");
     expect(listed.test).toContain("crucible-events");
   });
 

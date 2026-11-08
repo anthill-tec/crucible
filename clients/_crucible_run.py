@@ -1493,6 +1493,49 @@ class LandingPoster:
         return _post
 
 
+class ConsoleTee:
+    """The line observer `run_streamed` is handed on a relayed run: each line
+    of the runner's combined output is written to the console file as read,
+    then handed to the narrator. A write that fails is said once on stderr and
+    ends the writing, never the run."""
+
+    def __init__(self, handle, path, narrator):
+        self._handle = handle
+        self._path = path
+        self._narrator = narrator
+
+    def observe(self, line):
+        """Write one line to the console file, then hand it to the narrator."""
+        if self._handle is not None:
+            try:
+                self._handle.write(line)
+                self._handle.flush()
+            except OSError as exc:
+                self._handle = None
+                print(f"[crucible] WARN: the console {self._path} could not be "
+                      f"written ({exc}) \u2014 the run continues", file=sys.stderr)
+        if self._narrator is not None:
+            self._narrator.observe(line)
+
+
+@contextlib.contextmanager
+def console_observer(relay, path, narrator):
+    """The observer a run is handed: the narrator itself when nothing relays
+    (`relay` None), otherwise a `ConsoleTee` writing the console file at
+    `path` for the relay to follow. A console file that cannot be opened is
+    said once on stderr, and the run goes on with the narrator alone."""
+    with contextlib.ExitStack() as stack:
+        handle = None
+        if relay is not None:
+            try:
+                handle = stack.enter_context(
+                    open(path, "w", encoding="utf-8", newline=""))
+            except OSError as exc:
+                print(f"[crucible] WARN: the console {path} could not be opened "
+                      f"({exc}) \u2014 nothing of it is relayed", file=sys.stderr)
+        yield narrator if handle is None else ConsoleTee(handle, path, narrator)
+
+
 class StreamTicks:
     """Counts the stream file at `path` into `narrator`, a `RunNarrator`
     whose recogniser counts no console line and whose total is the

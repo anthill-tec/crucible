@@ -3,8 +3,8 @@
 // names this board decodes — so a client can tell a board that predates server-side
 // decoding before it sends. This board decodes `junit` test reports
 // (Playwright's JSON report retired with its codec), the `crucible-events` and `nextest` test streams, and `jacoco` and `lcov`
-// coverage, and reads the `bun-console` view stream into a run's live state
-// (CR-CRU-201 §S1). Driven through the real production HTTP surface
+// coverage, and reads the `bun-console` and `surefire-console` view streams
+// into a run's live state (CR-CRU-201 §S1). Driven through the real production HTTP surface
 // (`startServer`, in-memory store).
 import { describe, test, expect, afterEach } from "bun:test";
 import { startServer } from "../src/server.ts";
@@ -27,12 +27,12 @@ async function health(route: string): Promise<Record<string, unknown>> {
 const CODECS = {
   test: ["crucible-events", "junit", "nextest"],
   coverage: ["jacoco", "lcov"],
-  view: ["bun-console"],
+  view: ["bun-console", "surefire-console"],
   stream: ["crucible-events", "nextest"],
 };
 
 describe("health names the codecs the board decodes", () => {
-  test("GET /api/health carries codecs {test: [crucible-events, junit, nextest], coverage: [jacoco, lcov], view: [bun-console], stream: [crucible-events, nextest]}", async () => {
+  test("GET /api/health carries codecs {test: [crucible-events, junit, nextest], coverage: [jacoco, lcov], view: [bun-console, surefire-console], stream: [crucible-events, nextest]}", async () => {
     const body = await health("/api/health");
     expect(body.ok).toBe(true);
     expect(body.codecs).toEqual(CODECS);
@@ -44,15 +44,16 @@ describe("health names the codecs the board decodes", () => {
     expect(body.codecs).toEqual(CODECS);
   });
 
-  test("the codec lists hold exactly these names — no compile format, no parsed pseudo-codec, the view codec only under view", async () => {
+  test("the codec lists hold exactly these names — no compile format, no parsed pseudo-codec, the view codecs only under view", async () => {
     const body = await health("/api/v2/health");
     const codecs = body.codecs as { test?: string[]; coverage?: string[]; view?: string[] } | undefined;
     expect(codecs?.test?.length).toBe(3);
     expect(codecs?.test ?? []).not.toContain("playwright");
     expect(codecs?.coverage?.length).toBe(2);
-    expect(codecs?.view?.length).toBe(1);
+    expect(codecs?.view?.length).toBe(2);
     expect(codecs?.test ?? []).not.toContain("parsed");
     expect(codecs?.test ?? []).not.toContain("bun-console");
+    expect(codecs?.test ?? []).not.toContain("surefire-console");
     expect(codecs?.coverage ?? []).not.toContain("junit");
   });
 });

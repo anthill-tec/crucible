@@ -50,3 +50,8 @@ uv.lock
 .pi/
 # Model B's per-CR worktrees (worktree-flow start), each a checkout of its own feature branch.
 /.worktrees/
+# Build output the live maven fixture project's own build leaves behind (the
+# live e2e runs `mvn clean test` on a /tmp copy, so its target/ is never an
+# input). Only that project's target/ is ignored: the target/ dirs under
+# tests/fixtures/reports/mvn/ hold hand-written report fixtures, tracked.
+tests/fixtures/surefire-live-project/target/

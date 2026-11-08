@@ -77,7 +77,7 @@ report is read.
 | Source | The record | The live view |
 |---|---|---|
 | Structured stream: Vitest and Playwright (shipped reporters), nextest libtest JSON, go `-json`, the python runner Crucible owns, arduino's harness (the project's own, under `CRUCIBLE_STREAM`) | the stream file | the same stream, as it is written |
-| Console only: `bun test`, maven | the JUnit report | the console result lines, read on the board by a view codec (`bun test`'s by CR-CRU-201's `bun-console`) |
+| Console only: `bun test`, maven | the JUnit report | the console result lines, read on the board by a view codec (`bun test`'s by CR-CRU-201's `bun-console`, maven's surefire console by CR-CRU-237's `surefire-console`) |
 
 ### Event format (user ruling)
 
