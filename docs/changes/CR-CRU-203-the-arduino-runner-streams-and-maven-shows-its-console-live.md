@@ -1,197 +1,179 @@
-# CR-CRU-203 — the arduino runner streams its tests, and maven shows its console live
+# CR-CRU-203 — the arduino runner streams its tests
 
-**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-200, CR-CRU-201, CR-CRU-225 ·
-**Status** PENDING — filed 2026-10-20; made exact at gap analysis 2026-11-08 (user rulings 2026-11-08;
-design in `DN-crucible-live-test-progress.md`) · Pre-review: due — user rulings; 13 points; the make
-contract another project consumes
+**Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-200, CR-CRU-225 ·
+**Status** PENDING — filed 2026-10-20; made exact at gap analysis 2026-11-08; pre-review folded
+2026-11-08 (user rulings 2026-11-08). Maven's live console split out to CR-CRU-237 · Pre-review:
+done, 17 findings, the arduino ones folded
 
 ## Problem
 
-An arduino run and a maven run show nothing on their open run until the runner exits.
+An arduino run shows nothing on its open run until `make` exits.
 
-- **arduino.** The client runs `make <target>` in the project's native test dir and files the
-  `TEST-*.xml` the project's harness writes into `REPORTS_DIR`.
-  - The harness is the project's own: Crucible ships none. Its make contract asks only for
-    Unity-style verdict lines on stdout, and for JUnit.
-  - The verdict lines feed a heartbeat narration and nothing else.
-  - Measured: a C++ harness writing to a pipe delivers every line at exit, because stdio buffers in
-    blocks.
-- **maven.** Surefire's console states, while maven runs:
-  - each class as it starts;
-  - each class's counts as it ends;
-  - each failed or errored test, by name, with its message.
-
-  The client reads only the `Running <class>` lines, for a heartbeat narration (`running N/M
-  classes`). Measured on real surefire 3.2.5 and 3.5.4 (`mvn -B`), the two print identical lines:
-
-  ```text
-  [INFO] Running demo.BetaTest
-  [INFO] Running demo.BetaTest$Inner
-  [INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.004 s -- in demo.BetaTest$Inner
-  [INFO] Tests run: 0, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.535 s -- in demo.BetaTest
-  [INFO] Running demo.AlphaTest
-  [ERROR] Tests run: 4, Failures: 1, Errors: 1, Skipped: 1, Time elapsed: 1.514 s <<< FAILURE! -- in demo.AlphaTest
-  [ERROR] demo.AlphaTest.bad -- Time elapsed: 0.006 s <<< FAILURE!
-  org.opentest4j.AssertionFailedError: two is not three ==> expected: <2> but was: <3>
-  [ERROR] demo.AlphaTest.boom -- Time elapsed: 0.001 s <<< ERROR!
-  [ERROR] Tests run: 6, Failures: 1, Errors: 1, Skipped: 1
-  ```
-
-  - A nested class reports on its own line, and its outer class then reports 0.
-  - The last line is a module summary with no `-- in`.
-  - Maven states no total in advance.
+- The client runs `make <target>` in the project's native test dir (`--dir`), and files the
+  `TEST-*.xml` that the project's harness writes into `REPORTS_DIR`.
+- The harness is the project's own; Crucible ships none. The make contract asks only for Unity-style
+  verdict lines on stdout and for JUnit.
+- The verdict lines feed a heartbeat narration, and nothing else. A harness that prints other lines,
+  such as `  ok   <name>`, is not narrated at all.
+- Measured: a C++ harness writing to a pipe delivers every line at exit, because stdio buffers in
+  blocks.
 
 ## Scope
 
-- **§S1 — an arduino target's stream is its record.**
-  - A project declares an arduino run's stream in the one `[targets.<name>]` vocabulary (CR-CRU-225,
-    CR-CRU-233), keyed by the make target.
+- **§S1 — a declared target's stream is its record.**
+  - A project declares an arduino run's stream in the one `[targets.<key>]` vocabulary (CR-CRU-225,
+    CR-CRU-233), keyed by native dir and make target.
   - The make contract hands the stream file to `make` in `CRUCIBLE_STREAM`, bun's stream variable.
-  - The project's harness appends `crucible-events` lines to that file as each test ends.
+  - The project's harness appends one `crucible-events` `test-end` line per test, as each test ends.
   - The client relays the file to the open run, and the run is recorded from it.
-  - The JUnit reports stay on disk.
-  - How a project's harness comes to write the stream is the project's concern: Model B manages
-    project templates.
-- **§S2 — a maven target's console reaches its open run.**
-  - A project declares a maven run's console view in the same vocabulary, keyed by the verb's tier.
-  - The client relays maven's console to the open run under a new `surefire-console` view codec,
-    which reads it on the board.
-  - The record stays maven's JUnit reports (DN: console-only runners).
-- **§S3 — maven's heartbeat narration retires.** A maven run no longer heartbeats `running N/M
-  classes`. Its open run carries the live view, and the agent's card follows its streaming run
-  (CR-CRU-236), as rust's retired in CR-CRU-233.
+  - When `make` exits, the client appends the `run-end`, stating the totals of the run's own
+    `TEST-*.xml`. The board's completeness check then compares the stream with the JUnit (DN:
+    Completeness, "the runner's own totals").
+- **§S2 — the contract is Crucible's; adoption is not.** How a project's harness comes to write the
+  stream is the project's concern: Model B manages project templates.
+- **§S3 — the DN is amended.** Arduino's runner is the project's own harness, writing
+  `crucible-events` under the `CRUCIBLE_STREAM` make contract. Crucible does not own it.
 
 ## Design (user rulings 2026-11-08)
 
-### The arduino declaration
+### The declaration
 
-The declaration lives in the project's own `crucible.toml`, one table per make target:
+The declaration lives in the project's own `crucible.toml`. Its key is the native dir, relative to
+the project root, joined by `/` to the make target:
 
 ```toml
-[targets.junit]
+[targets."sheetal-firmware/tests/native/junit"]
 framework = "arduino-native"
 stream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }
 ```
 
-- **Undeclared:**
-  - a make target with no entry, or a project with no `crucible.toml`, runs exactly as today: JUnit
-    filed at exit, no stream;
-  - only a declared target streams.
+**Fields:**
+
+| Field | Allowed | Default |
+| --- | --- | --- |
+| `framework` | `arduino-native` | required |
+| `stream.codec` | `crucible-events` | required |
+| `stream.path` | `env:CRUCIBLE_STREAM` | required |
+| `junit`, `console`, `coverage` | refused | — |
+
+- **Coverage** follows the verb (`--coverage`), as today.
+- **Undeclared:** a native dir and target with no entry, or a project with no `crucible.toml`, runs
+  exactly as today: the JUnit is filed at exit, there is no stream, and the Unity narrator runs.
+- **Other stacks' entries:** an entry whose `framework` is another stack's (`nextest`, `surefire`, a
+  bun framework) is skipped, not refused. The same file holds every stack's `[targets.*]`.
 - **Refused before anything runs:**
-  - a `framework` other than `arduino-native`;
-  - a `codec` other than `crucible-events`;
-  - a `path` other than `env:CRUCIBLE_STREAM`;
-  - `junit`, `console` or `coverage` keys on the entry. Coverage follows the verb (`--coverage`), as
-    today.
-  - The refusal names the table and the field. A file that does not parse is refused as well.
-- **The stream file:**
-  - It is `<REPORTS_DIR>/crucible-events.ndjson`, emptied before `make` spawns.
-  - Every binary the target runs appends to it.
-  - A `run-end` line is optional. A run with several binaries cannot state one in advance, so the
-    run's counts are the sum of its `test-end` lines.
+  - when an entry under the run's own key names a wrong `framework`, `codec` or `path`, or declares a
+    refused key;
+  - when the project's file does not parse.
 
-### The maven declaration
+  The refusal names the table and the field.
+- **Refused on a board that cannot read it:**
+  - a declared target on a board whose health lists no `crucible-events` under `codecs.stream`;
+  - a declared `--coverage` run on a board that lists no `lcov`.
 
-The declaration lives in the project's own `crucible.toml`, one table per tier verb (`unit`,
-`module`, `integration`, `e2e`, `regression`), and `test` reads the `unit` entry:
+  Both are refused before `make`, as rust's are. An unreadable health refuses nothing.
+- **Every refusal comes before any board call, the `arduino-cli` compile, and `make`.** This includes
+  `pre-merge-gate`, which checks the declaration before its compile step.
 
-```toml
-[targets.regression]
-framework = "surefire"
-junit = "flag"
-console = "surefire-console"
-```
+### The make contract (stream)
 
-- **Undeclared:** a verb with no entry runs exactly as today, with no relay.
-- **Refused before anything runs:**
-  - a `framework` other than `surefire`;
-  - a `console` other than `surefire-console`;
-  - a `stream` key: maven has no structured stream, which is a non-goal.
-  - The refusal names the table and the field.
-- **Relay only on a board that reads it:** a declared run whose board's health lists no
-  `surefire-console` view codec runs unrelayed and carries one warning, as bun's console relay does.
+- `CRUCIBLE_STREAM` is the absolute path of `<REPORTS_DIR>/crucible-events.ndjson`.
+  - The client empties the file before `make` spawns.
+  - The variable is set only on a run with an agent, where `REPORTS_DIR` is the client's. When it is
+    unset, the harness writes nothing.
+- The harness opens the file in append mode. It writes each line in one write and flushes after each
+  line, because several binaries, possibly under `make -j`, append to the same file.
+- **One line per test:**
+
+  ```json
+  {"event":"test-end","suite":"…","name":"…","status":"pass|fail|pending","duration_ms":…,"failure":{"message":"…"}}
+  ```
+
+  `status` is one of `pass`, `fail` or `pending`, and Unity's `IGNORE` is `pending`.
+- The harness writes no `run-start` and no `run-end`. The client writes the `run-end`.
+- The harness still writes its `TEST-*.xml` into `REPORTS_DIR`, as today.
+
+### What a declared run does
+
+1. It sends the declared `framework` (`arduino-native`) with its run.
+2. It narrates through the shared stream-counted heartbeat, counting the stream's `test-end` lines.
+   It never uses the Unity narrator.
+3. After `make` exits, it appends the `run-end` if the run's `TEST-*.xml` exist, stating their totals.
+   This happens before the relay's last flush.
+4. It is closed from its stream. On `regression --coverage` and `pre-merge-gate`, the close carries
+   the `lcov` from `COVERAGE_DIR`.
 
 ## Acceptance criteria
 
-### arduino
-
 - [ ] **AC1 — a declared target's tests reach the open run one by one.**
-  - On `test`, every tier verb and `pre-merge-gate`, a run whose make target is declared gets these
-    steps:
+  - On `test`, every tier verb and `pre-merge-gate`, a declared run gets these steps:
     1. The client empties the stream file.
-    2. It runs `make <target>` with `CRUCIBLE_STREAM` set to that file's absolute path, alongside
-       `REPORTS_DIR` (and `COVERAGE_DIR` on a coverage run).
-    3. It relays the file to the open run under `crucible-events` while `make` runs.
-  - A harness that appends a `test-end` line per test, with a delay between tests, shows each test on
-    the open run before the next one ends. This is proved with a real `g++` harness in the client
-    suite.
-- [ ] **AC2 — the stream is the record, and it matches the JUnit.**
-  - The run is closed from its stream, and no JUnit is sent for it.
-  - Its stored counts and its failures (by suite, name and message) equal what the target's JUnit
-    reports for the same run would store. This is proved on one real run with passes, a failure, and
-    an ignored test across two binaries.
-- [ ] **AC3 — a declared target whose harness writes no stream is refused, not hidden.**
-  - Suppose `make` exits and the stream file is empty, while `REPORTS_DIR` holds `TEST-*.xml`. Then
-    the run is filed from the JUnit, and one warning names the declared target and the empty stream.
-    The exit follows the runner's.
-  - With neither a stream nor JUnit, the run is "ran nothing", as today.
-- [ ] **AC4 — the declaration is read and refused as specified.** This covers every refusal listed in
-  "The arduino declaration", each before the board, the lock or `make`. An undeclared target behaves
-  exactly as before this CR, with the same posts and the same envelope.
-- [ ] **AC5 — the make contract is written down.**
-  - The client's `--help` make contract names `CRUCIBLE_STREAM`, the `crucible-events` line shape
-    (`test-end` with `name`, `suite`, `status` and `failure`; an optional `run-end`), and the append
-    rule.
-  - `clients/crucible.toml`'s commented reference names the arduino entry.
-
-### maven
-
-- [ ] **AC6 — a declared verb's console reaches the open run.**
-  - On `test`, every tier verb and `pre-merge-gate`'s regression, a run whose verb is declared relays
-    maven's combined console to the open run under `surefire-console` while maven runs.
-  - The open run's live view shows each class's counts as the class ends, and each failed or errored
-    test as its line arrives.
-  - With no `surefire-console` in the board's health, the run is unrelayed and carries one warning.
-  - An undeclared verb relays nothing, with the same posts as before this CR.
-- [ ] **AC7 — the `surefire-console` view codec reads surefire's lines.** Registered in `viewCodecs`
-  only, never as a report codec, it reads:
-  - **a line ending `-- in <class>`:** completed += run; failed += failures + errors; pending +=
-    skipped; passed += run − failures − errors − skipped;
-  - **a summary line with no `-- in`:** read as nothing;
-  - **`<class>.<method> -- Time elapsed: … <<< FAILURE!` or `<<< ERROR!`:** one failure, its suite
-    the class, its name the method, and its message the first non-blank line after it;
-  - **`Running <class>`:** the current file.
-
-  It also:
-  - resumes across batch boundaries;
-  - never re-reads a decoded byte;
-  - is proved on real captures from surefire 3.2.5 and 3.5.4, kept as fixtures, that cover a nested
-    class, a failure, an error, a skip and a two-module reactor.
-- [ ] **AC8 — maven's record is unchanged.** A relayed maven run stores exactly what the same run's
-  JUnit reports stored before this CR: its counts, its failures and its coverage.
-- [ ] **AC9 — the declaration is read and refused as specified.** This covers every refusal listed in
-  "The maven declaration", each before the board, docker or maven.
-- [ ] **AC10 — maven's heartbeat narration is gone.**
-  - No maven run posts a narration heartbeat.
-  - The narrator and its `Running` line reader are removed, along with any code only they used.
-
-### both
-
-- [ ] **AC11 — every caller is kept green.** Every test in both suites (bun `tests/*.ts` and
-  `tests/client/*.py`) that drives `arduino-crucible.py` or `mvn-crucible.py` passes, its call
-  sequence re-pinned only where this CR changes what a run posts. At gap analysis there were 76 files
-  for arduino and 71 for mvn.
-- [ ] **AC12 — the docs name the declarations.** The CHANGELOG's `[Unreleased]` names:
-  - the two declarations;
-  - the `CRUCIBLE_STREAM` make contract;
-  - the `surefire-console` codec;
-  - the retired maven narration.
-
-  These go under "Stack declaration changes" in the release notes to Model B.
+    2. It runs `make <target>` with `CRUCIBLE_STREAM` set beside `REPORTS_DIR` (and `COVERAGE_DIR`
+       on a coverage run).
+    3. It relays the file under `crucible-events` while `make` runs.
+  - A real `g++` harness that writes the file through `fopen`/`fflush`, with a delay between tests,
+    shows each test on the open run before the next ends.
+  - The heartbeat counts the stream's `test-end` lines.
+  - With no `--agent`, `CRUCIBLE_STREAM` is unset.
+- [ ] **AC2 — the stream is the record, and the JUnit checks it.**
+  - A green declared run with two binaries exits 0 and is stored without `incomplete`.
+  - Its counts and failures (by suite, name and message) equal what its JUnit would store.
+  - Its stored framework is `arduino-native`.
+  - A stream whose test count differs from its JUnit's is stored flagged incomplete.
+  - Proved on one real run with passes, a failure and an ignored test across two binaries.
+- [ ] **AC3 — coverage rides the close.**
+  - A declared `regression --coverage` or `pre-merge-gate` closes its stream with `COVERAGE_DIR`'s
+    `lcov`. The stored coverage equals the same run's coverage from the JUnit path.
+  - With no lcov, the run carries the existing `coverage-not-measured` warning.
+- [ ] **AC4 — a crash is filed red and incomplete.**
+  - A binary killed by SIGSEGV after k tests is filed red from its stream. The record holds:
+    - the k tests;
+    - the `exit <n>` leaf;
+    - the incomplete flag: no `run-end` is written, because the crashed binary left no complete JUnit
+      set. A cut last line counts as undecodable.
+  - Later binaries that never ran are absent.
+  - Proved with a real `g++` harness.
+- [ ] **AC5 — a declared run with no stream is not hidden.**
+  - **Nothing held:** when the board holds no `test-end` (the file is empty, or the relay stopped),
+    the run is filed from its `TEST-*.xml` if there are any. It carries one warning naming the
+    declared key and the missing stream, and the exit follows the runner's.
+  - **Build failure:** a failure to build the test binary gives the no-report envelope, as today, with
+    no compile ingest.
+  - **Narrowed run:** a narrowed run (`--tests`/`--name`) whose stream holds no `test-end` is aborted
+    as having run nothing. The narrowing warnings still read the JUnit when it is present.
+  - **No open run:** when the board opens no run, the run is filed single-shot from its JUnit, as
+    today, with one warning.
+- [ ] **AC6 — the declaration is read and refused as specified.**
+  - Every refusal in "The declaration" is covered, each before any board call, the `arduino-cli`
+    compile and `make`.
+  - This includes the board-health refusals and two native dirs that each have a `junit` target,
+    only one of them declared.
+  - Another stack's entry is skipped.
+  - An undeclared target behaves exactly as before this CR, with the same posts, the same envelope
+    and the Unity narration.
+- [ ] **AC7 — the make contract is written down.**
+  - The client's `--help` make contract states:
+    - `CRUCIBLE_STREAM`;
+    - the `test-end` line shape and its statuses;
+    - the append, one-write and flush rule;
+    - that there is no `run-start` or `run-end`;
+    - that an unset variable means write nothing.
+  - `clients/crucible.toml`'s commented reference names the arduino entry and its key.
+- [ ] **AC8 — every caller is kept green.**
+  - Every test in both suites (bun `tests/*.ts` and `tests/client/*.py`) that drives
+    `arduino-crucible.py` passes. At gap analysis there were 76 files. A test's call sequence is
+    re-pinned only where this CR changes what a run posts.
+  - Every test of the shared module passes.
+  - Any growth of `_crucible_run.py` or `_crucible_axi.py` re-records `SHARED_MODULE_LINE_BUDGETS`
+    in all three files that pin it, in the same change.
+- [ ] **AC9 — the docs follow.**
+  - The DN's lines that call arduino a runner Crucible owns are amended (§S3).
+  - The CHANGELOG `[Unreleased]` names the declaration and the `CRUCIBLE_STREAM` make contract, under
+    "Stack declaration changes" for the release notes to Model B.
 
 ## Non-goals
 
-- A JUnit Platform listener for maven, which would be a structured maven stream.
-- Shipping a native harness, and how any project's harness adopts the stream. Model B manages project
-  templates.
-- A total in advance for either stack: neither runner states one.
+- Shipping a native harness, and how any project's harness adopts the stream. Model B manages
+  project templates.
+- Maven's live console. That is CR-CRU-237.
+- A total stated in advance. Several binaries cannot state one.
