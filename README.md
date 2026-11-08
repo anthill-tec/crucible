@@ -43,9 +43,11 @@ under `$HOME`, so there is no system-permission problem — then creates its
 target directory (`--target-dir`, default `~/.crucible`), lays the
 `*-crucible.py` **client fleet** (the five clients, the three shared modules
 they load by path — `_crucible_axi.py`, `_crucible_run.py` and `toon.py` — the
-`subtest_runner.py` the Python client runs, `STATUS-CONTRACT.md` and the
-shipped `crucible.toml` limit defaults) down in `<target-dir>/clients/`, and
-writes the client discovery **manifest** naming those paths into it. Those
+`subtest_runner.py` the Python client runs, `STATUS-CONTRACT.md`, the
+shipped `crucible.toml` limit defaults and the stack-declaration schema
+`crucible-declaration.schema.json`) down in `<target-dir>/clients/`, and
+writes the client discovery **manifest** naming those paths into it; the
+manifest's `declaration_schema` key lists the schema as `{path, version}`. Those
 three stages — `server`, `fleet`, `manifest`, in that order, so the manifest is
 written only after the paths it names exist — are the whole install. It reports
 a TOON-AXI envelope naming each stage's installed

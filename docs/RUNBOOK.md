@@ -408,6 +408,11 @@ provisioned server move in lockstep; on an already-current machine it reports
   when the installed server is exactly the new release's pinned version.
 - A systemd `--user` unit is refreshed by the same run, so the daemon is the new
   version rather than a new binary behind an old process.
+- The `[fleet]` stage overwrites the stack-declaration schema at
+  `<target-dir>/clients/crucible-declaration.schema.json`, and the `[manifest]`
+  stage lists it in `crucible-clients.json` under the `declaration_schema` key
+  as `{path, version}`, the version read from the packaged copy. A declaration
+  writer finds the schema through that key.
 
 ### Upgrading TO 0.2.1 — re-run the install, do not stop at the package
 

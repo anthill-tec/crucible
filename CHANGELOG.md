@@ -75,6 +75,18 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ### Stack declaration changes
 
+The stack declaration schema (CR-CRU-238):
+
+- **The installer ships `crucible-declaration.schema.json`, version 1.** It lands beside the clients
+  at `<target-dir>/clients/crucible-declaration.schema.json` (`~/.crucible/clients/` by default).
+  An upgrade overwrites it; an uninstall leaves it, like every fleet file.
+- **The manifest lists it.** `crucible-clients.json` gains `declaration_schema: {path, version}`,
+  the version read from the packaged copy. A packaged schema that is missing, is not JSON or has no
+  integer `version` fails the install fail-fast, naming its path.
+- **The writer rule.** A declaration writer writes only the stacks and fields it knows. It warns
+  when the schema's `version` is newer than the one it was built for. It never removes a field it
+  does not know. With no schema installed it writes nothing it cannot check.
+
 For the bun stack (`package.json`'s `crucible` block):
 
 - **Refused keys.** `crucible.reportPath`, `crucible.rawReport` and `crucible.testScript` are refused,
@@ -120,8 +132,10 @@ For the rust stack (`crucible.toml` and `.config/nextest.toml`):
 - **The `[targets.<profile>]` table.** A project declares its runs in its own `crucible.toml`, keyed
   by nextest profile, with bun's `crucible.targets` vocabulary. The rust entry is
   `framework = "nextest"` with `stream = { codec = "nextest", path = "stdout" }`. Undeclared
-  profiles (no entry, or no `crucible.toml`) stream by default as if they declared it. Any other
-  entry, or a project file that does not parse, is refused before anything runs. The install's file
+  profiles (no entry, or no `crucible.toml`) stream by default as if they declared it. Another
+  stack's entry (one naming another stack's framework, `go-test` included) is now skipped rather
+  than refused. Any other entry, or a project file that does not parse, is refused before anything
+  runs. The install's file
   never declares.
 - **The standard profiles.** A scaffold sets up `default` and `ci` (every test but the docker tier)
   and `e2e` (the docker tier alone, run by `docker-e2e-gate`) in `.config/nextest.toml`. A declared
@@ -139,7 +153,8 @@ For the arduino stack (`crucible.toml` and the native `Makefile`):
   make target: `[targets."tests/native/junit"]` with `framework = "arduino-native"` and
   `stream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }`. Every field is required;
   `junit`, `console` and `coverage` are refused, as is a project file that does not parse. Another
-  stack's entry is skipped. An undeclared target runs as before.
+  stack's entry is skipped, and `go-test` now joins that skip set: a `go-test` entry, refused before,
+  is skipped. An undeclared target runs as before.
 - **The `CRUCIBLE_STREAM` make contract.** On a declared run with an agent, `make` is handed
   `CRUCIBLE_STREAM`, the absolute `<REPORTS_DIR>/crucible-events.ndjson`, emptied first. The
   harness appends one `test-end` line per test as it ends (`pass`, `fail` or `pending`), in one
@@ -157,7 +172,8 @@ For the maven stack (`crucible.toml`):
   `regression`; `test` reads `unit`, and `pre-merge-gate` reads `regression`). The maven entry is
   `framework = "surefire"` with `console = "surefire-console"`. Both fields are required; `junit`,
   `stream` and `coverage` are refused, as is a project file that does not parse, before any board
-  call, `docker-up` or maven. Another stack's entry is skipped. A tier with no entry runs as before.
+  call, `docker-up` or maven. Another stack's entry is skipped, and `go-test` now joins that skip
+  set: a `go-test` entry, refused before, is skipped. A tier with no entry runs as before.
 - **The `surefire-console` view codec.** A declared console is read on the board by the
   `surefire-console` view codec. A board whose health lists no `surefire-console` under
   `codecs.view` refuses a declared run before anything runs; a health that cannot be read refuses
