@@ -117,6 +117,10 @@ EXPECTED_FLEET_FILES = frozenset({
     # `clients/`.
     "reporters/vitest-crucible.ts",
     "reporters/playwright-crucible.ts",
+    # The shipped declaration schema: every stack's Crucible declaration, for
+    # writers outside the clients. The manifest lists it as
+    # `declaration_schema`.
+    "crucible-declaration.schema.json",
 })
 
 
