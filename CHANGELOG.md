@@ -150,6 +150,19 @@ For the arduino stack (`crucible.toml` and the native `Makefile`):
   run, refuses a declared run before anything runs.
 - **Model B surfaces to update.** Native harness templates adopt the stream; Crucible ships none.
 
+For the maven stack (`crucible.toml`):
+
+- **The `[targets.<tier>]` table.** A project declares a tier's console in its own `crucible.toml`,
+  keyed by the client's tier vocabulary (`unit`, `module`, `integration`, `e2e`, `bdd`,
+  `regression`; `test` reads `unit`, and `pre-merge-gate` reads `regression`). The maven entry is
+  `framework = "surefire"` with `console = "surefire-console"`. Both fields are required; `junit`,
+  `stream` and `coverage` are refused, as is a project file that does not parse, before any board
+  call, `docker-up` or maven. Another stack's entry is skipped. A tier with no entry runs as before.
+- **The `surefire-console` view codec.** A declared console is read on the board by the
+  `surefire-console` view codec. A board whose health lists no `surefire-console` under
+  `codecs.view` refuses a declared run before anything runs; a health that cannot be read refuses
+  nothing.
+
 ## [0.3.0] - 2026-10-10
 
 38 change requests (wave 7).
