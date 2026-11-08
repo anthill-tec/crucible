@@ -1,0 +1,5 @@
+{"Time":"2026-11-09T01:37:30.935651066+05:30","Action":"start","Package":"example.com/mod/pb"}
+{"Time":"2026-11-09T01:37:30.937310427+05:30","Action":"output","Package":"example.com/mod/pb","Output":"testing: warning: no tests to run\n"}
+{"Time":"2026-11-09T01:37:30.937357277+05:30","Action":"output","Package":"example.com/mod/pb","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:37:30.937457168+05:30","Action":"output","Package":"example.com/mod/pb","Output":"ok  \texample.com/mod/pb\t0.002s [no tests to run]\n"}
+{"Time":"2026-11-09T01:37:30.937817907+05:30","Action":"pass","Package":"example.com/mod/pb","Elapsed":0.002}

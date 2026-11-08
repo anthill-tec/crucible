@@ -1,0 +1,15 @@
+{"Action":"start","Package":"example.com/mod/pbench"}
+{"Action":"output","Package":"example.com/mod/pbench","Output":"goos: darwin\n"}
+{"Action":"output","Package":"example.com/mod/pbench","Output":"goarch: 386\n"}
+{"Action":"output","Package":"example.com/mod/pbench","Output":"BenchmarkFoo-8   \t2000000000\t         0.00 ns/op\n"}
+{"Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkFoo-8","Output":"--- BENCH: BenchmarkFoo-8\n","OutputType":"frame"}
+{"Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkFoo-8","Output":"\tx_test.go:8: My benchmark\n"}
+{"Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkFoo-8","Output":"\tx_test.go:8: My benchmark\n"}
+{"Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkFoo-8","Output":"\tx_test.go:8: My benchmark\n"}
+{"Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkFoo-8","Output":"\tx_test.go:8: My benchmark\n"}
+{"Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkFoo-8","Output":"\tx_test.go:8: My benchmark\n"}
+{"Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkFoo-8","Output":"\tx_test.go:8: My benchmark\n"}
+{"Action":"bench","Package":"example.com/mod/pbench","Test":"BenchmarkFoo-8"}
+{"Action":"output","Package":"example.com/mod/pbench","Output":"PASS\n","OutputType":"frame"}
+{"Action":"output","Package":"example.com/mod/pbench","Output":"ok  \tcommand-line-arguments\t0.009s\n"}
+{"Action":"pass","Package":"example.com/mod/pbench"}
