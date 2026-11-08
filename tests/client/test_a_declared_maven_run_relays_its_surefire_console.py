@@ -552,6 +552,75 @@ class EachRunBodyRelaysItsDeclaredConsoleTest(_MavenProject):
                       "every line maven printed reaches the client's stderr, in order")
 
 
+# ── a previous run's console is never relayed as this run's ─────────────────
+
+#: A surefire line no fake `mvnw` run prints: found in a batch, it can only
+#: have come from the console a previous run left in the reports dir.
+STALE_LINE = ("[INFO] Tests run: 7, Failures: 3, Errors: 0, Skipped: 0, Time elapsed: 9.99 s "
+              "-- in com.acme.StaleFromThePreviousRunTest")
+
+
+class APreviousRunsConsoleIsNeverRelayedTest(_MavenProject):
+    """The agent's reports dir already holds a `surefire-console.log` from an
+    earlier run. A declared run relays only what THIS run's maven printed: the
+    old file is gone before the relay can follow it, whether or not the tee
+    then manages to open its own.
+
+    The tee's open is made to fail by leaving the old file read-only (0444) in
+    a writable reports dir: `open(path, "w")` is refused with `PermissionError`,
+    the tee's `OSError` branch, while the relay can still read the file. A run
+    that removes the old file first opens a fresh one there (removing a file
+    needs only the directory to be writable)."""
+
+    def seed_previous_console(self, read_only):
+        os.makedirs(self.reports_dir(), exist_ok=True)
+        Path(self.console_path()).unlink(missing_ok=True)
+        Path(self.console_path()).write_text(
+            "[INFO] Running com.acme.StaleFromThePreviousRunTest\n" + STALE_LINE + "\n",
+            encoding="utf-8")
+        if read_only:
+            os.chmod(self.console_path(), stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+
+    def assert_none_of_the_old_console_relayed(self, run_id, drive, where):
+        streams = self.board.stream_posts()
+        carrying = [(b or {}).get("from") for _p, b in streams
+                    if "StaleFromThePreviousRunTest" in str((b or {}).get("data"))]
+        self.assertEqual(carrying, [],
+                         f"{where}: no batch carries the previous run's console; batches "
+                         f"from offsets {carrying!r} did; {drive.diag()}")
+        self.assertNotIn("StaleFromThePreviousRunTest", self.board.held_stream(run_id),
+                         f"{where}: the board holds none of the previous run's console")
+        close = self.close_of(run_id)
+        self.assertIn("com.acme.C01Test", close.get("raw"),
+                      f"{where}: this run's own console is the close's raw")
+        self.assertNotIn("StaleFromThePreviousRunTest", close.get("raw"), where)
+        self.assertEqual(drive.returncode, 0, f"{where}: {drive.diag()}")
+
+    def test_a_run_whose_tee_cannot_open_the_console_relays_none_of_the_old_one(self):
+        for label, verb, extra, key in VERBS:
+            with self.subTest(verb=label):
+                self.use_board(ViewBoard())
+                self.declare({key: ENTRY})
+                self.seed_previous_console(read_only=True)
+                drive = self.drive(verb, *extra)
+                self.assert_none_of_the_old_console_relayed(self.run_of(verb), drive, label)
+
+    def test_a_normal_runs_batches_carry_none_of_the_old_console(self):
+        for label, verb, extra, key in VERBS:
+            with self.subTest(verb=label):
+                self.use_board(ViewBoard())
+                self.declare({key: ENTRY})
+                self.seed_previous_console(read_only=False)
+                drive = self.drive(verb, *extra, release_when=_a_batch_landed)
+                self.assert_relayed_live(drive, label)
+                run_id = self.run_of(verb)
+                self.assert_relayed_to(run_id, label)
+                self.assert_none_of_the_old_console_relayed(run_id, drive, label)
+                self.assertEqual(self.board.held_stream(run_id),
+                                 self.close_of(run_id).get("raw"),
+                                 f"{label}: the board holds exactly this run's console")
+
+
 # ── the record and the bytes are unchanged ──────────────────────────────────
 
 class TheRecordIsTodaysJUnitPlusTheFrameworkTest(_MavenProject):
