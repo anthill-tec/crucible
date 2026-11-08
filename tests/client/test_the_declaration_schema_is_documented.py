@@ -3,7 +3,7 @@
   - The CHANGELOG's `[Unreleased]` "Stack declaration changes" names the schema
     file `crucible-declaration.schema.json`, its installed path
     (`<target-dir>/clients/crucible-declaration.schema.json`) and its version,
-    which must equal the shipped file's own `version`.
+    which must equal the shipped file's own `version`, 2.
   - The same section states the writer rule: a writer writes the stacks and
     fields it knows, warns on a newer schema version, never removes a field it
     does not know, and with no schema writes nothing it cannot check.
@@ -108,6 +108,13 @@ class TheChangelogNamesTheDeclarationSchemaTest(unittest.TestCase):
         self.assertIn(_shipped_version(), stated,
                       f"the schema part states version {_shipped_version()}; "
                       f"versions stated: {sorted(stated)}")
+
+    def test_the_section_states_schema_version_two(self):
+        self.assertEqual(_shipped_version(), 2, "the shipped schema is version 2")
+        stated = {int(number) for number in re.findall(
+            r'(?i)(?:\bversion`?\W{0,4}|"version":\s*)(\d+)\b', self.schema)}
+        self.assertIn(2, stated, f"the schema part states version 2; versions "
+                                 f"stated: {sorted(stated)}")
 
     def test_the_section_states_the_writer_rule(self):
         for clause, pattern in WRITER_RULE:

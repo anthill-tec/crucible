@@ -1,5 +1,5 @@
 """Shared seams for the declaration-schema tests: the shipped descriptor, the
-five clients loaded by file path, a temporary project dir, and a small
+six clients loaded by file path, a temporary project dir, and a small
 interpreter of the descriptor's vocabulary.
 
 The descriptor (`clients/crucible-declaration.schema.json`) is plain JSON:
@@ -11,7 +11,7 @@ The descriptor (`clients/crucible-declaration.schema.json`) is plain JSON:
     reserved_frameworks {<stack or "go">: [framework, ...]}
     stacks              {<stack>: {location, entry, package?, stack_table?}}
 
-An `entry` (null for python, which reads no `[targets]` entry) carries `key`,
+An `entry` (null for python and go, which read no `[targets]` entry) carries `key`,
 `open`, `other_stacks` ("skipped" | "refused"), `refused` (field names),
 `requires` (entry level: `{"one_of": [field, ...]}`), `fields` and `shape`.
 
@@ -45,7 +45,7 @@ from tests.client.live_run_harness import CLIENTS
 
 SCHEMA_PATH = CLIENTS / "crucible-declaration.schema.json"
 
-STACKS = ("bun", "rust", "arduino", "maven", "python")
+STACKS = ("bun", "rust", "arduino", "maven", "python", "go")
 TARGETS_READERS = ("rust", "arduino", "maven")
 
 ACCEPTED, REFUSED, SKIPPED, UNDECLARED = "accepted", "refused", "skipped", "undeclared"
@@ -61,7 +61,7 @@ READER_KEYS = {"rust": "ci", "arduino": "tests/native/unit", "maven": "e2e"}
 
 _CLIENT_FILES = {"bun": "bun-crucible.py", "rust": "rust-crucible.py",
                  "arduino": "arduino-crucible.py", "maven": "mvn-crucible.py",
-                 "python": "python-crucible.py"}
+                 "python": "python-crucible.py", "go": "go-crucible.py"}
 _LOADED = {}
 
 

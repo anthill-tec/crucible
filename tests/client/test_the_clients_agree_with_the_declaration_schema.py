@@ -74,7 +74,8 @@ from tests.client.declaration_schema_harness import (
 SKIP_OUTCOME = {"rust": ACCEPTED, "arduino": UNDECLARED, "maven": UNDECLARED}
 
 _CLIENT_ENV = ("BUN_CRUCIBLE_PACKAGE_DIR", "BUN_CRUCIBLE_PROJECT_DIR",
-               "MVN_CRUCIBLE_PROJECT_DIR", "PY_CRUCIBLE_PYTHON")
+               "MVN_CRUCIBLE_PROJECT_DIR", "PY_CRUCIBLE_PYTHON",
+               "GO_CRUCIBLE_MODULE_DIR", "GO_CRUCIBLE_PROJECT_DIR")
 
 
 def _short(value, limit=120):
@@ -669,6 +670,92 @@ class TheStackTablesHoldTest(_AgreementCase):
                 write_toml(project, f"[python]\nrunner = {declared}\n")
                 args = no_python_args(runner="pytest")
                 self.assertEqual(python._resolve_runner(args, project, probe=False), "pytest")
+
+
+def path_field_entries(project, desc):
+    """`[go] module_dir`-style values generated from a `{"path": {"holds":
+    <file>}}` field descriptor, laid down under `project`, each with what the
+    descriptor says of it: a directory holding the named file is the declared
+    dir; a directory without it, one that does not exist, an empty string and
+    a value that is not a string declare no usable dir. Returns
+    `[(toml value, the dir it names or None)]`."""
+    holds = desc["values"]["path"]["holds"]
+    Path(project, "declared").mkdir()
+    Path(project, "declared", holds).write_text("module example.com/declared\n",
+                                                encoding="utf-8")
+    Path(project, "nested", "deeper").mkdir(parents=True)
+    Path(project, "nested", "deeper", holds).write_text(
+        "module example.com/deeper\n", encoding="utf-8")
+    Path(project, "lacking").mkdir()
+    return [('"declared"', os.path.join(project, "declared")),
+            ('"nested/deeper"', os.path.join(project, "nested", "deeper")),
+            ('"lacking"', None), ('"absent"', None), ('""', None), ("5", None)]
+
+
+class TheGoModuleDirAgreesWithTheSchemaTest(_AgreementCase):
+    """The go client's module-dir check (`_module_dir`, the run's module
+    resolved from the project dir, no flag, no environment, a working
+    directory holding no go.mod), driven with `[go] module_dir` values
+    generated from the schema's `go` stack table."""
+
+    def setUp(self):
+        super().setUp()
+        self.go = client("go")
+        self.table = self.schema["stacks"]["go"]["stack_table"]
+        self.desc = self.table["fields"]["module_dir"]
+        self.project = new_project(self)
+
+    def resolve(self):
+        return self.go._module_dir(None, self.project, self.project)
+
+    def test_each_generated_module_dir_gets_the_schemas_verdict(self):
+        self.assertEqual((self.table["file"], self.table["table"]), ("crucible.toml", "go"))
+        for value, names in path_field_entries(self.project, self.desc):
+            with self.subTest(module_dir=value):
+                write_toml(self.project, f"[go]\nmodule_dir = {value}\n")
+                module, why = self.resolve()
+                self.assertEqual(module, names, f"module_dir = {value}: {why!r}")
+                if names is None:
+                    self.assertIsInstance(why, str)
+                    self.assertTrue(why, "a module dir that cannot be used says why")
+                else:
+                    self.assertIsNone(why)
+
+    def test_a_named_dir_without_the_held_file_is_refused_naming_it(self):
+        path_field_entries(self.project, self.desc)
+        write_toml(self.project, '[go]\nmodule_dir = "lacking"\n')
+        module, why = self.resolve()
+        self.assertIsNone(module)
+        self.assertIn("lacking", why)
+        self.assertIn(self.desc["values"]["path"]["holds"], why)
+
+    def test_no_module_dir_declares_the_schemas_default(self):
+        self.assertIsNone(self.desc["default"])
+        self.assertIs(self.desc["required"], False)
+        write_toml(self.project, "[go]\n")
+        self.assertEqual(self.resolve()[0], self.desc["default"])
+        Path(self.project, "crucible.toml").unlink()
+        self.assertEqual(self.resolve()[0], self.desc["default"])
+
+    def test_a_crucible_toml_that_does_not_parse_declares_no_module_dir(self):
+        self.assertEqual(self.table["shape"]["file_does_not_parse"], UNDECLARED)
+        path_field_entries(self.project, self.desc)
+        write_toml(self.project, '[go\nmodule_dir = "declared"\n')
+        self.assertIsNone(self.go._declared_module_dir(self.project))
+        module, why = self.resolve()
+        self.assertIsNone(module, "an unparseable crucible.toml declares nothing")
+        self.assertIn("no go module was found", why)
+
+    def test_the_module_the_working_directory_is_in_comes_before_the_table(self):
+        path_field_entries(self.project, self.desc)
+        write_toml(self.project, '[go]\nmodule_dir = "declared"\n')
+        inside = os.path.join(self.project, "nested", "deeper")
+        self.assertEqual(self.go._module_dir(None, self.project, inside)[0], inside)
+
+    def test_go_reads_no_targets_entry_and_go_test_is_its_reserved_framework(self):
+        self.assertIsNone(self.schema["stacks"]["go"]["entry"])
+        self.assertEqual(self.schema["reserved_frameworks"]["go"], ["go-test"])
+        self.assertEqual(self.go.GO_TEST_CODEC, "go-test")
 
 
 if __name__ == "__main__":
