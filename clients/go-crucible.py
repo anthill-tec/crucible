@@ -56,6 +56,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -81,6 +82,24 @@ _MODULE_DECLARATION_HELP = (
     "declare the module with --module-dir <dir>, GO_CRUCIBLE_MODULE_DIR=<dir> "
     "or crucible.toml [go] module_dir = \"<dir>\" (each relative to the "
     "project dir), or run from inside the module")
+# The dirs a gate never looks in for a module (hidden dirs are skipped too):
+# vendored and test-fixture modules are not the project's own suite.
+_SKIPPED_MODULE_DIRS = ("vendor", "testdata", "node_modules")
+# The runner a gate over several modules starts: each module's
+# `go test -json ./...` in turn, its stdout the one run's stream. A failing
+# module does not stop the next; the exit is the worst any module gave (a
+# module a signal ended counts as 128 + the signal).
+_EACH_MODULE_RUNNER = r"""
+import subprocess, sys
+worst = 0
+for module in sys.argv[1:]:
+    print(f"[crucible] running: go test -json ./... (in {module})",
+          file=sys.stderr, flush=True)
+    code = subprocess.run(["go", "test", "-json", "./..."], cwd=module,
+                          check=False).returncode
+    worst = max(worst, code if code >= 0 else 128 - code)
+sys.exit(worst)
+"""
 
 
 def _resolve_project_dir(arg_value):
@@ -171,6 +190,11 @@ def _axi():
 
 
 _AXI_UNSET = _axi().AXI_UNSET
+
+# Go declares no suite: the gate's surface enumerates no declaration, so the
+# shared scoped-gate check refuses every `--suites`.
+_GATE_SURFACE = _axi().DeclaredTierSurface(
+    target="", names="", read=None, run=None, suites=None)
 
 
 def _axi_context(project_dir, agent_id=None, cr=None, cycle_id=_AXI_UNSET):
@@ -429,35 +453,139 @@ def cmd_test(args):
     verb = "test"
     agent = _agent_id(args)
     project_dir = _resolve_project_dir(args.project_dir)
-    acceptable, shown = _go_version()
-    if shown is None:
-        return _refuse(verb, project_dir, agent, "no `go` toolchain was found on PATH",
-                       [f"install go {GO_FLOOR_TEXT} or later and put it on PATH"])
-    if not acceptable:
-        return _refuse(verb, project_dir, agent,
-                       f"go {shown} is older than go {GO_FLOOR_TEXT}, the first whose "
-                       f"`go test -json` the board decodes; nothing was run",
-                       [f"install go {GO_FLOOR_TEXT} or later"])
+    _refuse_unattributed(args, project_dir, agent)
+    refused = _toolchain_refusal()
+    if refused:
+        return _refuse(verb, project_dir, agent, *refused)
     module, why = _module_dir(args.module_dir, project_dir, os.getcwd())
     if module is None:
         return _refuse(verb, project_dir, agent, f"{why}; nothing was run",
                        [_MODULE_DECLARATION_HELP])
+    return _gated_go_run(verb, args, project_dir, agent, [module])
+
+
+def cmd_regression(args):
+    """The full suite: every module under the project dir, run into ONE
+    streamed run (see `_gate_run`)."""
+    return _gate_run("regression", args)
+
+
+def cmd_pre_merge_gate(args):
+    """ORCHESTRATOR pre-merge gate: the full suite over every module, as
+    `regression` runs it, its outcome recorded as the gate's milestone. A gate
+    scoped to named suites is refused before anything else: go declares no
+    suite, so every `--suites` is."""
+    _axi().refuse_unrunnable_scoped_gate(
+        args, surface=_GATE_SURFACE, stack=_STACK, get=_get,
+        project_key=lambda: _project_key(_resolve_project_dir(args.project_dir)))
+    return _gate_run("pre-merge-gate", args)
+
+
+def _gate_run(verb, args):
+    """Run every module under the project dir into one run. `go test ./...`
+    cannot span two modules, so each `go.mod` found (`_discover_modules`) has
+    its own `./...` run in turn, into the one stream; the run-start total is
+    the sum of each module's list."""
+    agent = _agent_id(args)
+    project_dir = _resolve_project_dir(args.project_dir)
+    _refuse_unattributed(args, project_dir, agent)
+    refused = _toolchain_refusal()
+    if refused:
+        return _refuse(verb, project_dir, agent, *refused)
+    modules = _discover_modules(project_dir)
+    if not modules:
+        return _refuse(verb, project_dir, agent,
+                       f"no go module was found: no go.mod under the project dir "
+                       f"{project_dir} (outside {', '.join(_SKIPPED_MODULE_DIRS)} "
+                       f"and hidden dirs); nothing was run",
+                       ["run the gate from the project dir that holds the go modules "
+                        "(--project-dir <dir>)"])
+    return _gated_go_run(verb, args, project_dir, agent, modules)
+
+
+def _refuse_unattributed(args, project_dir, agent):
+    """Refuse a run the board would file under no cycle (or while a cycle is
+    active elsewhere) before the toolchain is touched or anything runs."""
+    _axi().refuse_unattributed_run(
+        _get, _project_key(project_dir), agent,
+        cycle_id=getattr(args, "cycle", None),
+        release=getattr(args, "release", None), context=None)
+
+
+def _toolchain_refusal():
+    """`(error, help)` when no `go` at or above the floor is on PATH, else None."""
+    acceptable, shown = _go_version()
+    if shown is None:
+        return ("no `go` toolchain was found on PATH",
+                [f"install go {GO_FLOOR_TEXT} or later and put it on PATH"])
+    if not acceptable:
+        return (f"go {shown} is older than go {GO_FLOOR_TEXT}, the first whose "
+                f"`go test -json` the board decodes; nothing was run",
+                [f"install go {GO_FLOOR_TEXT} or later"])
+    return None
+
+
+def _discover_modules(project_dir):
+    """Every dir under `project_dir` holding a go.mod, sorted, never looking
+    in a skipped dir (`_SKIPPED_MODULE_DIRS`) or a hidden one."""
+    found = []
+    for here, dirs, files in os.walk(project_dir):
+        dirs[:] = sorted(d for d in dirs
+                         if d not in _SKIPPED_MODULE_DIRS and not d.startswith("."))
+        if "go.mod" in files:
+            found.append(here)
+    return sorted(found)
+
+
+def _gated_go_run(verb, args, project_dir, agent, modules):
+    """The board check and the gated-identity bracket around `_go_test_run`."""
     health = _get("/api/v2/health")
     refused = _axi()._ingest_health_refusal(health, GO_TEST_CODEC, None)
     if refused:
         return _refuse(verb, project_dir, agent, refused,
                        [f"point the project at a board that decodes `{GO_TEST_CODEC}`"])
-    return _go_test_run(verb, args, project_dir, agent, module, health)
+    with _axi().gated_run(project_dir, agent, getattr(args, "cycle", None),
+                          f"gated {verb} run starting",
+                          open_fn=_open_gate_identity,
+                          close_fn=_close_gate_identity):
+        return _go_test_run(verb, args, project_dir, agent, modules, health)
 
 
-def _go_test_run(verb, args, project_dir, agent, module, health):
-    """List, open, run with the stream relayed, close: the body of `test`
+def _open_gate_identity(project_dir, agent_id, cycle_id, message):
+    """Open a gated run's identity and learn whether the run CREATED it.
+    Delegates to the shared implementation."""
+    return _axi().open_gate_identity(project_dir, agent_id, cycle_id, message, _ops())
+
+
+def _close_gate_identity(project_dir, identity):
+    """The closing half of the gated-run bracket. Delegates to the shared
+    implementation."""
+    return _axi().close_gate_identity(project_dir, identity, _ops())
+
+
+def _runner_command(modules, run, project_dir):
+    """`(cmd, cwd)` running `go test -json ./...`: directly in the one module,
+    or each module in turn through `_EACH_MODULE_RUNNER`."""
+    if len(modules) == 1:
+        return (["go", "test", "-json", *(["-run", run] if run else []), "./..."],
+                modules[0])
+    return [sys.executable, "-c", _EACH_MODULE_RUNNER, *modules], project_dir
+
+
+def _go_test_run(verb, args, project_dir, agent, modules, health):
+    """List, open, run with the stream relayed, close: the body of a run
     once nothing refuses it. Returns the verb's exit code."""
     key = _project_key(project_dir)
-    warnings = []
-    total = _listed_total(module, args.run, warnings)
+    release = getattr(args, "release", None)
+    run = getattr(args, "run", None)
+    warnings = list(_axi().preflight_cycle_warnings(
+        _get, key, agent, cycle_id=getattr(args, "cycle", None), context=None,
+        release=release))
+    totals = [_listed_total(module, run, warnings) for module in modules]
+    listed = [count for count in totals if count is not None]
+    total = sum(listed) if len(listed) == len(totals) else None
     run_id, opened = _axi().open_run(_start_post(total), key, agent, _STACK,
-                                     framework=GO_TEST_CODEC)
+                                     framework=GO_TEST_CODEC, release=release)
     warnings += opened
     if not run_id:
         return _refuse(verb, project_dir, agent,
@@ -467,7 +595,7 @@ def _go_test_run(verb, args, project_dir, agent, module, health):
     os.makedirs(own_dir, exist_ok=True)
     stream_path = os.path.join(own_dir, _STREAM_FILE)
     open(stream_path, "w", encoding="utf-8").close()
-    run_cmd = ["go", "test", "-json", *(["-run", args.run] if args.run else []), "./..."]
+    run_cmd, run_cwd = _runner_command(modules, run, project_dir)
     relay = None
     try:
         with _axi().abandon_trap(run_id):
@@ -476,9 +604,10 @@ def _go_test_run(verb, args, project_dir, agent, module, health):
             relay, _narrator = _axi().start_stream_relay(
                 _post, lambda *_a, **_k: None, key, agent, run_id, stream_path,
                 GO_TEST_CODEC, _axi()._ingest_body_limit(health))
-            print(f"[crucible] running: {' '.join(run_cmd)} (in {module})",
-                  file=sys.stderr)
-            result = _axi().run_streamed(run_cmd, module, dict(os.environ), args.log,
+            print(f"[crucible] running: go test -json ./... (in "
+                  f"{', '.join(modules)})", file=sys.stderr)
+            result = _axi().run_streamed(run_cmd, run_cwd, dict(os.environ),
+                                         getattr(args, "log", None),
                                          capture=True, stdout_path=stream_path)
     except _axi().RunAbandoned as abandoned:
         # What the run streamed before the signal reaches the board first.
@@ -492,15 +621,15 @@ def _go_test_run(verb, args, project_dir, agent, module, health):
         raise
     relay.finish(_STREAM_FINISH_SECONDS)
     print(f"[crucible] go test exit={result.returncode}", file=sys.stderr)
-    if args.run and _reached_tests(stream_path) == 0:
+    if run and _reached_tests(stream_path) == 0:
         warnings.append({"code": "run-matched-nothing",
-                         "detail": (f"--run {args.run!r} matched no test: the run "
+                         "detail": (f"--run {run!r} matched no test: the run "
                                     f"is filed as a run of 0 tests")})
     runner_exit = _axi().runner_exit_code(result.returncode)
     resp = _axi().close_stream(_post, stack=_STACK, project_key=key, agent_id=agent,
                                run_id=run_id, codec=GO_TEST_CODEC,
                                raw=result.stdout or None, runner_exit=runner_exit,
-                               framework=GO_TEST_CODEC)
+                               framework=GO_TEST_CODEC, release=release)
     exit_code = _axi().verb_exit(runner_exit, resp)
     if not resp.get("ok"):
         warnings.append(_axi().ingest_failed_warning(verb, _base_url()))
@@ -545,6 +674,34 @@ def _start_post(total):
             payload = {**payload, "total": total}
         return _post(path, payload, timeout=timeout)
     return post
+
+
+# ── gate verbs: thin delegators to the shared module ─────────────────────────
+
+
+def cmd_gate_report(args):
+    """Report a single already-run gate. Delegates to the shared implementation."""
+    return _axi().cmd_gate_report(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_gate_run(args):
+    """axi PROXY around `no-mistakes axi run`. Delegates to the shared
+    implementation; tool discovery stays here (this module's own `shutil`) so
+    each client keeps its patch seam."""
+    return _axi().cmd_gate_run(
+        args, _resolve_project_dir(args.project_dir), shutil.which("no-mistakes"), _ops())
+
+
+def cmd_gate_respond(args):
+    """axi PROXY around `no-mistakes axi respond`. Delegates to the shared
+    implementation; tool discovery stays here, as for `gate-run`."""
+    return _axi().cmd_gate_respond(
+        args, _resolve_project_dir(args.project_dir), shutil.which("no-mistakes"), _ops())
+
+
+def cmd_milestone(args):
+    """POST a workflow milestone. Delegates to the shared implementation."""
+    return _axi().cmd_milestone(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 # ── plan / cycle / status verbs: thin delegators to the shared module ──────
@@ -788,10 +945,131 @@ def _add_lifecycle_verbs(sub):
     t.add_argument("--log",
                    help="Write the run's stderr to this file in addition to "
                         "streaming it.")
-    t.add_argument("--reports",
-                   help=_axi().REPORTS_HELP + " A run keeps its go test stream here.")
+    t.add_argument("--reports", help=_REPORTS_HELP)
+    _add_gate_cycle_arg(t)
+    _axi().add_run_release_arg(t)
     _add_project_dir_arg(t)
     t.set_defaults(func=cmd_test)
+
+
+def _add_gate_cycle_arg(p):
+    """Bind `--cycle` on a gated verb (delegates to the shared binding so the
+    fleet documents it identically)."""
+    return _axi().add_gate_cycle_arg(p)
+
+
+_REPORTS_HELP = (_axi().REPORTS_HELP
+                 + " A run keeps its go test stream here: one file, whichever "
+                   "modules the run spans.")
+
+
+def _add_gate_verbs(sub):
+    """`regression` and `pre-merge-gate`: the full suite over every module
+    under the project dir, into one run. Go declares no tier, so these are
+    its only suite-wide run verbs."""
+    for name, func, help_text in (
+            ("regression", cmd_regression,
+             "go test -json ./... in EVERY module under the project dir (skipping "
+             "vendor, testdata, node_modules and hidden dirs), into one run "
+             "streamed to the board."),
+            ("pre-merge-gate", cmd_pre_merge_gate,
+             "ORCHESTRATOR pre-merge gate: the regression over every module, its "
+             "outcome posted as the pre-merge-gate milestone.")):
+        g = sub.add_parser(name, help=help_text)
+        g.add_argument("--agent",
+                       help="Registered agent id to file the run under — REQUIRED, "
+                            "enforced at RUNTIME.")
+        g.add_argument("--log",
+                       help="Write the run's stderr to this file in addition to "
+                            "streaming it.")
+        g.add_argument("--reports", help=_REPORTS_HELP)
+        _add_gate_cycle_arg(g)
+        _axi().add_run_release_arg(g)
+        if name == "pre-merge-gate":
+            _axi().add_gate_suites_arg(g)
+        _add_project_dir_arg(g)
+        g.set_defaults(func=func)
+
+
+def _add_gate_proxy_verbs(sub):
+    """`gate-run`, `gate-respond`, `gate-report` and `milestone`, as the rust
+    client registers them."""
+    gr = sub.add_parser("gate-run",
+                        help="axi PROXY: run `no-mistakes axi run`, post throttled interim "
+                             "+ final gates, relay the axi detail to the caller.")
+    gr.add_argument("--intent", required=True, help="The intent/goal passed down to `axi run`.")
+    gr.add_argument("--agent", help="Agent id for the gate events — REQUIRED: the "
+                          "identity is declared or the verb fails; there is "
+                          "no fallback.")
+    gr.add_argument("--skip", help="Pipeline steps to skip, forwarded VERBATIM to "
+                          "`no-mistakes axi run --skip` (pure passthrough — the "
+                          "client never validates or rewrites the value). Exists "
+                          "because no-mistakes' `ci` step is PR-based, and a "
+                          "git-flow project that merges directly has no PR for it "
+                          "to watch — skipping nothing, the gate blocks until "
+                          "ci_timeout. Omitted, the project's declared "
+                          "`[gate] skip` (crucible.toml) applies; a value "
+                          "REPLACES it, and --skip \"\" skips nothing.")
+    _axi().add_gate_release_arg(gr)
+    _add_project_dir_arg(gr)
+    gr.set_defaults(func=cmd_gate_run)
+
+    _axi().add_gate_respond_verb(sub, cmd_gate_respond,
+                                 add_args=(_add_workflow_agent_arg, _add_project_dir_arg))
+
+    grp = sub.add_parser("gate-report",
+                         help="Report a single already-run gate → POST /api/v2/gates.")
+    grp.add_argument("--outcome", required=True,
+                     help="Gate outcome (checks-passed|passed|failed|cancelled).")
+    grp.add_argument("--commit", help="The pushed commit sha (gate.push.commit).")
+    grp.add_argument("--steps", help='Comma-separated "name:status" step results.')
+    grp.add_argument("--intent", help="Gate intent (default: derived from --outcome).")
+    grp.add_argument("--agent", help="Agent id — REQUIRED: the identity is declared or "
+                         "the verb fails; there is no fallback.")
+    grp.add_argument("--full", action="store_true",
+                     help="Emit large text fields (e.g. a server error detail) untruncated.")
+    _axi().add_gate_release_arg(grp)
+    _add_project_dir_arg(grp)
+    grp.set_defaults(func=cmd_gate_report)
+
+    ms = sub.add_parser("milestone", help="POST a workflow milestone → /api/v2/milestones.")
+    ms.add_argument("--type", required=True,
+                    help="Milestone type. The vocabulary is this project's own, not this "
+                         "CLI's: PATCH /api/v2/projects/<key> {milestoneTypes: [...]} "
+                         "declares it, GET /api/v2/projects reads back what this project "
+                         "declared, and a refused milestone names the live accepted set "
+                         "back to you.")
+    ms.add_argument("--label", help="Human-readable milestone label.")
+    ms.add_argument("--cr", help="CR id (rides context.cr).")
+    ms.add_argument("--commit", help="Optional commit sha.")
+    ms.add_argument("--released-at", dest="released_at", type=int,
+                    help="Release SHIP date: the tag's own commit date in epoch "
+                         "SECONDS (`git log -1 --format=%%ct <tag>`), which is "
+                         "when the release shipped rather than when it was "
+                         "recorded.")
+    ms.add_argument("--crs",
+                    help="Comma-separated CR ids the release shipped (the merges "
+                         "in its tag range). Only the ids the project's "
+                         "registered queue holds are recorded.")
+    ms.add_argument("--packages",
+                    help="Comma-separated `registry:name:version` entries the "
+                         "release DELIVERED, e.g. `pypi:crucible-axi:0.4.0,"
+                         "npm:@anthill-tec/crucible-server:0.4.0`. Pass an "
+                         "empty string to record that it delivered none "
+                         "— on a recording only: with "
+                         "--repair-provenance an empty value writes nothing "
+                         "(it never overwrites a stored set) and the repair is "
+                         "REFUSED.")
+    ms.add_argument("--repair-provenance", dest="repair_provenance",
+                    action="store_true",
+                    help="RE-DERIVE an already-recorded release's provenance "
+                         "from this post's --released-at/--crs instead of "
+                         "replaying it. Opt-in and non-default; the release's "
+                         "version, commit and row are never touched.")
+    ms.add_argument("--agent", help="Agent id — REQUIRED: the identity is declared or "
+                         "the verb fails; there is no fallback.")
+    _add_project_dir_arg(ms)
+    ms.set_defaults(func=cmd_milestone)
 
 
 def _add_plan_verbs(sub):
@@ -808,8 +1086,9 @@ def _add_plan_verbs(sub):
     _axi().add_plan_file_cycle_kind_arg(pf)
     pf.add_argument(
         "--cycles",
-        help="Legacy comma-split form, REFUSED for filing: a filed cycle declares "
-             "its kind, so repeat --cycle with its own --cycle-kind instead.")
+        help='Legacy comma-split form, REFUSED for filing (§S4a): a filed '
+             'cycle declares its kind, so repeat --cycle with its own '
+             '--cycle-kind instead.')
     _add_workflow_agent_arg(
         pf, extra=" The registered id is also stored as the plan's orchestrator.")
     pf.add_argument("--wave", help="Wave number. Resolution: --wave > $WORKFLOW_WAVE.")
@@ -878,7 +1157,8 @@ def _add_plan_verbs(sub):
     for name in ("status", "plans"):
         sv = sub.add_parser(name,
                             help="Read the open plans, the work in flight, as a TOON-AXI "
-                                 "table + lastClosedCr and filed. Read-only; `plans` is "
+                                 "table + lastClosedCr (the last CR to close) and filed "
+                                 "(the project's plan count). Read-only; `plans` is "
                                  "an alias of `status`; --format json writes one JSON "
                                  "object.")
         sv.add_argument("--fields",
@@ -941,6 +1221,8 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=False)
     _add_lifecycle_verbs(sub)
     _add_plan_verbs(sub)
+    _add_gate_verbs(sub)
+    _add_gate_proxy_verbs(sub)
 
     args = p.parse_args()
     if getattr(args, "func", None) is None:

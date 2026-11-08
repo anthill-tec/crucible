@@ -213,10 +213,10 @@ _NO_USER_BUS_REASON = (
 XDG_DATA_HOME_ENV_VAR = "XDG_DATA_HOME"
 _DEFAULT_DATA_HOME_SUFFIX = (".local", "share")
 STORE_DIR_NAME = "crucible"
-# The packaged fleet, exactly (CR-CRU-090 §S1). The five stack clients plus:
+# The packaged fleet, exactly (CR-CRU-090 §S1). The six stack clients plus:
 # `_crucible_axi.py` (the shared AXI envelope) and `toon.py` (the codec) —
-# which the five load BY FILE PATH from their OWN directory, so a clients-only
-# copy lays down five UNRUNNABLE clients — plus `STATUS-CONTRACT.md`, the path
+# which the six load BY FILE PATH from their OWN directory, so a clients-only
+# copy lays down six UNRUNNABLE clients — plus `STATUS-CONTRACT.md`, the path
 # `manifest.build_manifest` publishes as `status`.
 # CR-CRU-138 §S4 — and `crucible.toml`, the distribution's own limit
 # declarations, which belong to this list for exactly the reason `toon.py`
@@ -246,6 +246,7 @@ FLEET_FILES = (
     "rust-crucible.py",
     "mvn-crucible.py",
     "arduino-crucible.py",
+    "go-crucible.py",
     "_crucible_axi.py",
     "_crucible_run.py",
     "toon.py",

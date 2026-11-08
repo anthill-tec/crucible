@@ -23,9 +23,9 @@ import json
 import os
 from pathlib import Path
 
-# The five client stacks that ship a `*-crucible.py` client — exactly these,
+# The six client stacks that ship a `*-crucible.py` client — exactly these,
 # no extras (a clientless stack such as vscode must NOT appear here).
-CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino")
+CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino", "go")
 
 MANIFEST_FILENAME = "crucible-clients.json"
 
