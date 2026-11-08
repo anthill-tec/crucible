@@ -70,12 +70,12 @@ cached result omits it). It is listed under `codecs.stream` in the board's healt
 - **Cases.** Each terminal `pass` / `fail` / `skip` event that carries a `Test` is a case under its
   package, less each parent §S3 drops. A skip is stored as `pending`, as every codec stores one.
 - **A failure's message** is its `error` line and the `error-continue` lines after it (read by
-  `OutputType` where present, else by the indented `file.go:LINE: ` form and its continuation
+  `OutputType` where present, else by the indented `file.go:LINE:` form and its continuation
   indent). With none, the message is the test's untyped output, which covers a panic and a failing
   example. Testify's multi-line `Error Trace:` / `Error:` blocks are kept whole.
 - **`file:line`** comes from the first `error` line, or else the first stack frame naming a
   `_test.go`. `file` is the package dir joined to the file's basename.
-- **A skip's reason** is the last `file.go:LINE: ` output line before its `--- SKIP` frame.
+- **A skip's reason** is the last `file.go:LINE:` output line before its `--- SKIP` frame.
 - **Package failures.** A package-level `fail` with no failing test is one failing case under the
   package, named for it, and never a passing run. Its message is the `build-output` lines whose
   `ImportPath` equals its `FailedBuild`, or else the package's own output. The shapes: a build failure
