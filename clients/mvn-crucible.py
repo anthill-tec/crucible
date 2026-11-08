@@ -953,16 +953,19 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
     # own envelope. `module` runs this same body and is left alone, because the
     # shared check is scoped to `unit` by the tier it is handed.
     # A signal while the run is open is trapped and the open run disclosed.
-    # The relay starts inside the `try`, so any exception after it finishes it.
+    # The run opens before the `try`, so a signal during its opening reaches
+    # the gated bracket; the relay starts inside it, so any exception after
+    # the relay starts finishes it.
+    if args.agent:
+        # The shared run path: open the run BEFORE maven is spawned so the
+        # board shows it running, relay a declared console to it, and
+        # narrate class-level progress.
+        run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
+                                          context=_run_context(),
+                                          release=release,
+                                          framework=console.framework)
     try:
         if args.agent:
-            # The shared run path: open the run BEFORE maven is spawned so the
-            # board shows it running, relay a declared console to it, and
-            # narrate class-level progress.
-            run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
-                                              context=_run_context(),
-                                              release=release,
-                                              framework=console.framework)
             console.start(project_dir, args.agent, run_id)
             narrator = _narrator(project_dir, args.agent,
                                  _xml_total_for(maven_dir,
@@ -1193,14 +1196,17 @@ def _failsafe_tier_run(args, goals, label, project_dir, identity):
         cycle_id=getattr(args, "cycle", None), context=_run_context())
     narrator, run_id, run_warnings = None, None, []
     console = _RunConsole(args, label, reports_dir)
-    # The relay starts inside the `try`, so any exception after it finishes it.
+    # The run opens before the `try`, so a signal during its opening reaches
+    # the gated bracket; the relay starts inside it, so any exception after
+    # the relay starts finishes it.
+    if args.agent:
+        # The shared run path, as `_run_surefire_tier` walks it.
+        run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
+                                          context=_run_context(),
+                                          release=release,
+                                          framework=console.framework)
     try:
         if args.agent:
-            # The shared run path, as `_run_surefire_tier` walks it.
-            run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
-                                              context=_run_context(),
-                                              release=release,
-                                              framework=console.framework)
             console.start(project_dir, args.agent, run_id)
             narrator = _narrator(project_dir, args.agent,
                                  _xml_total_for(maven_dir, module,
@@ -1466,20 +1472,23 @@ def _regression_run(args, identity=None, verb="regression",
     # of the envelope, leaving the stream prose-then-envelope, never a clean
     # single document. Interactive-only now, like `test`/`check`'s equivalents.
     print(f"[regression] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
-    narrator, run_id = None, None
+    narrator, run_id, run_warnings = None, None, []
     console = _RunConsole(args, "regression", reports_dir)
-    # The relay starts inside the `try`, so any exception after it finishes it.
+    # The run opens before the `try`, so a signal during its opening reaches
+    # the gated bracket; the relay starts inside it, so any exception after
+    # the relay starts finishes it.
+    if args.agent:
+        # The shared run path: open the run BEFORE maven is spawned, relay
+        # a declared console to it, and narrate class-level progress (which
+        # also forces the streaming capture, so result.stdout is populated
+        # for a bare `regression --agent X` and rides along as `raw`).
+        run_id, run_warnings = _start_run(project_dir, args.agent,
+                                          tier="regression",
+                                          context=_run_context(),
+                                          release=release,
+                                          framework=console.framework)
     try:
         if args.agent:
-            # The shared run path: open the run BEFORE maven is spawned, relay
-            # a declared console to it, and narrate class-level progress (which
-            # also forces the streaming capture, so result.stdout is populated
-            # for a bare `regression --agent X` and rides along as `raw`).
-            run_id, run_warnings = _start_run(project_dir, args.agent,
-                                              tier="regression",
-                                              context=_run_context(),
-                                              release=release,
-                                              framework=console.framework)
             console.start(project_dir, args.agent, run_id)
             narrator = _narrator(project_dir, args.agent,
                                  _xml_total_for(maven_dir, None,
@@ -1606,16 +1615,19 @@ def _test_run(args, tier, project_dir, identity):
         cycle_id=getattr(args, "cycle", None),
         context=_run_context(), release=release)
     print(f"[test] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
-    narrator, run_id = None, None
+    narrator, run_id, run_warnings = None, None, []
     console = _RunConsole(args, "unit", reports_dir)
-    # The relay starts inside the `try`, so any exception after it finishes it.
+    # The run opens before the `try`, so a signal during its opening reaches
+    # the gated bracket; the relay starts inside it, so any exception after
+    # the relay starts finishes it.
+    if args.agent:
+        # The shared run path, as `_run_surefire_tier` walks it.
+        run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
+                                          context=_run_context(),
+                                          release=release,
+                                          framework=console.framework)
     try:
         if args.agent:
-            # The shared run path, as `_run_surefire_tier` walks it.
-            run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
-                                              context=_run_context(),
-                                              release=release,
-                                              framework=console.framework)
             console.start(project_dir, args.agent, run_id)
             narrator = _narrator(project_dir, args.agent,
                                  _xml_total_for(maven_dir,
