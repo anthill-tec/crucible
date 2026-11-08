@@ -51,6 +51,9 @@ RECORD_AUTHORED_KEY = "authored"
 # range: an install that only ships defaults gives the operator nothing to
 # edit, and a checkout-only file gives an installed deployment nothing to read.
 CONFIG_FILENAME = "crucible.toml"
+# The stack-declaration schema, shipped beside the clients as a fleet file and
+# listed in the manifest as `declaration_schema`.
+DECLARATION_SCHEMA_FILENAME = "crucible-declaration.schema.json"
 
 # CR-CRU-139 §S1a — the TOML vocabulary of the two configuration files this
 # module lays down, declared ONCE. `install` READS the server's declarations
@@ -311,12 +314,42 @@ def _package_version() -> str:
         return "0.0.0+dev"
 
 
+def _packaged_schema_version() -> int:
+    """The integer `version` of the PACKAGED declaration schema — the copy
+    `[fleet]` lays down — so the manifest can list it with no installed fleet.
+
+    Fail-fast, naming the path: a schema that is missing, is not JSON, is not
+    an object, or has no integer `version` raises `ValueError`. A JSON boolean
+    is not a version, so the check is `type(v) is int`, never `isinstance`.
+    """
+    path = os.path.join(source_clients_dir(), DECLARATION_SCHEMA_FILENAME)
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(
+            f"packaged declaration schema unreadable at {path}: {exc}") from exc
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"packaged declaration schema at {path} is not JSON: {exc}") from exc
+    if not isinstance(document, dict):
+        raise ValueError(
+            f"packaged declaration schema at {path} is not a JSON object")
+    version = document.get("version")
+    if type(version) is not int:
+        raise ValueError(
+            f"packaged declaration schema at {path} has no integer `version`"
+            f" (found {version!r})")
+    return version
+
+
 def build_manifest(install_dir: str, server_config: str | None = None) -> dict:
     """Build the discovery manifest for clients laid down under `install_dir`.
 
     Returns a dict with the top-level keys `version`, `clients`, `status`,
-    `config` and `shipped_config`, plus `server_config` when the install laid
-    the server's file down. `clients` maps each of the five stacks to its
+    `config`, `shipped_config` and `declaration_schema`, plus `server_config`
+    when the install laid the server's file down. `clients` maps each of the five stacks to its
     installed client path under `install_dir`; `status` references the
     STATUS-CONTRACT; `config` is the operator-editable configuration the
     install laid down (CR-CRU-131 §S1c — a file the installer WRITES belongs
@@ -338,6 +371,10 @@ def build_manifest(install_dir: str, server_config: str | None = None) -> dict:
     host owns that file, and publishing a path nothing here wrote would be the
     dangling-path defect CR-CRU-090 closed. Its absence is therefore a fact
     about this machine, not an omission.
+
+    `declaration_schema` lists the installed stack-declaration schema as
+    `{path, version}`. The version is read from the PACKAGED copy, so building
+    the manifest needs no installed fleet; a malformed packaged schema raises.
     """
     clients_dir = os.path.join(install_dir, "clients")
     clients = {
@@ -350,6 +387,10 @@ def build_manifest(install_dir: str, server_config: str | None = None) -> dict:
         "status": os.path.join(clients_dir, "STATUS-CONTRACT.md"),
         "config": operator_config_path(install_dir),
         "shipped_config": os.path.join(clients_dir, CONFIG_FILENAME),
+        "declaration_schema": {
+            "path": os.path.join(clients_dir, DECLARATION_SCHEMA_FILENAME),
+            "version": _packaged_schema_version(),
+        },
     }
     if server_config:
         document["server_config"] = server_config

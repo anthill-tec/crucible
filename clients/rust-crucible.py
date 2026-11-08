@@ -661,6 +661,12 @@ _INTERRUPTED_FINISH_SECONDS = 5.0
 _TARGETS_FRAMEWORK = NEXTEST_CODEC
 _TARGETS_STREAM = {"codec": NEXTEST_CODEC, "path": "stdout"}
 _TARGETS_REFUSED_FIELDS = ("junit", "console", "coverage")
+#: The frameworks other stacks declare in the same `[targets.*]` table: an
+#: entry naming one is another stack's, skipped rather than refused. An entry
+#: with no framework is still the rust entry.
+_OTHER_STACKS_FRAMEWORKS = ("arduino-native", "surefire", "unittest", "pytest",
+                            "bun-test", "vitest", "playwright", "playwright-bdd",
+                            "go-test")
 
 
 def _nextest_refusal(args, verb, project_dir, profile, coverage=False, gate=False):
@@ -731,7 +737,9 @@ def _targets_refusal(project_dir, profile):
     """Why the project's own `crucible.toml` refuses a run of `profile` (it
     does not parse, or its `[targets.<profile>]` entry is not the rust
     entry), or None. A project with no file, or no entry for the profile,
-    runs as if it declared the rust entry; the install's file never declares."""
+    runs as if it declared the rust entry, and an entry naming another
+    stack's framework is skipped the same way; the install's file never
+    declares."""
     path = os.path.join(project_dir, "crucible.toml")
     try:
         with open(path, "rb") as handle:
@@ -744,6 +752,8 @@ def _targets_refusal(project_dir, profile):
                 f"was run — fix crucible.toml")
     targets = declared.get("targets")
     entry = targets.get(profile) if isinstance(targets, dict) else None
+    if isinstance(entry, dict) and entry.get("framework") in _OTHER_STACKS_FRAMEWORKS:
+        return None
     fault = None if entry is None else _targets_fault(entry)
     if fault is None:
         return None
