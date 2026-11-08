@@ -948,30 +948,32 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
     print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     narrator, run_id, run_warnings = None, None, []
     console = _RunConsole(args, label, reports_dir)
-    if args.agent:
-        # The shared run path: open the run BEFORE maven is spawned so the
-        # board shows it running, relay a declared console to it, and narrate
-        # class-level progress.
-        run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
-                                          context=_run_context(),
-                                          release=release,
-                                          framework=console.framework)
-        console.start(project_dir, args.agent, run_id)
-        narrator = _narrator(project_dir, args.agent,
-                             _xml_total_for(maven_dir, getattr(args, "module", None),
-                                            ("surefire",), reports_dir),
-                             identity, console.poster)
-        run_warnings = list(preflight_warnings) + run_warnings
-        # §S1 — a release run's note rides ahead of the run's own warnings,
-        # where the pre-flight's would.
-        if release:
-            run_warnings = [_axi().release_run_note(release)] + run_warnings
     # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: a `unit`
     # run that spends its wall clock waiting is measured here and says so in its
     # own envelope. `module` runs this same body and is left alone, because the
     # shared check is scoped to `unit` by the tier it is handed.
     # A signal while the run is open is trapped and the open run disclosed.
+    # The relay starts inside the `try`, so any exception after it finishes it.
     try:
+        if args.agent:
+            # The shared run path: open the run BEFORE maven is spawned so the
+            # board shows it running, relay a declared console to it, and
+            # narrate class-level progress.
+            run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
+                                              context=_run_context(),
+                                              release=release,
+                                              framework=console.framework)
+            console.start(project_dir, args.agent, run_id)
+            narrator = _narrator(project_dir, args.agent,
+                                 _xml_total_for(maven_dir,
+                                                getattr(args, "module", None),
+                                                ("surefire",), reports_dir),
+                                 identity, console.poster)
+            run_warnings = list(preflight_warnings) + run_warnings
+            # §S1 — a release run's note rides ahead of the run's own
+            # warnings, where the pre-flight's would.
+            if release:
+                run_warnings = [_axi().release_run_note(release)] + run_warnings
         with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id), \
                 console.observer(narrator) as observer:
             result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
@@ -1191,22 +1193,24 @@ def _failsafe_tier_run(args, goals, label, project_dir, identity):
         cycle_id=getattr(args, "cycle", None), context=_run_context())
     narrator, run_id, run_warnings = None, None, []
     console = _RunConsole(args, label, reports_dir)
-    if args.agent:
-        # The shared run path, as `_run_surefire_tier` walks it.
-        run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
-                                          context=_run_context(),
-                                          release=release,
-                                          framework=console.framework)
-        console.start(project_dir, args.agent, run_id)
-        narrator = _narrator(project_dir, args.agent,
-                             _xml_total_for(maven_dir, module,
-                                            ("failsafe", "surefire"), reports_dir),
-                             identity, console.poster)
-        run_warnings = list(preflight_warnings) + run_warnings
-        # §S1 — the release run's note, as `_run_surefire_tier` carries it.
-        if release:
-            run_warnings = [_axi().release_run_note(release)] + run_warnings
+    # The relay starts inside the `try`, so any exception after it finishes it.
     try:
+        if args.agent:
+            # The shared run path, as `_run_surefire_tier` walks it.
+            run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
+                                              context=_run_context(),
+                                              release=release,
+                                              framework=console.framework)
+            console.start(project_dir, args.agent, run_id)
+            narrator = _narrator(project_dir, args.agent,
+                                 _xml_total_for(maven_dir, module,
+                                                ("failsafe", "surefire"),
+                                                reports_dir),
+                                 identity, console.poster)
+            run_warnings = list(preflight_warnings) + run_warnings
+            # §S1 — the release run's note, as `_run_surefire_tier` carries it.
+            if release:
+                run_warnings = [_axi().release_run_note(release)] + run_warnings
         with _axi().abandon_trap(run_id), console.observer(narrator) as observer:
             result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
                                  observer)
@@ -1464,22 +1468,25 @@ def _regression_run(args, identity=None, verb="regression",
     print(f"[regression] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     narrator, run_id = None, None
     console = _RunConsole(args, "regression", reports_dir)
-    if args.agent:
-        # The shared run path: open the run BEFORE maven is spawned, relay a
-        # declared console to it, and narrate class-level progress (which also
-        # forces the streaming capture, so result.stdout is populated for a
-        # bare `regression --agent X` and rides along as `raw`).
-        run_id, run_warnings = _start_run(project_dir, args.agent,
-                                          tier="regression", context=_run_context(),
-                                          release=release,
-                                          framework=console.framework)
-        console.start(project_dir, args.agent, run_id)
-        narrator = _narrator(project_dir, args.agent,
-                             _xml_total_for(maven_dir, None, ("surefire", "failsafe"),
-                                            reports_dir),
-                             identity, console.poster)
-        preflight_warnings += run_warnings
+    # The relay starts inside the `try`, so any exception after it finishes it.
     try:
+        if args.agent:
+            # The shared run path: open the run BEFORE maven is spawned, relay
+            # a declared console to it, and narrate class-level progress (which
+            # also forces the streaming capture, so result.stdout is populated
+            # for a bare `regression --agent X` and rides along as `raw`).
+            run_id, run_warnings = _start_run(project_dir, args.agent,
+                                              tier="regression",
+                                              context=_run_context(),
+                                              release=release,
+                                              framework=console.framework)
+            console.start(project_dir, args.agent, run_id)
+            narrator = _narrator(project_dir, args.agent,
+                                 _xml_total_for(maven_dir, None,
+                                                ("surefire", "failsafe"),
+                                                reports_dir),
+                                 identity, console.poster)
+            preflight_warnings += run_warnings
         with _axi().abandon_trap(run_id), console.observer(narrator) as observer:
             result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
                                  observer)
@@ -1601,19 +1608,21 @@ def _test_run(args, tier, project_dir, identity):
     print(f"[test] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     narrator, run_id = None, None
     console = _RunConsole(args, "unit", reports_dir)
-    if args.agent:
-        # The shared run path, as `_run_surefire_tier` walks it.
-        run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
-                                          context=_run_context(),
-                                          release=release,
-                                          framework=console.framework)
-        console.start(project_dir, args.agent, run_id)
-        narrator = _narrator(project_dir, args.agent,
-                             _xml_total_for(maven_dir, getattr(args, "module", None),
-                                            ("surefire",), reports_dir),
-                             identity, console.poster)
-        preflight_warnings = list(preflight_warnings) + run_warnings
+    # The relay starts inside the `try`, so any exception after it finishes it.
     try:
+        if args.agent:
+            # The shared run path, as `_run_surefire_tier` walks it.
+            run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
+                                              context=_run_context(),
+                                              release=release,
+                                              framework=console.framework)
+            console.start(project_dir, args.agent, run_id)
+            narrator = _narrator(project_dir, args.agent,
+                                 _xml_total_for(maven_dir,
+                                                getattr(args, "module", None),
+                                                ("surefire",), reports_dir),
+                                 identity, console.poster)
+            preflight_warnings = list(preflight_warnings) + run_warnings
         with _axi().abandon_trap(run_id), console.observer(narrator) as observer:
             result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
                                  observer)
