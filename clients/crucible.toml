@@ -196,6 +196,21 @@ max = 500
 #            binary>)"`), run by `docker-e2e-gate` with docker up
 #
 # A run streams through cargo-nextest 0.9.130 or later.
+#
+# An arduino run keys its entry by native dir and make target: the native dir
+# (`--dir`, relative to the project dir) joined by `/` to the make target. The
+# arduino entry, which turns a native target's stream on:
+#
+#     [targets."tests/native/junit"]
+#     framework = "arduino-native"
+#     stream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }
+#
+# Every field is required. A native dir and make target with no entry runs as
+# before, filed from its JUnit. An entry under the run's key naming another
+# `framework`, `codec` or `path`, or declaring `junit`, `console` or
+# `coverage`, is REFUSED before anything runs; another stack's entry is
+# skipped. The harness writes the stream under the `CRUCIBLE_STREAM` make
+# contract (`arduino-crucible.py --help`).
 
 # ── The BOARD this fleet posts to ──────────────────────────────────────────
 #

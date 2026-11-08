@@ -132,6 +132,24 @@ For the rust stack (`crucible.toml` and `.config/nextest.toml`):
   run now always writes its lcov with `cargo llvm-cov report --failure-mode all`.
 - **A board that lists no `nextest` under `codecs.stream`** refuses the run before anything runs.
 
+For the arduino stack (`crucible.toml` and the native `Makefile`):
+
+- **A declared target streams its tests.** A project declares a native run in its own
+  `crucible.toml`, keyed by native dir (`--dir`, relative to `--project-dir`) joined by `/` to the
+  make target: `[targets."tests/native/junit"]` with `framework = "arduino-native"` and
+  `stream = { codec = "crucible-events", path = "env:CRUCIBLE_STREAM" }`. Every field is required;
+  `junit`, `console` and `coverage` are refused, as is a project file that does not parse. Another
+  stack's entry is skipped. An undeclared target runs as before.
+- **The `CRUCIBLE_STREAM` make contract.** On a declared run with an agent, `make` is handed
+  `CRUCIBLE_STREAM`, the absolute `<REPORTS_DIR>/crucible-events.ndjson`, emptied first. The
+  harness appends one `test-end` line per test as it ends (`pass`, `fail` or `pending`), in one
+  write, flushing after each line. It writes no `run-start` and no `run-end`: the client appends the
+  `run-end` from the run's `TEST-*.xml`, which the harness still writes. When the variable is unset,
+  the harness writes nothing.
+- **A board that lists no `crucible-events` under `codecs.stream`**, or no `lcov` for a coverage
+  run, refuses a declared run before anything runs.
+- **Model B surfaces to update.** Native harness templates adopt the stream; Crucible ships none.
+
 ## [0.3.0] - 2026-10-10
 
 38 change requests (wave 7).
