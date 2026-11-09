@@ -468,12 +468,15 @@ def cmd_check(args):
     compile files its output, stdout and stderr in the order go printed them,
     as ONE compile run of format `go`; a clean one files nothing.
 
-    Refused before go compiles anything: a Go below the floor, a module that
-    cannot be found, and with `--tests` a missing no-op for `-exec`. One
-    envelope on every path; the exit is go's own on a failing compile."""
+    Refused before go compiles anything: first a run the board would file
+    under no cycle while one is active (before the toolchain is touched, as
+    the run verbs refuse it), then a Go below the floor, a module that cannot
+    be found, and with `--tests` a missing no-op for `-exec`. One envelope on
+    every path; the exit is go's own on a failing compile."""
     verb = "check"
     agent = args.agent
     project_dir = _resolve_project_dir(args.project_dir)
+    _refuse_unattributed(args, project_dir, agent)
     refused = _toolchain_refusal()
     if refused:
         return _refuse(verb, project_dir, agent, *refused)
