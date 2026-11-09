@@ -1,0 +1,18 @@
+# example.com/shop/api
+api/api.go:4:6: declared and not used: code
+api/api.go:4:17: cannot use path (variable of type string) as int value in variable declaration
+api/api.go:5:9: undefined: status
+# example.com/shop/store
+store/store.go:4:6: undefined: a1
+store/store.go:5:6: undefined: a2
+store/store.go:6:6: undefined: a3
+store/store.go:7:6: undefined: a4
+store/store.go:8:6: undefined: a5
+store/store.go:9:6: undefined: a6
+store/store.go:10:6: undefined: a7
+store/store.go:11:6: undefined: a8
+store/store.go:12:6: undefined: a9
+store/store.go:13:6: undefined: a10
+store/store.go:13:6: too many errors
+# example.com/shop
+./main.go:6:14: undefined: total

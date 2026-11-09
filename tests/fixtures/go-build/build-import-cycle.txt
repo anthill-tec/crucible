@@ -1,0 +1,3 @@
+package example.com/cycle/billing
+	imports example.com/cycle/orders from billing.go
+	imports example.com/cycle/billing from orders.go: import cycle not allowed

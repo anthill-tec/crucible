@@ -1,0 +1,6 @@
+?   	example.com/books/clock	[no test files]
+# example.com/books/ledger [example.com/books/ledger.test]
+ledger/ledger_test.go:6:19: cannot use Balance() (value of type int) as string value in variable declaration
+FAIL	example.com/books/ledger [build failed]
+ok  	example.com/books/money	0.001s
+FAIL
