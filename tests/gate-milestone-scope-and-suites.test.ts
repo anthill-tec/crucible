@@ -296,7 +296,7 @@ describe("health states that the board records a gate's scope and suites", () =>
       expect(body.milestones).toEqual({ gate: ["scope", "suites"] });
       expect(body.codecs).toEqual({
         test: ["crucible-events", "go-test", "junit", "nextest"],
-        coverage: ["jacoco", "lcov"],
+        coverage: ["go-coverprofile", "jacoco", "lcov"],
         view: ["bun-console", "surefire-console"],
         stream: ["crucible-events", "go-test", "nextest"],
       });
