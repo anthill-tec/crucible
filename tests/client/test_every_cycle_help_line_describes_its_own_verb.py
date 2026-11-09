@@ -97,10 +97,10 @@ _JUNIT_ONE_GREEN = (
 
 GATED = "gated"
 FILING = "filing"
-#: The kinds each client's census must observe. The go client has no filing
-#: verb (no check, compile or auto-ingest): each of its run verbs opens a gated
-#: identity (orchestrator-approved re-seed fix).
-CLIENT_KINDS = {"go": [GATED]}
+#: The kinds each client's census must observe, where a client differs from
+#: the default of a filing verb and a gated one. Every client, the go client
+#: included (its `check` files a compile run), observes both today.
+CLIENT_KINDS = {}
 
 
 def _shared():
