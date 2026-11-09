@@ -1,0 +1,6 @@
+example.com/shop/price/price.go:4:	Discount	75.0%
+example.com/shop/price/price.go:13:	Round		0.0%
+example.com/shop/report/report.go:6:	Line		0.0%
+example.com/shop/stock/stock.go:12:	Value		100.0%
+example.com/shop/stock/stock.go:17:	Take		0.0%
+total:					(statements)	22.2%
