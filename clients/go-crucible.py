@@ -14,7 +14,9 @@ Subcommands:
   register, unregister  Agent lifecycle.
   test                  go test -json ./... in the run's module, streamed to
                         the board, which decodes it with its `go-test` codec.
-                        [--run REGEX] passes Go's own -run.
+                        [--run REGEX] passes Go's own -run; a regex the
+                        list finds no test for is refused before any run
+                        opens.
   plan / cycle / status verbs, the roadmap verbs and `next`: the fleet's
                         shared implementations, one thin delegator each.
 
@@ -337,19 +339,6 @@ def _parse_go_version(text):
     return None, text
 
 
-def _reached_tests(path):
-    """(PURE but for the read) How many terminal `pass` / `fail` / `skip`
-    events carrying a `Test` the stream at `path` holds: the tests the run
-    reached. A stream that cannot be read reached none."""
-    try:
-        with open(path, encoding="utf-8", errors="replace") as handle:
-            events = _json_events(handle.read())
-    except OSError:
-        return 0
-    return sum(1 for event in events
-               if event.get("Test") and event["Action"] in ("pass", "fail", "skip"))
-
-
 # ── the toolchain, the module, the refusals ────────────────────────────────
 
 
@@ -584,6 +573,13 @@ def _go_test_run(verb, args, project_dir, agent, modules, health):
     totals = [_listed_total(module, run, warnings) for module in modules]
     listed = [count for count in totals if count is not None]
     total = sum(listed) if len(listed) == len(totals) else None
+    if run and total == 0:
+        # The board never stores a stream with no test: refuse before opening.
+        return _refuse(verb, project_dir, agent,
+                       f"--run {run!r} matched no test: the go test list names "
+                       f"none, so no run was opened and nothing was run",
+                       ["re-run test --run <regex> with a regex that matches a test",
+                        "status"], warnings)
     run_id, opened = _axi().open_run(_start_post(total), key, agent, _STACK,
                                      framework=GO_TEST_CODEC, release=release)
     warnings += opened
@@ -621,10 +617,6 @@ def _go_test_run(verb, args, project_dir, agent, modules, health):
         raise
     relay.finish(_STREAM_FINISH_SECONDS)
     print(f"[crucible] go test exit={result.returncode}", file=sys.stderr)
-    if run and _reached_tests(stream_path) == 0:
-        warnings.append({"code": "run-matched-nothing",
-                         "detail": (f"--run {run!r} matched no test: the run "
-                                    f"is filed as a run of 0 tests")})
     runner_exit = _axi().runner_exit_code(result.returncode)
     resp = _axi().close_stream(_post, stack=_STACK, project_key=key, agent_id=agent,
                                run_id=run_id, codec=GO_TEST_CODEC,
