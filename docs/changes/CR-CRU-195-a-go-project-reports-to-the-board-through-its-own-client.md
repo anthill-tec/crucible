@@ -1,11 +1,7 @@
 # CR-CRU-195 — a Go project reports to the board through its own client
 
 **Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-152, CR-CRU-200,
-CR-CRU-238 · **Status** PENDING — filed 2026-10-18 (Model B request, user ruling: its own CR in
-0.4.0, decoded on the server after CR-CRU-152); made exact at gap analysis 2026-11-08 (user rulings
-2026-11-08: split, compile errors and coverage move to CR-CRU-239; the total from `go test -list`;
-no tier verbs before CR-CRU-196; the gate covers every module; the module you are in comes before
-`crucible.toml`) · Pre-review: ran — 13 points and user rulings (findings F1–F16, all folded)
+CR-CRU-238 · **Status** DONE — merged 2026-11-09 (`2d959db0`) · Pre-review: ran — 13 points and user rulings (findings F1–F16, all folded)
 
 ## Problem
 
@@ -41,7 +37,8 @@ cannot register, run, ingest or gate through the board.
   - A list that exits non-zero still gives the names it printed. A list that cannot be read gives no
     total, with a warning; the run goes on.
 - **Tiers are a separate CR (user ruling).** The Go client has no tier verbs until CR-CRU-196
-  declares tiers by build tag, as the python client has none. Nothing is filed under a tier it did not
+  declares tiers by build tag; the python client, by contrast, has its `unit`, `integration` and
+  `e2e` verbs. Nothing is filed under a tier it did not
   declare.
 - **The gate covers every module (user ruling).** `go test ./...` cannot span two modules, so
   `regression` and `pre-merge-gate` find every `go.mod` under the project dir (skipping `vendor`,
@@ -132,42 +129,44 @@ the census, manifest-contract, envelope and schema tests.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — a Go run reaches the board.** `go-crucible.py test --agent <id>` on a real Go module
+- [x] **AC1 — a Go run reaches the board.** `go-crucible.py test --agent <id>` on a real Go module
   opens a streaming run decoded by `go-test`. Its cases equal the terminal `pass` / `fail` / `skip`
   events carrying a `Test` in `go test -json`, less the parents §S3 drops; passed, failed and pending
   split the same way.
-- [ ] **AC2 — subtests are counted.** A module with passing and failing `t.Run` subtests, nested
+- [x] **AC2 — subtests are counted.** A module with passing and failing `t.Run` subtests, nested
   included, is stored with every subtest counted, and a failing subtest fails its run. A parent that
   fails on its own (its own `error` output, or `t.Fail()` after passing subtests) is its own failure.
-- [ ] **AC3 — failures, skips and package failures carry their detail.** On captured real output
+- [x] **AC3 — failures, skips and package failures carry their detail.** On captured real output
   (Go 1.27 with `OutputType`, and the text form without it): a failure's message (multi-line and
   testify included) and `file:line`; a skip's reason; a panic's message; a build failure, a `TestMain`
   exit, a panic in a subtest and `[setup failed]`, each a failing case under its package; a package
   with no test files adding nothing.
-- [ ] **AC4 — one test by name.** `test --run <regex>` runs only the matching tests, a regex naming a
+- [x] **AC4 — one test by name.** `test --run <regex>` runs only the matching tests, a regex naming a
   subtest included. A regex matching nothing is refused before any run opens, naming the regex, on
   a real board.
-- [ ] **AC5 — the total comes from the list.** The run-start total equals the listed `Test*`, `Fuzz*`
+- [x] **AC5 — the total comes from the list.** The run-start total equals the listed `Test*`, `Fuzz*`
   and `Example*` names of the run's selection, benchmarks excluded, with and without `--run`. A listed
   name that never reports leaves the run `incomplete`, naming it. A list that cannot be read starts
   the run with no total and a warning.
-- [ ] **AC6 — the module dir.** In a project with two `go.mod`s, `test` runs the module named by flag
+- [x] **AC6 — the module dir.** In a project with two `go.mod`s, `test` runs the module named by flag
   or environment variable, else the one the working directory is in, else `[go] module_dir`; a dir
   with no `go.mod`, or no module at all, is refused.
-- [ ] **AC7 — the gate covers every module.** `regression` and `pre-merge-gate` in a two-module
+- [x] **AC7 — the gate covers every module.** `regression` and `pre-merge-gate` in a two-module
   project run both modules into one run, skipping `vendor`, `testdata`, `node_modules` and hidden
   dirs.
-- [ ] **AC8 — no tier verbs.** The go client offers no `unit`, `integration` or `e2e` verb; the verb
+- [x] **AC8 — no tier verbs.** The go client offers no `unit`, `integration` or `e2e` verb; the verb
   census records that.
-- [ ] **AC9 — the schema names Go.** The declaration schema is `version` 2 with a `go` stack, and the
+- [x] **AC9 — the schema names Go.** The declaration schema is `version` 2 with a `go` stack, and the
   agreement test drives the go client's module-dir check with entries generated from it.
-- [ ] **AC10 — the fleet carries it.** `crucible-axi install` lays the client down, the manifest names
+- [x] **AC10 — the fleet carries it.** `crucible-axi install` lays the client down, the manifest names
   it under `go`, the board's health lists `go-test` under `codecs.stream`, and every fleet envelope
   contract holds for it.
-- [ ] **AC11 — the Go floor.** Below Go 1.24 the client refuses before running, naming the version.
-- [ ] **AC12 — the docs follow.** CHANGELOG `[Unreleased]` "Stack declaration changes" names schema
+- [x] **AC11 — the Go floor.** Below Go 1.24 the client refuses before running, naming the version.
+- [x] **AC12 — the docs follow.** CHANGELOG `[Unreleased]` "Stack declaration changes" names schema
   version 2 and the `go` stack, and states that `TestMain` runs twice per run; README and RUNBOOK
   name the Go client.
+
+**Done 2026-11-09.** Merged `2d959db0` (plan 243: U1 893, U2 894, U3 895, VERIFY 896 CHANGES, FIX 897 for B1, B2, S1, S2 and Sug1). The board decodes `go test -json` through the `go-test` codec; `go-crucible.py` runs a module named by flag, env, nearest `go.mod` or `[go] module_dir`, takes its total from `go test -list`, refuses a `--run` that matches nothing before a run opens, and gates every module in one run. Schema version 2 adds the `go` stack and the fleet installs the client. Pre-merge gate 12348 passed / 0 failed. Progress ticks for go runs follow in their own CR.
 
 ## Non-goals
 
