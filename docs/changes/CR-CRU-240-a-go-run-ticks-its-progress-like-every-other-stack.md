@@ -1,6 +1,6 @@
 # CR-CRU-240 — a Go run ticks its progress like every other stack
 
-**Type** feature · **Points** 2 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-195, CR-CRU-196 ·
+**Type** feature · **Points** 3 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-195, CR-CRU-196 ·
 **Status** PENDING — filed 2026-11-09 (user ruling at the CR-CRU-195 sign-off: progress ticks were
 out of that CR's scope and come in their own CR, after CR-CRU-196) · Pre-review: none
 
