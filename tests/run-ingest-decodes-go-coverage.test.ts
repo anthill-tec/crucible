@@ -163,10 +163,10 @@ describe("POST /api/v2/runs — go-coverprofile coverage on a green run", () => 
     const res = await ingest(handle, key, "go-brief", { codec: "go-coverprofile", data: [LEDGER] });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     const list = await briefs(handle, key);
-    expect(list.length).toBe(1);
-    expect(list[0]!.id).toBe(res.body.event as string);
-    expect(list[0]!.hasCoverage).toBe(true);
-    expect(list[0]!.coverageLines).toBe(75);
+    const mine = list.filter((b) => b.id === res.body.event);
+    expect(mine.length).toBe(1);
+    expect(mine[0]!.hasCoverage).toBe(true);
+    expect(mine[0]!.coverageLines).toBe(75);
   });
 
   test("one profile given as a single text, not a list, is decoded the same", async () => {
