@@ -8,6 +8,11 @@
 // names its `FailedBuild`, that build's output. Since go 1.24 an output event
 // may carry `OutputType` (`frame`, `error`, `error-continue`); a stream that
 // carries it is read by it, else each output line is classed by its text.
+// The text form's limit: without `OutputType` a `t.Log` line and a `t.Error`
+// line have the same shape, so there a failure's message is every indented
+// `file.go:LINE:` line of the test (its log lines included), and a parent with
+// a failing subtest is dropped unless it panicked — its own error beside a
+// failing subtest is carried by the subtest's failure. The typed form is exact.
 import type { DecodedRun } from "./index.ts";
 import type { SuiteNode, TestLeaf } from "../types.ts";
 import { CUT_REASON, summaryOf, undecodableReason, type StreamLine, type TestEndEvent } from "./crucible-events.ts";
@@ -39,11 +44,14 @@ const TEST_FRAME = /^\t(?:\S*\/)?([^/\s]+_test\.go):(\d+)\b/;
 
 /** What the reader holds of one test that has not yet ended. */
 interface TestRecord {
-  /** The first located error's message, its continuation lines appended. */
+  /**
+   * The failure's message: the first located error, its continuation lines
+   * appended — in the text form, every located line, each with its own.
+   */
   message: string[];
-  /** The first located error's indent; its continuation lines are indented four more. */
+  /** The indent of the located line the message read last; its continuation lines are indented four more. */
   indent?: string;
-  /** Whether the line read last belongs to the first located error's message. */
+  /** Whether the line read last belongs to the message. */
   inMessage: boolean;
   /** The first located error's `<file>:<line>`. */
   fileLine?: string;
@@ -232,7 +240,10 @@ export class GoTestReader {
       };
     }
     // A parent that failed only because a subtest failed is no case of its own.
-    if (record.subtestEnded && record.subtestFailed && !record.ownError && !record.ownPanic) return null;
+    // The text form cannot tell a parent's own error from its log lines, so
+    // there only a panic keeps such a parent.
+    const ownFailure = record.ownPanic || (this.held.typed && record.ownError);
+    if (record.subtestEnded && record.subtestFailed && !ownFailure) return null;
     const message = record.message.length > 0 ? record.message.join("\n") : record.untyped.join("\n");
     const fileLine = record.fileLine ?? record.frameLine;
     const failure = failureOf({
@@ -270,8 +281,10 @@ export class GoTestReader {
     if (header !== null) record.lastLocated = header[4];
     if (kind === "error") {
       record.ownError = true;
-      if (record.fileLine === undefined && header !== null) {
-        record.fileLine = `${(header[2] ?? "").split("/").pop()}:${header[3]}`;
+      // The typed form's message is its first error; the text form's, every located line.
+      const first = record.fileLine === undefined;
+      if (header !== null && (first || !this.held.typed)) {
+        if (first) record.fileLine = `${(header[2] ?? "").split("/").pop()}:${header[3]}`;
         record.indent = header[1];
         record.message.push(header[4] ?? "");
         record.inMessage = true;
