@@ -377,14 +377,16 @@ def _module_dir(module_dir_arg, project_dir, cwd):
     why)`: --module-dir, else $GO_CRUCIBLE_MODULE_DIR, else the nearest go.mod
     at or above `cwd` and never above `project_dir`, else crucible.toml's
     `[go] module_dir`. A named dir is relative to the project dir and must
-    hold a go.mod."""
+    hold a go.mod. The walk compares real paths, so a project dir reached
+    through a symlink still bounds it."""
     for source, named in (("--module-dir", module_dir_arg),
                           ("GO_CRUCIBLE_MODULE_DIR",
                            os.environ.get("GO_CRUCIBLE_MODULE_DIR"))):
         if named:
             return _named_module(source, named, project_dir)
-    here = os.path.abspath(cwd)
-    while here == project_dir or here.startswith(project_dir + os.sep):
+    real_project = os.path.realpath(project_dir)
+    here = os.path.realpath(cwd)
+    while here == real_project or here.startswith(real_project + os.sep):
         if os.path.isfile(os.path.join(here, "go.mod")):
             return here, None
         here = os.path.dirname(here)
