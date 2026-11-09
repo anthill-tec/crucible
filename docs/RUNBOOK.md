@@ -416,6 +416,14 @@ provisioned server move in lockstep; on an already-current machine it reports
 - The `[fleet]` stage also lays down the Go client beside the other five, and the manifest lists it under `clients.go`. Its `test`,
   `regression` and `pre-merge-gate` need go 1.24 or later on `PATH`; an older
   go, or none, is refused before anything runs.
+- The Go client's `check` compiles the module (`go build ./...`), and
+  `check --tests` compiles every package and test file without running a test
+  or a vet check; a failing compile filed with `--agent` is one compile run of
+  format `go`. `--coverage` on `test` and `regression` sends each module's
+  coverprofile as `go-coverprofile`: statement coverage on the run's `lines`
+  axis. A board whose health does not list `go-coverprofile` refuses the run
+  before it opens. The client adds no `-coverpkg`; set
+  `GOFLAGS=-coverpkg=./...` to measure across packages.
 
 ### Upgrading TO 0.2.1 — re-run the install, do not stop at the package
 
