@@ -46,10 +46,10 @@ Project + Crucible endpoint:
   The client parses no test result; the board decodes go's own stream.
 
 Examples:
-  go-crucible.py register --agent CR-ABC-12-3-RED --role RED --cycle 3
-  go-crucible.py test --agent CR-ABC-12-3-RED
-  go-crucible.py test --agent CR-ABC-12-3-RED --run 'TestParse/empty'
-  go-crucible.py test --agent CR-ABC-12-3-RED --module-dir services/api
+  go-crucible.py register --agent <agentId> --role RED --cycle <cycleId>
+  go-crucible.py test --agent <agentId>
+  go-crucible.py test --agent <agentId> --run 'TestParse/empty'
+  go-crucible.py test --agent <agentId> --module-dir services/api
 """
 
 # pi-lens-ignore: I001 — pi-lens lints with its own ruff configuration, which sets no target version, so ruff files `tomllib` as third-party whatever the declared floor
