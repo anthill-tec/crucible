@@ -49,7 +49,14 @@ cannot register, run, ingest or gate through the board.
   runs one resolved module.
 - **The Go floor is 1.24**, the first with `build-output` / `build-fail` under `-json`. Go 1.27 adds
   `OutputType`; the codec uses it when present and reads the text form otherwise, so a Go 1.26
-  toolchain (Model B's project) decodes the same. Below 1.24 the client refuses, naming the version.
+  toolchain (Model B's project) decodes the same cases. Below 1.24 the client refuses, naming the
+  version.
+  - **The text form's limit (found at VERIFY, orchestrator ruling 2026-11-09):** without
+    `OutputType`, a `t.Log` line and a `t.Error` line have the same shape. So in the text form a
+    failure's message is every indented `file.go:LINE:` line of the test (logs included), and a
+    parent with a failing subtest is dropped unless it panicked. A parent's own `t.Error` beside a
+    failing subtest is therefore carried by the subtest's failure, not counted as its own case. The
+    typed form (Go ≥ 1.27) is exact. The CHANGELOG states the limit.
 - **Compile errors and coverage are CR-CRU-239** (split at gap analysis).
 
 ## Scope
@@ -84,7 +91,9 @@ cached result omits it). It is listed under `codecs.stream` in the board's healt
 - **No test files** (`? pkg [no test files]`, a package `skip` with no `Test`) adds no case.
 - **Incomplete.** A listed top-level name that never reaches a terminal event, for itself or a
   subtest, gives the run an `incomplete` reason naming it.
-- **`--run` matching nothing** is a run of 0 tests that passes, with a warning naming the regex.
+- **`--run` matching nothing** is refused before any run opens (user ruling 2026-11-09, at VERIFY):
+  the board never stores a stream with no test, so the client refuses when the list finds none,
+  naming the regex, as bun's `--name` refuses a name that matches nothing.
 
 ### §S3 — subtests
 
@@ -92,9 +101,9 @@ cached result omits it). It is listed under `codecs.stream` in the board's healt
 sets for python:
 
 - a parent's `pass` is dropped once any subtest was recorded;
-- a parent's `fail` is its own failing case when it printed its own `error` output, or when none of
-  its recorded subtests failed (`t.Fail()` after passing subtests); otherwise it is dropped, its
-  failing subtests carrying the failure.
+- a parent's `fail` is its own failing case when it printed its own `error` output or panicked, or
+  when none of its recorded subtests failed (`t.Fail()` after passing subtests); otherwise it is
+  dropped, its failing subtests carrying the failure. (The text form: see the Go-floor bullet.)
 
 ### §S4 — the module dir
 
@@ -136,7 +145,8 @@ the census, manifest-contract, envelope and schema tests.
   exit, a panic in a subtest and `[setup failed]`, each a failing case under its package; a package
   with no test files adding nothing.
 - [ ] **AC4 — one test by name.** `test --run <regex>` runs only the matching tests, a regex naming a
-  subtest included; a regex matching nothing is a passing run of 0 tests with a warning.
+  subtest included. A regex matching nothing is refused before any run opens, naming the regex, on
+  a real board.
 - [ ] **AC5 — the total comes from the list.** The run-start total equals the listed `Test*`, `Fuzz*`
   and `Example*` names of the run's selection, benchmarks excluded, with and without `--run`. A listed
   name that never reports leaves the run `incomplete`, naming it. A list that cannot be read starts
