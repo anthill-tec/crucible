@@ -13,8 +13,9 @@ no `--run`, and the top-level element of `--run` (before its first unbracketed
   - the whole module's run states the module's listed total;
   - `--run` passes Go's own `-run <regex>` to the run, lists the top-level
     element, and a regex naming a subtest runs only that subtest;
-  - a regex matching nothing is a passing run of 0 tests, with a warning
-    naming the regex;
+  - a regex matching nothing is refused before any run opens: the list finds
+    no test, so one ok:false envelope names the regex, the exit is non-zero,
+    no `go test` run is made and nothing reaches the board's run routes;
   - a list that exits non-zero still counts the names it printed;
   - a list that cannot be read starts the run with no total and a warning,
     and the run goes on.
@@ -220,20 +221,28 @@ class ARunRegexSelectsGosOwnRunTest(_RealGo):
                          ["TestB1", "TestB2"], where)
         self.assertEqual(result.returncode, 0, where)
 
-    def test_a_regex_matching_nothing_is_a_passing_run_of_zero_tests_with_a_warning(self):
+    def test_a_regex_matching_nothing_is_refused_before_any_run_opens_naming_the_regex(self):
         p = GoProject(self)
         p.board.script_run(passed=0)
         result = p.drive("--run", "TestNoSuchThing")
-        where = diagnostics(result)
-        self.assertEqual(result.returncode, 0, f"the run passes; {where}")
-        axi = envelope(result.stdout) or {}
-        self.assertIs(axi.get("ok"), True, where)
-        self.assertEqual(self.start_body(p, result).get("total"), 0, where)
-        self.assertEqual(terminal_events(p.held()), [], f"no test ran; {where}")
-        self.assertEqual(len(p.closes()), 1, f"the run is closed, not aborted; {where}")
+        where = f"calls={[c['argv'] for c in p.calls()]!r} {diagnostics(result)}"
+        self.assertNotEqual(result.returncode, 0, f"the run is refused; {where}")
+        axi = envelope(result.stdout)
+        self.assertIsNotNone(axi, f"one TOON envelope on stdout; {where}")
+        axi = axi or {}
+        self.assertEqual(axi.get("verb"), "test", where)
+        self.assertIs(axi.get("ok"), False, where)
+        self.assertIn("TestNoSuchThing", str(axi.get("error") or ""),
+                      f"the refusal's error names the regex; {where}")
+        lists = p.list_calls()
+        self.assertEqual(len(lists), 1, f"the list is what finds no test; {where}")
+        self.assertEqual(flag_value(lists[0]["argv"], "-list"), "TestNoSuchThing", where)
+        self.assertEqual(p.run_calls(), [], f"no go test run is made; {where}")
+        self.assertEqual(p.starts(), [], f"no run start reaches the board; {where}")
+        self.assertEqual(p.run_route_posts(), [], f"nothing is opened, closed or aborted; {where}")
         self.assertEqual(p.board.aborts(), [], f"nothing is aborted; {where}")
-        self.assertTrue([w for w in warning_texts(axi) if "TestNoSuchThing" in w],
-                        f"a warning names the regex; warnings={warning_texts(axi)!r}")
+        self.assertFalse([w for w in warning_texts(axi) if "filed as a run" in w],
+                         f"no warning claims a run was filed; warnings={warning_texts(axi)!r}")
 
 
 if __name__ == "__main__":

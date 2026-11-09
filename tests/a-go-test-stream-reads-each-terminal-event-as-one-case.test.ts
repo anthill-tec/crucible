@@ -15,6 +15,12 @@
 //    carrying the failure;
 //  - a failing subtest fails its run.
 //
+// The text form's limit: without `OutputType` a `t.Log` line and a `t.Error`
+// line have the same shape, so in the text form a parent with a failing
+// subtest is dropped unless it panicked — its own `t.Error` beside a failing
+// subtest is carried by the subtest's failure, never its own case. The typed
+// form is exact (logs.jsonl, below).
+//
 // Each fixture's expected cases are computed from the fixture's own terminal
 // events, and cross-checked against the `go test -v` run of the same tree.
 import { describe, test, expect } from "bun:test";
@@ -26,6 +32,7 @@ import {
   FORMS,
   statusOf,
   terminalTestEvents,
+  textFormOf,
   verboseResults,
   withoutTime,
 } from "./helpers/go-test-harness.ts";
@@ -33,6 +40,12 @@ import {
 const PA = "example.com/mod/pa";
 const PEX = "example.com/mod/pex";
 const PSUBPANIC = "example.com/mod/psubpanic";
+const PLOG = "example.com/mod/plog";
+
+/** logs.jsonl's cases under the tests named `prefix` (the test and its subtests). */
+function casesUnder(cases: readonly string[], prefix: string): string[] {
+  return cases.filter((c) => c.startsWith(`${PLOG} :: ${prefix} `) || c.startsWith(`${PLOG} :: ${prefix}/`));
+}
 
 /** The cases a fixture's terminal events give, less the parents named in `dropped` (each `<suite> :: <name>`). */
 function expectedCases(text: string, dropped: readonly string[]): string[] {
@@ -179,5 +192,43 @@ for (const form of FORMS) {
       expect(casesOf(run.tree)).toEqual(expectedCases(fixture("pa.jsonl"), PA_DROPPED));
       expect(Object.keys(run)).not.toContain("incomplete");
     });
+
+    test("logs.jsonl: a parent that logs and then has a failing subtest is dropped, its subtest carrying the failure — the same cases in both forms", () => {
+      const cases = casesOf(decodeGoTest(form.of(fixture("logs.jsonl"))).tree);
+      expect(casesUnder(cases, "TestLogsThenFailingSub")).toEqual([`${PLOG} :: TestLogsThenFailingSub/bad = fail`]);
+    });
+
+    test("logs.jsonl: a test that logs and then errors is one failing case", () => {
+      const cases = casesOf(decodeGoTest(form.of(fixture("logs.jsonl"))).tree);
+      expect(casesUnder(cases, "TestLogThenError")).toEqual([`${PLOG} :: TestLogThenError = fail`]);
+    });
   });
 }
+
+describe("a parent's own t.Error beside a failing subtest (logs.jsonl) — typed (OutputType, Go 1.27)", () => {
+  test("the parent is its own failing case beside its failing subtest: 4 cases, all failed", () => {
+    const text = fixture("logs.jsonl");
+    const run = decodeGoTest(text);
+    const cases = casesOf(run.tree);
+    expect(casesUnder(cases, "TestOwnErrorAndFailingSub")).toEqual([
+      `${PLOG} :: TestOwnErrorAndFailingSub = fail`,
+      `${PLOG} :: TestOwnErrorAndFailingSub/bad = fail`,
+    ]);
+    expect(cases).toEqual(expectedCases(text, [`${PLOG} :: TestLogsThenFailingSub`]));
+    expect(run.summary).toMatchObject({ total: 4, passed: 0, failed: 4, pending: 0 });
+  });
+});
+
+describe("a parent's own t.Error beside a failing subtest (logs.jsonl) — text form (no OutputType, Go 1.26)", () => {
+  test("the parent is dropped, its own error carried by the failing subtest: 3 cases, all failed", () => {
+    const text = fixture("logs.jsonl");
+    const run = decodeGoTest(textFormOf(text));
+    const cases = casesOf(run.tree);
+    expect(casesUnder(cases, "TestOwnErrorAndFailingSub")).toEqual([`${PLOG} :: TestOwnErrorAndFailingSub/bad = fail`]);
+    expect(cases).toEqual(
+      expectedCases(text, [`${PLOG} :: TestLogsThenFailingSub`, `${PLOG} :: TestOwnErrorAndFailingSub`]),
+    );
+    expect(run.summary).toMatchObject({ total: 3, passed: 0, failed: 3, pending: 0 });
+    expect(run.tree.map((s) => [s.name, s.status])).toEqual([[PLOG, "fail"]]);
+  });
+});

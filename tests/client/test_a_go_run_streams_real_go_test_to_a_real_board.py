@@ -20,6 +20,8 @@ same way into passed, failed and pending.
   - a `test` run on the module is stored decoded by `go-test`, with exactly
     those cases, and its envelope states the run the board filed;
   - a `--run` naming a subtest stores that subtest alone;
+  - a `--run` matching nothing is refused before any run opens: the board
+    holds no run of the agent's, stored, aborted or open;
   - a listed test that never reports leaves the run `incomplete`, naming the
     listed and reached counts: the run-start total reached the board.
 
@@ -33,6 +35,7 @@ Invocation:
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -208,6 +211,42 @@ class OneSubtestByNameTest(_RealGoRun):
         self.assertNotIn("incomplete", event,
                          f"the listed parent reported through its subtest: "
                          f"{event.get('incomplete')!r}")
+
+
+class ARegexMatchingNothingIsRefusedTest(_RealGoRun):
+    """A `--run` regex the list finds no test for, on a real board: refused
+    before any run opens, so the board holds no run of the agent's at all —
+    none filed, none aborted, none left open."""
+
+    def board_runs_of(self, agent):
+        """Every run row the board's store holds for `agent`, open or settled
+        (`runs` keeps a row for each run ever started)."""
+        store = os.path.join(self.board.tmpdir, "crucible.db")
+        conn = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+        try:
+            return conn.execute(
+                "SELECT run_id, run_state FROM runs WHERE project_key = ? AND agent_id = ?",
+                (self.board.key, agent)).fetchall()
+        finally:
+            conn.close()
+
+    def test_a_regex_matching_nothing_stores_no_run_and_aborts_none(self):
+        project = self.project("module", "module-nomatch")
+        agent = "go-e2e-nomatch"
+        result = self.drive(project, agent, "--run", "TestNoSuchThing")
+        where = diagnostics(result)
+        self.assertNotEqual(result.returncode, 0, f"the run is refused; {where}")
+        axi = envelope(result.stdout)
+        self.assertIsNotNone(axi, f"one TOON envelope on stdout; {where}")
+        axi = axi or {}
+        self.assertEqual(axi.get("verb"), "test", where)
+        self.assertIs(axi.get("ok"), False, where)
+        self.assertIn("TestNoSuchThing", str(axi.get("error") or ""),
+                      f"the refusal's error names the regex; {where}")
+        self.assertEqual(self.board.test_events(agent), [],
+                         f"no run is stored, filed or aborted; {where}")
+        self.assertEqual(self.board_runs_of(agent), [],
+                         f"no run was ever started on the board; {where}")
 
 
 class AListedTestThatNeverReportsTest(_RealGoRun):

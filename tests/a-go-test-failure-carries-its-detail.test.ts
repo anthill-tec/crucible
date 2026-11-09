@@ -5,7 +5,10 @@
 //  - a failure's message is its first `error` line, stripped of its
 //    `file.go:LINE: ` prefix, and the `error-continue` lines after it,
 //    de-indented (the text form reads the indented `file.go:LINE:` line and its
-//    continuation indent); a `t.Log` line is not part of it; testify's
+//    continuation indent); a `t.Log` line is not part of it in the typed form,
+//    but in the text form, where a log line and an error line have the same
+//    shape, the message is every indented `file.go:LINE:` line of the test,
+//    its log lines included (logs.jsonl); testify's
 //    `Error Trace:` / `Error:` blocks are kept whole. With no `error` line, the
 //    message is the test's own untyped output — a panic, a failing example;
 //  - the failure's type is its `file:line`: the first `error` line's, else the
@@ -28,9 +31,11 @@ import {
   fixture,
   FORMS,
   leafOf,
+  textFormOf,
 } from "./helpers/go-test-harness.ts";
 
 const PA = "example.com/mod/pa";
+const PLOG = "example.com/mod/plog";
 const TFY = "example.com/tfy";
 
 /** Asserts each of `parts` appears in `text`, in order. */
@@ -44,15 +49,25 @@ function inOrder(text: string | undefined, parts: readonly string[]): void {
   }
 }
 
+describe("a go failure's multi-line message beside a later t.Log line (pa.jsonl)", () => {
+  test("typed (OutputType, Go 1.27): the message is its three lines, prefix stripped and de-indented, the t.Log line left out", () => {
+    const leaf = leafOf(decodeGoTest(fixture("pa.jsonl")).tree, PA, "TestFailMulti");
+    expect(leaf.status).toBe("fail");
+    expect(leaf.failure?.message).toBe("first line\nsecond line\nthird line");
+    expect(leaf.failure?.message).not.toContain("a log line");
+    expect(leaf.failure?.message).not.toContain("a_test.go");
+  });
+
+  test("text form (no OutputType, Go 1.26): the message is every indented file.go:LINE: line of the test, its three lines and the t.Log line after them", () => {
+    const leaf = leafOf(decodeGoTest(textFormOf(fixture("pa.jsonl"))).tree, PA, "TestFailMulti");
+    expect(leaf.status).toBe("fail");
+    inOrder(leaf.failure?.message, ["first line\nsecond line\nthird line", "a log line"]);
+    expect(leaf.failure?.message).not.toContain("a_test.go");
+  });
+});
+
 for (const form of FORMS) {
   describe(`a go failure's message, file:line and trace — ${form.name}`, () => {
-    test("a multi-line t.Errorf: the message is its three lines, prefix stripped and de-indented, the t.Log line left out", () => {
-      const leaf = leafOf(decodeGoTest(form.of(fixture("pa.jsonl"))).tree, PA, "TestFailMulti");
-      expect(leaf.status).toBe("fail");
-      expect(leaf.failure?.message).toBe("first line\nsecond line\nthird line");
-      expect(leaf.failure?.message).not.toContain("a log line");
-      expect(leaf.failure?.message).not.toContain("a_test.go");
-    });
 
     test("a multi-line t.Errorf: file:line is the error line's, the file the package path joined to its basename", () => {
       const leaf = leafOf(decodeGoTest(form.of(fixture("pa.jsonl"))).tree, PA, "TestFailMulti");
@@ -241,5 +256,42 @@ for (const form of FORMS) {
       expect(run.summary).toMatchObject({ total: 0, passed: 0, failed: 0, pending: 0 });
       expect(Object.keys(run)).not.toContain("incomplete");
     });
+
+    test("logs.jsonl: a failing subtest under a logging parent carries its own message and file:line", () => {
+      const leaf = leafOf(decodeGoTest(form.of(fixture("logs.jsonl"))).tree, PLOG, "TestLogsThenFailingSub/bad");
+      expect(leaf.failure).toMatchObject({ message: "sub failed", type: "example.com/mod/plog/l_test.go:7" });
+    });
   });
 }
+
+describe("a go failure's message beside a t.Log line (logs.jsonl) — typed (OutputType, Go 1.27)", () => {
+  test("t.Log then t.Error: the message is the error alone, the log line left out", () => {
+    const leaf = leafOf(decodeGoTest(fixture("logs.jsonl")).tree, PLOG, "TestLogThenError");
+    expect(leaf.status).toBe("fail");
+    expect(leaf.failure?.message).toBe("boom");
+    expect(leaf.failure?.type).toBe("example.com/mod/plog/l_test.go:11");
+  });
+
+  test("a parent's own t.Error beside a failing subtest is its own failure, carrying its own message", () => {
+    const tree = decodeGoTest(fixture("logs.jsonl")).tree;
+    expect(leafOf(tree, PLOG, "TestOwnErrorAndFailingSub").failure).toMatchObject({
+      message: "own failure",
+      type: "example.com/mod/plog/l_test.go:15",
+    });
+    expect(leafOf(tree, PLOG, "TestOwnErrorAndFailingSub/bad").failure).toMatchObject({
+      message: "sub failed",
+      type: "example.com/mod/plog/l_test.go:14",
+    });
+  });
+});
+
+describe("a go failure's message beside a t.Log line (logs.jsonl) — text form (no OutputType, Go 1.26)", () => {
+  test("t.Log then t.Error: the message is every indented file.go:LINE: line of the test, the log line included", () => {
+    const leaf = leafOf(decodeGoTest(textFormOf(fixture("logs.jsonl"))).tree, PLOG, "TestLogThenError");
+    expect(leaf.status).toBe("fail");
+    inOrder(leaf.failure?.message, ["step one", "boom"]);
+    expect(leaf.failure?.message).not.toContain("l_test.go");
+    expect(leaf.failure?.message).not.toContain("--- FAIL");
+    expect(leaf.failure?.message).not.toContain("=== RUN");
+  });
+});

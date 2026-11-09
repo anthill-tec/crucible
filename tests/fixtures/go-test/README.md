@@ -13,7 +13,8 @@ deleting `OutputType` from every line (`textFormOf` in
 two versions.
 
 The commands below restate how each run was captured (at spec pre-review,
-except `bench.jsonl` and `bench-action.jsonl`, captured with the RED tests).
+except `bench.jsonl` and `bench-action.jsonl`, captured with the RED tests,
+and `logs.jsonl`, captured with the text-form ruling's tests).
 
 | File | Command (from the module dir) | What it holds |
 |---|---|---|
@@ -29,4 +30,5 @@ except `bench.jsonl` and `bench-action.jsonl`, captured with the RED tests).
 | `nomatch.jsonl` | `go test -json -run TestNothing ./pb` | `-run` matching nothing |
 | `cached.jsonl` | `go test -json ./pb`, twice | two runs, each a cached result (`(cached)`) |
 | `bench.jsonl` | `go test -json -run 'TestPass$' -bench . -benchtime 2x ./pbench` | a test and two benchmarks (one logging): benchmarks reach no terminal event |
+| `logs.jsonl` | `go test -json -count=1 ./plog` (in `testdata/mod`) | `t.Log` beside `t.Error`, where the text form cannot tell them apart: a parent that logs and then has a failing subtest; `t.Log("step one"); t.Error("boom")`; a parent with its own `t.Error` and a failing subtest |
 | `bench-action.jsonl` | `go tool test2json -p example.com/mod/pbench < testdata/bench-action.test` | a `bench` action, from Go's own test2json golden input (`src/cmd/internal/test2json/testdata/bench.test`); it carries no `Time` |

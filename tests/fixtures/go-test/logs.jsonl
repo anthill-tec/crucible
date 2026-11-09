@@ -1,0 +1,30 @@
+{"Time":"2026-11-09T07:09:39.792658704+05:30","Action":"start","Package":"example.com/mod/plog"}
+{"Time":"2026-11-09T07:09:39.794427721+05:30","Action":"run","Package":"example.com/mod/plog","Test":"TestLogsThenFailingSub"}
+{"Time":"2026-11-09T07:09:39.794466365+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestLogsThenFailingSub","Output":"=== RUN   TestLogsThenFailingSub\n","OutputType":"frame"}
+{"Time":"2026-11-09T07:09:39.794480242+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestLogsThenFailingSub","Output":"    l_test.go:6: setting up the table\n"}
+{"Time":"2026-11-09T07:09:39.794485953+05:30","Action":"run","Package":"example.com/mod/plog","Test":"TestLogsThenFailingSub/bad"}
+{"Time":"2026-11-09T07:09:39.794490131+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestLogsThenFailingSub/bad","Output":"=== RUN   TestLogsThenFailingSub/bad\n","OutputType":"frame"}
+{"Time":"2026-11-09T07:09:39.794494469+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestLogsThenFailingSub/bad","Output":"    l_test.go:7: sub failed\n","OutputType":"error"}
+{"Time":"2026-11-09T07:09:39.79450013+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestLogsThenFailingSub/bad","Output":"--- FAIL: TestLogsThenFailingSub/bad (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-09T07:09:39.794504759+05:30","Action":"fail","Package":"example.com/mod/plog","Test":"TestLogsThenFailingSub/bad","Elapsed":0}
+{"Time":"2026-11-09T07:09:39.794511061+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestLogsThenFailingSub","Output":"--- FAIL: TestLogsThenFailingSub (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-09T07:09:39.794515559+05:30","Action":"fail","Package":"example.com/mod/plog","Test":"TestLogsThenFailingSub","Elapsed":0}
+{"Time":"2026-11-09T07:09:39.794520289+05:30","Action":"run","Package":"example.com/mod/plog","Test":"TestLogThenError"}
+{"Time":"2026-11-09T07:09:39.794524126+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestLogThenError","Output":"=== RUN   TestLogThenError\n","OutputType":"frame"}
+{"Time":"2026-11-09T07:09:39.794529125+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestLogThenError","Output":"    l_test.go:10: step one\n"}
+{"Time":"2026-11-09T07:09:39.794533384+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestLogThenError","Output":"    l_test.go:11: boom\n","OutputType":"error"}
+{"Time":"2026-11-09T07:09:39.794537972+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestLogThenError","Output":"--- FAIL: TestLogThenError (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-09T07:09:39.794542421+05:30","Action":"fail","Package":"example.com/mod/plog","Test":"TestLogThenError","Elapsed":0}
+{"Time":"2026-11-09T07:09:39.794546429+05:30","Action":"run","Package":"example.com/mod/plog","Test":"TestOwnErrorAndFailingSub"}
+{"Time":"2026-11-09T07:09:39.794550226+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestOwnErrorAndFailingSub","Output":"=== RUN   TestOwnErrorAndFailingSub\n","OutputType":"frame"}
+{"Time":"2026-11-09T07:09:39.794554514+05:30","Action":"run","Package":"example.com/mod/plog","Test":"TestOwnErrorAndFailingSub/bad"}
+{"Time":"2026-11-09T07:09:39.794558351+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestOwnErrorAndFailingSub/bad","Output":"=== RUN   TestOwnErrorAndFailingSub/bad\n","OutputType":"frame"}
+{"Time":"2026-11-09T07:09:39.794562439+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestOwnErrorAndFailingSub/bad","Output":"    l_test.go:14: sub failed\n","OutputType":"error"}
+{"Time":"2026-11-09T07:09:39.794567399+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestOwnErrorAndFailingSub/bad","Output":"--- FAIL: TestOwnErrorAndFailingSub/bad (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-09T07:09:39.794572539+05:30","Action":"fail","Package":"example.com/mod/plog","Test":"TestOwnErrorAndFailingSub/bad","Elapsed":0}
+{"Time":"2026-11-09T07:09:39.794576867+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestOwnErrorAndFailingSub","Output":"    l_test.go:15: own failure\n","OutputType":"error"}
+{"Time":"2026-11-09T07:09:39.794587698+05:30","Action":"output","Package":"example.com/mod/plog","Test":"TestOwnErrorAndFailingSub","Output":"--- FAIL: TestOwnErrorAndFailingSub (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-09T07:09:39.794594711+05:30","Action":"fail","Package":"example.com/mod/plog","Test":"TestOwnErrorAndFailingSub","Elapsed":0}
+{"Time":"2026-11-09T07:09:39.794598949+05:30","Action":"output","Package":"example.com/mod/plog","Output":"FAIL\n","OutputType":"frame"}
+{"Time":"2026-11-09T07:09:39.794642032+05:30","Action":"output","Package":"example.com/mod/plog","Output":"FAIL\texample.com/mod/plog\t0.002s\n","OutputType":"frame"}
+{"Time":"2026-11-09T07:09:39.794659726+05:30","Action":"fail","Package":"example.com/mod/plog","Elapsed":0.002}

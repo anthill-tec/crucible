@@ -124,6 +124,44 @@ class TheModuleDirPrecedenceTest(_ModuleDir):
                         "a go.mod above the project dir is passed over for [go] module_dir")
 
 
+class AProjectDirReachedThroughASymlinkTest(_ModuleDir):
+    """The project dir named through a symlink: the working directory the
+    client stands in is always its real path, so the walk compares real paths
+    on both sides — the module the working directory is in is still found, and
+    a go.mod above the project's real dir is still never the module."""
+
+    def linked(self, p):
+        """`p` named from now on through a symlink to its real project dir."""
+        link = os.path.join(new_scratch("go-link-"), "linked-project")
+        os.symlink(p.dir, link)
+        self.assertNotEqual(os.path.realpath(link), link, "the project dir is a symlink")
+        p.dir = link
+        return p
+
+    def test_the_nearest_go_mod_is_found_when_the_project_dir_is_a_symlink(self):
+        p = self.linked(self.project())
+        result = p.drive(cwd=os.path.join(p.dir, "worker", "sub"))
+        self.assert_ran(p, result, WORKER,
+                        "standing in worker/sub of a project dir named through a symlink")
+
+    def test_the_working_directorys_module_comes_before_the_declaration_through_a_symlink(self):
+        p = self.linked(self.project())
+        p.declare_module_dir("api")
+        result = p.drive(cwd=os.path.join(p.dir, "worker"))
+        self.assert_ran(p, result, WORKER,
+                        "standing in worker through a symlinked project dir, "
+                        "[go] module_dir = api")
+
+    def test_a_go_mod_above_the_real_project_dir_is_never_the_module_through_a_symlink(self):
+        outer = new_scratch("go-outer-")
+        Path(outer, "go.mod").write_text("module example.com/outer\n\ngo 1.24\n",
+                                         encoding="utf-8")
+        p = self.linked(self.project(project_dir=os.path.join(outer, "project")))
+        result = p.drive(cwd=p.dir)
+        self.assert_refused(p, result,
+                            "only a go.mod above the real dir of a symlinked project dir")
+
+
 class AModuleThatCannotBeFoundIsRefusedTest(_ModuleDir):
 
     def test_no_module_found_is_refused_naming_the_ways_to_declare_one(self):
