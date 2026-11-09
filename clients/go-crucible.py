@@ -90,17 +90,21 @@ _MODULE_DECLARATION_HELP = (
 # The dirs a gate never looks in for a module (hidden dirs are skipped too):
 # vendored and test-fixture modules are not the project's own suite.
 _SKIPPED_MODULE_DIRS = ("vendor", "testdata", "node_modules")
+# The board codec that decodes a `go test -coverprofile` profile, the codec a
+# `--coverage` run's close sends each module's profile under.
+GO_COVERAGE_CODEC = "go-coverprofile"
 # The runner a gate over several modules starts: each module's
-# `go test -json ./...` in turn, its stdout the one run's stream. A failing
+# `go test -json ./...` in turn, its stdout the one run's stream. Its one
+# argument is a JSON list of `[module, [extra go test flags]]`. A failing
 # module does not stop the next; the exit is the worst any module gave (a
 # module a signal ended counts as 128 + the signal).
 _EACH_MODULE_RUNNER = r"""
-import subprocess, sys
+import json, subprocess, sys
 worst = 0
-for module in sys.argv[1:]:
+for module, extra in json.loads(sys.argv[1]):
     print(f"[crucible] running: go test -json ./... (in {module})",
           file=sys.stderr, flush=True)
-    code = subprocess.run(["go", "test", "-json", "./..."], cwd=module,
+    code = subprocess.run(["go", "test", "-json", *extra, "./..."], cwd=module,
                           check=False).returncode
     worst = max(worst, code if code >= 0 else 128 - code)
 sys.exit(worst)
@@ -611,10 +615,13 @@ def _discover_modules(project_dir):
 def _gated_go_run(verb, args, project_dir, agent, modules):
     """The board check and the gated-identity bracket around `_go_test_run`."""
     health = _get("/api/v2/health")
-    refused = _axi()._ingest_health_refusal(health, GO_TEST_CODEC, None)
+    coverage_codec = GO_COVERAGE_CODEC if getattr(args, "coverage", False) else None
+    refused = _axi()._ingest_health_refusal(health, GO_TEST_CODEC, coverage_codec)
     if refused:
+        codecs = " and ".join(f"`{name}`" for name in (GO_TEST_CODEC, coverage_codec)
+                              if name)
         return _refuse(verb, project_dir, agent, refused,
-                       [f"point the project at a board that decodes `{GO_TEST_CODEC}`"])
+                       [f"point the project at a board that decodes {codecs}"])
     with _axi().gated_run(project_dir, agent, getattr(args, "cycle", None),
                           f"gated {verb} run starting",
                           open_fn=_open_gate_identity,
@@ -634,13 +641,41 @@ def _close_gate_identity(project_dir, identity):
     return _axi().close_gate_identity(project_dir, identity, _ops())
 
 
-def _runner_command(modules, run, project_dir):
+def _runner_command(modules, run, project_dir, profiles=None):
     """`(cmd, cwd)` running `go test -json ./...`: directly in the one module,
-    or each module in turn through `_EACH_MODULE_RUNNER`."""
+    or each module in turn through `_EACH_MODULE_RUNNER`. With `profiles`
+    (one path per module), each module's call writes its coverprofile there."""
+    extras = [[f"-coverprofile={profile}"] for profile in profiles] if profiles \
+        else [[] for _module in modules]
     if len(modules) == 1:
-        return (["go", "test", "-json", *(["-run", run] if run else []), "./..."],
-                modules[0])
-    return [sys.executable, "-c", _EACH_MODULE_RUNNER, *modules], project_dir
+        return (["go", "test", "-json", *(["-run", run] if run else []),
+                 *extras[0], "./..."], modules[0])
+    return ([sys.executable, "-c", _EACH_MODULE_RUNNER,
+             json.dumps([[module, extra] for module, extra in zip(modules, extras, strict=True)])],
+            project_dir)
+
+
+def _coverage_profiles(own_dir, modules):
+    """One coverprofile path per module, in the run's own reports dir, each
+    removed first so a profile go did not write is never a stale one."""
+    profiles = [os.path.join(own_dir, f"go-coverprofile-{index}.out")
+                for index in range(len(modules))]
+    for profile in profiles:
+        if os.path.exists(profile):
+            os.remove(profile)
+    return profiles
+
+
+def _written_profiles(modules, profiles):
+    """`(paths, warnings)`: every module's profile when go wrote them all;
+    otherwise no path and one warning naming each module whose profile was
+    not written, so a run never carries a partial total."""
+    unwritten = [module for module, profile in zip(modules, profiles, strict=True)
+                 if not os.path.isfile(profile)]
+    if not unwritten:
+        return list(profiles), []
+    return [], [_axi().coverage_not_measured_warning(
+        f"go wrote no coverprofile for the module(s) {', '.join(unwritten)}")]
 
 
 def _go_test_run(verb, args, project_dir, agent, modules, health):
@@ -673,7 +708,9 @@ def _go_test_run(verb, args, project_dir, agent, modules, health):
     os.makedirs(own_dir, exist_ok=True)
     stream_path = os.path.join(own_dir, _STREAM_FILE)
     open(stream_path, "w", encoding="utf-8").close()
-    run_cmd, run_cwd = _runner_command(modules, run, project_dir)
+    coverage = bool(getattr(args, "coverage", False))
+    profiles = _coverage_profiles(own_dir, modules) if coverage else None
+    run_cmd, run_cwd = _runner_command(modules, run, project_dir, profiles)
     relay = None
     try:
         with _axi().abandon_trap(run_id):
@@ -700,9 +737,15 @@ def _go_test_run(verb, args, project_dir, agent, modules, health):
     relay.finish(_STREAM_FINISH_SECONDS)
     print(f"[crucible] go test exit={result.returncode}", file=sys.stderr)
     runner_exit = _axi().runner_exit_code(result.returncode)
+    coverage_paths = []
+    if coverage:
+        coverage_paths, missing = _written_profiles(modules, profiles)
+        warnings += missing
     resp = _axi().close_stream(_post, stack=_STACK, project_key=key, agent_id=agent,
                                run_id=run_id, codec=GO_TEST_CODEC,
                                raw=result.stdout or None, runner_exit=runner_exit,
+                               coverage_codec=GO_COVERAGE_CODEC if coverage_paths else None,
+                               coverage_paths=coverage_paths,
                                framework=GO_TEST_CODEC, release=release)
     exit_code = _axi().verb_exit(runner_exit, resp)
     if not resp.get("ok"):
@@ -1020,6 +1063,10 @@ def _add_lifecycle_verbs(sub):
                    help="Write the run's stderr to this file in addition to "
                         "streaming it.")
     t.add_argument("--reports", help=_REPORTS_HELP)
+    t.add_argument("--coverage", action="store_true",
+                   help="Write the module's coverprofile (go test -coverprofile) in "
+                        "the run's reports dir and send it with the run's close as "
+                        "go-coverprofile: statement coverage, on the lines axis.")
     _add_gate_cycle_arg(t)
     _axi().add_run_release_arg(t)
     _add_project_dir_arg(t)
@@ -1077,6 +1124,13 @@ def _add_gate_verbs(sub):
                        help="Write the run's stderr to this file in addition to "
                             "streaming it.")
         g.add_argument("--reports", help=_REPORTS_HELP)
+        if name == "regression":
+            g.add_argument("--coverage", action="store_true",
+                           help="Write each module's coverprofile (go test "
+                                "-coverprofile) in the run's reports dir and send "
+                                "them all with the run's close as go-coverprofile; "
+                                "a module whose profile was not written leaves the "
+                                "run with no coverage.")
         _add_gate_cycle_arg(g)
         _axi().add_run_release_arg(g)
         if name == "pre-merge-gate":
