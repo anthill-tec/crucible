@@ -51,7 +51,8 @@ decoder:
   import cycle, two packages in one directory) print no `path:LINE` line. A `go` report holding no
   diagnostic is stored as ONE message-only error whose message is the report's lines that are not
   headers, `go:`, `ok`, `?` or `FAIL` lines, so its error count is 1 and the compile is never shown as
-  clean.
+  clean. When no line is left (a failure Go reports only on `go:` lines, such as
+  `go: updates to go.mod needed`), the message is the `go:` lines (added at VERIFY 2026-11-09).
 - The format is named by the hint `go` (alias `golang`), which the client always sends. Without a
   hint, a report is read as `go` only when a line starts with `<file>.go:LINE:COL:` and a space, and
   only after every existing format has been tried. A board older than this CR stores a `go` report
