@@ -17,6 +17,9 @@ Subcommands:
                         [--run REGEX] passes Go's own -run; a regex the
                         list finds no test for is refused before any run
                         opens.
+  check                 go build ./... in the same module ([--tests]: the
+                        test compile, no test and no vet check run); with
+                        --agent a failing compile is filed, format `go`.
   plan / cycle / status verbs, the roadmap verbs and `next`: the fleet's
                         shared implementations, one thin delegator each.
 
@@ -453,6 +456,83 @@ def cmd_test(args):
         return _refuse(verb, project_dir, agent, f"{why}; nothing was run",
                        [_MODULE_DECLARATION_HELP])
     return _gated_go_run(verb, args, project_dir, agent, [module])
+
+
+def cmd_check(args):
+    """Compile the module `test` resolves: `go build ./...`, or with `--tests`
+    the test compile (`_check_command`) instead. With `--agent` a failing
+    compile files its output, stdout and stderr in the order go printed them,
+    as ONE compile run of format `go`; a clean one files nothing.
+
+    Refused before go compiles anything: a Go below the floor, a module that
+    cannot be found, and with `--tests` a missing no-op for `-exec`. One
+    envelope on every path; the exit is go's own on a failing compile."""
+    verb = "check"
+    agent = args.agent
+    project_dir = _resolve_project_dir(args.project_dir)
+    refused = _toolchain_refusal()
+    if refused:
+        return _refuse(verb, project_dir, agent, *refused)
+    module, why = _module_dir(args.module_dir, project_dir, os.getcwd())
+    if module is None:
+        return _refuse(verb, project_dir, agent, f"{why}; nothing was compiled",
+                       [_MODULE_DECLARATION_HELP])
+    cmd, why = _check_command(args.tests)
+    if cmd is None:
+        return _refuse(verb, project_dir, agent, why,
+                       ["put a `true` binary on PATH, or run check without --tests"])
+    cycle = getattr(args, "cycle", None)
+    # An ingesting verb: the attribution pre-flight runs before go compiles,
+    # while `--cycle` can still be supplied.
+    warnings = list(_axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), agent, cycle_id=cycle, context=None))
+    print(f"[crucible] running: {' '.join(cmd)} (in {module})", file=sys.stderr)
+    result = subprocess.run(cmd, cwd=module, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, check=False)
+    ok = result.returncode == 0
+    print(f"[crucible] {' '.join(cmd[:2])} exit={result.returncode}", file=sys.stderr)
+    if not ok:
+        sys.stderr.write(result.stdout)
+        if agent:
+            _ingest_go_compile(project_dir, agent, result.stdout, cycle)
+    _emit_axi(verb, ok, {"exit": result.returncode, "help": _axi().HELP_STEPS["check"]},
+              _axi_context(project_dir, agent_id=agent), warnings,
+              f"check: ok={ok} exit={result.returncode}")
+    return 0 if ok else (result.returncode or 1)
+
+
+def _check_command(tests):
+    """`(cmd, None)` for the compile `check` runs, or `(None, why)`. Without
+    `tests` it is `go build ./...`. With `tests` it is the test compile: every
+    package and test file compiled, no vet check, no test selected, and the
+    test binary handed to a no-op `-exec` (an absolute path, run without a
+    shell) so none runs, `TestMain` included."""
+    if not tests:
+        return ["go", "build", "./..."], None
+    no_op = shutil.which("true")
+    if no_op is None:
+        return None, ("no `true` binary was found on PATH to stand in for the test "
+                      "binary (-exec), so the test compile would run the tests; "
+                      "nothing was compiled")
+    return ["go", "test", "-count=1", "-vet=off", "-run", "^$",
+            "-exec", os.path.abspath(no_op), "./..."], None
+
+
+def _ingest_go_compile(project_dir, agent, output, cycle_id):
+    """POST a failing compile's output to /api/v2/runs/compile, format `go`
+    (the board decodes it), under `cycle_id` when one is given."""
+    payload = {
+        "projectKey": _project_key(project_dir),
+        "format": "go",
+        "errors": output,
+        "agentId": agent,
+    }
+    context = _axi().cycle_context(None, cycle_id)
+    if context:
+        payload["context"] = context
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload, stack=_STACK)
+    print(f"ingest compile (check): ok={resp.get('ok')}", file=sys.stderr)
+    return resp
 
 
 def cmd_regression(args):
@@ -944,6 +1024,26 @@ def _add_lifecycle_verbs(sub):
     _axi().add_run_release_arg(t)
     _add_project_dir_arg(t)
     t.set_defaults(func=cmd_test)
+
+    c = sub.add_parser(
+        "check",
+        help="Compile the run's module (go build ./...); a failing compile is "
+             "filed as a go compile run.")
+    c.add_argument("--agent",
+                   help="Registered agent id to file a failing compile under; "
+                        "without one nothing is filed.")
+    c.add_argument("--tests", action="store_true",
+                   help="Compile every package and test file instead (go test "
+                        "-count=1 -vet=off -run '^$' with a no-op -exec): no test "
+                        "runs and no vet check runs.")
+    c.add_argument("--module-dir",
+                   help="The module to compile, relative to the project dir "
+                        "(default: $GO_CRUCIBLE_MODULE_DIR, else the nearest go.mod "
+                        "at or above the working directory, else crucible.toml "
+                        "[go] module_dir).")
+    _axi().add_filing_cycle_arg(c)
+    _add_project_dir_arg(c)
+    c.set_defaults(func=cmd_check)
 
 
 def _add_gate_cycle_arg(p):
