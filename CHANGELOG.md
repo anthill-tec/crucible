@@ -192,6 +192,9 @@ For the go stack (`crucible.toml`):
 - **`TestMain` runs twice per run.** The `go test -list` that counts the run's total builds and
   starts every test binary once more, so a package's `TestMain` runs twice: once for the list and
   once for the run. A `TestMain` with side effects should tolerate that.
+- **Below Go 1.27 the board reads the text form.** That form cannot tell a `t.Log` line from a
+  `t.Error` line. So a test's log lines are carried in its failure message, and a parent's own
+  error beside a failing subtest is carried by the subtest's failure, not counted as its own case.
 
 ## [0.3.0] - 2026-10-10
 
