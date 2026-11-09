@@ -418,8 +418,8 @@ provisioned server move in lockstep; on an already-current machine it reports
   go, or none, is refused before anything runs.
 - The Go client's `check` compiles the module (`go build ./...`), and
   `check --tests` compiles every package and test file without running a test
-  or a vet check; a failing compile filed with `--agent` is one compile run of
-  format `go`. `--coverage` on `test` and `regression` sends each module's
+  or a vet check; a failing compile filed under an agent id is one compile run
+  of format `go`. `--coverage` on `test` and `regression` sends each module's
   coverprofile as `go-coverprofile`: statement coverage on the run's `lines`
   axis. A board whose health does not list `go-coverprofile` refuses the run
   before it opens. The client adds no `-coverpkg`; set
