@@ -1,7 +1,8 @@
 // CR-CRU-002 §S2 — Compile codecs: parseCompile / detectFormat.
-// Parses compiler error output (rustc / javac / python / tsc / gcc) into a CompileReport.
+// Parses compiler error output (rustc / javac / python / tsc / gcc / go) into a CompileReport.
 // Never rejects: unrecognized input falls back to format "raw"; so does a gcc report
-// holding no error diagnostic, so a failed build is never shown as clean.
+// holding no error diagnostic, so a failed build is never shown as clean. A go report
+// holding no positioned diagnostic is one message-only error, for the same reason.
 
 export interface CompileDiagnostic {
   file?: string;
@@ -34,6 +35,8 @@ const HINT_ALIASES: Record<string, string> = {
   gcc: "gcc",
   "g++": "gcc",
   arduino: "gcc",
+  go: "go",
+  golang: "go",
 };
 
 const RUSTC_HEAD = /^(error|warning)(?:\[(E\d+)\])?:\s*(.*)$/;
@@ -52,6 +55,16 @@ const GCC_FLAG = /^(.*) \[(-[^\]]*)\]$/;
 const GCC_LINK_SOURCED = /^(?!\[)((?:(?!: ).)+?):(\d+):(?:\([^()]*\):)? (undefined reference to .*)$/;
 // Object-only link error: `…: OBJECT:(SECTION+OFFSET): undefined reference to …`.
 const GCC_LINK_OBJECT = /^.*?: [^:\s][^:]*:\([^()]*\): (undefined reference to .*)$/;
+// Go: `PATH:LINE:COL: message`, or `PATH:LINE: message` with no column (a go.mod error).
+const GO_DIAGNOSTIC = /^(?!\[)((?:(?!: ).)+?):(\d+)(?::(\d+))?: (.*)$/;
+// Unhinted detection needs a `<file>.go:LINE:COL: ` line.
+const GO_DETECT = /^(?!\[)(?:(?!: ).)+?\.go:\d+:\d+: /;
+const GO_CONTINUATION = /^\t+/;
+// A line the go command prints about itself or the module, not about a source file.
+const GO_TOOL_LINE = /^go: /;
+const GO_TOO_MANY = "too many errors";
+// Lines that are never a go diagnostic: package headers, `go:` lines, the test compile's status lines.
+const GO_NOT_DIAGNOSTIC = /^(?:# |go: |(?:ok|\?|FAIL)(?:\s|$))/;
 
 export function detectFormat(errors: string, hint?: string): string {
   if (hint !== undefined) {
@@ -66,6 +79,7 @@ export function detectFormat(errors: string, hint?: string): string {
   if (lines.some((line) => PYTHON_FRAME.test(line))) return "python";
   if (lines.some((line) => TSC_LINE.test(line))) return "tsc";
   if (lines.some((line) => GCC_DIAGNOSTIC.test(line) || GCC_LINK_SOURCED.test(line))) return "gcc";
+  if (lines.some((line) => GO_DETECT.test(line))) return "go";
   return "raw";
 }
 
@@ -184,6 +198,56 @@ function parseGcc(lines: string[]): CompileDiagnostic[] {
   return diagnostics;
 }
 
+function parseGo(lines: string[]): CompileDiagnostic[] {
+  const diagnostics: CompileDiagnostic[] = [];
+  let current: CompileDiagnostic | null = null;
+  for (const line of lines) {
+    if (current !== null && GO_CONTINUATION.test(line)) {
+      current.message += `\n${line.replace(GO_CONTINUATION, "")}`;
+      continue;
+    }
+    current = null;
+    if (GO_NOT_DIAGNOSTIC.test(line)) continue;
+    const match = line.match(GO_DIAGNOSTIC);
+    if (!match) continue;
+    const message = match[4] ?? "";
+    if (message === GO_TOO_MANY) continue; // printed after the tenth error, not a diagnostic
+    const diagnostic: CompileDiagnostic = {
+      file: match[1] ?? "",
+      line: Number(match[2]),
+      message,
+      level: "error",
+    };
+    if (match[3] !== undefined) diagnostic.col = Number(match[3]);
+    diagnostics.push(diagnostic);
+    current = diagnostic;
+  }
+  return diagnostics;
+}
+
+/**
+ * A go report with no positioned diagnostic: one error from its lines that are not headers,
+ * status lines or `go:` lines. A tab-indented line belongs to the line it follows, so it goes
+ * with a `go:` line. When nothing else is left, the `go:` lines are the message.
+ */
+function goMessageOnly(lines: string[]): CompileDiagnostic {
+  const kept: string[] = [];
+  const goLines: string[] = [];
+  let afterGoLine = false;
+  for (const line of lines) {
+    if (GO_CONTINUATION.test(line)) {
+      const text = line.replace(GO_CONTINUATION, "");
+      if (text.trim() !== "") (afterGoLine ? goLines : kept).push(text);
+      continue;
+    }
+    afterGoLine = GO_TOOL_LINE.test(line);
+    if (afterGoLine) goLines.push(line);
+    else if (line.trim() !== "" && !GO_NOT_DIAGNOSTIC.test(line)) kept.push(line);
+  }
+  const message = (kept.length > 0 ? kept : goLines).join("\n");
+  return { message, level: "error" };
+}
+
 /** Counts from conventional markers for unstructured ("raw") input. */
 function rawCounts(errors: string): { errorCount: number; warningCount: number } {
   return {
@@ -226,6 +290,11 @@ export function parseCompile(errors: string, formatHint?: string): CompileReport
         diagnostics = parseGcc(lines);
         // A gcc report with no error diagnostic is never shown as clean.
         if (!diagnostics.some((d) => d.level === "error")) return rawReport(errors);
+        break;
+      case "go":
+        diagnostics = parseGo(lines);
+        // A go report with no positioned diagnostic is still a failure, never shown as clean.
+        if (diagnostics.length === 0) diagnostics = [goMessageOnly(lines)];
         break;
       default:
         return rawReport(errors);

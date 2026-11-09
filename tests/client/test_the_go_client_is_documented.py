@@ -88,5 +88,99 @@ class TheReadmeAndRunbookNameTheGoClientTest(unittest.TestCase):
                         "the RUNBOOK names the Go floor, go 1.24")
 
 
+PRD = RUNBOOK.parent / "research" / "PRD-crucible-v2.md"
+#: A block about Go: the word `Go` (or the Go client's file name).
+ABOUT_GO = re.compile(r"\bGo\b|go-crucible\.py")
+CHECK = re.compile(r"`(?:[\w.-]+ )?check`")
+CHECK_TESTS = re.compile(r"`(?:[\w.-]+ )?check --tests`")
+COVERAGE_FLAG = re.compile(r"--coverage\b")
+
+
+def _unreleased(text):
+    """The CHANGELOG's `[Unreleased]` body, up to the next release heading."""
+    parts = text.split("## [Unreleased]", 1)
+    return re.split(r"(?m)^## \[", parts[1], maxsplit=1)[0] if len(parts) == 2 else ""
+
+
+def _go_blocks(text):
+    """The paragraphs and top-level bullets of `text` that are about Go."""
+    return [block for block in _blocks(text) if ABOUT_GO.search(block)]
+
+
+class _NamesGosCheckAndCoverage:
+    """A document names, in a block about Go, `check`, `check --tests` and
+    `--coverage`. A subclass states `text()` and is a `TestCase`."""
+
+    def text(self):
+        raise NotImplementedError
+
+    def assert_a_go_block_matches(self, pattern, what):
+        blocks = _go_blocks(self.text())
+        if not any(pattern.search(block) for block in blocks):
+            raise AssertionError(f"a block about Go names {what}")
+
+    def test_names_gos_check(self):
+        self.assert_a_go_block_matches(CHECK, "`check`")
+
+    def test_names_gos_check_tests(self):
+        self.assert_a_go_block_matches(CHECK_TESTS, "`check --tests`")
+
+    def test_names_gos_coverage_flag(self):
+        self.assert_a_go_block_matches(COVERAGE_FLAG, "`--coverage`")
+
+
+class TheChangelogNamesGosCheckAndCoverageTest(_NamesGosCheckAndCoverage, unittest.TestCase):
+
+    def text(self):
+        return _unreleased(CHANGELOG.read_text(encoding="utf-8"))
+
+    def test_states_go_coverage_is_statement_coverage_on_the_lines_axis(self):
+        stated = any(re.search(r"(?i)\bstatement", block) and re.search(r"\blines\b", block)
+                     for block in _go_blocks(self.text()))
+        self.assertTrue(stated, "a block about Go says its coverage is statement coverage, "
+                                "on the lines axis")
+
+    def test_states_that_goflags_carries_coverpkg(self):
+        stated = any("GOFLAGS" in block and "-coverpkg" in block
+                     for block in _blocks(self.text()))
+        self.assertTrue(stated, "a block says `GOFLAGS` carries `-coverpkg`")
+
+
+class TheReadmeNamesGosCheckAndCoverageTest(_NamesGosCheckAndCoverage, unittest.TestCase):
+
+    def text(self):
+        return README.read_text(encoding="utf-8")
+
+
+class TheRunbookNamesGosCheckAndCoverageTest(_NamesGosCheckAndCoverage, unittest.TestCase):
+
+    def text(self):
+        return RUNBOOK.read_text(encoding="utf-8")
+
+
+class ThePrdCarriesTheGoCoverageAmendmentTest(unittest.TestCase):
+
+    def setUp(self):
+        self.text = PRD.read_text(encoding="utf-8")
+
+    def test_the_run_schemas_coverage_row_makes_functions_optional(self):
+        rows = [line for line in self.text.splitlines()
+                if re.match(r"^\|\s*`coverage`\s*\|", line)]
+        self.assertTrue(rows, "the run schema has a `coverage` row")
+        optional = any(re.search(r"\bfunctions\?|(?i:functions\b[^|]{0,80}\boptional)", row)
+                       for row in rows)
+        self.assertTrue(optional, f"the coverage row makes functions optional; rows={rows}")
+
+    def test_the_coverage_codec_list_names_go_coverprofile(self):
+        listed = any(re.search(r"(?i)coverage codecs", block) and "go-coverprofile" in block
+                     for block in _blocks(self.text))
+        self.assertTrue(listed, "the coverage codec list names `go-coverprofile`")
+
+    def test_go_statement_coverage_is_stated_on_lines(self):
+        stated = any("go-coverprofile" in block and re.search(r"(?i)\bstatement", block)
+                     and re.search(r"\blines\b", block) for block in _blocks(self.text))
+        self.assertTrue(stated, "the PRD puts Go's statement coverage on `lines`")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,2 @@
+main.go:3:8: no required module provides package example.com/nowhere/widgets; to add it:
+	go get example.com/nowhere/widgets

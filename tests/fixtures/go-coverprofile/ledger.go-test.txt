@@ -1,0 +1,1 @@
+ok  	example.com/ledger	0.002s	coverage: 75.0% of statements

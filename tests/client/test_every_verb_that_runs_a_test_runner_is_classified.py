@@ -74,13 +74,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 CLIENT_KEYS = ("bun", "python", "mvn", "rust", "arduino", "go")
 # The verbs every client's parser must enumerate. go declares no tier yet (so
-# no `unit` or `bdd`), files no compile result yet (so no `check`) and reads
-# no report already on disk (so no `auto-ingest`): its own set is its gate.
+# no `unit` or `bdd`) and reads no report already on disk (so no
+# `auto-ingest`): its own set is its gate and its compile `check`.
 ENUMERATED_VERBS = {
     **{client: ("register", "pre-merge-gate", "auto-ingest", "check", "unit",
                 "regression", "bdd")
        for client in ("bun", "python", "mvn", "rust", "arduino")},
-    "go": ("register", "test", "regression", "pre-merge-gate"),
+    "go": ("register", "test", "regression", "pre-merge-gate", "check"),
 }
 # The verbs each client must classify as running a test runner.
 APPLYING_VERBS = {
@@ -278,6 +278,7 @@ CLIENT_CENSUS = {
         "test": applies("_go_test_run"),
         "regression": applies("_go_test_run"),
         "pre-merge-gate": applies("_go_test_run"),
+        "check": _COMPILE_GATE,
         "runs": _STORED_RUN_READ,
         "run": _STORED_RUN_READ,
     },
@@ -1311,6 +1312,7 @@ _PY_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 _MVN_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
 _RUST_RUSTC = {("_ingest_rustc_stderr", "post_ingest", COMPILE_ROUTE)}
 _ARDUINO_COMPILE = {("_ingest_compile", "post_ingest", COMPILE_ROUTE)}
+_GO_COMPILE = {("_ingest_go_compile", "post_ingest", COMPILE_ROUTE)}
 
 ROUTE_TABLE = {
     "bun": {
@@ -1385,10 +1387,11 @@ ROUTE_TABLE = {
     "go": {
         # Every `go test -json` verb closes its open run from its go-test
         # stream through the shared stream close, handed the runner's exit. A
-        # build failure is the stream's own package failure (no compile
-        # ingest of its own yet).
+        # run's build failure is the stream's own package failure; the compile
+        # `check` files its failing compile on the compile route.
         **{verb: routes(_THROUGH_THE_SHARED_STREAM_CLOSE)
            for verb in ("test", "regression", "pre-merge-gate")},
+        "check": routes((), _GO_COMPILE),
     },
 }
 

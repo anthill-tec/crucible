@@ -165,7 +165,10 @@ pip install -e '.[dev]'
   (`{bun,python,rust,mvn,arduino,go}-crucible.py`) plus the shared TOON-AXI
   envelope module every one of them emits through. The Go client,
   `go-crucible.py`, streams `go test -json` to the board; it needs go 1.24 or
-  later.
+  later. Its `check` compiles the module (`go build ./...`), `check --tests`
+  compiles test files too without running a test, and `--coverage` on `test`
+  and `regression` sends each module's coverprofile as Go statement coverage
+  (`go-coverprofile`, on the `lines` axis).
 - `clients/STATUS-CONTRACT.md` — the status/dashboard payload contract the
   orchestrators read.
 

@@ -26,13 +26,13 @@ async function health(route: string): Promise<Record<string, unknown>> {
 
 const CODECS = {
   test: ["crucible-events", "go-test", "junit", "nextest"],
-  coverage: ["jacoco", "lcov"],
+  coverage: ["go-coverprofile", "jacoco", "lcov"],
   view: ["bun-console", "surefire-console"],
   stream: ["crucible-events", "go-test", "nextest"],
 };
 
 describe("health names the codecs the board decodes", () => {
-  test("GET /api/health carries codecs {test: [crucible-events, go-test, junit, nextest], coverage: [jacoco, lcov], view: [bun-console, surefire-console], stream: [crucible-events, go-test, nextest]}", async () => {
+  test("GET /api/health carries codecs {test: [crucible-events, go-test, junit, nextest], coverage: [go-coverprofile, jacoco, lcov], view: [bun-console, surefire-console], stream: [crucible-events, go-test, nextest]}", async () => {
     const body = await health("/api/health");
     expect(body.ok).toBe(true);
     expect(body.codecs).toEqual(CODECS);
@@ -49,7 +49,7 @@ describe("health names the codecs the board decodes", () => {
     const codecs = body.codecs as { test?: string[]; coverage?: string[]; view?: string[] } | undefined;
     expect(codecs?.test?.length).toBe(4);
     expect(codecs?.test ?? []).not.toContain("playwright");
-    expect(codecs?.coverage?.length).toBe(2);
+    expect(codecs?.coverage?.length).toBe(3);
     expect(codecs?.view?.length).toBe(2);
     expect(codecs?.test ?? []).not.toContain("parsed");
     expect(codecs?.test ?? []).not.toContain("bun-console");

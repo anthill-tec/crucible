@@ -136,7 +136,7 @@ One ingest call = one immutable event on the project's timeline.
 | `stack` | `"rust"` \| `"java"` \| `"python"` \| `"ts"` \| `"arduino"` \| … | v2 — which stack produced the run |
 | `framework` | string? — `"bun-test"` \| `"vitest"` \| `"playwright"` \| `"playwright-bdd"` for bun; `"pytest"` \| `"unittest"` for python, its runner; `"nextest"`, `"surefire"`, `"go-test"`, `"arduino-native"` reserved for the other stacks | CR-CRU-225 (migration v23) — which test framework ran it, as the run's target declares (§4.4); stored beside `stack` on the event and the run. The python client states its runner, `pytest` or `unittest`, on every run it files. The runs filed through the retired codec carry `playwright-bdd` (migration v25). The framework decides the `junit` readings and the specification view (§4.4). The board takes any non-empty string; a close that states none inherits its start's. A run stored before v23, or sent by a client that states none, has none |
 | `codec` | `"junit"` \| `"crucible-events"` \| `"rustc"` \| `"javac"` \| `"python"` \| `"tsc"` \| `"gcc"` \| … | v2 — which codec normalized it (the set follows the supported stacks, §4.4). A run stored through the retired Playwright JSON codec keeps that codec as the record of how it was filed; no run is filed with it now |
-| `coverage` | `{lines, functions, branches?}` each `{total, covered, percent}` | only on fully-green runs — server discards otherwise (v1 safety net) |
+| `coverage` | `{lines, functions?, branches?}` each `{total, covered, percent}` | only on fully-green runs — server discards otherwise (v1 safety net) |
 | `compile` | `{format, errorCount, warningCount, errors: [{file?, line?, col?, code?, message, level}], raw}` | compile events |
 | `name` | string? | optional run label |
 | `context` | `{git?: {branch, commit}, wave?: string, orchestrator?: "mainline" \| "track-N"}` | v2 (decided 2026-07-14) — ties runs to the exact commit and, in Model-B projects, distinguishes a track's check-run from Mainline's regression on the same timeline. **Every field optional — graceful degradation is a hard requirement**: lightweight projects send no context and the API/UI must never require or fabricate it. |
@@ -265,7 +265,10 @@ registry** translating each tool's native output into one **canonical RunSchema*
   section are filed as CR-CRU-151 (stack stamp), CR-CRU-152 (per-stack reports decoded on the server)
   and CR-CRU-153 (the arduino stack's g++ compile output).
 - Every event is stamped with `stack` + `codec` so the UI renders stack-aware views (§4.11); a tool
-  version is not stamped. Coverage codecs: `lcov` and `jacoco`, rounded as the clients' Python `round`.
+  version is not stamped. Coverage codecs: `lcov`, `jacoco` and `go-coverprofile`, rounded as the
+  clients' Python `round`. `go-coverprofile` (CR-CRU-239) stores Go's statement coverage on `lines`:
+  covered statements over all statements, a block listed more than once counted once, and no
+  `functions` axis, which is why `functions` is optional on the run.
 - Parsed path (`/runs/parsed`): the route older clients post to — summary/tree/coverage taken as-is.
 - Both paths record a `kind:"test"` event and answer `{ok, run}`; `/runs` adds `files` and `coverage`.
 - Record stream codecs (CR-CRU-200): `crucible-events` decodes a JSON-lines test stream by JUnit's own failure and

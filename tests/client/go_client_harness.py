@@ -296,8 +296,10 @@ class GoProject:
         env.update({k: str(v) for k, v in extra.items()})
         return env
 
-    def drive(self, *argv, cwd=None, agent=AGENT, timeout=TIMEOUT, **extra):
-        cmd = [sys.executable, str(GO_CLIENT), "test", *argv]
+    def drive(self, *argv, cwd=None, agent=AGENT, timeout=TIMEOUT, verb="test",
+              **extra):
+        """Run the client's `verb` (default `test`) with `argv`."""
+        cmd = [sys.executable, str(GO_CLIENT), verb, *argv]
         if agent:
             cmd += ["--agent", agent]
         cmd += ["--project-dir", self.dir]
@@ -316,6 +318,11 @@ class GoProject:
     def test_calls(self):
         """Every `go test` call, in order."""
         return [c for c in self.calls() if "test" in c["argv"]]
+
+    def subcommand_calls(self, subcommand):
+        """Every call whose go subcommand (its first argument) is
+        `subcommand` — `build`, `test` — in order."""
+        return [c for c in self.calls() if c["argv"][:1] == [subcommand]]
 
     def list_calls(self):
         return [c for c in self.test_calls() if flag_value(c["argv"], "-list") is not None]

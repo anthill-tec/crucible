@@ -28,7 +28,7 @@ async function health(route: string): Promise<Record<string, unknown>> {
 
 const CODECS = {
   test: ["crucible-events", "go-test", "junit", "nextest"],
-  coverage: ["jacoco", "lcov"],
+  coverage: ["go-coverprofile", "jacoco", "lcov"],
   view: ["bun-console", "surefire-console"],
   stream: ["crucible-events", "go-test", "nextest"],
 };

@@ -27,6 +27,18 @@ Releases before 0.3.0 are described only on GitHub Releases.
   - `--suites <target>` on a non-`bun-test` target runs only that target.
   - These suites measure no coverage, and the gate warns of none.
   - The other stacks' gates are unchanged.
+- **The Go client compiles and measures coverage.** `check` runs `go build ./...` in the module
+  `test` resolves; `check --tests` compiles every package and test file instead, running no test and
+  no vet check. With `--agent`, a failing compile is filed as one compile run of format `go`; a clean
+  one files nothing. `--coverage` on `test` and `regression` writes each module's coverprofile in the
+  run's own reports dir and sends them all with the run's close, codec `go-coverprofile`.
+  - Go coverage is statement coverage, stored on the run's `lines` axis: covered statements over all
+    statements, a block listed more than once counted once. The run has no functions axis.
+  - The client adds no `-coverpkg`. A project that wants it sets `GOFLAGS=-coverpkg=./...`, which
+    every `go` command the client runs inherits.
+  - A `--coverage` run is refused before it opens when the board's health does not list
+    `go-coverprofile`. When a module's profile was not written, the run is closed with no coverage
+    and a `coverage-not-measured` warning naming the module.
 
 ### Changed
 

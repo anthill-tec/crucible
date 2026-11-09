@@ -1,0 +1,11 @@
+# example.com/cycle/billing
+package example.com/cycle/billing
+	imports example.com/cycle/orders from billing.go
+	imports example.com/cycle/billing from orders.go: import cycle not allowed
+FAIL	example.com/cycle/billing [setup failed]
+# example.com/cycle/orders
+package example.com/cycle/billing
+	imports example.com/cycle/orders from billing.go
+	imports example.com/cycle/billing from orders.go: import cycle not allowed
+FAIL	example.com/cycle/orders [setup failed]
+FAIL

@@ -12,7 +12,7 @@ interface Counts {
 /** What a coverage codec reads from one text: per-axis counters. */
 interface CoverageCounts {
   lines: Counts;
-  functions: Counts;
+  functions?: Counts;
   branches?: Counts;
 }
 
@@ -141,10 +141,52 @@ const jacoco: CoverageCodec = {
   },
 };
 
+/** A coverprofile block line: `file:startLine.startCol,endLine.endCol numStmt count`. */
+const GO_BLOCK = /^(.+:\d+\.\d+,\d+\.\d+) (\d+) (\d+)$/;
+
+/**
+ * go-coverprofile: statement coverage on the lines axis, each block weighted by
+ * its statement count. A block listed more than once (`-coverpkg` lists it once
+ * per test package) counts once, covered if any copy counted. A profile states
+ * no functions and no branches.
+ */
+const goCoverprofile: CoverageCodec = {
+  read(text: string): CoverageCounts {
+    const rows = text.split(/\r?\n/).filter((row) => row.length > 0);
+    if (rows.length === 0 || !/^mode: (set|count|atomic)$/.test(rows[0]!)) {
+      throw new Error("no mode: line");
+    }
+    const blocks = new Map<string, { statements: number; covered: boolean }>();
+    for (const row of rows.slice(1)) {
+      const match = GO_BLOCK.exec(row);
+      if (match === null) throw new Error(`not a coverprofile block: '${row}'`);
+      const [, block, statements, count] = match;
+      const seen = blocks.get(block!);
+      const covered = Number.parseInt(count!, 10) > 0;
+      if (seen === undefined) blocks.set(block!, { statements: Number.parseInt(statements!, 10), covered });
+      else seen.covered ||= covered;
+    }
+    const lines: Counts = { total: 0, covered: 0 };
+    for (const { statements, covered } of blocks.values()) {
+      lines.total += statements;
+      if (covered) lines.covered += statements;
+    }
+    return { lines };
+  },
+};
+
 export const coverageCodecs: Map<string, CoverageCodec> = new Map<string, CoverageCodec>([
   ["lcov", lcov],
   ["jacoco", jacoco],
+  ["go-coverprofile", goCoverprofile],
 ]);
+
+/** Adds an optional axis's counters into the sum, opening the axis when only the addend carries it. */
+function addAxis(sum: Counts | undefined, counts: Counts | undefined): Counts | undefined {
+  if (counts === undefined) return sum;
+  if (sum === undefined) return { ...counts };
+  return { total: sum.total + counts.total, covered: sum.covered + counts.covered };
+}
 
 /** Several texts of one codec summed as ONE coverage object; throws on the first undecodable text. */
 export function decodeCoverage(codec: CoverageCodec, texts: string[]): Coverage {
@@ -157,17 +199,13 @@ export function decodeCoverage(codec: CoverageCodec, texts: string[]): Coverage 
     }
     sum.lines.total += counts.lines.total;
     sum.lines.covered += counts.lines.covered;
-    sum.functions.total += counts.functions.total;
-    sum.functions.covered += counts.functions.covered;
-    if (sum.branches !== undefined && counts.branches !== undefined) {
-      sum.branches.total += counts.branches.total;
-      sum.branches.covered += counts.branches.covered;
-    }
+    sum.functions = addAxis(sum.functions, counts.functions);
+    sum.branches = addAxis(sum.branches, counts.branches);
   }
   if (sum === undefined) throw new Error("no coverage text");
   return {
     lines: axis(sum.lines),
-    functions: axis(sum.functions),
+    ...(sum.functions !== undefined ? { functions: axis(sum.functions) } : {}),
     ...(sum.branches !== undefined ? { branches: axis(sum.branches) } : {}),
   };
 }

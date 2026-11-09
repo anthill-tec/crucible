@@ -101,7 +101,7 @@ describe("health lists the view codecs under codecs.view", () => {
       expect(body.ok).toBe(true);
       expect(body.codecs).toEqual({
         test: ["crucible-events", "go-test", "junit", "nextest"],
-        coverage: ["jacoco", "lcov"],
+        coverage: ["go-coverprofile", "jacoco", "lcov"],
         view: ["bun-console", "surefire-console"],
         stream: ["crucible-events", "go-test", "nextest"],
       });

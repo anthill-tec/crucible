@@ -1,0 +1,1 @@
+found packages inv (x.go) and stock (y.go) in /work/twopkg/inv
