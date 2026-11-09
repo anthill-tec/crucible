@@ -413,8 +413,7 @@ provisioned server move in lockstep; on an already-current machine it reports
   stage lists it in `crucible-clients.json` under the `declaration_schema` key
   as `{path, version}`, the version read from the packaged copy. A declaration
   writer finds the schema through that key.
-- The `[fleet]` stage also lays down the Go client, `go-crucible.py`, beside
-  the other five, and the manifest lists it under `clients.go`. Its `test`,
+- The `[fleet]` stage also lays down the Go client beside the other five, and the manifest lists it under `clients.go`. Its `test`,
   `regression` and `pre-merge-gate` need go 1.24 or later on `PATH`; an older
   go, or none, is refused before anything runs.
 
