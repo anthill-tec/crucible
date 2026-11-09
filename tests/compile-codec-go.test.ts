@@ -63,6 +63,9 @@ const CYCLE = "build-import-cycle.txt";
 const TWO_PACKAGES = "build-two-packages-one-directory.txt";
 const TEST_CYCLE = "test-compile-import-cycle.txt";
 const TEST_FILE = "test-compile-test-file-error.txt";
+const GO_VERSION = "build-go-version-too-new.txt";
+const MOD_UPDATES = "build-go-mod-updates-needed.txt";
+const CYCLE_GO_WARNING = "build-import-cycle-with-go-warning.txt";
 
 const STORE_UNDEFINED: Diagnostic[] = Array.from({ length: 10 }, (_, i) =>
   goError("store/store.go", 4 + i, 6, `undefined: a${i + 1}`),
@@ -104,7 +107,19 @@ const CYCLE_WORDS =
   "imports example.com/cycle/orders from billing.go " +
   "imports example.com/cycle/billing from orders.go: import cycle not allowed";
 
-const ALL_CAPTURES = [MULTI, IFACE, MISSING, GOMOD, CYCLE, TWO_PACKAGES, TEST_CYCLE, TEST_FILE];
+const ALL_CAPTURES = [
+  MULTI,
+  IFACE,
+  MISSING,
+  GOMOD,
+  CYCLE,
+  TWO_PACKAGES,
+  TEST_CYCLE,
+  TEST_FILE,
+  GO_VERSION,
+  MOD_UPDATES,
+  CYCLE_GO_WARNING,
+];
 
 /** Lines Go prints that are never a diagnostic, by the shape of the line. */
 const HEADER = /^# /;
@@ -305,6 +320,53 @@ describe("go compile format — a failure with no positioned diagnostic is one m
     expect(words(only?.message ?? "")).toBe(
       "found packages inv (x.go) and stock (y.go) in /work/twopkg/inv",
     );
+  });
+});
+
+describe("go compile format — a failure Go reports only on go: lines keeps those lines as its message", () => {
+  test("a go.mod needing a newer Go is ONE message-only error whose message is its go: line, never empty", () => {
+    const input = fixture(GO_VERSION);
+    const report = parseCompile(input, "go");
+    expect(report.format).toBe("go");
+    expect(report.errorCount).toBe(1);
+    expect(report.warningCount).toBe(0);
+    expect(report.diagnostics).toHaveLength(1);
+    const [only] = report.diagnostics;
+    expect(only?.level).toBe("error");
+    expect(only !== undefined && "file" in only).toBe(false);
+    expect(only !== undefined && "line" in only).toBe(false);
+    expect(only !== undefined && "col" in only).toBe(false);
+    expect(words(only?.message ?? "")).not.toBe("");
+    expect(words(only?.message ?? "")).toBe(
+      "go: go.mod requires go >= 1.99 (running go 1.27.3; GOTOOLCHAIN=local)",
+    );
+    expect(report.raw).toBe(input);
+  });
+
+  test("a go.mod needing updates is ONE message-only error whose message holds the `go: updates to go.mod needed` line", () => {
+    const report = parseCompile(fixture(MOD_UPDATES), "go");
+    expect(report.format).toBe("go");
+    expect(report.errorCount).toBe(1);
+    expect(report.warningCount).toBe(0);
+    expect(report.diagnostics).toHaveLength(1);
+    const [only] = report.diagnostics;
+    expect(only?.level).toBe("error");
+    expect(only !== undefined && "file" in only).toBe(false);
+    // The go: line leads the message; its tab-indented `go mod tidy` hint may follow it.
+    expect(words(only?.message ?? "")).toMatch(
+      /^go: updates to go\.mod needed; to update it:( go mod tidy)?$/,
+    );
+  });
+
+  test("regression guard: an import cycle beside a go: warning line keeps only the cycle's lines as its message", () => {
+    const report = parseCompile(fixture(CYCLE_GO_WARNING), "go");
+    expect(report.format).toBe("go");
+    expect(report.errorCount).toBe(1);
+    expect(report.diagnostics).toHaveLength(1);
+    const message = report.diagnostics[0]?.message ?? "";
+    expect(words(message)).toBe(CYCLE_WORDS);
+    expect(message).not.toContain("go: warning");
+    expect(message).not.toContain("matched no packages");
   });
 });
 
