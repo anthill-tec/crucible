@@ -257,8 +257,8 @@ class QueueFileDeprecationReachesEveryClientTest(unittest.TestCase):
         dropped from `CLIENT_FILES` would make every other assertion in this
         file pass while covering four stacks."""
         self.assertEqual(
-            len(CLIENT_FILES), 5,
-            f"the fleet is FIVE clients (the census constant); "
+            len(CLIENT_FILES), 6,
+            f"the fleet is SIX clients (the census constant); "
             f"got {sorted(CLIENT_FILES)!r}")
         self.assertEqual(
             sorted(self.drives), sorted(CLIENT_FILES),

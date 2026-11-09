@@ -7,6 +7,7 @@ import type { CoverageCodec } from "./coverage.ts";
 import { parseCrucibleEvents, readStreamLine, type StreamLine } from "./crucible-events.ts";
 import { surefireConsoleView } from "./surefire-console-view.ts";
 import { parseJunit, parseJunitPath, readJunitRawOutput } from "./junit.ts";
+import { GoTestReader, parseGoTest } from "./go-test.ts";
 import { nextestLineReader, parseNextest } from "./nextest.ts";
 
 /**
@@ -106,6 +107,18 @@ export const codecs: Map<string, Codec> = new Map<string, Codec>([
       stream: true,
       lineReader: ({ list, state }) => nextestLineReader(list, state),
       pendingOutsideTotal: true,
+    },
+  ],
+  [
+    "go-test",
+    {
+      parse: (data: string, options?: DecodeOptions) =>
+        parseGoTest(data, {
+          cut: options?.cut === true,
+          ...(options?.startTotal !== undefined ? { startTotal: options.startTotal } : {}),
+        }),
+      stream: true,
+      lineReader: ({ state }) => new GoTestReader(state),
     },
   ],
 ]);

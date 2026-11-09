@@ -98,6 +98,7 @@ EXPECTED_FLEET_FILES = frozenset({
     "rust-crucible.py",
     "mvn-crucible.py",
     "arduino-crucible.py",
+    "go-crucible.py",
     "_crucible_axi.py",
     # The run pipeline `_crucible_axi.py` loads BY FILE PATH from its own
     # directory and re-exports: a fleet landed without it cannot load its
@@ -803,7 +804,7 @@ from manifest_contract import (  # noqa: E402
 )
 
 EXPECTED_CLIENT_STACKS = frozenset({
-    "bun", "python", "rust", "mvn", "arduino",
+    "bun", "python", "rust", "mvn", "arduino", "go",
 })
 
 # The `status` entry is published at top level, not inside `clients`; the guard
@@ -1113,7 +1114,7 @@ class ConditionalServerConfigKeyTest(_ScratchInstallCase):
 # The five stacks, as the manifest keys them. Parity matters: the `fleet` stage
 # copies a tuple, and a guard that only exercised `python` would pass a stage
 # that dropped, truncated or mis-copied any of the other four.
-COPIED_CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino")
+COPIED_CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino", "go")
 
 # AC4's literal subject: `python3 <target-dir>/clients/python-crucible.py --help`.
 AC4_CLIENT_STACK = "python"
@@ -1126,6 +1127,15 @@ AC4_CLIENT_STACK = "python"
 RUN_MODULE_LOADER = "_axi_run"
 SHARED_MODULE_LOADERS = (("_axi", "_crucible_axi.py"), ("_toon", "toon.py"),
                          (RUN_MODULE_LOADER, "_crucible_run.py"))
+# The go client loads only the shared modules it uses: it encodes nothing
+# itself, so it has no `_toon()` loader (orchestrator-approved re-seed fix).
+GO_SHARED_MODULE_LOADERS = tuple(loader for loader in SHARED_MODULE_LOADERS
+                                 if loader[0] != "_toon")
+
+
+def _shared_module_loaders(stack):
+    """The by-path loaders `stack`'s copied client is probed through."""
+    return GO_SHARED_MODULE_LOADERS if stack == "go" else SHARED_MODULE_LOADERS
 
 # Bounded so a wedged interpreter fails the test instead of hanging the suite.
 # `--help` is argparse-only work; a second would do, 60 is slack for a loaded
@@ -1302,11 +1312,11 @@ class CopiedClientsActuallyRunTest(_ScratchInstallCase):
         COPIED clients dir. Bare importability is not enough -- a module
         resolved out of the repo checkout would import fine and still mean the
         install laid nothing down."""
-        probe = _SHARED_MODULE_PROBE % {"loaders": SHARED_MODULE_LOADERS,
-                                        "run_loader": RUN_MODULE_LOADER}
         expected_dir = os.path.realpath(self.clients_dir())
         broken = []
         for stack in COPIED_CLIENT_STACKS:
+            probe = _SHARED_MODULE_PROBE % {"loaders": _shared_module_loaders(stack),
+                                            "run_loader": RUN_MODULE_LOADER}
             client = self.copied_client(stack)
             try:
                 completed = self.run_from_the_copy("-c", probe, client)
@@ -1321,7 +1331,7 @@ class CopiedClientsActuallyRunTest(_ScratchInstallCase):
             resolved = dict(
                 line.split(":", 1)
                 for line in completed.stdout.splitlines() if ":" in line)
-            for loader_name, filename in SHARED_MODULE_LOADERS:
+            for loader_name, filename in _shared_module_loaders(stack):
                 path = resolved.get(loader_name)
                 if path is None:
                     broken.append(

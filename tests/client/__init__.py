@@ -36,6 +36,7 @@ PROJECT_DIR_VARIABLES = (
     "MVN_CRUCIBLE_PROJECT_DIR",
     "RUST_CRUCIBLE_PROJECT_DIR",
     "ARDUINO_CRUCIBLE_PROJECT_DIR",
+    "GO_CRUCIBLE_PROJECT_DIR",
 )
 
 #: The marker naming this process's isolation directory.

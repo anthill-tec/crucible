@@ -105,11 +105,12 @@ from tests.client.test_client_fleet_envelope_census import (
     classify_envelope,
     drive_verb,
     enumerate_verbs,
+    fake_go_body,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-CLIENT_KEYS = ("bun", "python", "rust", "mvn", "arduino")
+CLIENT_KEYS = ("bun", "python", "rust", "mvn", "arduino", "go")
 
 # The one failing test identifier every client's FAIL fixture carries, so a
 # milestone's `failingTests` can be checked for a REAL, specific value rather
@@ -273,6 +274,13 @@ def _overwrite_fake_tool(bin_dir, name, body):
     return path
 
 
+# The passing fake `go`, cut to its first (passing) test.
+_ONE_PASSING_GO_BODY = fake_go_body("pass").replace(
+    'TESTS = ["Test_alpha_behaviour_passes", "Test_gate_fixture_known_failure"]',
+    'TESTS = ["Test_alpha_behaviour_passes"]')
+assert _ONE_PASSING_GO_BODY != fake_go_body("pass"), "the fake go's test list moved"
+
+
 def _fail_bin_dir_for(client_key):
     """A copy of the census module's standard PASSING fake-tool dir, with the
     ONE tool that produces this client's suite result overwritten to report a
@@ -289,6 +297,8 @@ def _fail_bin_dir_for(client_key):
         _overwrite_fake_tool(bin_dir, "cargo", _FAIL_CARGO_BODY)
     elif client_key == "mvn":
         _overwrite_fake_tool(bin_dir, "mvn", _FAIL_MVN_BODY)
+    elif client_key == "go":
+        _overwrite_fake_tool(bin_dir, "go", fake_go_body("fail"))
     return bin_dir
 
 
@@ -496,6 +506,10 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
         pass_bin = _build_fake_bin_dir()
         if client_key == "arduino":
             _overwrite_fake_tool(pass_bin, "make", _SILENT_MAKE_BODY)
+        if client_key == "go":
+            # The passing fixture runs ONE passing test, as every other
+            # client's does (orchestrator-approved re-seed fix).
+            _overwrite_fake_tool(pass_bin, "go", _ONE_PASSING_GO_BODY)
         cls._scratch_dirs.append(pass_bin)
         fail_bin = _fail_bin_dir_for(client_key)
         cls._scratch_dirs.append(fail_bin)
@@ -514,7 +528,7 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
             head_sha = _git_commit_fixture(project_dir)
             bin_dir = pass_bin if outcome == "pass" else fail_bin
             agent_id = f"gate-fixture-{client_key}-{case}-agent"
-            if client_key in ("python", "rust"):
+            if client_key in ("python", "rust", "go"):
                 # The plan's cycle is done, so the client's own registration
                 # bound to it is refused, and a streamed run (python's
                 # unittest, rust's nextest) whose binding is refused or whose

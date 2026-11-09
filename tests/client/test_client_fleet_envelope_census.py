@@ -97,6 +97,7 @@ CLIENT_FILES = {
     "mvn": CLIENTS_DIR / "mvn-crucible.py",
     "python": CLIENTS_DIR / "python-crucible.py",
     "arduino": CLIENTS_DIR / "arduino-crucible.py",
+    "go": CLIENTS_DIR / "go-crucible.py",
 }
 
 # An unreachable local address (nothing listens on port 1 without root) --
@@ -288,7 +289,99 @@ sys.stderr.write("fake no-mistakes: unsupported invocation: " + repr(argv) + "\n
 sys.exit(1)
 '''
 
+# The go toolchain as the go client asks it: `go env GOVERSION` answers a Go
+# above the client's floor, `go test -list <re> -json ./...` lists one test
+# per package, and `go test -json ./...` runs them, each test passing (or,
+# with `OUTCOME = "fail"`, the second failing); `FAKE_TOTAL=<n>` in the
+# environment makes it `n` tests in `go test -json`'s own event
+# stream, which the board's `go-test` codec decodes. Every package is the
+# module path of the `go.mod` in the working directory, so a run made in two
+# modules names two packages.
+_FAKE_GO_TEMPLATE = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+
+OUTCOME = "@OUTCOME@"
+argv = sys.argv[1:]
+if argv[:2] == ["env", "GOVERSION"]:
+    print("go1.27.3")
+    sys.exit(0)
+if argv[:1] == ["version"]:
+    print("go version go1.27.3 linux/amd64")
+    sys.exit(0)
+if argv[:1] != ["test"]:
+    sys.stderr.write("fake go: unsupported invocation: " + repr(argv) + "\n")
+    sys.exit(2)
+module = "example.com/probe"
+try:
+    with open("go.mod") as handle:
+        for line in handle:
+            if line.startswith("module "):
+                module = line.split()[1]
+                break
+except OSError:
+    pass
+TESTS = ["Test_alpha_behaviour_passes", "Test_gate_fixture_known_failure"]
+if os.environ.get("FAKE_TOTAL"):
+    TESTS = ["Test_case_%d" % index for index in range(int(os.environ["FAKE_TOTAL"]))]
+
+
+def emit(**event):
+    sys.stdout.write(json.dumps({"Package": module, **event}) + "\n")
+
+
+if "-list" in argv:
+    for name in TESTS:
+        emit(Action="output", Output=name + "\n")
+    emit(Action="output", Output="ok  \t" + module + "\t0.001s\n")
+    emit(Action="pass")
+    sys.exit(0)
+failed = False
+emit(Action="start")
+for index, name in enumerate(TESTS):
+    fails = OUTCOME == "fail" and index == 1
+    failed = failed or fails
+    emit(Action="run", Test=name)
+    emit(Action="output", Test=name, Output="=== RUN   " + name + "\n")
+    if fails:
+        emit(Action="output", Test=name,
+             Output="    probe_test.go:9: gate_fixture_known_failure\n")
+    word = "FAIL" if fails else "PASS"
+    emit(Action="output", Test=name,
+         Output="--- " + word + ": " + name + " (0.00s)\n")
+    emit(Action="fail" if fails else "pass", Test=name, Elapsed=0)
+emit(Action="output", Output=("FAIL\n" if failed else "PASS\n"))
+emit(Action="fail" if failed else "pass", Elapsed=0)
+sys.exit(1 if failed else 0)
+'''
+
+
+def fake_go_body(outcome="pass"):
+    """The fake `go` whose run passes every test (`pass`) or fails one
+    (`fail`)."""
+    return _FAKE_GO_TEMPLATE.replace("@OUTCOME@", outcome)
+
+
+_FAKE_GO_BODY = fake_go_body("pass")
+
+# A go module the census drives: its `go.mod` and one test file, so a go
+# client verb that resolves a module finds it at the project dir.
+GO_PROBE_MODULE = "example.com/probe"
+
+
+def write_go_module(directory, module=GO_PROBE_MODULE):
+    """Lay a minimal go module down at `directory`."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "go.mod").write_text(f"module {module}\n\ngo 1.24\n")
+    (directory / "probe_test.go").write_text(
+        "package probe\n\nimport \"testing\"\n\n"
+        "func Test_alpha_behaviour_passes(t *testing.T) {}\n")
+
+
 _FAKE_TOOLS = {
+    "go": _FAKE_GO_BODY,
     "cargo": _FAKE_CARGO_BODY,
     "docker": _FAKE_DOCKER_BODY,
     "mvn": _FAKE_MVN_BODY,
@@ -366,6 +459,11 @@ def _make_project_dir(client_key):
         # fixture gap, not a real client finding. The dir must exist even
         # though the fake `make` writes its own reports/ subdir on demand.
         (d / "tests" / "native").mkdir(parents=True)
+    if client_key == "go":
+        # The go client resolves its module from the working directory (the
+        # nearest go.mod at or above it); its gate finds every go.mod under
+        # the project dir. One module at the project dir serves both.
+        write_go_module(d)
     return d
 
 
@@ -3890,6 +3988,65 @@ class Cr075QueueFileAxiConformanceTest(unittest.TestCase):
             offenders, {},
             f"`queue-file` must be enveloped in the fleet-wide census too: "
             f"{offenders!r}")
+
+
+# The go client declares no tier until tiers are declared by build tag: it
+# offers none of the tier verbs but `regression`, which is its gate's full
+# suite (every module under the project dir), not a declared tier.
+GO_UNDECLARED_TIER_VERBS = ("unit", "module", "integration", "e2e", "bdd")
+
+
+class TheGoClientOffersNoTierVerbTest(unittest.TestCase):
+    """The verb census records the go client's surface: no `unit`, `module`,
+    `integration`, `e2e` or `bdd` verb, the gate's `regression` and
+    `pre-merge-gate` enveloped, and the gate's `gate-run`, `gate-respond`,
+    `gate-report` and `milestone` verbs as the rust client offers them."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.census = _get_census()
+        cls.go_verbs = set(enumerate_verbs("go", CLIENT_FILES["go"]))
+
+    def test_the_go_client_offers_no_unit_integration_or_e2e_verb(self):
+        offered = sorted(set(GO_UNDECLARED_TIER_VERBS) & self.go_verbs)
+        self.assertEqual(offered, [],
+                         f"the go client declares no tier, so it offers no tier "
+                         f"verb; it offers {offered!r}")
+
+    def test_a_tier_verb_is_an_invalid_choice_on_the_go_client(self):
+        fake_bin_dir = _build_fake_bin_dir()
+        self.addCleanup(shutil.rmtree, fake_bin_dir, True)
+        project_dir = _make_project_dir("go")
+        self.addCleanup(shutil.rmtree, project_dir, True)
+        for verb in ("unit", "integration", "e2e"):
+            with self.subTest(verb=verb):
+                result = drive_verb(CLIENT_FILES["go"], [verb, "--agent", "a"],
+                                    project_dir, fake_bin_dir)
+                self.assertEqual(result.returncode, 2, result.stderr[-600:])
+                self.assertIn(f"invalid choice: '{verb}'", result.stderr)
+
+    def test_the_go_clients_one_tier_named_verb_is_its_gate_regression(self):
+        from tests.client.test_client_tier_surface import TIER_VERBS
+        self.assertEqual(sorted(set(TIER_VERBS) & self.go_verbs), ["regression"],
+                         f"the go client's verbs: {sorted(self.go_verbs)!r}")
+
+    def test_the_go_client_offers_the_rust_clients_gate_verbs(self):
+        rust_verbs = set(enumerate_verbs("rust", CLIENT_FILES["rust"]))
+        gate_verbs = {"regression", "pre-merge-gate", "gate-run", "gate-respond",
+                      "gate-report", "milestone"}
+        self.assertLessEqual(gate_verbs, rust_verbs,
+                             "the rust client is the model for every gate verb")
+        self.assertEqual(sorted(gate_verbs - self.go_verbs), [],
+                         f"the go client's verbs: {sorted(self.go_verbs)!r}")
+
+    def test_the_go_gate_verbs_each_emit_one_envelope_under_their_own_name(self):
+        go = self.census["go"]
+        for verb in ("regression", "pre-merge-gate", "gate-run", "gate-respond",
+                     "gate-report", "milestone"):
+            with self.subTest(verb=verb):
+                axi = go.get(verb)
+                self.assertIsNotNone(axi, f"go {verb}: enveloped in the census")
+                self.assertEqual((axi or {}).get("verb"), verb)
 
 
 if __name__ == "__main__":

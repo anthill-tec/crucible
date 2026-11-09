@@ -546,8 +546,8 @@ class AProjectDeclaresTheBoardEveryClientPostsToTest(BoardInterlockCase):
         it iterates. A client quietly dropped from `CLIENT_FILES` would leave
         every assertion below passing over four stacks."""
         self.assertEqual(
-            len(CLIENT_FILES), 5,
-            f"the fleet is FIVE clients; got {sorted(CLIENT_FILES)!r}")
+            len(CLIENT_FILES), 6,
+            f"the fleet is SIX clients; got {sorted(CLIENT_FILES)!r}")
         missing = [f"{client}:{verb}" for client in CLIENT_FILES
                    for verb in VERBS
                    if (client, verb) not in self.families["declared"]]

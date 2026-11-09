@@ -99,6 +99,7 @@ from tests.client.live_run_harness import (
     write_fake_mvnw,
     write_fake_python,
 )
+from tests.client.test_client_fleet_envelope_census import fake_go_body, write_go_module
 from tests.client.test_cr017_client_lifecycle import MISSING_CYCLE_CODE
 
 AGENT = "cycle-binding-fixture"
@@ -172,6 +173,14 @@ def _bun_test_setup(project_dir, bin_dir):
              "--package-dir", project_dir, "--reports", "reports"],
            {"FAKE_TOTAL": "1"})
 
+def _go_setup(project_dir, bin_dir):
+    write_go_module(project_dir)
+    fake = Path(bin_dir, "go")
+    fake.write_text(fake_go_body("pass"))
+    fake.chmod(0o755)
+    return (["--project-dir", project_dir, "--reports", "reports"],
+           {"FAKE_TOTAL": "1"})
+
 # ── the reconciled worklist: the ELEVEN verbs this CR must give --cycle ────
 
 TARGET_VERBS = (
@@ -186,6 +195,10 @@ TARGET_VERBS = (
     ("rust-crucible.py", "smoke-test", _rust_smoke_test_setup),
     ("rust-crucible.py", "workspace-regression", _rust_workspace_regression_setup),
     ("rust-crucible.py", "pre-merge-gate", _rust_pre_merge_gate_setup),
+    # go: each verb that runs `go test` takes --cycle beside --release.
+    ("go-crucible.py", "test", _go_setup),
+    ("go-crucible.py", "regression", _go_setup),
+    ("go-crucible.py", "pre-merge-gate", _go_setup),
 )
 
 # The already-compliant census (GUARD, not RED) — every call site this

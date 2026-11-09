@@ -1,0 +1,12 @@
+{"ImportPath":"example.com/gobroken/bad [example.com/gobroken/bad.test]","Action":"build-output","Output":"# example.com/gobroken/bad [example.com/gobroken/bad.test]\n"}
+{"ImportPath":"example.com/gobroken/bad [example.com/gobroken/bad.test]","Action":"build-output","Output":"bad/bad_test.go:5:43: declared and not used: x\n"}
+{"ImportPath":"example.com/gobroken/bad [example.com/gobroken/bad.test]","Action":"build-output","Output":"bad/bad_test.go:5:51: cannot use \"s\" (untyped string constant) as int value in variable declaration\n"}
+{"ImportPath":"example.com/gobroken/bad [example.com/gobroken/bad.test]","Action":"build-fail"}
+{"Time":"2026-11-09T02:56:01.555126845+05:30","Action":"start","Package":"example.com/gobroken/bad"}
+{"Time":"2026-11-09T02:56:01.555196729+05:30","Action":"output","Package":"example.com/gobroken/bad","Output":"FAIL\texample.com/gobroken/bad [build failed]\n","OutputType":"frame"}
+{"Time":"2026-11-09T02:56:01.555208932+05:30","Action":"fail","Package":"example.com/gobroken/bad","Elapsed":0,"FailedBuild":"example.com/gobroken/bad [example.com/gobroken/bad.test]"}
+{"Time":"2026-11-09T02:56:01.627190455+05:30","Action":"start","Package":"example.com/gobroken/good"}
+{"Time":"2026-11-09T02:56:01.628547315+05:30","Action":"output","Package":"example.com/gobroken/good","Output":"TestG1\n"}
+{"Time":"2026-11-09T02:56:01.628594214+05:30","Action":"output","Package":"example.com/gobroken/good","Output":"TestG2\n"}
+{"Time":"2026-11-09T02:56:01.628786521+05:30","Action":"output","Package":"example.com/gobroken/good","Output":"ok  \texample.com/gobroken/good\t0.001s\n"}
+{"Time":"2026-11-09T02:56:01.628813934+05:30","Action":"pass","Package":"example.com/gobroken/good","Elapsed":0.002}

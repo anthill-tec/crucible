@@ -71,6 +71,7 @@ CLIENT_FILES = {
     "rust": CLIENTS_DIR / "rust-crucible.py",
     "mvn": CLIENTS_DIR / "mvn-crucible.py",
     "arduino": CLIENTS_DIR / "arduino-crucible.py",
+    "go": CLIENTS_DIR / "go-crucible.py",
 }
 
 PROJECT_KEY = "cr091-roadmap-key"
@@ -920,6 +921,10 @@ class MvnRoadmapVerbTest(_AllRoadmapVerbTests, unittest.TestCase):
 
 class ArduinoRoadmapVerbTest(_AllRoadmapVerbTests, unittest.TestCase):
     CLIENT = "arduino"
+
+
+class GoRoadmapVerbTest(_AllRoadmapVerbTests, unittest.TestCase):
+    CLIENT = "go"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -244,8 +244,8 @@ class ReleaseProposeRequiresATargetInEveryClientTest(unittest.TestCase):
         silently dropped from `CLIENT_FILES` would leave every other assertion
         in this file passing while covering four stacks."""
         self.assertEqual(
-            len(CLIENT_FILES), 5,
-            f"the fleet is FIVE clients (the census constant); "
+            len(CLIENT_FILES), 6,
+            f"the fleet is SIX clients (the census constant); "
             f"got {sorted(CLIENT_FILES)!r}")
         missing = [f"{client}:{case}"
                    for client in CLIENT_FILES

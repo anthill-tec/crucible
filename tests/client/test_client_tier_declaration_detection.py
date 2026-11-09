@@ -157,6 +157,8 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -220,6 +222,16 @@ DECLARED_CELLS = {
     "mvn": "bdd",
     "rust": "module",
     "arduino": "integration",
+}
+
+# The clients that declare NO tier, each with why: no declared-target
+# assertion is possible on them, so the coverage pin counts them beside the
+# driven cells rather than letting the fleet's size outgrow the asserted count.
+# go declares tiers by build tag only once a later change lands; until then it
+# offers no tier verb at all, which `UndeclaringClientsOfferNoTierVerbTest`
+# below proves by driving it.
+DECLARES_NO_TIER = {
+    "go": "declares no tier yet: it offers no unit/module/integration/e2e/bdd verb",
 }
 
 # What counts as a project ARTEFACT named in a refusal (AC14b's second face).
@@ -963,8 +975,11 @@ class DeclaredCellCoverageTest(unittest.TestCase):
 
     def test_every_client_in_the_fleet_has_its_declared_target_asserted(self):
         driven = {client for client, _tier in self._driven_cells()}
+        self.assertEqual(driven & set(DECLARES_NO_TIER), set(),
+                         "a client recorded as declaring no tier is never driven "
+                         "as declaring one")
         self.assertEqual(
-            driven, set(FLEET),
+            driven | set(DECLARES_NO_TIER), set(FLEET),
             f"AC14 is per STACK: the fleet is {sorted(FLEET)!r} (globbed from "
             f"clients/*{_CLIENT_SUFFIX}) and this file asserts a declared "
             f"target on {sorted(driven)!r}. A stack whose declaration surface "
@@ -977,9 +992,11 @@ class DeclaredCellCoverageTest(unittest.TestCase):
             "the fleet size is derived from the client files themselves, "
             "never frozen")
         self.assertEqual(
-            len(cells), len(FLEET),
-            f"AC14 asks for one declared-target assertion per client and the "
-            f"fleet has {len(FLEET)}; this file drives {sorted(cells)!r}")
+            len(cells) + len(DECLARES_NO_TIER), len(FLEET),
+            f"AC14 asks for one declared-target assertion per client that "
+            f"declares tiers, and the fleet has {len(FLEET)} of which "
+            f"{sorted(DECLARES_NO_TIER)!r} declare none; this file drives "
+            f"{sorted(cells)!r}")
         self.assertGreater(
             len(FLEET), 1,
             "a fleet of one would make AC14's per-stack requirement "
@@ -998,6 +1015,25 @@ class DeclaredCellCoverageTest(unittest.TestCase):
                     f"AC14 — {client}/{tier}: this cell is a TOOLCHAIN-SPLIT "
                     f"cell of §S3's matrix, so it runs today and asserting it "
                     f"here would prove nothing about §S6's detection.")
+
+
+class UndeclaringClientsOfferNoTierVerbTest(unittest.TestCase):
+    """The bound on `DECLARES_NO_TIER`: a client recorded as declaring no tier
+    really offers no declared-tier verb, so the record cannot hide a client
+    whose declared targets go unasserted."""
+
+    def test_each_client_recorded_as_declaring_no_tier_refuses_every_tier_verb(self):
+        self.assertTrue(set(DECLARES_NO_TIER) <= set(FLEET),
+                        f"each recorded client is in the fleet: {sorted(FLEET)!r}")
+        for client in sorted(DECLARES_NO_TIER):
+            for verb in ("unit", "module", "integration", "e2e", "bdd"):
+                with self.subTest(client=client, verb=verb):
+                    result = subprocess.run(
+                        [sys.executable, str(CLIENTS_DIR / f"{client}{_CLIENT_SUFFIX}"),
+                         verb, "--help"],
+                        capture_output=True, text=True, timeout=60, check=False)
+                    self.assertEqual(result.returncode, 2, result.stdout[-400:])
+                    self.assertIn(f"invalid choice: '{verb}'", result.stderr)
 
 
 # ── AC14a: the refusal is REACHABLE-PAST ──────────────────────────────

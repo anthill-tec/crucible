@@ -67,6 +67,7 @@ CLIENT_SCRIPTS = {
     "mvn": CLIENTS_DIR / "mvn-crucible.py",
     "rust": CLIENTS_DIR / "rust-crucible.py",
     "arduino": CLIENTS_DIR / "arduino-crucible.py",
+    "go": CLIENTS_DIR / "go-crucible.py",
 }
 
 INTENT = "carry the findings count onto the ladder"

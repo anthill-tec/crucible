@@ -81,6 +81,7 @@ CLIENT_FILES = {
     "mvn": CLIENTS_DIR / "mvn-crucible.py",
     "python": CLIENTS_DIR / "python-crucible.py",
     "arduino": CLIENTS_DIR / "arduino-crucible.py",
+    "go": CLIENTS_DIR / "go-crucible.py",
 }
 
 _SEQ = [0]

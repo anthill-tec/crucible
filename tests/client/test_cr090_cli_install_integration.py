@@ -81,6 +81,7 @@ EXPECTED_FLEET_FILES = frozenset({
     "rust-crucible.py",
     "mvn-crucible.py",
     "arduino-crucible.py",
+    "go-crucible.py",
     "_crucible_axi.py",
     # The run pipeline `_crucible_axi.py` loads BY FILE PATH from its own
     # directory and re-exports.
@@ -116,7 +117,7 @@ def _landed_fleet_listing(clients_dir):
             listing.add(Path(relative).as_posix())
     return listing
 
-CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino")
+CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino", "go")
 
 FLEET_STAGE_NAME = "fleet"
 MANIFEST_STAGE_NAME = "manifest"
@@ -435,9 +436,9 @@ class CliMainInstallManifestResolvesTest(_CliInstallCase):
         published = [clients[stack] for stack in CLIENT_STACKS]
         published.append(document.get("status"))
         self.assertEqual(
-            6, len(published),
-            f"AC3/AC8 -- six published paths expected (five clients + "
-            f"status); got {published!r}. envelope:\n{stdout}")
+            len(CLIENT_STACKS) + 1, len(published),
+            f"AC3/AC8 -- {len(CLIENT_STACKS) + 1} published paths expected "
+            f"(six clients + status); got {published!r}. envelope:\n{stdout}")
         anchor = self.clients_dir() + os.sep
         for path in published:
             self.assertTrue(

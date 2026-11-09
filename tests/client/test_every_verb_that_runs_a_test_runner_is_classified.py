@@ -72,7 +72,24 @@ from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
-CLIENT_KEYS = ("bun", "python", "mvn", "rust", "arduino")
+CLIENT_KEYS = ("bun", "python", "mvn", "rust", "arduino", "go")
+# The verbs every client's parser must enumerate. go declares no tier yet (so
+# no `unit` or `bdd`), files no compile result yet (so no `check`) and reads
+# no report already on disk (so no `auto-ingest`): its own set is its gate.
+ENUMERATED_VERBS = {
+    **{client: ("register", "pre-merge-gate", "auto-ingest", "check", "unit",
+                "regression", "bdd")
+       for client in ("bun", "python", "mvn", "rust", "arduino")},
+    "go": ("register", "test", "regression", "pre-merge-gate"),
+}
+# The verbs each client must classify as running a test runner.
+APPLYING_VERBS = {
+    **{client: ("test", "unit", "regression", "pre-merge-gate")
+       for client in ("bun", "python", "mvn", "rust", "arduino")},
+    "go": ("test", "regression", "pre-merge-gate"),
+}
+# The clients with a declared-tier `bdd` cell; go declares no tier yet.
+DECLARED_TIER_CLIENTS = ("bun", "python", "mvn", "rust", "arduino")
 
 APPLIES, EXEMPT, NOT_INGESTING = "applies", "exempt", "not-ingesting"
 
@@ -253,6 +270,17 @@ CLIENT_CENSUS = {
         "runs": _STORED_RUN_READ,
         "run": _STORED_RUN_READ,
     },
+    # go's one runner body: `test` runs the one resolved module, and the gate
+    # (`regression`, `pre-merge-gate`) every module under the project dir,
+    # each into ONE streamed run, as rust's `regression` and `pre-merge-gate`
+    # share `_workspace_regression_run`.
+    "go": {
+        "test": applies("_go_test_run"),
+        "regression": applies("_go_test_run"),
+        "pre-merge-gate": applies("_go_test_run"),
+        "runs": _STORED_RUN_READ,
+        "run": _STORED_RUN_READ,
+    },
 }
 
 
@@ -341,7 +369,14 @@ def _callee_name(call):
 # the runner's exit, and its return is the filed run's verdict.
 SHARED_INGEST = "ingest_reports"
 SHARED_STREAMED_CLOSE = "close_streamed_run"
-INGEST_CALLEES = ("post_ingest", SHARED_INGEST, SHARED_STREAMED_CLOSE)
+# The shared one-POST close of an open streamed run (the go client closes its
+# `go test -json` run with it directly): it sends through `post_ingest` itself
+# and puts the `runner_exit=` it is handed on the body as `runnerExit`, as the
+# shared ingest does. A call of it handed a runner exit is a filing that
+# carries the runner's exit.
+SHARED_STREAM_CLOSE = "close_stream"
+INGEST_CALLEES = ("post_ingest", SHARED_INGEST, SHARED_STREAMED_CLOSE,
+                  SHARED_STREAM_CLOSE)
 
 
 def _shared_ingest_name():
@@ -385,10 +420,12 @@ class ClientSource:
 
     @staticmethod
     def _hands_the_shared_ingest_a_runner_exit(node):
-        """A call of the shared ingest handed a `runner_exit=` that is not the
-        literal `None`: the shared ingest puts it on the body as `runnerExit`."""
+        """A call of the shared ingest (or the shared stream close) handed a
+        `runner_exit=` that is not the literal `None`: either puts it on the
+        body as `runnerExit`."""
         return any(
-            isinstance(n, ast.Call) and _callee_name(n) == SHARED_INGEST
+            isinstance(n, ast.Call)
+            and _callee_name(n) in (SHARED_INGEST, SHARED_STREAM_CLOSE)
             and any(k.arg == "runner_exit"
                     and not (isinstance(k.value, ast.Constant)
                              and k.value.value is None)
@@ -608,8 +645,7 @@ class EveryClientsVerbsAreClassifiedTest(unittest.TestCase):
                 self.assertGreaterEqual(
                     len(handlers), 30,
                     f"{client}: the parser enumerated only {sorted(handlers)}")
-                for verb in ("register", "pre-merge-gate", "auto-ingest",
-                             "check", "unit", "regression", "bdd"):
+                for verb in ENUMERATED_VERBS[client]:
                     self.assertIn(verb, handlers,
                                   f"{client}: `{verb}` missing from the "
                                   f"enumerated subcommands {sorted(handlers)}")
@@ -618,7 +654,7 @@ class EveryClientsVerbsAreClassifiedTest(unittest.TestCase):
         for client in CLIENT_KEYS:
             census = client_census(client)
             with self.subTest(client=client):
-                for verb in ("test", "unit", "regression", "pre-merge-gate"):
+                for verb in APPLYING_VERBS[client]:
                     self.assertEqual(
                         census[verb].kind, APPLIES,
                         f"{client} `{verb}` runs a test runner; the census "
@@ -634,7 +670,7 @@ class EveryClientsVerbsAreClassifiedTest(unittest.TestCase):
                     "rust": "_run_declared_nextest_profile",
                     "arduino": "_run_declared_make_target"}
         self.assertEqual(
-            {client: _client_handlers(client)["bdd"] for client in CLIENT_KEYS},
+            {client: _client_handlers(client)["bdd"] for client in DECLARED_TIER_CLIENTS},
             expected)
 
 
@@ -1053,6 +1089,25 @@ class TheCensusReadsTheSharedIngestAsTheIngestCallTest(unittest.TestCase):
         self.assertEqual(len(self.findings), 5, "\n".join(self.findings))
 
 
+class TheCensusReadsTheSharedStreamCloseAsTheIngestCallTest(
+        TheCensusReadsTheSharedIngestAsTheIngestCallTest):
+    """The same proof for the shared one-POST stream close: handed a
+    `runner_exit`, it sends `runnerExit`; reaching it is filing something."""
+
+    @classmethod
+    def setUpClass(cls):
+        axi = _load_module(CLIENTS_DIR / "_crucible_axi.py",
+                           "runner_exit_census_shared_stream_close_name")
+        cls.source = _SYNTHETIC_SHARED_INGEST_CLIENT.replace(
+            "{shared}", getattr(axi, SHARED_STREAM_CLOSE).__name__)
+        cls.tmpdir = tempfile.mkdtemp(prefix="runner-exit-census-stream-close-")
+        path = Path(cls.tmpdir) / "synthetic-shared-crucible.py"
+        path.write_text(cls.source)
+        cls.handlers = verb_handlers(path, "runner_exit_census_synthetic_stream_close")
+        cls.findings = census_findings("shared", cls.source, cls.handlers,
+                                       _SYNTHETIC_SHARED_INGEST_CENSUS)
+
+
 _SYNTHETIC_STREAMED_CLOSE_CLIENT = textwrap.dedent('''
     """A synthetic client whose verbs close a streamed run through the shared
     streamed close: one compliant body, and the mutants around it."""
@@ -1188,6 +1243,7 @@ COMPILE_ROUTE = "/api/v2/runs/compile"
 REPORT_ROUTES = (RUNS_ROUTE, PARSED_ROUTE)
 SHARED = "<the shared ingest>"
 SHARED_CLOSE = "<the shared streamed close>"
+SHARED_ONE_CLOSE = "<the shared stream close>"
 
 
 class Routes(NamedTuple):
@@ -1214,6 +1270,8 @@ def ingest_sites(source):
                 site = (SHARED, SHARED_INGEST, RUNS_ROUTE)
             elif callee == SHARED_STREAMED_CLOSE:
                 site = (SHARED_CLOSE, SHARED_STREAMED_CLOSE, RUNS_ROUTE)
+            elif callee == SHARED_STREAM_CLOSE:
+                site = (SHARED_ONE_CLOSE, SHARED_STREAM_CLOSE, RUNS_ROUTE)
             elif callee == "post_ingest":
                 route = (call.args[1].value if len(call.args) >= 2
                          and isinstance(call.args[1], ast.Constant)
@@ -1244,6 +1302,7 @@ def verb_routes(source, handlers, census):
 
 _THROUGH_THE_SHARED_INGEST = {(SHARED, SHARED_INGEST, RUNS_ROUTE)}
 _THROUGH_THE_SHARED_CLOSE = {(SHARED_CLOSE, SHARED_STREAMED_CLOSE, RUNS_ROUTE)}
+_THROUGH_THE_SHARED_STREAM_CLOSE = {(SHARED_ONE_CLOSE, SHARED_STREAM_CLOSE, RUNS_ROUTE)}
 # A client whose run verbs stream a declared target and file a JUnit report
 # otherwise reaches both.
 _THROUGH_THE_SHARED_INGEST_OR_CLOSE = _THROUGH_THE_SHARED_INGEST | _THROUGH_THE_SHARED_CLOSE
@@ -1309,16 +1368,27 @@ ROUTE_TABLE = {
     },
     "arduino": {
         # Every native `make` verb files its TEST-*.xml through the shared
-        # ingest; a run with no report files nothing.
-        **{verb: routes(_THROUGH_THE_SHARED_INGEST)
+        # ingest, or closes a declared stream target's open run through the
+        # shared stream close; a run with no report files nothing.
+        **{verb: routes(_THROUGH_THE_SHARED_INGEST | _THROUGH_THE_SHARED_STREAM_CLOSE)
            for verb in ("test", "unit", "regression", "module", "integration",
                         "e2e", "bdd")},
         # The gate's arduino-cli compile step files a compile ingest: no
-        # report. Its whole suite files through the shared ingest.
-        "pre-merge-gate": routes(_THROUGH_THE_SHARED_INGEST, _ARDUINO_COMPILE),
+        # report. Its whole suite files through the shared ingest (or the
+        # shared stream close, for a declared stream target).
+        "pre-merge-gate": routes(_THROUGH_THE_SHARED_INGEST | _THROUGH_THE_SHARED_STREAM_CLOSE,
+                                 _ARDUINO_COMPILE),
         "auto-ingest": routes(_THROUGH_THE_SHARED_INGEST),
         "check": routes((), _ARDUINO_COMPILE),
         "compile": routes((), _ARDUINO_COMPILE),
+    },
+    "go": {
+        # Every `go test -json` verb closes its open run from its go-test
+        # stream through the shared stream close, handed the runner's exit. A
+        # build failure is the stream's own package failure (no compile
+        # ingest of its own yet).
+        **{verb: routes(_THROUGH_THE_SHARED_STREAM_CLOSE)
+           for verb in ("test", "regression", "pre-merge-gate")},
     },
 }
 
@@ -1354,8 +1424,11 @@ class EveryFilingVerbsRouteAndCallSiteAreTabledTest(unittest.TestCase):
     def test_every_rust_report_verb_files_through_the_shared_ingest_only(self):
         self.assert_client_matches_its_table("rust")
 
-    def test_every_arduino_report_verb_files_through_the_shared_ingest_only(self):
+    def test_every_arduino_report_verb_files_through_the_shared_ingest_or_stream_close_only(self):
         self.assert_client_matches_its_table("arduino")
+
+    def test_every_go_run_verb_closes_through_the_shared_stream_close_only(self):
+        self.assert_client_matches_its_table("go")
 
     def test_the_table_has_a_row_for_every_filing_verb_and_no_other(self):
         for client in CLIENT_KEYS:

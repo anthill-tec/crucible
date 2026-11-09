@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "description": "Crucible's stack declaration: how each stack declares how its tests run. A plain JSON descriptor, readable with any runtime's standard library; it is not a JSON Schema and no JSON Schema validator reads it. Under each stack: `location` names the file and table its declaration lives in; `entry` describes one declared target (null where the stack reads no target entry); `fields` lists each field with the `values` it may take, its `default` and whether it is `required`. A `values` is a list of the exact values, a {\"pattern\": [...]} of templates in which <NAME> stands for any non-blank name, a {\"board-listed\": \"codecs.<kind>\"} codec name the board must list at run time, or a {\"path\": {\"holds\": \"<file>\"}} directory that must hold that file. `requires` names a field that must be present (true) or must hold one of the listed values; `excludes` names the fields that may not appear beside it; `when` is a rule for one value. An `open` entry accepts fields it does not list; `refused` names the fields it never accepts.",
   "stacks": {
     "bun": {
@@ -208,6 +208,24 @@
             "default": "unittest",
             "required": false,
             "overridden_by": "--runner"
+          }
+        },
+        "shape": {"file_does_not_parse": "undeclared"}
+      }
+    },
+    "go": {
+      "description": "A go project reads no [targets] entry; it declares its module dir in crucible.toml [go].",
+      "location": {"file": "crucible.toml", "table": "go"},
+      "entry": null,
+      "stack_table": {
+        "file": "crucible.toml",
+        "table": "go",
+        "fields": {
+          "module_dir": {
+            "description": "the directory holding go.mod",
+            "values": {"path": {"holds": "go.mod"}},
+            "default": null,
+            "required": false
           }
         },
         "shape": {"file_does_not_parse": "undeclared"}

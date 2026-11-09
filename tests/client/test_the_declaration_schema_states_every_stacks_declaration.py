@@ -3,7 +3,7 @@ every stack's declaration as the clients accept it, and the writer's rule.
 
 The schema is a plain JSON descriptor: an integer `version`, a description
 saying it is not a JSON Schema, and a `stacks` map naming bun, rust, arduino,
-maven and python. For each stack it states where the declaration lives, how an
+maven, python and go. For each stack it states where the declaration lives, how an
 entry's key is formed, each field (allowed values in one of four forms,
 default, whether it is required, cross-field rules), whether an entry is open,
 the refused fields (entry level, and bun's package level), the stack's own
@@ -57,13 +57,16 @@ class TheSchemaIsAVersionedPlainDescriptorTest(_SchemaCase):
         self.assertIs(type(version), int, f"version is {version!r}, not an integer")
         self.assertGreaterEqual(version, 1)
 
+    def test_the_version_is_two_since_the_go_stack_joined(self):
+        self.assertEqual(self.schema.get("version"), 2)
+
     def test_the_description_says_it_is_not_a_json_schema(self):
         description = self.schema.get("description")
         self.assertIsInstance(description, str)
         self.assertIn("not a json schema", description.lower())
         self.assertNotIn("$schema", self.schema)
 
-    def test_the_stacks_map_names_exactly_the_five_stacks(self):
+    def test_the_stacks_map_names_exactly_the_six_stacks(self):
         self.assertEqual(set(self.stacks), set(STACKS))
 
 
@@ -76,6 +79,7 @@ class EachStackStatesWhereItsDeclarationLivesTest(_SchemaCase):
             "arduino": {"file": "crucible.toml", "table": "targets.<key>"},
             "maven": {"file": "crucible.toml", "table": "targets.<key>"},
             "python": {"file": "crucible.toml", "table": "python"},
+            "go": {"file": "crucible.toml", "table": "go"},
         }
         for stack, location in expected.items():
             with self.subTest(stack=stack):
@@ -83,6 +87,10 @@ class EachStackStatesWhereItsDeclarationLivesTest(_SchemaCase):
 
     def test_python_declares_no_targets_entry(self):
         self.assertIsNone(self.stacks["python"]["entry"])
+
+    def test_go_declares_no_targets_entry(self):
+        self.assertIn("entry", self.stacks["go"])
+        self.assertIsNone(self.stacks["go"]["entry"])
 
     def test_each_targets_stack_states_how_its_key_is_formed(self):
         self.assertEqual(self.entry("bun")["key"]["form"], "script")
@@ -241,6 +249,15 @@ class EachStackTableIsStatedTest(_SchemaCase):
         self.assertIs(runner["required"], False)
         self.assertEqual(runner["overridden_by"], "--runner")
 
+    def test_go_module_dir_is_a_run_time_path_holding_go_mod(self):
+        table = self.stacks["go"]["stack_table"]
+        self.assertEqual((table["file"], table["table"]), ("crucible.toml", "go"))
+        self.assertEqual(set(table["fields"]), {"module_dir"})
+        module_dir = table["fields"]["module_dir"]
+        self.assertEqual(module_dir["values"], {"path": {"holds": "go.mod"}})
+        self.assertIs(module_dir["required"], False)
+        self.assertIsNone(module_dir["default"])
+
     def test_rust_arduino_and_maven_have_no_stack_table(self):
         for stack in ("rust", "arduino", "maven"):
             with self.subTest(stack=stack):
@@ -263,7 +280,7 @@ class TheShapeAndParseRulesAreStatedTest(_SchemaCase):
         for stack in ("rust", "arduino", "maven"):
             with self.subTest(stack=stack):
                 self.assertEqual(self.entry(stack)["shape"]["file_does_not_parse"], "refused")
-        for stack in ("bun", "python"):
+        for stack in ("bun", "python", "go"):
             with self.subTest(stack=stack):
                 self.assertEqual(
                     self.stacks[stack]["stack_table"]["shape"]["file_does_not_parse"],

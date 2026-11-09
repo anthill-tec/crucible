@@ -1,6 +1,6 @@
 """CR-CRU-216 §S3/AC5 — `runs` and `run` are registered ONCE for the fleet.
 
-The five clients (`bun`, `python`, `mvn`, `rust`, `arduino`) register both
+The six clients (`bun`, `python`, `mvn`, `rust`, `arduino`, `go`) register both
 verbs through ONE shared registrar in `clients/_crucible_axi.py` that takes a
 verb → delegator `funcs` mapping (the `add_roadmap_verbs` shape). Each client
 defines its own `cmd_runs` and `cmd_run`, thin delegators to the shared bodies,
@@ -30,7 +30,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_PATH = CLIENTS_DIR / "_crucible_axi.py"
-CLIENT_KEYS = ("bun", "python", "mvn", "rust", "arduino")
+CLIENT_KEYS = ("bun", "python", "mvn", "rust", "arduino", "go")
 
 RUN_READ_VERBS = ("runs", "run")
 DELEGATORS = {"runs": "cmd_runs", "run": "cmd_run"}
@@ -71,12 +71,25 @@ def _called_name(call):
 
 
 def _reachable_statements(tree):
-    """Module-level statements plus `main()`'s own body — where every
-    registrar call on the fleet is written, and where one can RUN."""
+    """Module-level statements, `main()`'s own body, and the body of each
+    module-level function `main()` calls as a statement of its own (the go
+    client registers its verbs from `_add_plan_verbs(sub)`, called from
+    `main()`) — where every registrar call on the fleet is written, and where
+    one can RUN. A call guarded by a branch is no statement of `main()`'s and
+    reaches nothing."""
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef)}
     statements = list(tree.body)
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "main":
-            statements.extend(node.body)
+    main = functions.get("main")
+    if main is not None:
+        statements.extend(main.body)
+        for statement in main.body:
+            if (isinstance(statement, ast.Expr)
+                    and isinstance(statement.value, ast.Call)
+                    and isinstance(statement.value.func, ast.Name)
+                    and statement.value.func.id in functions
+                    and statement.value.func.id != "main"):
+                statements.extend(functions[statement.value.func.id].body)
     return statements
 
 
@@ -261,6 +274,31 @@ class RunReadRegistrationScanProofTest(unittest.TestCase):
         self.assertEqual(
             offenders,
             {"arduino": ["never calls the shared `add_stored_run_verbs`"]})
+
+    def test_a_registrar_call_in_a_helper_main_calls_is_wiring(self):
+        moved = _mutate(
+            "    _axi().add_stored_run_verbs(\n        sub, {\"runs\": cmd_runs, \"run\": cmd_run},\n"
+            "        add_args=(_add_project_dir_arg,))\n",
+            "    _add_read_verbs(sub)\n") + textwrap.dedent('''
+            def _add_read_verbs(sub):
+                _axi().add_stored_run_verbs(
+                    sub, {"runs": cmd_runs, "run": cmd_run},
+                    add_args=(_add_project_dir_arg,))
+        ''')
+        self.assertEqual(run_read_offenders(SYNTHETIC_AXI, _fleet(go=moved)), {})
+
+    def test_a_registrar_call_in_a_helper_main_never_calls_is_not_wiring(self):
+        unused = _mutate(
+            "    _axi().add_stored_run_verbs(\n        sub, {\"runs\": cmd_runs, \"run\": cmd_run},\n"
+            "        add_args=(_add_project_dir_arg,))\n",
+            "") + textwrap.dedent('''
+            def _add_read_verbs(sub):
+                _axi().add_stored_run_verbs(
+                    sub, {"runs": cmd_runs, "run": cmd_run},
+                    add_args=(_add_project_dir_arg,))
+        ''')
+        self.assertEqual(run_read_offenders(SYNTHETIC_AXI, _fleet(go=unused)),
+                         {"go": ["never calls the shared `add_stored_run_verbs`"]})
 
     def test_a_client_wiring_a_verb_to_another_function_is_named(self):
         mutant = _mutate('"run": cmd_run}', '"run": cmd_status}')

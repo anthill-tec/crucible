@@ -585,19 +585,20 @@ describe("CR-CRU-119 — the seq finding names the cause it actually found", () 
   // ── Integration — the fleet renders the finding and decides nothing ──────
 
   test(
-    "INTEGRATION — the second cause reaches all FIVE clients unchanged in shape: the client " +
-      "count is five, every one of them forwards a cr-plan finding through the shared module " +
+    "INTEGRATION — the second cause reaches all SIX clients unchanged in shape: the client " +
+      "count is six, every one of them forwards a cr-plan finding through the shared module " +
       "without naming a code, and both causes carry only values a client can render",
     async () => {
       const clients = readdirSync(CLIENTS_DIR)
         .filter((file) => file.endsWith("-crucible.py"))
         .sort();
-      // The count itself, asserted: a sixth stack client (or a deleted one)
+      // The count itself, asserted: a seventh stack client (or a deleted one)
       // must fail here rather than quietly narrowing the parity claim below.
-      expect(clients).toHaveLength(5);
+      expect(clients).toHaveLength(6);
       expect(clients).toEqual([
         "arduino-crucible.py",
         "bun-crucible.py",
+        "go-crucible.py",
         "mvn-crucible.py",
         "python-crucible.py",
         "rust-crucible.py",
@@ -634,7 +635,7 @@ describe("CR-CRU-119 — the seq finding names the cause it actually found", () 
         ["invented", invented],
         ["preserved", preserved],
       ] as const) {
-        // The SHAPE five clients already render: a printable line, a code, and
+        // The SHAPE six clients already render: a printable line, a code, and
         // the machine-readable crs beside it.
         expect(typeof finding.code).toBe("string");
         expect(typeof finding.message).toBe("string");

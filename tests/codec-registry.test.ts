@@ -41,8 +41,8 @@ describe("codecs registry — §S3", () => {
 });
 
 describe("the Playwright JSON codec is retired", () => {
-  test("codecs holds exactly crucible-events, junit and nextest, and no playwright entry", () => {
-    expect([...codecs.keys()].sort()).toEqual(["crucible-events", "junit", "nextest"]);
+  test("codecs holds exactly crucible-events, go-test, junit and nextest, and no playwright entry", () => {
+    expect([...codecs.keys()].sort()).toEqual(["crucible-events", "go-test", "junit", "nextest"]);
     expect(codecs.get("playwright")).toBeUndefined();
   });
 

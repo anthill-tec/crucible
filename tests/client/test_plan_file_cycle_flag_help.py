@@ -105,6 +105,7 @@ CLIENT_FILES = {
     "mvn": CLIENTS_DIR / "mvn-crucible.py",
     "python": CLIENTS_DIR / "python-crucible.py",
     "rust": CLIENTS_DIR / "rust-crucible.py",
+    "go": CLIENTS_DIR / "go-crucible.py",
 }
 
 TOON_PATH = CLIENTS_DIR / "toon.py"

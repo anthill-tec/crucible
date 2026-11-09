@@ -75,7 +75,12 @@ GATE_TYPE = "pre-merge-gate"
 CLOSE_VERB = "cr-close"
 ACCEPT_FLAG = "--accept-failing-gate"
 UNUSED_REASON_CODE = "accept-failing-gate-unused"
-CLIENT_KEYS = ("bun", "python", "rust", "mvn", "arduino")
+CLIENT_KEYS = ("bun", "python", "rust", "mvn", "arduino", "go")
+#: The clients whose surface enumerates no suite declaration at all: a red
+#: suite is never undeclared on them, and they cannot run a scoped gate.
+NO_SUITE_CLIENTS = ("python", "go")
+#: go's two gated suites: two names it cannot declare, as python's.
+GO_GATED = ("./api/...", "./worker/...")
 
 #: A target no fixture declares, for the "no longer declared" help.
 RETIRED_TARGET = "test:retired"
@@ -173,8 +178,8 @@ class _CloseJudgesSuiteBySuite(unittest.TestCase):
         if cls.CLIENT == "arduino":
             env_lines.append("CRUCIBLE_PROJECT_NAME=close-by-suite\n")
         (cls.project_dir / ".env").write_text("".join(env_lines))
-        if cls.CLIENT != "python":
-            # python's surface enumerates no declaration at all.
+        if cls.CLIENT not in NO_SUITE_CLIENTS:
+            # python's and go's surfaces enumerate no declaration at all.
             _declare(cls.CLIENT, cls.project_dir)
 
     @classmethod
@@ -415,8 +420,8 @@ class _EveryClientClosesSuiteBySuite(_CloseJudgesSuiteBySuite):
         result, axi = self._close(cr, "feedc0de0011")
         error, help_ = self.assertRefused(cr, plan_id, result, axi)
         self.assertNamesRedSuites(error, [red])
-        if self.CLIENT == "python":
-            # python declares no suites, so the red one is not declared here.
+        if self.CLIENT in NO_SUITE_CLIENTS:
+            # python and go declare no suites, so the red one is not declared here.
             self.assertHelpNamesAFullGate(help_)
         else:
             self.assertHelpRerunsExactly(help_, [red])
@@ -452,6 +457,36 @@ class PythonClosesSuiteBySuiteTest(_EveryClientClosesSuiteBySuite):
             any(re.search(r"no longer declared", line) for line in help_),
             f"python: the red suite was never undeclared, so the help does "
             f"not say it is; help={help_!r}")
+
+
+class GoClosesSuiteBySuiteTest(_EveryClientClosesSuiteBySuite):
+    CLIENT = "go"
+
+    @property
+    def gated(self):
+        return GO_GATED
+
+    def test_the_full_gate_help_says_this_client_cannot_run_a_scoped_gate(self):
+        """go declares no suite, as python: the help gives the real cause --
+        this client cannot run a scoped gate -- and names a full gate."""
+        red, other = self.gated
+        cr = "close-go-cannot-scope"
+        plan_id = self._history(
+            cr,
+            full(entry(red, "fail"), entry(other, "pass")),
+            scoped(entry(other, "pass")))
+        result, axi = self._close(cr, "feedc0de0013")
+        _error, help_ = self.assertRefused(cr, plan_id, result, axi)
+        self.assertHelpNamesAFullGate(help_)
+        self.assertTrue(
+            any(GATE_TYPE in line and re.search(r"\bfull\b", line)
+                and re.search(r"cannot run a scoped gate", line)
+                for line in help_),
+            f"go: the full-gate help says this client cannot run a scoped "
+            f"gate; help={help_!r}")
+        self.assertFalse(
+            any(re.search(r"no longer declared", line) for line in help_),
+            f"go: the red suite was never undeclared; help={help_!r}")
 
 
 class RustClosesSuiteBySuiteTest(_EveryClientClosesSuiteBySuite):
