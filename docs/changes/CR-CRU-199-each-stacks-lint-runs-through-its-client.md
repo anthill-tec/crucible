@@ -51,6 +51,9 @@ reads as "does not compile".
 - **Rust's clippy verbs.** Whether `lint` replaces, wraps or sits beside `clippy` and
   `workspace-clippy`.
 - **Arduino and maven.** Which linter each runs, if any.
+- **Go** (added 2026-11-09, user ruling at CR-CRU-239's gap analysis): Go's `check` compiles only,
+  and `go vet` is Go's linter, run by the Go client's `lint` verb. The open question is only whether
+  the Go `lint` also runs a declared third-party linter (staticcheck, golangci-lint).
 
 ## Steps
 
