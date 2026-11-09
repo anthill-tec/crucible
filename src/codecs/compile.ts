@@ -60,6 +60,8 @@ const GO_DIAGNOSTIC = /^(?!\[)((?:(?!: ).)+?):(\d+)(?::(\d+))?: (.*)$/;
 // Unhinted detection needs a `<file>.go:LINE:COL: ` line.
 const GO_DETECT = /^(?!\[)(?:(?!: ).)+?\.go:\d+:\d+: /;
 const GO_CONTINUATION = /^\t+/;
+// A line the go command prints about itself or the module, not about a source file.
+const GO_TOOL_LINE = /^go: /;
 const GO_TOO_MANY = "too many errors";
 // Lines that are never a go diagnostic: package headers, `go:` lines, the test compile's status lines.
 const GO_NOT_DIAGNOSTIC = /^(?:# |go: |(?:ok|\?|FAIL)(?:\s|$))/;
@@ -223,12 +225,26 @@ function parseGo(lines: string[]): CompileDiagnostic[] {
   return diagnostics;
 }
 
-/** A go report with no positioned diagnostic: one error from its lines that are not headers or status lines. */
+/**
+ * A go report with no positioned diagnostic: one error from its lines that are not headers,
+ * status lines or `go:` lines. A tab-indented line belongs to the line it follows, so it goes
+ * with a `go:` line. When nothing else is left, the `go:` lines are the message.
+ */
 function goMessageOnly(lines: string[]): CompileDiagnostic {
-  const message = lines
-    .map((line) => line.replace(GO_CONTINUATION, ""))
-    .filter((line) => line.trim() !== "" && !GO_NOT_DIAGNOSTIC.test(line))
-    .join("\n");
+  const kept: string[] = [];
+  const goLines: string[] = [];
+  let afterGoLine = false;
+  for (const line of lines) {
+    if (GO_CONTINUATION.test(line)) {
+      const text = line.replace(GO_CONTINUATION, "");
+      if (text.trim() !== "") (afterGoLine ? goLines : kept).push(text);
+      continue;
+    }
+    afterGoLine = GO_TOOL_LINE.test(line);
+    if (afterGoLine) goLines.push(line);
+    else if (line.trim() !== "" && !GO_NOT_DIAGNOSTIC.test(line)) kept.push(line);
+  }
+  const message = (kept.length > 0 ? kept : goLines).join("\n");
   return { message, level: "error" };
 }
 
