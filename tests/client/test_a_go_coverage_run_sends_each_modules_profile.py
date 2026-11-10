@@ -1,9 +1,11 @@
 """A go `--coverage` run sends each module's coverprofile with its close.
 
 `test --coverage` and `regression --coverage` add `-coverprofile` to each
-module's `go test` call, the profile written in the run's own reports dir,
-and send every module's profile text with the run's close under the codec
-`go-coverprofile`. The client adds no `-coverpkg`: a project that wants it
+module's `go test` call, the profile written in the run's own reports dir.
+`test` sends its module's profile text with the run's close under the codec
+`go-coverprofile`; `regression` merges every invocation's profile into ONE
+`go-coverprofile` text first, a block covered when any profile covered it and
+the `mode:` line written once. The client adds no `-coverpkg`: a project that wants it
 sets `GOFLAGS=-coverpkg=./...`, which the client's `go` calls inherit. A
 `--coverage` run against a board whose health does not list
 `go-coverprofile` is refused before a run opens; a profile that was not
@@ -80,6 +82,20 @@ def _names_coverpkg(argv):
 def _block_keys(profile):
     """Each block line's `file:start,end` of a coverprofile, in order."""
     return [line.split(" ", 1)[0] for line in profile.splitlines()[1:] if line.strip()]
+
+
+def _union_blocks(profiles):
+    """`{file:start,end: (statements, covered)}` over every profile: each
+    block once, covered when any profile's count for it is not zero."""
+    union = {}
+    for profile in profiles:
+        for line in profile.splitlines()[1:]:
+            if not line.strip():
+                continue
+            key, statements, count = line.rsplit(" ", 2)
+            weight, hit = union.get(key, (int(statements), False))
+            union[key] = (weight, hit or int(count) > 0)
+    return union
 
 
 def _coverage_warnings(result):
@@ -173,7 +189,7 @@ class ARegressionCoverageRunSendsEveryModulesProfileTest(_CoverageDrive):
         self.assertEqual(len(set(paths)), len(runs),
                          f"each module writes its own profile; {paths}")
 
-    def test_the_close_carries_both_modules_profiles_the_statement_free_one_included(self):
+    def test_the_close_carries_one_profile_the_union_of_both_modules_profiles(self):
         runs = self.p.run_calls()
         texts = {}
         for call in runs:
@@ -188,9 +204,17 @@ class ARegressionCoverageRunSendsEveryModulesProfileTest(_CoverageDrive):
         self.assertEqual(len(closes), 1, f"one close; {self.where}")
         coverage = (closes[0] if closes else {}).get("coverage") or {}
         self.assertEqual(coverage.get("codec"), COVERAGE_CODEC, f"{coverage!r} {self.where}")
-        self.assertEqual(sorted(coverage.get("data") or []), sorted(texts.values()),
-                         f"the close carries each module's profile text, both of them; "
+        data = coverage.get("data") or []
+        self.assertEqual(len(data), 1,
+                         f"ONE go-coverprofile text, never one per module; data={data!r} "
                          f"{self.where}")
+        text = data[0] if data else ""
+        self.assertEqual([line for line in text.splitlines() if line.startswith("mode:")],
+                         [BARE_PROFILE], f"the mode line is written once; text={text!r}")
+        self.assertTrue(text.startswith(BARE_PROFILE), f"text={text!r}")
+        self.assertEqual(_union_blocks([text]), _union_blocks(texts.values()),
+                         f"the one text is the union of both modules' profiles, the "
+                         f"statement-free one adding no block; text={text!r} {self.where}")
         self.assertEqual(self.result.returncode, 0, self.where)
 
 

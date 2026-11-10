@@ -78,9 +78,18 @@ UNUSED_REASON_CODE = "accept-failing-gate-unused"
 CLIENT_KEYS = ("bun", "python", "rust", "mvn", "arduino", "go")
 #: The clients whose surface enumerates no suite declaration at all: a red
 #: suite is never undeclared on them, and they cannot run a scoped gate.
-NO_SUITE_CLIENTS = ("python", "go")
-#: go's two gated suites: two names it cannot declare, as python's.
-GO_GATED = ("./api/...", "./worker/...")
+NO_SUITE_CLIENTS = ("python",)
+#: go's two gated suites on a module that declares the `integration` and
+#: `bdd` tiers by build tag: the untagged run, and one declared tier.
+GO_GATED = ("untagged", "integration")
+#: The tier files the go fixture's module declares its tiers with, beside
+#: the census module's one untagged test.
+_GO_TIER_FILES = {
+    "integ_test.go": ("//go:build integration\n\npackage probe\n\nimport \"testing\"\n\n"
+                      "func TestIntegProbe(t *testing.T) {}\n"),
+    "bdd_test.go": ("//go:build bdd\n\npackage probe\n\nimport \"testing\"\n\n"
+                    "func TestBddProbe(t *testing.T) {}\n"),
+}
 
 #: A target no fixture declares, for the "no longer declared" help.
 RETIRED_TARGET = "test:retired"
@@ -156,6 +165,11 @@ class _CloseJudgesSuiteBySuite(unittest.TestCase):
     drives the client's `cr-close` for it."""
 
     CLIENT = ""
+    #: go only: whether the project's module declares the `integration` and
+    #: `bdd` tiers (a go project that declares no tier declares no suite).
+    GO_DECLARES_TIERS = True
+    #: Keeps two classes of one client on projects of their own.
+    PROJECT_SUFFIX = ""
 
     @classmethod
     def setUpClass(cls):
@@ -164,11 +178,11 @@ class _CloseJudgesSuiteBySuite(unittest.TestCase):
             raise AssertionError("the module's real board was never booted")
         cls.board = _BOARD
         cls.toon = _load_toon_module()
-        project = cls.board.http("/api/v2/projects",
-                                 {"name": f"close-by-suite-{cls.CLIENT}"})
+        name = f"close-by-suite-{cls.CLIENT}{cls.PROJECT_SUFFIX}"
+        project = cls.board.http("/api/v2/projects", {"name": name})
         assert project.get("ok"), f"project creation failed: {project!r}"
         cls.key = project["project"]["key"]
-        cls.orchestrator = f"close-by-suite-{cls.CLIENT}-orchestrator"
+        cls.orchestrator = f"{name}-orchestrator"
         reg = cls.board.http("/api/v2/agents/register",
                              {"projectKey": cls.key, "agentId": cls.orchestrator,
                               "role": "ORCHESTRATOR"})
@@ -178,8 +192,13 @@ class _CloseJudgesSuiteBySuite(unittest.TestCase):
         if cls.CLIENT == "arduino":
             env_lines.append("CRUCIBLE_PROJECT_NAME=close-by-suite\n")
         (cls.project_dir / ".env").write_text("".join(env_lines))
-        if cls.CLIENT not in NO_SUITE_CLIENTS:
-            # python's and go's surfaces enumerate no declaration at all.
+        if cls.CLIENT == "go":
+            # go declares a tier by build tag, read off the real `go list`.
+            if cls.GO_DECLARES_TIERS:
+                for name, text in _GO_TIER_FILES.items():
+                    (cls.project_dir / name).write_text(text)
+        elif cls.CLIENT not in NO_SUITE_CLIENTS:
+            # python's surface enumerates no declaration at all.
             _declare(cls.CLIENT, cls.project_dir)
 
     @classmethod
@@ -460,33 +479,47 @@ class PythonClosesSuiteBySuiteTest(_EveryClientClosesSuiteBySuite):
 
 
 class GoClosesSuiteBySuiteTest(_EveryClientClosesSuiteBySuite):
+    """A go module that declares the `integration` and `bdd` tiers by build
+    tag: its gate's suites are `untagged` and each declared tier, so a red
+    one is re-run by a gate scoped to it."""
+
     CLIENT = "go"
 
     @property
     def gated(self):
         return GO_GATED
 
-    def test_the_full_gate_help_says_this_client_cannot_run_a_scoped_gate(self):
-        """go declares no suite, as python: the help gives the real cause --
-        this client cannot run a scoped gate -- and names a full gate."""
-        red, other = self.gated
-        cr = "close-go-cannot-scope"
+    def test_a_red_declared_tier_is_rerun_by_a_gate_scoped_to_it(self):
+        cr = "close-go-rerun-tier"
         plan_id = self._history(
             cr,
-            full(entry(red, "fail"), entry(other, "pass")),
-            scoped(entry(other, "pass")))
+            full(entry("untagged", "pass"), entry("integration", "fail"),
+                 entry("bdd", "pass")),
+            scoped(entry("bdd", "pass")))
         result, axi = self._close(cr, "feedc0de0013")
-        _error, help_ = self.assertRefused(cr, plan_id, result, axi)
+        error, help_ = self.assertRefused(cr, plan_id, result, axi)
+        self.assertNamesRedSuites(error, ["integration"])
+        self.assertHelpRerunsExactly(help_, ["integration"])
+
+
+class GoProjectThatDeclaresNoTierClosesSuiteBySuiteTest(_CloseJudgesSuiteBySuite):
+    """A go module that declares no tier declares no suite: every `--suites`
+    is refused on it, so a red suite's refusal offers a full gate only."""
+
+    CLIENT = "go"
+    GO_DECLARES_TIERS = False
+    PROJECT_SUFFIX = "-no-tier"
+
+    def test_the_refusal_offers_a_full_gate_and_no_scoped_rerun(self):
+        cr = "close-go-no-tier"
+        plan_id = self._history(
+            cr,
+            full(entry("untagged", "fail"), entry("other", "pass")),
+            scoped(entry("other", "pass")))
+        result, axi = self._close(cr, "feedc0de0014")
+        error, help_ = self.assertRefused(cr, plan_id, result, axi)
+        self.assertNamesRedSuites(error, ["untagged"])
         self.assertHelpNamesAFullGate(help_)
-        self.assertTrue(
-            any(GATE_TYPE in line and re.search(r"\bfull\b", line)
-                and re.search(r"cannot run a scoped gate", line)
-                for line in help_),
-            f"go: the full-gate help says this client cannot run a scoped "
-            f"gate; help={help_!r}")
-        self.assertFalse(
-            any(re.search(r"no longer declared", line) for line in help_),
-            f"go: the red suite was never undeclared; help={help_!r}")
 
 
 class RustClosesSuiteBySuiteTest(_EveryClientClosesSuiteBySuite):

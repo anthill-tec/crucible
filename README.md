@@ -168,7 +168,15 @@ pip install -e '.[dev]'
   later. Its `check` compiles the module (`go build ./...`), `check --tests`
   compiles test files too without running a test, and `--coverage` on `test`
   and `regression` sends each module's coverprofile as Go statement coverage
-  (`go-coverprofile`, on the `lines` axis).
+  (`go-coverprofile`, on the `lines` axis). A Go project declares a tier by
+  build tag: `//go:build <tier>` in a `_test.go` file that declares a test.
+  The tier verbs `unit`, `module`, `integration`, `e2e` and `bdd` run only the
+  tests the tier's tag adds, never an untagged test, into one run filed under
+  its tier; a tier no module declares is refused, and so is a tier test whose
+  name is also declared in a test file the untagged build compiles.
+  `regression` runs the untagged tests and then every declared tier's tests.
+  The `pre-merge-gate` runs each declared tier as a suite with its own row,
+  beside the `untagged` row, filed under `regression`.
 - `clients/STATUS-CONTRACT.md` — the status/dashboard payload contract the
   orchestrators read.
 

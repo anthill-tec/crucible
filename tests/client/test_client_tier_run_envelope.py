@@ -81,6 +81,14 @@ code, and every drive in this file is built from them:
                               `_emit_run_axi`, as the
                               arduino client sends its
                               reports to the board)
+  go       integration        `_go_test_run`, the run   a build-tag tier with no
+           (a build-tag       closed from the stream    test is REFUSED before it
+           tier; zero-        the board held            runs, so go's zero-
+           discovery on                                 discovery is driven on
+           `regression`)                                its other tier verb,
+                                                        `regression`, over a
+                                                        module with no test
+                                                        → ingested, total 0
 
   client   compile ingest, and whether it is a FALLBACK from the tier verb
   bun      NOT from `regression` — that verb's no-JUnit exit ingests NOTHING
@@ -101,6 +109,18 @@ code, and every drive in this file is built from them:
            compile ingest is a first-class verb (`compile`/`check`, the
            arduino-cli target build), so this file drives THAT — AC13a's rule
            is fleet-wide and the envelope must state `compile` there too.
+  go       NO compile fallback from a test run: a tier file that does not
+           compile FAILS its run, its build failure filed in the run's own
+           stream. go's compile ingest is the first-class `check` verb (a
+           failing `go build` filed to /api/v2/runs/compile), so this file
+           drives THAT, as it does arduino's.
+
+The go row is driven unlike the other five: go's tier declaration is read by
+the toolchain itself (`go list -tags <tier>`), so its drives run the REAL go
+client and the real `go` against a loopback `RecordingBoard`
+(`_GoModalityCase` in the modality harness), with the board's answer to the
+run's close scripted and the stream it held read back to show the script was
+honest.
 
 So the (client × path) matrix is 5 × 4 = 20 and every cell is driven; two of
 the twenty (bun, arduino) are driven on a verb OTHER than that client's tier
@@ -320,9 +340,14 @@ def _tier_verb_clients():
 # matrix in the module docstring), recorded here so every drive below is built
 # from one statement of the fact.
 TIER_VERB_DRIVEN = {"bun": "regression", "python": "regression",
-                    "mvn": "unit", "rust": "unit", "arduino": "unit"}
+                    "mvn": "unit", "rust": "unit", "arduino": "unit",
+                    "go": "integration"}
 COMPILE_EXIT_VERB = {"bun": "test", "python": "regression", "mvn": "unit",
-                     "rust": "unit", "arduino": "compile"}
+                     "rust": "unit", "arduino": "compile", "go": "check"}
+# go's one exit its build-tag tier verb cannot reach: a tier whose files declare
+# no test is refused before anything runs, so the runner finding no test is
+# driven on go's other tier verb.
+GO_ZERO_DISCOVERY_VERB = "regression"
 
 
 # ── fixtures: junit payloads for the three RUN outcomes ────────────────────
@@ -985,15 +1010,111 @@ class ArduinoIngestedTierEnvelopeTest(_EnvelopeTierProbe,
         self.assertClaimsNothingWasIngested(drive, where)
 
 
+# The go module of the zero-discovery drive: one package, no test file.
+_GO_NO_TEST_MODULE = {
+    "go.mod": "module example.com/notests\n\ngo 1.24\n",
+    "probe/probe.go": "package probe\n\n// One answers one.\nfunc One() int { return 1 }\n",
+}
+
+
+class GoIngestedTierEnvelopeTest(_EnvelopeTierProbe, _MODALITY._GoModalityCase):
+    """AC7 in go. The tier verb driven is `integration`, a tier go declares
+    by build tag, on the shared fixtures of the go tier tests:
+
+      * success — `tiers`: its one `integration` test, `TestInteg`, passes;
+      * failing suite — `tier-shared-name`: its `integration` `TestX` fails;
+      * zero-discovery — on `regression`, go's other tier verb, over a module
+        with no test: a build-tag tier whose files declare no test is refused
+        before it runs, so the runner can find no test only there;
+      * compile — `check` on `does-not-build`: go has no compile fallback from
+        a test run (a tier file that does not compile fails its run), and its
+        compile ingest is the `check` verb, driven as arduino's `compile` is.
+
+    Each drive also reads the stream the board held, so the counts the board
+    was scripted to answer are shown to be the ones the run produced."""
+
+    drive = _MODALITY._GoModalityCase.drive
+
+    TIERS_PACKAGE = "example.com/tiers/tiers"
+    SHARED_PACKAGE = "example.com/shared/shared"
+
+    def assertStatesTheVerbsTier(self, stated, where):
+        """A build-tag tier run is filed under the verb's own tier, so the
+        tier its envelope states is that verb's, not merely one that agrees
+        with the wire."""
+        self.assertEqual(
+            stated, TIER_VERB_DRIVEN["go"],
+            f"AC7 — {where}: the run was filed under the verb's tier, so the "
+            f"envelope states {TIER_VERB_DRIVEN['go']!r}; it says {stated!r}")
+
+    def test_a_successful_tiered_run_states_the_tier_it_ingested(self):
+        where = "go integration / success"
+        self.use_fixture("tiers")
+        drive = self.drive(self.go_argv(TIER_VERB_DRIVEN["go"]),
+                           {"run": {"passed": 1}})
+        self.assertEqual(
+            self.held_terminals(), [(self.TIERS_PACKAGE, "TestInteg", "pass")],
+            f"{where}: the run must hold exactly the passing tagged test; "
+            f"exit={drive.code} stderr={drive.err[-800:]!r}")
+        self.assertReachedSuccess(drive, where)
+        stated = self.assertEnvelopeStatesIngestedTier(drive, where)
+        self.assertStatesTheVerbsTier(stated, where)
+
+    def test_a_failing_suite_still_states_the_tier_it_ingested(self):
+        where = "go integration / failing suite"
+        self.use_fixture("tier-shared-name")
+        drive = self.drive(self.go_argv(TIER_VERB_DRIVEN["go"]),
+                           {"run": {"failed": 1}})
+        self.assertEqual(
+            self.held_terminals(), [(self.SHARED_PACKAGE, "TestX", "fail")],
+            f"{where}: the run must hold exactly the failing tagged test; "
+            f"exit={drive.code} stderr={drive.err[-800:]!r}")
+        self.assertNotEqual(drive.code, 0,
+                            f"{where}: a failing tier run exits non-zero")
+        self.assertReachedFailingSuite(drive, where)
+        stated = self.assertEnvelopeStatesIngestedTier(drive, where)
+        self.assertStatesTheVerbsTier(stated, where)
+
+    def test_a_zero_discovery_run_states_what_it_ingested(self):
+        where = f"go {GO_ZERO_DISCOVERY_VERB} / zero-discovery"
+        for name, text in _GO_NO_TEST_MODULE.items():
+            path = Path(self.tmpdir, name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        drive = self.drive(self.go_argv(GO_ZERO_DISCOVERY_VERB),
+                           {"run": {"total": 0}})
+        self.assertEqual(
+            self.held_terminals(), [],
+            f"{where}: a module with no test runs no test; "
+            f"exit={drive.code} stderr={drive.err[-800:]!r}")
+        self.assertReachedZeroDiscovery(drive, where)
+        self.assertTrue(
+            self._ingested_test_bodies(drive),
+            f"{where}: the run that found no test is still closed on the "
+            f"board; posted {[p for p, _ in drive.calls]!r}")
+        self.assertEnvelopeStatesIngestedTier(drive, where)
+
+    def test_the_compile_fallback_states_compile_and_not_a_test_tier(self):
+        where = "go check / compile"
+        self.use_fixture("does-not-build")
+        drive = self.drive(self.go_argv(COMPILE_EXIT_VERB["go"]))
+        self.assertReachedCompileIngest(drive, where)
+        self.assertEqual(
+            self._ingested_test_bodies(drive), [],
+            f"{where}: a compile is not a test run; posted "
+            f"{[p for p, _ in drive.calls]!r}")
+        self.assertStatesCompileAndNotATestTier(drive, where)
+
+
 _EXIT_PATH_CASES = (BunIngestedTierEnvelopeTest, PythonIngestedTierEnvelopeTest,
                     MvnIngestedTierEnvelopeTest, RustIngestedTierEnvelopeTest,
-                    ArduinoIngestedTierEnvelopeTest)
+                    ArduinoIngestedTierEnvelopeTest, GoIngestedTierEnvelopeTest)
 
 # Every (client, path) cell this file drives, attached to the method that
 # drives it — the same `.cell` idiom cycle 379 uses, so `ExitPathCoverageTest`
 # derives its coverage instead of restating it.
 for _case, _client in zip(_EXIT_PATH_CASES,
-                          ("bun", "python", "mvn", "rust", "arduino")):
+                          ("bun", "python", "mvn", "rust", "arduino", "go")):
     _case.test_a_successful_tiered_run_states_the_tier_it_ingested.exit_path = (
         _client, "success")
     _case.test_a_failing_suite_still_states_the_tier_it_ingested.exit_path = (
@@ -1175,9 +1296,33 @@ class ArduinoTierLessEnvelopeTest(_TierLessProbe, _MODALITY._ArduinoModalityCase
         self.assertTierLessEnvelopeIsHonest()
 
 
+class GoTierLessEnvelopeTest(_TierLessProbe, _MODALITY._GoModalityCase):
+    """go's one tier-less ingesting verb is `test` (go has no `auto-ingest`):
+    an untagged `go test -json ./...` run that sends no tier, on the `tiers`
+    module, whose untagged build holds `TestUnit` and `TestNotInteg`."""
+
+    FIXTURE = "tiers"
+    drive = _MODALITY._GoModalityCase.drive
+
+    def tier_less_drives(self):
+        def untagged_run():
+            self.script_run(passed=2)
+
+        return {"test": (self.go_argv("test"), untagged_run)}
+
+    def test_a_tier_less_run_states_no_tier_it_did_not_send(self):
+        self.assertTierLessEnvelopeIsHonest()
+        self.assertEqual(
+            sorted(self.held_terminals()),
+            [("example.com/tiers/tiers", "TestNotInteg", "pass"),
+             ("example.com/tiers/tiers", "TestUnit", "pass")],
+            "the untagged run holds the two untagged-build tests the board "
+            "was scripted to count")
+
+
 _TIER_LESS_CASES = (BunTierLessEnvelopeTest, PythonTierLessEnvelopeTest,
                     MvnTierLessEnvelopeTest, RustTierLessEnvelopeTest,
-                    ArduinoTierLessEnvelopeTest)
+                    ArduinoTierLessEnvelopeTest, GoTierLessEnvelopeTest)
 
 
 # ── §S1's refusal ingested nothing, so it claims nothing ───────────────────
@@ -1248,9 +1393,19 @@ class ArduinoRefusalClaimsNothingTest(_RefusalProbe, _MODALITY._ArduinoModalityC
         return [self.UNDECLARED_CELL, "--project-dir", self.tmpdir]
 
 
+class GoRefusalClaimsNothingTest(_RefusalProbe, _MODALITY._GoModalityCase):
+    """`bdd` on the `tiers` module, which declares only `integration`."""
+
+    FIXTURE = "tiers"
+    drive = _MODALITY._GoModalityCase.drive
+
+    def refusal_argv(self):
+        return self.go_argv(self.UNDECLARED_CELL)
+
+
 _REFUSAL_CASES = (BunRefusalClaimsNothingTest, PythonRefusalClaimsNothingTest,
                   MvnRefusalClaimsNothingTest, RustRefusalClaimsNothingTest,
-                  ArduinoRefusalClaimsNothingTest)
+                  ArduinoRefusalClaimsNothingTest, GoRefusalClaimsNothingTest)
 
 
 # ── the counts, DERIVED ────────────────────────────────────────────────────

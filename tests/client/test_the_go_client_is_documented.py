@@ -16,7 +16,10 @@ Invocation:
         --tests tests.client.test_the_go_client_is_documented
 """
 
+import importlib.util
 import re
+import subprocess
+import sys
 import unittest
 
 from tests.client.test_the_declaration_schema_is_documented import (
@@ -180,6 +183,195 @@ class ThePrdCarriesTheGoCoverageAmendmentTest(unittest.TestCase):
         stated = any("go-coverprofile" in block and re.search(r"(?i)\bstatement", block)
                      and re.search(r"\blines\b", block) for block in _blocks(self.text))
         self.assertTrue(stated, "the PRD puts Go's statement coverage on `lines`")
+
+
+# ── go's tiers: declared by build tag ──────────────────────────────────────────────────────────
+#
+# Each fact is pinned loosely, by key words, and in ONE block about Go
+# (`_go_blocks`), so a doc may word it as it likes.
+
+DN = RUNBOOK.parent / "research" / "DN-testing-tiers-in-crucible-projects.md"
+GO_HELP_CLIENT = RUNBOOK.parent.parent / "clients" / GO_CLIENT
+TIER_VERBS = ("unit", "module", "integration", "e2e", "bdd")
+
+
+def _verb(name):
+    """A verb in backticks, bare or after the client (`go-crucible.py unit`)."""
+    return re.compile(rf"`(?:[\w./-]+ )?{name}\b[^`\n]*`")
+
+
+#: fact name -> the key words ONE block about Go must carry, every one.
+GO_TIER_FACTS = {
+    "the tier verbs": [_verb(t) for t in TIER_VERBS],
+    "the declaration rule (a `_test.go` file with `//go:build <tier>` that "
+    "declares a test)": [re.compile(r"//go:build"), re.compile(r"_test\.go"),
+                         re.compile(r"(?i)\bdeclar")],
+    "that a tier runs only the tests its tag adds": [re.compile(
+        r"(?is)\bonly\b[^.]{0,120}(?:\btag\w*\b[^.]{0,60}\badd|\btagged\b)"
+        r"|\bnever\s+(?:runs|files)\b[^.]{0,60}\buntagged\b")],
+    "the refused name clash": [re.compile(r"(?i)\brefus"), re.compile(
+        r"(?i)\bclash|\bsame\s+name\b|\balso\s+declared\b"
+        r"|\bcannot\s+be\s+(?:run|selected|separated)\b")],
+    "the gate's per-tier rows, the `untagged` row filed under `regression`": [
+        re.compile(r"(?i)\bgate\b|pre-merge-gate"),
+        re.compile(r"(?i)\b(?:rows?|suites?)\b"),
+        re.compile(r"(?is)\buntagged\b[^.]{0,160}\bregression\b")],
+    "a tier verb's run filed under its tier": [re.compile(
+        r"(?i)\b(?:filed|stated|ingested)\s+under\s+(?:its|the|that)\s+(?:own\s+)?tier\b"
+        r"|\bunder\s+the\s+verb's\s+(?:own\s+)?tier\b")],
+    "`regression` covering every declared tier": [re.compile(
+        r"(?is)\bregression\b[^.]{0,200}\b(?:every|each|all)\b[^.]{0,30}\btiers?\b")],
+}
+
+#: What says go declares no tier, or offers no tier verb.
+GO_DECLARES_NO_TIER = (
+    re.compile(r"(?i)no target for it is declared on this stack"),
+    re.compile(r"(?i)\bgo\b[^.\n]{0,40}\b(?:declares|has|offers|takes) no tiers?\b"),
+    re.compile(r"(?i)\bgo\b[^.\n]{0,40}\b(?:has|offers) no tier verbs?\b"),
+    re.compile(r"(?i)\bno tiers? (?:is|are|can be) declared (?:on|for|in) go\b"),
+)
+
+
+#: The same facts in the client's own help and docstring, where a verb is
+#: written bare (`unit, module, ...`), as argparse and the docstring list it.
+GO_TIER_FACTS_BARE = {**GO_TIER_FACTS, "the tier verbs": [
+    re.compile(rf"\b{t}\b") for t in TIER_VERBS]}
+
+
+def _missing_facts(blocks, facts=None):
+    """The facts of `facts` (default `GO_TIER_FACTS`) no one block of
+    `blocks` carries."""
+    return [fact for fact, words in (facts or GO_TIER_FACTS).items()
+            if not any(all(w.search(block) for w in words) for block in blocks)]
+
+
+def _assert_none(found, what):
+    """Fail naming `found` when it is not empty: the mixins below hold no
+    `TestCase` assertions of their own."""
+    if found:
+        raise AssertionError(f"{what}: {found!r}")
+
+
+def _says_go_declares_no_tier(text):
+    return [m.group() for pattern in GO_DECLARES_NO_TIER for m in pattern.finditer(text)]
+
+
+class _NamesGosTiers:
+    """A document names, each in a block about Go, every fact of
+    `GO_TIER_FACTS`, and nowhere says go declares no tier. A subclass states
+    `text()` and is a `TestCase`."""
+
+    def text(self):
+        raise NotImplementedError
+
+    def test_names_every_fact_of_gos_build_tag_tiers(self):
+        _assert_none(_missing_facts(_go_blocks(self.text())),
+                     "no one block about Go names these facts")
+
+    def test_nothing_says_go_declares_no_tier(self):
+        _assert_none(_says_go_declares_no_tier(self.text()),
+                     "these say go declares no tier")
+
+
+class TheChangelogNamesGosTiersTest(_NamesGosTiers, unittest.TestCase):
+
+    def text(self):
+        return _unreleased(CHANGELOG.read_text(encoding="utf-8"))
+
+    def test_says_check_tests_compiles_each_declared_tier(self):
+        stated = any(CHECK_TESTS.search(block) and re.search(r"(?i)\btiers?\b", block)
+                     and re.search(r"(?i)\btag", block)
+                     for block in _go_blocks(self.text()))
+        self.assertTrue(stated, "a block about Go says `check --tests` compiles each "
+                                "declared tier under its tag")
+
+
+class TheReadmeNamesGosTiersTest(_NamesGosTiers, unittest.TestCase):
+
+    def text(self):
+        return README.read_text(encoding="utf-8")
+
+
+class TheRunbookNamesGosTiersTest(_NamesGosTiers, unittest.TestCase):
+
+    def text(self):
+        return RUNBOOK.read_text(encoding="utf-8")
+
+
+class TheTestingTiersDnHasTheGoNoteTest(unittest.TestCase):
+
+    def test_a_go_note_says_the_gates_whole_run_is_untagged_and_its_tier_rows_make_the_union(self):
+        text = DN.read_text(encoding="utf-8")
+        noted = any(re.search(r"\bGo\b", block) and re.search(r"\buntagged\b", block)
+                    and re.search(r"(?i)\bwhole run\b|\bgate\b", block)
+                    and re.search(r"(?i)\b(?:rows?|suites?)\b", block)
+                    and re.search(r"(?i)\bunion\b", block)
+                    for block in _blocks(text))
+        self.assertTrue(noted, "a block of the testing-tiers DN says that on Go the gate's "
+                               "whole run is untagged only, and its per-tier rows make "
+                               "the union")
+
+
+def _go_help():
+    """`go-crucible.py --help`, as printed."""
+    ran = subprocess.run([sys.executable, str(GO_HELP_CLIENT), "--help"],
+                         capture_output=True, text=True, timeout=60, check=False)
+    if ran.returncode != 0:
+        raise AssertionError(f"--help exit={ran.returncode} err={ran.stderr[-600:]!r}")
+    return ran.stdout
+
+
+def _go_docstring():
+    spec = importlib.util.spec_from_file_location("go_client_documented", GO_HELP_CLIENT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.__doc__ or ""
+
+
+class _NamesGosTiersAsAWhole:
+    """The client's own help and docstring: the facts may be spread over the
+    whole text (a help is not written in paragraphs), but each must be there,
+    and nothing may say go declares no tier."""
+
+    def text(self):
+        raise NotImplementedError
+
+    def test_names_every_fact_of_gos_build_tag_tiers(self):
+        _assert_none(_missing_facts([self.text()], GO_TIER_FACTS_BARE),
+                     "the text does not name these facts")
+
+    def test_nothing_says_go_declares_no_tier(self):
+        _assert_none(_says_go_declares_no_tier(self.text()),
+                     "these say go declares no tier")
+
+
+class TheGoHelpNamesItsTiersTest(_NamesGosTiersAsAWhole, unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.help = _go_help()
+
+    def text(self):
+        return self.help
+
+    def test_names_the_tier_verbs(self):
+        listed = re.search(r"\{([^{}]*)\}", self.help)
+        verbs = set((listed.group(1) if listed else "").split(","))
+        self.assertEqual(sorted(set(TIER_VERBS) - verbs), [], f"the verbs: {sorted(verbs)}")
+
+
+class TheGoDocstringNamesItsTiersTest(_NamesGosTiersAsAWhole, unittest.TestCase):
+
+    def text(self):
+        return _go_docstring()
+
+
+class NothingInTheGoClientSaysGoDeclaresNoTierTest(unittest.TestCase):
+
+    def test_the_client_source_says_nothing_of_the_kind(self):
+        text = GO_HELP_CLIENT.read_text(encoding="utf-8")
+        self.assertEqual(_says_go_declares_no_tier(text), [])
 
 
 if __name__ == "__main__":

@@ -39,6 +39,20 @@ Releases before 0.3.0 are described only on GitHub Releases.
   - A `--coverage` run is refused before it opens when the board's health does not list
     `go-coverprofile`. When a module's profile was not written, the run is closed with no coverage
     and a `coverage-not-measured` warning naming the module.
+- **A Go project declares its tiers by build tag.** The Go client's tier verbs, `unit`, `module`,
+  `integration`, `e2e` and `bdd`, run a tier the project declares with `//go:build <tier>` in a
+  `_test.go` file that declares a test. A tier verb runs only the tests its tag adds, never an
+  untagged test, into one run filed under its tier. A tier no module declares is refused, and so is a
+  tier test whose name is also declared in a test file the untagged build compiles, since `-run`
+  cannot select it alone. `regression` runs the untagged tests and then every declared tier's tests,
+  in one run. The `pre-merge-gate` runs each declared tier as a suite with its own row, filed under
+  that tier, beside the `untagged` row, the whole run, filed under `regression`; `e2e` is listed and
+  excluded.
+  - The Go client's `check --tests` also compiles each declared tier's test files under its tag
+    (`-tags <tier>`). Every compile runs, and the failing ones are filed as one compile run, each
+    error once.
+  - The Go client's `unit` run carries the `unit-run-wall-exceeds-cpu` warning when it spends its
+    wall time waiting, as the other clients' `unit` runs do.
 
 ### Changed
 

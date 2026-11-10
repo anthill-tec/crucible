@@ -424,6 +424,18 @@ provisioned server move in lockstep; on an already-current machine it reports
   axis. A board whose health does not list `go-coverprofile` refuses the run
   before it opens. The client adds no `-coverpkg`; set
   `GOFLAGS=-coverpkg=./...` to measure across packages.
+- The Go client's tiers are declared by build tag: `//go:build <tier>` in a
+  `_test.go` file that declares a test. The tier verbs `unit`, `module`,
+  `integration`, `e2e` and `bdd` run only the tests the tier's tag adds, never
+  an untagged test, into one run filed under its tier. A tier no module
+  declares is refused, and so is a tier test whose name is also declared in a
+  test file the untagged build compiles. `regression` runs the untagged tests
+  and then every declared tier's tests. The `pre-merge-gate` runs each
+  declared tier as a suite with its own row, beside the `untagged` row, filed
+  under `regression`. `check --tests` also compiles each declared tier's test
+  files under its tag. A module whose `go.mod` `go list` rejects has
+  `regression` and the gate refused (`declaration-refused`), not run red, even
+  in a project that declares no tier.
 
 ### Upgrading TO 0.2.1 — re-run the install, do not stop at the package
 

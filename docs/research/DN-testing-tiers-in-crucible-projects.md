@@ -145,6 +145,10 @@ gate cannot see is not gated, and "the gate was green" then means only "the part
   `pre-merge-gate`. No new code — `--start-dir`/`--pattern` already exist.
 - **`regression` means the union.** A `regression` run covering one language of a two-language project
   is a mislabelled run, not a partial one.
+- **Go: the whole run is untagged.** A Go project declares a tier by build tag (`//go:build <tier>` in
+  a `_test.go` file that declares a test), so the gate's whole run, the `untagged` row filed under
+  `regression`, holds the untagged tests only. Each declared tier runs as a suite with its own row,
+  under its tier, and the rows together make the union.
 - **Additive, never exclusionary.** No project may gain a target by hiding files from discovery:
   `bunfig.toml` carries no `pathIgnorePatterns` (CR-CRU-047 §S1) and `tests/suite-integrity.test.ts`
   asserts the key is absent.

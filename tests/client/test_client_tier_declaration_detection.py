@@ -162,6 +162,15 @@ import sys
 import unittest
 from pathlib import Path
 
+from tests.client.go_client_harness import (
+    GoProject,
+    go_toolchain_gap,
+)
+from tests.client.go_client_harness import envelope as go_envelope
+from tests.client.go_client_harness import flag_value as go_flag_value
+from tests.client.go_client_harness import said as go_said
+from tests.client.go_client_harness import terminal_events as go_terminal_events
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 MODALITY_PATH = Path(__file__).resolve().parent / "test_client_tier_run_modality.py"
@@ -222,17 +231,15 @@ DECLARED_CELLS = {
     "mvn": "bdd",
     "rust": "module",
     "arduino": "integration",
+    "go": "integration",
 }
 
 # The clients that declare NO tier, each with why: no declared-target
 # assertion is possible on them, so the coverage pin counts them beside the
 # driven cells rather than letting the fleet's size outgrow the asserted count.
-# go declares tiers by build tag only once a later change lands; until then it
-# offers no tier verb at all, which `UndeclaringClientsOfferNoTierVerbTest`
-# below proves by driving it.
-DECLARES_NO_TIER = {
-    "go": "declares no tier yet: it offers no unit/module/integration/e2e/bdd verb",
-}
+# None today: go declares its tiers by build tag, and its declared cell is
+# driven by `GoDeclaredTargetRunsTest` below.
+DECLARES_NO_TIER = {}
 
 # What counts as a project ARTEFACT named in a refusal (AC14b's second face).
 # Derived from the text rather than listed per stack: a refusal that names a
@@ -945,12 +952,73 @@ MvnDeclaredTargetRunsTest.test_a_declared_pom_profile_is_detected_and_run.cell =
     "mvn", DECLARED_CELLS["mvn"])
 RustDeclaredTargetRunsTest.test_a_declared_nextest_profile_is_detected_and_run.cell = (
     "rust", DECLARED_CELLS["rust"])
+
+
+def _declared_cell(client):
+    """Mark a test method as the declared-target assertion of `client`'s
+    cell, the mark `DeclaredCellCoverageTest` counts."""
+    def mark(func):
+        func.__dict__.update(cell=(client, DECLARED_CELLS[client]))
+        return func
+    return mark
+
+
+class GoDeclaredTargetRunsTest(unittest.TestCase):
+    """go — a tier is declared by `//go:build <tier>` in a `_test.go` file that
+    declares a test. The same cell refuses with no such file, naming the
+    declaration, and RUNS once the file the refusal names is added, with
+    nothing else about the invocation changed.
+
+    Unlike the fake-toolchain cases above, go's declaration is read by the
+    real toolchain (`go list -tags <tier>`), so this case drives the real go
+    client and the real `go` behind the recording shim of `go_client_harness`,
+    against a loopback `RecordingBoard`."""
+
+    PACKAGE = "example.com/tier-e2e-helper-only/probe"
+
+    @_declared_cell("go")
+    def test_a_declared_build_tag_is_detected_and_run(self):
+        gap = go_toolchain_gap()
+        if gap:
+            self.fail(f"missing toolchain: {gap}")
+        tier = DECLARED_CELLS["go"]
+        # A module whose only tag (`e2e`) adds a helper: `integration` is
+        # declared nowhere.
+        p = GoProject(self, fixture="tier-e2e-helper-only")
+        p.board.script_run(passed=1)
+        refused = p.drive(verb=tier)
+        axi = go_envelope(refused.stdout) or {}
+        self.assertIs(axi.get("ok"), False, refused.stdout[-600:] + refused.stderr[-600:])
+        self.assertIn("tier-run-undeclared", refused.stderr, refused.stderr[-600:])
+        self.assertIn(f"//go:build {tier}", go_said(axi), go_said(axi))
+        self.assertEqual(p.subcommand_calls("test"), [], "a refusal runs no go test")
+        self.assertEqual(p.starts(), [], "a refusal opens no run")
+
+        # Follow the instruction: `//go:build integration` in a `_test.go`
+        # file that declares a test. Nothing else changes.
+        Path(p.dir, "probe", "declared_probe_test.go").write_text(
+            f'//go:build {tier}\n\npackage probe\n\nimport "testing"\n\n'
+            'func TestDeclaredProbe(t *testing.T) {}\n', encoding="utf-8")
+        ran = p.drive(verb=tier)
+        where = ran.stdout[-800:] + ran.stderr[-1200:]
+        self.assertEqual(ran.returncode, 0, where)
+        self.assertEqual([s.get("tier") for s in p.starts()], [tier],
+                         f"one run, filed under the verb's tier; {where}")
+        calls = p.subcommand_calls("test")
+        self.assertTrue(calls, f"the declared tier ran go test; {where}")
+        for call in calls:
+            self.assertEqual(go_flag_value(call["argv"], "-tags"), tier, call["argv"])
+        self.assertEqual(go_terminal_events(p.held()),
+                         [(self.PACKAGE, "TestDeclaredProbe", "pass")],
+                         f"exactly the declared test is filed; {where}")
+
+
 ArduinoDeclaredTargetRunsTest.test_a_declared_native_make_target_is_detected_and_run.cell = (
     "arduino", DECLARED_CELLS["arduino"])
 
 _AC14_CASES = (BunDeclaredTargetRunsTest, PythonDeclaredTargetRunsTest,
                MvnDeclaredTargetRunsTest, RustDeclaredTargetRunsTest,
-               ArduinoDeclaredTargetRunsTest)
+               ArduinoDeclaredTargetRunsTest, GoDeclaredTargetRunsTest)
 
 
 class DeclaredCellCoverageTest(unittest.TestCase):
