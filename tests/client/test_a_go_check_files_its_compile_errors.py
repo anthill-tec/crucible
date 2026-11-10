@@ -38,12 +38,14 @@ from tests.client.go_client_harness import (
     AGENT,
     PROJECT_KEY,
     TIMEOUT,
+    UNREADABLE_GO_MOD_ERROR,
     GoProject,
     copy_fixture,
     diagnostics,
     envelope,
     flag_value,
     go_toolchain_gap,
+    make_go_mod_unreadable,
     said,
     toolchain_env,
 )
@@ -347,6 +349,65 @@ class ACheckWithTestsCompilesEveryDeclaredTierTest(_Check):
         self.assertEqual(p.subcommand_calls("test"), [],
                          f"a plain check runs no test compile, tagged or not; {where}")
         self.assert_files_nothing_and_passes(p, result)
+
+
+class ACheckWithTestsOnAModuleGoListRejectsCompilesOnlyUntaggedTest(_Check):
+    """`check --tests` on a module whose `go.mod` `go list` rejects: a scratch
+    copy of `tiers` (which declares `integration`) with a directive go does
+    not know appended to its `go.mod`. The tier declaration cannot be read,
+    so no tier is compiled under its tag; the untagged compile still runs,
+    and its failure is filed as one compile run of format `go`. One
+    `tier-declaration-unreadable` warning names the `go list` failure. It
+    never says nothing was run: the untagged compile ran."""
+
+    drives: list = []
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drives = []
+
+    def setUp(self):
+        super().setUp()
+        if not type(self).drives:
+            p = GoProject(self, fixture="tiers")
+            make_go_mod_unreadable(p.dir)
+            type(self).drives.append((p, self.check(p, "--tests")))
+        self.p, self.result = type(self).drives[0]
+        self.ctx = self.where(self.p, self.result)
+
+    def unreadable_warnings(self):
+        axi = envelope(self.result.stdout) or {}
+        return [w for w in axi.get("warnings") or []
+                if isinstance(w, dict) and w.get("code") == "tier-declaration-unreadable"]
+
+    def test_one_untagged_test_compile_runs_and_none_under_a_tag(self):
+        compiles = self.p.subcommand_calls("test")
+        self.assertEqual(len(compiles), 1, f"exactly one test compile; {self.ctx}")
+        argv = compiles[0]["argv"] if compiles else []
+        self.assertIsNone(flag_value(argv, "-tags"),
+                          f"the one compile is the untagged one; {self.ctx}")
+        self.assertEqual(flag_value(argv, "-run"), "^$", f"no test is selected; {self.ctx}")
+        self.assertIn("-vet=off", argv, f"no vet check; {self.ctx}")
+        self.assertEqual(self.p.subcommand_calls("build"), [],
+                         f"--tests runs no go build in addition; {self.ctx}")
+
+    def test_one_warning_names_the_go_list_failure_and_never_says_nothing_ran(self):
+        found = self.unreadable_warnings()
+        self.assertEqual(len(found), 1,
+                         f"exactly one tier-declaration-unreadable warning; {self.ctx}")
+        detail = str((found[0] if found else {}).get("detail") or "")
+        self.assertIn("go list", detail, f"the warning names `go list`; {detail!r}")
+        self.assertIn(UNREADABLE_GO_MOD_ERROR, detail,
+                      f"the warning names what `go list` said; {detail!r}")
+        self.assertNotRegex(detail, r"(?i)nothing (was )?(run|ran)",
+                            f"the untagged compile DID run: the warning must not say "
+                            f"nothing was run; {detail!r}")
+
+    def test_the_untagged_compile_failure_is_filed_once_as_one_go_compile_run(self):
+        body = self.assert_one_go_compile_run(self.p, self.result, UNREADABLE_GO_MOD_ERROR)
+        errors = body.get("errors") or ""
+        self.assertEqual(errors.count(UNREADABLE_GO_MOD_ERROR), 1,
+                         f"the failure is filed once; errors={errors!r}; {self.ctx}")
 
 
 class ACheckResolvesItsModuleAsTestDoesTest(_Check):

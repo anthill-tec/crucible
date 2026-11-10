@@ -133,6 +133,18 @@ def copy_fixture(name, dest):
     return str(dest)
 
 
+#: What `go` prints for the directive `make_go_mod_unreadable` appends, read
+#: by every `go list` and `go test` in that module.
+UNREADABLE_GO_MOD_ERROR = "unknown directive: bogus"
+
+
+def make_go_mod_unreadable(module_dir):
+    """Append a directive `go` does not know to `module_dir`'s `go.mod`, so
+    every `go list` and `go test` in that module fails reading it."""
+    with open(os.path.join(module_dir, "go.mod"), "a", encoding="utf-8") as fh:
+        fh.write("\nbogus directive\n")
+
+
 def write_go_shim(bin_dir):
     shim = Path(bin_dir, "go")
     shim.write_text("#!" + sys.executable + "\n" + _GO_SHIM, encoding="utf-8")

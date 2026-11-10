@@ -31,7 +31,14 @@ import shutil
 import tempfile
 import unittest
 
-from tests.client.go_client_harness import envelope, go_toolchain_gap
+from tests.client.go_client_harness import (
+    RUNS,
+    UNREADABLE_GO_MOD_ERROR,
+    envelope,
+    go_toolchain_gap,
+    make_go_mod_unreadable,
+    said,
+)
 from tests.client.go_gate_harness import (
     BDD_TEST,
     COVERAGE_CODEC,
@@ -50,6 +57,9 @@ from tests.client.go_gate_harness import (
     statements,
     union_blocks,
 )
+
+#: The legacy error code the shared `DeclarationRefused` hard stop prints.
+DECLARATION_REFUSED_CODE = "declaration-refused"
 
 #: Every test of the module declaring `integration`, `bdd` and `e2e`.
 EVERY_TEST = sorted([(TIERS_PKG, "TestUnit", "pass"), (TIERS_PKG, "TestNotInteg", "pass"),
@@ -163,6 +173,53 @@ class ARegressionCoverageSendsOneProfileAtTheUnionTest(_RegressionCase):
         self.assertEqual(sorted(test for _pkg, test, _a in held_tests(self.p, run_id)),
                          ["TestIntegCov", "TestUnitCov"], self.ctx)
         self.assertEqual(self.result.returncode, 0, self.ctx)
+
+
+class ARegressionWhoseTiersCannotBeReadOrSeparatedIsRefusedTest(unittest.TestCase):
+    """`regression` reads every module's tier declaration before any `go test`
+    runs. Where it cannot separate a tier's tests (`tier-name-clash`: untagged
+    `TestY` in `ledger`'s internal test package, `integration`-tagged `TestY`
+    in its external one) or cannot read the declaration (a `go.mod` `go list`
+    rejects), it is refused: an `ok: false` envelope, a non-zero exit, no
+    `go test` and no run opened."""
+
+    maxDiff = 8000
+
+    def setUp(self):
+        gap = go_toolchain_gap()
+        if gap:
+            self.fail(f"missing toolchain: {gap}")
+
+    def assert_refused_before_any_go_test(self, p, result):
+        ctx = describe(p, result)
+        self.assertNotEqual(result.returncode, 0, f"refused; {ctx}")
+        axi = envelope(result.stdout)
+        self.assertIsNotNone(axi, f"one TOON envelope on stdout; {ctx}")
+        self.assertEqual((axi or {}).get("verb"), "regression", ctx)
+        self.assertIs((axi or {}).get("ok"), False, ctx)
+        self.assertNotIn("Traceback", result.stderr, f"a refusal, never a traceback; {ctx}")
+        self.assertEqual(p.subcommand_calls("test"), [], f"no `go test` runs; {ctx}")
+        self.assertEqual(opened_runs(p), [], f"no run is opened; {ctx}")
+        self.assertEqual([path for path, _b in p.posts() if path.startswith(RUNS)], [],
+                         f"nothing is posted to the run routes; {ctx}")
+        return axi or {}
+
+    def test_a_name_clash_is_refused_naming_the_test_and_the_package(self):
+        p = gate_project(self, fixture="tier-name-clash")
+        result = p.drive(verb="regression")
+        words = said(self.assert_refused_before_any_go_test(p, result))
+        self.assertIn("TestY", words, f"the refusal names the test; {words!r}")
+        self.assertIn("ledger", words, f"the refusal names the package; {words!r}")
+
+    def test_a_module_go_list_rejects_is_refused_as_a_declaration_refused(self):
+        p = gate_project(self)
+        make_go_mod_unreadable(p.dir)
+        result = p.drive(verb="regression")
+        words = said(self.assert_refused_before_any_go_test(p, result))
+        self.assertIn(DECLARATION_REFUSED_CODE, result.stderr,
+                      f"refused as a declaration-refused; {describe(p, result)}")
+        self.assertIn(UNREADABLE_GO_MOD_ERROR, words,
+                      f"the refusal names what `go list` said; {words!r}")
 
 
 if __name__ == "__main__":
