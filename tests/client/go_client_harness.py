@@ -269,7 +269,7 @@ class GoProject:
     shim first on `PATH`. `fixture` is copied into the project dir (None:
     an empty project)."""
 
-    def __init__(self, test, fixture="module", project_dir=None):
+    def __init__(self, test, fixture: str | None = "module", project_dir=None):
         self.test = test
         self.board = RecordingBoard()
         test.addCleanup(self.board.close)
