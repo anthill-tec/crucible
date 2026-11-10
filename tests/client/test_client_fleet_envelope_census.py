@@ -4024,7 +4024,8 @@ class TheGoClientOffersTheTierVerbsTest(unittest.TestCase):
         toon = _load_toon_module()
         for verb in ("unit", "integration", "e2e"):
             with self.subTest(verb=verb):
-                result = drive_verb(CLIENT_FILES["go"], [verb, "--agent", "a"],
+                result = drive_verb(CLIENT_FILES["go"],
+                                    [verb, "--agent", "a", "--project-dir", str(project_dir)],
                                     project_dir, fake_bin_dir)
                 self.assertNotIn("invalid choice", result.stderr, result.stderr[-600:])
                 self.assertNotEqual(result.returncode, 0, result.stderr[-600:])
