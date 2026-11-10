@@ -18,8 +18,11 @@ Subcommands:
                         list finds no test for is refused before any run
                         opens.
   check                 go build ./... in the same module ([--tests]: the
-                        test compile, no test and no vet check run); with
-                        --agent a failing compile is filed, format `go`.
+                        test compile, then the same compile under
+                        -tags <tier> for each declared tier; no test and no
+                        vet check run); with --agent the failing compiles
+                        are filed as one compile run, format `go`, each
+                        error once.
   unit, module, integration, e2e, bdd
                         The tier verbs. A tier is declared by build tag:
                         `//go:build <tier>` in a `_test.go` file that
@@ -526,9 +529,12 @@ def cmd_test(args):
 
 def cmd_check(args):
     """Compile the module `test` resolves: `go build ./...`, or with `--tests`
-    the test compile (`_check_command`) instead. With `--agent` a failing
-    compile files its output, stdout and stderr in the order go printed them,
-    as ONE compile run of format `go`; a clean one files nothing.
+    the test compile (`_check_command`) instead, then the same compile under
+    `-tags <tier>` for each tier the module declares by build tag. Every
+    compile runs, even after one fails. With `--agent` the failing compiles'
+    output, stdout and stderr in the order go printed them, is filed as ONE
+    compile run of format `go`, a line an earlier compile already printed
+    dropped (`_merged_diagnostics`); a clean check files nothing.
 
     Refused before go compiles anything: first a run the board would file
     under no cycle while one is active (before the toolchain is touched, as
@@ -555,19 +561,29 @@ def cmd_check(args):
     # while `--cycle` can still be supplied.
     warnings = list(_axi().preflight_cycle_warnings(
         _get, _project_key(project_dir), agent, cycle_id=cycle, context=None))
-    print(f"[crucible] running: {' '.join(cmd)} (in {module})", file=sys.stderr)
-    result = subprocess.run(cmd, cwd=module, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, check=False)
-    ok = result.returncode == 0
-    print(f"[crucible] {' '.join(cmd[:2])} exit={result.returncode}", file=sys.stderr)
+    commands = [cmd]
+    if args.tests:
+        commands += _tier_check_commands(cmd, project_dir, agent, module, warnings)
+    exit_code, failed = 0, []
+    for each in commands:
+        print(f"[crucible] running: {' '.join(each)} (in {module})", file=sys.stderr)
+        result = subprocess.run(each, cwd=module, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, check=False)
+        print(f"[crucible] {' '.join(each[:2])} exit={result.returncode}",
+              file=sys.stderr)
+        if result.returncode != 0:
+            exit_code = exit_code or result.returncode
+            failed.append(result.stdout)
+    ok = exit_code == 0
     if not ok:
-        sys.stderr.write(result.stdout)
+        output = _merged_diagnostics(failed) if len(commands) > 1 else failed[0]
+        sys.stderr.write(output)
         if agent:
-            _ingest_go_compile(project_dir, agent, result.stdout, cycle)
-    _emit_axi(verb, ok, {"exit": result.returncode, "help": _axi().HELP_STEPS["check"]},
+            _ingest_go_compile(project_dir, agent, output, cycle)
+    _emit_axi(verb, ok, {"exit": exit_code, "help": _axi().HELP_STEPS["check"]},
               _axi_context(project_dir, agent_id=agent), warnings,
-              f"check: ok={ok} exit={result.returncode}")
-    return 0 if ok else (result.returncode or 1)
+              f"check: ok={ok} exit={exit_code}")
+    return exit_code
 
 
 def _check_command(tests):
@@ -585,6 +601,44 @@ def _check_command(tests):
                       "nothing was compiled")
     return ["go", "test", "-count=1", "-vet=off", "-run", "^$",
             "-exec", os.path.abspath(no_op), "./..."], None
+
+
+def _tier_check_commands(cmd, project_dir, agent, module, warnings):
+    """The test compile `cmd` under `-tags <tier>`, once for each tier
+    `module` declares by build tag. When `go list` cannot read the
+    declaration, a warning says so and no tier is compiled: the untagged
+    compile still runs and reports what fails."""
+    try:
+        plans = _declared_tier_plans(project_dir, agent, [module])
+    except _axi().DeclarationRefused as refused:
+        warnings.append({"code": "tier-declaration-unreadable",
+                         "detail": (f"no declared tier's test files were "
+                                    f"compiled, only the untagged ones: "
+                                    f"{refused.detail}")})
+        return []
+    return [[*cmd[:2], "-tags", plan.tier, *cmd[2:]] for plan in plans]
+
+
+def _merged_diagnostics(outputs):
+    """(PURE) The failing compiles' `outputs` as one, in order, each line
+    with its tab-indented continuation lines kept once: an error every build
+    compiles (an untagged test file's) is printed by each build, and filed
+    once."""
+    seen, merged = set(), []
+    for output in outputs:
+        blocks = []
+        for line in output.splitlines(keepends=True):
+            if blocks and line.startswith("\t"):
+                blocks[-1] += line
+            else:
+                blocks.append(line)
+        for block in blocks:
+            key = block.rstrip("\n")
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(block if block.endswith("\n") else block + "\n")
+    return "".join(merged)
 
 
 def _ingest_go_compile(project_dir, agent, output, cycle_id):
@@ -914,8 +968,12 @@ def _go_test_run(verb, args, project_dir, agent, modules, health, plan=None,
         run_cmd, run_cwd = _runner_command(modules, run, project_dir, profiles)
         running = "go test -json ./..."
     relay = None
+    # The child that runs the tests, bracketed: a `unit` run that spends its
+    # wall clock waiting says so in its own envelope. Every other tier runs
+    # this same body and is left alone, because the shared check is scoped to
+    # `unit` by the tier it is handed.
     try:
-        with _axi().abandon_trap(run_id):
+        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
             # The narrator counts no `go-test` event, so the run's in-flight
             # ticks are not posted: the relay's batches are the run's progress.
             relay, _narrator = _axi().start_stream_relay(
@@ -960,6 +1018,7 @@ def _go_test_run(verb, args, project_dir, agent, modules, health, plan=None,
     exit_code = _axi().verb_exit(runner_exit, resp)
     if not resp.get("ok"):
         warnings.append(_axi().ingest_failed_warning(verb, _base_url()))
+    warnings += _axi().unit_run_wall_vs_cpu_warnings(tier, _STACK, timing)
     _axi().emit_run_axi(
         verb, resp,
         _axi_context(project_dir, agent_id=agent,
@@ -1524,8 +1583,11 @@ def _add_lifecycle_verbs(sub):
                         "without one nothing is filed.")
     c.add_argument("--tests", action="store_true",
                    help="Compile every package and test file instead (go test "
-                        "-count=1 -vet=off -run '^$' with a no-op -exec): no test "
-                        "runs and no vet check runs.")
+                        "-count=1 -vet=off -run '^$' with a no-op -exec), then "
+                        "again under -tags <tier> for each tier the module "
+                        "declares: no test runs and no vet check runs. Every "
+                        "failing compile is filed as one compile run, each "
+                        "error once.")
     c.add_argument("--module-dir",
                    help="The module to compile, relative to the project dir "
                         "(default: $GO_CRUCIBLE_MODULE_DIR, else the nearest go.mod "
@@ -1593,9 +1655,21 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
 )
 
 
+# What a declared tier verb does, in go's own words: the line after the shared
+# meaning in its help.
+_DECLARED_TIER_VERB_RUNS = (
+    "A tier is declared by build tag: `//go:build {tier}` in a `_test.go` file "
+    "that declares a test. Runs only the tests that tag adds, in every module "
+    "that declares it (or the one --module-dir names), into one run filed "
+    "under its tier and streamed to the board. A tier no module declares is "
+    "refused, and so is a tier test also declared in a file the untagged "
+    "build compiles, which -run cannot select alone.")
+
+
 def _add_tier_verbs(sub):
     """The six tier verbs, through the shared registration: `regression`
-    wired with its own flags, the other five declared by build tag."""
+    wired with its own flags, the other five declared by build tag, each
+    one's help line then saying so in go's own words."""
     tier_verb = _axi().TierVerb
     _axi().add_tier_verbs(
         sub,
@@ -1611,6 +1685,12 @@ def _add_tier_verbs(sub):
              _axi().add_run_release_arg))),
         declares=_TIER_DECLARATION_SURFACE,
         add_args=(_add_project_dir_arg,))
+    meanings = _axi().TIER_MEANINGS
+    for action in sub._choices_actions:
+        if action.dest in meanings and action.dest != "regression":
+            action.help = _axi().tier_verb_help(
+                action.dest, meanings[action.dest],
+                tier_verb(None, _DECLARED_TIER_VERB_RUNS.format(tier=action.dest)))
 
 
 def _add_gate_verbs(sub):
