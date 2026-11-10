@@ -123,11 +123,24 @@ class TheGoClientOffersTheSixTierVerbsTest(unittest.TestCase):
                       self.module.cmd_regression)
 
     def test_each_help_line_is_the_shared_tier_verb_help(self):
+        """Each declared verb's help opens with the shared meaning, and goes on
+        in go's own words: a tier is declared by build tag. The shared line
+        for a cell with no declaration ("No target for it is declared on this
+        stack") would say go declares no tier, which the help no longer
+        says."""
         meanings = self.axi.TIER_MEANINGS
         for tier in DECLARED:
             with self.subTest(tier=tier):
-                self.assertEqual(self.help_lines.get(tier),
-                                 self.axi.tier_verb_help(tier, meanings[tier], None))
+                line = self.help_lines.get(tier) or ""
+                prefix = f"{tier.upper()} tier — {meanings[tier]}. "
+                self.assertTrue(line.startswith(prefix),
+                                f"{tier}: the shared meaning opens the line; {line!r}")
+                self.assertNotIn("no target for it is declared", line.lower(),
+                                 f"{tier}: the help does not say go declares no tier; "
+                                 f"{line!r}")
+                self.assertRegex(line[len(prefix):], r"//go:build|build tag",
+                                 f"{tier}: go's own text names the build-tag "
+                                 f"declaration; {line!r}")
         regression = self.help_lines.get("regression") or ""
         prefix = f"REGRESSION tier — {meanings['regression']}. "
         self.assertTrue(regression.startswith(prefix),
