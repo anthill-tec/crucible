@@ -611,10 +611,13 @@ def _tier_check_commands(cmd, project_dir, agent, module, warnings):
     try:
         plans = _declared_tier_plans(project_dir, agent, [module])
     except _axi().DeclarationRefused as refused:
+        # The untagged compile does run: the tier verbs' "nothing was run"
+        # is not this warning's to say.
+        cause = refused.detail.removesuffix(_GO_LIST_REFUSED_SUFFIX)
         warnings.append({"code": "tier-declaration-unreadable",
                          "detail": (f"no declared tier's test files were "
                                     f"compiled, only the untagged ones: "
-                                    f"{refused.detail}")})
+                                    f"{cause}")})
         return []
     return [[*cmd[:2], "-tags", plan.tier, *cmd[2:]] for plan in plans]
 
@@ -1108,6 +1111,10 @@ def _file_tests(package_dir, name):
         return _declared_tests(fh.read())
 
 
+# What a tier verb's refusal adds to a `go list` failure: the verb ran nothing.
+_GO_LIST_REFUSED_SUFFIX = "; the tier's declaration could not be read, so nothing was run"
+
+
 def _listed_test_files(module, tags):
     """`{dir: (import path, internal test files, external test files)}` for
     every package of `module`, as `go list` names them under `tags` (None:
@@ -1121,7 +1128,7 @@ def _listed_test_files(module, tags):
         raise _axi().DeclarationRefused(
             f"`{' '.join(cmd)}` failed in {module} (exit {ran.returncode})"
             + (f": {said[-1]}" if said else "")
-            + "; the tier's declaration could not be read, so nothing was run",
+            + _GO_LIST_REFUSED_SUFFIX,
             ["fix what `go list` names, then re-run the verb"])
     packages = {}
     decoder, text, at = json.JSONDecoder(), ran.stdout, 0
