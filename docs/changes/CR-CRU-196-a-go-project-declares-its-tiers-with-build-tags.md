@@ -1,10 +1,8 @@
 # CR-CRU-196 — a Go project declares its tiers with build tags
 
 **Type** feature · **Points** 13 · **Wave** 8 (0.4.0) · **Depends on** CR-CRU-195 · **Status**
-PENDING — filed 2026-10-18 (Model B request, user ruling: Go's tiers are declared by build tag);
-made exact at gap analysis 2026-11-10 (user rulings 2026-11-10: one run per tier, a tier runs only
-the tests its tag adds, `regression` covers every declared tier, the gate's untagged run is filed
-as `regression`) · Pre-review: ran — 8 points and user rulings (findings F1–F14, all folded)
+DONE — merged 2026-11-10 (`ba5e56c7`) · Pre-review: ran — 8 points and user rulings (findings
+F1–F14, all folded)
 
 ## Problem
 
@@ -174,28 +172,28 @@ A missing profile gives the existing `coverage-not-measured` warning, as today.
 
 All on real Go modules (go 1.27.3).
 
-- [ ] **AC1 — a tier runs only its own tests.**
+- [x] **AC1 — a tier runs only its own tests.**
   - **Setup:** a module with untagged `TestUnit`, `integration`-tagged `TestInteg` and
     `!integration`-tagged `TestNotInteg`.
   - `integration --agent <id>` opens one run under tier `integration` with start total 1, and it
     files exactly `TestInteg`.
   - **A shared name:** in a package where `TestX` is declared in a `!integration` file and again,
     failing, in an `integration` file, the `integration` run files that tagged `TestX` as failed.
-- [ ] **AC2 — an undeclared tier is refused before any test runs.**
+- [x] **AC2 — an undeclared tier is refused before any test runs.**
   - With no `e2e` tier file, `e2e --agent <id>` exits non-zero with `ok: false`. Its help names
     `//go:build e2e` in a `_test.go` file, no run is opened, and no `go test` runs.
   - The same holds when the `e2e` tag adds only a helper file or a `TestMain`.
   - A benchmark-only tag file declares nothing.
-- [ ] **AC3 — a name that cannot be separated is refused.**
+- [x] **AC3 — a name that cannot be separated is refused.**
   - **Setup:** a package with untagged `TestY` in its internal test package and an
     `integration`-tagged `TestY` in its external one.
   - `integration` is refused before any test runs, naming the package and `TestY`.
-- [ ] **AC4 — a tier file that does not compile fails its run.**
+- [x] **AC4 — a tier file that does not compile fails its run.**
   - An `integration` file with a type error makes the `integration` run fail with the build
     failure filed.
   - It is not refused, and it does not pass.
   - The same holds when that package's tier files declare no test.
-- [ ] **AC5 — the gate runs each declared tier as its own suite.** On the AC1 module plus a `bdd`
+- [x] **AC5 — the gate runs each declared tier as its own suite.** On the AC1 module plus a `bdd`
       tag and an `e2e` tag, `pre-merge-gate` gives these `suites[]` rows:
   - `untagged`: covered by the whole go suite, total 2. Its run is filed under `regression` and
     holds `TestUnit` and `TestNotInteg`.
@@ -206,7 +204,7 @@ All on real Go modules (go 1.27.3).
 
   The gate milestone records a result under each gated target. A failing `integration` test fails
   only that row.
-- [ ] **AC6 — scoped gates, refusals and the no-tier project.**
+- [x] **AC6 — scoped gates, refusals and the no-tier project.**
   - **On the AC5 module:**
     - `--suites integration` opens only the `integration` run, and the milestone's scope is
       scoped;
@@ -216,32 +214,32 @@ All on real Go modules (go 1.27.3).
   - **On a module that declares no tier:**
     - the gate's envelope is today's, a single untagged run filed under `regression`;
     - `--suites untagged` is refused.
-- [ ] **AC7 — `regression` is every declared tier.**
+- [x] **AC7 — `regression` is every declared tier.**
   - On the AC5 module, `regression` opens ONE run under tier `regression`. It holds `TestUnit`,
     `TestNotInteg`, `TestInteg` and the `bdd` and `e2e` tests, each once, and its start total is
     their count.
   - With `--coverage`, a package whose untagged and `integration` runs cover different statements
     is stored with the union of the two.
-- [ ] **AC8 — `check --tests` compiles every declared tier.**
+- [x] **AC8 — `check --tests` compiles every declared tier.**
   - A compile error in an `integration`-tagged test file fails `check --tests` and is filed with
     format `go`.
   - An untagged compile error is filed once, however many tiers are declared.
   - The module without either error passes.
-- [ ] **AC9 — a tier with many tests is split, not refused.**
+- [x] **AC9 — a tier with many tests is split, not refused.**
   - **Setup:** a package with 3000 `integration` tests, whose one `-run` would exceed Linux's
     128 KiB argument limit.
   - Its `integration` run runs them all in one run, with start total 3000 and 3000 filed.
-- [ ] **AC10 — modules.**
+- [x] **AC10 — modules.**
   - **Setup:** a project of two modules, where only `b` declares `integration`.
   - `integration` runs `b` only.
   - `integration --module-dir a` is refused as undeclared.
   - `regression` holds both modules' untagged tests and `b`'s `integration` tests.
-- [ ] **AC11 — every call site.**
+- [x] **AC11 — every call site.**
   - The client's parser offers `unit`, `module`, `integration`, `e2e`, `bdd` and `regression`
     through the shared registration.
   - Each is refused while a cycle is active elsewhere, before the toolchain is touched.
   - Each appears in the fleet censuses that hold the other clients' tier verbs.
-- [ ] **AC12 — the docs follow.**
+- [x] **AC12 — the docs follow.**
   - The help, README, RUNBOOK and CHANGELOG name the tier verbs, the declaration rule, the refused
     name clash, the gate's per-tier rows, and each run's tier.
   - The testing-tiers DN has the Go note.
@@ -253,3 +251,14 @@ All on real Go modules (go 1.27.3).
 - `--coverage` on a tier verb or in the gate.
 - A tier declared any other way than by build tag.
 - A tier stated on `test`.
+
+**Done 2026-11-10.** Merged `ba5e56c7` (plan 245: U1 903, U2 904, U3 905, VERIFY 906 APPROVE,
+FIX 907 for S1, S2 and Sug1–Sug3). A Go module declares a tier with a `//go:build <tier>` test file
+that declares a test; the tier verb runs only the tests that tag adds, as one run under the tier,
+split under the per-argument budget, and refuses a name it cannot separate. The gate runs an
+`untagged` suite, filed as `regression`, plus one suite per declared tier, with `e2e` excluded; a
+project with no tier keeps today's gate. `regression` is one run of every tier and sends one merged
+coverprofile. `check --tests` compiles each declared tier and files each error once. Go's declared
+`unit` run carries the fleet's wall-vs-CPU warning. A module whose `go.mod` `go list` rejects has
+`regression` and the gate refused, not run red. Sug4 (the tier-verb help is set through argparse's
+private choice actions) is left for a shared help hook. Full gate: bun 5106/0, python 7522/0.
