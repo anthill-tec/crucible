@@ -290,6 +290,10 @@ class _WallVsCpuProbe:
     test took around the same drive, and not against the spec's anchors."""
 
     _BURN_ENV = ("FAKE_BURN_MODE", "FAKE_BURN_SECONDS")
+    #: How long this client's toolchain burns. A real toolchain (go's) spends
+    #: CPU of its own compiling, so its burn must be longer to clear the
+    #: factor by the same margin a fake's does.
+    BURN = BURN_SECONDS
 
     def setUp(self):
         super().setUp()
@@ -319,7 +323,7 @@ class _WallVsCpuProbe:
         plus the wall and child-CPU this test measured around it."""
         self.write_unit_fixture()
         os.environ["FAKE_BURN_MODE"] = mode
-        os.environ["FAKE_BURN_SECONDS"] = str(BURN_SECONDS)
+        os.environ["FAKE_BURN_SECONDS"] = str(self.BURN)
         before = resource.getrusage(resource.RUSAGE_CHILDREN)
         started = time.monotonic()
         drive = self.drive(self.unit_argv())
@@ -375,7 +379,7 @@ class _WallVsCpuProbe:
                        for m in _NUMBER_RE.finditer(detail or "")]
 
         def in_wall(value):
-            return BURN_SECONDS * 0.75 <= value <= wall * 1.5
+            return self.BURN * 0.75 <= value <= wall * 1.5
 
         def in_cpu(value):
             return 0.0 <= value <= max(cpu * 1.5, 0.001)
@@ -401,7 +405,7 @@ class _WallVsCpuProbe:
             f"RUSAGE_CHILDREN CPU around the same drive ({ratio:.1f}x, and "
             f"§S4's stated factor is {STATED_FACTOR:g}x), so the detail must "
             f"carry a wall figure in "
-            f"[{BURN_SECONDS * 0.75:.4f}, {wall * 1.5:.4f}], a CPU figure in "
+            f"[{self.BURN * 0.75:.4f}, {wall * 1.5:.4f}], a CPU figure in "
             f"[0, {max(cpu * 1.5, 0.001):.4f}] and the factor — seconds or "
             f"milliseconds, its wording is GREEN's to choose. "
             f"detail={detail!r} numbers={[t for t, _v in occurrences]!r}")
@@ -574,6 +578,105 @@ class GoUnitRunThatWaitsTest(_WallVsCpuProbe, _MODALITY._GoModalityCase):
 
     def unit_argv(self):
         return self.go_argv(SCOPED_TIER)
+
+
+# go's DECLARED `unit`: a real Go test that sleeps or spins, read off the burn
+# environment by the test itself. Long enough that go's own compile and link
+# CPU leaves the sleeping run well over the factor.
+GO_BURN_SECONDS = 4.0
+# Read by the fixture's test so a run under a new nonce is never answered from
+# go's test cache (the tier invocation carries no `-count=1`).
+GO_BURN_NONCE = "GO_BURN_NONCE"
+GO_WAITS_PACKAGE = "example.com/unitwaits/waits"
+
+
+class GoDeclaredUnitRunThatWaitsTest(_WallVsCpuProbe, _MODALITY._GoModalityCase):
+    """go's positive half. On `tier-unit-waits` the module declares `unit`
+    (`waits/unit_test.go`, `//go:build unit`) and `integration`, and each tagged
+    test spends `FAKE_BURN_SECONDS` asleep or computing as `FAKE_BURN_MODE`
+    says, so go's `unit` verb RUNS and its run is measured like every other
+    client's: a `unit` run that waits carries `unit-run-wall-exceeds-cpu`, one
+    that computes does not. No other go tier verb carries the warning.
+
+    The drive is the real go client and the real `go` against a loopback board
+    (`_GoModalityCase`); the board's close answer is scripted with the run's
+    passing tests, and the stream it held is read to show the burning test
+    really ran. go's negative probe (`GoUnitRunThatWaitsTest`, the undeclared
+    `unit` refuses) stays the fleet census entry."""
+
+    FIXTURE = "tier-unit-waits"
+    BURN = GO_BURN_SECONDS
+
+    def setUp(self):
+        super().setUp()
+        saved = os.environ.get(GO_BURN_NONCE)
+        os.environ[GO_BURN_NONCE] = f"{os.getpid()}-{time.monotonic_ns()}"
+        self.addCleanup(self._restore_nonce, saved)
+
+    @staticmethod
+    def _restore_nonce(saved):
+        if saved is None:
+            os.environ.pop(GO_BURN_NONCE, None)
+        else:
+            os.environ[GO_BURN_NONCE] = saved
+
+    def unit_argv(self):
+        return self.go_argv(SCOPED_TIER)
+
+    def drive(self, argv, response=None):
+        """The board answers the close with the tests the verb's run holds."""
+        passed = {"unit": 1, "integration": 1, "regression": 3}.get(argv[0], 1)
+        return _MODALITY._GoModalityCase.drive(
+            self, argv, response or {"run": {"passed": passed}})
+
+    def drive_unit(self, mode):
+        """go's `unit` is declared here, so it must RUN: a refusal would make
+        both halves vacuous (the shared probe accepts a refusal from a client
+        with no `unit` split cell)."""
+        drive, wall, cpu = super().drive_unit(mode)
+        self.assertFalse(
+            self.refused_for_no_declaration(drive),
+            f"the module declares `unit` by `//go:build unit`, so the verb "
+            f"runs; it refused. stderr={drive.err[-600:]!r}")
+        self.assertEqual(
+            self.held_terminals(), [(GO_WAITS_PACKAGE, "TestUnitBurns", "pass")],
+            f"the `unit` run holds exactly the burning tagged test; "
+            f"exit={drive.code} stderr={drive.err[-600:]!r}")
+        return drive, wall, cpu
+
+    def drive_other_tier(self, verb):
+        """`verb` with every tagged test asleep: wall time far above CPU."""
+        os.environ["FAKE_BURN_MODE"] = "sleep"
+        os.environ["FAKE_BURN_SECONDS"] = str(self.BURN)
+        drive = self.drive(self.go_argv(verb))
+        self.assertVerbAcceptedTheInvocation(drive, f"go/{verb}")
+        self.assertFalse(self.refused_for_no_declaration(drive),
+                         f"go/{verb} runs on this module; stderr={drive.err[-600:]!r}")
+        return drive
+
+    def test_an_integration_run_that_waits_carries_no_unit_warning(self):
+        """PIN — the warning is `unit`'s alone: an `integration` run that
+        waits is that tier doing what it is defined by."""
+        drive = self.drive_other_tier("integration")
+        self.assertEqual(
+            self.held_terminals(), [(GO_WAITS_PACKAGE, "TestIntegBurns", "pass")],
+            f"the `integration` run holds its sleeping test; stderr={drive.err[-600:]!r}")
+        self.assertRunWasReportedNotRefused(drive, "go/integration")
+        self.assertEqual(self.wall_vs_cpu_warnings(drive), [],
+                         f"go/integration slept and is not `unit`: no "
+                         f"`{WALL_VS_CPU_CODE}`; warnings={self.envelope(drive).get('warnings')!r}")
+
+    def test_a_regression_run_that_waits_carries_no_unit_warning(self):
+        """PIN — `regression` holds the `unit`-tagged test too, but it is
+        not a `unit` run, so it carries no `unit` warning."""
+        drive = self.drive_other_tier("regression")
+        held = sorted(test for _pkg, test, _action in self.held_terminals())
+        self.assertEqual(held, ["TestIntegBurns", "TestPlain", "TestUnitBurns"],
+                         f"regression holds every tier; stderr={drive.err[-600:]!r}")
+        self.assertRunWasReportedNotRefused(drive, "go/regression")
+        self.assertEqual(self.wall_vs_cpu_warnings(drive), [],
+                         f"go/regression is not `unit`: no `{WALL_VS_CPU_CODE}`; "
+                         f"warnings={self.envelope(drive).get('warnings')!r}")
 
 
 _PROBED_CLIENTS = {

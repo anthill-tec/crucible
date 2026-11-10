@@ -29,6 +29,7 @@ Invocation:
 """
 
 import os
+import re
 import shutil
 import subprocess
 import unittest
@@ -228,6 +229,123 @@ class ACleanCheckFilesNothingTest(_Check):
         where = self.where(p, result)
         self.assertEqual(len(p.subcommand_calls("test")), 1,
                          f"the module's tests were compiled; {where}")
+        self.assert_files_nothing_and_passes(p, result)
+
+
+# The tier fixtures' errors, matched by pattern: the column is go's to report.
+# `tier-broken`: its `integration`-tagged `broken/integ_test.go` does not
+# compile; its untagged test file does.
+TAGGED_ERROR = re.compile(r'broken/integ_test\.go:9:\d+: cannot use "not an int"')
+# `tier-check-untagged-error` and `tier-check-both-errors`: the untagged
+# `p/u_test.go`, compiled by every build, does not compile.
+UNTAGGED_ERROR = re.compile(r"p/u_test\.go:6:\d+: cannot use One\(\)")
+UNTAGGED_POSITION = "p/u_test.go:6:"
+# `tier-check-both-errors`: its `integration`-tagged `p/integ_test.go` does
+# not compile either.
+BOTH_TAGGED_ERROR = re.compile(r'p/integ_test\.go:8:\d+: cannot use "integration"')
+BOTH_TAGGED_POSITION = "p/integ_test.go:8:"
+
+
+class ACheckWithTestsCompilesEveryDeclaredTierTest(_Check):
+    """`check --tests` also compiles each declared tier's test files under
+    that tier's tag. Every compile runs, even after an earlier one fails; their
+    output is filed as ONE compile run; a diagnostic line an earlier compile
+    already reported is dropped, so an untagged error is filed once.
+
+    The modules (`tests/fixtures/go-client`):
+      - `tier-broken`: declares `integration`; its tagged test file has a type
+        error, its untagged one compiles.
+      - `tier-check-untagged-error`: declares `integration` and `bdd`, both
+        of which compile; its untagged test file has a type error, so every
+        build (untagged, `integration`, `bdd`) prints that error.
+      - `tier-check-both-errors`: declares `integration`; the untagged test
+        file and the tagged one each have a type error.
+      - `tiers`: declares `integration`; everything compiles."""
+
+    def tag_compiles(self, p, tag):
+        """Every `go test` the shim recorded under `-tags <tag>` (None: the
+        untagged ones)."""
+        return [c for c in p.subcommand_calls("test")
+                if flag_value(c["argv"], "-tags") == tag]
+
+    def assert_one_compile_each(self, p, result, tags):
+        """Exactly one test compile per tag of `tags` (None: untagged), each
+        a compile that runs no test and no vet check, in the module."""
+        where = self.where(p, result)
+        for tag in tags:
+            calls = self.tag_compiles(p, tag)
+            self.assertEqual(len(calls), 1,
+                             f"one test compile under tag {tag!r}; {where}")
+            argv = calls[0]["argv"]
+            self.assertEqual(flag_value(argv, "-run"), "^$",
+                             f"tag {tag!r}: no test is selected; {where}")
+            self.assertIn("-exec", argv,
+                          f"tag {tag!r}: the test binary is handed to a no-op, so "
+                          f"none runs; {where}")
+            self.assertIn("-vet=off", argv, f"tag {tag!r}: no vet check; {where}")
+            self.assertEqual(os.path.realpath(calls[0]["cwd"]), os.path.realpath(p.dir),
+                             f"tag {tag!r}: compiled in the module; {where}")
+        tagged = {flag_value(c["argv"], "-tags") for c in p.subcommand_calls("test")}
+        self.assertEqual(tagged, set(tags),
+                         f"no compile under a tag the module does not declare; {where}")
+        self.assertEqual(p.subcommand_calls("build"), [],
+                         f"--tests runs no go build in addition; {where}")
+
+    def test_an_integration_tagged_compile_error_fails_check_tests_and_is_filed_as_go(self):
+        p = GoProject(self, fixture="tier-broken")
+        result = self.check(p, "--tests")
+        where = self.where(p, result)
+        self.assert_one_compile_each(p, result, (None, "integration"))
+        body = self.assert_one_go_compile_run(p, result, "broken/integ_test.go:9:")
+        self.assertRegex(body.get("errors") or "", TAGGED_ERROR,
+                         f"the tagged file's error is filed; {where}")
+
+    def test_an_untagged_compile_error_is_filed_once_however_many_tiers_are_declared(self):
+        p = GoProject(self, fixture="tier-check-untagged-error")
+        result = self.check(p, "--tests")
+        where = self.where(p, result)
+        # Every compile runs, even after the untagged one fails.
+        self.assert_one_compile_each(p, result, (None, "integration", "bdd"))
+        body = self.assert_one_go_compile_run(p, result, UNTAGGED_POSITION)
+        errors = body.get("errors") or ""
+        self.assertRegex(errors, UNTAGGED_ERROR, where)
+        self.assertEqual(
+            errors.count(UNTAGGED_POSITION), 1,
+            f"three builds print the untagged error; it is filed once, not once "
+            f"per build; errors={errors!r}; {where}")
+
+    def test_an_untagged_and_a_tagged_error_are_filed_together_in_one_compile_run(self):
+        p = GoProject(self, fixture="tier-check-both-errors")
+        result = self.check(p, "--tests")
+        where = self.where(p, result)
+        self.assert_one_compile_each(p, result, (None, "integration"))
+        body = self.assert_one_go_compile_run(p, result, UNTAGGED_POSITION)
+        errors = body.get("errors") or ""
+        self.assertRegex(errors, UNTAGGED_ERROR, f"the untagged error; {where}")
+        self.assertRegex(errors, BOTH_TAGGED_ERROR, f"and the tagged one, in the same "
+                                                   f"compile run; {where}")
+        self.assertEqual(errors.count(UNTAGGED_POSITION), 1,
+                         f"the untagged error is filed once; errors={errors!r}; {where}")
+        self.assertEqual(errors.count(BOTH_TAGGED_POSITION), 1,
+                         f"the tagged error is filed once; errors={errors!r}; {where}")
+
+    def test_a_module_whose_declared_tiers_all_compile_passes_and_files_nothing(self):
+        p = GoProject(self, fixture="tiers")
+        result = self.check(p, "--tests")
+        self.assert_one_compile_each(p, result, (None, "integration"))
+        self.assert_files_nothing_and_passes(p, result)
+
+    def test_plain_check_on_a_module_declaring_a_broken_tier_only_builds(self):
+        """PIN — plain `check` is unchanged: `go build ./...` alone, which
+        compiles no test file, so a tagged test file's error neither runs a
+        test compile nor fails it."""
+        p = GoProject(self, fixture="tier-broken")
+        result = self.check(p)
+        where = self.where(p, result)
+        self.assertEqual([c["argv"] for c in p.subcommand_calls("build")],
+                         [["build", "./..."]], f"one go build ./...; {where}")
+        self.assertEqual(p.subcommand_calls("test"), [],
+                         f"a plain check runs no test compile, tagged or not; {where}")
         self.assert_files_nothing_and_passes(p, result)
 
 
