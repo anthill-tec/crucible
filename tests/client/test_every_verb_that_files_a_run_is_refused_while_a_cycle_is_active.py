@@ -188,6 +188,12 @@ def _seed(client_key, verb, project_dir):
                 f'[profile.{verb}]\n\n[profile.{verb}.junit]\npath = "junit.xml"\n')
         elif client_key == "arduino":
             (d / "tests" / "native" / "Makefile").write_text(f"junit-{verb}:\n\t@true\n")
+        elif client_key == "go":
+            # go declares a tier by build tag: a `_test.go` file under
+            # `//go:build <tier>` that declares a test.
+            (d / f"{verb}_probe_test.go").write_text(
+                f'//go:build {verb}\n\npackage probe\n\nimport "testing"\n\n'
+                f'func Test_{verb}_tier_probe(t *testing.T) {{}}\n')
     if verb == "auto-ingest" and client_key in ("python", "bun", "arduino"):
         reports = d / SEEDED_REPORTS
         reports.mkdir(exist_ok=True)
@@ -210,6 +216,13 @@ class EveryRefusableVerbAcceptsCycleTest(unittest.TestCase):
     """The refusal's first lever is `re-run with --cycle <id>`, so every verb
     the refusal covers must accept `--cycle` — read off each client's own
     argparse, never a hand-kept list of flags."""
+
+    def test_the_go_tier_verbs_join_the_census(self):
+        """go declares its tiers by build tag, so each tier verb and
+        `regression` is a go filing verb this census drives."""
+        filing = set(_filing_verbs("go"))
+        self.assertEqual(sorted(set(TIERS + ("regression",)) - filing), [],
+                         f"go's filing verbs: {sorted(filing)!r}")
 
     def test_every_verb_the_refusal_covers_accepts_cycle(self):
         for client_key in sorted(CLIENT_FILES):

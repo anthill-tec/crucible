@@ -3990,45 +3990,62 @@ class Cr075QueueFileAxiConformanceTest(unittest.TestCase):
             f"{offenders!r}")
 
 
-# The go client declares no tier until tiers are declared by build tag: it
-# offers none of the tier verbs but `regression`, which is its gate's full
-# suite (every module under the project dir), not a declared tier.
-GO_UNDECLARED_TIER_VERBS = ("unit", "module", "integration", "e2e", "bdd")
+# The go client declares its tiers by build tag (`//go:build <tier>` in a
+# `_test.go` file), so it offers the five declared tier verbs beside
+# `regression`, all through the shared tier registration.
+GO_DECLARED_TIER_VERBS = ("unit", "module", "integration", "e2e", "bdd")
 
 
-class TheGoClientOffersNoTierVerbTest(unittest.TestCase):
-    """The verb census records the go client's surface: no `unit`, `module`,
-    `integration`, `e2e` or `bdd` verb, the gate's `regression` and
-    `pre-merge-gate` enveloped, and the gate's `gate-run`, `gate-respond`,
-    `gate-report` and `milestone` verbs as the rust client offers them."""
+class TheGoClientOffersTheTierVerbsTest(unittest.TestCase):
+    """The verb census records the go client's surface: the `unit`, `module`,
+    `integration`, `e2e` and `bdd` verbs each enveloped, the gate's
+    `regression` and `pre-merge-gate` enveloped, and the gate's `gate-run`,
+    `gate-respond`, `gate-report` and `milestone` verbs as the rust client
+    offers them."""
 
     @classmethod
     def setUpClass(cls):
         cls.census = _get_census()
         cls.go_verbs = set(enumerate_verbs("go", CLIENT_FILES["go"]))
 
-    def test_the_go_client_offers_no_unit_integration_or_e2e_verb(self):
-        offered = sorted(set(GO_UNDECLARED_TIER_VERBS) & self.go_verbs)
-        self.assertEqual(offered, [],
-                         f"the go client declares no tier, so it offers no tier "
-                         f"verb; it offers {offered!r}")
+    def test_the_go_client_offers_every_declared_tier_verb(self):
+        missing = sorted(set(GO_DECLARED_TIER_VERBS) - self.go_verbs)
+        self.assertEqual(missing, [],
+                         f"the go client declares tiers by build tag, so it offers "
+                         f"every tier verb; it lacks {missing!r}")
 
-    def test_a_tier_verb_is_an_invalid_choice_on_the_go_client(self):
+    def test_a_tier_verb_on_the_go_client_answers_with_one_envelope_not_an_invalid_choice(self):
+        # The census project declares no tier (one untagged test), so each
+        # verb answers ok:false — never argparse's invalid choice.
         fake_bin_dir = _build_fake_bin_dir()
         self.addCleanup(shutil.rmtree, fake_bin_dir, True)
         project_dir = _make_project_dir("go")
         self.addCleanup(shutil.rmtree, project_dir, True)
+        toon = _load_toon_module()
         for verb in ("unit", "integration", "e2e"):
             with self.subTest(verb=verb):
                 result = drive_verb(CLIENT_FILES["go"], [verb, "--agent", "a"],
                                     project_dir, fake_bin_dir)
-                self.assertEqual(result.returncode, 2, result.stderr[-600:])
-                self.assertIn(f"invalid choice: '{verb}'", result.stderr)
+                self.assertNotIn("invalid choice", result.stderr, result.stderr[-600:])
+                self.assertNotEqual(result.returncode, 0, result.stderr[-600:])
+                emits, axi = classify_envelope(result.stdout, toon)
+                self.assertTrue(emits, f"go {verb}: one envelope; {result.stdout[-600:]!r}")
+                self.assertEqual(((axi or {}).get("verb"), (axi or {}).get("ok")),
+                                 (verb, False), f"go {verb}: {axi!r}")
+                self.assertNotIn("Traceback", result.stderr, result.stderr[-600:])
 
-    def test_the_go_clients_one_tier_named_verb_is_its_gate_regression(self):
+    def test_the_go_clients_tier_named_verbs_are_all_six(self):
         from tests.client.test_client_tier_surface import TIER_VERBS
-        self.assertEqual(sorted(set(TIER_VERBS) & self.go_verbs), ["regression"],
+        self.assertEqual(sorted(set(TIER_VERBS) & self.go_verbs), sorted(TIER_VERBS),
                          f"the go client's verbs: {sorted(self.go_verbs)!r}")
+
+    def test_the_go_tier_verbs_each_emit_one_envelope_under_their_own_name(self):
+        go = self.census["go"]
+        for verb in GO_DECLARED_TIER_VERBS:
+            with self.subTest(verb=verb):
+                axi = go.get(verb)
+                self.assertIsNotNone(axi, f"go {verb}: enveloped in the census")
+                self.assertEqual((axi or {}).get("verb"), verb)
 
     def test_the_go_client_offers_the_rust_clients_gate_verbs(self):
         rust_verbs = set(enumerate_verbs("rust", CLIENT_FILES["rust"]))

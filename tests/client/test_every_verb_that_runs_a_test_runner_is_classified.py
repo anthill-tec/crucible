@@ -73,22 +73,23 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 CLIENT_KEYS = ("bun", "python", "mvn", "rust", "arduino", "go")
-# The verbs every client's parser must enumerate. go declares no tier yet (so
-# no `unit` or `bdd`) and reads no report already on disk (so no
-# `auto-ingest`): its own set is its gate and its compile `check`.
+# The verbs every client's parser must enumerate. go reads no report already
+# on disk (so no `auto-ingest`); it declares its tiers by build tag, so it
+# offers the tier verbs beside its gate and its compile `check`.
 ENUMERATED_VERBS = {
     **{client: ("register", "pre-merge-gate", "auto-ingest", "check", "unit",
                 "regression", "bdd")
        for client in ("bun", "python", "mvn", "rust", "arduino")},
-    "go": ("register", "test", "regression", "pre-merge-gate", "check"),
+    "go": ("register", "test", "regression", "pre-merge-gate", "check", "unit",
+           "bdd"),
 }
 # The verbs each client must classify as running a test runner.
-APPLYING_VERBS = {
-    **{client: ("test", "unit", "regression", "pre-merge-gate")
-       for client in ("bun", "python", "mvn", "rust", "arduino")},
-    "go": ("test", "regression", "pre-merge-gate"),
-}
-# The clients with a declared-tier `bdd` cell; go declares no tier yet.
+APPLYING_VERBS = dict.fromkeys(
+    ("bun", "python", "mvn", "rust", "arduino", "go"),
+    ("test", "unit", "regression", "pre-merge-gate"))
+# The clients whose declared-tier `bdd` cell's RUN function this file names.
+# go's is asserted by its fleet convention (`_run_declared_<surface>`) only:
+# the name of its surface's run is go's own choice.
 DECLARED_TIER_CLIENTS = ("bun", "python", "mvn", "rust", "arduino")
 
 APPLIES, EXEMPT, NOT_INGESTING = "applies", "exempt", "not-ingesting"
@@ -270,14 +271,16 @@ CLIENT_CENSUS = {
         "runs": _STORED_RUN_READ,
         "run": _STORED_RUN_READ,
     },
-    # go's one runner body: `test` runs the one resolved module, and the gate
-    # (`regression`, `pre-merge-gate`) every module under the project dir,
-    # each into ONE streamed run, as rust's `regression` and `pre-merge-gate`
-    # share `_workspace_regression_run`.
+    # go's one runner body: `test` runs the one resolved module, the gate
+    # (`regression`, `pre-merge-gate`) every module under the project dir, and
+    # a declared tier verb every package with a tier file, each into ONE
+    # streamed run, as rust's run verbs share their bodies.
     "go": {
         "test": applies("_go_test_run"),
         "regression": applies("_go_test_run"),
         "pre-merge-gate": applies("_go_test_run"),
+        **{tier: applies("_go_test_run")
+           for tier in ("unit", "module", "integration", "e2e", "bdd")},
         "check": _COMPILE_GATE,
         "runs": _STORED_RUN_READ,
         "run": _STORED_RUN_READ,
@@ -673,6 +676,11 @@ class EveryClientsVerbsAreClassifiedTest(unittest.TestCase):
         self.assertEqual(
             {client: _client_handlers(client)["bdd"] for client in DECLARED_TIER_CLIENTS},
             expected)
+        go_bdd = _client_handlers("go").get("bdd")
+        self.assertTrue(
+            str(go_bdd).startswith("_run_declared_"),
+            f"go `bdd` is a declared-tier cell: its handler unwraps to go's own "
+            f"declared-target RUN; got {go_bdd!r}")
 
 
 # ── the checker, proved on a synthetic client ──────────────────────────────
@@ -1390,7 +1398,8 @@ ROUTE_TABLE = {
         # run's build failure is the stream's own package failure; the compile
         # `check` files its failing compile on the compile route.
         **{verb: routes(_THROUGH_THE_SHARED_STREAM_CLOSE)
-           for verb in ("test", "regression", "pre-merge-gate")},
+           for verb in ("test", "regression", "pre-merge-gate", "unit", "module",
+                        "integration", "e2e", "bdd")},
         "check": routes((), _GO_COMPILE),
     },
 }

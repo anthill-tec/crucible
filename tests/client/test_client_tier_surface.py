@@ -118,15 +118,18 @@ CLIENT_FILES = {
     "mvn": CLIENTS_DIR / "mvn-crucible.py",
     "python": CLIENTS_DIR / "python-crucible.py",
     "arduino": CLIENTS_DIR / "arduino-crucible.py",
+    # go joined the fleet's tier surface when its tiers became declared by
+    # build tag: it registers the six through the same shared registrar.
+    "go": CLIENTS_DIR / "go-crucible.py",
 }
 CLIENTS = tuple(CLIENT_FILES)
 
-# AC1's own words: "Five assertions and the client count asserted". The count is
-# a CONSTANT here and is compared against the number of clients each test
-# actually DROVE, so a loop that silently shrank to one client fails -- that is
-# the specific defect AC1 exists to prevent ("the client exposes the verbs" is
-# satisfiable by one client).
-EXPECTED_CLIENT_COUNT = 5
+# AC1's own words: "Five assertions and the client count asserted" -- six since
+# go joined. The count is a CONSTANT here and is compared against the number of
+# clients each test actually DROVE, so a loop that silently shrank to one
+# client fails -- that is the specific defect AC1 exists to prevent ("the
+# client exposes the verbs" is satisfiable by one client).
+EXPECTED_CLIENT_COUNT = 6
 
 # The six, spelled as AC1 spells them. This literal is not the source of truth:
 # `TierVocabularyMirrorDriftGuardTest` below asserts it equals the `Tier` union
