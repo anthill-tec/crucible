@@ -804,9 +804,9 @@ def _gated_go_run(verb, args, project_dir, agent, modules, plan=None,
     with _axi().gated_run(project_dir, agent, getattr(args, "cycle", None),
                           f"gated {verb} run starting",
                           open_fn=_open_gate_identity,
-                          close_fn=_close_gate_identity):
+                          close_fn=_close_gate_identity) as identity:
         return _go_test_run(verb, args, project_dir, agent, modules, health,
-                            plan, tier)
+                            plan, tier, identity)
 
 
 def _open_gate_identity(project_dir, agent_id, cycle_id, message):
@@ -917,7 +917,7 @@ def _coverage_post(text):
 
 
 def _go_test_run(verb, args, project_dir, agent, modules, health, plan=None,
-                 tier=None):
+                 tier=None, identity=None):
     """List, open, run with the stream relayed, close: the body of a run
     once nothing refuses it. Returns the verb's exit code.
 
@@ -925,7 +925,9 @@ def _go_test_run(verb, args, project_dir, agent, modules, health, plan=None,
     test count is the start total (plus the list of its `listed` modules),
     its invocations are the run, and its tier rides the run's start and its
     close. Without a plan, `tier` (None: no tier stated) rides them. A
-    `regression` run's coverage is every profile merged into one."""
+    `regression` run's coverage is every profile merged into one. The run's
+    in-flight ticks count its stream against the listed `total`, and are
+    observed by the gated bracket's `identity` (None: no bracket)."""
     key = _project_key(project_dir)
     release = getattr(args, "release", None)
     run = getattr(args, "run", None)
@@ -982,11 +984,10 @@ def _go_test_run(verb, args, project_dir, agent, modules, health, plan=None,
     # `unit` by the tier it is handed.
     try:
         with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
-            # The narrator counts no `go-test` event, so the run's in-flight
-            # ticks are not posted: the relay's batches are the run's progress.
             relay, _narrator = _axi().start_stream_relay(
-                _post, lambda *_a, **_k: None, key, agent, run_id, stream_path,
-                GO_TEST_CODEC, _axi()._ingest_body_limit(health))
+                _post, _axi().narration_poster(_post, key, agent, identity), key, agent,
+                run_id, stream_path, GO_TEST_CODEC, _axi()._ingest_body_limit(health),
+                listed_total=total)
             print(f"[crucible] running: {running} (in {', '.join(modules)})",
                   file=sys.stderr)
             result = _axi().run_streamed(run_cmd, run_cwd, dict(os.environ),
