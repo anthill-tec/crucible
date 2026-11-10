@@ -148,14 +148,19 @@ sys.exit(worst)
 # the JSON list in the file its one argument names, in turn, its stdout the
 # one run's stream. The list rides a file, never an argument, because a large
 # tier's names would overflow the per-argument limit. A failing invocation
-# does not stop the next; the exit is the worst any gave.
+# does not stop the next; the exit is the worst any gave. Each is narrated as
+# the command it runs, a `-run` value too long to read given as its count of
+# names.
 _EACH_INVOCATION_RUNNER = r"""
-import json, subprocess, sys
+import json, shlex, subprocess, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     invocations = json.load(handle)
 worst = 0
 for cwd, argv in invocations:
-    print(f"[crucible] running: {' '.join(argv[:5])} {argv[-1]} (in {cwd})",
+    shown = [f"<{arg.count('|') + 1} names>"
+             if before == "-run" and len(arg) > 80 else arg
+             for before, arg in zip([None, *argv], argv)]
+    print(f"[crucible] running: {shlex.join(shown)} (in {cwd})",
           file=sys.stderr, flush=True)
     code = subprocess.run(argv, cwd=cwd, check=False).returncode
     worst = max(worst, code if code >= 0 else 128 - code)
