@@ -1290,8 +1290,8 @@ def _clash_refusal(plan):
     return ((f"the {plan.tier} tier cannot be run: {named} is also declared in "
              f"a test file both the tagged and the untagged build compile, so "
              f"-run would run the untagged one too; nothing was run"),
-            [f"rename one of the two, or constrain the untagged file with "
-             f"`//go:build !{plan.tier}`"])
+            [(f"rename one of the two, or constrain the untagged file with "
+              f"`//go:build !{plan.tier}`")])
 
 
 def _tier_runner_command(plan, own_dir, project_dir):
