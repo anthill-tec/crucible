@@ -243,9 +243,9 @@ class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
         project_dir, seeded = self._project(client_key, verb, outcome, project_key)
         bin_dir = self._bin_dir(client_key, outcome)
         if client_key == "go" and verb in TIERS:
-            # go reads a tier off `go list`, which the fake `go` does not
-            # answer, and a `go list` that fails files nothing: a go tier
-            # drive gets the `go list` front end the cycle-help census uses,
+            # go reads a tier off `go list` and runs it with a tagged
+            # `go test -run`, which the fake `go` does not run as asked: a
+            # go tier drive gets the front end the cycle-help census uses,
             # its tagged run passing or failing with this drive's outcome.
             _answer_go_tier_lists(bin_dir, outcome)
         subparser = _filing_verbs(client_key)[verb]

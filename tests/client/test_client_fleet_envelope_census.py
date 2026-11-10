@@ -290,7 +290,9 @@ sys.exit(1)
 '''
 
 # The go toolchain as the go client asks it: `go env GOVERSION` answers a Go
-# above the client's floor, `go test -list <re> -json ./...` lists one test
+# above the client's floor, `go list` names the module's test files as the
+# real one does (so a module whose test files carry no build tag declares no
+# tier), `go test -list <re> -json ./...` lists one test
 # per package, and `go test -json ./...` runs them, each test passing (or,
 # with `OUTCOME = "fail"`, the second failing); `FAKE_TOTAL=<n>` in the
 # environment makes it `n` tests in `go test -json`'s own event
@@ -309,6 +311,40 @@ if argv[:2] == ["env", "GOVERSION"]:
     sys.exit(0)
 if argv[:1] == ["version"]:
     print("go version go1.27.3 linux/amd64")
+    sys.exit(0)
+if argv[:1] == ["list"]:
+    # `go list [-tags <t>] -json=... ./...`, as the real one answers it for a
+    # one-package module: its `_test.go` files, each kept or dropped by its
+    # `//go:build` line under the tags. The gate and `regression` read a
+    # project's declared tiers this way, so a module whose test files carry
+    # no tag declares none.
+    tags = []
+    if "-tags" in argv[:-1]:
+        tags = [t for t in argv[argv.index("-tags") + 1].split(",") if t]
+    module = "example.com/probe"
+    try:
+        with open("go.mod") as handle:
+            for line in handle:
+                if line.startswith("module "):
+                    module = line.split()[1]
+                    break
+    except OSError:
+        pass
+    files = []
+    for name in sorted(os.listdir(".")):
+        if not name.endswith("_test.go"):
+            continue
+        with open(name) as handle:
+            first = handle.readline().strip()
+        if first.startswith("//go:build "):
+            expr = first[len("//go:build "):].strip()
+            if (expr.lstrip("!") in tags) == expr.startswith("!"):
+                continue
+        files.append(name)
+    package = {"Dir": os.getcwd(), "ImportPath": module}
+    if files:
+        package["TestGoFiles"] = files
+    sys.stdout.write(json.dumps(package, indent="\t") + "\n")
     sys.exit(0)
 if argv[:1] != ["test"]:
     sys.stderr.write("fake go: unsupported invocation: " + repr(argv) + "\n")

@@ -130,7 +130,8 @@ HELP_VERBS = (
        ("test", "regression-ingest", "smoke-test", "workspace-regression", "pre-merge-gate")]
     + [("arduino-crucible.py", v) for v in
        ("test", "unit", "regression", "pre-merge-gate")]
-    # go: every verb that runs `go test` (it declares no tier).
+    # go: the untagged run and the gate verbs (go's build-tag tier verbs
+    # carry --release through the shared tier registration).
     + [("go-crucible.py", v) for v in ("test", "regression", "pre-merge-gate")]
 )
 

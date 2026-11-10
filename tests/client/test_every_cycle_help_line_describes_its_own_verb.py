@@ -90,8 +90,9 @@ SEEDED_REPORTS = "seeded-reports"
 
 # The go client reads a tier off `go list` (the test files the tagged list
 # names and the untagged one does not), and a `go list` that fails is a hard
-# stop. The census's fake `go` answers no `go list`, so a go tier drive gets
-# this front end, inserted after the fake's shebang: `go list` answered as the
+# stop. The census's fake `go` answers `go list` but runs no tagged `go test`
+# as asked, so a go tier drive gets this front end, inserted after the fake's
+# shebang: `go list` answered as the
 # real one answers it for a one-package module (its `_test.go` files, each kept
 # or dropped by its `//go:build` line under `-tags`), and a tagged `go test`
 # answered with the `go test -json` events of exactly the tests its `-run`

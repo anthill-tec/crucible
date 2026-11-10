@@ -73,7 +73,8 @@ ADDED_HELP_VERBS = (
      ("unit", "module", "integration", "e2e", "bdd", "regression")]
     + [("arduino-crucible.py", v) for v in
        ("module", "integration", "e2e", "bdd")]
-    # go's gate verbs, which run every module (go declares no tier).
+    # go's gate verbs, which run every module (and, where a module declares
+    # a tier by build tag, the gate runs each tier as a suite of its own).
     + [("go-crucible.py", v) for v in ("regression", "pre-merge-gate")]
 )
 

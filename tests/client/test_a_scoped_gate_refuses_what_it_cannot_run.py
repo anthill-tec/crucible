@@ -6,7 +6,7 @@ unattributed-run refusal and before the gate's first step — by one shared
 check, and refused whole as a typed hard stop: an `ok:false` envelope carrying
 an `error` that names the cause and a `help[]`, a non-zero exit, nothing run,
 nothing filed (no run, compile or lint result) and no `pre-merge-gate`
-milestone. It refuses, on every one of the five clients:
+milestone. It refuses, on every one of the six clients:
 
   * a board that does not state that it records a gate's scope and suites;
   * a target the project does not declare, or declares excluded — the
@@ -17,6 +17,11 @@ milestone. It refuses, on every one of the five clients:
 
 python's surface cannot enumerate a project's declaration, so python refuses
 EVERY `--suites` as a project that declares no suites.
+
+go reads its declaration off `go list`: a module that declares a tier by
+build tag declares the suites `untagged` and each tier, `e2e` excluded. That
+probe runs `go list`, never `go test`, so for go "nothing ran" means no go
+call beyond the toolchain's version and `go list`.
 
 Each case drives the real client as an OS subprocess. Every toolchain is a
 fake that records its invocations, and every compile, typecheck and lint step
@@ -85,7 +90,21 @@ TARGETS = {
                 "excluded": "junit-e2e", "undeclared": "junit-module"},
     "python": {"gated": ("tests/unit", "tests/integration"), "excluded": None,
                "undeclared": "tests/nowhere"},
+    "go": {"gated": ("untagged", "integration"), "excluded": "e2e",
+           "undeclared": "module"},
 }
+
+#: The tier files a go module declares `integration` and `e2e` with, beside
+#: the census module's one untagged test.
+_GO_TIER_FILES = {
+    f"{tier}_tier_test.go": (f"//go:build {tier}\n\npackage probe\n\n"
+                             f"import \"testing\"\n\n"
+                             f"func Test{tier.title()}Probe(t *testing.T) {{}}\n")
+    for tier in ("integration", "e2e")
+}
+#: The go calls that read a declaration and run nothing: the toolchain's
+#: version and `go list`.
+_GO_PROBES = re.compile(r"^go (list|version|env)\b")
 
 #: How a refusal names a project that declares no suites (python, always).
 DECLARES_NO_SUITES = (r"declares? no\b|no (declared |gate )*suites?|"
@@ -127,6 +146,11 @@ def _declare(client_key, project_dir):
         # A source that does not compile: a gate whose step 0 ran would file
         # a compile result.
         _seed("python", GATE_VERB, d)
+    elif client_key == "go":
+        # go declares a tier by build tag: the gate's suites are `untagged`
+        # and each declared tier, `e2e` declared and excluded.
+        for name, text in _GO_TIER_FILES.items():
+            (d / name).write_text(text)
 
 def _client_argv(client_key, project_dir, bin_dir):
     """The flags each client's gate needs beyond `--agent` and the project."""
@@ -261,9 +285,16 @@ class _AScopedGateRefusal(unittest.TestCase):
                          f"envelope names no event; axi={axi!r}")
         return " ".join([str(error)] + [str(h) for h in (help_ or [])])
 
+    def _ran(self, invocations):
+        """The recorded invocations that RAN something: every one, but for
+        go, whose declaration is read by `go list` and its toolchain check."""
+        if self.CLIENT == "go":
+            return [line for line in invocations if not _GO_PROBES.match(line)]
+        return invocations
+
     def assertNothingRanOrFiled(self, agent, ran, milestones_before, result):
         self.assertEqual(
-            ran, [],
+            self._ran(ran), [],
             f"{self.CLIENT}: refused before anything runs — no toolchain was "
             f"invoked (step 0 included); {self._transcript(result)}")
         self.assertEqual(
@@ -376,7 +407,7 @@ class _AScopedGateRefusal(unittest.TestCase):
             key="scoped-gate-no-capability-key")
         text = self.assertTypedRefusal(result, axi)
         self.assertCause(text, r"board", "the board does not state the capability")
-        self.assertEqual(ran, [], f"{self.CLIENT}: nothing ran; "
+        self.assertEqual(self._ran(ran), [], f"{self.CLIENT}: nothing ran; "
                                   f"{self._transcript(result)}")
         filed = [p for p, _body in stand_in.posts()
                  if p.startswith("/api/v2/runs") or "milestones" in p
@@ -395,7 +426,7 @@ class _AScopedGateRefusal(unittest.TestCase):
             "no-answer", first, board=_UNREACHABLE_CRUCIBLE_URL,
             key="scoped-gate-no-answer-key")
         text = self.assertTypedRefusal(result, axi)
-        self.assertEqual(ran, [], f"{self.CLIENT}: nothing ran; "
+        self.assertEqual(self._ran(ran), [], f"{self.CLIENT}: nothing ran; "
                                   f"{self._transcript(result)}")
         if self.CLIENT == "python":
             self.assertRegex(text.lower(), DECLARES_NO_SUITES,
@@ -426,7 +457,12 @@ class ArduinoRefusesAScopedGateItCannotRunTest(_AScopedGateRefusal):
 class PythonRefusesEveryScopedGateTest(_AScopedGateRefusal):
     CLIENT = "python"
 
-# The abstract refusal is no test of its own: only its five clients run.
+class GoRefusesAScopedGateItCannotRunTest(_AScopedGateRefusal):
+    """A go module that declares `integration` and `e2e` by build tag."""
+
+    CLIENT = "go"
+
+# The abstract refusal is no test of its own: only its six clients run.
 del _AScopedGateRefusal
 
 if __name__ == "__main__":
