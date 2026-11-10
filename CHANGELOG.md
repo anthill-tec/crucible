@@ -53,6 +53,10 @@ Releases before 0.3.0 are described only on GitHub Releases.
     error once.
   - The Go client's `unit` run carries the `unit-run-wall-exceeds-cpu` warning when it spends its
     wall time waiting, as the other clients' `unit` runs do.
+- **A Go run ticks its progress.** While the relay lands no batch, a Go run posts `running N/M`,
+  with N its top-level test results so far and M its listed total (`running N` when its listing
+  failed), as every other stack does. Subtests are not counted. Under a gated run, the ticks are
+  observed by the run's gated identity.
 
 ### Changed
 
