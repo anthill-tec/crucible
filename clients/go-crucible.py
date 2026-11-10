@@ -27,8 +27,17 @@ Subcommands:
                         adds, in every module that declares the tier (or the
                         one --module-dir names), into ONE run filed under the
                         tier. A tier no module declares is refused.
-  regression            go test -json ./... in every module under the project
-                        dir, into one run.
+  regression            ONE run filed under `regression`: go test -json ./...
+                        in every module under the project dir, then each
+                        declared tier's tests (`e2e` included), each invoked
+                        as its tier verb invokes it. --coverage merges every
+                        invocation's coverprofile into one.
+  pre-merge-gate        The gate, through the shared composition: `untagged`
+                        (the untagged run of every module, filed under
+                        `regression`) is the whole run; each declared tier
+                        runs as a suite of its own, under its tier; `e2e` is
+                        listed and excluded. A project that declares no tier
+                        has no suite, so its gate is the untagged run alone.
   plan / cycle / status verbs, the roadmap verbs and `next`: the fleet's
                         shared implementations, one thin delegator each.
 
@@ -257,11 +266,6 @@ def _axi():
 
 
 _AXI_UNSET = _axi().AXI_UNSET
-
-# Go declares no suite: the gate's surface enumerates no declaration, so the
-# shared scoped-gate check refuses every `--suites`.
-_GATE_SURFACE = _axi().DeclaredTierSurface(
-    target="", names="", read=None, run=None, suites=None)
 
 
 def _axi_context(project_dir, agent_id=None, cr=None, cycle_id=_AXI_UNSET):
@@ -601,24 +605,64 @@ def _ingest_go_compile(project_dir, agent, output, cycle_id):
 
 
 def cmd_regression(args):
-    """The full suite: every module under the project dir, run into ONE
-    streamed run (see `_gate_run`)."""
-    return _gate_run("regression", args)
+    """The full suite, into ONE streamed run filed under `regression`: the
+    untagged tests of every module under the project dir, then each declared
+    tier's tests (`e2e` included), each tier invoked as its tier verb invokes
+    it. With --coverage, every invocation's profile is merged into one."""
+    verb = "regression"
+    found = _gate_modules(verb, args)
+    if isinstance(found, int):
+        return found
+    project_dir, agent, modules = found
+    plans = _declared_tier_plans(project_dir, agent, modules)
+    if not plans:
+        return _gated_go_run(verb, args, project_dir, agent, modules, tier=verb)
+    clashing = next((plan for plan in plans if plan.clashes), None)
+    plan = _TierPlan(
+        verb, project_dir, agent, modules,
+        [[module, ["go", "test", "-json", "./..."]] for module in modules]
+        + [invocation for tier_plan in plans for invocation in tier_plan.invocations],
+        sum(tier_plan.total for tier_plan in plans), [], listed=modules)
+    return _gated_go_run(verb, args, project_dir, agent, modules, plan=plan,
+                         clashing=clashing)
 
 
 def cmd_pre_merge_gate(args):
-    """ORCHESTRATOR pre-merge gate: the full suite over every module, as
-    `regression` runs it, its outcome recorded as the gate's milestone. A gate
-    scoped to named suites is refused before anything else: go declares no
-    suite, so every `--suites` is."""
+    """ORCHESTRATOR pre-merge gate, its outcome recorded as the gate's
+    milestone. It composes the declared suites through the shared
+    `gate_regression`: `untagged` is the whole run, the untagged tests of
+    every module filed under `regression`; each declared tier runs as a suite
+    of its own, under its tier; `e2e` is listed and excluded. A project that
+    declares no tier has no suite, so its gate is the untagged run alone. A
+    gate scoped to named suites that cannot run as asked is refused before
+    anything else."""
     _axi().refuse_unrunnable_scoped_gate(
-        args, surface=_GATE_SURFACE, stack=_STACK, get=_get,
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK, get=_get,
         project_key=lambda: _project_key(_resolve_project_dir(args.project_dir)))
-    return _gate_run("pre-merge-gate", args)
+    verb = "pre-merge-gate"
+    found = _gate_modules(verb, args)
+    if isinstance(found, int):
+        return found
+    project_dir, agent, modules = found
+
+    def whole_suite():
+        return _gated_go_run(verb, args, project_dir, agent, modules,
+                             tier="regression")
+
+    return _axi().gate_regression(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK, verb=verb,
+        whole_suite=whole_suite, whole_suite_alone=whole_suite, dispatch=None,
+        run_suite=lambda suite: _axi().declared_tier_run(
+            suite.tier, (), _TIER_DECLARATION_SURFACE)(args),
+        whole_framework=GO_TEST_CODEC,
+        context=_axi_context(project_dir, agent_id=agent),
+        crucible_url=_base_url())
 
 
-def _gate_run(verb, args):
-    """Run every module under the project dir into one run. `go test ./...`
+def _gate_modules(verb, args):
+    """`(project dir, agent, modules)` of a run over every module under the
+    project dir, or the exit code of its refusal: a run the board would file
+    under no cycle, no Go or a Go below the floor, no module. `go test ./...`
     cannot span two modules, so each `go.mod` found (`_discover_modules`) has
     its own `./...` run in turn, into the one stream; the run-start total is
     the sum of each module's list."""
@@ -631,7 +675,7 @@ def _gate_run(verb, args):
     modules = _discover_modules(project_dir)
     if not modules:
         return _refuse(verb, project_dir, agent, *_no_module_refusal(project_dir))
-    return _gated_go_run(verb, args, project_dir, agent, modules)
+    return project_dir, agent, modules
 
 
 def _no_module_refusal(project_dir):
@@ -677,10 +721,12 @@ def _discover_modules(project_dir):
     return sorted(found)
 
 
-def _gated_go_run(verb, args, project_dir, agent, modules, plan=None):
+def _gated_go_run(verb, args, project_dir, agent, modules, plan=None,
+                  tier=None, clashing=None):
     """The board check and the gated-identity bracket around `_go_test_run`.
-    A tier's `plan` (`_TierPlan`) is then checked for a test it cannot run
-    alone, before any run opens."""
+    A tier's `plan` (`_TierPlan`), or the `clashing` plan of a tier the run
+    holds, is then checked for a test it cannot run alone, before any run
+    opens. `tier` is the tier a run without a plan is filed under."""
     health = _get("/api/v2/health")
     coverage_codec = GO_COVERAGE_CODEC if getattr(args, "coverage", False) else None
     refused = _axi()._ingest_health_refusal(health, GO_TEST_CODEC, coverage_codec)
@@ -689,13 +735,16 @@ def _gated_go_run(verb, args, project_dir, agent, modules, plan=None):
                               if name)
         return _refuse(verb, project_dir, agent, refused,
                        [f"point the project at a board that decodes {codecs}"])
-    if plan is not None and plan.clashes:
-        return _refuse(verb, project_dir, agent, *_clash_refusal(plan))
+    if clashing is None and plan is not None and plan.clashes:
+        clashing = plan
+    if clashing is not None:
+        return _refuse(verb, project_dir, agent, *_clash_refusal(clashing))
     with _axi().gated_run(project_dir, agent, getattr(args, "cycle", None),
                           f"gated {verb} run starting",
                           open_fn=_open_gate_identity,
                           close_fn=_close_gate_identity):
-        return _go_test_run(verb, args, project_dir, agent, modules, health, plan)
+        return _go_test_run(verb, args, project_dir, agent, modules, health,
+                            plan, tier)
 
 
 def _open_gate_identity(project_dir, agent_id, cycle_id, message):
@@ -724,22 +773,23 @@ def _runner_command(modules, run, project_dir, profiles=None):
             project_dir)
 
 
-def _coverage_profiles(own_dir, modules):
-    """One coverprofile path per module, in the run's own reports dir, each
-    removed first so a profile go did not write is never a stale one."""
+def _coverage_profiles(own_dir, count):
+    """`count` coverprofile paths (one per module or invocation), in the
+    run's own reports dir, each removed first so a profile go did not write
+    is never a stale one."""
     profiles = [os.path.join(own_dir, f"go-coverprofile-{index}.out")
-                for index in range(len(modules))]
+                for index in range(count)]
     for profile in profiles:
         if os.path.exists(profile):
             os.remove(profile)
     return profiles
 
 
-def _written_profiles(modules, profiles):
-    """`(paths, warnings)`: every module's profile when go wrote them all;
-    otherwise no path and one warning naming each module whose profile was
-    not written, so a run never carries a partial total."""
-    unwritten = [module for module, profile in zip(modules, profiles, strict=True)
+def _written_profiles(labels, profiles):
+    """`(paths, warnings)`: every profile when go wrote them all; otherwise
+    no path and one warning naming each module (or invocation, by `labels`)
+    whose profile was not written, so a run never carries a partial total."""
+    unwritten = [label for label, profile in zip(labels, profiles, strict=True)
                  if not os.path.isfile(profile)]
     if not unwritten:
         return list(profiles), []
@@ -747,22 +797,86 @@ def _written_profiles(modules, profiles):
         f"go wrote no coverprofile for the module(s) {', '.join(unwritten)}")]
 
 
-def _go_test_run(verb, args, project_dir, agent, modules, health, plan=None):
+def _with_coverprofile(invocations, profiles):
+    """(PURE) `invocations` (`[cwd, argv]`), each writing its coverprofile
+    to its own path of `profiles`, the flag placed before the package."""
+    return [[cwd, [*argv[:-1], f"-coverprofile={profile}", argv[-1]]]
+            for (cwd, argv), profile in zip(invocations, profiles, strict=True)]
+
+
+def _merged_profile(texts):
+    """(PURE) One coverprofile of several: the first `mode:` line once, then
+    each block once, in the order first met. A block's count is the sum of
+    its counts (`mode: set`: 1 when any covered it), so a block is covered
+    when any profile covered it and no statement is counted twice."""
+    mode, counts = None, {}
+    for text in texts:
+        lines = text.splitlines()
+        if not lines:
+            continue
+        if mode is None:
+            mode = lines[0]
+        for line in lines[1:]:
+            if not line.strip():
+                continue
+            block, count = line.rsplit(" ", 1)
+            counts[block] = counts.get(block, 0) + int(count)
+    if mode is None:
+        return ""
+    if mode.split(":", 1)[-1].strip() == "set":
+        counts = {block: min(count, 1) for block, count in counts.items()}
+    return "\n".join([mode, *(f"{block} {count}" for block, count in counts.items())]) + "\n"
+
+
+def _merged_coverage(paths, warnings):
+    """The one coverprofile text merged from `paths`, or None (a warning
+    added to `warnings`) when one cannot be read."""
+    texts = []
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                texts.append(fh.read())
+        except OSError as error:
+            warnings.append(_axi().coverage_not_measured_warning(
+                f"the coverprofile {path} could not be read ({error})"))
+            return None
+    return _merged_profile(texts)
+
+
+def _coverage_post(text):
+    """`_post`, with the run's close carrying `text` as its one
+    `go-coverprofile`."""
+    def post(path, payload, timeout=None):
+        if path == _axi().INGEST_RUNS_PATH:
+            payload = {**payload, "coverage": {"codec": GO_COVERAGE_CODEC,
+                                               "data": [text]}}
+        return _post(path, payload, timeout=timeout)
+    return post
+
+
+def _go_test_run(verb, args, project_dir, agent, modules, health, plan=None,
+                 tier=None):
     """List, open, run with the stream relayed, close: the body of a run
     once nothing refuses it. Returns the verb's exit code.
 
     A tier's `plan` (`_TierPlan`) replaces the list and the `./...` run: its
-    test count is the start total, its invocations are the run, and its tier
-    rides the run's start and its close."""
+    test count is the start total (plus the list of its `listed` modules),
+    its invocations are the run, and its tier rides the run's start and its
+    close. Without a plan, `tier` (None: no tier stated) rides them. A
+    `regression` run's coverage is every profile merged into one."""
     key = _project_key(project_dir)
     release = getattr(args, "release", None)
     run = getattr(args, "run", None)
-    tier = plan.tier if plan is not None else None
+    tier = plan.tier if plan is not None else tier
     warnings = list(_axi().preflight_cycle_warnings(
         _get, key, agent, cycle_id=getattr(args, "cycle", None), context=None,
         release=release))
     if plan is not None:
         total = plan.total
+        if plan.listed:
+            totals = [_listed_total(module, None, warnings) for module in plan.listed]
+            listed = [count for count in totals if count is not None]
+            total = total + sum(listed) if len(listed) == len(totals) else None
     else:
         totals = [_listed_total(module, run, warnings) for module in modules]
         listed = [count for count in totals if count is not None]
@@ -787,10 +901,15 @@ def _go_test_run(verb, args, project_dir, agent, modules, health, plan=None):
     stream_path = os.path.join(own_dir, _STREAM_FILE)
     open(stream_path, "w", encoding="utf-8").close()
     coverage = bool(getattr(args, "coverage", False))
-    profiles = _coverage_profiles(own_dir, modules) if coverage else None
+    covered = plan.invocations if plan is not None else modules
+    profiles = _coverage_profiles(own_dir, len(covered)) if coverage else None
     if plan is not None:
+        if profiles:
+            plan = plan._replace(invocations=_with_coverprofile(plan.invocations,
+                                                                profiles))
         run_cmd, run_cwd = _tier_runner_command(plan, own_dir, project_dir)
-        running = f"go test -json -tags {tier}"
+        running = ("go test -json ./..., then each declared tier's tests"
+                   if plan.listed else f"go test -json -tags {tier}")
     else:
         run_cmd, run_cwd = _runner_command(modules, run, project_dir, profiles)
         running = "go test -json ./..."
@@ -821,10 +940,18 @@ def _go_test_run(verb, args, project_dir, agent, modules, health, plan=None):
     print(f"[crucible] go test exit={result.returncode}", file=sys.stderr)
     runner_exit = _axi().runner_exit_code(result.returncode)
     coverage_paths = []
+    close_post = _post
     if coverage:
-        coverage_paths, missing = _written_profiles(modules, profiles)
+        labels = (modules if plan is None
+                  else [f"{argv[-1]} in {cwd}" for cwd, argv in plan.invocations])
+        coverage_paths, missing = _written_profiles(labels, profiles)
         warnings += missing
-    resp = _axi().close_stream(_post, stack=_STACK, project_key=key, agent_id=agent,
+        if coverage_paths and tier == "regression":
+            merged = _merged_coverage(coverage_paths, warnings)
+            coverage_paths = []
+            if merged is not None:
+                close_post = _coverage_post(merged)
+    resp = _axi().close_stream(close_post, stack=_STACK, project_key=key, agent_id=agent,
                                run_id=run_id, codec=GO_TEST_CODEC,
                                raw=result.stdout or None, runner_exit=runner_exit,
                                coverage_codec=GO_COVERAGE_CODEC if coverage_paths else None,
@@ -882,10 +1009,11 @@ def _start_post(total):
 # What a tier run is, once read: the `tier`, the declaring `modules`, the
 # `invocations` (`[cwd, argv]`, in order), the `total` of the tier's tests and
 # the `clashes` (`(package, test)`) that cannot be run alone; `project_dir`
-# and `agent` the run is made in and filed under.
+# and `agent` the run is made in and filed under; the `listed` modules whose
+# untagged list adds to the start total (a `regression` run's).
 _TierPlan = collections.namedtuple(
     "_TierPlan", ("tier", "project_dir", "agent", "modules", "invocations",
-                  "total", "clashes"))
+                  "total", "clashes", "listed"), defaults=((),))
 
 
 def _is_test_name(name, prefix):
@@ -966,13 +1094,15 @@ def _run_patterns(names):
     return [f"^({'|'.join(chunk)})$" for chunk in chunks]
 
 
-def _module_tier(module, tier):
+def _module_tier(module, tier, untagged=None):
     """`(test count, invocations, clashes)` of `tier` in `module`.
 
     A package's tier files are the test files the tagged `go list` names and
-    the untagged one does not; a tier test also declared in a test file both
-    builds compile, in the same package dir, is a clash."""
-    untagged = _listed_test_files(module, None)
+    the untagged one does not (`untagged`: that untagged list, when already
+    read); a tier test also declared in a test file both builds compile, in
+    the same package dir, is a clash."""
+    if untagged is None:
+        untagged = _listed_test_files(module, None)
     count, invocations, clashes = 0, [], []
     for package_dir, (path, internal, external) in sorted(
             _listed_test_files(module, tier).items()):
@@ -1027,18 +1157,52 @@ def _read_declared_build_tag(args, tier):
     refused = _toolchain_refusal()
     if refused:
         raise _axi().DeclarationRefused(*refused)
-    modules, invocations, clashes, total = [], [], [], 0
-    for module in _tier_modules(args, project_dir):
-        count, module_invocations, module_clashes = _module_tier(module, tier)
+    return _tier_plan(tier, project_dir, agent, _tier_modules(args, project_dir))
+
+
+def _tier_plan(tier, project_dir, agent, modules, untagged=None):
+    """The `_TierPlan` of `tier` over the `modules` that declare it, or None
+    when none does. `untagged` maps a module to its untagged `go list`, when
+    already read. `go list` runs; no `go test` does."""
+    declaring, invocations, clashes, total = [], [], [], 0
+    for module in modules:
+        count, module_invocations, module_clashes = _module_tier(
+            module, tier, (untagged or {}).get(module))
         if not count:
             continue
-        modules.append(module)
+        declaring.append(module)
         invocations += module_invocations
         clashes += module_clashes
         total += count
-    if not modules:
+    if not declaring:
         return None
-    return _TierPlan(tier, project_dir, agent, modules, invocations, total, clashes)
+    return _TierPlan(tier, project_dir, agent, declaring, invocations, total, clashes)
+
+
+def _declared_tier_plans(project_dir, agent, modules):
+    """The `_TierPlan` of every tier of the vocabulary (but `regression`)
+    some module of `modules` declares, in the vocabulary's order."""
+    untagged = {module: _listed_test_files(module, None) for module in modules}
+    plans = (_tier_plan(tier, project_dir, agent, modules, untagged)
+             for tier in _axi().TIER_MEANINGS if tier != "regression")
+    return [plan for plan in plans if plan is not None]
+
+
+def _read_declared_tiers(args, _surface):
+    """Go's ENUMERATION of the gate's suites: `untagged`, the whole run's
+    (the untagged tests of every module), then each declared tier, under a
+    framework of its own so the gate runs it as a suite of its own. None when
+    no module declares a tier. No Go, a Go below the floor, or no module is a
+    hard stop, never a project that declares nothing."""
+    refused = _toolchain_refusal()
+    if refused:
+        raise _axi().DeclarationRefused(*refused)
+    project_dir = _resolve_project_dir(args.project_dir)
+    plans = _declared_tier_plans(project_dir, None, _tier_modules(args, project_dir))
+    if not plans:
+        return ()
+    return (("untagged", None, GO_TEST_CODEC),
+            *((plan.tier, None, f"{GO_TEST_CODEC} -tags {plan.tier}") for plan in plans))
 
 
 def _run_declared_build_tag(args, tier, plan):
@@ -1128,10 +1292,10 @@ def cmd_cycle_skip(args):
 
 def cmd_cr_close(args):
     """Close the resolved OPEN plan and post the cr-merged milestone. The
-    gate enumerates no go suite, so no declared-gate surface is handed on. Delegates to
-    the shared implementation."""
+    gate's declaration surface is handed on, so a red declared suite is
+    offered a gate scoped to it. Delegates to the shared implementation."""
     return _axi().cmd_cr_close(args, _resolve_project_dir(args.project_dir), _ops(),
-                               stack=_STACK)
+                               surface=_TIER_DECLARATION_SURFACE, stack=_STACK)
 
 
 def cmd_cycle_add(args):
@@ -1397,11 +1561,12 @@ def _add_run_args(p):
 
 def _add_regression_coverage_arg(p):
     p.add_argument("--coverage", action="store_true",
-                   help="Write each module's coverprofile (go test "
-                        "-coverprofile) in the run's reports dir and send "
-                        "them all with the run's close as go-coverprofile; "
-                        "a module whose profile was not written leaves the "
-                        "run with no coverage.")
+                   help="Write each invocation's coverprofile (go test "
+                        "-coverprofile) in the run's reports dir, merge them "
+                        "into one (a block covered when any covered it) and "
+                        "send it with the run's close as go-coverprofile; a "
+                        "profile that was not written leaves the run with no "
+                        "coverage.")
 
 
 def _add_declared_tier_args(p):
@@ -1424,6 +1589,7 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
     read=_read_declared_build_tag,
     run=_run_declared_build_tag,
     add_args=(_add_declared_tier_args,),
+    suites=_read_declared_tiers,
 )
 
 
@@ -1437,9 +1603,10 @@ def _add_tier_verbs(sub):
         dict(regression=tier_verb(  # noqa: C408
             cmd_regression,
             "Runs `go test -json ./...` in every module under the project dir "
-            "(skipping vendor, testdata, node_modules and hidden dirs), into "
-            "one run streamed to the board; --coverage adds each module's "
-            "coverprofile.",
+            "(skipping vendor, testdata, node_modules and hidden dirs), then "
+            "each declared tier's tests, into one run filed under regression "
+            "and streamed to the board; --coverage adds one coverprofile, "
+            "merged from every invocation's.",
             (_add_run_args, _add_regression_coverage_arg, _add_gate_cycle_arg,
              _axi().add_run_release_arg))),
         declares=_TIER_DECLARATION_SURFACE,
@@ -1447,12 +1614,15 @@ def _add_tier_verbs(sub):
 
 
 def _add_gate_verbs(sub):
-    """`pre-merge-gate`: the full suite over every module under the project
-    dir, into one run, its outcome the gate's milestone."""
+    """`pre-merge-gate`: the untagged run over every module under the project
+    dir plus each declared tier as a suite of its own, its outcome the gate's
+    milestone."""
     g = sub.add_parser("pre-merge-gate",
-                       help=("ORCHESTRATOR pre-merge gate: the regression over "
-                             "every module, its outcome posted as the "
-                             "pre-merge-gate milestone."))
+                       help=("ORCHESTRATOR pre-merge gate: the untagged run "
+                             "over every module, filed under regression, and "
+                             "each declared tier as a suite of its own, its "
+                             "outcome posted as the pre-merge-gate "
+                             "milestone."))
     _add_run_args(g)
     _add_gate_cycle_arg(g)
     _axi().add_run_release_arg(g)
