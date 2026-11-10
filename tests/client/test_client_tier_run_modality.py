@@ -223,6 +223,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.go_client_harness import (
+    GoProject,
+    copy_fixture,
+    go_toolchain_gap,
+    terminal_events,
+)
 from tests.client.live_run_harness import get_answering_health
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -816,6 +822,84 @@ class _PythonModalityCase(_ModalityCase):
 
     def py_argv(self, verb, extra=()):
         return [verb, "--project-dir", self.tmpdir] + list(extra)
+
+
+class _GoModalityCase(unittest.TestCase):
+    """go's drive, beside the five above, with the same surface: `drive(argv)`
+    answers a `_Drive` whose `calls` are every `(path, body)` the board was
+    POSTed, in wire order, and `envelope` / `refused_for_no_declaration` read
+    it as the other cases do.
+
+    go declares a tier by build tag, and the declaration is read by the
+    toolchain itself (`go list -tags <tier>`), so a fake `go` would answer the
+    very question a go tier verb asks. This case therefore drives the REAL go
+    client as a subprocess, with the real `go` behind the recording shim of
+    `go_client_harness`, against its own loopback `RecordingBoard` -- never
+    an in-process client with its `_post` patched, and never a live board.
+
+    The board decodes nothing it is sent: the `run` block it answers a run's
+    close with is the one a drive scripts (`response`), so a test that reads
+    the envelope's counts also reads the stream the board held
+    (`held_terminals`) to show the script was honest."""
+
+    CLIENT = "go"
+    #: The `tests/fixtures/go-client` module the project starts as (None: an
+    #: empty project, which a test fills itself).
+    FIXTURE = None
+
+    def setUp(self):
+        super().setUp()
+        gap = go_toolchain_gap()
+        if gap:
+            self.fail(f"missing toolchain: {gap}")
+        self.project = GoProject(self, fixture=self.FIXTURE)
+        self.tmpdir = self.project.dir
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+
+    def use_fixture(self, name):
+        """Copy the fixture module `name` into the project dir."""
+        copy_fixture(name, self.tmpdir)
+
+    def script_run(self, **run):
+        """The `run` block the board answers the run's close with."""
+        self.project.board.script_run(**run)
+
+    def drive(self, argv, response=None):
+        """`go-crucible.py <argv> --agent AGENT --project-dir <dir>`. A
+        `response` (`{"run": {...}}`) scripts the board's answer to the run's
+        close."""
+        if response is not None:
+            self.script_run(**(response.get("run") or {}))
+        verb, *rest = argv
+        result = self.project.drive(*rest, verb=verb, agent=AGENT)
+        return _Drive(result.returncode, result.stdout, result.stderr,
+                      self.project.posts())
+
+    def go_argv(self, verb, extra=()):
+        return [verb] + list(extra)
+
+    def held_terminals(self):
+        """`(Package, Test, Action)` of each terminal test event in the
+        stream the board held."""
+        return terminal_events(self.project.held())
+
+    def invocations(self, tool=None):
+        """Every `go` call the recording shim logged, in the argv-log shape
+        of the other cases (`{"tool", "argv", "cwd"}`)."""
+        records = [{"tool": "go", "argv": c["argv"], "cwd": c["cwd"]}
+                   for c in self.project.calls()]
+        return [r for r in records if tool is None or r["tool"] == tool]
+
+    def tearDown(self):
+        # A census that drives this case by hand (`setUp`, a drive,
+        # `tearDown`) never reaches unittest's own cleanup pass, so the
+        # board and the scratch project are released here as well.
+        super().tearDown()
+        self.doCleanups()
+
+    envelope = _ModalityCase.envelope
+    refused_for_no_declaration = _ModalityCase.refused_for_no_declaration
+    assertVerbAcceptedTheInvocation = _ModalityCase.assertVerbAcceptedTheInvocation
 
 
 # ── AC6: every toolchain-split cell runs through that stack's own split ────

@@ -146,10 +146,11 @@ V2_ROUTES_PATH = REPO_ROOT / "src" / "v2.ts"
 # The census walks the five clients AND the shared registrar: a flag routed
 # through `_crucible_axi.py` is declared once for the whole fleet, so an
 # undescribed one there is five undescribed flags.
-# The go client joins the walk beside the five: the tier-surface table it is
-# reused from holds the clients that offer the tier verbs, which go does not.
+# The go client is walked as one of the six: it offers the tier verbs through
+# the shared registrar, so the tier-surface table this census reuses holds its
+# row, and the census walks that row rather than adding a second one.
 GO_CLIENT_PATH = AXI_MODULE_PATH.parent / "go-crucible.py"
-FLAG_HELP_CLIENTS = {**CLIENT_FILES, "go": GO_CLIENT_PATH}
+FLAG_HELP_CLIENTS = dict(CLIENT_FILES)
 CENSUS_SOURCES = dict(FLAG_HELP_CLIENTS)
 CENSUS_SOURCES["axi"] = AXI_MODULE_PATH
 
@@ -637,7 +638,11 @@ class FlagHelpCensusTest(unittest.TestCase):
         reading reports a clean fleet, which is indistinguishable from a
         described one until the counts are asserted."""
         self.assertEqual(EXPECTED_CLIENT_COUNT, len(CLIENT_FILES))
-        self.assertEqual(EXPECTED_CLIENT_COUNT + 1, len(FLAG_HELP_CLIENTS))
+        self.assertEqual(EXPECTED_CLIENT_COUNT, len(FLAG_HELP_CLIENTS))
+        self.assertEqual(
+            FLAG_HELP_CLIENTS.get("go"), GO_CLIENT_PATH,
+            f"the go client offers the tier verbs, so the census walks its "
+            f"row from the tier-surface table: {sorted(FLAG_HELP_CLIENTS)!r}")
         self.assertEqual(len(FLAG_HELP_CLIENTS) + 1, len(CENSUS_SOURCES),
                          "the census walks the six clients AND the shared "
                          "registrar; a missing source is a blind spot")

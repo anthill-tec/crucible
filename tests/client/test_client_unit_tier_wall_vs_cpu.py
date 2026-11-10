@@ -201,6 +201,7 @@ _TOOLCHAIN_ALIASES = {
     "arduino": ("make",),
     "bun": (),
     "python": ("unittest",),
+    "go": ("go test",),
 }
 
 
@@ -560,12 +561,28 @@ class PythonUnitRunThatWaitsTest(_WallVsCpuProbe, _MODALITY._PythonModalityCase)
         return self.py_argv(SCOPED_TIER)
 
 
+class GoUnitRunThatWaitsTest(_WallVsCpuProbe, _MODALITY._GoModalityCase):
+    """PIN, both halves — ESCALATION 2, go's half. go declares a tier by
+    build tag, so its `unit` is a declared cell like bun's and python's: on
+    the `tiers` module, which tags only `integration`, `unit` answers the
+    undeclared-tier hard stop and nothing runs, so nothing is measured. The
+    drive is the real go client and the real `go` against a loopback board
+    (`_GoModalityCase`); the burn preamble reaches no fake here, and none is
+    needed while the cell refuses."""
+
+    FIXTURE = "tiers"
+
+    def unit_argv(self):
+        return self.go_argv(SCOPED_TIER)
+
+
 _PROBED_CLIENTS = {
     "mvn": MvnUnitRunThatWaitsTest,
     "rust": RustUnitRunThatWaitsTest,
     "arduino": ArduinoUnitRunThatWaitsTest,
     "bun": BunUnitRunThatWaitsTest,
     "python": PythonUnitRunThatWaitsTest,
+    "go": GoUnitRunThatWaitsTest,
 }
 
 

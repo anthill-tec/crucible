@@ -50,6 +50,10 @@ from tests.client.test_client_fleet_envelope_census import (
     classify_envelope,
     drive_verb,
 )
+from tests.client.test_every_cycle_help_line_describes_its_own_verb import (
+    TIERS,
+    _answer_go_tier_lists,
+)
 from tests.client.test_every_verb_that_files_a_run_is_refused_while_a_cycle_is_active import (
     _filing_verbs,
     _seed,
@@ -238,6 +242,12 @@ class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
                        else self._board().key)
         project_dir, seeded = self._project(client_key, verb, outcome, project_key)
         bin_dir = self._bin_dir(client_key, outcome)
+        if client_key == "go" and verb in TIERS:
+            # go reads a tier off `go list`, which the fake `go` does not
+            # answer, and a `go list` that fails files nothing: a go tier
+            # drive gets the `go list` front end the cycle-help census uses,
+            # its tagged run passing or failing with this drive's outcome.
+            _answer_go_tier_lists(bin_dir, outcome)
         subparser = _filing_verbs(client_key)[verb]
         census = build_argv(verb, subparser, project_dir)[1:]
         positionals = sum(1 for a in subparser._actions if not a.option_strings)
@@ -328,6 +338,39 @@ class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
                         f"{client_key} test ({outcome}): `events` names exactly "
                         f"the id the board answered for the one run filed "
                         f"({run['id']!r}); envelope={drive.axi!r}")
+
+    def test_each_go_tier_verb_names_the_one_run_it_filed_under_its_tier(self):
+        """go's tier verbs read their declaration off `go list`: a drive
+        whose `go list` failed would file nothing and pass the census above
+        on an empty `events`. Each go tier verb in the census files exactly
+        one run, under its own tier, and names exactly that run."""
+        board = self._board()
+        tiers = sorted(set(_filing_verbs("go")) & set(TIERS))
+        self.assertTrue(tiers, "go files a run from at least one tier verb")
+        for verb in tiers:
+            for outcome in OUTCOMES:
+                with self.subTest(verb=verb, outcome=outcome):
+                    drive = self.drive("go", verb, outcome)
+                    runs = drive.runs()
+                    self.assertEqual(
+                        len(runs), 1,
+                        f"go {verb} ({outcome}): the declared tier files "
+                        f"exactly one run; {drive.transcript()}")
+                    if len(runs) != 1:
+                        continue
+                    stored = board.event(str(runs[0]["id"]))
+                    self.assertEqual(
+                        stored.get("tier"), verb,
+                        f"go {verb} ({outcome}): the run is filed under its "
+                        f"verb's tier; stored={stored!r}")
+                    self.assertEqual(
+                        (stored.get("summary") or {}).get("failed"),
+                        0 if outcome == "pass" else 1,
+                        f"go {verb} ({outcome}): stored={stored!r}")
+                    self.assertEqual(
+                        _ids(drive.events or []), [str(runs[0]["id"])],
+                        f"go {verb} ({outcome}): `events` names exactly the "
+                        f"one run filed; envelope={drive.axi!r}")
 
     def test_a_failing_drive_names_the_failing_run_and_not_another(self):
         """The failing `test` drive's one named event is the run carrying the
