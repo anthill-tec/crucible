@@ -14,7 +14,7 @@ lands no batch); CR-CRU-233 (the `nextest` branch of the shared stream reading)
 Every client except the Go one shows a running run's progress in two ways:
 
 - the relay lands the stream's batches on the board;
-- between those batches, the shared narrator prints and posts `running N[/M]` ticks.
+- between those batches, the shared narrator posts `running N[/M]` ticks.
 
 The narrator reads a stream through the shared run module's one reading of a stream line,
 `_counted_event` (`clients/_crucible_run.py`). That reading knows only the `crucible-events` and
@@ -94,7 +94,7 @@ the relay lands no batch.
   - nothing for any subtest, any package-level action, or any `run`, `output`, `pause` or `cont`
     line.
 - [ ] **AC2 — a Go run ticks.** With the relay landing no batch for longer than the tick interval:
-  - a Go `test` run prints and posts `running N/M`, with M the run's listed total;
+  - a Go `test` run posts `running N/M`, with M the run's listed total;
   - a run whose listing failed posts `running N`;
   - a run whose relay lands batches posts no in-run tick.
 - [ ] **AC3 — every streaming verb ticks.** `regression` over two modules, a declared tier verb, and
