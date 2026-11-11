@@ -1042,7 +1042,7 @@ class NoBoardNoFiguresTest(_RustProject, unittest.TestCase):
 # (the shared streamed-run close and the stream-counted narration in). The
 # rust client's move to the shared ingest adds nothing to either. A change
 # that grows a shared module re-records its budget here, in the same change.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9160, "_crucible_run.py": 1847}
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9183, "_crucible_run.py": 1972}
 _OWN_RESULT_LINES = ("ingest junit:", "regression: ok=",
                      "workspace regression: ok=", "smoke-test: ok=")
 
