@@ -136,7 +136,7 @@ One ingest call = one immutable event on the project's timeline.
 | `stack` | `"rust"` \| `"java"` \| `"python"` \| `"ts"` \| `"arduino"` \| … | v2 — which stack produced the run |
 | `framework` | string? — `"bun-test"` \| `"vitest"` \| `"playwright"` \| `"playwright-bdd"` for bun; `"pytest"` \| `"unittest"` for python, its runner; `"nextest"`, `"surefire"`, `"go-test"`, `"arduino-native"` reserved for the other stacks | CR-CRU-225 (migration v23) — which test framework ran it, as the run's target declares (§4.4); stored beside `stack` on the event and the run. The python client states its runner, `pytest` or `unittest`, on every run it files. The runs filed through the retired codec carry `playwright-bdd` (migration v25). The framework decides the `junit` readings and the specification view (§4.4). The board takes any non-empty string; a close that states none inherits its start's. A run stored before v23, or sent by a client that states none, has none |
 | `codec` | `"junit"` \| `"crucible-events"` \| `"rustc"` \| `"javac"` \| `"python"` \| `"tsc"` \| `"gcc"` \| … | v2 — which codec normalized it (the set follows the supported stacks, §4.4). A run stored through the retired Playwright JSON codec keeps that codec as the record of how it was filed; no run is filed with it now |
-| `coverage` | `{lines, functions?, branches?}` each `{total, covered, percent}` | only on fully-green runs — server discards otherwise (v1 safety net) |
+| `coverage` | `{lines, functions?, branches?}` each `{total, covered, percent}` | only on fully-green runs — server discards otherwise (v1 safety net). A run filed with a coverage report also keeps the report's per-file list (`coverageFiles`: each file's name, `lines` and optional `functions`), least covered first; it is read on its own, through the events API, and is never part of this field |
 | `compile` | `{format, errorCount, warningCount, errors: [{file?, line?, col?, code?, message, level}], raw}` | compile events |
 | `name` | string? | optional run label |
 | `context` | `{git?: {branch, commit}, wave?: string, orchestrator?: "mainline" \| "track-N"}` | v2 (decided 2026-07-14) — ties runs to the exact commit and, in Model-B projects, distinguishes a track's check-run from Mainline's regression on the same timeline. **Every field optional — graceful degradation is a hard requirement**: lightweight projects send no context and the API/UI must never require or fabricate it. |
@@ -268,9 +268,16 @@ registry** translating each tool's native output into one **canonical RunSchema*
   version is not stamped. Coverage codecs: `lcov`, `jacoco` and `go-coverprofile`, rounded as the
   clients' Python `round`. `go-coverprofile` (CR-CRU-239) stores Go's statement coverage on `lines`:
   covered statements over all statements, a block listed more than once counted once, and no
-  `functions` axis, which is why `functions` is optional on the run.
+  `functions` axis, which is why `functions` is optional on the run. Each coverage codec also reads
+  the report file by file, and the board keeps the files with the run: for `lcov` a file is one
+  `SF:` record, named as the report writes it; for `jacoco` it is one CSV row, a class named
+  `PACKAGE.CLASS`, since the CSV names no source file; for `go-coverprofile` it is one file of the
+  profile's blocks, with lines and no functions. A name stated more than once is one file, so the
+  files' counters sum to the run's totals.
 - Parsed path (`/runs/parsed`): the route older clients post to — summary/tree/coverage taken as-is.
-- Both paths record a `kind:"test"` event and answer `{ok, run}`; `/runs` adds `files` and `coverage`.
+- Both paths record a `kind:"test"` event and answer `{ok, run}`; `/runs` adds `files` and `coverage`,
+  and, when the run kept coverage files, `coverageFileCount` (how many) and `coverageFiles` (the
+  first 10, least covered first). `/runs/parsed` keeps coverage totals only.
 - Record stream codecs (CR-CRU-200): `crucible-events` decodes a JSON-lines test stream by JUnit's own failure and
   suite-status rules. An open run's batches go to `POST /api/v2/runs/<runId>/stream`, which holds them byte-offset by
   byte-offset and fills the run's live state; the close on `/runs` (`runId`, `codec: "crucible-events"`, no report)
@@ -403,6 +410,15 @@ duration, coverage) that feed trend views — **per wave** when `context.wave` i
 (a wave's cycle history stays reconstructable), daily buckets otherwise; raw trees are
 pruned with the rollup. Events indexed on `(projectKey, timestamp)`. One Bun process is
 the single writer — matching SQLite/WAL's concurrency model by construction.
+
+**A run's coverage files are read on their own.** `GET /api/v2/events/<id>?depth=coverage` answers
+the event without its tree and without its raw output, and its `event` carries `coverageFileCount`,
+`coverageFiles` (the files in their stored order: lowest lines percent first, then most uncovered
+lines, then name) and `coverageRoot` (the leading directories every file name of the run shares,
+empty when they share none). `&files=<n>` answers only the first `n` files; the count and the root
+stay the whole run's. A run with no files answers 0, an empty list and an empty root.
+`?depth=suites` carries `coverageFileCount` when the run has files. The files are removed with
+the run, by retention and by every other path that removes a run's detail.
 
 **Retention reaches TELEMETRY ONLY (revised 2026-09-13, CR-CRU-129).** The cap may evict
 `test`, `compile` and `lifecycle` events and nothing else. It may NOT reach a structural
@@ -599,7 +615,17 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   (plan-file / cycle-activate / cycle-done / cr-close) in
   CR-CRU-008.
 - **Coverage** — line/function/branch meters on green regression events; latest-green
-  coverage shown at project level.
+  coverage shown at project level. The Coverage tab lists the files of the latest green
+  coverage run in one table beneath its totals: a heading `Files · N`, then a row per file with
+  its name, lines, a meter, the lines percent and its functions. The table opens on the first 50
+  files, with one `show all N` control for the rest, and has no sort and no filter.
+- **Coverage files on a run's page** — a test run that kept coverage shows one line above its
+  test tree (its lines percent, its functions percent when it has one, and its file count),
+  folded when the page opens; a click unfolds the same file table, reading the files then. A run
+  with coverage and no files shows its totals and `no per-file coverage for this run` on both
+  surfaces. A file's name is shown without the directories every file of the run shares; a name
+  too long for its cell is cut on the left, and on touch media it is shown whole and wrapped.
+  On the phone band a row's functions sit beneath its name.
 - Localhost tool aesthetics: fast, dense, dark-friendly, zero build step.
 - **Design consistency (user-locked during CR-007):** one design vocabulary
   everywhere. Status chips/badges are deliberate HIGHLIGHT elements (the F4½

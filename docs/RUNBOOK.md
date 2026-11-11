@@ -275,6 +275,14 @@ test-run rollup *before* deletion, so what it contributed to that day's totals
 survives pruning, while a `lifecycle` event contributes nothing to a rollup and
 is simply pruned. Rollups and active-cycle state are untouched.
 
+**A run's coverage files go with the run.** A green run filed with a coverage
+report keeps the report's files with it, one row per file, and retention
+removes them with the run, as it removes the run's tree. Nothing caps the
+files of one run: a project of thousands of files stores that many rows per
+coverage run, for as long as retention holds the run. The ingest answer names
+only the first 10 files of the run, and the board's file table opens on the
+first 50; both state the run's whole file count.
+
 **Precedence.** A project's own `retention` overrides the `[limits.retention]`
 value in the server's file, and it does so for that project alone. Set it with
 a PATCH on the project:
