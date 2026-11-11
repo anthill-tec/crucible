@@ -778,6 +778,18 @@ def _coverage_row(kept_file):
             "functionsTotal": functions.get("total")}
 
 
+def _run_files(file_count, files):
+    """(PURE) Whether `file_count` and `files` are a run's files as the board
+    answers them: an integer that is not a boolean, and a list whose every
+    entry is an object with a string `path` and an object `lines`."""
+    return (isinstance(file_count, int) and not isinstance(file_count, bool)
+            and isinstance(files, list)
+            and all(isinstance(entry, dict)
+                    and isinstance(entry.get("path"), str)
+                    and isinstance(entry.get("lines"), dict)
+                    for entry in files))
+
+
 def coverage_block(kept, file_count, files, event):
     """(PURE) The `coverage` block a run's envelope states from what the
     board kept for the run, or None when it kept no coverage. Never raises.
@@ -803,17 +815,77 @@ def coverage_block(kept, file_count, files, event):
              and not isinstance(kept[axis].get("percent"), bool)}
     if not block:
         return None
-    if (isinstance(file_count, int) and not isinstance(file_count, bool)
-            and isinstance(files, list)
-            and all(isinstance(entry, dict)
-                    and isinstance(entry.get("path"), str)
-                    and isinstance(entry.get("lines"), dict)
-                    for entry in files)):
+    if _run_files(file_count, files):
         block.update({"event": event if isinstance(event, str) else None,
                       "fileCount": file_count,
                       "moreFiles": max(file_count - len(files), 0),
                       "files": [_coverage_row(entry) for entry in files]})
     return block
+
+
+#: How `run` is told how many of a run's files to list.
+RUN_FILES_USAGE = "run <event-id> --files <n>|all"
+
+
+def run_files_query(value):
+    """(PURE) The query of the read that lists a stored run's coverage files,
+    for the `--files` value `run` was given: `(query, None)`, or `(None,
+    error)` for a value the verb refuses.
+
+    `all` asks for every file, and ASCII digits alone whose value is at least
+    1 (`03` is 3) for that many of the least covered. Anything else is
+    refused, the error naming the flag and the value given."""
+    if value == "all":
+        return "?depth=coverage", None
+    if (isinstance(value, str) and value.isascii() and value.isdigit()
+            and int(value) >= 1):
+        return f"?depth=coverage&files={int(value)}", None
+    return None, (f"--files {value!r} is neither `all` nor a whole number of "
+                  f"at least 1: {RUN_FILES_USAGE}")
+
+
+def stored_run_coverage(get_fn, path, query, event, event_id):
+    """The `coverage` block `run` states for a stored run, as `(block, error)`.
+
+    `event` is the run's `?depth=suites` record, `path` its record's path on
+    the board, `query` the coverage read's (`run_files_query`) and `event_id`
+    the id that was asked for. Only a test run whose record carries an integer
+    `coverageFileCount` (not a boolean) has files to list: any other run sends
+    no request and answers `(None, None)`.
+
+    Such a run's files are read with `get_fn(path + query)`. The block is
+    `coverage_block` of the record's stored coverage (its percents), the
+    count and the files that read answered, and `event_id`. A read that fails
+    (the board not reached, an HTTP error, or an answer without both a
+    well-formed `event.coverageFileCount` and `event.coverageFiles`) answers
+    `(None, error)`, so a run is never stated with a file list that could not
+    be read."""
+    count = event.get("coverageFileCount")
+    if (event.get("kind") != "test" or not isinstance(count, int)
+            or isinstance(count, bool)):
+        return None, None
+    refusal = f"could not read the coverage files of run {event_id}"
+    resp = get_fn(f"{path}{query}")
+    resp = resp if isinstance(resp, dict) else {}
+    if not resp.get("ok"):
+        return None, f"{refusal}: {resp.get('error')}"
+    read = resp.get("event")
+    read = read if isinstance(read, dict) else {}
+    file_count, files = read.get("coverageFileCount"), read.get("coverageFiles")
+    if not _run_files(file_count, files):
+        return None, f"{refusal}: the board's answer does not carry them"
+    return coverage_block(event.get("coverage"), file_count, files,
+                          event_id), None
+
+
+def add_coverage_run(rows, suite, stack, envelope):
+    """Append to `rows` the `coverageRuns` row of one run a gate read, when
+    the run's `envelope` carried a `coverage` block: `suite` (what the gate
+    calls the run), `stack`, then the block's own keys in the block's order.
+    A run whose envelope carried no block adds nothing."""
+    block = envelope.get("coverage") if isinstance(envelope, dict) else None
+    if isinstance(block, dict):
+        rows.append({"suite": suite, "stack": stack, **block})
 
 
 def emit_run_axi(verb, resp, context, emit_fn, *, ok=None, help_steps=None,
@@ -832,8 +904,9 @@ def emit_run_axi(verb, resp, context, emit_fn, *, ok=None, help_steps=None,
     the kept lines and functions percents, then the run's id, its file count
     and its least covered files when the answer's `run` carries them) follows
     them, absent when the board kept none (it discards a red run's coverage)
-    and for a caller that does not ask. The answer's `warnings[]` join the caller's `warnings`, after
-    them. `ok` overrides the envelope's verdict (default: the answer's `ok`).
+    and for a caller that does not ask. The answer's `warnings[]` join the
+    caller's `warnings`, after them. `ok` overrides the envelope's verdict
+    (default: the answer's `ok`).
 
     The client builds `context`, so the cycle it echoes (`echoed_cycle_id`)
     stays the client's."""
