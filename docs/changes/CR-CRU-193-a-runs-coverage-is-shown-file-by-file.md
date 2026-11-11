@@ -1,6 +1,6 @@
 # CR-CRU-193 — a run's coverage is shown file by file
 
-**Status:** PENDING · Pre-review: ran — 8 points or more, and user rulings at design
+**Status:** COMPLETED — merged 2026-11-11 · Pre-review: ran — 8 points or more, and user rulings at design
 **Type:** feature
 **Priority:** medium
 **Depends on:** CR-CRU-152, CR-CRU-239
@@ -54,7 +54,8 @@ returns today. Each file is a name and its own counters.
 
 A file whose functions total is 0, or unstated, has no functions axis, on every codec.
 
-`decodeCoverage` joins the files of every text of the run. A name stated more than once, in one
+`decodeCoverageWithFiles`, beside `decodeCoverage` in `src/codecs/coverage.ts`, joins the files of
+every text of the run; `decodeCoverage` still answers the totals alone. A name stated more than once, in one
 text or in several, is one file whose counters are added. So on every axis the files' counters sum
 to the run's total.
 
@@ -203,7 +204,7 @@ There are no sort controls and no filter.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — each codec reads its files.** On the repository's coverage fixtures, and a
+- [x] **AC1 — each codec reads its files.** On the repository's coverage fixtures, and a
   multi-row `jacoco` fixture this CR adds:
   - every `lcov` fixture decodes to one file per `SF:` record, named as the record writes it,
     with that record's lines and functions; a record that states no counters is a file of 0
@@ -216,25 +217,25 @@ There are no sort controls and no filter.
     on the captured `-coverpkg` profile a repeated block counts once in its file;
   - `tests/fixtures/go-coverprofile/contracts-types-only.coverprofile` and a header-only JaCoCo
     CSV decode to coverage with no file.
-- [ ] **AC2 — the files sum to the totals.** For every fixture above, and for two texts decoded
+- [x] **AC2 — the files sum to the totals.** For every fixture above, and for two texts decoded
   as one run with one name in both, the files' lines total and covered, and their functions total
   and covered, equal the run's totals. The name stated twice is one file. Each file's percent is
   `coveragePercent` of its own counters.
-- [ ] **AC3 — a green run keeps its files.** A green run ingested with a coverage block stores
+- [x] **AC3 — a green run keeps its files.** A green run ingested with a coverage block stores
   one row per file, for a single-shot ingest and for a streamed run's close. Its `events.coverage`
   is the totals object it stores today, with no file in it.
-- [ ] **AC4 — a run that keeps no coverage keeps no files.** No row is stored for a failing run,
+- [x] **AC4 — a run that keeps no coverage keeps no files.** No row is stored for a failing run,
   for a run whose coverage is dropped as undecodable, or for a run posted to `/api/v2/runs/parsed`
   with coverage.
-- [ ] **AC5 — the order.** A run whose files include two with the same rounded lines percent and
+- [x] **AC5 — the order.** A run whose files include two with the same rounded lines percent and
   different uncovered counts, two equal on both and named `B.ts` and `a.ts`, and one with no lines
   is read back in the §S2 order: the more uncovered of the first pair first, `B.ts` before
   `a.ts`, the file with no lines last.
-- [ ] **AC6 — the ingest answer.** A run of 12 files answers `coverageFileCount: 12` and the
+- [x] **AC6 — the ingest answer.** A run of 12 files answers `coverageFileCount: 12` and the
   first 10 files in the stored order in its `run` block, with the run's id at the top-level
   `event`; a run of 3 answers all 3; a run that kept no files, or coverage of 0 files, answers
   neither key. A streamed run's close answers as a single-shot ingest does.
-- [ ] **AC7 — the reads.**
+- [x] **AC7 — the reads.**
   - `?depth=suites` carries `event.coverageFileCount` for a run with files and no such key for a
     run without. Its only statement on `run_coverage_files` is one aggregate.
   - `?depth=coverage` answers every file in order in `event.coverageFiles`, with
@@ -250,58 +251,58 @@ There are no sort controls and no filter.
     `files=x`, answer a run with files as they do today, with no new key but the count.
   - A run without files, and a compile run, answer `coverageFileCount: 0`, an empty
     `coverageFiles` and the root `""`.
-- [ ] **AC8 — the root.** Files named `/home/dev/app/src/a.ts` and `/home/dev/app/src/lib/b.ts`
+- [x] **AC8 — the root.** Files named `/home/dev/app/src/a.ts` and `/home/dev/app/src/lib/b.ts`
   answer the root `/home/dev/app/src/`; `src/a.ts` and `srcgen/b.ts` answer the empty string; two
   Maven class names answer the empty string; a run of one file answers that file's directory.
-- [ ] **AC9 — the files leave with the run.** After each of: one event deleted, a project's
+- [x] **AC9 — the files leave with the run.** After each of: one event deleted, a project's
   events cleared, a project deleted, and a retention sweep that removes the run, no
   `run_coverage_files` row of that run remains, and other runs' rows are untouched.
-- [ ] **AC10 — an older store gains the table.** A store at the current schema version without
+- [x] **AC10 — an older store gains the table.** A store at the current schema version without
   `run_coverage_files` opens, gains the table, and changes nothing else: no other table, index or
   row, and the same schema version. An unstamped store that has the six earlier run-detail tables
   and not this one is stamped at the same version as before this change, and no retrofit runs
   again.
-- [ ] **AC11 — the lists stay as they are.** `GET /api/v2/projects` and an event brief answer a
+- [x] **AC11 — the lists stay as they are.** `GET /api/v2/projects` and an event brief answer a
   project with a file-bearing coverage run exactly as they answer one without, and read no
   `run_coverage_files` row.
-- [ ] **AC12 — the Coverage tab lists the files.** For a project whose latest green coverage run
+- [x] **AC12 — the Coverage tab lists the files.** For a project whose latest green coverage run
   has files, the tab shows the totals and `view run` as today, then `coverage-files` with the
   heading `Files · N` and one `coverage-file-row` per file in the board's order, each with its
   name, lines, meter, percent and functions. The tab requests `?depth=coverage&files=50`.
-- [ ] **AC13 — a run's page folds its files.** A test run with files shows `run-coverage` above
+- [x] **AC13 — a run's page folds its files.** A test run with files shows `run-coverage` above
   its test tree with its percents and `N files`, and no table. A click shows the same table; a
   second click removes it. The files are requested only on the first unfold, with
   `?depth=coverage&files=50`. This holds in the home in-pane container and in the workspace one.
-- [ ] **AC14 — more than 50.** A run of 60 files shows 50 rows and `show all 60`; clicking it
+- [x] **AC14 — more than 50.** A run of 60 files shows 50 rows and `show all 60`; clicking it
   requests the files with no `files=`, shows 60 rows and removes the control. A run of 50 shows 50
   rows and no control.
-- [ ] **AC15 — names.** A row shows its name without the root and carries the whole name as its
+- [x] **AC15 — names.** A row shows its name without the root and carries the whole name as its
   `title`. A `mvn` run's name column is headed `class`; another run's is headed `file`. A Go
   run's rows, and a file with no functions axis, have an empty functions cell.
-- [ ] **AC16 — runs without files.** A run with coverage and no files shows its totals and
+- [x] **AC16 — runs without files.** A run with coverage and no files shows its totals and
   `no per-file coverage for this run` on both surfaces, with no `coverage-files` and no unfold.
   This holds for a run filed before this change, and for a run whose report decoded to 0 files
   (the types-only Go profile). A run with no coverage shows no `run-coverage`.
-- [ ] **AC17 — the phone band and touch.** In real browsers on the `chromium-mobile` and
+- [x] **AC17 — the phone band and touch.** In real browsers on the `chromium-mobile` and
   `webkit-iphone` projects (WebKit gated on its endpoint, as the other phone-band checks are):
   - a row's functions cell is beneath its name, and the table is no wider than its pane;
   - `run-coverage` and `coverage-files-show-all` are at least 44px tall;
   - a name longer than its cell shows whole, without the root, wrapped.
 
   On a desktop browser, a name wider than its cell keeps its end visible.
-- [ ] **AC18 — loading, failure and retry.** While the files are being read the table's place
+- [x] **AC18 — loading, failure and retry.** While the files are being read the table's place
   shows the loading line. When the read fails it shows `could not read this run's files`, on both
   surfaces, and the totals stay. On the run page the next unfold reads again. A failed
   `show all` read keeps the 50 rows with the failure line beneath them, and the next click reads
   again.
-- [ ] **AC19 — a newer coverage run.** With the Coverage tab open on a run of 60 files and all 60
+- [x] **AC19 — a newer coverage run.** With the Coverage tab open on a run of 60 files and all 60
   shown, a newer green coverage run of 3 files arriving makes the tab show that run's 3 files,
   its totals and no control. A read for the older run that answers after the newer run arrived
   does not replace the newer run's files.
-- [ ] **AC20 — the state outlives a refresh.** With the Coverage tab showing all 60 files, a
+- [x] **AC20 — the state outlives a refresh.** With the Coverage tab showing all 60 files, a
   frame that leaves `latestCoverageEventId` unchanged keeps the 60 rows and sends no request.
   The same holds for an unfolded run page.
-- [ ] **AC21 — docs and hygiene.** The §S6 texts are present. The code and tests carry no CR id
+- [x] **AC21 — docs and hygiene.** The §S6 texts are present. The code and tests carry no CR id
   literal.
 
 ## Estimated size
