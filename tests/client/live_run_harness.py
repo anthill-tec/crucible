@@ -193,6 +193,9 @@ class RecordingBoard:
         # answers beside it (none until a test scripts them).
         self._run_block = dict(DEFAULT_RUN_BLOCK)
         self._run_warnings = None
+        # The coverage files `/api/v2/runs` answers the run kept (none until a
+        # test scripts them): see `script_coverage_files`.
+        self._run_coverage_files = None
         self._lock = threading.Lock()
         self._run_seq = 0
         # CR-CRU-170 \u00a7S2 \u2014 scripted refusals, so a RED test can drive the real
@@ -392,7 +395,14 @@ class RecordingBoard:
                         with board._lock:
                             run_block = json.loads(json.dumps(board._run_block))
                             run_warnings = board._run_warnings
+                            kept_files = board._run_coverage_files
                         answer = {"ok": True, "changed": True, "run": run_block}
+                        if kept_files is not None:
+                            answer = {"ok": True, "changed": True,
+                                      "event": kept_files["event"], "run": run_block}
+                            run_block["coverageFileCount"] = kept_files["count"]
+                            run_block["coverageFiles"] = json.loads(
+                                json.dumps(kept_files["files"]))
                         if run_warnings is not None:
                             answer["warnings"] = json.loads(json.dumps(run_warnings))
                         self._reply(answer)
@@ -569,6 +579,20 @@ class RecordingBoard:
             self._run_block = block
             self._run_warnings = (None if warnings is None
                                   else json.loads(json.dumps(warnings)))
+
+    def script_coverage_files(self, event, file_count, files):
+        """Answer `/api/v2/runs` as a board that kept the run's coverage file
+        by file, from now on: the run's id `event` at the answer's top level,
+        and in the `run` block `script_run` scripted, `coverageFileCount`
+        (`file_count`) and `coverageFiles` (`files`: the least covered ones,
+        each `{path, lines, functions?}`, in the order given). Until a test
+        calls this the answer carries none of the three, whatever `script_run`
+        scripted. The board decodes nothing: the answer is what the test
+        scripted."""
+        with self._lock:
+            self._run_coverage_files = {
+                "event": event, "count": file_count,
+                "files": json.loads(json.dumps(files))}
 
     def health_reads(self):
         """Every GET of a health route, in wire order."""
