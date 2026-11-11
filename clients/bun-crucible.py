@@ -2354,7 +2354,7 @@ def _emit_ingest_axi(verb, resp, project_dir, agent, help_steps=None,
         fields={**({"runId": run_id} if run_id else {}),
                 **({"name": name} if name is not None else {}),
                 **({"script": script} if script else {})},
-        coverage=False)
+        coverage=True)
 
 
 def _agent_id(args):

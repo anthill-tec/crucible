@@ -762,6 +762,60 @@ def filed_run(resp):
 RUN_FIGURE_KEYS = ("passed", "failed", "pending", "total", "files")
 
 
+def _coverage_row(kept_file):
+    """(PURE) One file of a `coverage` block from the board's kept file
+    `{path, lines, functions?}`: every figure the board's own, the three
+    function keys null for a file with no functions axis."""
+    lines = kept_file["lines"]
+    functions = kept_file.get("functions")
+    functions = functions if isinstance(functions, dict) else {}
+    return {"file": kept_file["path"],
+            "linesPercent": lines.get("percent"),
+            "linesCovered": lines.get("covered"),
+            "linesTotal": lines.get("total"),
+            "functionsPercent": functions.get("percent"),
+            "functionsCovered": functions.get("covered"),
+            "functionsTotal": functions.get("total")}
+
+
+def coverage_block(kept, file_count, files, event):
+    """(PURE) The `coverage` block a run's envelope states from what the
+    board kept for the run, or None when it kept no coverage. Never raises.
+
+    `kept` is the run's kept coverage (`lines` and, when it has any,
+    `functions`, each `{total, covered, percent}`), `file_count` how many
+    files the run has, `files` its least covered files as the board answers
+    them (each `{path, lines, functions?}`) and `event` the run's id.
+
+    The block holds `lines` and `functions`, each the axis's percent
+    (`functions` absent with no functions axis). When `file_count` and
+    `files` are the run's files (an integer that is not a boolean, and a list
+    whose every entry is an object with a string `path` and an object
+    `lines`), `event` (null when the id is not a string), `fileCount`,
+    `moreFiles` (the count less the rows listed, never below 0) and `files`
+    follow, one row per file in the board's order. Every figure is the
+    board's own: nothing is recomputed, rounded or re-sorted."""
+    kept = kept if isinstance(kept, dict) else {}
+    block = {axis: kept[axis].get("percent")
+             for axis in ("lines", "functions")
+             if isinstance(kept.get(axis), dict)
+             and isinstance(kept[axis].get("percent"), (int, float))
+             and not isinstance(kept[axis].get("percent"), bool)}
+    if not block:
+        return None
+    if (isinstance(file_count, int) and not isinstance(file_count, bool)
+            and isinstance(files, list)
+            and all(isinstance(entry, dict)
+                    and isinstance(entry.get("path"), str)
+                    and isinstance(entry.get("lines"), dict)
+                    for entry in files)):
+        block.update({"event": event if isinstance(event, str) else None,
+                      "fileCount": file_count,
+                      "moreFiles": max(file_count - len(files), 0),
+                      "files": [_coverage_row(entry) for entry in files]})
+    return block
+
+
 def emit_run_axi(verb, resp, context, emit_fn, *, ok=None, help_steps=None,
                  warnings=(), fields=None, coverage=False):
     """Emit the envelope of a run a client filed, through the client's own
@@ -774,9 +828,11 @@ def emit_run_axi(verb, resp, context, emit_fn, *, ok=None, help_steps=None,
     figures: each is null beside the envelope's `error`, the answer's own.
     `help` is the caller's `help_steps` (a state-derived next step), else the
     verb's `HELP_STEPS` entry. The caller's `fields` follow `help`, in their
-    order; with `coverage`, the answer's kept lines and functions percents
-    follow them, absent when the board kept none (it discards a red run's
-    coverage). The answer's `warnings[]` join the caller's `warnings`, after
+    order; with `coverage`, the answer's `coverage` block (`coverage_block`:
+    the kept lines and functions percents, then the run's id, its file count
+    and its least covered files when the answer's `run` carries them) follows
+    them, absent when the board kept none (it discards a red run's coverage)
+    and for a caller that does not ask. The answer's `warnings[]` join the caller's `warnings`, after
     them. `ok` overrides the envelope's verdict (default: the answer's `ok`).
 
     The client builds `context`, so the cycle it echoes (`echoed_cycle_id`)
@@ -789,15 +845,11 @@ def emit_run_axi(verb, resp, context, emit_fn, *, ok=None, help_steps=None,
                      "help": help_steps or _core.HELP_STEPS.get(verb, ["status"])}
     result_fields.update(fields or {})
     if coverage:
-        kept = filed.get("coverage")
-        kept = kept if isinstance(kept, dict) else {}
-        percents = {axis: kept[axis].get("percent")
-                    for axis in ("lines", "functions")
-                    if isinstance(kept.get(axis), dict)
-                    and isinstance(kept[axis].get("percent"), (int, float))
-                    and not isinstance(kept[axis].get("percent"), bool)}
-        if percents:
-            result_fields["coverage"] = percents
+        block = coverage_block(filed.get("coverage"),
+                               filed.get("coverageFileCount"),
+                               filed.get("coverageFiles"), resp.get("event"))
+        if block is not None:
+            result_fields["coverage"] = block
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
