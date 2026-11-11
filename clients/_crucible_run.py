@@ -832,14 +832,14 @@ def run_files_query(value):
     for the `--files` value `run` was given: `(query, None)`, or `(None,
     error)` for a value the verb refuses.
 
-    `all` asks for every file, and ASCII digits alone whose value is at least
-    1 (`03` is 3) for that many of the least covered. Anything else is
-    refused, the error naming the flag and the value given."""
+    `all` asks for every file, and ASCII digits alone of any length that are
+    not all zeros (`03` is 3) for that many of the least covered. Anything
+    else is refused, the error naming the flag and the value given."""
     if value == "all":
         return "?depth=coverage", None
     if (isinstance(value, str) and value.isascii() and value.isdigit()
-            and int(value) >= 1):
-        return f"?depth=coverage&files={int(value)}", None
+            and value.lstrip("0")):
+        return f"?depth=coverage&files={value.lstrip('0')}", None
     return None, (f"--files {value!r} is neither `all` nor a whole number of "
                   f"at least 1: {RUN_FILES_USAGE}")
 
