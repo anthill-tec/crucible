@@ -12,6 +12,25 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ### Added
 
+- **A run's coverage is kept and shown file by file.** The board keeps each file of a green run's
+  coverage report with the run: its name, its lines and, where the report states them, its
+  functions. The Coverage tab lists the files of the project's latest green coverage run beneath
+  its totals, least covered first, and a test run's own page shows one coverage line above its
+  test tree that unfolds the same table. A run of more than 50 files opens on its first 50, with
+  one `show all` control.
+  - An `lcov` file is an `SF:` record and a `go-coverprofile` file is a file of the profile's
+    blocks, with lines only. A `jacoco` file is a class, since the CSV names no source file.
+  - A row shows the name without the directories every file of the run shares. A name too long
+    for its cell is cut on the left, and the row's hover title is the whole name. On touch media
+    the name is shown whole and wrapped instead.
+  - `GET /api/v2/events/<id>?depth=coverage` reads a run's files without its tree or its raw
+    output: `coverageFileCount`, `coverageFiles` and `coverageRoot` inside `event`. `&files=<n>`
+    answers only the first `n` files. `?depth=suites` carries `coverageFileCount` when the run has
+    files.
+  - The answer of `POST /api/v2/runs` gains `coverageFileCount` and `coverageFiles` (the first 10
+    files) in its `run` block when the run kept files.
+  - A failing run keeps no coverage and so no files. A run filed before this change, or through
+    `/api/v2/runs/parsed`, has totals only, and the board says `no per-file coverage for this run`.
 - **`test` runs the script a bun project marks.** A `crucible.targets` entry marked `"test": true` is
   the script every `test` runs, with the files and `--name` passed on in the flag its framework takes
   (`-t` for `bun-test` and `vitest`, `--grep` for `playwright` and `playwright-bdd`). The run carries

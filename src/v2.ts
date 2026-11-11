@@ -1327,10 +1327,16 @@ function evidenceResponse(
   return json({ ...body, help: [...(options.help ?? []), ...hints.readEvidence] }, options.status);
 }
 
+/** How many of a run's least covered files an ingest answers. */
+const ANSWERED_COVERAGE_FILES = 10;
+
 /**
  * An ingest's answer. `files` (the run's distinct-file count) joins the `run`
  * block when the route computed one; it is never stored. `coverage` joins it
- * when the route answers the coverage the run kept.
+ * when the route answers the coverage the run kept. A run that kept files
+ * answers how many (`coverageFileCount`) and the first
+ * `ANSWERED_COVERAGE_FILES` of them in their kept order (`coverageFiles`); a
+ * run that kept none has neither key.
  */
 function runResponse(
   event: RunEvent,
@@ -1340,17 +1346,24 @@ function runResponse(
   files?: number,
   coverage?: Coverage,
 ): Response {
+  const kept = event.coverageFiles ?? [];
   return evidenceResponse(
     {
       ok: true,
       changed: true,
       event: event.id,
       run:
-        files !== undefined || coverage !== undefined
+        files !== undefined || coverage !== undefined || kept.length > 0
           ? {
               ...summary,
               ...(files !== undefined ? { files } : {}),
               ...(coverage !== undefined ? { coverage } : {}),
+              ...(kept.length > 0
+                ? {
+                    coverageFileCount: kept.length,
+                    coverageFiles: kept.slice(0, ANSWERED_COVERAGE_FILES),
+                  }
+                : {}),
             }
           : summary,
       verdict: runVerdict(summary),
@@ -5682,7 +5695,16 @@ function gateSteps(gate: unknown): { name: string; findings?: unknown }[] {
  *  Each progressive read asks the store for only what it serves — the suites
  *  rows alone, or one suite's leaves — and neither carries the run's raw
  *  output, which only the full read does; each carries `rawBytes`, its byte
- *  length, when the run has raw output. */
+ *  length, when the run has raw output. `?depth=suites` also carries
+ *  `coverageFileCount` when the run has coverage files.
+ *  ?depth=coverage[&files=<n>] reads an event's coverage files on their own:
+ *  the full read's answer without the tree and the raw output (and without
+ *  `rawBytes`), plus `coverageFileCount`, `coverageFiles` (all in the kept
+ *  order, or the first `n`) and `coverageRoot` — the count and the root the
+ *  whole run's. `files` is ASCII digits with a value of at least 1, the first
+ *  when given twice; anything else is refused with 400 before the store is
+ *  read. `?suite=` takes precedence over `depth`, and `files` is ignored on
+ *  every other read. */
 function handleEventGet(store: Store, id: string, req: Request, url: URL): Response {
   const notFound = (): Response => fail(404, `event not found: ${id}`);
   const suite = url.searchParams.get("suite");
@@ -5700,15 +5722,55 @@ function handleEventGet(store: Store, id: string, req: Request, url: URL): Respo
     const read = store.getEventSuites(id);
     if (read === null) return notFound();
     if (read.suites !== undefined) {
-      return reply(req, url, { ok: true, event: { ...read.event, tree: read.suites, ...rawBytesOf(read) } });
+      return reply(req, url, {
+        ok: true,
+        event: { ...read.event, tree: read.suites, ...rawBytesOf(read), ...coverageFileCountOf(read) },
+      });
     }
     // A run with no tree has no suites to summarise: the full read's answer,
     // still without the raw output.
-    return reply(req, url, { ok: true, event: { ...withGateDecisions(store, read.event), ...rawBytesOf(read) } });
+    return reply(req, url, {
+      ok: true,
+      event: { ...withGateDecisions(store, read.event), ...rawBytesOf(read), ...coverageFileCountOf(read) },
+    });
+  }
+  if (url.searchParams.get("depth") === "coverage") {
+    // Of a `files` given twice the first value counts; it is checked before
+    // the store is read, so a refused one answers 400 whatever the id.
+    const given = url.searchParams.get("files");
+    const limit = given === null ? undefined : coverageFilesLimit(given);
+    if (limit === null) {
+      return fail(400, `files must be a whole number of at least 1 (got ${JSON.stringify(given)})`);
+    }
+    const read = store.getEventCoverage(id, limit);
+    if (read === null) return notFound();
+    const { event: head, ...files } = read;
+    return reply(req, url, { ok: true, event: { ...withGateDecisions(store, head), ...files } });
   }
   const event = store.getEvent(id);
   if (event === null) return notFound();
   return reply(req, url, { ok: true, event: withGateDecisions(store, event) });
+}
+
+/** The `coverageFileCount` key of the `?depth=suites` answer — absent when the run has no coverage files. */
+function coverageFileCountOf(read: { coverageFileCount?: number }): { coverageFileCount?: number } {
+  return read.coverageFileCount !== undefined ? { coverageFileCount: read.coverageFileCount } : {};
+}
+
+/** Digits beyond which a `files` value is no longer an exact number; every such value is above any run's count. */
+const EXACT_DIGITS = 15;
+
+/**
+ * The `files` parameter of the `?depth=coverage` read as a row limit: ASCII
+ * digits alone with a value of at least 1 (`03` is 3), null for anything
+ * else. A value of more digits than a number holds exactly is answered as the
+ * greatest exact integer, so it is never rounded into a smaller limit.
+ */
+function coverageFilesLimit(text: string): number | null {
+  if (!/^[0-9]+$/.test(text)) return null;
+  const digits = text.replace(/^0+/, "");
+  if (digits.length === 0) return null;
+  return digits.length > EXACT_DIGITS ? Number.MAX_SAFE_INTEGER : Number(digits);
 }
 
 /** The `rawBytes` key of a progressive read's answer — absent when the run has no raw output. */

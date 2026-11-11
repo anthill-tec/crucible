@@ -996,6 +996,11 @@
     // site; a per-site copy would be a second source of the same signal.
     const Spinner = () => span({ "data-testid": "spinner", class: "app-spinner" });
 
+    // The run detail's loading line: the spinner beside its words. A run's
+    // page shows it while its detail is read, and a run's coverage file table
+    // shows the same line while its files are read.
+    const RunLoadingLine = () => div({ class: "app-empty" }, Spinner(), " loading run detail…");
+
     // Shared app logo — the workspace top bar renders the SAME element/class/
     // text as home (§S5 fidelity #6).
     const Logo = () =>
@@ -3610,10 +3615,157 @@
         () => VelocityCard(),
       );
 
+    // ── A run's coverage files ──────────────────────────────────────────
+    // One table lists a run's coverage file by file, on the Coverage tab and
+    // on the run's own page. What a surface shows of a run is that run's
+    // state, kept here by event id: the files read, whether every file was
+    // asked for, a read in flight, a failure. A surface drawn again for the
+    // same run finds the state and reads nothing.
+    //
+    // A state's value is one of:
+    //   { phase: "loading" }                       the first read is in flight
+    //   { phase: "failed" }                        the first read failed
+    //   { phase: "ready", count, root, stack, files, more }
+    // where `more` is the read of every file: "idle", "loading" or "failed".
+    const COVERAGE_FILES_OPENING = 50;
+    const COVERAGE_FILES_FAILED = "could not read this run's files";
+    const coverageFiles = new Map();
+
+    // What a read of a run's files answered, or null when the answer does not
+    // carry them (an answer without the file keys).
+    const coverageFilesAnswer = (body) => {
+      const ev = body !== null && typeof body === "object" ? body.event : undefined;
+      if (ev === undefined || ev === null || typeof ev !== "object") return null;
+      if (typeof ev.coverageFileCount !== "number" || !Array.isArray(ev.coverageFiles)) return null;
+      return {
+        count: ev.coverageFileCount,
+        root: typeof ev.coverageRoot === "string" ? ev.coverageRoot : "",
+        stack: ev.stack,
+        files: ev.coverageFiles,
+      };
+    };
+
+    // Read a run's files: its first 50, or every one of them when `all`. The
+    // answer is the run's; one that arrives after the run's state was dropped
+    // is discarded.
+    async function readCoverageFiles(eventId, all) {
+      let entry = coverageFiles.get(eventId);
+      if (entry === undefined) {
+        entry = van.state({ phase: "loading" });
+        coverageFiles.set(eventId, entry);
+      } else if (all) {
+        entry.val = { ...entry.val, more: "loading" };
+      } else {
+        entry.val = { phase: "loading" };
+      }
+      let answer = null;
+      try {
+        const limit = all ? "" : `&files=${COVERAGE_FILES_OPENING}`;
+        const res = await fetch(
+          `/api/v2/events/${encodeURIComponent(eventId)}?depth=coverage${limit}`,
+        );
+        if (res.ok === true) answer = coverageFilesAnswer(await res.json());
+      } catch {
+        // A read that never answered is a failed read: the table says so.
+        answer = null;
+      }
+      if (coverageFiles.get(eventId) !== entry) return;
+      if (answer !== null) entry.val = { phase: "ready", ...answer, more: "idle" };
+      else if (all) entry.val = { ...entry.val, more: "failed" };
+      else entry.val = { phase: "failed" };
+    }
+
+    // A file's name as its row shows it: without the directories every file
+    // of the run shares, and with a break opportunity (a zero-width space)
+    // after each `/` for the media that wrap it. Where the name stays on one
+    // line the opportunity is never taken.
+    const coverageFileName = (path, root) => {
+      const name = root !== "" && path.startsWith(root) ? path.slice(root.length) : path;
+      return name.replace(/\/(?=.)/g, "/\u200B");
+    };
+
+    const CoverageFileRow = (file, root) => {
+      const lines = file.lines;
+      const fns = file.functions;
+      return div(
+        { "data-testid": "coverage-file-row", class: "app-coverage-file", title: file.path },
+        span(
+          { class: "app-coverage-file-name" },
+          span({ class: "app-coverage-file-path" }, coverageFileName(file.path, root)),
+        ),
+        span({ class: "app-coverage-file-lines" }, `${lines.covered}/${lines.total}`),
+        div(
+          { class: "app-meter app-coverage-file-meter" },
+          div({ class: "app-meter-fill", style: `width:${lines.percent}%;` }),
+        ),
+        span({ class: "app-coverage-file-percent" }, `${lines.percent}%`),
+        span(
+          { class: "app-coverage-file-functions" },
+          fns !== undefined && fns !== null ? `${fns.covered}/${fns.total} · ${fns.percent}%` : "",
+        ),
+      );
+    };
+
+    const CoverageNoFiles = () =>
+      div({ class: "app-card-meta app-coverage-no-files" }, "no per-file coverage for this run");
+
+    // The table of a run's files, drawn from the run's state: the loading
+    // line while the first read is in flight, the failure line when it
+    // failed, one line for a run that kept no file, and otherwise the heading,
+    // the rows and, while files are left to list, the control that lists them.
+    const CoverageFilesBody = (eventId) => {
+      const s = coverageFiles.get(eventId)?.val;
+      if (s === undefined || s.phase === "loading") return RunLoadingLine();
+      if (s.phase === "failed") return div({ class: "app-empty" }, COVERAGE_FILES_FAILED);
+      if (s.count === 0) return CoverageNoFiles();
+      return div(
+        { "data-testid": "coverage-files", class: "app-coverage-files" },
+        div({ class: "app-rail-title app-coverage-files-title" }, `Files · ${s.count}`),
+        div(
+          { class: "app-coverage-file app-coverage-file-head" },
+          span({ class: "app-coverage-file-name" }, s.stack === "mvn" ? "class" : "file"),
+          span("lines"),
+          span(),
+          span(),
+          span({ class: "app-coverage-file-functions" }, "functions"),
+        ),
+        s.files.map((file) => CoverageFileRow(file, s.root)),
+        s.more === "loading"
+          ? RunLoadingLine()
+          : [
+              s.more === "failed" ? div({ class: "app-empty" }, COVERAGE_FILES_FAILED) : null,
+              s.files.length < s.count
+                ? button(
+                    {
+                      "data-testid": "coverage-files-show-all",
+                      class: "app-chip app-coverage-files-all",
+                      onclick: () => readCoverageFiles(eventId, true),
+                    },
+                    `show all ${s.count}`,
+                  )
+                : null,
+            ],
+      );
+    };
+
+    // The run whose files the Coverage tab last showed. When the project's
+    // latest coverage run moves on, the tab no longer shows the older run:
+    // its state is dropped, and with it any read of it still in flight.
+    let coverageTabEventId = null;
+    const coverageTabFiles = (eventId) => {
+      if (coverageTabEventId !== null && coverageTabEventId !== eventId) {
+        coverageFiles.delete(coverageTabEventId);
+      }
+      coverageTabEventId = eventId;
+      if (!coverageFiles.has(eventId)) readCoverageFiles(eventId, false);
+      return () => CoverageFilesBody(eventId);
+    };
+
     // §S5.5 (user defect 2026-07-15) — the Coverage tab renders the real
     // latest-green-coverage panel: lines + functions meter rows and a
     // `view run` control opening the latest coverage event's drill-in (same
     // wiring as the §nav coverage-meter click). Gating unchanged.
+    // Beneath them, the table of that run's files.
     const CoveragePanelBody = () => {
       const p = currentProject();
       const cov = p?.latestGreenCoverage;
@@ -3651,6 +3803,7 @@
                   "view run",
                 )
               : null,
+            eventId !== undefined && eventId !== null ? coverageTabFiles(eventId) : null,
           ),
         ),
       );
@@ -7868,6 +8021,7 @@
       };
       const openStacks = van.state({}); // spec runs: leaf key -> true while its stack shows
       const showRaw = van.state(false);
+      const coverageOpen = van.state(false); // the run's coverage files are unfolded
       // The run's raw output text: the suite reads carry only its byte length
       // (`rawBytes`), so the text is read with the full read the first time
       // the raw panel opens, and kept from then on. Null until it arrives.
@@ -8815,6 +8969,49 @@
       // (§S4.3) and failures-float folding (§S4.1). Virtualization (§S4.4)
       // applies in BOTH presentations. A playwright-bdd run draws the same suites
       // grouped under their features (SpecFeatures), under its byline.
+      // The run's coverage, above its test tree: one line with its percents
+      // and how many files it has, folded when the page opens. A click unfolds
+      // the run's file table beneath the line, reading the files the first
+      // time (and again after a read that failed); a second click folds it. A
+      // run that kept coverage and no file shows its percents and says so,
+      // with nothing to unfold; a run with no coverage shows nothing.
+      const RunCoverage = (d) => {
+        const lines = d.coverage?.lines;
+        if (lines === undefined || lines === null) return null;
+        const fns = d.coverage.functions;
+        const count = typeof d.coverageFileCount === "number" ? d.coverageFileCount : 0;
+        const words = [`lines ${lines.percent}%`];
+        if (fns !== undefined && fns !== null) words.push(`functions ${fns.percent}%`);
+        if (count === 0) {
+          return [
+            div(
+              { "data-testid": "run-coverage", class: "app-run-coverage" },
+              span({ class: "app-run-coverage-title" }, "Coverage"),
+              ` · ${words.join(" · ")}`,
+            ),
+            CoverageNoFiles(),
+          ];
+        }
+        words.push(`${count} ${count === 1 ? "file" : "files"}`);
+        const toggle = () => {
+          const opening = !coverageOpen.val;
+          const kept = coverageFiles.get(eventId);
+          if (opening && (kept === undefined || kept.val.phase === "failed")) {
+            readCoverageFiles(eventId, false);
+          }
+          coverageOpen.val = opening;
+        };
+        return [
+          button(
+            { "data-testid": "run-coverage", class: "app-run-coverage", onclick: toggle },
+            span({ class: "app-tree-toggle" }, () => (coverageOpen.val ? "▾" : "▸")),
+            span({ class: "app-run-coverage-title" }, "Coverage"),
+            ` · ${words.join(" · ")}`,
+          ),
+          () => (coverageOpen.val ? CoverageFilesBody(eventId) : ""),
+        ];
+      };
+
       const TestBody = (d) => {
         const presentation = presentationOf(d);
         const density = presentation === "Density";
@@ -8822,6 +9019,7 @@
         return div(
           { class: "app-drillin-tree" },
           spec ? RunByline(d) : null,
+          RunCoverage(d),
           density ? StatusChips(d) : null,
           density ? HeatStrip(d) : null,
           spec
@@ -8971,7 +9169,7 @@
           // CR-CRU-122 §S2 — the ?depth=suites fetch is still in flight: the
           // words stay, the spinner joins them (plain text alone read as a
           // stalled surface, not as work in progress).
-          return div({ class: "app-empty" }, Spinner(), " loading run detail…");
+          return RunLoadingLine();
         if (d.kind === "gate") return GateBody(d);
         if (d.kind === "compile") return CompileBody(d);
         return d.status === "aborted"

@@ -147,11 +147,27 @@ export interface Coverage {
   branches?: CoverageAxis;
 }
 
+/**
+ * One file of a run's coverage, under the name its report writes: its lines,
+ * and its functions when it has any. Each axis's percent is `coveragePercent`'s.
+ */
+export interface CoverageFile {
+  path: string;
+  lines: CoverageAxis;
+  functions?: CoverageAxis;
+}
+
 /** CR-CRU-002 §S1 — canonical normalized-run shape produced by every codec. */
 export interface RunSchema {
   summary: RunSummary;
   tree: SuiteNode[];
   coverage?: Coverage;
+  /**
+   * The files `coverage` was decoded from, in no fixed order: set whenever
+   * `coverage` comes from a coverage block (empty when the block states no
+   * file), absent on any other run.
+   */
+  coverageFiles?: CoverageFile[];
   // CR-CRU-038 §S2b — run-level captured runner output (stdout/stderr),
   // threaded codec→ingest→event so the frontend raw-toggle has real data.
   raw?: string;
@@ -266,6 +282,13 @@ export interface RunEvent {
   summary?: RunSummary;
   tree?: SuiteNode[];
   coverage?: Coverage;
+  /**
+   * The files a run's coverage came from, in the order they are positioned at
+   * ingest. Carried only by the event `recordTestEvent` returns, and only when
+   * it kept the run's coverage: the files are stored as `run_coverage_files`
+   * rows, never in an `events` column, and no stored event is read back with them.
+   */
+  coverageFiles?: CoverageFile[];
   // CR-CRU-038 §S2b — run-level captured runner output; persisted and served
   // verbatim, and (unlike coverage) retained even on a failing ingest.
   raw?: string;

@@ -1,7 +1,8 @@
-// Coverage codecs: each reads one coverage report text into summed counters,
-// and several texts are summed as one before the axes are built. A text that
-// carries none of its codec's records is undecodable and throws.
-import type { Coverage, CoverageAxis } from "../types.ts";
+// Coverage codecs: each reads one coverage report text into summed counters
+// and the files those counters came from, and several texts are summed as one
+// before the axes are built. A text that carries none of its codec's records
+// is undecodable and throws.
+import type { Coverage, CoverageAxis, CoverageFile } from "../types.ts";
 
 /** One axis's summed counters, before its percent is computed. */
 interface Counts {
@@ -9,15 +10,27 @@ interface Counts {
   covered: number;
 }
 
-/** What a coverage codec reads from one text: per-axis counters. */
+/**
+ * One file a coverage text states, under the name the text writes: its own
+ * lines counters, and its functions counters when the format states any. A
+ * text may state one name more than once; `decodeCoverageWithFiles` joins them.
+ */
+interface FileCounts {
+  path: string;
+  lines: Counts;
+  functions?: Counts;
+}
+
+/** What a coverage codec reads from one text: per-axis counters, and the text's files. */
 interface CoverageCounts {
   lines: Counts;
   functions?: Counts;
   branches?: Counts;
+  files: FileCounts[];
 }
 
 export interface CoverageCodec {
-  /** Reads one text's counters; throws when the text carries none of the codec's records. */
+  /** Reads one text's counters and files; throws when the text carries none of the codec's records. */
   read(text: string): CoverageCounts;
 }
 
@@ -59,21 +72,47 @@ function integer(field: string, what: string): number {
   return Number.parseInt(trimmed, 10);
 }
 
-/** lcov: `LF`/`LH` sum into lines, `FNF`/`FNH` into functions; branches are not read. */
+/**
+ * lcov: `LF`/`LH` sum into lines, `FNF`/`FNH` into functions; branches are not
+ * read. Each `SF:` record is a file, named as the record writes it, holding
+ * the counters stated up to its `end_of_record`.
+ */
 const lcov: CoverageCodec = {
   read(text: string): CoverageCounts {
     const lines: Counts = { total: 0, covered: 0 };
     const functions: Counts = { total: 0, covered: 0 };
-    let sourceFiles = 0;
+    const files: FileCounts[] = [];
+    let record: Required<FileCounts> | undefined;
     for (const line of text.split(/\r?\n/)) {
-      if (line.startsWith("SF:")) sourceFiles++;
-      else if (line.startsWith("LF:")) lines.total += integer(line.slice(3), "LF");
-      else if (line.startsWith("LH:")) lines.covered += integer(line.slice(3), "LH");
-      else if (line.startsWith("FNF:")) functions.total += integer(line.slice(4), "FNF");
-      else if (line.startsWith("FNH:")) functions.covered += integer(line.slice(4), "FNH");
+      if (line.startsWith("SF:")) {
+        record = {
+          path: line.slice(3),
+          lines: { total: 0, covered: 0 },
+          functions: { total: 0, covered: 0 },
+        };
+        files.push(record);
+      } else if (line === "end_of_record") {
+        record = undefined;
+      } else if (line.startsWith("LF:")) {
+        const count = integer(line.slice(3), "LF");
+        lines.total += count;
+        if (record !== undefined) record.lines.total += count;
+      } else if (line.startsWith("LH:")) {
+        const count = integer(line.slice(3), "LH");
+        lines.covered += count;
+        if (record !== undefined) record.lines.covered += count;
+      } else if (line.startsWith("FNF:")) {
+        const count = integer(line.slice(4), "FNF");
+        functions.total += count;
+        if (record !== undefined) record.functions.total += count;
+      } else if (line.startsWith("FNH:")) {
+        const count = integer(line.slice(4), "FNH");
+        functions.covered += count;
+        if (record !== undefined) record.functions.covered += count;
+      }
     }
-    if (sourceFiles === 0) throw new Error("no SF: record");
-    return { lines, functions };
+    if (files.length === 0) throw new Error("no SF: record");
+    return { lines, functions, files };
   },
 };
 
@@ -112,7 +151,12 @@ const JACOCO_AXES = {
   branches: ["BRANCH_MISSED", "BRANCH_COVERED"],
 } as const;
 
-/** jacoco: the CSV's `LINE_*`, `METHOD_*` and `BRANCH_*` columns sum into lines, functions and branches. */
+/**
+ * jacoco: the CSV's `LINE_*`, `METHOD_*` and `BRANCH_*` columns sum into lines,
+ * functions and branches. Each row is a file with the row's lines and
+ * functions: the CSV names a class and no source file, so the file is named
+ * `PACKAGE.CLASS`, or `CLASS` alone when `PACKAGE` is empty.
+ */
 const jacoco: CoverageCodec = {
   read(text: string): CoverageCounts {
     const rows = text.split(/\r?\n/).filter((row) => row.length > 0);
@@ -126,29 +170,43 @@ const jacoco: CoverageCodec = {
       lines: { total: 0, covered: 0 },
       functions: { total: 0, covered: 0 },
       branches: { total: 0, covered: 0 },
+      files: [],
     };
     for (const row of rows.slice(1)) {
       const fields = csvFields(row);
+      const named = (name: string): string => (column(name) < 0 ? "" : (fields[column(name)] ?? ""));
+      const pkg = named("PACKAGE");
+      const file: Required<FileCounts> & { branches: Counts } = {
+        path: pkg.length > 0 ? `${pkg}.${named("CLASS")}` : named("CLASS"),
+        lines: { total: 0, covered: 0 },
+        functions: { total: 0, covered: 0 },
+        branches: { total: 0, covered: 0 },
+      };
       for (const [name, [missedColumn, coveredColumn]] of Object.entries(JACOCO_AXES)) {
         const missed = integer(fields[column(missedColumn)] ?? "", missedColumn);
         const covered = integer(fields[column(coveredColumn)] ?? "", coveredColumn);
-        const target = counts[name as keyof typeof JACOCO_AXES];
-        target.covered += covered;
-        target.total += missed + covered;
+        for (const target of [counts, file]) {
+          const sum = target[name as keyof typeof JACOCO_AXES];
+          sum.covered += covered;
+          sum.total += missed + covered;
+        }
       }
+      // Branches are not kept per file.
+      counts.files.push({ path: file.path, lines: file.lines, functions: file.functions });
     }
     return counts;
   },
 };
 
 /** A coverprofile block line: `file:startLine.startCol,endLine.endCol numStmt count`. */
-const GO_BLOCK = /^(.+:\d+\.\d+,\d+\.\d+) (\d+) (\d+)$/;
+const GO_BLOCK = /^(.+):(\d+\.\d+,\d+\.\d+) (\d+) (\d+)$/;
 
 /**
  * go-coverprofile: statement coverage on the lines axis, each block weighted by
  * its statement count. A block listed more than once (`-coverpkg` lists it once
  * per test package) counts once, covered if any copy counted. A profile states
- * no functions and no branches.
+ * no functions and no branches. Each distinct file of the blocks is a file,
+ * named by the block's text before its span, holding its blocks' statements.
  */
 const goCoverprofile: CoverageCodec = {
   read(text: string): CoverageCounts {
@@ -156,22 +214,32 @@ const goCoverprofile: CoverageCodec = {
     if (rows.length === 0 || !/^mode: (set|count|atomic)$/.test(rows[0]!)) {
       throw new Error("no mode: line");
     }
-    const blocks = new Map<string, { statements: number; covered: boolean }>();
+    const blocks = new Map<string, { file: string; statements: number; covered: boolean }>();
     for (const row of rows.slice(1)) {
       const match = GO_BLOCK.exec(row);
       if (match === null) throw new Error(`not a coverprofile block: '${row}'`);
-      const [, block, statements, count] = match;
-      const seen = blocks.get(block!);
+      const [, file, span, statements, count] = match;
+      const block = `${file!}:${span!}`;
+      const seen = blocks.get(block);
       const covered = Number.parseInt(count!, 10) > 0;
-      if (seen === undefined) blocks.set(block!, { statements: Number.parseInt(statements!, 10), covered });
-      else seen.covered ||= covered;
+      if (seen === undefined) {
+        blocks.set(block, { file: file!, statements: Number.parseInt(statements!, 10), covered });
+      } else seen.covered ||= covered;
     }
     const lines: Counts = { total: 0, covered: 0 };
-    for (const { statements, covered } of blocks.values()) {
-      lines.total += statements;
-      if (covered) lines.covered += statements;
+    const files = new Map<string, FileCounts>();
+    for (const { file, statements, covered } of blocks.values()) {
+      let held = files.get(file);
+      if (held === undefined) {
+        held = { path: file, lines: { total: 0, covered: 0 } };
+        files.set(file, held);
+      }
+      for (const sum of [lines, held.lines]) {
+        sum.total += statements;
+        if (covered) sum.covered += statements;
+      }
     }
-    return { lines };
+    return { lines, files: [...files.values()] };
   },
 };
 
@@ -190,9 +258,39 @@ function addAxis(sum: Counts | undefined, counts: Counts | undefined): Counts | 
 
 /** Several texts of one codec summed as ONE coverage object; throws on the first undecodable text. */
 export function decodeCoverage(codec: CoverageCodec, texts: string[]): Coverage {
-  let sum: CoverageCounts | undefined;
+  return decodeCoverageWithFiles(codec, texts).coverage;
+}
+
+/**
+ * Several texts of one codec as ONE coverage object and the files it came
+ * from; throws on the first undecodable text. A name stated more than once,
+ * in one text or in several, is one file whose counters are added, in the
+ * order the names first appear. A file whose functions total is 0, or
+ * unstated, has no functions axis.
+ */
+export function decodeCoverageWithFiles(
+  codec: CoverageCodec,
+  texts: string[],
+): { coverage: Coverage; files: CoverageFile[] } {
+  let sum: Omit<CoverageCounts, "files"> | undefined;
+  const joined = new Map<string, FileCounts>();
   for (const text of texts) {
-    const counts = codec.read(text);
+    const { files, ...counts } = codec.read(text);
+    for (const file of files) {
+      const held = joined.get(file.path);
+      if (held === undefined) {
+        joined.set(file.path, {
+          path: file.path,
+          lines: { ...file.lines },
+          ...(file.functions !== undefined ? { functions: { ...file.functions } } : {}),
+        });
+        continue;
+      }
+      held.lines.total += file.lines.total;
+      held.lines.covered += file.lines.covered;
+      const functions = addAxis(held.functions, file.functions);
+      if (functions !== undefined) held.functions = functions;
+    }
     if (sum === undefined) {
       sum = counts;
       continue;
@@ -204,8 +302,17 @@ export function decodeCoverage(codec: CoverageCodec, texts: string[]): Coverage 
   }
   if (sum === undefined) throw new Error("no coverage text");
   return {
-    lines: axis(sum.lines),
-    ...(sum.functions !== undefined ? { functions: axis(sum.functions) } : {}),
-    ...(sum.branches !== undefined ? { branches: axis(sum.branches) } : {}),
+    coverage: {
+      lines: axis(sum.lines),
+      ...(sum.functions !== undefined ? { functions: axis(sum.functions) } : {}),
+      ...(sum.branches !== undefined ? { branches: axis(sum.branches) } : {}),
+    },
+    files: [...joined.values()].map((file) => ({
+      path: file.path,
+      lines: axis(file.lines),
+      ...(file.functions !== undefined && file.functions.total > 0
+        ? { functions: axis(file.functions) }
+        : {}),
+    })),
   };
 }
