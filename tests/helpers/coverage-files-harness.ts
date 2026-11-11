@@ -10,16 +10,20 @@
 //    other than `event_id` (the column every run-detail table is deleted by)
 //    are DISCOVERED from one probe row whose every value is distinct, so no
 //    name the board has not committed to is assumed here.
+//  - a run of twelve files, the reads of a stored run
+//    (`GET /api/v2/events/<id>` under any query), and a log of the statements
+//    the store's connection runs during a read, with the rows each hands back.
 //
 // Safety: every server binds port 0 on ":memory:".
-import { expect } from "bun:test";
-import type { Database } from "bun:sqlite";
+import { expect, spyOn } from "bun:test";
+import type { Database, Statement } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { coveragePercent } from "../../src/codecs/coverage.ts";
 import type { ServerHandle } from "../../src/server.ts";
 import type { Store } from "../../src/store.ts";
 import {
+  base,
   bootOn,
   eventLine,
   openRun,
@@ -463,4 +467,185 @@ export async function storedFiles(db: Database, eventId: string): Promise<Stored
     functionsTotal: row[columns.functionsTotal] as number | null,
     functionsCovered: row[columns.functionsCovered] as number | null,
   }));
+}
+
+// ── A run of twelve files ───────────────────────────────────────────────────
+
+/** The directory every file of the twelve-file run shares. */
+export const TWELVE_ROOT = "/home/dev/app/src/";
+
+/**
+ * Twelve files of 100 lines each, written in no order. The six least covered
+ * sit one directory deeper (`lib/`) than the rest, so the directory the first
+ * few share is not the directory the whole run shares; the other six state
+ * functions.
+ */
+export const TWELVE_RECORDS: LcovRecord[] = [57, 3, 91, 22, 78, 40, 100, 0, 64, 15, 86, 33].map((hit, index) => ({
+  path: `${TWELVE_ROOT}${index % 2 === 1 ? "lib/" : ""}f${String(index).padStart(2, "0")}.ts`,
+  lf: 100,
+  lh: hit,
+  ...(index % 2 === 0 ? { fnf: 4, fnh: index % 4 === 0 ? 4 : 1 } : {}),
+}));
+
+export const TWELVE_BLOCK = { codec: "lcov", data: lcovText(TWELVE_RECORDS) };
+
+/** The twelve as a read answers them, least covered first, written out by hand. */
+export const TWELVE_FILES: CoverageFile[] = [
+  { path: "/home/dev/app/src/lib/f07.ts", lines: { total: 100, covered: 0, percent: 0 } },
+  { path: "/home/dev/app/src/lib/f01.ts", lines: { total: 100, covered: 3, percent: 3 } },
+  { path: "/home/dev/app/src/lib/f09.ts", lines: { total: 100, covered: 15, percent: 15 } },
+  { path: "/home/dev/app/src/lib/f03.ts", lines: { total: 100, covered: 22, percent: 22 } },
+  { path: "/home/dev/app/src/lib/f11.ts", lines: { total: 100, covered: 33, percent: 33 } },
+  { path: "/home/dev/app/src/lib/f05.ts", lines: { total: 100, covered: 40, percent: 40 } },
+  { path: "/home/dev/app/src/f00.ts", lines: { total: 100, covered: 57, percent: 57 }, functions: { total: 4, covered: 4, percent: 100 } },
+  { path: "/home/dev/app/src/f08.ts", lines: { total: 100, covered: 64, percent: 64 }, functions: { total: 4, covered: 4, percent: 100 } },
+  { path: "/home/dev/app/src/f04.ts", lines: { total: 100, covered: 78, percent: 78 }, functions: { total: 4, covered: 4, percent: 100 } },
+  { path: "/home/dev/app/src/f10.ts", lines: { total: 100, covered: 86, percent: 86 }, functions: { total: 4, covered: 1, percent: 25 } },
+  { path: "/home/dev/app/src/f02.ts", lines: { total: 100, covered: 91, percent: 91 }, functions: { total: 4, covered: 1, percent: 25 } },
+  { path: "/home/dev/app/src/f06.ts", lines: { total: 100, covered: 100, percent: 100 }, functions: { total: 4, covered: 1, percent: 25 } },
+];
+
+/** The twelve-file run's totals, as its `coverage` states them. */
+export const TWELVE_TOTALS = {
+  lines: { total: 1200, covered: 589, percent: 49.1 },
+  functions: { total: 24, covered: 15, percent: 62.5 },
+};
+
+// ── The reads ───────────────────────────────────────────────────────────────
+
+/** The three keys a read of a run's files adds to its `event`. */
+export const FILE_READ_KEYS = ["coverageFileCount", "coverageFiles", "coverageRoot"] as const;
+
+/** Which of the three file keys `event` carries, sorted. */
+export function fileReadKeysOf(event: Record<string, unknown>): string[] {
+  return FILE_READ_KEYS.filter((key) => key in event).sort();
+}
+
+/** A GET answered with whatever status the board gives it: the status and the JSON body. */
+export async function getAnswer(handle: ServerHandle, route: string): Promise<Answer> {
+  const res = await fetch(`${base(handle)}${route}`);
+  const text = await res.text();
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    parsed = { unparsed: text };
+  }
+  return { status: res.status, body: parsed };
+}
+
+/** The `event` of `GET /api/v2/events/<id><query>`, which must answer 200. */
+export async function eventRead(handle: ServerHandle, eventId: string, query = ""): Promise<Record<string, unknown>> {
+  const route = `/api/v2/events/${eventId}${query}`;
+  const answer = await getAnswer(handle, route);
+  expect(answer.status, `GET ${route}: ${JSON.stringify(answer.body).slice(0, 300)}`).toBe(200);
+  expect(typeof answer.body.event, `GET ${route} answers an event`).toBe("object");
+  return answer.body.event as Record<string, unknown>;
+}
+
+/** `value` without `keys`. */
+export function without(value: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !keys.includes(key)));
+}
+
+// ── The query log ───────────────────────────────────────────────────────────
+
+export interface QueryRecord {
+  sql: string;
+  /** The rows the statement handed back: each row of an `.all()`, `.values()` or `.iterate()`, the one row of a `.get()` that found one. */
+  handed: unknown[];
+}
+
+/**
+ * Every statement the store's own connection runs while `body` runs, with the
+ * rows it handed back: the query-log instrumentation of the bounded-read
+ * suites, keeping the rows themselves beside their count.
+ */
+export async function recordQueries(store: Store, body: () => Promise<unknown>): Promise<QueryRecord[]> {
+  const db = dbOf(store);
+  const query = db.query.bind(db);
+  const records: QueryRecord[] = [];
+  const spy = spyOn(db, "query").mockImplementation(((sql: string) => {
+    const stmt = query(sql) as Statement;
+    return new Proxy(stmt, {
+      get(target, prop) {
+        const value = Reflect.get(target, prop, target) as unknown;
+        if (typeof value !== "function") return value;
+        if (prop === "all" || prop === "values") {
+          return (...args: unknown[]) => {
+            const out = (value as (...a: unknown[]) => unknown[]).apply(target, args);
+            records.push({ sql, handed: [...out] });
+            return out;
+          };
+        }
+        if (prop === "iterate") {
+          return (...args: unknown[]) => {
+            const out = [...(value as (...a: unknown[]) => Iterable<unknown>).apply(target, args)];
+            records.push({ sql, handed: out });
+            return out[Symbol.iterator]();
+          };
+        }
+        if (prop === "get") {
+          return (...args: unknown[]) => {
+            const out = (value as (...a: unknown[]) => unknown).apply(target, args);
+            records.push({ sql, handed: out !== null && out !== undefined ? [out] : [] });
+            return out;
+          };
+        }
+        return (value as (...a: unknown[]) => unknown).bind(target);
+      },
+    });
+  }) as typeof db.query);
+  try {
+    await body();
+  } finally {
+    spy.mockRestore();
+  }
+  return records;
+}
+
+/** The statements that name the files table, wherever in their text. */
+export function filesTableStatements(records: readonly QueryRecord[]): QueryRecord[] {
+  return records.filter((record) => /\brun_coverage_files\b/i.test(record.sql));
+}
+
+/** Whether a statement's text calls an aggregate function. */
+export function callsAnAggregate(sql: string): boolean {
+  return /\b(?:COUNT|MIN|MAX|SUM|TOTAL)\s*\(/i.test(sql);
+}
+
+/**
+ * Whether a handed-back row is one of `files`' rows: it holds a file's name
+ * beside that file's lines total. A count or a least-and-greatest-name
+ * aggregate holds no lines total, so it is not one; `files` must be a run
+ * whose file count is no file's lines total (the twelve-file run: 12, and 100).
+ */
+export function isFileRow(row: unknown, files: readonly CoverageFile[]): boolean {
+  const values: unknown[] = Array.isArray(row)
+    ? row
+    : typeof row === "object" && row !== null
+      ? Object.values(row)
+      : [row];
+  return files.some((file) => values.includes(file.path) && values.includes(file.lines.total));
+}
+
+/** What a read asked of the files table: its statements there, the file rows they handed back, and the other rows. */
+export interface FilesTableUse {
+  statements: QueryRecord[];
+  fileRows: number;
+  otherRows: number;
+  /** The statements that handed back no file row. */
+  rowless: QueryRecord[];
+}
+
+export function filesTableUse(records: readonly QueryRecord[], files: readonly CoverageFile[]): FilesTableUse {
+  const statements = filesTableStatements(records);
+  const handed = statements.flatMap((statement) => statement.handed);
+  const fileRows = handed.filter((row) => isFileRow(row, files)).length;
+  return {
+    statements,
+    fileRows,
+    otherRows: handed.length - fileRows,
+    rowless: statements.filter((statement) => !statement.handed.some((row) => isFileRow(row, files))),
+  };
 }
