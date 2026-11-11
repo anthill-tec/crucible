@@ -1,6 +1,6 @@
 # CR-CRU-240 — a Go run ticks its progress like every other stack
 
-**Status:** PENDING · Pre-review: none — no trigger
+**Status:** COMPLETED — merged 2026-11-11 · Pre-review: none — no trigger
 **Type:** feature
 **Priority:** medium
 **Depends on:** CR-CRU-195, CR-CRU-196
@@ -86,30 +86,30 @@ the relay lands no batch.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the reading counts top-level Go results.** On a captured `go test -json` stream from a
+- [x] **AC1 — the reading counts top-level Go results.** On a captured `go test -json` stream from a
   module with a passing, a failing and a skipped test, a parent with nested subtests, a parent whose
   subtest fails, and an `Example` with output, `_counted_event` under `go-test` counts:
   - 6 results: one per top-level test;
   - with `ran` True for 5 and False for the skip;
   - nothing for any subtest, any package-level action, or any `run`, `output`, `pause` or `cont`
     line.
-- [ ] **AC2 — a Go run ticks.** With the relay landing no batch for longer than the tick interval:
+- [x] **AC2 — a Go run ticks.** With the relay landing no batch for longer than the tick interval:
   - a Go `test` run posts `running N/M`, with M the run's listed total;
   - a run whose listing failed posts `running N`;
   - a run whose relay lands batches posts no in-run tick.
-- [ ] **AC3 — every streaming verb ticks.** `regression` over two modules, a declared tier verb, and
+- [x] **AC3 — every streaming verb ticks.** `regression` over two modules, a declared tier verb, and
   a gate's per-tier suite each post ticks through the same tick sender. The single `_go_test_run`
   call site carries them all.
-- [ ] **AC4 — a gated run's ticks are observed.** Under a gated run, the tick poster is
+- [x] **AC4 — a gated run's ticks are observed.** Under a gated run, the tick poster is
   `narration_poster` built with the bracket's identity, and the identity observes each tick's
   response.
-- [ ] **AC5 — the budget is re-recorded.**
+- [x] **AC5 — the budget is re-recorded.**
   - `_crucible_run.py`'s line count equals the re-seeded `SHARED_MODULE_LINE_BUDGETS` value in all
     three pinning modules, and those pass.
   - `_crucible_axi.py` is unchanged against the base.
-- [ ] **AC6 — the other codecs are unchanged.** `test_the_shared_run_path_reads_every_stack_as_before`
+- [x] **AC6 — the other codecs are unchanged.** `test_the_shared_run_path_reads_every_stack_as_before`
   and `test_a_streamed_runs_in_run_count_comes_from_its_stream` pass unchanged.
-- [ ] **AC7 — docs and hygiene.**
+- [x] **AC7 — docs and hygiene.**
   - The CHANGELOG line of §S5 is present.
   - The code and tests carry no CR id literal.
 
