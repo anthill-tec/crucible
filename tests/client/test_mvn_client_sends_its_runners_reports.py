@@ -927,7 +927,7 @@ class NoBoardNoFiguresTest(_MavenProject, unittest.TestCase):
 # (the shared streamed-run close and the stream-counted narration in). The
 # maven client's move to the shared ingest adds nothing to either. A change
 # that grows a shared module re-records its budget here, in the same change.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9160, "_crucible_run.py": 1839}
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9160, "_crucible_run.py": 1847}
 _OWN_INGEST_LINES = ("ingest junit:", "ingest parsed:")
 
 

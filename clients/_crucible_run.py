@@ -1629,6 +1629,8 @@ def start_stream_relay(post_fn, tick_post, project_key, agent_id, run_id,
 STREAM_RECORD_CODEC = "crucible-events"
 #: nextest's `libtest-json-plus` stream, the rust client's record.
 NEXTEST_STREAM_CODEC = "nextest"
+#: `go test -json`'s stream, the go client's record.
+GO_TEST_STREAM_CODEC = "go-test"
 
 
 def _counted_event(event, codec):
@@ -1637,9 +1639,15 @@ def _counted_event(event, codec):
     passed or failed), `("end", total)` for a `crucible-events` `run-end`
     (its int total, else None), `("start", total)` for a `run-start` stating
     an int total, `("started", name)` for a nextest test that began, and
-    `(None, None)` for anything else."""
+    `(None, None)` for anything else. A go-test result counts for a
+    top-level test only (no `/`), the granularity of `go test -list`."""
     if not isinstance(event, dict):
         return None, None
+    if codec == GO_TEST_STREAM_CODEC:
+        test, action = event.get("Test"), event.get("Action")
+        if not isinstance(test, str) or "/" in test or action not in ("pass", "fail", "skip"):
+            return None, None
+        return "result", action != "skip"
     kind = event.get("event")
     if codec == NEXTEST_STREAM_CODEC:
         if event.get("type") != "test":
