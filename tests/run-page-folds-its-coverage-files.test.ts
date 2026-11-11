@@ -51,6 +51,7 @@ import {
   shownRows,
   startBoard,
   totalsOnlyRun,
+  workspaceRunPath,
 } from "./helpers/coverage-files-view.ts";
 import { gateFetch } from "./helpers/fetch-gate.ts";
 import { settleServedApp } from "./helpers/served-app.ts";
@@ -101,6 +102,68 @@ describe("the run page's own loading line", () => {
     expect(all("spinner", runPage())).toHaveLength(0);
     expect(reading(runPage())).not.toContain(LOADING_WORDS);
     expect(all("suite-row", runPage()).length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("a run's own page on a run whose report states no function counters", () => {
+  test("its coverage line reads two percents: the lines percent, then the functions percent the board answers", async () => {
+    const board = await startBoard();
+    const eventId = await lcovRun(board, [
+      { path: "/srv/app/src/a.ts", lf: 10, lh: 4 },
+      { path: "/srv/app/src/b.ts", lf: 10, lh: 5 },
+    ]);
+    const kept = (await eventRead(board.handle, eventId, "?depth=suites")).coverage as {
+      lines: { total: number; covered: number; percent: number };
+      functions?: { total: number; covered: number; percent: number };
+    };
+    expect(kept.lines, "the run's stored lines").toEqual({ total: 20, covered: 9, percent: 45 });
+    expect(kept.functions, "the run's stored coverage carries functions").toBeDefined();
+    expect([kept.functions!.total, kept.functions!.covered], "functions of 0 of 0").toEqual([0, 0]);
+
+    await openPage(board, workspaceRunPath(board, eventId));
+
+    const text = reading(coverageLine());
+    expect(percentsIn(text), `the line reads "${text}"`).toEqual(["45%", `${String(kept.functions!.percent)}%`]);
+    expect(text).toContain("2 files");
+  });
+});
+
+describe("a run's own page while its show all read is in flight", () => {
+  test("the 50 rows stay, one spinner stands beneath them in the control's place, one read is sent, and all 60 rows replace it when the read answers", async () => {
+    const board = await startBoard();
+    const eventId = await lcovRun(board, numberedRecords(60));
+    await openPage(board, workspaceRunPath(board, eventId));
+    await press(coverageLine(), "the coverage line");
+    expect(all("coverage-file-row", runPage())).toHaveLength(50);
+    expect(all("spinner", runPage())).toHaveLength(0);
+    const gate = gateFetch((url) => isFileRead(url));
+
+    one("coverage-files-show-all", runPage())?.click();
+    await settleServedApp();
+
+    expect(gate.held.map((request) => request.url), "the one read sent, with no limit").toEqual([
+      `/api/v2/events/${encodeURIComponent(eventId)}?depth=coverage`,
+    ]);
+    expect(gate.fired).toBe(1);
+    expect(shownNames(NUMBERED_ROOT)).toEqual(numberedNames(60).slice(0, 50));
+    expect(all("coverage-files-show-all"), "the control gives its place to the loading line").toHaveLength(0);
+    const spinners = all("spinner", runPage());
+    expect(spinners, "the spinner in the control's place").toHaveLength(1);
+    expect(
+      follows(spinners[0]!, all("coverage-file-row", runPage())[49]!),
+      "the spinner stands beneath the last row",
+    ).toBe(true);
+    expect(follows(firstSuiteRow(), spinners[0]!), "the spinner stands above the test tree").toBe(true);
+    expect(reads(FAILED_READ_LINE)).toHaveLength(0);
+
+    expect(gate.resolveAll()).toBe(1);
+    await settleServedApp();
+
+    expect(shownNames(NUMBERED_ROOT)).toEqual(numberedNames(60));
+    expect(all("spinner", runPage())).toHaveLength(0);
+    expect(all("coverage-files-show-all")).toHaveLength(0);
+    expect(gate.fired, "no second read was sent").toBe(1);
+    expect(fileReads(eventId)).toEqual([FIRST_FIFTY, EVERY_FILE]);
   });
 });
 

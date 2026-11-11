@@ -468,6 +468,38 @@ describe("the Coverage tab while its files are read, and when the read fails", (
     expect(reading(one("coverage-view-run"))).toBe("view run");
   });
 
+  test("while the show all read is in flight the 50 rows stay, one spinner stands beneath them in the control's place, one read is sent, and all 60 rows replace it when the read answers", async () => {
+    const board = await startBoard();
+    const eventId = await lcovRun(board, numberedRecords(60));
+    await openCoverageTab(board);
+    expect(all("coverage-file-row")).toHaveLength(50);
+    expect(all("spinner", coveragePane())).toHaveLength(0);
+    const gate = gateFetch((url) => isFileRead(url));
+
+    one("coverage-files-show-all")?.click();
+    await settleServedApp();
+
+    expect(gate.held.map((request) => request.url), "the one read sent, with no limit").toEqual([
+      `/api/v2/events/${encodeURIComponent(eventId)}?depth=coverage`,
+    ]);
+    expect(gate.fired).toBe(1);
+    expect(shownNames(NUMBERED_ROOT)).toEqual(numberedNames(60).slice(0, 50));
+    expect(all("coverage-files-show-all"), "the control gives its place to the loading line").toHaveLength(0);
+    const spinners = all("spinner", coveragePane());
+    expect(spinners, "the spinner in the control's place").toHaveLength(1);
+    expect(follows(spinners[0]!, all("coverage-file-row")[49]!), "the spinner stands beneath the last row").toBe(true);
+    expect(reads(FAILED_READ_LINE)).toHaveLength(0);
+
+    expect(gate.resolveAll()).toBe(1);
+    await settleServedApp();
+
+    expect(shownNames(NUMBERED_ROOT)).toEqual(numberedNames(60));
+    expect(all("spinner", coveragePane())).toHaveLength(0);
+    expect(all("coverage-files-show-all")).toHaveLength(0);
+    expect(gate.fired, "no second read was sent").toBe(1);
+    expect(fileReads(eventId)).toEqual([FIRST_FIFTY, EVERY_FILE]);
+  });
+
   test("a failed show all read keeps the 50 rows with the failure line beneath them, and the next click reads again and lists all 60", async () => {
     const board = await startBoard();
     const eventId = await lcovRun(board, numberedRecords(60));
