@@ -335,3 +335,34 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     And the live drill-in lists the failures "test_acks_each_batch", "test_close_sends_the_rest" and "test_run_end_totals" in order
     And the run overlay's bounding box spans at least 95% of the viewport height
     And the page body does not scroll horizontally
+
+  Scenario: at the phone band a coverage file row draws its functions beneath the file's name, and the coverage file table stays inside its pane
+    Given a project named "MOB Coverage Files Project" is registered
+    And a green run whose coverage report names one very long file and two short ones is ingested for agent "mob-cov-files-agent"
+    When I open the workspace for that project
+    And I click the "Coverage" workspace tab
+    Then the coverage file table lists 3 files
+    And every coverage file row draws its functions figure beneath its file's name
+    And the coverage file table is no wider than its pane
+    And the page body does not scroll horizontally
+
+  Scenario: at the phone band on touch a long coverage file name is drawn whole, without the directory its files share, wrapped after a slash
+    Given a project named "MOB Coverage Names Project" is registered
+    And a green run whose coverage report names one very long file and two short ones is ingested for agent "mob-cov-names-agent"
+    When I open the workspace for that project
+    And I click the "Coverage" workspace tab
+    Then the coverage file table lists 3 files
+    And the long coverage file name is drawn whole, without the directory its files share
+    And the long coverage file name is wrapped over more than one line, breaking only after a "/"
+    And the long coverage file's row carries its whole name as its title
+
+  Scenario: at the phone band on touch a run page's coverage file line and its show all control are at least 44px tall
+    Given a project named "MOB Coverage Fold Project" is registered
+    And a green run whose coverage report names 60 files is ingested for agent "mob-cov-fold-agent"
+    When I open the run overlay directly at its cold URL under the workspace
+    Then the run overlay is visible
+    And the run's coverage line is at least 44px tall
+    When I tap the run's coverage line
+    Then the coverage file table lists 50 files
+    And the coverage file table's show all control is at least 44px tall
+    And the coverage file table is no wider than its pane
