@@ -494,6 +494,82 @@ body {
   margin: 4px 0;
 }
 
+/* ── A run's coverage files: one table, on the Coverage tab and on a run's
+   own page. A row is the file's name, its lines, a meter, the lines percent
+   and its functions; the name takes the room the figures leave. ── */
+.app-coverage-files { margin-top: 10px; min-width: 0; }
+.app-coverage-file {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 78px 56px 44px 104px;
+  gap: 2px 8px;
+  align-items: center;
+  padding: 3px 0;
+  border-top: 1px solid var(--line);
+  font: 10px var(--mono);
+  color: var(--ink);
+}
+.app-coverage-file-head { border-top: 0; font-size: 9px; color: var(--ink-faint); }
+.app-coverage-file-meter { margin: 0; }
+.app-coverage-file-percent { font-weight: 600; }
+.app-coverage-file-functions { color: var(--ink-dim); }
+.app-coverage-file-head .app-coverage-file-functions { color: inherit; }
+/* A name too long for its cell stays on one line and is cut on the left, so
+   its end (the file itself) stays in view: a right-to-left box, while the name
+   inside is isolated left-to-right so its characters keep their order. A name
+   that fits sits at the cell's left. */
+.app-coverage-file-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+.app-coverage-file-path { direction: ltr; unicode-bidi: isolate; }
+.app-coverage-files > .app-empty { border-top: 1px solid var(--line); }
+.app-coverage-files-all { margin-top: 6px; }
+.app-coverage-no-files { margin: 4px 0; }
+/* The run page's coverage line: a line of the page, not a chip. As a control
+   (a run with files) it is a button drawn as that line. */
+.app-run-coverage {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0 0 4px;
+  padding: 3px 0;
+  border: 0;
+  background: none;
+  font: 10.5px var(--mono);
+  color: var(--ink-dim);
+  text-align: left;
+  white-space: pre-wrap;
+}
+button.app-run-coverage { cursor: pointer; }
+button.app-run-coverage:hover { color: var(--ink); }
+.app-run-coverage-title { font-weight: 600; color: var(--ink); }
+/* Touch media have no hover to show a cut name whole: the name is not cut. It
+   shows whole and wraps, breaking after a `/` (and inside a part only when
+   that part alone is wider than the cell). The coverage line is a touch
+   target there; the `show all` control is one as every chip button is. */
+@media (pointer: coarse) {
+  .app-coverage-file-name {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+    direction: ltr;
+    overflow-wrap: anywhere;
+  }
+  button.app-run-coverage { min-height: 44px; }
+}
+/* The phone band: the name takes a line of its own, and the figures, the
+   functions among them, sit beneath it. */
+@media (width <= 640px) {
+  .app-coverage-file { grid-template-columns: 78px minmax(0, 1fr) 44px 104px; }
+  .app-coverage-file-name { grid-column: 1 / -1; }
+}
+
 /* ── Timeline pane header + filter pulldown (§S5.1 CR-CRU-007) ──────────── */
 .app-timeline-head {
   display: flex;
