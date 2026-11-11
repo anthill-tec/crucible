@@ -621,6 +621,7 @@ describe("the Coverage tab follows the project's latest coverage run", () => {
     expect(reads("Files · 3", one("coverage-files") ?? document)).toHaveLength(1);
     expect(reads("Files · 60")).toHaveLength(0);
     expect(all("coverage-files-show-all")).toHaveLength(0);
+
     expect(panelText()).toContain("lines 60/300 · 20%");
   });
 
