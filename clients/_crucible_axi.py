@@ -3558,9 +3558,9 @@ def _run_diagnostic_rows(event):
 
 
 def _run_refusal(emit, ops, project_dir, error, help_steps=None):
-    """The `run` refusal: ok:false naming what was refused, no brief, exit 1.
-    Its help points at `runs --cycle` unless the caller names a step that
-    helps more (an unreachable board, which `runs` cannot read either)."""
+    """The `run` refusal: ok:false naming what was refused, no brief; returns
+    exit 1. Its help points at `runs --cycle` unless the caller names a step
+    that helps more (an unreachable board, which `runs` cannot read either)."""
     emit(RUN_VERB, False,
          {"error": error,
           "help": help_steps or ["runs --cycle <id> — lists the runs this "
