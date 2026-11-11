@@ -289,7 +289,7 @@ def _emit_run_axi(verb, resp, project_dir, agent, *, ok=None, help_steps=None,
         _axi_context(project_dir, agent_id=agent,
                      cycle_id=_axi().echoed_cycle_id(resp)),
         _emit_axi, ok=ok, help_steps=help_steps, warnings=warnings,
-        fields={})
+        fields={}, coverage=True)
 
 
 # ── the run's reports, sent for the board to decode ──────────────────────────

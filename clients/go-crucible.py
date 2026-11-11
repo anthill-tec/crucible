@@ -1035,7 +1035,7 @@ def _go_test_run(verb, args, project_dir, agent, modules, health, plan=None,
         _emit_axi,
         help_steps=_axi().run_help(verb, exit_code == 0,
                                    _axi().filed_run(resp).get("failed"), _base_url()),
-        warnings=warnings, fields={})
+        warnings=warnings, fields={}, coverage=True)
     return exit_code
 
 

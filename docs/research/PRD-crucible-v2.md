@@ -356,7 +356,14 @@ registry** translating each tool's native output into one **canonical RunSchema*
     naming a non-`bun-test` target runs only it; naming a `bun-test` target runs the whole suite. A non-`bun-test`
     suite measures no coverage and adds no `coverage-not-measured` warning. A non-`bun-test` entry whose key is not a
     `test:` script, or is a `test:` key with no script of that name in `scripts`, is refused by the gate before
-    anything runs. `e2e` stays outside the gate, whatever its framework.
+    anything runs. `e2e` stays outside the gate, whatever its framework. A gate composed of several runs states
+    `coverageRuns` beside `suites`: one row per run whose envelope carried a `coverage` block, in the order the runs
+    ran, absent when none did, with no total across the runs. A row is `suite` (the whole-suite label, or the suite's
+    target), `stack`, then the block's own keys: `lines` and `functions`, the run's percents, then, when the run's
+    answer carries its files, `event`, `fileCount`, `moreFiles` and `files`. A row of `files` is `file`,
+    `linesPercent`, `linesCovered`, `linesTotal`, `functionsPercent`, `functionsCovered` and `functionsTotal`. A gate
+    that is one run alone prints that run's envelope, with its `coverage`. `run <event-id> --files <n>|all` lists a
+    stored run's files in the same block, 10 by default.
   - **Left to CR-CRU-229** (split 2026-11-04, user ruling): the `playwright` codec's retirement with Playwright's JSON
     report (`STREAM_KEPT_REPORTS`), the migration of the runs stored through it, and the `junit` readings keyed by
     framework rather than stack.

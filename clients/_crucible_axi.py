@@ -3410,6 +3410,10 @@ def add_run_read_verbs(sub, funcs, *, parents=(), add_args=()):
                     help="Print every diagnostic of a compile run; by "
                          "default the table is cut at the project's "
                          "roadmap_list_rows limit.")
+    rn.add_argument("--files", default="10", metavar="<n>|all",
+                    help="How many of a test run's least covered files "
+                         "--files lists in the `coverage` block: a whole "
+                         "number of at least 1, or `all` (default: 10).")
     for adder in add_args:
         adder(rn)
     rn.set_defaults(func=funcs[RUN_VERB])
@@ -3554,9 +3558,9 @@ def _run_diagnostic_rows(event):
 
 
 def _run_refusal(emit, ops, project_dir, error, help_steps=None):
-    """The `run` refusal: ok:false naming what was refused, no brief, exit 1.
-    Its help points at `runs --cycle` unless the caller names a step that
-    helps more (an unreachable board, which `runs` cannot read either)."""
+    """The `run` refusal: ok:false naming what was refused, no brief; returns
+    exit 1. Its help points at `runs --cycle` unless the caller names a step
+    that helps more (an unreachable board, which `runs` cannot read either)."""
     emit(RUN_VERB, False,
          {"error": error,
           "help": help_steps or ["runs --cycle <id> — lists the runs this "
@@ -3575,14 +3579,23 @@ def cmd_run(args, project_dir, ops):
     `?depth=suites` and the leaves only from the full record. The envelope
     carries the brief under `run`, then a test run's `suites` and
     `failingTests`, or a compile run's `diagnostics` (cut at
-    `roadmap_list_rows` unless `--full`) with their `totalCount`.
+    `roadmap_list_rows` unless `--full`) with their `totalCount`. A test run
+    that kept its coverage file by file is then read a third time, for the
+    files `--files` asks for, and states them in a `coverage` block after
+    `failingTests` (`stored_run_coverage`).
 
-    Refused, exit 1: an id the board does not hold, another project's
-    record (naming both keys), a record that is not a run (naming its kind),
-    and a read that fails — the second included, so a run is never printed
-    with an empty failing list it could not read."""
+    A `--files` value that is neither `all` nor a whole number of at least 1
+    is refused before any request, exit 2. Refused, exit 1: an id the board
+    does not hold, another project's record (naming both keys), a record that
+    is not a run (naming its kind), and a read that fails — the second and
+    the third included, so a run is never printed with an empty failing list
+    or a file list it could not read."""
     emit = _status_emitter(args, ops)
     event_id = args.event_id
+    files_query, files_error = _RUN.run_files_query(getattr(args, "files", "10"))
+    if files_error:
+        _run_refusal(emit, ops, project_dir, files_error, [_RUN.RUN_FILES_USAGE])
+        return EXIT_USAGE
     path = f"/api/v2/events/{urllib.parse.quote(str(event_id))}"
     resp = ops.get(f"{path}?depth=suites") or {}
     if not resp.get("ok"):
@@ -3618,8 +3631,13 @@ def cmd_run(args, project_dir, ops):
             return _run_refusal(
                 emit, ops, project_dir,
                 f"could not read the failing tests of run {event_id}")
+        coverage, error = _RUN.stored_run_coverage(ops.get, path, files_query,
+                                                   event, event_id)
+        if error:
+            return _run_refusal(emit, ops, project_dir, error)
         fields = {RUN_VERB: brief, "suites": _run_suite_rows(event),
-                  "failingTests": failing}
+                  "failingTests": failing,
+                  **({"coverage": coverage} if coverage else {})}
         legacy = (f"run: ok=True {event_id} test passed={brief.get('passed')} "
                   f"failed={brief.get('failed')}")
     else:
@@ -7364,9 +7382,13 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
                     and not own_run(suite))
     totals = {"passed": 0, "failed": 0, "pending": 0, "total": 0}
     whole_counts, whole_outcome, whole_events = None, None, []
+    # One row per run whose envelope stated its coverage, in run order.
+    coverage_runs = []
     if run_whole:
         code, out, error = _captured_suite_run(whole_suite)
         envelope = _suite_envelope(out)
+        _RUN.add_coverage_run(coverage_runs, whole_suite_label(stack), stack,
+                              envelope)
         whole_counts = _suite_counts(envelope)
         _adopt_suite_warnings(gate_warnings, envelope)
         totals.update(whole_counts or {})
@@ -7440,6 +7462,7 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
                 sys.stderr.write(result.stderr or "")
                 code, out, error = result.returncode, result.stdout or "", None
         envelope = _suite_envelope(out)
+        _RUN.add_coverage_run(coverage_runs, suite.target, suite.stack, envelope)
         counts = _suite_counts(envelope)
         if counts:
             row.update(counts)
@@ -7464,7 +7487,7 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     _gate_suite_results = results
     emit_axi(verb, ok,
              {"run": totals, "suites": rows, "events": events, "scope": scope,
-              **extra,
+              **extra, **({"coverageRuns": coverage_runs} if coverage_runs else {}),
               "help": run_help(verb, ok, totals["failed"], crucible_url)},
              context, gate_warnings,
              f"{verb}: ok={ok} suites={len(rows)} passed={totals['passed']} "
