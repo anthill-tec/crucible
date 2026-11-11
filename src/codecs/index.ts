@@ -1,8 +1,8 @@
 // CR-CRU-002 §S3 — codec registry. Ingest paths look up a codec by name so
 // adding a codec never touches core.
-import type { Coverage, RunLive, RunSchema, SuiteNode } from "../types.ts";
+import type { Coverage, CoverageFile, RunLive, RunSchema, SuiteNode } from "../types.ts";
 import { bunConsoleView } from "./bun-console-view.ts";
-import { coverageCodecs, decodeCoverage } from "./coverage.ts";
+import { coverageCodecs, decodeCoverageWithFiles } from "./coverage.ts";
 import type { CoverageCodec } from "./coverage.ts";
 import { parseCrucibleEvents, readStreamLine, type StreamLine } from "./crucible-events.ts";
 import { surefireConsoleView } from "./surefire-console-view.ts";
@@ -193,14 +193,20 @@ function readCoverageBlock(value: unknown): { block?: CoverageBlock } | { error:
   };
 }
 
-/** The block's texts summed as one coverage; one undecodable text drops it, with a warning. */
-function decodeCoverageBlock(block: CoverageBlock, warnings: IngestWarning[]): Coverage | undefined {
+/**
+ * The block's texts summed as one coverage, with the files it came from; one
+ * undecodable text drops both, with a warning.
+ */
+function decodeCoverageBlock(
+  block: CoverageBlock,
+  warnings: IngestWarning[],
+): { coverage: Coverage; files: CoverageFile[] } | undefined {
   try {
     const texts = block.texts.map((text, index) => {
       if (typeof text !== "string") throw new Error(`coverage text ${index} is not a text`);
       return text;
     });
-    return decodeCoverage(block.codec, texts);
+    return decodeCoverageWithFiles(block.codec, texts);
   } catch (cause) {
     warnings.push({
       code: "coverage-dropped",
@@ -408,12 +414,15 @@ function assembleRun(
     for (const file of codec.readRaw(merged.tree, raw, options)) files.add(file);
     summary = recount(merged.tree, summary.duration_ms);
   }
-  const coverage =
-    coverageBlock !== undefined ? decodeCoverageBlock(coverageBlock, warnings) : merged.coverage;
+  // Coverage the decoded run carries itself has no files; a block's has its own.
+  const fromBlock =
+    coverageBlock !== undefined ? decodeCoverageBlock(coverageBlock, warnings) : undefined;
+  const coverage = coverageBlock !== undefined ? fromBlock?.coverage : merged.coverage;
   const run: RunSchema = {
     summary,
     tree: merged.tree,
     ...(coverage !== undefined ? { coverage } : {}),
+    ...(fromBlock !== undefined ? { coverageFiles: fromBlock.files } : {}),
     ...(raw !== undefined ? { raw } : {}),
   };
   return { run, files: files.size };

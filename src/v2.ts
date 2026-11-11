@@ -1327,10 +1327,16 @@ function evidenceResponse(
   return json({ ...body, help: [...(options.help ?? []), ...hints.readEvidence] }, options.status);
 }
 
+/** How many of a run's least covered files an ingest answers. */
+const ANSWERED_COVERAGE_FILES = 10;
+
 /**
  * An ingest's answer. `files` (the run's distinct-file count) joins the `run`
  * block when the route computed one; it is never stored. `coverage` joins it
- * when the route answers the coverage the run kept.
+ * when the route answers the coverage the run kept. A run that kept files
+ * answers how many (`coverageFileCount`) and the first
+ * `ANSWERED_COVERAGE_FILES` of them in their kept order (`coverageFiles`); a
+ * run that kept none has neither key.
  */
 function runResponse(
   event: RunEvent,
@@ -1340,17 +1346,24 @@ function runResponse(
   files?: number,
   coverage?: Coverage,
 ): Response {
+  const kept = event.coverageFiles ?? [];
   return evidenceResponse(
     {
       ok: true,
       changed: true,
       event: event.id,
       run:
-        files !== undefined || coverage !== undefined
+        files !== undefined || coverage !== undefined || kept.length > 0
           ? {
               ...summary,
               ...(files !== undefined ? { files } : {}),
               ...(coverage !== undefined ? { coverage } : {}),
+              ...(kept.length > 0
+                ? {
+                    coverageFileCount: kept.length,
+                    coverageFiles: kept.slice(0, ANSWERED_COVERAGE_FILES),
+                  }
+                : {}),
             }
           : summary,
       verdict: runVerdict(summary),
