@@ -4,6 +4,7 @@ import { Database } from "bun:sqlite";
 import { renameSync } from "node:fs";
 import { configuredRetention, resolveLimit } from "./limits.ts";
 import type { CompileReport } from "./codecs/compile.ts";
+import { coveragePercent } from "./codecs/coverage.ts";
 import { suiteStatus } from "./codecs/junit.ts";
 import {
   abortedStreamRecord,
@@ -1574,6 +1575,62 @@ function positionCoverageFiles(files: readonly CoverageFile[]): CoverageFile[] {
       (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
     );
   });
+}
+
+interface RunCoverageFileRow {
+  path: string;
+  lines_total: number;
+  lines_covered: number;
+  functions_total: number | null;
+  functions_covered: number | null;
+}
+
+/**
+ * A `run_coverage_files` row as the `CoverageFile` it was filed from, each
+ * axis's percent computed by `coveragePercent`; no `functions` when the row
+ * stores none. The ONE place a stored file is read back.
+ */
+function coverageFileOf(row: RunCoverageFileRow): CoverageFile {
+  const axis = (covered: number, total: number): CoverageFile["lines"] => ({
+    total,
+    covered,
+    percent: coveragePercent(covered, total),
+  });
+  return {
+    path: row.path,
+    lines: axis(row.lines_covered, row.lines_total),
+    ...(row.functions_total !== null && row.functions_covered !== null
+      ? { functions: axis(row.functions_covered, row.functions_total) }
+      : {}),
+  };
+}
+
+/**
+ * The leading directories two names share: their longest common prefix, cut
+ * back to end at a `/`; the empty string when they share no directory. The
+ * prefix is compared character by character, never by code unit, so the cut
+ * cannot land inside a character.
+ */
+function sharedDirectory(a: string, b: string): string {
+  const second = Array.from(b);
+  let prefix = "";
+  let index = 0;
+  for (const char of a) {
+    if (second[index] !== char) break;
+    prefix += char;
+    index += 1;
+  }
+  return prefix.slice(0, prefix.lastIndexOf("/") + 1);
+}
+
+/** One run's files as `?depth=coverage` serves them. */
+export interface EventCoverageFiles {
+  /** How many files the run has; 0 when it has none. */
+  coverageFileCount: number;
+  /** The files in their kept order: all of them, or the first few asked for. */
+  coverageFiles: CoverageFile[];
+  /** The leading directories every file name of the run shares; `""` when none. */
+  coverageRoot: string;
 }
 
 /** The framework whose suites are features, each stored under its own whole name; any other run's suites have none. */
@@ -6282,19 +6339,32 @@ export class Store {
    * Reads no case row. `suites` is absent when the run has no tree; null when
    * no event has the id. `rawBytes` is the raw output's UTF-8 byte length,
    * counted in SQL so the raw text is never read; absent when the run has none.
+   * `coverageFileCount` is how many coverage files the run has, counted by one
+   * aggregate so no file row is read; absent when the run has none.
    */
   getEventSuites(
     id: string,
-  ): { event: RunEvent; suites?: SuiteSummary[]; rawBytes?: number } | null {
+  ): {
+    event: RunEvent;
+    suites?: SuiteSummary[];
+    rawBytes?: number;
+    coverageFileCount?: number;
+  } | null {
     const event = this.getEventHead(id);
     if (event === null) return null;
+    const fileCount = this.db
+      .query<{ n: number }, [string]>(
+        `SELECT COUNT(*) AS n FROM run_coverage_files WHERE event_id = ?`,
+      )
+      .get(id)!.n;
+    const files = fileCount > 0 ? { coverageFileCount: fileCount } : {};
     const run = this.db
       .query<{ has_tree: number; raw_bytes: number | null }, [string]>(
         `SELECT has_tree, LENGTH(CAST(raw AS BLOB)) AS raw_bytes FROM run_details WHERE event_id = ?`,
       )
       .get(id);
     const rawBytes = run?.raw_bytes ?? null;
-    const raw = rawBytes !== null ? { rawBytes } : {};
+    const raw = { ...(rawBytes !== null ? { rawBytes } : {}), ...files };
     if (run?.has_tree !== 1) return { event, ...raw };
     const suites = this.db
       .query<RunSuiteCountsRow, [string]>(
@@ -6357,6 +6427,45 @@ export class Store {
       .all(id, row.position);
     for (const stepRow of stepRows) addStep(suite.children[stepRow.case_position], stepRow);
     return { event, suite, ...raw };
+  }
+
+  /**
+   * The `?depth=coverage` read: event `id` without a run's tree or raw output,
+   * and its coverage files in their kept order — all of them, or the first
+   * `limit` when one is given. The count and the root are the whole run's
+   * however few files are answered, read by one aggregate (the count, and the
+   * least and greatest names, whose shared directory is every name's), so no
+   * more file rows are read than are answered. An event with no files answers
+   * the count 0, no file and the root `""`; null when no event has the id.
+   * Reads no suite, case, step or raw row.
+   */
+  getEventCoverage(id: string, limit?: number): ({ event: RunEvent } & EventCoverageFiles) | null {
+    const event = this.getEventHead(id);
+    if (event === null) return null;
+    const whole = this.db
+      .query<{ n: number; least: string | null; greatest: string | null }, [string]>(
+        `SELECT COUNT(*) AS n, MIN(path) AS least, MAX(path) AS greatest
+           FROM run_coverage_files WHERE event_id = ?`,
+      )
+      .get(id)!;
+    if (whole.n === 0 || whole.least === null || whole.greatest === null) {
+      return { event, coverageFileCount: 0, coverageFiles: [], coverageRoot: "" };
+    }
+    const columns = `SELECT path, lines_total, lines_covered, functions_total, functions_covered
+           FROM run_coverage_files WHERE event_id = ? ORDER BY position`;
+    const rows =
+      limit === undefined
+        ? this.db.query<RunCoverageFileRow, [string]>(columns).all(id)
+        : this.db
+            .query<RunCoverageFileRow, [string, number]>(`${columns} LIMIT ?`)
+            // A limit above the run's count answers every file: the count bounds it.
+            .all(id, Math.min(limit, whole.n));
+    return {
+      event,
+      coverageFileCount: whole.n,
+      coverageFiles: rows.map(coverageFileOf),
+      coverageRoot: sharedDirectory(whole.least, whole.greatest),
+    };
   }
 
   /** Run `id`'s raw output's UTF-8 byte length, counted without reading the
