@@ -177,6 +177,11 @@ pip install -e '.[dev]'
   `regression` runs the untagged tests and then every declared tier's tests.
   The `pre-merge-gate` runs each declared tier as a suite with its own row,
   beside the `untagged` row, filed under `regression`.
+  A run that kept coverage states a `coverage` block in its envelope: its
+  lines and functions percents, its file count and its 10 least covered files.
+  `run <event-id> --files <n>|all` lists a stored run's files in the same
+  block, and a gate composed of several runs states each run's block as a row
+  of `coverageRuns`.
 - `clients/STATUS-CONTRACT.md` — the status/dashboard payload contract the
   orchestrators read.
 

@@ -31,6 +31,25 @@ Releases before 0.3.0 are described only on GitHub Releases.
     files) in its `run` block when the run kept files.
   - A failing run keeps no coverage and so no files. A run filed before this change, or through
     `/api/v2/runs/parsed`, has totals only, and the board says `no per-file coverage for this run`.
+- **A coverage run's envelope names its least covered files.** Every stack's run that kept coverage
+  states a `coverage` block in its envelope: `lines` and `functions`, the run's percents
+  (`functions` absent for a run with no functions axis), then `event`, the run's id, `fileCount`,
+  how many files the run has, `moreFiles`, how many of them are not listed, and `files`, its 10
+  least covered files, least covered first.
+  - A row of `files` is `file`, `linesPercent`, `linesCovered`, `linesTotal`, `functionsPercent`,
+    `functionsCovered` and `functionsTotal`. The three function keys are null for a file with no
+    functions axis. Every figure is the board's own.
+  - A run whose answer carries no files states `lines` and `functions` alone. A run that kept no
+    coverage states no block.
+  - `run <event-id> --files <n>|all` lists a stored run's files in the same block, after
+    `failingTests`: the `n` least covered, 10 by default, or every file with `all`. A value that
+    is neither is refused before any request, exit 2. A run without files prints as before, and
+    a file list that cannot be read refuses the verb.
+  - A gate composed of several runs states `coverageRuns`: one row per run whose envelope carried
+    a block, in the order the runs ran. A row is `suite`, the whole-suite label or the suite's
+    target, `stack`, then the block's own keys. The key is absent when no run carried a block,
+    and the gate states no total across its runs. A gate that is one run alone prints that run's
+    envelope, with its `coverage`.
 - **`test` runs the script a bun project marks.** A `crucible.targets` entry marked `"test": true` is
   the script every `test` runs, with the files and `--name` passed on in the flag its framework takes
   (`-t` for `bun-test` and `vitest`, `--grep` for `playwright` and `playwright-bdd`). The run carries

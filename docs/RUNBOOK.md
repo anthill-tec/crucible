@@ -283,6 +283,13 @@ coverage run, for as long as retention holds the run. The ingest answer names
 only the first 10 files of the run, and the board's file table opens on the
 first 50; both state the run's whole file count.
 
+**A client reads them back.** A run that kept coverage states a `coverage`
+block in its client's envelope: its lines and functions percents, its file
+count and its 10 least covered files. `run <event-id> --files <n>|all` lists a
+stored run's files in the same block: the `n` least covered, 10 by default, or
+every file with `all`. A gate composed of several runs states each run's block
+as a row of `coverageRuns`, under the run's suite and stack.
+
 **Precedence.** A project's own `retention` overrides the `[limits.retention]`
 value in the server's file, and it does so for that project alone. Set it with
 a PATCH on the project:
