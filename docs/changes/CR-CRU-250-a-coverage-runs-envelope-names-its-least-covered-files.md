@@ -1,6 +1,6 @@
 # CR-CRU-250 — a coverage run's envelope names its least covered files
 
-**Status:** PENDING · Pre-review: ran — another project's surface (the run envelope its agents read)
+**Status:** COMPLETED — merged 2026-11-11 · Pre-review: ran — another project's surface (the run envelope its agents read)
 **Type:** feature
 **Priority:** medium
 **Depends on:** CR-CRU-193, CR-CRU-216, CR-CRU-218
@@ -127,15 +127,15 @@ modules that pin it:
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the block names the files.** Given an ingest answer with a kept coverage, a
+- [x] **AC1 — the block names the files.** Given an ingest answer with a kept coverage, a
   `coverageFileCount` of 12 and 10 `coverageFiles`, `emit_run_axi` with `coverage=True` emits a
   `coverage` block with `lines`, `functions`, `event`, `fileCount: 12`, `moreFiles: 2` and 10
   `files` rows in the answer's order, each with the seven §S2 keys.
-- [ ] **AC2 — a file without functions.** A file with no functions axis has null for its three
+- [x] **AC2 — a file without functions.** A file with no functions axis has null for its three
   function keys, and a run with no functions axis has no `functions` key in the block.
-- [ ] **AC3 — an answer without files.** An answer with a kept coverage and no file keys emits
+- [x] **AC3 — an answer without files.** An answer with a kept coverage and no file keys emits
   the block with its percent keys alone. An answer that kept no coverage emits no block.
-- [ ] **AC4 — every stack asks.** Each client file holds exactly one `emit_run_axi` call, and
+- [x] **AC4 — every stack asks.** Each client file holds exactly one `emit_run_axi` call, and
   all six ask for coverage:
   - `_emit_ingest_axi` in `bun-crucible.py` and in `python-crucible.py`, `_emit_run_axi` in
     `mvn-crucible.py` and in `arduino-crucible.py`, and `_go_test_run` in `go-crucible.py` pass
@@ -146,31 +146,31 @@ modules that pin it:
   stubbed green `regression --coverage` (and a Go `test --coverage`) against a recorded board
   answer that carries `run.coverageFileCount` and `run.coverageFiles` prints the block with its
   files. A client added after this CR that measures no coverage is not one of the six.
-- [ ] **AC5 — a run that measured none is unchanged.** A run without `--coverage`, and a failing
+- [x] **AC5 — a run that measured none is unchanged.** A run without `--coverage`, and a failing
   coverage run, print no `coverage` block on any stack.
-- [ ] **AC6 — `run` lists the files.** For a stored run of 12 files:
+- [x] **AC6 — `run` lists the files.** For a stored run of 12 files:
   - `run <event-id>` carries the block with 10 rows, `fileCount: 12` and `moreFiles: 2`;
   - `--files 3` carries 3 rows and `moreFiles: 9`;
   - `--files all` carries 12 rows and `moreFiles: 0`, and its request names no `files=`.
-- [ ] **AC7 — `run` refusals.** `--files 0`, `--files -1`, `--files x`, `--files +3` and
+- [x] **AC7 — `run` refusals.** `--files 0`, `--files -1`, `--files x`, `--files +3` and
   `--files 1_0` are refused, exit 2, with no request sent. `--files 03` requests `files=3`. A `?depth=coverage` read that fails refuses the verb, exit 1, and prints
   no run.
-- [ ] **AC8 — a run without files reads as before.** For a run whose `?depth=suites` answer
+- [x] **AC8 — a run without files reads as before.** For a run whose `?depth=suites` answer
   carries no `event.coverageFileCount`, `run` sends no `?depth=coverage` request and its envelope is
   today's, with or without `--files`.
-- [ ] **AC9 — a composed gate.** A gate of three runs, two of whose envelopes carry a `coverage`
+- [x] **AC9 — a composed gate.** A gate of three runs, two of whose envelopes carry a `coverage`
   block, emits `coverageRuns` with two rows in run order, each with its `suite`, its `stack` and
   that run's block whole. A gate none of whose runs carried one emits no `coverageRuns`.
-- [ ] **AC10 — on a real board.** A python `regression --coverage` of a fixture project that
+- [x] **AC10 — on a real board.** A python `regression --coverage` of a fixture project that
   declares its coverage source as 12 source files, with its tests outside that source, against a
   real board:
   - prints the block with `fileCount: 12`, 10 rows and `moreFiles: 2`;
   - its rows are the first 10 files `?depth=coverage` answers for that event, in that order;
   - `run <that event> --files all` lists the 12.
-- [ ] **AC11 — the budgets are re-recorded.** Each shared module's line count equals its
+- [x] **AC11 — the budgets are re-recorded.** Each shared module's line count equals its
   re-seeded `SHARED_MODULE_LINE_BUDGETS` value in all three pinning modules, and those pass.
   `test_the_core_is_no_longer_than_its_line_limit` passes with `CORE_LINE_LIMIT` unchanged.
-- [ ] **AC12 — docs and hygiene.** The §S6 texts are present, and the CHANGELOG and the PRD
+- [x] **AC12 — docs and hygiene.** The §S6 texts are present, and the CHANGELOG and the PRD
   name every key of §S2 and §S4. The code and tests add no CR id literal. A CR citation on a
   touched line is kept, or `PROSE_CITATIONS` in `tests/project-namespace-tripwire.test.ts` is
   re-recorded once, as its own commit.
