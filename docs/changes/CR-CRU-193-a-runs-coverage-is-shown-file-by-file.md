@@ -306,13 +306,14 @@ There are no sort controls and no filter.
 
 ## Estimated size
 
-11 points:
+13 points:
 
 - the three codecs' per-file reading and the joined decode (2);
 - the table, its order, its write and its removal with the run (2);
 - the ingest answer, the count on `?depth=suites` and the `?depth=coverage` read (2);
 - the shared table on both surfaces, the fold, `show all` and the phone band (4);
-- the table's state per run, the retry and touch (1).
+- the table's state per run, the retry and touch (1);
+- the real-browser checks on both phone projects, and the multi-row JaCoCo fixture (2).
 
 ## Risk
 
