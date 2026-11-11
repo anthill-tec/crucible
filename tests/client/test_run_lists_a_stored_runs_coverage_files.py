@@ -8,6 +8,9 @@ themselves on the `?depth=coverage` read. The `run` verb reads them:
     digits alone whose value is at least 1 (`03` is 3). Any other value is
     refused by the verb's own envelope, exit 2, before any request; the error
     names `--files` and the value given.
+  * A digit string is read whatever its length, one longer than the 4300
+    digits Python reads as an integer included: the request carries its
+    digits less their leading zeros, and zeros alone are refused as `0` is.
   * For a test run whose first answer carries an integer
     `event.coverageFileCount`, the verb sends one more request, after the two
     it sends today: `?depth=coverage&files=<n>`, or `?depth=coverage` alone
@@ -32,6 +35,8 @@ Invocation:
 """
 # pyright: reportAttributeAccessIssue=false
 
+import re
+import sys
 import unittest
 
 from tests.client.kept_coverage_answer import ROW_KEYS
@@ -55,6 +60,26 @@ from tests.client.stored_run_coverage import (
 
 #: Every value the verb refuses.
 REFUSED_VALUES = ("0", "00", "-1", "x", "+3", "1_0", " 3 ", "", "ALL", "\u0663")
+
+#: Digit strings longer than the 4300 digits Python reads as an integer: a
+#: whole number of 4301 digits, the number 1 behind 4400 zeros, and zero
+#: written as 5000 zeros.
+NUMBER_OF_4301_NINES = "9" * 4301
+ONE_AFTER_4400_ZEROS = "0" * 4400 + "1"
+FIVE_THOUSAND_ZEROS = "0" * 5000
+
+#: The name of a Python exception, as an error that only passes one on
+#: carries it.
+PYTHON_EXCEPTION_NAME = re.compile(r"\b(?:[A-Z]\w*)?(?:Error|Exception)\b")
+
+
+def told(text, ends=400):
+    """`text`, or its two ends and its length when it is long: a failure
+    message never carries thousands of digits."""
+    text = str(text)
+    if len(text) <= 2 * ends:
+        return text
+    return f"{text[:ends]}[…{len(text)} characters in all…]{text[-ends:]}"
 
 #: The stored run's brief, as the verb states it today.
 BRIEF_OF_THE_RUN_WITH_FILES = {
@@ -224,6 +249,70 @@ class RunSendsOneMoreRequest:
         self.assertEqual(block, stated_block(3),
                          f"{self.CLIENT}: `03` is 3")
 
+    def assertALongDigitStringIsRequested(self, value, named, requested, rows):
+        """`--files <value>`, told as `named`, shows the stored run: the
+        coverage read is the third request and asks for `files=<requested>`,
+        and the block lists the `rows` files the board answers it with."""
+        board = StoredCoverageBoard(coverage_answer=coverage_read_answer(rows))
+        code, out, err, board = self.drive(
+            ["run", EVENT_WITH_FILES, "--files", value], board)
+        where = f"{self.CLIENT}: `run {EVENT_WITH_FILES} --files <{named}>`"
+        self.assertEqual(
+            code, 0,
+            f"{where} shows the stored run, exit 0; stdout={told(out)!r} "
+            f"stderr={told(err)!r}")
+        gets = board.gets()
+        sent = [told(path, 60) for path in gets]
+        self.assertEqual(
+            len(gets), 3,
+            f"{where}: one more request after the two the verb sends today; "
+            f"sent {sent!r}")
+        self.assertEqual(gets[:2], todays_requests(EVENT_WITH_FILES),
+                         f"{where}: the first two are today's, in order")
+        self.assertIn("depth=coverage", gets[2],
+                      f"{where}: the coverage read is the third; sent {sent!r}")
+        reads = board.coverage_reads()
+        self.assertEqual(len(reads), 1,
+                         f"{where}: one coverage read; sent {sent!r}")
+        path, query = reads[0]
+        self.assertEqual(path, event_path(EVENT_WITH_FILES), where)
+        self.assertEqual(
+            {key: [told(text, 20) for text in values]
+             for key, values in query.items()},
+            {"depth": ["coverage"], "files": [told(requested, 20)]},
+            f"{where}: the read asks for `files=` the value's digits less "
+            f"their leading zeros")
+        self.assertTrue(
+            query["files"] == [requested],
+            f"{where}: the read asks for `files=` the value's digits less "
+            f"their leading zeros, every digit of them; it asked for "
+            f"{[told(text, 20) for text in query['files']]!r}")
+        self.assertEqual({method for method, _path, _body in board.calls}, {"GET"},
+                         f"{where}: the verb only reads")
+        axi = self.envelope(out, err)
+        self.assertIs(axi.get("ok"), True, f"{where}: {told(axi)!r}")
+        self.assertEqual(
+            axi.get("coverage"), stated_block(rows),
+            f"{where}: the block lists the files the board answered")
+        return axi["coverage"]
+
+    def test_a_number_of_4301_digits_is_requested_digit_for_digit_and_lists_the_files(self):
+        # A board answers a number above the run's count with every file.
+        block = self.assertALongDigitStringIsRequested(
+            NUMBER_OF_4301_NINES, "4301 nines", NUMBER_OF_4301_NINES, FILE_COUNT)
+        self.assertEqual(
+            (block.get("fileCount"), block.get("moreFiles"),
+             len(block.get("files") or [])),
+            (12, 0, 12), f"{self.CLIENT}: every file is listed")
+
+    def test_a_1_after_4400_zeros_requests_one_file_and_lists_one_row(self):
+        block = self.assertALongDigitStringIsRequested(
+            ONE_AFTER_4400_ZEROS, "a 1 after 4400 zeros", "1", 1)
+        self.assertEqual(
+            (block.get("fileCount"), block.get("moreFiles"),
+             len(block.get("files") or [])),
+            (12, 11, 1), f"{self.CLIENT}: the least covered file alone is listed")
+
 
 class RunRefusesABadFilesValue:
     """A `--files` value that is neither `all` nor a whole number of at least
@@ -262,6 +351,32 @@ class RunRefusesABadFilesValue:
         for value in ("0", "x"):
             with self.subTest(value=value):
                 self.assertRefusedBeforeAnyRequest(COMPILE_EVENT, value)
+
+    def test_5000_zeros_are_refused_as_0_is_and_the_error_names_no_python_exception(self):
+        code, out, err, board = self.drive(
+            ["run", EVENT_WITH_FILES, "--files", FIVE_THOUSAND_ZEROS])
+        where = f"{self.CLIENT}: `run {EVENT_WITH_FILES} --files <5000 zeros>`"
+        shown = f"stdout={told(out)!r} stderr={told(err)!r}"
+        self.assertEqual(
+            code, 2,
+            f"{where} is the verb's own refusal, exit 2, never an exit 1; {shown}")
+        self.assertEqual(
+            board.calls, [],
+            f"{where}: refused before any request; sent "
+            f"{[told(path, 60) for _method, path, _body in board.calls]!r}")
+        axi = self.envelope(out, err)
+        self.assertIs(axi.get("ok"), False, f"{where} is refused; {shown}")
+        self.assertEqual(axi.get("verb"), "run",
+                         f"{where}: the envelope is the verb's own; {shown}")
+        error = str(axi.get("error"))
+        self.assertIn("--files", error,
+                      f"{where}: the error names the flag; error={told(error)!r}")
+        self.assertEqual(
+            PYTHON_EXCEPTION_NAME.findall(error), [],
+            f"{where}: the error names no Python exception; error={told(error)!r}")
+        self.assertNotIn("Traceback", out + err, f"{where}: {shown}")
+        for key in ("run", "suites", "failingTests", "coverage"):
+            self.assertNotIn(key, axi, f"{where}: no run is printed; {shown}")
 
 
 class RunRefusesWhenTheFilesCannotBeRead:
@@ -442,6 +557,47 @@ class TheFixtureBoardAnswersAsABoardDoesTest(unittest.TestCase):
                 answer = self.read(f"?depth=coverage&files={value}")
                 self.assertIs(answer["ok"], False)
                 self.assertTrue(answer["error"].startswith("HTTP 400"), answer)
+
+
+class TheLongDigitStringsAreWhatTheyAreNamedTest(unittest.TestCase):
+    """Proofs of the long values, and of how a Python exception is told."""
+
+    def test_each_long_value_is_ascii_digits_alone_of_its_named_length(self):
+        for value, length, digits in (
+                (NUMBER_OF_4301_NINES, 4301, {"9"}),
+                (ONE_AFTER_4400_ZEROS, 4401, {"0", "1"}),
+                (FIVE_THOUSAND_ZEROS, 5000, {"0"})):
+            with self.subTest(length=length):
+                self.assertEqual((len(value), set(value)), (length, digits))
+        self.assertEqual(ONE_AFTER_4400_ZEROS.lstrip("0"), "1")
+        self.assertEqual(ONE_AFTER_4400_ZEROS.index("1"), 4400)
+
+    def test_each_long_value_is_longer_than_python_reads_as_an_integer(self):
+        limit = sys.get_int_max_str_digits()
+        self.assertEqual(limit, 4300,
+                         "this interpreter reads at most 4300 digits as an integer")
+        for value in (NUMBER_OF_4301_NINES, ONE_AFTER_4400_ZEROS, FIVE_THOUSAND_ZEROS):
+            with self.subTest(length=len(value)):
+                self.assertGreater(len(value), limit)
+
+    def test_a_python_exceptions_name_is_told_and_the_verbs_own_refusal_holds_none(self):
+        self.assertEqual(
+            PYTHON_EXCEPTION_NAME.findall(
+                "ValueError: Exceeds the limit (4300 digits) for integer "
+                "string conversion"), ["ValueError"])
+        self.assertEqual(
+            PYTHON_EXCEPTION_NAME.findall("an Exception, or a ZeroDivisionError"),
+            ["Exception", "ZeroDivisionError"])
+        self.assertEqual(
+            PYTHON_EXCEPTION_NAME.findall(
+                "--files '0' is neither `all` nor a whole number of at least "
+                "1: run <event-id> --files <n>|all"), [])
+
+    def test_a_long_text_is_told_by_its_two_ends_and_its_length(self):
+        self.assertEqual(told("short"), "short")
+        self.assertEqual(told(NUMBER_OF_4301_NINES, 3),
+                         "999[…4301 characters in all…]999")
+        self.assertNotEqual(told(ONE_AFTER_4400_ZEROS, 20), told("1", 20))
 
 
 if __name__ == "__main__":

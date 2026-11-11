@@ -14,6 +14,11 @@ block whole. The key is absent when no run carried a block.
 A gate that is one run alone prints that run's envelope, so it carries the
 run's `coverage` and no `coverageRuns`.
 
+A dispatched run that printed no envelope, or one that cannot be decoded, has
+no row and adds no error about coverage: the other runs' rows stand as they
+are, and the gate says of that run what it says of any run that reported no
+counts.
+
 Each test drives the shared composition (`gate_regression`) as the clients
 call it, with a stub declaration surface, stubs for the runs in the gate's own
 process, and a real child process for each dispatched suite. Every envelope a
@@ -316,6 +321,182 @@ class AGateWhoseRunsStatedNoCoverageTest(_ComposedGateCase):
         envelope = decoded(out.getvalue())
         self.assertEqual(envelope.get("coverage"), BLOCK_WITH_FILES)
         self.assertNotIn("coverageRuns", envelope)
+
+
+#: What a dispatched client left on stdout when it printed no envelope.
+STDOUT_WITHOUT_AN_ENVELOPE = {
+    "nothing at all": "",
+    "its runner's own lines alone": "Ran 4 tests in 0.012s\n\nOK\n",
+}
+#: How many rows of its ten-row file table the cut envelope still holds.
+ROWS_BEFORE_THE_CUT = 3
+
+
+def envelope_cut_inside_its_file_table():
+    """The envelope of a run that kept its files, cut off three rows into its
+    ten-row file table: its percents and its first rows are on stdout, and the
+    document cannot be decoded, because the table says ten rows and holds
+    three."""
+    lines = run_envelope_text("regression", WITH_FILES).splitlines(keepends=True)
+    table = next(index for index, line in enumerate(lines)
+                 if line.strip().startswith("files["))
+    return "".join(lines[:table + 1 + ROWS_BEFORE_THE_CUT])
+
+
+class _RunsWithStagedStdout(_Runs):
+    """`_Runs`, with the stdout of some dispatched suites staged as text
+    instead of written from a board answer: `stdout` maps a suite's target to
+    what its dispatched client prints."""
+
+    def __init__(self, whole, own=None, dispatched=None, stdout=None):
+        super().__init__(whole, own, dispatched)
+        self.stdout = stdout or {}
+
+    def dispatch(self, suite):
+        if suite.target not in self.stdout:
+            return super().dispatch(suite)
+        self.ran.append(suite.target)
+        text = self.stdout[suite.target]
+        return [sys.executable, "-c", f"import sys; sys.stdout.write({text!r})"], None
+
+
+class AGateWhoseDispatchedRunPrintedNoReadableEnvelopeTest(unittest.TestCase):
+    """Guards: these hold today. A maven gate of three runs whose first
+    dispatched suite's client exited 0 and left no envelope the gate can
+    read."""
+
+    maxDiff = None
+
+    def gate(self, whole, first_stdout, second):
+        """The gate's exit and its envelope, its first dispatched suite
+        printing `first_stdout` and its two other runs the envelopes of their
+        board answers."""
+        runs = _RunsWithStagedStdout(whole, dispatched={SECOND_DISPATCHED: second},
+                                     stdout={FIRST_DISPATCHED: first_stdout})
+        surface = _surface("<tier>", ("unit", "integration"),
+                           [(name, DISPATCHED_COMMANDS[name])
+                            for name in (FIRST_DISPATCHED, SECOND_DISPATCHED)])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(io.StringIO()):
+            code = AXI.gate_regression(
+                argparse.Namespace(suites=None), surface=surface, stack="mvn",
+                verb=GATE, whole_suite=runs.run_whole_suite,
+                dispatch=runs.dispatch, context={"projectKey": "stub-key"},
+                crucible_url="http://127.0.0.1:1",
+                whole_suite_alone=runs.run_whole_suite)
+        text = out.getvalue()
+        self.assertEqual(
+            [line for line in text.splitlines() if line.startswith("axi:")],
+            ["axi:"], f"the gate prints one envelope; stdout={text!r}")
+        envelope = decoded(text)
+        self.assertEqual(runs.ran, ["whole suite", FIRST_DISPATCHED, SECOND_DISPATCHED],
+                         "the gate ran three runs, in this order")
+        return code, envelope
+
+    def assertTheUnreadRunIsOnlyARunWithoutCounts(self, code, envelope):
+        """The gate says of the unread run what it says of any run that
+        reported no counts, and nothing about coverage."""
+        self.assertIs(envelope.get("ok"), False, f"envelope={envelope!r}")
+        self.assertNotEqual(code, 0, f"envelope={envelope!r}")
+        self.assertEqual(
+            [(row.get("suite"), row.get("outcome")) for row in envelope.get("suites") or []],
+            [("unit", "pass"), ("integration", "pass"), (FIRST_DISPATCHED, "fail"),
+             (SECOND_DISPATCHED, "pass")], f"envelope={envelope!r}")
+        warnings = envelope.get("warnings")
+        self.assertEqual(
+            [warning.get("code") for warning in warnings or []],
+            [AXI.GATE_SUITE_UNREPORTED_CODE],
+            f"one warning, the one a run that reported no counts has; "
+            f"warnings={warnings!r}")
+        self.assertIn(f"`{FIRST_DISPATCHED}`", warnings[0].get("detail"),
+                      f"the warning names the unread run; warnings={warnings!r}")
+        self.assertNotIn("coverage", str(warnings).lower(),
+                         f"no warning is about coverage; warnings={warnings!r}")
+        self.assertNotIn("error", envelope,
+                         f"the envelope states no error; envelope={envelope!r}")
+        self.assertEqual(
+            [key for key in envelope if "coverage" in key.lower()],
+            ["coverageRuns"] if "coverageRuns" in envelope else [],
+            f"`coverageRuns` is the envelope's one key about coverage; "
+            f"keys={list(envelope)!r}")
+
+    def assertTheOtherRunsRowsStandAlone(self, envelope, why):
+        self.assertEqual(
+            envelope.get("coverageRuns"),
+            [{"suite": AXI.whole_suite_label("mvn"), "stack": "mvn",
+              **BLOCK_WITH_FILES},
+             {"suite": SECOND_DISPATCHED, "stack": "python",
+              **BLOCK_OF_THREE_FILES}],
+            f"{why}: the rows are the two other runs' own blocks, whole and "
+            f"in run order, and the unread run has none")
+
+    def test_a_dispatched_run_that_printed_no_envelope_leaves_the_other_runs_rows_alone(self):
+        for label, stdout in STDOUT_WITHOUT_AN_ENVELOPE.items():
+            with self.subTest(stdout=label):
+                code, envelope = self.gate(WITH_FILES, stdout,
+                                           THREE_FILES_LINES_ONLY)
+                self.assertTheOtherRunsRowsStandAlone(
+                    envelope, f"a dispatched run that printed {label}")
+                self.assertTheUnreadRunIsOnlyARunWithoutCounts(code, envelope)
+
+    def test_a_dispatched_run_whose_envelope_cannot_be_decoded_leaves_the_other_runs_rows_alone(self):
+        code, envelope = self.gate(
+            WITH_FILES, envelope_cut_inside_its_file_table(), THREE_FILES_LINES_ONLY)
+        self.assertTheOtherRunsRowsStandAlone(
+            envelope, "a dispatched run whose envelope cannot be decoded")
+        self.assertTheUnreadRunIsOnlyARunWithoutCounts(code, envelope)
+
+    def test_a_gate_whose_only_coverage_stood_in_an_undecodable_envelope_has_no_coverage_runs(self):
+        # The cut envelope still shows its percents and three file rows: none
+        # of it is read into a row.
+        code, envelope = self.gate(
+            NO_COVERAGE, envelope_cut_inside_its_file_table(), NO_COVERAGE)
+        self.assertNotIn(
+            "coverageRuns", envelope,
+            f"no run's envelope carried a block the gate could read; "
+            f"coverageRuns={envelope.get('coverageRuns')!r}")
+        self.assertTheUnreadRunIsOnlyARunWithoutCounts(code, envelope)
+
+    def test_a_gate_whose_other_runs_measured_none_and_one_printed_no_envelope_has_no_coverage_runs(self):
+        for label, stdout in STDOUT_WITHOUT_AN_ENVELOPE.items():
+            with self.subTest(stdout=label):
+                code, envelope = self.gate(NO_COVERAGE, stdout, NO_COVERAGE)
+                self.assertNotIn(
+                    "coverageRuns", envelope,
+                    f"a dispatched run that printed {label} has no row; "
+                    f"coverageRuns={envelope.get('coverageRuns')!r}")
+                self.assertTheUnreadRunIsOnlyARunWithoutCounts(code, envelope)
+
+
+class TheStagedStdoutIsWhatItIsNamedTest(unittest.TestCase):
+    """Proofs of the fixture: what the unread dispatched runs printed."""
+
+    def test_the_stdout_without_an_envelope_holds_no_envelope_line(self):
+        self.assertEqual(len(STDOUT_WITHOUT_AN_ENVELOPE), 2)
+        for label, stdout in STDOUT_WITHOUT_AN_ENVELOPE.items():
+            with self.subTest(stdout=label):
+                self.assertEqual(
+                    [line for line in stdout.splitlines() if line.startswith("axi:")], [])
+
+    def test_the_cut_envelope_shows_its_coverage_and_cannot_be_decoded(self):
+        text = envelope_cut_inside_its_file_table()
+        lines = text.splitlines()
+        self.assertEqual([line for line in lines if line.startswith("axi:")], ["axi:"])
+        self.assertEqual(
+            [line.strip() for line in lines if line.strip().startswith("coverage:")],
+            ["coverage:"], "the cut envelope holds a coverage block")
+        self.assertIn(f"lines: {BLOCK_WITH_FILES['lines']}", text)
+        self.assertTrue(lines[-1 - ROWS_BEFORE_THE_CUT].strip().startswith("files[10]"),
+                        f"the table says ten rows; its header={lines[-1 - ROWS_BEFORE_THE_CUT]!r}")
+        with self.assertRaises(TOON.ToonDecodeError) as refused:
+            TOON.decode(text)
+        self.assertIn("10", str(refused.exception),
+                      "it is refused for the ten rows it says and does not hold")
+
+    def test_the_same_envelope_whole_decodes_to_its_block(self):
+        envelope = decoded(run_envelope_text("regression", WITH_FILES))
+        self.assertEqual(envelope.get("coverage"), BLOCK_WITH_FILES)
 
 
 class TheRunsEnvelopesAreWhatARunPrintsTest(unittest.TestCase):
