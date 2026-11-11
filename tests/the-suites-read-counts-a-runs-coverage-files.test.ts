@@ -255,6 +255,17 @@ describe("the reads other than the suites read and the coverage read answer a ru
     expect(await eventRead(handle, withFiles, "?depth=coverage&suite=Green")).toEqual(suite);
   });
 
+  test("?suite= with depth=coverage and a files= the coverage read would refuse is still the suite read: answered 200, files= ignored", async () => {
+    const { handle, withFiles } = await aRunWithFilesAndOneWithout();
+    const suite = await eventRead(handle, withFiles, "?suite=Green");
+    expect((suite.tree as Array<{ name: string; children: unknown[] }>).map((node) => [node.name, node.children.length])).toEqual([["Green", 2]]);
+
+    for (const sent of ["x", "0", "", "3"]) {
+      expect(await eventRead(handle, withFiles, `?suite=Green&depth=coverage&files=${sent}`), `files=${sent}`).toEqual(suite);
+    }
+    expect(await eventRead(handle, withFiles, "?files=x&depth=coverage&suite=Green")).toEqual(suite);
+  });
+
   test("?depth=suites with files=x is the suites read: answered 200, the count 12 and no file", async () => {
     const { handle, withFiles } = await aRunWithFilesAndOneWithout();
     const suites = await eventRead(handle, withFiles, "?depth=suites");

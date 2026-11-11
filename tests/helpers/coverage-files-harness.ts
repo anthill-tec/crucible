@@ -649,3 +649,14 @@ export function filesTableUse(records: readonly QueryRecord[], files: readonly C
     rowless: statements.filter((statement) => !statement.handed.some((row) => isFileRow(row, files))),
   };
 }
+
+/** How many rows the statements reading `FROM <table>` handed back, counted as the bounded-read suites count them. */
+export function rowsHandedFrom(records: readonly QueryRecord[], table: string): number {
+  const reads = new RegExp(`\\bFROM\\s+${table}\\b`, "i");
+  return records.filter((record) => reads.test(record.sql)).reduce((sum, record) => sum + record.handed.length, 0);
+}
+
+/** Every row the statements handed back, as one JSON text: what a search for a value that must not be read looks in. */
+export function handedText(records: readonly QueryRecord[]): string {
+  return JSON.stringify(records.map((record) => record.handed));
+}

@@ -19,7 +19,15 @@
 // connection, with the rows each hands back.
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ServerHandle } from "../src/server.ts";
-import { bootOn, postJson, readyProject } from "./helpers/run-stream-harness.ts";
+import {
+  bootOn,
+  eventLine,
+  openRun,
+  postJson,
+  readyProject,
+  sendBatch,
+  STREAM_CODEC,
+} from "./helpers/run-stream-harness.ts";
 import {
   callsAnAggregate,
   closeStreamedRun,
@@ -27,17 +35,20 @@ import {
   eventIdOf,
   eventRead,
   FAILING_REPORT,
+  FILE_READ_KEYS,
   fileReadKeysOf,
   fileRowCount,
   filesTableUse,
   fixtureText,
   getAnswer,
+  handedText,
   inKeptOrder,
   ingestRun,
   lcovText,
   oracleFiles,
   PASSING_REPORT,
   recordQueries,
+  rowsHandedFrom,
   storedFileOf,
   storedFiles,
   TWELVE_BLOCK,
@@ -77,6 +88,40 @@ function pathsOf(event: Record<string, unknown>): string[] | undefined {
 }
 
 const TWELVE_PATHS = TWELVE_FILES.map((file) => file.path);
+
+const RAW_OUTPUT = "$ runner\nraw-output-marker-41d9\n2 pass";
+
+/** A board holding one green run of the twelve files that also has raw output. */
+async function twelveFileRunWithRawOutput(): Promise<{ handle: ServerHandle; key: string; eventId: string; rawOutput: string }> {
+  const handle = boot();
+  const key = await readyProject(handle, [AGENT]);
+  const eventId = eventIdOf(
+    await postJson(handle, "/api/v2/runs", {
+      projectKey: key,
+      agentId: AGENT,
+      codec: "junit",
+      data: PASSING_REPORT,
+      raw: RAW_OUTPUT,
+      coverage: TWELVE_BLOCK,
+    }),
+  );
+  return { handle, key, eventId, rawOutput: RAW_OUTPUT };
+}
+
+function keysOf(event: Record<string, unknown>): string[] {
+  return Object.keys(event).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
+ * What the read answers for an event of any kind: every key the full read
+ * answers but the tree and the raw output, each with the full read's value,
+ * beside exactly the three file keys.
+ */
+function expectTheFullReadsKeysBesideTheFileKeys(event: Record<string, unknown>, full: Record<string, unknown>): void {
+  const rest = without(full, ["tree", "raw"]);
+  expect(without(event, FILE_READ_KEYS)).toEqual(rest);
+  expect(keysOf(event)).toEqual(keysOf({ ...rest, coverageFileCount: 0, coverageFiles: [], coverageRoot: "" }));
+}
 
 // ── The read ────────────────────────────────────────────────────────────────
 
@@ -130,17 +175,19 @@ describe("?depth=coverage answers a run's files, their count and their root", ()
   });
 
   test("the rest of the event is answered as the full read answers it: every key but the tree and the raw output, beside the three file keys", async () => {
-    const { handle, eventId } = await twelveFileRun();
+    const { handle, eventId, rawOutput } = await twelveFileRunWithRawOutput();
     const full = await eventRead(handle, eventId);
     expect(full.coverage).toEqual(TWELVE_TOTALS);
+    expect(full.raw).toBe(rawOutput);
+    expect(Array.isArray(full.tree)).toBe(true);
 
     const event = await eventRead(handle, eventId, "?depth=coverage");
 
     expect(fileReadKeysOf(event)).toEqual(["coverageFileCount", "coverageFiles", "coverageRoot"]);
-    // The raw output's byte length is the one key left open here: a read may carry it or not.
-    expect(without(event, ["coverageFileCount", "coverageFiles", "coverageRoot", "rawBytes"])).toEqual(
-      without(full, ["tree", "raw"]),
-    );
+    // Exactly the three file keys are new: every other key is the full read's, with the full read's value.
+    expectTheFullReadsKeysBesideTheFileKeys(event, full);
+    // The run has raw output, and the read carries neither it nor its byte length.
+    expect("rawBytes" in event).toBe(false);
     // The run's totals stay the totals: the files are beside them, not in them.
     expect(event.coverage).toEqual(TWELVE_TOTALS);
   });
@@ -352,6 +399,46 @@ describe("&files=<n> answers the first n files beside the whole run's count and 
       expect("event" in answer.body).toBe(false);
     });
   }
+  test("files= with an empty value is refused with 400 and answers no event", async () => {
+    const { handle, eventId } = await twelveFileRun();
+    await eventRead(handle, eventId, "?depth=coverage&files=3");
+
+    const answer = await getAnswer(handle, `/api/v2/events/${eventId}?depth=coverage&files=`);
+
+    expect(answer.status, JSON.stringify(answer.body).slice(0, 200)).toBe(400);
+    expect(answer.body.ok).toBe(false);
+    expect(typeof answer.body.error).toBe("string");
+    expect("event" in answer.body).toBe(false);
+  });
+
+  test("files=3 before files=x answers 3 files: of a parameter given twice, the first value counts", async () => {
+    const { handle, eventId } = await twelveFileRun();
+
+    const event = await eventRead(handle, eventId, "?depth=coverage&files=3&files=x");
+
+    expect(event.coverageFiles).toEqual(TWELVE_FILES.slice(0, 3));
+    expect(event.coverageFileCount).toBe(12);
+    expect(event.coverageRoot).toBe(TWELVE_ROOT);
+  });
+
+  test("files=3 before files=5 answers 3 files, not 5", async () => {
+    const { handle, eventId } = await twelveFileRun();
+
+    const event = await eventRead(handle, eventId, "?depth=coverage&files=3&files=5");
+
+    expect(event.coverageFiles).toEqual(TWELVE_FILES.slice(0, 3));
+  });
+
+  test("files=x before files=3 is refused with 400: the first value counts", async () => {
+    const { handle, eventId } = await twelveFileRun();
+    await eventRead(handle, eventId, "?depth=coverage&files=3");
+
+    const answer = await getAnswer(handle, `/api/v2/events/${eventId}?depth=coverage&files=x&files=3`);
+
+    expect(answer.status, JSON.stringify(answer.body).slice(0, 200)).toBe(400);
+    expect(answer.body.ok).toBe(false);
+    expect("event" in answer.body).toBe(false);
+  });
 });
 
 // ── An id the board does not hold ───────────────────────────────────────────
@@ -370,6 +457,164 @@ describe("?depth=coverage on an id the board does not hold", () => {
     expect(firstThree.body).toEqual(coverage.body);
     expect((await getAnswer(handle, `/api/v2/events/${unknown}`)).body).toEqual(coverage.body);
     expect((await getAnswer(handle, `/api/v2/events/${unknown}?depth=suites`)).body).toEqual(coverage.body);
+  });
+
+  const REFUSED_BEFORE_THE_ID: Array<{ query: string; what: string }> = [
+    { query: "files=x", what: "files=x" },
+    { query: "files=0", what: "files=0" },
+    { query: "files=", what: "files= with an empty value" },
+    { query: "files=x&files=3", what: "files=x before files=3" },
+  ];
+  for (const { query, what } of REFUSED_BEFORE_THE_ID) {
+    test(`${what} on an id the board does not hold answers 400, not 404`, async () => {
+      const { handle } = await twelveFileRun();
+      const unknown = "evt-held-by-no-board";
+      // The id is unknown: the same read with a number answers 404.
+      expect((await getAnswer(handle, `/api/v2/events/${unknown}?depth=coverage&files=3`)).status).toBe(404);
+
+      const answer = await getAnswer(handle, `/api/v2/events/${unknown}?depth=coverage&${query}`);
+
+      expect(answer.status, JSON.stringify(answer.body).slice(0, 200)).toBe(400);
+      expect(answer.body.ok).toBe(false);
+      expect(answer.body.error).not.toBe(`event not found: ${unknown}`);
+      expect("event" in answer.body).toBe(false);
+    });
+  }
+});
+
+// ── The parameter is checked before the store is read ───────────────────────
+
+describe("a refused files= is refused before the store is read", () => {
+  /** Answering a request runs no statement by itself: a read refused for a missing parameter runs none. */
+  async function expectARequestAloneRunsNoStatement(handle: ServerHandle): Promise<void> {
+    let status = 0;
+    const records = await recordQueries(handle.store, async () => {
+      status = (await getAnswer(handle, "/api/v2/status")).status;
+    });
+    expect(status).toBe(400);
+    expect(records.map((record) => record.sql)).toEqual([]);
+  }
+
+  test("on a run the board holds, the refused read runs no statement, where the answered read runs some", async () => {
+    const { handle, eventId } = await twelveFileRun();
+    await expectARequestAloneRunsNoStatement(handle);
+    const answered = await recordQueries(handle.store, () => getAnswer(handle, `/api/v2/events/${eventId}?depth=coverage&files=3`));
+    expect(answered.length).toBeGreaterThan(0);
+
+    let status = 0;
+    const refused = await recordQueries(handle.store, async () => {
+      status = (await getAnswer(handle, `/api/v2/events/${eventId}?depth=coverage&files=x`)).status;
+    });
+
+    expect(status).toBe(400);
+    expect(refused.map((record) => record.sql)).toEqual([]);
+  });
+
+  test("on an id the board does not hold, the refused read runs no statement, where the 404 read runs some", async () => {
+    const { handle } = await twelveFileRun();
+    const unknown = "evt-held-by-no-board";
+    await expectARequestAloneRunsNoStatement(handle);
+    const notFound = await recordQueries(handle.store, () => getAnswer(handle, `/api/v2/events/${unknown}?depth=coverage&files=3`));
+    expect(notFound.length).toBeGreaterThan(0);
+
+    let status = 0;
+    const refused = await recordQueries(handle.store, async () => {
+      status = (await getAnswer(handle, `/api/v2/events/${unknown}?depth=coverage&files=x`)).status;
+    });
+
+    expect(status).toBe(400);
+    expect(refused.map((record) => record.sql)).toEqual([]);
+  });
+});
+
+// ── What the read touches ───────────────────────────────────────────────────
+
+const STEPPED_STREAM =
+  eventLine({ event: "run-start", total: 2 }) +
+  eventLine({
+    event: "test-end",
+    id: "card",
+    name: "Pay by card",
+    suite: "Checkout",
+    file: "features/checkout.feature",
+    browser: "chromium",
+    status: "pass",
+    duration_ms: 30,
+    steps: [
+      { name: "Given a cart holding one book", status: "pass", duration_ms: 10 },
+      { name: "When I pay by card", status: "pass", duration_ms: 20 },
+    ],
+  }) +
+  eventLine({
+    event: "test-end",
+    id: "voucher",
+    name: "Pay by voucher",
+    suite: "Checkout",
+    file: "features/checkout.feature",
+    browser: "chromium",
+    status: "pass",
+    duration_ms: 10,
+    steps: [{ name: "Given a voucher worth ten", status: "pass", duration_ms: 10 }],
+  }) +
+  eventLine({ event: "run-end", total: 2, passed: 2, failed: 0, pending: 0, duration_ms: 40 });
+
+/** A board holding a green streamed run of the twelve files that has a tree, steps under its tests, and raw output. */
+async function twelveFileRunWithStepsAndRawOutput(): Promise<{ handle: ServerHandle; eventId: string }> {
+  const handle = boot();
+  const key = await readyProject(handle, [AGENT]);
+  const runId = await openRun(handle, key, AGENT, { stack: "bun", framework: "playwright-bdd" });
+  const batch = await sendBatch(handle, runId, { projectKey: key, agentId: AGENT, from: 0, data: STEPPED_STREAM });
+  expect(batch.status, JSON.stringify(batch.body)).toBe(200);
+  const eventId = eventIdOf(
+    await postJson(handle, "/api/v2/runs", {
+      projectKey: key,
+      agentId: AGENT,
+      runId,
+      codec: STREAM_CODEC,
+      raw: RAW_OUTPUT,
+      coverage: TWELVE_BLOCK,
+    }),
+  );
+  return { handle, eventId };
+}
+
+describe("?depth=coverage reads none of the run's tree and none of its raw output", () => {
+  test("it hands back no suite row, no test row, no step row and no raw text, where the full read hands back each", async () => {
+    const { handle, eventId } = await twelveFileRunWithStepsAndRawOutput();
+    // The run has all four, and the log sees the full read hand each back.
+    const whole = await recordQueries(handle.store, () => eventRead(handle, eventId));
+    expect(rowsHandedFrom(whole, "run_suites")).toBe(1);
+    expect(rowsHandedFrom(whole, "run_cases")).toBe(2);
+    expect(rowsHandedFrom(whole, "run_case_steps")).toBe(3);
+    expect(handedText(whole)).toContain("raw-output-marker-41d9");
+
+    let event: Record<string, unknown> = {};
+    const records = await recordQueries(handle.store, async () => {
+      event = await eventRead(handle, eventId, "?depth=coverage");
+    });
+
+    expect(rowsHandedFrom(records, "run_suites")).toBe(0);
+    expect(rowsHandedFrom(records, "run_cases")).toBe(0);
+    expect(rowsHandedFrom(records, "run_case_steps")).toBe(0);
+    expect(handedText(records)).not.toContain("raw-output-marker-41d9");
+    // It is still the read of the run's files.
+    expect(event.coverageFileCount).toBe(12);
+    expect(pathsOf(event)).toEqual(TWELVE_PATHS);
+  });
+
+  test("with files=3 it hands back none of them either", async () => {
+    const { handle, eventId } = await twelveFileRunWithStepsAndRawOutput();
+
+    let event: Record<string, unknown> = {};
+    const records = await recordQueries(handle.store, async () => {
+      event = await eventRead(handle, eventId, "?depth=coverage&files=3");
+    });
+
+    expect(rowsHandedFrom(records, "run_suites")).toBe(0);
+    expect(rowsHandedFrom(records, "run_cases")).toBe(0);
+    expect(rowsHandedFrom(records, "run_case_steps")).toBe(0);
+    expect(handedText(records)).not.toContain("raw-output-marker-41d9");
+    expect(pathsOf(event)).toEqual(TWELVE_PATHS.slice(0, 3));
   });
 });
 
@@ -461,4 +706,134 @@ describe("?depth=coverage on an event that has no files answers the count 0, an 
     expect(event.coverageFiles).toEqual([]);
     expect(event.coverageRoot).toBe("");
   });
+});
+
+// ── An event of any kind ────────────────────────────────────────────────────
+
+/** The id of the event a route that answers 201 stored. */
+function createdIdOf(answer: { status: number; body: Record<string, unknown> }): string {
+  expect(answer.status, JSON.stringify(answer.body).slice(0, 300)).toBe(201);
+  expect(typeof answer.body.event, "the route answers the event it stored").toBe("string");
+  return answer.body.event as string;
+}
+
+function postGate(handle: ServerHandle, key: string, gateRunId?: string): Promise<{ status: number; body: Record<string, unknown> }> {
+  return postJson(handle, "/api/v2/gates", {
+    projectKey: key,
+    agentId: AGENT,
+    gate: {
+      intent: "a gate beside the runs",
+      outcome: "passed",
+      steps: [{ name: "review", status: "passed" }],
+      ...(gateRunId !== undefined ? { run: { id: gateRunId } } : {}),
+    },
+  });
+}
+
+interface OtherKind {
+  what: string;
+  /** Stores the event on `handle`'s board and answers its id. */
+  store: (handle: ServerHandle, key: string) => Promise<string>;
+  /** What the full read of the event must show, so the event is the kind it is named. */
+  isTheKind: (full: Record<string, unknown>) => void;
+}
+
+const OTHER_KINDS: OtherKind[] = [
+  {
+    what: "a gate event",
+    store: async (handle, key) => createdIdOf(await postGate(handle, key)),
+    isTheKind: (full) => {
+      expect(full.kind).toBe("gate");
+      expect("decisions" in full).toBe(false);
+    },
+  },
+  {
+    what: "a gate event whose run has a recorded decision, its decisions included",
+    store: async (handle, key) => {
+      const gate = createdIdOf(await postGate(handle, key, "gate-run-with-a-decision"));
+      const decision = await postJson(handle, "/api/v2/gate-decisions", {
+        projectKey: key,
+        agentId: AGENT,
+        decision: { runId: "gate-run-with-a-decision", action: "approve", step: "review" },
+      });
+      expect(decision.status, JSON.stringify(decision.body).slice(0, 300)).toBe(201);
+      return gate;
+    },
+    isTheKind: (full) => {
+      expect(full.kind).toBe("gate");
+      expect((full.decisions as Array<{ runId: string; action: string }>).map((decision) => [decision.runId, decision.action])).toEqual([
+        ["gate-run-with-a-decision", "approve"],
+      ]);
+    },
+  },
+  {
+    what: "a milestone event",
+    store: async (handle, key) =>
+      createdIdOf(
+        await postJson(handle, "/api/v2/milestones", {
+          projectKey: key,
+          agentId: AGENT,
+          type: "gap-analysis",
+          label: "a milestone beside the runs",
+        }),
+      ),
+    isTheKind: (full) => {
+      expect(full.kind).toBe("milestone");
+    },
+  },
+  {
+    what: "a compile run, its report included",
+    store: async (handle, key) =>
+      eventIdOf(
+        await postJson(handle, "/api/v2/runs/compile", {
+          projectKey: key,
+          agentId: AGENT,
+          errors: "src/thing.ts(1,1): error TS1234: something is wrong",
+          format: "tsc",
+        }),
+      ),
+    isTheKind: (full) => {
+      expect(full.kind).toBe("compile");
+      expect((full.compile as { errorCount: number }).errorCount).toBe(1);
+    },
+  },
+  {
+    what: "a failing run that has a tree and raw output",
+    store: async (handle, key) =>
+      eventIdOf(
+        await postJson(handle, "/api/v2/runs", {
+          projectKey: key,
+          agentId: AGENT,
+          codec: "junit",
+          data: FAILING_REPORT,
+          raw: RAW_OUTPUT,
+          coverage: TWO_FILE_BLOCK,
+        }),
+      ),
+    isTheKind: (full) => {
+      expect(full.kind).toBe("test");
+      expect((full.summary as { failed: number }).failed).toBe(1);
+      expect(full.raw).toBe(RAW_OUTPUT);
+      expect(Array.isArray(full.tree)).toBe(true);
+    },
+  },
+];
+
+describe("?depth=coverage on an event of any kind answers the full read's keys but the tree and the raw output, beside a count of 0, an empty list and the empty root", () => {
+  for (const { what, store, isTheKind } of OTHER_KINDS) {
+    test(`${what}`, async () => {
+      const { handle, key } = await twelveFileRun();
+      const eventId = await store(handle, key);
+      const full = await eventRead(handle, eventId);
+      isTheKind(full);
+
+      const event = await eventRead(handle, eventId, "?depth=coverage");
+
+      expect(event.coverageFileCount).toBe(0);
+      expect(event.coverageFiles).toEqual([]);
+      expect(event.coverageRoot).toBe("");
+      expectTheFullReadsKeysBesideTheFileKeys(event, full);
+      expect("rawBytes" in event).toBe(false);
+    });
+  }
 });
