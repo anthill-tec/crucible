@@ -8,7 +8,8 @@ spawn at all) and nothing posted:
 - a marker `test` refuses: a marker of `"true"` or `1`; a marked script
   missing from `scripts`; a marked script whose body is empty (two marked
   entries and a marker of `false` are pinned beside the gate-frameworks
-  tests);
+  tests). Here the gate's detail EQUALS the one `test` gives for the same
+  package;
 - a marked entry whose own table entry is refused: `junit: "file"`; both
   `stream` and `junit`;
 - a marked entry keyed `test:e2e`, a tier the gate excludes: the detail
@@ -34,6 +35,7 @@ from tests.client.test_the_bun_gate_runs_every_declared_frameworks_suite import 
     VITEST_STREAM_ENTRY,
     _GateFrameworksCase,
     assert_gate_refused_before_its_tsc_step,
+    assert_gate_refused_with_tests_detail,
 )
 
 UNIT = "test:unit"
@@ -50,9 +52,10 @@ def marked(entry: dict, marker: object = True) -> dict:
 class ARefusedMarkerRefusesTheGateBeforeItsTscStepTest(_GateFrameworksCase):
 
     def refused_gate(self, scripts, targets, *named):
+        """Refused before the tsc step, with `test`'s detail."""
         self.declare(scripts, {"targets": targets})
         drive = self.drive(GATE)
-        return assert_gate_refused_before_its_tsc_step(self, drive, TABLE, *named)
+        assert_gate_refused_with_tests_detail(self, drive, TABLE, *named)
 
     def test_a_marker_that_is_the_string_true_refuses_the_gate(self):
         self.refused_gate({UNIT: "bun test tests/unit"},

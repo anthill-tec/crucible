@@ -712,6 +712,25 @@ def assert_gate_refused_before_its_tsc_step(case, drive, *named):
     return detail
 
 
+def assert_gate_refused_with_tests_detail(case, drive, *named):
+    """A gate refused on its marker before its tsc step (as above), whose
+    `target-refused` detail EQUALS the one `test` gives for the same
+    package."""
+    gate_detail = assert_gate_refused_before_its_tsc_step(case, drive, *named)
+    test_drive = case.drive("test")
+    case.assertNotEqual(test_drive.returncode, 0, test_drive.diag())
+    envelope = case.envelope(test_drive)
+    case.assertEqual((envelope.get("verb"), envelope.get("ok")), ("test", False),
+                     f"envelope={envelope!r}")
+    refused = [w.get("detail") for w in envelope.get("warnings") or []
+               if isinstance(w, dict) and w.get("code") == TARGET_REFUSED]
+    case.assertEqual(len(refused), 1,
+                     f"`test` gives one {TARGET_REFUSED} warning; envelope={envelope!r}")
+    case.assertEqual(gate_detail, (refused or [None])[0],
+                     f"the gate refuses with test's detail for the same package; "
+                     f"gate={drive.diag()} test={test_drive.diag()}")
+
+
 class TheGateRunsTheMarkedEntryAndRefusesABadMarkerTest(_GateFrameworksCase):
 
     def test_a_marked_vitest_entry_is_the_whole_suite_run_and_the_bun_test_target_runs_on_its_own(self):
@@ -740,18 +759,20 @@ class TheGateRunsTheMarkedEntryAndRefusesABadMarkerTest(_GateFrameworksCase):
 
     def test_two_marked_entries_refuse_the_gate_before_its_tsc_step(self):
         """Both entries marked (which `test` refuses): the gate refuses,
-        naming `crucible.targets` and both entries, before its tsc step."""
+        naming `crucible.targets` and both entries, before its tsc step, with
+        `test`'s detail."""
         self.declare_bun_and_vitest({**VITEST_JUNIT_ENV_ENTRY, "test": True},
                                     bun_entry={**BUN_TEST_ENTRY, "test": True})
         drive = self.drive(GATE)
-        assert_gate_refused_before_its_tsc_step(self, drive, TABLE, VITEST_TARGET, BUN_TARGET)
+        assert_gate_refused_with_tests_detail(self, drive, TABLE, VITEST_TARGET, BUN_TARGET)
 
     def test_a_marker_of_false_refuses_the_gate_before_its_tsc_step(self):
         """`"test": false` (which `test` refuses): the gate refuses, naming
-        `crucible.targets` and the entry, before its tsc step."""
+        `crucible.targets` and the entry, before its tsc step, with `test`'s
+        detail."""
         self.declare_bun_and_vitest({**VITEST_JUNIT_ENV_ENTRY, "test": False})
         drive = self.drive(GATE)
-        assert_gate_refused_before_its_tsc_step(self, drive, TABLE, VITEST_TARGET)
+        assert_gate_refused_with_tests_detail(self, drive, TABLE, VITEST_TARGET)
 
 
 if __name__ == "__main__":
