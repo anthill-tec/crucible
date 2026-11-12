@@ -86,6 +86,8 @@ EXPECTED_FLEET_FILES = frozenset({
     # The run pipeline `_crucible_axi.py` loads BY FILE PATH from its own
     # directory and re-exports.
     "_crucible_run.py",
+    # The release-notes verb's module, loaded the same way and as eagerly.
+    "_crucible_release.py",
     "toon.py",
     "STATUS-CONTRACT.md",
     # CR-CRU-138 §S4 -- the distribution's own limit declarations, package

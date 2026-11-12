@@ -64,7 +64,10 @@ AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 # The run pipeline the shared module loads by path and re-exports: a
 # shared module too, where the fleet's shared code is supposed to live.
 RUN_MODULE_PATH = CLIENTS_DIR / "_crucible_run.py"
-SHARED_MODULE_NAMES = (AXI_MODULE_PATH.name, RUN_MODULE_PATH.name)
+# The release-notes verb's module, loaded by path the same way.
+RELEASE_MODULE_PATH = CLIENTS_DIR / "_crucible_release.py"
+SHARED_MODULE_NAMES = (AXI_MODULE_PATH.name, RUN_MODULE_PATH.name,
+                       RELEASE_MODULE_PATH.name)
 
 CLIENT_FILES = {
     "bun": CLIENTS_DIR / "bun-crucible.py",

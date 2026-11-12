@@ -287,6 +287,13 @@ CLIENT_CENSUS = {
     },
 }
 
+# The release-notes read verb: read-only, filing nothing, and owed to all six
+# clients, so it is named in each client's own census (a client missing it is a
+# finding) rather than in `SHARED_CENSUS`.
+_RELEASE_NOTES_READ = _READ
+for _own_census in CLIENT_CENSUS.values():
+    _own_census["release-notes"] = _RELEASE_NOTES_READ
+
 
 # ── enumeration: the subcommands and their handlers, from the real parser ──
 
