@@ -386,6 +386,69 @@ describe("finish refuses a release whose notes are not committed and dated", () 
     },
   );
 
+  // -- the refusal names the command that drafts the notes -------------------
+
+  // The refusal points the operator at the client verb that drafts the
+  // version's section from the board. Pinned by containment of its two
+  // fragments, never by the whole sentence, and read whitespace-collapsed so a
+  // wrapped message still counts.
+  const DRAFT_VERB = "release-notes --release";
+  const DRAFT_FORMAT = "--format markdown";
+
+  /** A finish's stderr, every run of whitespace collapsed to one space. */
+  function flatStderr(res: RunResult): string {
+    return res.stderr.replace(/\s+/g, " ");
+  }
+
+  test.each(MODES)(
+    "%s refused for a CHANGELOG.md with no 9.9.9 section names the release-notes verb with --format markdown as the way to draft it",
+    (_mode, args) => {
+      const world = makeWorld({ committedChangelog: CHANGELOG_WITHOUT_SECTION });
+      const before = world.snapshot();
+      const res = world.finish(args);
+      expectNotesRefusal(world, before, res);
+      expect(res.stderr).toContain(NOTES_REFUSAL);
+      expect(flatStderr(res)).toContain(DRAFT_VERB);
+      expect(flatStderr(res)).toContain(DRAFT_FORMAT);
+    },
+  );
+
+  test.each(MODES)(
+    "%s refused for a release branch with no CHANGELOG.md names the release-notes verb with --format markdown as the way to draft it",
+    (_mode, args) => {
+      const world = makeWorld({ committedChangelog: null });
+      const before = world.snapshot();
+      const res = world.finish(args);
+      expectNotesRefusal(world, before, res);
+      expect(res.stderr).toContain(NOTES_REFUSAL);
+      expect(flatStderr(res)).toContain(DRAFT_VERB);
+      expect(flatStderr(res)).toContain(DRAFT_FORMAT);
+    },
+  );
+
+  test.each(MODES)(
+    "%s refused for an undated `## [9.9.9]` heading names the release-notes verb with --format markdown as the way to draft it",
+    (_mode, args) => {
+      const world = makeWorld({
+        committedChangelog: `# Changelog\n\n## [${VERSION}]\n\n### Fixed\n\n- The release being finished.\n\n${EARLIER_SECTION}`,
+      });
+      const before = world.snapshot();
+      const res = world.finish(args);
+      expectNotesRefusal(world, before, res);
+      expect(res.stderr).toContain(NOTES_REFUSAL);
+      expect(flatStderr(res)).toContain(DRAFT_VERB);
+      expect(flatStderr(res)).toContain(DRAFT_FORMAT);
+    },
+  );
+
+  test("an accepted --dry-run finish with dated notes prints no notes refusal and no pointer to the release-notes verb", () => {
+    const world = makeWorld({ committedChangelog: CHANGELOG_WITH_DATED_SECTION });
+    const res = world.finish(["--dry-run"]);
+    expect(res.exitCode).toBe(0);
+    expect(res.stderr).not.toContain(NOTES_REFUSAL);
+    expect(flatStderr(res)).not.toContain(DRAFT_VERB);
+  });
+
   // -- a changelog larger than a pipe buffer is read whole --------------------
 
   describe("a committed CHANGELOG.md larger than a pipe buffer", () => {
