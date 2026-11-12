@@ -326,10 +326,11 @@ guard_agent_identity() {
 # date is checked; a refusal commits nothing, under --dry-run too.
 guard_release_notes() {
     local want="$1"
-    local script_dir extractor changelog heading rest
+    local script_dir extractor changelog heading rest client
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
     extractor="$script_dir/release-notes.sh"
-    local refusal="no committed, dated release notes for $want — CHANGELOG.md at HEAD must carry a '## [$want] - YYYY-MM-DD' heading with notes under it. Write the notes AND commit them on the release branch before finish (RELEASING.md step 3)."
+    client="$(repo_root)/clients/python-crucible.py"
+    local refusal="no committed, dated release notes for $want — CHANGELOG.md at HEAD must carry a '## [$want] - YYYY-MM-DD' heading with notes under it. Write the notes AND commit them on the release branch before finish (RELEASING.md step 3). Draft the section from the board with: python3 $client release-notes --release $want --format markdown — then edit and sort it before committing."
 
     # A missing extractor is its own refusal: blaming the notes would send the
     # operator to fix a CHANGELOG.md that is already right.
