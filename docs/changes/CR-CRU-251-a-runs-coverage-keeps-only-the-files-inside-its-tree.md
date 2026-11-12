@@ -1,6 +1,6 @@
 # CR-CRU-251 — a run's coverage keeps only the files inside its tree
 
-**Status:** PENDING · Pre-review: due — user rulings at design
+**Status:** PENDING · Pre-review: ran — user rulings at design
 **Type:** feature
 **Priority:** medium
 **Depends on:** CR-CRU-193
@@ -36,8 +36,8 @@ Such a file is wrong in three places:
 ### §S1 — a file outside the run's tree is not the run's
 
 - **The rule.** A file name climbs out of the run's tree when it is relative and, read with `/`
-  and `\` both as separators, `.` segments dropped and each `<name>/..` pair cancelled, its first
-  segment is `..`.
+  and `\` both as separators, empty and `.` segments dropped and each `<name>/..` pair cancelled,
+  its first segment is `..`.
   - A name that starts with `/`, or with a drive letter and `:`, is absolute, and is kept as
     today: the board does not know the project's root.
   - `src/../lib/a.ts` stays inside the tree; `src/../../x.ts` and `./../x.ts` climb out.
@@ -46,15 +46,16 @@ Such a file is wrong in three places:
   the rule holds for every codec and every stack.
 - **The totals.** The run's `lines` and `functions` totals are the sums the texts state, less the
   counters of every file left out; each percent is taken from what remains, by `coveragePercent`.
-  When the `functions` counters that remain total 0, the run has no `functions` axis, as a file
-  with no functions has none.
+  An axis the texts state stays stated: when the `functions` counters that remain total 0, the
+  axis is `{total: 0, covered: 0, percent: 0}`, as it is today for a report with no functions.
   The `branches` axis is unchanged: no codec keeps a file's branches, and only `jacoco` states
   branches, whose names are package paths that never climb.
 - **No file left.** A block whose every file climbs out keeps no coverage. It is dropped as an
   undecodable block is (`decodeCoverageBlock` in `src/codecs/index.ts`): one `coverage-dropped`
   warning, its detail naming the block and saying that every file it names lies outside the run's
   tree. A block that names no file at all is unchanged.
-- **No warning otherwise.** A block that keeps at least one file leaves the others out silently.
+- **No warning otherwise.** A block that keeps at least one file leaves the others out silently:
+  the board does not say that it left files out, or how many.
 
 ### §S2 — docs
 
@@ -69,19 +70,20 @@ Such a file is wrong in three places:
 - [ ] **AC1 — a climbing file is left out.** An lcov text naming `src/a.ts`, `lib/b.ts` and
   `../../tmp/x/c.mjs` decodes to two files, `src/a.ts` and `lib/b.ts`; its `lines` and `functions`
   totals are the three records' sums less `c.mjs`'s counters, with their percents taken from what
-  remains. A text whose only functions lie in the climbing file decodes with no `functions` axis.
-- [ ] **AC2 — the rule's cases.** Each of `../x.ts`, `./../x.ts`, `src/../../x.ts` and
-  `..\x.ts` is left out. Each of `src/../lib/a.ts`, `./src/a.ts`, `/abs/path/a.ts`,
-  `C:\work\a.ts` and `..x/a.ts` is kept.
-- [ ] **AC3 — one name stated twice.** A climbing name stated in two texts of one block is left
-  out once, and both statements' counters leave the totals.
+  remains. A text whose only functions lie in the climbing file decodes with a `functions` axis
+  of total 0, covered 0 and percent 0.
+- [ ] **AC2 — the rule's cases.** Each of `..`, `../x.ts`, `./../x.ts`, `src/../../x.ts`,
+  `a/b/../../../x.ts`, `a//../../x.ts` and `..\x.ts` is left out. Each of `src/../lib/a.ts`,
+  `./src/a.ts`, `/abs/path/a.ts`, `C:\work\a.ts` and `..x/a.ts` is kept.
+- [ ] **AC3 — one name stated twice.** A climbing name stated in two texts of one block is absent
+  from the files, and the totals equal the sums of the kept files' counters.
 - [ ] **AC4 — no file left.** A block whose every file climbs out keeps no coverage and no files,
   and the ingest answers exactly one `coverage-dropped` warning whose detail says its files lie
   outside the run's tree. A block that names no file decodes as today.
 - [ ] **AC5 — through the ingest.** A green bun run posted to `POST /api/v2/runs` whose lcov names
-  a climbing file answers `run.coverage`, `run.coverageFileCount` and `run.coverageFiles` without
-  it, and `?depth=coverage` answers the same count and files, with `coverageRoot` the shared
-  directory of the kept names.
+  `src/a.ts`, `src/lib/b.ts` and `../../tmp/x/c.mjs` answers `run.coverage`,
+  `run.coverageFileCount: 2` and `run.coverageFiles` without the third, and `?depth=coverage`
+  answers the same count and files, with `coverageRoot: "src/"`.
 - [ ] **AC6 — the other codecs.** A `jacoco` report and a `go-coverprofile` profile keep the
   files and totals they keep today: none of their names climbs.
 - [ ] **AC7 — docs and hygiene.** The texts of §S2 are present. The code and tests add no CR id
@@ -108,6 +110,7 @@ Such a file is wrong in three places:
 
 ## Non-goals
 
+- A count, a list or a warning of the files a run left out.
 - Whether files under a project's test tree (test helpers, step files) count toward its coverage.
 - Absolute names outside the project: the board does not know the project's root.
 - Runs stored before this change keep their files and totals as stored.
