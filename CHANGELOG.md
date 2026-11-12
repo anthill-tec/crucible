@@ -110,8 +110,8 @@ Releases before 0.3.0 are described only on GitHub Releases.
     `count`.
   - The heading's date is the UTC day the release shipped, else today's UTC date.
     `--date YYYY-MM-DD` sets it.
-  - A title is the CR's latest closed plan's, else its queue entry's. A CR with neither is its id
-    alone.
+  - A title is the CR's latest merged plan's, else its queue entry's, and is written on one line.
+    A CR with neither is its id alone.
   - The verb only reads the board and takes no `--agent`.
 
 ### Changed
