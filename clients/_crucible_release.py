@@ -62,7 +62,7 @@ def add_release_notes_verb(sub, funcs, *, parents=(), add_args=()):
         RELEASE_NOTES_VERB, parents=list(parents),
         help="Draft one release's CHANGELOG section from the board (GET "
              "…/history, …/plans?status=closed, and …/queue only when a "
-             "completed CR has no titled closed plan): its dated heading, "
+             "completed CR has no titled merged plan): its dated heading, "
              "then one `### Changed` line per completed CR, in landing order. "
              "Read-only: no --agent.")
     rn.add_argument("--release",
@@ -103,28 +103,33 @@ def completed_crs(release):
     return crs
 
 
-def latest_closed_plans(plans, crs):
-    """(PURE) Each of `crs`' latest closed plan (by `closedAt`; the later one
-    of a tie), keyed by CR. A CR with no closed plan has no key."""
-    latest = {}
+def landing_plans(plans, crs):
+    """(PURE) Each of `crs`' landing plan — its latest closed plan that
+    recorded a merge (by `closedAt`; the later one of a tie) — keyed by CR. A
+    plan closed without a merge is ignored; a CR with no landing plan has no
+    key."""
+    landing = {}
     for plan in plans or []:
         cr = plan.get("cr")
-        if cr in crs and (cr not in latest or (plan.get("closedAt") or 0)
-                          >= (latest[cr].get("closedAt") or 0)):
-            latest[cr] = plan
-    return latest
+        if cr in crs and plan.get("merge") and (
+                cr not in landing or (plan.get("closedAt") or 0)
+                >= (landing[cr].get("closedAt") or 0)):
+            landing[cr] = plan
+    return landing
 
 
-def release_notes_lines(crs, latest, queue_titles):
-    """(PURE) One `- <title> (<CR id>)` line per completed CR: the planned
-    ones by their latest close, earliest first, then the rest in the history
-    row's order. The title is the latest closed plan's, else the queue
-    entry's; a CR with neither is its id alone."""
-    planned = sorted((cr for cr in crs if cr in latest),
-                     key=lambda cr: latest[cr].get("closedAt") or 0)
+def release_notes_lines(crs, landing, queue_titles):
+    """(PURE) One `- <title> (<CR id>)` line per completed CR: the landed
+    ones by their landing plan's close, earliest first, then the rest in the
+    history row's order. The title is the landing plan's, else the queue
+    entry's, each run of whitespace in it written as one space; a CR with
+    neither is its id alone."""
+    landed = sorted((cr for cr in crs if cr in landing),
+                    key=lambda cr: landing[cr].get("closedAt") or 0)
     lines = []
-    for cr in planned + [cr for cr in crs if cr not in latest]:
-        title = (latest.get(cr) or {}).get("title") or queue_titles.get(cr)
+    for cr in landed + [cr for cr in crs if cr not in landing]:
+        title = (landing.get(cr) or {}).get("title") or queue_titles.get(cr)
+        title = " ".join(str(title or "").split())
         lines.append(f"- {title} ({cr})" if title else f"- {cr}")
     return lines
 
@@ -204,7 +209,8 @@ def cmd_release_notes(args, project_dir, ops):
     (read-only, no --agent).
 
     The reads, in order: the history; the closed plans; the queue only when a
-    completed CR has no titled closed plan to take its title from. A label
+    completed CR has no titled landing plan (its latest closed plan with a
+    merge) to take its title from, at most once. A label
     missing from the history reads only the queue and the release proposals
     (`_history_label_is_held`), to tell a held label from an unknown one, and
     never the closed plans. `--format` picks the encoding: the envelope
@@ -234,15 +240,15 @@ def cmd_release_notes(args, project_dir, ops):
                                             _core.PLANS_STATUS_CLOSED)) or {}
     if not plans.get("ok"):
         return _read_refusal(emit, ops, project_dir, "closed plans", plans)
-    latest = latest_closed_plans(plans.get("plans"), crs)
+    landing = landing_plans(plans.get("plans"), crs)
     queue_titles = {}
-    if any(not (latest.get(cr) or {}).get("title") for cr in crs):
+    if any(not (landing.get(cr) or {}).get("title") for cr in crs):
         queue = ops.get(f"/api/v2/projects/{project_key}/queue") or {}
         if not queue.get("ok"):
             return _read_refusal(emit, ops, project_dir, "queue", queue)
         queue_titles = {e.get("cr"): e.get("title")
                         for e in queue.get("entries") or [] if isinstance(e, dict)}
-    cr_lines = release_notes_lines(crs, latest, queue_titles)
+    cr_lines = release_notes_lines(crs, landing, queue_titles)
     date = heading_date(release, date)
     section = build_release_notes_section(label, date, cr_lines)
     fields = {"release": label, "state": release.get("state"),
