@@ -46,6 +46,8 @@ Such a file is wrong in three places:
   the rule holds for every codec and every stack.
 - **The totals.** The run's `lines` and `functions` totals are the sums the texts state, less the
   counters of every file left out; each percent is taken from what remains, by `coveragePercent`.
+  When the `functions` counters that remain total 0, the run has no `functions` axis, as a file
+  with no functions has none.
   The `branches` axis is unchanged: no codec keeps a file's branches, and only `jacoco` states
   branches, whose names are package paths that never climb.
 - **No file left.** A block whose every file climbs out keeps no coverage. It is dropped as an
@@ -67,10 +69,10 @@ Such a file is wrong in three places:
 - [ ] **AC1 — a climbing file is left out.** An lcov text naming `src/a.ts`, `lib/b.ts` and
   `../../tmp/x/c.mjs` decodes to two files, `src/a.ts` and `lib/b.ts`; its `lines` and `functions`
   totals are the three records' sums less `c.mjs`'s counters, with their percents taken from what
-  remains.
+  remains. A text whose only functions lie in the climbing file decodes with no `functions` axis.
 - [ ] **AC2 — the rule's cases.** Each of `../x.ts`, `./../x.ts`, `src/../../x.ts` and
-  `..\\x.ts` is left out. Each of `src/../lib/a.ts`, `./src/a.ts`, `/abs/path/a.ts`,
-  `C:\\work\\a.ts` and `..x/a.ts` is kept.
+  `..\x.ts` is left out. Each of `src/../lib/a.ts`, `./src/a.ts`, `/abs/path/a.ts`,
+  `C:\work\a.ts` and `..x/a.ts` is kept.
 - [ ] **AC3 — one name stated twice.** A climbing name stated in two texts of one block is left
   out once, and both statements' counters leave the totals.
 - [ ] **AC4 — no file left.** A block whose every file climbs out keeps no coverage and no files,
@@ -101,10 +103,14 @@ Such a file is wrong in three places:
   wants measured.
 - Totals that no longer equal what the runner printed. The board states only the files that are
   the project's, and its totals agree with its files.
+- A step in a project's coverage trend at its first run after this change, when its reports named
+  such files: the earlier runs keep the totals they were stored with.
 
 ## Non-goals
 
 - Whether files under a project's test tree (test helpers, step files) count toward its coverage.
 - Absolute names outside the project: the board does not know the project's root.
 - Runs stored before this change keep their files and totals as stored.
+- A run posted already decoded (`/api/v2/runs/parsed`) keeps the totals it was posted with: it
+  names no files.
 - How a test writes its temporary modules; this board's own suite is left as it is.
