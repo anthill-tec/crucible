@@ -104,6 +104,8 @@ EXPECTED_FLEET_FILES = frozenset({
     # directory and re-exports: a fleet landed without it cannot load its
     # shared module at all.
     "_crucible_run.py",
+    # The release-notes verb's module, loaded the same way and as eagerly.
+    "_crucible_release.py",
     "toon.py",
     "STATUS-CONTRACT.md",
     # CR-CRU-138 §S4 -- the distribution's own limit declarations. They are
@@ -1295,6 +1297,49 @@ class CopiedClientsActuallyRunTest(_ScratchInstallCase):
             f"AC4/§S1 -- all {len(COPIED_CLIENT_STACKS)} copied clients must "
             f"exit 0 on `--help` from {self.clients_dir()!r}; "
             f"{len(broken)} failed:\n" + "\n".join(broken))
+
+    def test_the_install_lays_the_release_notes_module_beside_the_core(self):
+        """The release-notes verb's module lands in the same directory as the
+        core that loads it by path, byte-identical to its source."""
+        landed = os.path.join(self.clients_dir(), "_crucible_release.py")
+        source = os.path.join(SOURCE_CLIENTS_DIR, "_crucible_release.py")
+        self.assertTrue(
+            os.path.isfile(landed),
+            f"the install lays `_crucible_release.py` down beside "
+            f"`_crucible_axi.py` in {self.clients_dir()!r}")
+        with open(landed, "rb") as got, open(source, "rb") as want:
+            self.assertEqual(got.read(), want.read())
+
+    def test_each_copied_client_reaches_release_notes_from_the_copy(self):
+        """Every copied client offers the `release-notes` verb, with its
+        `--release` and `--date` flags, running from the install."""
+        broken = []
+        for stack in COPIED_CLIENT_STACKS:
+            completed = self.run_from_the_copy(
+                self.copied_client(stack), "release-notes", "--help")
+            if completed.returncode != 0 or "--release" not in completed.stdout \
+                    or "--date" not in completed.stdout:
+                broken.append(self._diagnose(stack, completed))
+        self.assertEqual(
+            [], broken,
+            "every copied client reaches `release-notes --help` from the "
+            "install:\n" + "\n".join(broken))
+
+    def test_the_copied_core_cannot_load_without_its_release_notes_module(self):
+        """The core loads the module eagerly, by path, from its OWN
+        directory: with the installed copy removed, the copied client no
+        longer starts, even though the source checkout still holds one."""
+        landed = os.path.join(self.clients_dir(), "_crucible_release.py")
+        self.assertTrue(os.path.isfile(landed),
+                        f"the install laid down {landed!r}")
+        os.remove(landed)
+        client = self.copied_client(AC4_CLIENT_STACK)
+        completed = self.run_from_the_copy(client, "--help")
+        self.assertNotEqual(
+            0, completed.returncode,
+            f"a copied core whose release-notes module is gone cannot load: "
+            f"it reads the module from its own directory, never the "
+            f"checkout's.\n{self._diagnose(AC4_CLIENT_STACK, completed)}")
 
     def test_each_copied_client_loads_both_shared_modules_from_the_copy(self):
         """AC4/§S1, the seam DIRECTLY -- "the shared envelope + codec modules

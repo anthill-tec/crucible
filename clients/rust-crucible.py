@@ -2413,6 +2413,12 @@ def cmd_history(args):
     return _axi().cmd_history(args, _resolve_project_dir(args.project_dir), _ops())
 
 
+def cmd_release_notes(args):
+    """Draft one release's CHANGELOG section from the board (read-only, no
+    --agent). Delegates to the shared implementation."""
+    return _axi().cmd_release_notes(args, _resolve_project_dir(args.project_dir), _ops())
+
+
 def cmd_runs(args):
     """List a cycle's or a release's stored test and compile runs
     (read-only, no --agent). Delegates to the shared implementation."""
@@ -3387,6 +3393,9 @@ def main():
     # client's project-dir argument is its own. No --agent: both are read-only.
     _axi().add_run_read_verbs(sub, {"runs": cmd_runs, "run": cmd_run},
                               add_args=(_add_project_dir_arg,))
+    # The release-notes READ verb, built by its module's shared registrar.
+    _axi().add_release_notes_verb(sub, {"release-notes": cmd_release_notes},
+                                  add_args=(_add_project_dir_arg,))
 
     # ── CR-CRU-075 §S1 — the queue REGISTRATION verb through the shared
     # registrar, so five clients cannot fork one verb's flag surface. No

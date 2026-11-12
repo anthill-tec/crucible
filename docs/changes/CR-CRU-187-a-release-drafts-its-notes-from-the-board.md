@@ -33,9 +33,11 @@ A new read-only verb, `release-notes`, reached by each of the six clients (`bun-
 
 1. `…/history`: the release's row gives the CRs it COMPLETED (its `waves[].crs`), its `state` and,
    when it shipped, `shippedAt`.
-2. `…/plans?status=closed`: each closed plan's `cr`, `title` and `closedAt`.
-3. `…/queue`, only when a completed CR has no closed plan (a CR a shipped release record names
-   without a plan): its entry's `title`.
+2. `…/plans?status=closed`: each closed plan's `cr`, `title`, `closedAt` and `merge`. A CR's
+   **landing plan** is its latest closed plan that recorded a merge commit; a plan closed without
+   a merge is not a landing.
+3. `…/queue`, only when a completed CR has no landing plan (a CR a shipped release record names
+   without a merged plan), or its landing plan carries no title: its entry's `title`.
 
 On the refusal path only, once the label is missing from the history: the queue and the release
 proposals, the reads the `history` verb makes to tell a held label from an unknown one.
@@ -56,10 +58,10 @@ proposals, the reads the `history` verb makes to tell a held label from an unkno
   demands. A `--date` that is not a real `YYYY-MM-DD` date is refused (§S3).
 - **One line per completed CR**, carrying its CR id. Pending CRs of the release are not listed.
   A release that completed no CR but shipped is its heading alone, with no group (`count` 0).
-- **Order.** Landing order: by the CR's latest closed plan's `closedAt`, earliest first. CRs with
-  no closed plan follow, in the order the history row lists them.
-- **Title.** The latest closed plan's `title`, else the queue entry's `title`. A CR with neither is
-  its id alone: `- <CR id>`.
+- **Order.** Landing order: by the CR's landing plan's `closedAt`, earliest first. CRs with no
+  landing plan follow, in the order the history row lists them.
+- **Title.** The landing plan's `title`, else the queue entry's `title`, each run of whitespace in
+  it (a newline included) written as one space. A CR with neither is its id alone: `- <CR id>`.
 - **Grouping.** The board records no CR type, so every line goes under `### Changed` for the human
   to sort (user ruling 2026-11-12: a CR type stays off the board).
 - **Non-goal.** A CR is listed when the board's history counts it completed (a closed plan with a
@@ -141,16 +143,18 @@ Each refusal is the `release-notes` envelope (`verb: release-notes`) on stdout, 
 - [ ] **AC3 — the draft passes the notes guard.** The markdown output for an unshipped release,
   written into a `CHANGELOG.md`, is accepted by `scripts/release-notes.sh <label>` (it prints the
   section) and by the heading check of `finish`'s notes guard.
-- [ ] **AC4 — the edge cases.** A completed CR with no closed plan takes its queue title and
-  follows the planned ones; a CR with neither title is its id alone; a CR with two closed plans of
-  different titles is one line, at its latest close, with that plan's title.
+- [ ] **AC4 — the edge cases.** A completed CR with no landing plan takes its queue title and
+  follows the planned ones; a CR whose landing plan has no title takes its queue title in its
+  landing place; a CR with neither title is its id alone; a CR with two merged plans of different
+  titles is one line, at its latest merged close, with that plan's title; a plan closed later
+  without a merge moves neither the line nor its title; a title holding a newline stays one line.
 - [ ] **AC5 — refusals.** Each case of §S3 (no `--release`, an empty one, a bad `--date`, an unknown
   label, a held label with no completed CR, and a failed history, closed-plans or queue read) exits
   with its code, under each `--format`, with `verb: release-notes`, the wording and help of §S3,
   and no section on stdout.
 - [ ] **AC6 — read-only.** Through a capturing proxy, the verb issues only the `GET`s §S1 names —
-  the queue only when a completed CR lacks a closed plan, the queue and release proposals only on
-  the refusal path — and no write.
+  the queue only when a completed CR lacks a titled landing plan, the queue and release proposals
+  only on the refusal path — and no write.
 - [ ] **AC7 — warnings under markdown.** A `--format markdown` run whose envelope would carry a
   limit-disclosure warning prints the section alone on stdout and the warning on stderr.
 - [ ] **AC8 — its own module.** `release-notes` is defined in `clients/_crucible_release.py`, which

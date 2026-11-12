@@ -58,7 +58,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS = REPO_ROOT / "clients"
 CORE_MODULE = CLIENTS / "_crucible_axi.py"
 RUN_MODULE = CLIENTS / "_crucible_run.py"
-SHARED_MODULES = (CORE_MODULE, RUN_MODULE)
+# The release-notes verb's module, loaded by the core the same way.
+RELEASE_MODULE = CLIENTS / "_crucible_release.py"
+SHARED_MODULES = (CORE_MODULE, RUN_MODULE, RELEASE_MODULE)
 CLIENT_FILES = ("bun-crucible.py", "python-crucible.py", "mvn-crucible.py",
                 "rust-crucible.py", "arduino-crucible.py")
 
@@ -544,6 +546,11 @@ class TheSharedModulesAreCleanTest(unittest.TestCase):
         if ruff is None:
             self.skipTest("ruff is not installed on this machine")
         _require_run_module(self)
+        # ruff only warns, and still exits 0, on a path that does not exist,
+        # so each module's presence is asserted before it is linted.
+        for path in SHARED_MODULES:
+            self.assertTrue(path.is_file(),
+                            f"{path.relative_to(REPO_ROOT)} exists to be linted")
         completed = subprocess.run(
             [ruff, "check", "--no-cache", "--select", "F",
              *(str(path) for path in SHARED_MODULES)],
@@ -570,6 +577,24 @@ class TheSharedModulesAreCleanTest(unittest.TestCase):
                          "clients/_crucible_run.py imports only the standard "
                          "library; it reaches the core through its bound view")
         self.assertIn("json", imported)
+
+    def test_the_release_notes_module_imports_only_the_standard_library(self):
+        self.assertTrue(RELEASE_MODULE.is_file(),
+                        f"{RELEASE_MODULE.relative_to(REPO_ROOT)} exists")
+        tree = ast.parse(_source(RELEASE_MODULE))
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported |= {alias.name.split(".")[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                imported.add("." if node.level else (node.module or "").split(".")[0])
+        foreign = sorted(name for name in imported
+                         if name not in sys.stdlib_module_names
+                         and name != "__future__")
+        self.assertEqual(foreign, [],
+                         "clients/_crucible_release.py imports only the "
+                         "standard library; it reaches the core through its "
+                         "bound view")
 
 
 # ── one run emitter ─────────────────────────────────────────────────────────

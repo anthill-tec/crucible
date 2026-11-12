@@ -458,7 +458,8 @@ class TheSharedModuleDefinesTheIngestHelpersOnceTest(unittest.TestCase):
     """The shared modules define each helper at the top level, once between
     them, and each does what both clients' copies did."""
 
-    SHARED_MODULES = ("_crucible_axi.py", "_crucible_run.py")
+    SHARED_MODULES = ("_crucible_axi.py", "_crucible_run.py",
+                      "_crucible_release.py")
 
     def setUp(self):
         self.axi = load_client("_crucible_axi.py")

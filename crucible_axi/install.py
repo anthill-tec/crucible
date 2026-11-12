@@ -233,6 +233,9 @@ STORE_DIR_NAME = "crucible"
 # And `_crucible_run.py`, the run and ingest pipeline `_crucible_axi.py` reads
 # BY FILE PATH from its own directory as it loads, so an install that omits it
 # lays down a shared module that cannot load at all.
+# And `_crucible_release.py`, the release notes verb's module, which
+# `_crucible_axi.py` reads by file path from its own directory as it loads, for
+# the same reason.
 # And `reporters/vitest-crucible.ts` and `reporters/playwright-crucible.ts`,
 # the shipped Vitest and Playwright reporters, in the `reporters/` subdirectory the bun client hands a runner as
 # `CRUCIBLE_REPORTERS`; a name may carry a `/`-separated subdirectory, which
@@ -249,6 +252,7 @@ FLEET_FILES = (
     "go-crucible.py",
     "_crucible_axi.py",
     "_crucible_run.py",
+    "_crucible_release.py",
     "toon.py",
     "STATUS-CONTRACT.md",
     manifest.CONFIG_FILENAME,

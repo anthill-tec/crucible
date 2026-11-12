@@ -21,9 +21,9 @@ const CLIENT_SCRIPTS = [
   "arduino-crucible.py",
 ];
 
-// The shared modules every client loads: the core, and the run pipeline the
-// core loads by path and re-exports.
-const SHARED_MODULES = ["_crucible_axi.py", "_crucible_run.py"];
+// The shared modules every client loads: the core, and the run pipeline and
+// the release-notes module the core loads by path and re-exports.
+const SHARED_MODULES = ["_crucible_axi.py", "_crucible_run.py", "_crucible_release.py"];
 
 function readClientSource(fileName: string): string {
   return readFileSync(join(CLIENTS_DIR, fileName), "utf8");
