@@ -256,6 +256,57 @@ function addAxis(sum: Counts | undefined, counts: Counts | undefined): Counts | 
   return { total: sum.total + counts.total, covered: sum.covered + counts.covered };
 }
 
+/**
+ * Whether a file name climbs out of the run's tree: a relative name whose
+ * first segment is `..` once `/` and `\` both separate it, empty and `.`
+ * segments are dropped and each `<name>/..` pair is cancelled. A name that
+ * starts with `/`, or with a drive letter and `:`, is absolute and never
+ * climbs: the board does not know the project's root.
+ */
+function climbsOutOfTree(name: string): boolean {
+  if (name.startsWith("/") || /^[A-Za-z]:/.test(name)) return false;
+  const kept: string[] = [];
+  for (const segment of name.split(/[/\\]/)) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === ".." && kept.length > 0 && kept[kept.length - 1] !== "..") kept.pop();
+    else kept.push(segment);
+  }
+  return kept[0] === "..";
+}
+
+/** Takes a left-out file's counters back out of an axis's sum. */
+function subtractAxis(sum: Counts | undefined, counts: Counts | undefined): void {
+  if (sum === undefined || counts === undefined) return;
+  sum.total -= counts.total;
+  sum.covered -= counts.covered;
+}
+
+/**
+ * The joined files inside the run's tree; each file left out has its lines
+ * and functions counters taken out of the sum. Throws when there are files
+ * and every one climbs out.
+ */
+function keepFilesInsideTree(
+  joined: Iterable<FileCounts>,
+  sum: Omit<CoverageCounts, "files">,
+): FileCounts[] {
+  const kept: FileCounts[] = [];
+  let leftOut = 0;
+  for (const file of joined) {
+    if (!climbsOutOfTree(file.path)) {
+      kept.push(file);
+      continue;
+    }
+    leftOut += 1;
+    subtractAxis(sum.lines, file.lines);
+    subtractAxis(sum.functions, file.functions);
+  }
+  if (leftOut > 0 && kept.length === 0) {
+    throw new Error("every file it names lies outside the run's tree");
+  }
+  return kept;
+}
+
 /** Several texts of one codec summed as ONE coverage object; throws on the first undecodable text. */
 export function decodeCoverage(codec: CoverageCodec, texts: string[]): Coverage {
   return decodeCoverageWithFiles(codec, texts).coverage;
@@ -266,7 +317,9 @@ export function decodeCoverage(codec: CoverageCodec, texts: string[]): Coverage 
  * from; throws on the first undecodable text. A name stated more than once,
  * in one text or in several, is one file whose counters are added, in the
  * order the names first appear. A file whose functions total is 0, or
- * unstated, has no functions axis.
+ * unstated, has no functions axis. A joined file whose name climbs out of the
+ * run's tree is left out, and its counters leave the totals; when the texts
+ * name files and every one climbs out, it throws.
  */
 export function decodeCoverageWithFiles(
   codec: CoverageCodec,
@@ -301,13 +354,14 @@ export function decodeCoverageWithFiles(
     sum.branches = addAxis(sum.branches, counts.branches);
   }
   if (sum === undefined) throw new Error("no coverage text");
+  const kept = keepFilesInsideTree(joined.values(), sum);
   return {
     coverage: {
       lines: axis(sum.lines),
       ...(sum.functions !== undefined ? { functions: axis(sum.functions) } : {}),
       ...(sum.branches !== undefined ? { branches: axis(sum.branches) } : {}),
     },
-    files: [...joined.values()].map((file) => ({
+    files: kept.map((file) => ({
       path: file.path,
       lines: axis(file.lines),
       ...(file.functions !== undefined && file.functions.total > 0
