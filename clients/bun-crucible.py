@@ -25,9 +25,11 @@ Subcommands:
                         the result is ingested regardless of pass/fail (junit captures
                         failures). The reports file is wiped first so only THIS run's
                         XML is ingested.
-  regression            Run the FULL suite and send its JUnit report to /api/v2/runs.
-                        With --coverage (bun --coverage-reporter=lcov) the lcov report
-                        travels with it, for the board to decode. Orchestrator pre-merge
+  regression            Run the entry marked `"test": true` when one is marked, else the
+                        FULL suite (`bun test`), and send its report to /api/v2/runs.
+                        With --coverage a `bun-test` run (bun --coverage-reporter=lcov)
+                        sends its lcov report with it, for the board to decode; any other
+                        framework is handed no coverage flags. Orchestrator pre-merge
                         gate path.
   auto-ingest           Ingest only: send an already-produced junit file to /api/v2/runs.
   check                 `tsc --noEmit` typecheck gate over the package; ingest any errors to
@@ -1356,6 +1358,11 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     `name` is that filter (a filtered run that ran nothing is aborted, as on
     `test`'s own path), and its envelope names the script it went through.
 
+    The `regression` verb itself reads the table entry marked `"test": true`
+    the way `test` does, and runs that whole script (no passthrough, no name)
+    in place of its own `bun test`; its envelope names the script. The gate
+    calls this body under its own verb, so it does not read the marker here.
+
     `name_unfiled` — set only by a gate whose whole answer is this run — adds
     one `gate-suite-unreported` warning when the run was not filed."""
     project_dir = _resolve_project_dir(args.project_dir)
@@ -1364,6 +1371,13 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     # A package declaring a key the table replaced is refused first, before
     # anything is posted, whatever script this run would take.
     _refuse_old_keys(package_dir, verb)
+    marked_run = False
+    if verb == "regression" and script is None:
+        # The marker is refused here exactly as `test` refuses it.
+        script, _framework, refusal = _marked_test_script(package_dir)
+        if refusal:
+            return _emit_target_refused(verb, project_dir, agent, refusal)
+        marked_run, passthrough, name = script is not None, (), None
     # CR-CRU-225 \u00a7S2 \u2014 a script's `crucible.targets` entry is read first:
     # one the client cannot honour is refused before anything is posted.
     target, refusal = _declared_target(package_dir, script)
@@ -1374,7 +1388,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     if target is not None and target["stream"] is not None:
         return _stream_target_run(args, verb, tier, script, target, passthrough,
                                   name, name_unfiled, project_dir, package_dir,
-                                  reports_dir)
+                                  reports_dir, marked_run=marked_run)
     bun = _resolve_bun(args.bun)
     # A script with no table entry runs as before, as `bun-test`.
     framework = target["framework"] if target else DEFAULT_FRAMEWORK
@@ -1383,9 +1397,13 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
     _wipe(reports_dir)
     junit_path = _junit_path(reports_dir)
     coverage_on = bool(getattr(args, "coverage", False))
-    # Only a `test` run names its script in the envelope: a tier verb's
-    # envelope is unchanged.
-    named_script = script if verb == "test" else None
+    # Only a run through the marked entry (`test`, or `regression` reading
+    # the marker) names its script in the envelope: a tier verb's envelope,
+    # and an unmarked run's, is unchanged.
+    named_script = script if verb == "test" or marked_run else None
+    # Only a `bun-test` script (an entry, or none) is handed bun's coverage
+    # flags: another framework's runner does not take them.
+    coverage_flags = coverage_on and framework == DEFAULT_FRAMEWORK
     # Coverage follows the run: an agent's own directory holds its lcov too;
     # otherwise bun keeps writing it to the package's `coverage/`.
     per_agent = _axi().reports_dir_is_agents_own(args.reports, agent)
@@ -1408,7 +1426,7 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         # builder returns both the command and the environment overlay the
         # target's DECLARATION asked the report path to be carried in.
         cmd, report_env = _bun_run_script_cmd(
-            bun, script, junit_path, coverage_on, coverage_dir,
+            bun, script, junit_path, coverage_flags, coverage_dir,
             mechanism, passthrough)
         env.update(report_env)
     else:
@@ -1564,16 +1582,19 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
         if coverage_on:
             lcov_path = os.path.join(coverage_dir, "lcov.info")
             # Only an invocation handed bun's coverage flags measures any: a
-            # target told its report path through `env:<VAR>` is handed none,
-            # so an lcov left at that path is not this run's.
+            # target told its report path through `env:<VAR>`, or of another
+            # framework, is handed none, so an lcov left at that path is not
+            # this run's.
             if "--coverage" in cmd and os.path.exists(lcov_path):
                 coverage_paths = [lcov_path]
             else:
+                why = ("is told its report path through the environment"
+                       if _report_path_variable(mechanism) else
+                       f"is not a `{DEFAULT_FRAMEWORK}` entry")
                 where = (f"the run left no lcov coverage report at {lcov_path}"
                          if "--coverage" in cmd else
-                         f"`{script}` is told its report path through the "
-                         f"environment and is handed no coverage flags, so it "
-                         f"measured none")
+                         f"`{script}` (framework `{framework}`) {why} and is "
+                         f"handed no coverage flags, so it measured none")
                 print(f"[crucible] WARN: --coverage was requested but {where} "
                       f"— this run is filed with no coverage", file=sys.stderr)
                 run_warnings.append(_axi().coverage_not_measured_warning(where))
@@ -1605,7 +1626,8 @@ def cmd_regression(args, verb="regression", tier: str | None = "regression",
 
 
 def _stream_target_run(args, verb, tier, script, target, passthrough, name,
-                       name_unfiled, project_dir, package_dir, reports_dir):
+                       name_unfiled, project_dir, package_dir, reports_dir,
+                       marked_run=False):
     """CR-CRU-225 \u00a7S2 \u2014 a declared script whose `crucible.targets` entry
     declares a `stream`: its record is the event stream its runner writes.
 
@@ -1617,7 +1639,9 @@ def _stream_target_run(args, verb, tier, script, target, passthrough, name,
     A codec the board's health does not list is refused before the run
     opens; with no open run (`--no-lifecycle`, a board that cannot be reached
     or opens none) the suite runs and nothing is filed. A `--name` run that
-    ran no test, counted from the stream, is aborted. Returns the exit code."""
+    ran no test, counted from the stream, is aborted. `marked_run` is a
+    `regression` through the marked entry, whose envelope names the script
+    as a `test` run's does. Returns the exit code."""
     bun = _resolve_bun(args.bun)
     agent = getattr(args, "agent", None)
     framework, codec = target["framework"], target["stream"]["codec"]
@@ -1628,7 +1652,7 @@ def _stream_target_run(args, verb, tier, script, target, passthrough, name,
     kept_env = {variable: os.path.join(reports_dir, file_name)
                 for variable, file_name in STREAM_KEPT_REPORTS}
     _wipe(reports_dir, stream_path, *kept_env.values())
-    named_script = script if verb == "test" else None
+    named_script = script if verb == "test" or marked_run else None
     release = getattr(args, "release", None)
     cmd = [bun, "run", script] + (["--", *passthrough] if passthrough else [])
     stream_env = {STREAM_VAR: stream_path, REPORTERS_VAR: _reporters_dir()}
@@ -1641,7 +1665,8 @@ def _stream_target_run(args, verb, tier, script, target, passthrough, name,
     env.update(kept_env)
     warnings, unfiled = [], None
     if getattr(args, "coverage", False):
-        where = f"`{script}` streams its record and declares no coverage"
+        where = (f"`{script}` (framework `{framework}`) streams its record "
+                 f"and declares no coverage")
         print(f"[crucible] WARN: --coverage was requested but {where} "
               f"\u2014 this run is filed with no coverage", file=sys.stderr)
         warnings.append(_axi().coverage_not_measured_warning(where))
@@ -2796,8 +2821,9 @@ def main():
         # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, which the tier-mirror guard reads as a copy of the tier vocabulary
         dict(regression=tier_verb(  # noqa: C408
             cmd_regression,
-            "Runs the full-suite `bun test` and ingests it; --coverage adds "
-            "lcov.",
+            "Runs the entry marked `\"test\": true` when one is marked, else "
+            "the full-suite `bun test`, and ingests it; --coverage adds "
+            "lcov (a `bun-test` run's).",
             (_add_regression_tier_args, _add_gate_cycle_arg,
              _add_run_release_arg, _add_reports_arg, _add_bun_arg,
              _add_package_dir_arg, _add_log_arg, _add_no_lifecycle_arg))),
