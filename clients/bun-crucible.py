@@ -27,10 +27,10 @@ Subcommands:
                         XML is ingested.
   regression            Run the entry marked `"test": true` when one is marked, else the
                         FULL suite (`bun test`), and send its report to /api/v2/runs.
-                        With --coverage a `bun-test` run (bun --coverage-reporter=lcov)
-                        sends its lcov report with it, for the board to decode; any other
-                        framework is handed no coverage flags. Orchestrator pre-merge
-                        gate path.
+                        With --coverage a `bun-test` flag run (an entry with `junit: flag`,
+                        or no entry; bun --coverage-reporter=lcov) sends its lcov report
+                        with it, for the board to decode; any other run is handed no
+                        coverage flags. Orchestrator pre-merge gate path.
   auto-ingest           Ingest only: send an already-produced junit file to /api/v2/runs.
   check                 `tsc --noEmit` typecheck gate over the package; ingest any errors to
                         /api/v2/runs/compile. (Most TS RED failures are runtime, but a type
@@ -2860,7 +2860,8 @@ def main():
             cmd_regression,
             "Runs the entry marked `\"test\": true` when one is marked, else "
             "the full-suite `bun test`, and ingests it; --coverage adds "
-            "lcov (a `bun-test` run's).",
+            "lcov (a `bun-test` flag run's: an entry with `junit: flag`, or "
+            "no entry).",
             (_add_regression_tier_args, _add_gate_cycle_arg,
              _add_run_release_arg, _add_reports_arg, _add_bun_arg,
              _add_package_dir_arg, _add_log_arg, _add_no_lifecycle_arg))),
@@ -2889,8 +2890,11 @@ def main():
 
     pmg = sub.add_parser("pre-merge-gate",
                          help="ORCHESTRATOR pre-merge: fail-fast tsc check → regression WITH "
-                              "coverage (always measured here; regression --coverage "
-                              "measures it too).")
+                              "coverage, measured for a `bun-test` flag whole-suite run "
+                              "(regression --coverage measures it too); a marked "
+                              "whole-suite run of another framework, or any other marked "
+                              "run bun's coverage flags do not reach, carries a "
+                              "`coverage-not-measured` warning instead.")
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     pmg.add_argument("--skip-check", action="store_true", help="Bypass the fail-fast tsc check")
     _add_gate_cycle_arg(pmg)
