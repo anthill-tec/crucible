@@ -282,6 +282,71 @@ describe("a name that stays inside the tree, and an absolute name, is kept as th
   });
 });
 
+// ── The names the rule settles at its edges ─────────────────────────────────
+
+/** A leading `\` is not absolute: the name is judged by its segments, and its first is `..`. */
+const EDGE_CLIMBS_OUT = ["\\..\\x.ts"];
+
+/** A drive letter of either case and `:` is absolute, with or without a separator after it. */
+const EDGE_STAYS_INSIDE = ["c:/x.ts", "C:..\\x.ts"];
+
+describe("a name at the rule's edge is judged as the rule says", () => {
+  for (const name of EDGE_CLIMBS_OUT) {
+    test(`the name ${name}, led by a backslash that is not absolute, is left out beside the kept file`, () => {
+      const { coverage, files } = decodeBeside(name);
+
+      expect(files).toEqual(filesOf([BESIDE]));
+      expect(files.map((file) => file.path)).toEqual(["src/kept.ts"]);
+      // The totals are the kept file's own: 6 of 10 lines and 1 of 2 functions.
+      expect(coverage).toEqual({
+        lines: { total: 10, covered: 6, percent: 60 },
+        functions: { total: 2, covered: 1, percent: 50 },
+      });
+    });
+  }
+
+  for (const name of EDGE_STAYS_INSIDE) {
+    test(`the name ${name}, led by a drive letter and a colon, is kept as written beside the other file`, () => {
+      const { coverage, files } = decodeBeside(name);
+
+      expect(pathsOf(files)).toEqual(["src/kept.ts", name].sort());
+      expect(byPath(files)).toEqual(byPath(filesOf([BESIDE, { path: name, ...UNDER_TEST }])));
+      // Both files' counters are in the totals: 9 of 17 lines and 3 of 5 functions.
+      expect(coverage).toEqual({
+        lines: { total: 17, covered: 9, percent: 52.9 },
+        functions: { total: 5, covered: 3, percent: 60 },
+      });
+    });
+  }
+});
+
+// ── Counters stated outside any file ────────────────────────────────────────
+
+describe("counters an lcov report states outside any file", () => {
+  test("counters a report states outside any file stay in the totals, while a climbing file's counters leave them", () => {
+    // LF/LH before any SF:, then a climbing record of 10 lines with 3 hit, then a kept record of 4 with 4 hit.
+    const text = [
+      "LF:5",
+      "LH:2",
+      "SF:../x.ts",
+      "LF:10",
+      "LH:3",
+      "end_of_record",
+      "SF:src/a.ts",
+      "LF:4",
+      "LH:4",
+      "end_of_record",
+      "",
+    ].join("\n");
+
+    const { coverage, files } = decode("lcov", [text]);
+
+    expect(files).toEqual([{ path: "src/a.ts", lines: { total: 4, covered: 4, percent: 100 } }]);
+    // The report states 19 lines with 9 hit; less the climbing file's 10 and 3, that is 9 lines with 6 covered.
+    expect(coverage.lines).toEqual({ total: 9, covered: 6, percent: 66.7 });
+  });
+});
+
 // ── No file left ────────────────────────────────────────────────────────────
 
 describe("a block whose every file climbs out of the tree keeps no coverage", () => {
