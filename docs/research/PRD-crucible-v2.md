@@ -274,6 +274,14 @@ registry** translating each tool's native output into one **canonical RunSchema*
   `PACKAGE.CLASS`, since the CSV names no source file; for `go-coverprofile` it is one file of the
   profile's blocks, with lines and no functions. A name stated more than once is one file, so the
   files' counters sum to the run's totals.
+- A coverage file whose name climbs out of the run's tree is not kept. A name climbs out when it is
+  relative and, read with `/` and `\` both as separators, empty and `.` segments dropped and each
+  `<name>/..` pair cancelled, its first segment is `..`. A name that starts with `/`, or with a drive
+  letter and `:`, is absolute and kept: the board does not know the project's root. The decoder
+  judges each file once its texts are joined, and the run's `lines` and `functions` totals then
+  count only the files that are kept, each percent taken from what remains; `branches` is
+  unchanged. A block whose every file climbs out keeps no coverage and is dropped with one
+  `coverage-dropped` warning; a block that keeps a file says nothing of the files it left out.
 - Parsed path (`/runs/parsed`): the route older clients post to — summary/tree/coverage taken as-is.
 - Both paths record a `kind:"test"` event and answer `{ok, run}`; `/runs` adds `files` and `coverage`,
   and, when the run kept coverage files, `coverageFileCount` (how many) and `coverageFiles` (the

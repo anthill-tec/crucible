@@ -31,6 +31,11 @@ Releases before 0.3.0 are described only on GitHub Releases.
     files) in its `run` block when the run kept files.
   - A failing run keeps no coverage and so no files. A run filed before this change, or through
     `/api/v2/runs/parsed`, has totals only, and the board says `no per-file coverage for this run`.
+  - A run's coverage keeps only the files inside the run's tree. A file whose name climbs out of
+    the run's tree, such as `../../tmp/x/c.mjs`, is not kept, and the run's `lines` and `functions`
+    totals then count only the files that are kept, each percent taken from what remains. An
+    absolute name is kept. A report whose every file lies outside the run's tree keeps no coverage,
+    with one `coverage-dropped` warning.
 - **A coverage run's envelope names its least covered files.** Every stack's run that kept coverage
   states a `coverage` block in its envelope: `lines` and `functions`, the run's percents
   (`functions` absent for a run with no functions axis), then `event`, the run's id, `fileCount`,
