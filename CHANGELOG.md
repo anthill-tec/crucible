@@ -134,7 +134,7 @@ Releases before 0.3.0 are described only on GitHub Releases.
   `playwright-bdd` as feature → scenario → step, whatever its codec.
 - **A bun project's `regression` and gate run the script it marks.** On a project whose
   `crucible.targets` entry is marked `"test": true`, `regression` and the `pre-merge-gate`'s
-  whole-suite step run that script in place of `bun test`, filed under `regression`, and the gate
+  whole-suite step run that script in place of `bun test`, filed under `regression`, and a full gate
   never skips that run. The gate runs every other declared bun suite on its own, whatever its
   framework, and records only the marked script's suite as covered by the whole-suite run. Coverage
   flags go only to a `bun-test` entry with `junit: flag` (or a script with no entry); any other
