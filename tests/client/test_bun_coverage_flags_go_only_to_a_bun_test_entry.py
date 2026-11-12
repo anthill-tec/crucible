@@ -7,8 +7,8 @@ Any other declared script run with `--coverage` -- an entry of another
 framework with `junit: flag`, an `env:<VAR>` entry, a `stream` entry -- is
 handed none, files no coverage, and its envelope carries exactly one
 `coverage-not-measured` warning naming the script. This holds on every verb
-that runs a declared script: `regression` (through the marked entry), a tier
-verb, and `test`.
+that takes `--coverage`: `regression` (through the marked entry) and the tier
+verbs. `test` takes no `--coverage`.
 
 Without `--coverage`, no coverage flag reaches any runner and nothing is filed
 as coverage: on an unmarked project, and on each kind of marked entry.
@@ -200,11 +200,6 @@ class CoverageIsWithheldFromEveryOtherEntryTest(_CoverageCase):
         self.declare({UNIT: "vitest run"}, {"targets": {UNIT: FLAG_VITEST_ENTRY}})
         drive = self.drive("unit", "--coverage")
         self.assert_withheld(drive, UNIT)
-
-    def test_test_on_a_marked_vitest_flag_entry_is_handed_no_coverage_flag(self):
-        self.declare({VITEST: "vitest run"}, {"targets": {VITEST: marked(FLAG_VITEST_ENTRY)}})
-        drive = self.drive("test", "--coverage")
-        self.assert_withheld(drive, VITEST)
 
 
 if __name__ == "__main__":
