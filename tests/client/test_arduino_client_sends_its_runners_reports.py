@@ -1115,8 +1115,11 @@ class NoBoardNoFiguresTest(_ArduinoProject, unittest.TestCase):
 # maven's and rust's tests; `_crucible_axi.py` still does not grow. CR-CRU-225's
 # close-out re-records it once more (the shared streamed-run close and the
 # stream-counted narration in). A change that grows a shared module
-# re-records its budget here, in the same change.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9183, "_crucible_run.py": 1972}
+# re-records its budget here, in the same change. The release-notes verb's
+# module grows the core by its load, and is a shared module itself, so the
+# core's budget is re-recorded and the module's is added.
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9190, "_crucible_run.py": 1972,
+                              "_crucible_release.py": 260}
 
 # Names the arduino client's move to the shared ingest retires: its own
 # parsers and its own figures' emitter from the client, and the client-figure

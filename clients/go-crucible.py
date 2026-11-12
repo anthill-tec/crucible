@@ -1410,6 +1410,11 @@ def cmd_history(args):
     return _axi().cmd_history(args, _resolve_project_dir(args.project_dir), _ops())
 
 
+def cmd_release_notes(args):
+    """Draft one release's CHANGELOG section. Delegates to the shared implementation."""
+    return _axi().cmd_release_notes(args, _resolve_project_dir(args.project_dir), _ops())
+
+
 def cmd_runs(args):
     """List a cycle's or a release's stored runs. Delegates to the shared implementation."""
     return _axi().cmd_runs(args, _resolve_project_dir(args.project_dir), _ops())
@@ -1944,6 +1949,8 @@ def _add_plan_verbs(sub):
     _axi().add_next_verb(sub, cmd_next, add_args=(_add_project_dir_arg,))
     _axi().add_run_read_verbs(sub, {"runs": cmd_runs, "run": cmd_run},
                               add_args=(_add_project_dir_arg,))
+    _axi().add_release_notes_verb(sub, {"release-notes": cmd_release_notes},
+                                  add_args=(_add_project_dir_arg,))
     _axi().add_queue_file_verb(sub, cmd_queue_file, add_args=(_add_project_dir_arg,))
 
 

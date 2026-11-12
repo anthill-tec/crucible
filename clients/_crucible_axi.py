@@ -3260,12 +3260,11 @@ def build_history_gate_rows(release):
             for g in gate_runs]
 
 
-def _history_refusal(emit, ops, project_dir, error, help_steps):
-    """§S4 — the `history` refusal: ok:false, the error naming the bad
-    input, a non-empty `help[]`, no rows; exit 1."""
-    emit(HISTORY_VERB, False, {"error": error, "help": help_steps},
-         ops.context(project_dir), [],
-         f"history: ok=False error={error}")
+def _history_refusal(verb, emit, ops, project_dir, error, help_steps):
+    """§S4 — the `history` refusal, under `verb`'s own name: ok:false, the
+    error naming the bad input, a non-empty `help[]`, no rows; exit 1."""
+    emit(verb, False, {"error": error, "help": help_steps},
+         ops.context(project_dir), [], f"{verb}: ok=False error={error}")
     return 1
 
 
@@ -3296,7 +3295,7 @@ def cmd_history(args, project_dir, ops):
     resp = ops.get(history_path(ops.project_key(project_dir))) or {}
     if not resp.get("ok"):
         return _history_refusal(
-            emit, ops, project_dir,
+            HISTORY_VERB, emit, ops, project_dir,
             f"could not read the project's history: {resp.get('error')}",
             server_failure_help(resp) or [
                 "check CRUCIBLE_PROJECT_KEY in the project's .env names a "
@@ -3311,12 +3310,12 @@ def cmd_history(args, project_dir, ops):
         if release is None:
             if _history_label_is_held(ops, ops.project_key(project_dir), label):
                 return _history_refusal(
-                    emit, ops, project_dir,
+                    HISTORY_VERB, emit, ops, project_dir,
                     f"release {label} is not in History yet: nothing shipped "
                     f"and no CR completed",
                     ["queue --fields release,seq,points,dependsOn"])
             return _history_refusal(
-                emit, ops, project_dir,
+                HISTORY_VERB, emit, ops, project_dir,
                 f"unknown release: {label}",
                 ["history — lists every release label the project holds"])
         rows = build_history_gate_rows(release)
@@ -7696,13 +7695,13 @@ class _CoreView:
             raise AttributeError(name) from None
 
 
-def _load_run_module():
-    """Load `_crucible_run.py` from this module's own directory as
-    `f"{__name__}_run"`, and bind it to a view of this module's namespace."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_crucible_run.py")
-    spec = importlib.util.spec_from_file_location(f"{__name__}_run", path)
+def _load_sibling_module(file_name, suffix):
+    """Load `file_name` from this module's own directory as
+    `f"{__name__}{suffix}"`, and bind it to a view of this module's namespace."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), file_name)
+    spec = importlib.util.spec_from_file_location(f"{__name__}{suffix}", path)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"could not load the run module at {path}")
+        raise RuntimeError(f"could not load the shared module at {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     # Bound after it has run: its own `_core = None` would overwrite a binding
@@ -7722,6 +7721,12 @@ def _reexport_run_module(module):
     abort_run = module.abort_run
     emit_bracket_abandoned = module.emit_bracket_abandoned
     narration_poster = module.narration_poster
+    _reexport_module(module)
+
+
+def _reexport_module(module):
+    """Carry every name `module` defines (its imports and its core view aside)
+    on this module, as the same object, unless this module already has it."""
     namespace = globals()
     for name, value in vars(module).items():
         if (not name.startswith("__") and name != "_core"
@@ -7730,8 +7735,10 @@ def _reexport_run_module(module):
             namespace[name] = value
 
 
-_RUN = _load_run_module()
+_RUN = _load_sibling_module("_crucible_run.py", "_run")
 _reexport_run_module(_RUN)
+# The release notes verb's module, loaded and re-exported the same way.
+_reexport_module(_load_sibling_module("_crucible_release.py", "_release"))
 
 
 # The gated-run bracket in flight in this process (`gated_run`): its trap, and
