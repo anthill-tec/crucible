@@ -62,8 +62,8 @@ def add_release_notes_verb(sub, funcs, *, parents=(), add_args=()):
         RELEASE_NOTES_VERB, parents=list(parents),
         help="Draft one release's CHANGELOG section from the board (GET "
              "…/history, …/plans?status=closed, and …/queue only when a "
-             "completed CR has no closed plan): its dated heading, then one "
-             "`### Changed` line per completed CR, in landing order. "
+             "completed CR has no titled closed plan): its dated heading, "
+             "then one `### Changed` line per completed CR, in landing order. "
              "Read-only: no --agent.")
     rn.add_argument("--release",
                     help="The release label whose section to draft (required).")
@@ -204,8 +204,8 @@ def cmd_release_notes(args, project_dir, ops):
     (read-only, no --agent).
 
     The reads, in order: the history; the closed plans; the queue only when a
-    completed CR has no closed plan to take its title from. A label missing
-    from the history reads only the queue and the release proposals
+    completed CR has no titled closed plan to take its title from. A label
+    missing from the history reads only the queue and the release proposals
     (`_history_label_is_held`), to tell a held label from an unknown one, and
     never the closed plans. `--format` picks the encoding: the envelope
     (`toon`, `json`) carries the section as `lines`; `markdown` prints the
@@ -236,7 +236,7 @@ def cmd_release_notes(args, project_dir, ops):
         return _read_refusal(emit, ops, project_dir, "closed plans", plans)
     latest = latest_closed_plans(plans.get("plans"), crs)
     queue_titles = {}
-    if any(cr not in latest for cr in crs):
+    if any(not (latest.get(cr) or {}).get("title") for cr in crs):
         queue = ops.get(f"/api/v2/projects/{project_key}/queue") or {}
         if not queue.get("ok"):
             return _read_refusal(emit, ops, project_dir, "queue", queue)
