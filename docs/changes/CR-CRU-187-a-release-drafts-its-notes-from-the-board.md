@@ -1,6 +1,6 @@
 # CR-CRU-187 — a release drafts its notes from the board
 
-**Status:** PENDING — filed 2026-10-14 (user ruling: accept Model B's #1449 request); gap analysis
+**Status:** COMPLETED — merged 2026-11-12 · filed 2026-10-14 (user ruling: accept Model B's #1449 request); gap analysis
 ran 2026-11-12 · Pre-review: ran — user rulings at design (10 findings folded)
 **Type:** feature
 **Points:** 8 (5 at filing; 8 after the gap analysis's ruling for a new shared module)
@@ -130,41 +130,41 @@ Each refusal is the `release-notes` envelope (`verb: release-notes`) on stdout, 
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the draft, in each client.** For EACH of the six clients, against a live in-process
+- [x] **AC1 — the draft, in each client.** For EACH of the six clients, against a live in-process
   board holding a shipped release with three completed CRs closed out of their filing order,
   `release-notes --release <label> --format markdown` exits 0 and prints exactly the section: the
   label and the UTC ship date in the heading, then `### Changed`, then the three CRs' titles and
   ids in landing order. The default `toon` and `--format json` envelopes carry `verb:
   release-notes` and the same section as `lines`, with `release`, `state`, `date` and `count`.
-- [ ] **AC2 — the heading date.** An unshipped release with completed and pending CRs is headed with
+- [x] **AC2 — the heading date.** An unshipped release with completed and pending CRs is headed with
   today's UTC date and lists only the completed CRs; `--date 2026-12-01` heads it
   `## [<label>] - 2026-12-01`; a `ship not recorded` release takes today's date too. A shipped
   release with no completed CR prints its dated heading alone and exits 0.
-- [ ] **AC3 — the draft passes the notes guard.** The markdown output for an unshipped release,
+- [x] **AC3 — the draft passes the notes guard.** The markdown output for an unshipped release,
   written into a `CHANGELOG.md`, is accepted by `scripts/release-notes.sh <label>` (it prints the
   section) and by the heading check of `finish`'s notes guard.
-- [ ] **AC4 — the edge cases.** A completed CR with no landing plan takes its queue title and
+- [x] **AC4 — the edge cases.** A completed CR with no landing plan takes its queue title and
   follows the planned ones; a CR whose landing plan has no title takes its queue title in its
   landing place; a CR with neither title is its id alone; a CR with two merged plans of different
   titles is one line, at its latest merged close, with that plan's title; a plan closed later
   without a merge moves neither the line nor its title; a title holding a newline stays one line.
-- [ ] **AC5 — refusals.** Each case of §S3 (no `--release`, an empty one, a bad `--date`, an unknown
+- [x] **AC5 — refusals.** Each case of §S3 (no `--release`, an empty one, a bad `--date`, an unknown
   label, a held label with no completed CR, and a failed history, closed-plans or queue read) exits
   with its code, under each `--format`, with `verb: release-notes`, the wording and help of §S3,
   and no section on stdout.
-- [ ] **AC6 — read-only.** Through a capturing proxy, the verb issues only the `GET`s §S1 names —
+- [x] **AC6 — read-only.** Through a capturing proxy, the verb issues only the `GET`s §S1 names —
   the queue only when a completed CR lacks a titled landing plan, the queue and release proposals
   only on the refusal path — and no write.
-- [ ] **AC7 — warnings under markdown.** A `--format markdown` run whose envelope would carry a
+- [x] **AC7 — warnings under markdown.** A `--format markdown` run whose envelope would carry a
   limit-disclosure warning prints the section alone on stdout and the warning on stderr.
-- [ ] **AC8 — its own module.** `release-notes` is defined in `clients/_crucible_release.py`, which
+- [x] **AC8 — its own module.** `release-notes` is defined in `clients/_crucible_release.py`, which
   the core loads by file path as it loads; `_crucible_axi.py` stays within its line guard; every
   site §S2 lists names the new module, and the line budgets are re-recorded; an install lays the
   module down beside the core; the verb census classifies `release-notes` as a read verb.
-- [ ] **AC9 — the flow names it.** `RELEASING.md` step 3 and its at-a-glance notes line, and the
+- [x] **AC9 — the flow names it.** `RELEASING.md` step 3 and its at-a-glance notes line, and the
   notes guard's refusal in `scripts/release.sh`, each name `release-notes --release` with
   `--format markdown`.
-- [ ] **AC10 — docs and hygiene.** The CHANGELOG `[Unreleased]` names the verb as §S4 says. No
+- [x] **AC10 — docs and hygiene.** The CHANGELOG `[Unreleased]` names the verb as §S4 says. No
   CR-shaped literal, `§` or AC number is added to comments or text under `clients/`, `src/` or
   `scripts/`, and the citation tripwire's pins are unchanged.
 
