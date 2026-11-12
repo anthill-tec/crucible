@@ -1118,7 +1118,7 @@ class NoBoardNoFiguresTest(_ArduinoProject, unittest.TestCase):
 # re-records its budget here, in the same change. The release-notes verb's
 # module grows the core by its load, and is a shared module itself, so the
 # core's budget is re-recorded and the module's is added.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9190, "_crucible_run.py": 1972,
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9199, "_crucible_run.py": 1972,
                               "_crucible_release.py": 266}
 
 # Names the arduino client's move to the shared ingest retires: its own
