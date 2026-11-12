@@ -136,10 +136,12 @@ A bun project declares, per `package.json` script, one table:
   found beside what replaced it (`junit`, `stream`, the entry marked `"test": true`) and `crucible.targets`, exits
   non-zero and files nothing. The client keeps no reader of the old keys.
 - **The script `test` runs is a table field** (CR-CRU-226): the entry marked `"test": true`, which replaces
-  `crucible.testScript`. Only `test` reads the marker; the tier verbs and the gate ignore it.
-  - `test` refuses, naming `crucible.targets` and the entry, before anything is posted: two marked entries (naming
-    both), a marker that is not `true` (an unmarked entry omits the field, so `false` is refused too), and a marked
-    entry whose script is not in `scripts` or whose body is empty.
+  `crucible.testScript`. `test`, `regression` and the gate (`pre-merge-gate`) read the marker, and the tier verbs
+  ignore it: `regression` and the gate's whole-suite step run the marked script in place of `bun test`.
+  - `test`, `regression` and the gate each refuse, naming `crucible.targets` and the entry, before anything is
+    posted (the gate before its tsc step): two marked entries (naming both), a marker that is not `true` (an
+    unmarked entry omits the field, so `false` is refused too), and a marked entry whose script is not in `scripts`
+    or whose body is empty.
   - `test <files>` runs the marked script with the files and the name filter as its passthrough, and the run
     carries the entry's framework. The filter flag follows the framework: `-t` for `bun-test` and `vitest`,
     `--grep` for `playwright` and `playwright-bdd`. `test` with no files runs the whole script under the verb

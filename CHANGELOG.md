@@ -132,6 +132,14 @@ Releases before 0.3.0 are described only on GitHub Releases.
   - Days already folded into the rollups keep their step counts.
 - **The specification view is chosen by framework.** The run detail opens a test run of framework
   `playwright-bdd` as feature → scenario → step, whatever its codec.
+- **A bun project's `regression` and gate run the script it marks.** On a project whose
+  `crucible.targets` entry is marked `"test": true`, `regression` and the `pre-merge-gate`'s
+  whole-suite step run that script in place of `bun test`, filed under `regression`, and the gate
+  never skips that run. The gate runs every other declared bun suite on its own, whatever its
+  framework, and records only the marked script's suite as covered by the whole-suite run. Coverage
+  flags go only to a `bun-test` entry with `junit: flag` (or a script with no entry); any other
+  script run with `--coverage` carries one `coverage-not-measured` warning. An unmarked project runs
+  as before.
 
 ### Removed
 
@@ -163,7 +171,7 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 The stack declaration schema:
 
-- **The installer ships `crucible-declaration.schema.json`, version 2.** It lands beside the clients
+- **The installer ships `crucible-declaration.schema.json`, version 3.** It lands beside the clients
   at `<target-dir>/clients/crucible-declaration.schema.json` (`~/.crucible/clients/` by default).
   An upgrade overwrites it; an uninstall leaves it, like every fleet file.
 - **The manifest lists it.** `crucible-clients.json` gains `declaration_schema: {path, version}`,
@@ -174,6 +182,10 @@ The stack declaration schema:
   does not know. With no schema installed it writes nothing it cannot check.
 - **Version 2 adds the `go` stack.** `crucible-declaration.schema.json` gains a `go` stack, which
   reads no `[targets]` entry and declares only its `[go] module_dir` table.
+- **Version 3 exempts the marked entry from the bun gate's key rule.** The bun `entry.key.gate`
+  descriptor gains `"marked": "exempt"`, and the bun `marker` descriptor gains
+  `"read_by": ["test", "regression", "pre-merge-gate"]`: `test`, `regression` and the gate read
+  the marked entry. A reader computing the gate rule from version 2 would refuse it.
 
 For the bun stack (`package.json`'s `crucible` block):
 
@@ -184,16 +196,20 @@ For the bun stack (`package.json`'s `crucible` block):
   - `reportPath.<script>` becomes `crucible.targets.<script>.junit`.
   - `rawReport` becomes `crucible.targets.<script>.stream`.
   - `testScript` becomes `crucible.targets.<script>.test: true`.
-- **The `"test": true` marker.** Only `test` reads the marker; the tier verbs and the gate ignore it.
-  - It is refused when two entries carry it, when it is anything but `true` (an unmarked entry omits
-    the field, so `false` is refused too), or when the marked script is missing from `scripts` or has
-    an empty body.
+- **The `"test": true` marker.** `test`, `regression` and the gate (`pre-merge-gate`) read the
+  marker; the tier verbs ignore it.
+  - Each of them refuses it when two entries carry it, when it is anything but `true` (an unmarked
+    entry omits the field, so `false` is refused too), or when the marked script is missing from
+    `scripts` or has an empty body. The gate refuses before its tsc step, posting nothing.
+  - The gate also refuses, before its tsc step, a marked entry whose own entry is refused, and a
+    marked entry whose key names a tier the gate excludes (`test:e2e`), which `regression` runs.
   - `--name` is passed as `-t` to `bun-test` and `vitest`, and as `--grep` to `playwright` and
     `playwright-bdd`.
 - **The gate.**
   - `pre-merge-gate` runs each non-`bun-test` target as its own suite.
   - It refuses a non-`bun-test` entry whose key is not a `test:` script, or is a `test:` key with
-    no script of that name in `scripts`, because it could not otherwise run it.
+    no script of that name in `scripts`, because it could not otherwise run it. The marked entry is
+    exempt: it is the gate's whole-suite run.
 - **Playwright's JSON report.** A Playwright config needs no `json` reporter: the client no longer
   points one (`PLAYWRIGHT_JSON_OUTPUT_NAME`) into a stream run's reports dir, and the board no longer
   reads it. Remove the `json` reporter from the config. The `junit` reporter stays, still pointed by
