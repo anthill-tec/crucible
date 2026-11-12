@@ -30,6 +30,7 @@ scripts/release.sh checkpoint            # optional: re-run the rehearsal a push
 scripts/release.sh set-version X.Y.Z     # housekeeping: align the committed package.json,
                                          # commit. NOT the version authority (see below)
 # write the release notes: CHANGELOG.md [Unreleased] -> [X.Y.Z] - YYYY-MM-DD, commit
+#   (draft it from any client: release-notes --release X.Y.Z --format markdown)
 scripts/release.sh finish     X.Y.Z      # preflight guards -> git flow finish -> tag X.Y.Z
                                          # (bare, no `v`) -> push master + develop + tags
 ```
@@ -326,6 +327,14 @@ operator has to act (a store migration, a retired setting). On the release branc
 `## [Unreleased]` gathered under the new version's heading (or write the section from the
 release's CRs), add its compare link at the foot of the file, and commit. A push rehearses it
 like any other commit.
+
+Any client can start the section from the board:
+`release-notes --release <X.Y.Z> --format markdown` prints it alone — the
+`## [X.Y.Z] - YYYY-MM-DD` heading, dated with the UTC day the release shipped, else today's
+UTC date, unless `--date YYYY-MM-DD` names the day, then one `### Changed` line per
+CR the release completed, carrying its title and its id, in the order the CRs landed. It only
+reads the board. Edit the draft before you commit it: sort its lines into their groups and add
+any `Upgrading` note.
 
 `finish` refuses a release whose notes are not committed and dated. It reads `CHANGELOG.md`
 at `HEAD` — not the working tree or the index — so the `## [X.Y.Z] - YYYY-MM-DD` heading,

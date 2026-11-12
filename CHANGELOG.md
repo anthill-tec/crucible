@@ -100,6 +100,19 @@ Releases before 0.3.0 are described only on GitHub Releases.
   with N its top-level test results so far and M its listed total (`running N` when its listing
   failed), as every other stack does. Subtests are not counted. Under a gated run, the ticks are
   observed by the run's gated identity.
+- **A release's notes are drafted from the board.** Every client's `release-notes --release <label>`
+  drafts the release's `CHANGELOG.md` section: its `## [<label>] - YYYY-MM-DD` heading, then one
+  `### Changed` line per CR the release completed, each carrying the CR's title and its id, in the
+  order the CRs landed. The lines are a draft, to be edited and sorted into their groups before the
+  notes are committed.
+  - `--format markdown` prints the section alone, ready to paste. Under `toon`, the default, and
+    `json`, the envelope carries the section as `lines`, with `release`, `state`, `date` and
+    `count`.
+  - The heading's date is the UTC day the release shipped, else today's UTC date.
+    `--date YYYY-MM-DD` sets it.
+  - A title is the CR's latest closed plan's, else its queue entry's. A CR with neither is its id
+    alone.
+  - The verb only reads the board and takes no `--agent`.
 
 ### Changed
 
