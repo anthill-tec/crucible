@@ -56,13 +56,14 @@ User rulings 2026-11-12, at the gap analysis (F1–F3) and at the pre-review (F4
     has no entry.
   - Any other declared script run with `--coverage` measures none and carries one `coverage-not-measured`
     warning: an entry of another framework with `junit: flag`, an `env:<VAR>` entry, or a `stream` entry.
-  - This holds on every verb that runs a declared script: `test`, `regression`, the tier verbs and the gate.
+  - This holds on every verb that takes `--coverage`: `regression`, the tier verbs and the gate. `test` takes no
+    `--coverage`, and gains none.
   - Without `--coverage`, no coverage is measured or filed on any path.
 
 Existing behaviour this CR keeps, stated so it is not mistaken for a gap:
 
-- **A `stream` entry under `--no-lifecycle` files nothing and answers `ok: false`** with its `unfiled` warning,
-  as a stream tier run does today. A stream-marked project's `regression --no-lifecycle` therefore answers
+- **A `stream` entry under `--no-lifecycle` files nothing and answers `ok: false`**, the unfiled cause as its
+  `error`, as a stream tier run does today. A stream-marked project's `regression --no-lifecycle` therefore answers
   `ok: false` even when every test passed.
 - **A codec the board does not list** (`_target_board_refusal`) is checked when the run opens, after the gate's
   tsc step, as for every declared script today.
@@ -117,8 +118,8 @@ stays within its 9200-line limit. Its new count is re-pinned once, in the cycle 
 
 `_bun_run_script_cmd` hands bun's coverage flags only to a declared script whose entry is `bun-test` with
 `junit: flag`, or that has no entry. Every other declared script run with `--coverage` carries one
-`coverage-not-measured` warning naming the script and its framework. This applies on every verb that runs a
-declared script.
+`coverage-not-measured` warning naming the script and its framework. This applies on every verb that takes
+`--coverage`.
 
 ### §S4 — the shipped declaration schema states it
 
@@ -170,8 +171,8 @@ These pin the old rule and are rewritten in RED to the new one:
   `"test": true`, `regression` spawns `bun run <that script>` and never `bun test`. The run is filed under the
   `regression` tier with the entry's framework, and the envelope carries `script: <that script>`.
   - This holds for each record kind: a `junit: flag` entry, a `junit: env:<VAR>` entry, and a `stream` entry.
-  - A `stream`-marked `regression --no-lifecycle` files nothing and answers `ok: false` with its `unfiled`
-    warning.
+  - A `stream`-marked `regression --no-lifecycle` files nothing and answers `ok: false`, with the same `error`
+    and warnings as the tier verb's `--no-lifecycle` run of that entry, and with `script: <that script>`.
   - On a project that marks no entry, `regression` spawns the same `bun test` argv as before, and its envelope
     carries no `script`.
 - [ ] **AC2 — coverage stays opt-in, and only `bun-test` takes bun's flags.** `regression` without `--coverage`
@@ -180,7 +181,7 @@ These pin the old rule and are rewritten in RED to the new one:
   - With `--coverage`, a `bun-test` `junit: flag` entry is handed bun's coverage flags.
   - With `--coverage`, each of these is handed none and carries exactly one `coverage-not-measured` warning: a
     `vitest` `junit: flag` entry, an `env:<VAR>` entry and a `stream` entry.
-  - The same holds for a tier verb and for `test` run with `--coverage` on a `vitest` `junit: flag` entry.
+  - The same holds for a tier verb run with `--coverage` on a `vitest` `junit: flag` entry.
 - [ ] **AC3 — a refused marker refuses `regression`.** For each refused marker (two marked entries; a marker of
   `"true"`, `1` or `false`; a marked script missing from `scripts`; a marked script with an empty body),
   `regression` exits non-zero with one `target-refused` envelope whose detail equals `test`'s for the same
