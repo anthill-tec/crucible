@@ -286,11 +286,11 @@ first 50; both state the run's whole file count.
 **Only the files inside the run's tree are kept.** A coverage file whose name
 climbs out of the run's tree, a relative name such as `../../tmp/x/c.mjs`
 that starts with `..` once each `<name>/..` pair is cancelled, is not kept.
-The run's `lines` and `functions` totals then count only the files that are
-kept. A name that starts with `/` or a drive letter is kept, since the board
-does not know the project's root. A report whose every file lies outside the
-run's tree keeps no coverage, and the ingest answers one `coverage-dropped`
-warning.
+The run's `lines` and `functions` totals are the sums the report states, less
+the counters of the files left out. A name that starts with `/` or a drive
+letter is kept, since the board does not know the project's root. A report
+whose every file lies outside the run's tree keeps no coverage, and the ingest
+answers one `coverage-dropped` warning.
 
 **A client reads them back.** A run that kept coverage states a `coverage`
 block in its client's envelope: its lines and functions percents, its file

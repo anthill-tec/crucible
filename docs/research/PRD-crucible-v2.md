@@ -278,10 +278,11 @@ registry** translating each tool's native output into one **canonical RunSchema*
   relative and, read with `/` and `\` both as separators, empty and `.` segments dropped and each
   `<name>/..` pair cancelled, its first segment is `..`. A name that starts with `/`, or with a drive
   letter and `:`, is absolute and kept: the board does not know the project's root. The decoder
-  judges each file once its texts are joined, and the run's `lines` and `functions` totals then
-  count only the files that are kept, each percent taken from what remains; `branches` is
-  unchanged. A block whose every file climbs out keeps no coverage and is dropped with one
-  `coverage-dropped` warning; a block that keeps a file says nothing of the files it left out.
+  judges each file once its texts are joined, and the run's `lines` and `functions` totals are the
+  sums the report states, less the counters of the files left out, each percent taken from what
+  remains; `branches` is unchanged. A block whose every file climbs out keeps no coverage and is
+  dropped with one `coverage-dropped` warning; a block that keeps a file says nothing of the files
+  it left out.
 - Parsed path (`/runs/parsed`): the route older clients post to — summary/tree/coverage taken as-is.
 - Both paths record a `kind:"test"` event and answer `{ok, run}`; `/runs` adds `files` and `coverage`,
   and, when the run kept coverage files, `coverageFileCount` (how many) and `coverageFiles` (the
