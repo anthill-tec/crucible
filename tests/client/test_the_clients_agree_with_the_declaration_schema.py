@@ -422,6 +422,16 @@ class BunsKeyRulesHoldTest(_AgreementCase):
                     self.package(scripts, {key: entry})
                     found = self.bun._off_template_target(args, surface)
                     self.assertEqual(found, key if off else None)
+                # The entry marked `"test": true` is exempt (`gate.marked`):
+                # never off the template, whatever its framework or key.
+                with self.subTest(framework=framework, key=key, in_scripts=in_scripts,
+                                  marked=True):
+                    marker = self.key["marker"]
+                    self.package(scripts, {key: {**entry, marker["field"]: marker["values"][0]}})
+                    found = self.bun._off_template_target(args, surface)
+                    self.assertIsNone(found, f"the marked entry {key!r} is exempt")
+        with self.subTest("the schema states the marked entry exempt"):
+            self.assertEqual(gate.get("marked"), "exempt", f"gate={gate!r}")
 
     def test_one_entry_marked_true_names_its_script(self):
         marker = self.key["marker"]
