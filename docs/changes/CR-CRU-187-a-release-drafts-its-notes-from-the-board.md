@@ -35,7 +35,7 @@ A new read-only verb, `release-notes`, reached by each of the six clients (`bun-
    when it shipped, `shippedAt`.
 2. `…/plans?status=closed`: each closed plan's `cr`, `title` and `closedAt`.
 3. `…/queue`, only when a completed CR has no closed plan (a CR a shipped release record names
-   without a plan): its entry's `title`.
+   without a plan), or its latest closed plan carries no title: its entry's `title`.
 
 On the refusal path only, once the label is missing from the history: the queue and the release
 proposals, the reads the `history` verb makes to tell a held label from an unknown one.
@@ -142,15 +142,16 @@ Each refusal is the `release-notes` envelope (`verb: release-notes`) on stdout, 
   written into a `CHANGELOG.md`, is accepted by `scripts/release-notes.sh <label>` (it prints the
   section) and by the heading check of `finish`'s notes guard.
 - [ ] **AC4 — the edge cases.** A completed CR with no closed plan takes its queue title and
-  follows the planned ones; a CR with neither title is its id alone; a CR with two closed plans of
+  follows the planned ones; a CR whose latest closed plan has no title takes its queue title in
+  its landing place; a CR with neither title is its id alone; a CR with two closed plans of
   different titles is one line, at its latest close, with that plan's title.
 - [ ] **AC5 — refusals.** Each case of §S3 (no `--release`, an empty one, a bad `--date`, an unknown
   label, a held label with no completed CR, and a failed history, closed-plans or queue read) exits
   with its code, under each `--format`, with `verb: release-notes`, the wording and help of §S3,
   and no section on stdout.
 - [ ] **AC6 — read-only.** Through a capturing proxy, the verb issues only the `GET`s §S1 names —
-  the queue only when a completed CR lacks a closed plan, the queue and release proposals only on
-  the refusal path — and no write.
+  the queue only when a completed CR lacks a titled closed plan, the queue and release proposals
+  only on the refusal path — and no write.
 - [ ] **AC7 — warnings under markdown.** A `--format markdown` run whose envelope would carry a
   limit-disclosure warning prints the section alone on stdout and the warning on stderr.
 - [ ] **AC8 — its own module.** `release-notes` is defined in `clients/_crucible_release.py`, which
