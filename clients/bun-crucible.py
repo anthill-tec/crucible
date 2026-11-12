@@ -1097,7 +1097,8 @@ def _emit_filter_ran_nothing(project_dir, agent_id, run_id, pattern,
 
 
 # The field a `crucible.targets` entry carries to mark itself as the script
-# `test` runs; only `test` reads it, and only the JSON boolean `true` marks.
+# `test` runs; `test`, `regression` and the gate read it (the tier verbs do
+# not), and only the JSON boolean `true` marks.
 TEST_MARKER = "test"
 # The name filter each bun framework takes on its command line.
 _NAME_FILTER_FLAGS = {"bun-test": "-t", "vitest": "-t",
@@ -1866,6 +1867,9 @@ def cmd_pre_merge_gate(args):
     # A package declaring a key the table replaced is refused before the tsc
     # step, which files a compile result of its own.
     _refuse_old_keys(package_dir, "pre-merge-gate")
+    # The entry marked `"test": true` is the whole-suite run; one the gate
+    # cannot run is refused here too, before anything runs or is posted.
+    marked = _gate_marked_script(package_dir)
     # A non-`bun-test` entry the gate cannot enumerate is refused before
     # anything runs.
     hidden = _off_template_target(args, _TIER_DECLARATION_SURFACE)
@@ -1916,6 +1920,8 @@ def cmd_pre_merge_gate(args):
     # and every bun suite, excluded ones included, runs under another
     # framework (it is then skipped, and the envelope says so); a declared
     # `bun-test` target is a subset of it rather than a replacement for it.
+    # On a marked project the whole-suite run is the marked script, never
+    # skipped, and every other declared bun suite runs on its own.
     return _axi().gate_regression(
         args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK,
         verb="pre-merge-gate",
@@ -1924,12 +1930,13 @@ def cmd_pre_merge_gate(args):
         # puts exactly one envelope on stdout under the name the caller
         # invoked.
         whole_suite=lambda: cmd_regression(_gate_regression_args(args),
-                                           verb="pre-merge-gate"),
+                                           verb="pre-merge-gate",
+                                           script=marked),
         # With no declared suite that run IS the gate: its envelope names it
         # unreported when it was not filed (the composition names it itself).
         whole_suite_alone=lambda: cmd_regression(
             _gate_regression_args(args), verb="pre-merge-gate",
-            name_unfiled=True),
+            script=marked, name_unfiled=True),
         # A suite of another framework runs here, by its own script, filed
         # under the tier its name names, and measures no coverage.
         run_suite=lambda suite: cmd_regression(
@@ -1937,9 +1944,35 @@ def cmd_pre_merge_gate(args):
                                   "coverage": False}),
             verb="pre-merge-gate", tier=suite.tier or "regression",
             script=suite.target),
-        whole_framework=DEFAULT_FRAMEWORK,
+        whole_framework=DEFAULT_FRAMEWORK, whole_script=marked,
         context=_axi_context(project_dir, agent_id=args.agent),
         crucible_url=_base_url())
+
+
+def _gate_marked_script(package_dir):
+    """The script of the entry marked `"test": true`, which the gate runs as
+    its whole-suite run, or None when no entry is marked.
+
+    A marker `test` refuses (with `test`'s detail), a marked entry whose table
+    entry is refused, and a marked entry whose key names a tier the gate
+    excludes each raise the shared `DeclarationRefused` hard stop carrying one
+    `target-refused` warning, so nothing is run and nothing is posted."""
+    script, _framework, refusal = _marked_test_script(package_dir)
+    if refusal is None and script is not None:
+        _target, refusal = _declared_target(package_dir, script)
+    if refusal is None and script is not None:
+        tier = _axi().declared_target_tier(_TIER_DECLARATION_SURFACE, script)
+        if tier in _axi().GATE_UNCOVERED_TIERS:
+            refusal = (f"{TARGETS_DECLARATION}.{script} is marked `\""
+                       f"{TEST_MARKER}\": true`, but its key names the `{tier}` "
+                       f"tier, which the gate excludes; `regression` runs it. "
+                       f"Nothing was run")
+    if refusal is None:
+        return script
+    fix = f"fix {TARGETS_DECLARATION} in package.json, then re-run pre-merge-gate"
+    raise _axi().DeclarationRefused(
+        refusal, [fix, "status"],
+        [{"code": "target-refused", "detail": refusal}])
 
 
 def _gate_regression_args(args):
@@ -2636,7 +2669,8 @@ def _targets_table(args):
 
 def _entry_framework(entry):
     """The framework a table entry names; `bun-test` for a script with no
-    entry. The `test` marker is not read: only `test` reads it."""
+    entry. The `test` marker is not read here: `test`, `regression` and the
+    gate read it through `_marked_test_script`."""
     if isinstance(entry, dict) and entry.get("framework") is not None:
         return entry.get("framework")
     return DEFAULT_FRAMEWORK
@@ -2646,10 +2680,13 @@ def _off_template_target(args, surface):
     """The first non-`bun-test` table entry whose key is not a script the
     gate enumerates, or None: the gate could not see it, so it refuses it.
     The gate enumerates `scripts`, so a key that is not `test:`-prefixed, and
-    a `test:` key with no script of that name, are both unseen."""
+    a `test:` key with no script of that name, are both unseen. The entry
+    marked `"test": true` is the gate's whole-suite run, so it is exempt."""
     head = surface.target.split("<tier>")[0]
     scripts = _package_scripts(args)
     for key, entry in _targets_table(args).items():
+        if isinstance(entry, dict) and entry.get(TEST_MARKER) is True:
+            continue
         if (_entry_framework(entry) != DEFAULT_FRAMEWORK
                 and not (key.startswith(head) and key in scripts)):
             return key
