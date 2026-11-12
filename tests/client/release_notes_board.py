@@ -190,9 +190,13 @@ class SeededProject:
 
     # -- landing ------------------------------------------------------------
 
-    def land(self, cr, title=None, wave="1"):
+    def land(self, cr, title=None, wave="1", merged=True):
         """File a plan for `cr` (titled when `title` is given), seal its one
-        cycle and close it with a merge commit: the CR lands now."""
+        cycle and close it with a merge commit: the CR lands now.
+
+        With `merged=False` the plan is closed WITHOUT a merge — the board's
+        plan route takes `merge` as optional, so this is a close the board
+        really records — and the CR does not land by it."""
         body = {"cr": cr, "wave": wave, "cycles": [{"label": "solo"}],
                 "agentId": ORCHESTRATOR}
         if title is not None:
@@ -208,10 +212,11 @@ class SeededProject:
                           {"status": status, "agentId": ORCHESTRATOR},
                           method="PATCH"),
                      f"moving {cr}'s cycle to {status}")
+        close: dict[str, object] = {"status": "closed", "agentId": ORCHESTRATOR}
+        if merged:
+            close["merge"] = {"commit": FIXTURE_COMMIT}
         _require(board_http(self.base, f"/api/v2/projects/{self.key}/plans/{plan_id}",
-                      {"status": "closed", "agentId": ORCHESTRATOR,
-                       "merge": {"commit": FIXTURE_COMMIT}},
-                      method="PATCH"),
+                      close, method="PATCH"),
                  f"closing {cr}'s plan")
         return plan_id
 

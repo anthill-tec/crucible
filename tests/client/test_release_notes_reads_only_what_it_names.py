@@ -133,10 +133,11 @@ class ReleaseNotesReadsOnlyWhatItNamesTest(unittest.TestCase):
         assert axi is not None
         self.assertEqual(axi.get("verb"), "release-notes")
         names, taken = self.reads(project, proxy)
-        self.assertEqual(names[0], "history",
-                         f"the history is read first; got {taken!r}")
-        self.assertIn("queue", names, f"got {taken!r}")
-        self.assertIn("release proposals", names, f"got {taken!r}")
+        self.assertEqual(
+            names, ["history", "queue", "release proposals"],
+            f"the history first, then the queue and the release proposals "
+            f"to tell a held label from an unknown one — and never the "
+            f"closed plans; got {taken!r}")
 
 
 if __name__ == "__main__":
