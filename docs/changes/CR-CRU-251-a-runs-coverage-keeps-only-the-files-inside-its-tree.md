@@ -1,6 +1,6 @@
 # CR-CRU-251 — a run's coverage keeps only the files inside its tree
 
-**Status:** PENDING · Pre-review: ran — user rulings at design
+**Status:** COMPLETED — merged 2026-11-12 · Pre-review: ran — user rulings at design
 **Type:** feature
 **Priority:** medium
 **Depends on:** CR-CRU-193
@@ -67,26 +67,26 @@ Such a file is wrong in three places:
 
 ## Acceptance criteria
 
-- [ ] **AC1 — a climbing file is left out.** An lcov text naming `src/a.ts`, `lib/b.ts` and
+- [x] **AC1 — a climbing file is left out.** An lcov text naming `src/a.ts`, `lib/b.ts` and
   `../../tmp/x/c.mjs` decodes to two files, `src/a.ts` and `lib/b.ts`; its `lines` and `functions`
   totals are the three records' sums less `c.mjs`'s counters, with their percents taken from what
   remains. A text whose only functions lie in the climbing file decodes with a `functions` axis
   of total 0, covered 0 and percent 0.
-- [ ] **AC2 — the rule's cases.** Each of `..`, `../x.ts`, `./../x.ts`, `src/../../x.ts`,
+- [x] **AC2 — the rule's cases.** Each of `..`, `../x.ts`, `./../x.ts`, `src/../../x.ts`,
   `a/b/../../../x.ts`, `a//../../x.ts` and `..\x.ts` is left out. Each of `src/../lib/a.ts`,
   `./src/a.ts`, `/abs/path/a.ts`, `C:\work\a.ts` and `..x/a.ts` is kept.
-- [ ] **AC3 — one name stated twice.** A climbing name stated in two texts of one block is absent
+- [x] **AC3 — one name stated twice.** A climbing name stated in two texts of one block is absent
   from the files, and the totals equal the sums of the kept files' counters.
-- [ ] **AC4 — no file left.** A block whose every file climbs out keeps no coverage and no files,
+- [x] **AC4 — no file left.** A block whose every file climbs out keeps no coverage and no files,
   and the ingest answers exactly one `coverage-dropped` warning whose detail says its files lie
   outside the run's tree. A block that names no file decodes as today.
-- [ ] **AC5 — through the ingest.** A green bun run posted to `POST /api/v2/runs` whose lcov names
+- [x] **AC5 — through the ingest.** A green bun run posted to `POST /api/v2/runs` whose lcov names
   `src/a.ts`, `src/lib/b.ts` and `../../tmp/x/c.mjs` answers `run.coverage`,
   `run.coverageFileCount: 2` and `run.coverageFiles` without the third, and `?depth=coverage`
   answers the same count and files, with `coverageRoot: "src/"`.
-- [ ] **AC6 — the other codecs.** A `jacoco` report and a `go-coverprofile` profile keep the
+- [x] **AC6 — the other codecs.** A `jacoco` report and a `go-coverprofile` profile keep the
   files and totals they keep today: none of their names climbs.
-- [ ] **AC7 — docs and hygiene.** The texts of §S2 are present. The code and tests add no CR id
+- [x] **AC7 — docs and hygiene.** The texts of §S2 are present. The code and tests add no CR id
   literal.
 
 ## Estimated size
