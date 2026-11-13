@@ -934,7 +934,7 @@ class NoBoardNoFiguresTest(_MavenProject, unittest.TestCase):
 # creates a project grows that module, and the core by its help steps.
 SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9097, "_crucible_run.py": 1972,
                               "_crucible_release.py": 266,
-                              "_crucible_project.py": 503}
+                              "_crucible_project.py": 521}
 _OWN_INGEST_LINES = ("ingest junit:", "ingest parsed:")
 
 

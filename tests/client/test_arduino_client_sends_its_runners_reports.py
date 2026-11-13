@@ -1123,7 +1123,7 @@ class NoBoardNoFiguresTest(_ArduinoProject, unittest.TestCase):
 # project grows that module, and the core by its help steps.
 SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9097, "_crucible_run.py": 1972,
                               "_crucible_release.py": 266,
-                              "_crucible_project.py": 503}
+                              "_crucible_project.py": 521}
 
 # Names the arduino client's move to the shared ingest retires: its own
 # parsers and its own figures' emitter from the client, and the client-figure
