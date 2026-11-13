@@ -163,7 +163,8 @@ This step is not part of the code and has no AC.
 
 - [ ] **AC1 — a project file without `[client]` falls through to the install's.** A scratch fleet whose install
   `crucible.toml` declares `[client] url = <board double>`, and whose project `crucible.toml` declares only
-  `[gate] skip`, posts a verb's requests to the double. The envelope's `context.board` names it.
+  `[gate] skip`, posts a verb's requests to the double. The envelope names no `context.board`, because the board is
+  the install's own (see AC3's `context.board` bullet).
 - [ ] **AC2 — the project's own `url` still wins.** With both files declaring a `url`, the project's is used.
 - [ ] **AC3 — what is passed over.** Each of these project files falls through to the install's `url`:
   - no `[client]` table;
