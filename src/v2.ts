@@ -2110,12 +2110,16 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
 }
 
 /**
- * The decoders' never-clean guards a lint post turns off: a linter that
- * exited 0 succeeded, so its report stays clean even when it printed nothing.
- * Every other post keeps every guard.
+ * The decoders' never-clean guards a lint post turns off. `lintExit` is set
+ * only on a lint post that states its linter's exit. Such a post is never
+ * filed clean by mistake (a non-zero exit with no error gains the synthetic
+ * error), so gcc's no-error→raw fallback is off and a warnings-only run keeps
+ * its findings; go's message-only error is off only when the linter exited 0.
+ * A compile post, or a lint post with no stated exit, keeps every guard.
  */
 function lintGuards(lintExit: number | undefined): CompileGuards {
-  return lintExit === 0 ? { gccNoErrorToRaw: false, goMessageOnly: false } : {};
+  if (lintExit === undefined) return {};
+  return lintExit === 0 ? { gccNoErrorToRaw: false, goMessageOnly: false } : { gccNoErrorToRaw: false };
 }
 
 /**

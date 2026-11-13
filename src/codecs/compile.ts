@@ -50,8 +50,9 @@ const RUSTC_LOCATION = /^\s*-->\s*(.+?):(\d+):(\d+)\s*$/;
 const RUSTC_SUMMARY = /generated \d+ warnings?/;
 // cargo's per-crate trailer: `could not compile `NAME` … due to N previous error…`.
 const CARGO_TRAILER = /^could not compile /;
-// rustc's own lint, named by its level note: `= note: `#[warn(unused_variables)]` …`.
-const RUSTC_LINT_NOTE = /^\s*= note: `#\[(?:warn|deny|forbid)\(([a-z_][a-z0-9_]*)\)\]`/;
+// rustc's own lint, named by its level note: `= note: `#[warn(unused_variables)]` …`, or the
+// command-line form `-D warnings` prints: `= note: `-D unused-variables` implied by …`.
+const RUSTC_LINT_NOTE = /^\s*= note: `(?:#\[(?:warn|deny|forbid)\(([a-z_][a-z0-9_]*)\)\]|-[DWF] ([a-z_][a-z0-9_-]*))`/;
 // A clippy lint's help URL, on master or a versioned `rust-<v>` path: `…/index.html#<name>`.
 const CLIPPY_URL = /rust-lang\.github\.io\/rust-clippy\/(?:master|rust-[\d.]+)\/index\.html#([\w-]+)/;
 // A clippy lint's level note: `#[warn(clippy::<name>)]`, `#[deny(clippy::<name>)]` or `-D clippy::<name>`.
@@ -152,7 +153,7 @@ function lintName(lines: string[], from: number, clippy: boolean): string | unde
       if (note && clippyNote === undefined) clippyNote = `clippy::${snakeCase(note[1] ?? "")}`;
     }
     const rustc = line.match(RUSTC_LINT_NOTE);
-    if (rustc && rustcNote === undefined) rustcNote = rustc[1];
+    if (rustc && rustcNote === undefined) rustcNote = snakeCase(rustc[1] ?? rustc[2] ?? "");
   }
   return clippyNote ?? rustcNote;
 }
