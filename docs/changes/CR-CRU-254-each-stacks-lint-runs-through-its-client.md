@@ -90,6 +90,10 @@ shared client module of its own, shipped with the fleet); CR-CRU-056 (the gated-
 - **The linter is not on PATH:** `lint` is refused, naming it. Nothing is posted.
 - **The board is unreachable:** the client's existing ingest-failed warning applies, and the verdict still follows
   the exit code.
+- **Every post** (CR-CRU-199's pre-review folds) carries the linter's `runnerExit`, and a clean run is posted
+  even when the linter printed nothing, so the board records every lint run with the linter's own verdict.
+- **The clients' `runs` and `run` verbs** (`_run_brief`) say `lint`, not `compile`, for a record carrying the
+  marker, naming its tool (moved here from CR-CRU-199 §S3).
 - **The rust client:**
   - `lint` uses the default or declared command;
   - `clippy` and `workspace-clippy` keep their own arguments;
@@ -133,7 +137,9 @@ Then Model B is told over Sandesh, answering #1488.
 - [ ] **AC1 — a declared linter runs and files.**
   - In a scratch python project declaring `[lint]` ruff, against a board double, `python-crucible.py lint` runs
     the declared command in the project directory.
-  - It posts `format: "ruff"`, `lint: "ruff"` and the raw output to `/api/v2/runs/compile`.
+  - It posts `format: "ruff"`, `lint: "ruff"`, the linter's `runnerExit` and the raw output to
+    `/api/v2/runs/compile`.
+  - A clean run whose linter printed nothing is posted too, with `runnerExit: 0`.
   - It answers `ok` and the linter's exit verdict, with `declared: declared:<file>`.
 - [ ] **AC2 — the linter's exit code is the verdict.**
   - A linter exiting 1 makes `lint` answer `ok: false`, and the client exits non-zero.
@@ -170,6 +176,8 @@ Then Model B is told over Sandesh, answering #1488.
   - The core stays at or under 9200 lines.
   - `SHARED_MODULE_LINE_BUDGETS` pins `_crucible_lint.py` in all three copies.
   - No `src/` or `public/` file changes.
+- [ ] **AC15 — the clients' `runs` and `run` say lint.** For a lint record, `runs` and `run` name it `lint` and its
+  tool; a compile record's wording is unchanged.
 
 ## Non-goals
 
