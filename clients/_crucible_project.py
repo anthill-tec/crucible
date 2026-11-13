@@ -232,7 +232,7 @@ PROJECT_KEY_UNKNOWN_CODE = "project-key-unknown"
 PROJECT_KEY_ARCHIVED_CODE = "project-key-archived"
 PROJECT_KEY_MALFORMED_CODE = "project-key-malformed"
 # pi-lens-ignore: S105 — a refusal code, not a secret
-PROJECT_TOKEN_MISMATCH_CODE = "project-token-mismatch"  # noqa: S105
+PROJECT_TOKEN_MISMATCH_CODE = "project-token-mismatch"
 PROJECT_ARCHIVED_CODE = "project-archived"
 AGENT_ROLE_CONFLICT_CODE = "agent-role-conflict"
 ARGUMENT_REFUSED_CODE = "argument-refused"
@@ -243,7 +243,7 @@ _META_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]*")
 _UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 # pi-lens-ignore: S105 — a metadata key's name, not a secret
-_TOKEN_META_KEY = "PROJECT_TOKEN"  # noqa: S105
+_TOKEN_META_KEY = "PROJECT_TOKEN"
 _ACRONYM_META_KEY = "PROJECT_ACRONYM"
 _ORCHESTRATOR = "ORCHESTRATOR"
 
