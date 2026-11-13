@@ -463,16 +463,19 @@ def _seed_project(args, root, key, agent_id, ops, fields):
     fields["metadata"] = resp.get("metadata") or {}
 
 def _refuse_role_conflict(agent_id, row):
-    """Refuse an agent already on the project under another role, or bound
-    to a cycle, naming its role and its cycle."""
+    """Refuse an agent already on the project under another role, with no
+    role (a historical row), or bound to a cycle, naming its role and its
+    cycle."""
     role = row.get("role")
     cycle = row.get("boundCycleId")
     if role == _ORCHESTRATOR and cycle is None:
         return
-    held = f"role {role}" if cycle is None else f"role {role}, bound to cycle {cycle}"
+    held = f"under role {role}" if role else "with no role"
+    if cycle is not None:
+        held = f"{held}, bound to cycle {cycle}"
     raise _Stopped(
         AGENT_ROLE_CONFLICT_CODE,
-        f"agent {agent_id} is already on this project under {held}; it is not "
+        f"agent {agent_id} is already on this project {held}; it is not "
         "re-registered as ORCHESTRATOR, and nothing is changed",
         [("re-run with an --agent that is not on the project, or with this "
           "agent once its registration has ended")])
