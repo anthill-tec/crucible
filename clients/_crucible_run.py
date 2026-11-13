@@ -34,11 +34,13 @@ import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
+from typing import Any
 
 #: The core this module is bound to: a live view of `_crucible_axi.py`'s
 #: namespace, set by the core's loader once this module has run. Every core
-#: name is read through it at call time, never copied.
-_core = None
+#: name is read through it at call time, never copied. It is typed `Any` so a
+#: type checker resolves the core's names through it.
+_core: Any = None
 
 
 # ── CR-CRU-111 §S4 — a `unit` run that WAITS says so (AC6b) ───────────────

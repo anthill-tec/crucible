@@ -38,7 +38,6 @@ import stat
 import sys
 import tempfile
 import unittest
-from pathlib import Path
 from unittest import mock
 
 from tests.client.test_cr054_fleet_inventory import CLIENT_FILES

@@ -142,7 +142,6 @@ import os
 import re
 import resource
 import shutil
-import sys
 import tempfile
 import time
 import unittest

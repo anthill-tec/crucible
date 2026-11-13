@@ -40,7 +40,6 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from tests.client.fake_nextest import DEFAULT_LCOV
 from tests.client.live_run_harness import RecordingBoard
 from tests.client.rust_stream_harness import (
     AGENT,

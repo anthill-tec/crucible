@@ -220,7 +220,6 @@ import importlib.util
 import os
 import re
 import shutil
-import sys
 import tempfile
 import unittest
 from pathlib import Path

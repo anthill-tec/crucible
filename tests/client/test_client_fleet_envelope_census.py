@@ -4067,7 +4067,7 @@ class Cr075QueueFileAxiConformanceTest(unittest.TestCase):
             result = self._drive(client_key, case).get("result")
             stderr = getattr(result, "stderr", "") or ""
             if "axi:" in stderr:
-                offenders[f"{client_key}:{case}"] = f"envelope on stderr"
+                offenders[f"{client_key}:{case}"] = "envelope on stderr"
             elif CR075_QUEUE_FILE_VERB not in stderr:
                 offenders[f"{client_key}:{case}"] = f"no human line: {stderr!r}"
         self.assertEqual(

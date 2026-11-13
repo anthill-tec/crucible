@@ -155,6 +155,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.test_cr139_installer_writes_the_connection import (
+    SHIPPED_RANGE_MAX,
+    SHIPPED_RANGE_MIN,
+    _claim_consecutive_ports,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_NAME = "crucible.toml"
 
@@ -163,6 +169,21 @@ CONFIG_NAME = "crucible.toml"
 #: so every expectation below is READ BACK off it rather than written out.
 SHIPPED_CLIENT_DATA = REPO_ROOT / "clients" / CONFIG_NAME
 SHIPPED_SERVER_DATA = REPO_ROOT / "src" / CONFIG_NAME
+
+
+def _with_listener_values(text, values):
+    """`text`, a server template, with each `<key> = <number>` line named in
+    `values` given that value instead; every other byte is kept, comments and
+    all, so the template stays the shipped one but for its listener."""
+    for key, value in values.items():
+        text, replaced = re.subn(
+            rf"(?m)^({re.escape(key)}\s*=\s*)\d+", rf"\g<1>{value}", text)
+        if replaced != 1:
+            raise AssertionError(
+                f"fixture sanity: the shipped server template must declare "
+                f"`{key}` exactly once; it declared it {replaced} times")
+    return text
+
 
 #: §S4 -- the manifest key the fleet's OWN shipped data is declared under.
 #: FLEET content, deliberately NOT the operator's `config`: one is package
@@ -561,11 +582,34 @@ class _InstalledDeploymentCase(unittest.TestCase):
         (package.json `files`) and the source §S2 lays the operator's copy down
         from. `bun add -g` is never run: the stage that would run it is stubbed,
         and what §S2 turns on is whether the package IS there.
+
+        The template is the shipped one with its three listener values
+        replaced by ephemeral ports this test claims: a two-port range and a
+        `port` outside it. A fresh install probes that range, so it never
+        binds a port in the shipped window, where a live board may listen.
         """
+        low, high, port = _claim_consecutive_ports(3)
+        declared = {"port_range_min": low, "port_range_max": high,
+                    "port": port}
+        template = _with_listener_values(
+            SHIPPED_SERVER_DATA.read_text(encoding="utf-8"), declared)
+        server_table = tomllib.loads(template).get("server", {})
+        self.assertEqual(
+            declared, {key: server_table.get(key) for key in declared},
+            "fixture sanity: the provisioned template must declare this "
+            "test's own ephemeral listener values")
+        for key in declared:
+            value = server_table.get(key)
+            self.assertFalse(
+                SHIPPED_RANGE_MIN <= value <= SHIPPED_RANGE_MAX,
+                "fixture sanity: the provisioned template would declare "
+                f"`{key} = {value}`, inside the shipped "
+                f"{SHIPPED_RANGE_MIN}-{SHIPPED_RANGE_MAX} window that carries "
+                "a live board on a development workstation; every port this "
+                "suite declares must be an ephemeral one it claimed")
         package = self.install._provisioned_server_package_dir()
         os.makedirs(os.path.join(package, "src"), exist_ok=True)
-        shutil.copyfile(SHIPPED_SERVER_DATA,
-                        os.path.join(package, "src", CONFIG_NAME))
+        Path(package, "src", CONFIG_NAME).write_text(template, encoding="utf-8")
         Path(package, "package.json").write_text(
             json.dumps({"name": self.install.SERVER_NPM_PACKAGE,
                         "version": "0.0.0-sandbox"}) + "\n", encoding="utf-8")

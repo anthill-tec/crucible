@@ -135,13 +135,6 @@ URL_KEY = "url"
 SHIPPED_RANGE_MIN = 3800
 SHIPPED_RANGE_MAX = 3899
 
-#: What the fixture's own provisioned template declares as its `port` while the
-#: shipped file does not yet carry a `[server]` table to read one from. It is
-#: deliberately OUTSIDE every narrow range this file declares, so "the install
-#: fell back to the shipped default" is distinguishable from "the install
-#: probed".
-_TEMPLATE_DEFAULT_PORT = 3849
-
 LOOPBACK = "127.0.0.1"
 
 #: Words that describe a port being unavailable -- the prompt must say what
@@ -223,6 +216,11 @@ def _claim_consecutive_ports(count, attempts=64):
             base = probe.getsockname()[1]
         if base + count - 1 > 65535:
             continue
+        # The kernel's ephemeral range does not overlap the shipped window by
+        # default, but nothing guarantees it: a span that would touch the
+        # window is skipped, never bound.
+        if base <= SHIPPED_RANGE_MAX and base + count - 1 >= SHIPPED_RANGE_MIN:
+            continue
         held = []
         for offset in range(count):
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -241,6 +239,24 @@ def _claim_consecutive_ports(count, attempts=64):
         "could not claim %d consecutive free loopback ports in %d attempts -- "
         "this suite refuses to fall back to a hardcoded window, because the "
         "shipped 3800-3899 one carries a live board" % (count, attempts))
+
+
+def _claim_port_outside(low, high, attempts=64):
+    """One loopback port claimed from the kernel, then released, that lies
+    OUTSIDE `low`-`high`.
+
+    It is what the fixture's provisioned template declares as its `port` when
+    a test names none: deliberately outside the range that template declares,
+    so "the install fell back to the template's default" is distinguishable
+    from "the install probed". Ephemeral, like every port this suite owns.
+    """
+    for _attempt in range(attempts):
+        port = _claim_consecutive_ports(1)[0]
+        if not low <= port <= high:
+            return port
+    raise AssertionError(
+        f"could not claim a free loopback port outside {low}-{high} in "
+        f"{attempts} attempts")
 
 
 def _without_server_table(text):
@@ -390,7 +406,7 @@ class _InstallerConnectionCase(unittest.TestCase):
     # -- the machine the install runs on ------------------------------------
 
     def provision_server(self, *, range_min=None, range_max=None,
-                         host=LOOPBACK, port=_TEMPLATE_DEFAULT_PORT):
+                         host=LOOPBACK, port=None):
         """Make the server PROVISIONED LOCALLY, as the installer's own probe
         answers that question, and give its packaged `src/crucible.toml` the
         `[server]` table whose bounds this test wants probed.
@@ -399,9 +415,24 @@ class _InstallerConnectionCase(unittest.TestCase):
         template from, which is §S1a's whole point: the range is read from the
         RESOLVED server config file, so a test declares its own two bounds in a
         file instead of exporting a knob this CR is retiring.
+
+        Every default is an ephemeral port, never one in the shipped window: an
+        undeclared range is two claimed consecutive ports, and an undeclared
+        `port` is a claimed port outside the declared range.
         """
         if range_min is None or range_max is None:
-            range_min, range_max = SHIPPED_RANGE_MIN, SHIPPED_RANGE_MAX
+            range_min, range_max = self.consecutive_ports(2)
+        if port is None:
+            port = _claim_port_outside(range_min, range_max)
+        for key, value in ("port", port), (RANGE_MIN_KEY, range_min), \
+                (RANGE_MAX_KEY, range_max):
+            self.assertFalse(
+                SHIPPED_RANGE_MIN <= value <= SHIPPED_RANGE_MAX,
+                "fixture sanity: the provisioned template would declare "
+                f"`{key} = {value}`, inside the shipped "
+                f"{SHIPPED_RANGE_MIN}-{SHIPPED_RANGE_MAX} window that carries a "
+                "live board on a development workstation; every port this "
+                "suite declares must be an ephemeral one it claimed")
         package = self.install._provisioned_server_package_dir()
         os.makedirs(os.path.join(package, "src"), exist_ok=True)
         text = _without_server_table(
@@ -956,7 +987,7 @@ class AConfiguredPortIsNeverReProbedTest(_InstallerConnectionCase):
         happened not to be touched", and it is the state an operator lands in
         the moment they move a board off the port the install picked.
         """
-        ports = self.declare_range(width=2)
+        self.declare_range(width=2)
         self.install_once()
         chosen = self.written_listener()
         operators_port = self.consecutive_ports(1)[0]
