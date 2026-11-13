@@ -27,6 +27,11 @@ import unittest
 from tests.client.declaration_schema_harness import STACKS, load_schema
 
 BUN_FRAMEWORKS = ["bun-test", "vitest", "playwright", "playwright-bdd"]
+# The schema's `version` before the bun gate exempted the entry marked
+# `"test": true` (read from `develop`'s `clients/crucible-declaration.schema.json`
+# when that exemption was written). The exemption made it one more: a reader
+# computing the gate rule from the earlier version would refuse that entry.
+VERSION_BEFORE_THE_MARKED_ENTRY_EXEMPTION = 2
 RESERVED = {
     "bun": BUN_FRAMEWORKS,
     "rust": ["nextest"],
@@ -57,8 +62,9 @@ class TheSchemaIsAVersionedPlainDescriptorTest(_SchemaCase):
         self.assertIs(type(version), int, f"version is {version!r}, not an integer")
         self.assertGreaterEqual(version, 1)
 
-    def test_the_version_is_two_since_the_go_stack_joined(self):
-        self.assertEqual(self.schema.get("version"), 2)
+    def test_the_version_is_one_more_since_the_gate_exempted_the_marked_entry(self):
+        self.assertEqual(self.schema.get("version"),
+                         VERSION_BEFORE_THE_MARKED_ENTRY_EXEMPTION + 1)
 
     def test_the_description_says_it_is_not_a_json_schema(self):
         description = self.schema.get("description")

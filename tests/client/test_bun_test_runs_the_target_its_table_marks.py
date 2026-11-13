@@ -1,8 +1,9 @@
 """`test` runs the `crucible.targets` entry its table marks `"test": true`.
 
 A bun project marks ONE entry of `crucible.targets` as the script `test` runs,
-with the field `"test": true` (an unmarked entry omits the field). Only `test`
-reads the marker: `test <files>` and `test --name <pattern>` run the marked
+with the field `"test": true` (an unmarked entry omits the field). `test`,
+`regression` and the gate read the marker, and the tier verbs ignore it. Here
+it is `test` that is pinned: `test <files>` and `test --name <pattern>` run the marked
 script, the files and the framework's filter flag riding its passthrough, and
 the run carries the entry's framework; `test` with no files runs the whole
 marked script under the verb `test`, with no tier.

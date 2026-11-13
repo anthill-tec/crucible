@@ -29,8 +29,12 @@ What is pinned:
 - the Vitest suite's run requests no coverage and adds no
   `coverage-not-measured` warning, while the whole-suite run keeps its
   coverage;
-- a `"test"` marker on a table entry changes nothing in the gate: only `test`
-  reads it.
+- on a project that marks an entry `"test": true`, the gate's whole-suite
+  run is that marked script, run once, and never `bun test`; every other
+  declared suite runs as a suite of its own;
+- a marker `test` refuses (two marked entries; a marker that is not `true`)
+  refuses the gate before its tsc step: a non-zero exit, ONE `target-refused`
+  envelope under `pre-merge-gate`, nothing spawned and nothing posted.
 
 Every test drives the REAL `clients/bun-crucible.py` as an OS subprocess
 (`TargetsCase`, tests/client/bun_targets_harness.py) with a fake `bun` that
@@ -59,6 +63,7 @@ from typing import Any
 from tests.client.bun_targets_harness import (
     JUNIT_VAR,
     STREAM_PATH_DECLARATION,
+    TABLE,
     TargetsBoard,
     TargetsCase,
 )
@@ -677,52 +682,97 @@ class TheGateRequestsNoCoverageForAVitestSuiteTest(_GateFrameworksCase):
         self.assert_no_coverage_not_measured_warning(drive)
 
 
-# ── the `test` marker is ignored by the gate ────────────────────────────────
+# ── the gate reads the `test` marker ────────────────────────────────────────
 
-class TheTestMarkerChangesNothingInTheGateTest(_GateFrameworksCase):
+TARGET_REFUSED = "target-refused"
 
-    def shape(self, drive):
-        """What the gate ran and reported: its exit, ok, rows, the argv of
-        every spawn and the framework and tier of every filed run."""
-        envelope = self.envelope(drive)
-        return {"exit": drive.returncode, "ok": envelope.get("ok"),
-                "rows": self.rows(drive),
-                "spawns": sorted(json.dumps(s.get("argv")) for s in self.spawns()),
-                "filed": sorted((b.get("framework"), b.get("tier")) for b in self.ingests())}
 
-    def test_a_marked_vitest_entry_gates_exactly_as_the_unmarked_one(self):
-        """The same project gated with `test:vitest` unmarked and then marked
-        `"test": true`: identical runs and rows, the Vitest suite run in
-        both."""
-        self.declare_bun_and_vitest()
-        unmarked = self.gate()
-        self.assert_ran_once_by_its_own_script(unmarked, VITEST_TARGET)
-        before = self.shape(unmarked)
-        self.forget()
+def assert_gate_refused_before_its_tsc_step(case, drive, *named):
+    """A gate refused on its `crucible.targets` before its tsc step: a
+    non-zero exit, nothing posted, nothing spawned (the tsc step included),
+    and ONE `ok: false` envelope under `pre-merge-gate` carrying exactly one
+    `target-refused` warning whose detail names each of `named`. Returns that
+    detail."""
+    case.assertNotEqual(drive.returncode, 0, f"a refused gate exits non-zero; {drive.diag()}")
+    case.assertEqual(case.spawns(), [],
+                     f"the refusal comes before the tsc step, so nothing is spawned; "
+                     f"{drive.diag()}")
+    case.assertEqual(case.board.posts(), [],
+                     f"a refused gate posts nothing; {drive.diag()}")
+    envelope = case.envelope(drive)
+    case.assertEqual((envelope.get("verb"), envelope.get("ok")), (GATE, False),
+                     f"the refusal is the gate's own ok:false envelope; envelope={envelope!r}")
+    refused = [w for w in envelope.get("warnings") or []
+               if isinstance(w, dict) and w.get("code") == TARGET_REFUSED]
+    case.assertEqual(len(refused), 1,
+                     f"exactly one {TARGET_REFUSED} warning; envelope={envelope!r}")
+    detail = str((refused or [{}])[0].get("detail"))
+    for name in named:
+        case.assertIn(name, detail, f"the refusal names {name!r}; detail={detail!r}")
+    return detail
+
+
+def assert_gate_refused_with_tests_detail(case, drive, *named):
+    """A gate refused on its marker before its tsc step (as above), whose
+    `target-refused` detail EQUALS the one `test` gives for the same
+    package."""
+    gate_detail = assert_gate_refused_before_its_tsc_step(case, drive, *named)
+    test_drive = case.drive("test")
+    case.assertNotEqual(test_drive.returncode, 0, test_drive.diag())
+    envelope = case.envelope(test_drive)
+    case.assertEqual((envelope.get("verb"), envelope.get("ok")), ("test", False),
+                     f"envelope={envelope!r}")
+    refused = [w.get("detail") for w in envelope.get("warnings") or []
+               if isinstance(w, dict) and w.get("code") == TARGET_REFUSED]
+    case.assertEqual(len(refused), 1,
+                     f"`test` gives one {TARGET_REFUSED} warning; envelope={envelope!r}")
+    case.assertEqual(gate_detail, (refused or [None])[0],
+                     f"the gate refuses with test's detail for the same package; "
+                     f"gate={drive.diag()} test={test_drive.diag()}")
+
+
+class TheGateRunsTheMarkedEntryAndRefusesABadMarkerTest(_GateFrameworksCase):
+
+    def test_a_marked_vitest_entry_is_the_whole_suite_run_and_the_bun_test_target_runs_on_its_own(self):
+        """`test:vitest` marked `"test": true` beside an unentried
+        `test:client`: the marked script runs exactly once, as the whole-suite
+        run, and its row is covered by that run; `bun test` never runs;
+        `test:client` runs once by its own script, its row its own."""
         self.declare_bun_and_vitest({**VITEST_JUNIT_ENV_ENTRY, "test": True})
-        marked = self.gate()
-        self.assert_ran_once_by_its_own_script(marked, VITEST_TARGET)
-        self.assertEqual(self.shape(marked), before, marked.diag())
+        drive = self.gate()
+        self.assertEqual(self.whole_suite_spawns(), [],
+                         f"a marked project's gate never runs `bun test`; "
+                         f"spawns={self.spawns()!r}; {drive.diag()}")
+        self.assert_ran_once_by_its_own_script(drive, VITEST_TARGET)
+        self.assert_ran_once_by_its_own_script(drive, BUN_TARGET)
+        marked_row = self.row(drive, VITEST_TARGET)
+        self.assertIsInstance(marked_row.get("coveredBy"), str, f"row={marked_row!r}")
+        self.assertEqual((marked_row.get("passed"), marked_row.get("total")),
+                         (SCRIPT_CASES, SCRIPT_CASES), f"row={marked_row!r}")
+        own_row = self.row(drive, BUN_TARGET)
+        self.assertNotIn("coveredBy", own_row, f"row={own_row!r}")
+        self.assertEqual(own_row.get("client"), BUN_CLIENT_NAME, f"row={own_row!r}")
+        self.assertEqual((own_row.get("passed"), own_row.get("total"), own_row.get("outcome")),
+                         (SCRIPT_CASES, SCRIPT_CASES, "pass"), f"row={own_row!r}")
+        self.assertEqual(drive.returncode, 0, drive.diag())
+        self.assertIs(self.envelope(drive).get("ok"), True, drive.diag())
 
-    def test_two_marked_entries_do_not_stop_the_gate(self):
-        """Both entries marked (which `test` refuses): the gate runs the whole
-        suite and the Vitest suite and is ok."""
+    def test_two_marked_entries_refuse_the_gate_before_its_tsc_step(self):
+        """Both entries marked (which `test` refuses): the gate refuses,
+        naming `crucible.targets` and both entries, before its tsc step, with
+        `test`'s detail."""
         self.declare_bun_and_vitest({**VITEST_JUNIT_ENV_ENTRY, "test": True},
                                     bun_entry={**BUN_TEST_ENTRY, "test": True})
-        drive = self.gate()
-        self.assertEqual(len(self.whole_suite_spawns()), 1, f"spawns={self.spawns()!r}")
-        self.assert_ran_once_by_its_own_script(drive, VITEST_TARGET)
-        self.assertEqual(drive.returncode, 0, drive.diag())
-        self.assertIs(self.envelope(drive).get("ok"), True, drive.diag())
+        drive = self.drive(GATE)
+        assert_gate_refused_with_tests_detail(self, drive, TABLE, VITEST_TARGET, BUN_TARGET)
 
-    def test_a_marker_that_is_not_true_does_not_stop_the_gate(self):
-        """`"test": false` (which `test` refuses): the gate runs the Vitest
-        suite and is ok."""
+    def test_a_marker_of_false_refuses_the_gate_before_its_tsc_step(self):
+        """`"test": false` (which `test` refuses): the gate refuses, naming
+        `crucible.targets` and the entry, before its tsc step, with `test`'s
+        detail."""
         self.declare_bun_and_vitest({**VITEST_JUNIT_ENV_ENTRY, "test": False})
-        drive = self.gate()
-        self.assert_ran_once_by_its_own_script(drive, VITEST_TARGET)
-        self.assertEqual(drive.returncode, 0, drive.diag())
-        self.assertIs(self.envelope(drive).get("ok"), True, drive.diag())
+        drive = self.drive(GATE)
+        assert_gate_refused_with_tests_detail(self, drive, TABLE, VITEST_TARGET)
 
 
 if __name__ == "__main__":

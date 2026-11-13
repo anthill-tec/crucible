@@ -3,7 +3,8 @@
   - The CHANGELOG's `[Unreleased]` "Stack declaration changes" names the schema
     file `crucible-declaration.schema.json`, its installed path
     (`<target-dir>/clients/crucible-declaration.schema.json`) and its version,
-    which must equal the shipped file's own `version`, 2.
+    which must equal the shipped file's own `version`: one more than before
+    the bun gate exempted the entry marked `"test": true`.
   - The same section states the writer rule: a writer writes the stacks and
     fields it knows, warns on a newer schema version, never removes a field it
     does not know, and with no schema writes nothing it cannot check.
@@ -28,6 +29,10 @@ RUNBOOK = REPO_ROOT / "docs" / "RUNBOOK.md"
 SCHEMA_NAME = "crucible-declaration.schema.json"
 SHIPPED_SCHEMA = REPO_ROOT / "clients" / SCHEMA_NAME
 INSTALLED_PATH = re.compile(r"(?:<target-dir>|~/\.crucible)/clients/" + re.escape(SCHEMA_NAME))
+# The schema's `version` before the bun gate exempted the entry marked
+# `"test": true` (read from `develop`'s `clients/crucible-declaration.schema.json`
+# when that exemption was written); the exemption made it one more.
+VERSION_BEFORE_THE_MARKED_ENTRY_EXEMPTION = 2
 
 def _phrase(words):
     """A phrase as a pattern that survives the CHANGELOG's line wrapping."""
@@ -109,11 +114,13 @@ class TheChangelogNamesTheDeclarationSchemaTest(unittest.TestCase):
                       f"the schema part states version {_shipped_version()}; "
                       f"versions stated: {sorted(stated)}")
 
-    def test_the_section_states_schema_version_two(self):
-        self.assertEqual(_shipped_version(), 2, "the shipped schema is version 2")
+    def test_the_section_states_the_schema_version_one_more_than_before_the_marked_entry_exemption(self):
+        expected = VERSION_BEFORE_THE_MARKED_ENTRY_EXEMPTION + 1
+        self.assertEqual(_shipped_version(), expected,
+                         f"the shipped schema is version {expected}")
         stated = {int(number) for number in re.findall(
             r'(?i)(?:\bversion`?\W{0,4}|"version":\s*)(\d+)\b', self.schema)}
-        self.assertIn(2, stated, f"the schema part states version 2; versions "
+        self.assertIn(expected, stated, f"the schema part states version {expected}; versions "
                                  f"stated: {sorted(stated)}")
 
     def test_the_section_states_the_writer_rule(self):

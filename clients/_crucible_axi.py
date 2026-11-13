@@ -2683,11 +2683,13 @@ DECLARATION_REFUSED_CODE = "declaration-refused"
 
 class DeclarationRefused(Exception):
     """Raised when a project declares what the client refuses; `detail`
-    names the declaration and `help[]` the next moves."""
+    names the declaration, `help[]` the next moves and `warnings[]` any the
+    envelope carries."""
 
-    def __init__(self, detail, help_steps):
+    def __init__(self, detail, help_steps, warnings=()):
         self.detail = detail
         self.help = list(help_steps)
+        self.warnings = list(warnings)
         super().__init__(detail)
 
 
@@ -2697,7 +2699,7 @@ def emit_declaration_refused_hard_stop(verb, refusal, context=None):
     Nothing is run, nothing is posted from this path."""
     emit_axi(verb or "unknown", False,
              {"error": refusal.detail, "help": refusal.help},
-             context or {}, [],
+             context or {}, refusal.warnings,
              legacy_line=f"error: {DECLARATION_REFUSED_CODE} \u2014 {refusal.detail}")
     return 1
 
@@ -7311,7 +7313,7 @@ def _adopt_suite_warnings(gate_warnings, envelope):
 
 def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
                     crucible_url, warnings=(), named=None, run_suite=None,
-                    whole_framework=None):
+                    whole_framework=None, whole_script=None):
     """§S2 — the ADDITIVE composition: this stack's OWN whole-suite regression,
     plus one dispatched run for every declared suite another stack owns, in ONE
     envelope naming them all.
@@ -7348,18 +7350,24 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     it runs in this process through `run_suite(suite)`, as a suite of its own.
     When the project declares at least one own-stack suite and every one of
     them, excluded ones included, is such a suite, the whole-suite run is
-    skipped, and the envelope says so."""
+    skipped, and the envelope says so. When `whole_script` names the script
+    the whole-suite run is, that run is never skipped, only that script's
+    suite is covered by it, and every other own-stack suite is `run_suite`'s."""
     rows, gate_warnings = [], list(warnings)
     ok, worst = True, 0
     scope = GATE_SCOPE_FULL if named is None else GATE_SCOPE_SCOPED
 
     def own_run(suite):
-        return (run_suite is not None and suite.stack == stack
-                and suite.framework is not None
+        if run_suite is None or suite.stack != stack:
+            return False
+        if whole_script is not None:
+            return suite.target != whole_script
+        return (suite.framework is not None
                 and suite.framework != whole_framework)
 
     own = [suite for suite in suites if suite.stack == stack]
-    run_whole = not (own and all(own_run(suite) for suite in own))
+    run_whole = whole_script is not None or not (
+        own and all(own_run(suite) for suite in own))
     extra = {} if run_whole else {"wholeSuite": (
         f"the whole {stack} suite was skipped: every declared {stack} suite "
         f"runs under a framework of its own")}
@@ -7639,7 +7647,7 @@ def refuse_unrunnable_scoped_gate(args, *, surface, stack, get, project_key):
 
 def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
                     context, crucible_url, whole_suite_alone=None,
-                    run_suite=None, whole_framework=None):
+                    run_suite=None, whole_framework=None, whole_script=None):
     """§S1/§S2 — the GATE's regression step: the one composition all five gates
     run, so "the gate covers every declared suite" is a property of the fleet
     and not of one client.
@@ -7662,7 +7670,8 @@ def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
                            context=context, crucible_url=crucible_url,
                            named=scoped_gate_targets(args),
                            run_suite=run_suite,
-                           whole_framework=whole_framework)
+                           whole_framework=whole_framework,
+                           whole_script=whole_script)
 
 
 # ── the run and ingest pipeline lives in `_crucible_run.py` ─────────────────

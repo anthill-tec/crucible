@@ -136,28 +136,42 @@ A bun project declares, per `package.json` script, one table:
   found beside what replaced it (`junit`, `stream`, the entry marked `"test": true`) and `crucible.targets`, exits
   non-zero and files nothing. The client keeps no reader of the old keys.
 - **The script `test` runs is a table field** (CR-CRU-226): the entry marked `"test": true`, which replaces
-  `crucible.testScript`. Only `test` reads the marker; the tier verbs and the gate ignore it.
-  - `test` refuses, naming `crucible.targets` and the entry, before anything is posted: two marked entries (naming
-    both), a marker that is not `true` (an unmarked entry omits the field, so `false` is refused too), and a marked
-    entry whose script is not in `scripts` or whose body is empty.
+  `crucible.testScript`. `test`, `regression` and the gate (`pre-merge-gate`) read the marker, and the tier verbs
+  ignore it: `regression` and the gate's whole-suite step run the marked script in place of `bun test`.
+  - `test`, `regression` and the gate each refuse, naming `crucible.targets` and the entry, before anything is
+    posted (the gate before its tsc step): two marked entries (naming both), a marker that is not `true` (an
+    unmarked entry omits the field, so `false` is refused too), and a marked entry whose script is not in `scripts`
+    or whose body is empty.
   - `test <files>` runs the marked script with the files and the name filter as its passthrough, and the run
     carries the entry's framework. The filter flag follows the framework: `-t` for `bun-test` and `vitest`,
     `--grep` for `playwright` and `playwright-bdd`. `test` with no files runs the whole script under the verb
     `test`, with no tier. With no entry marked, `test` runs `bun test`, unchanged.
 - **The gate runs every declared framework** (CR-CRU-226). `pre-merge-gate` joins each `test:` script with its
   entry, so each declared suite carries its framework (`bun-test` when it has no entry).
-  - A `bun-test` suite is covered by the whole-suite `bun test` run, as before. A suite of any other framework runs
-    in the gate's own process, through its own script, filed under the tier its name names, else `regression`; its
+  - On an unmarked project, a `bun-test` suite is covered by the whole-suite `bun test` run, as before. A suite of
+    any other framework runs in the gate's own process, through its own script, filed under the tier its name names, else `regression`; its
     row carries its own counts and outcome and the client that ran it, and its counts are added to the gate's totals.
-  - When every declared bun suite is of another framework, the whole-suite run is skipped and the envelope's
-    `wholeSuite` says so. A project whose `*.test.ts` files both runners collect is the project's to separate.
-  - `--suites` naming a non-`bun-test` target runs only that target; naming a `bun-test` target runs the whole suite
-    and records the `bun-test` targets it covered.
-  - A non-`bun-test` suite's run measures no coverage and adds no `coverage-not-measured` warning: the gate's
-    coverage is the `bun-test` code's, as before.
+  - On an unmarked project, when every declared bun suite is of another framework, the whole-suite run is skipped
+    and the envelope's `wholeSuite` says so. A project whose `*.test.ts` files both runners collect is the project's to separate.
+  - `--suites` naming a non-`bun-test` target runs only that target; on an unmarked project, naming a `bun-test`
+    target runs the whole suite and records the `bun-test` targets it covered.
+  - A non-`bun-test` suite that runs on its own measures no coverage and adds no `coverage-not-measured` warning;
+    on an unmarked project the gate's coverage is the `bun-test` code's, as before.
   - A non-`bun-test` entry whose key is not a `test:` script, or is a `test:` key with no script of that name in
     `scripts`, is refused by the gate before anything runs, naming it, since the gate could not otherwise see it. The
-    `e2e` tier stays outside the gate, whatever its framework.
+    entry marked `"test": true` is exempt: the gate runs it as its whole-suite run. The `e2e` tier stays outside the
+    gate, whatever its framework.
+  - On a marked project, the marked entry's script is the gate's whole-suite run, in place of `bun test`:
+    - a full gate always runs it and never skips it;
+    - it covers only its own suite, when the marked entry is itself a declared suite, and nothing else is assumed
+      to be collected by it;
+    - every other declared bun suite runs on its own, whatever its framework, measuring no coverage;
+    - a marked whole-suite run that cannot take bun's coverage flags (its entry is not `bun-test` with
+      `junit: flag`) measures none and carries one `coverage-not-measured` warning, and a green gate stays
+      `ok: true`;
+    - `--suites` runs only the suites it names: naming the marked script's own suite runs the marked script as the
+      whole-suite run, naming any other suite runs that suite alone and the marked script does not run, and a
+      marked script keyed outside `test:<tier>` (`test`, say) cannot be named.
   - The other stacks' gates are unchanged: their suites declare no framework of their own. The python gate's
     tiers state their runner, `pytest` or `unittest`, as each run's framework.
 - The other stacks declare the same three facts in their own place (`crucible.toml` for cargo,
