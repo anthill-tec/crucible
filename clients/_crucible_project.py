@@ -243,7 +243,7 @@ _META_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]*")
 _UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 # pi-lens-ignore: S105 — a metadata key's name, not a secret
-_TOKEN_META_KEY = "PROJECT_TOKEN"
+_TOKEN_META_KEY = "PROJECT_TOKEN"  # noqa: S105
 _ACRONYM_META_KEY = "PROJECT_ACRONYM"
 _ORCHESTRATOR = "ORCHESTRATOR"
 
