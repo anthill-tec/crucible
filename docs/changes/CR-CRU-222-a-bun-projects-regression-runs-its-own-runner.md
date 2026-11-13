@@ -1,6 +1,6 @@
 # CR-CRU-222 — a bun project's regression runs its own runner
 
-**Status:** PENDING — filed 2026-10-30 (Model B request, Sandesh 1499; user ruling: its own CR in 0.4.0, at the
+**Status:** COMPLETED — merged 2026-11-13 · filed 2026-10-30 (Model B request, Sandesh 1499; user ruling: its own CR in 0.4.0, at the
 end of wave 8); gap analysis ran 2026-11-12 · Pre-review: ran — user rulings at design (9 findings folded)
 **Type:** feature
 **Points:** 8 (5 at filing; 8 after the pre-review's gate rulings, which reach the shared gate composition)
@@ -167,7 +167,7 @@ These pin the old rule and are rewritten in RED to the new one:
 
 ## Acceptance criteria
 
-- [ ] **AC1 — a declared runner is run.** On a bun project whose `crucible.targets` marks a script
+- [x] **AC1 — a declared runner is run.** On a bun project whose `crucible.targets` marks a script
   `"test": true`, `regression` spawns `bun run <that script>` and never `bun test`. The run is filed under the
   `regression` tier with the entry's framework, and the envelope carries `script: <that script>`.
   - This holds for each record kind: a `junit: flag` entry, a `junit: env:<VAR>` entry, and a `stream` entry.
@@ -175,25 +175,25 @@ These pin the old rule and are rewritten in RED to the new one:
     and warnings as the tier verb's `--no-lifecycle` run of that entry, and with `script: <that script>`.
   - On a project that marks no entry, `regression` spawns the same `bun test` argv as before, and its envelope
     carries no `script`.
-- [ ] **AC2 — coverage stays opt-in, and only `bun-test` takes bun's flags.** `regression` without `--coverage`
+- [x] **AC2 — coverage stays opt-in, and only `bun-test` takes bun's flags.** `regression` without `--coverage`
   hands no coverage flag to its runner and files no coverage, on an unmarked project and on each kind of marked
   entry.
   - With `--coverage`, a `bun-test` `junit: flag` entry is handed bun's coverage flags.
   - With `--coverage`, each of these is handed none and carries exactly one `coverage-not-measured` warning: a
     `vitest` `junit: flag` entry, an `env:<VAR>` entry and a `stream` entry.
   - The same holds for a tier verb run with `--coverage` on a `vitest` `junit: flag` entry.
-- [ ] **AC3 — a refused marker refuses `regression`.** For each refused marker (two marked entries; a marker of
+- [x] **AC3 — a refused marker refuses `regression`.** For each refused marker (two marked entries; a marker of
   `"true"`, `1` or `false`; a marked script missing from `scripts`; a marked script with an empty body),
   `regression` exits non-zero with one `target-refused` envelope whose detail equals `test`'s for the same
   package, spawns nothing and posts nothing.
-- [ ] **AC4 — the gate's whole-suite step runs it.** On a marked project, `pre-merge-gate` spawns
+- [x] **AC4 — the gate's whole-suite step runs it.** On a marked project, `pre-merge-gate` spawns
   `bun run <marked script>` exactly once as its whole-suite run, and never `bun test`. This holds in each case:
   - no declared suite;
   - declared suites alongside;
   - a marked `vitest` entry keyed `test` with only a `playwright` `test:e2e` declared (the run is not skipped).
 
   An unmarked project's gate spawns the same argv as before.
-- [ ] **AC5 — only the marked script is covered.** The gate:
+- [x] **AC5 — only the marked script is covered.** The gate:
   - on a project that marks `test:unit` (`bun-test`, body `bun test tests/unit`) and declares an unentried
     `test:integration`: runs `test:unit` as the whole-suite run, records `test:unit` as covered by it, and runs
     `test:integration` as its own suite with no coverage;
@@ -201,25 +201,25 @@ These pin the old rule and are rewritten in RED to the new one:
     a `playwright` `test:client`: runs the marked script once, and `test:unit` and `test:client` each as its own
     suite;
   - on an unmarked project: records every `bun-test` suite as covered by `bun test`, as before.
-- [ ] **AC6 — the marked entry is not refused as off-template.** A project whose marked entry is `vitest` and
+- [x] **AC6 — the marked entry is not refused as off-template.** A project whose marked entry is `vitest` and
   keyed `test` (not `test:<tier>`) runs the gate past the off-template refusal. An unmarked `vitest` entry keyed
   `build`, and one keyed `test:e2e` with no such script, are still refused, with the same detail as before.
-- [ ] **AC7 — the gate refuses before its tsc step.** `pre-merge-gate` exits non-zero with one `target-refused`
+- [x] **AC7 — the gate refuses before its tsc step.** `pre-merge-gate` exits non-zero with one `target-refused`
   envelope under `pre-merge-gate`, spawning no `tsc` and filing nothing, for each of:
   - each refused marker of AC3;
   - a marked entry whose table entry is refused (`junit: "file"`; both `stream` and `junit`);
   - a marked entry keyed `test:e2e`. Here the detail names `test:e2e`, the `e2e` tier, and that `regression`
     runs it, while `regression` on the same project runs it.
-- [ ] **AC8 — coverage in the gate.** A gate whose whole-suite run goes through an `env:<VAR>` marked entry,
+- [x] **AC8 — coverage in the gate.** A gate whose whole-suite run goes through an `env:<VAR>` marked entry,
   and one through a `vitest` `junit: flag` marked entry, each answer `ok: true` when green, with exactly one
   `coverage-not-measured` warning and no coverage flag spawned.
-- [ ] **AC9 — the schema states it.** The shipped schema's `version` is one more than at the branch's base. Its
+- [x] **AC9 — the schema states it.** The shipped schema's `version` is one more than at the branch's base. Its
   bun `entry.key.gate` carries `"marked": "exempt"`, and its bun `marker` carries
   `"read_by": ["test", "regression", "pre-merge-gate"]`.
   - The client's off-template rule agrees with the schema for every framework, marked and unmarked, as the
     clients-agree test reads it.
   - The installed manifest's `declaration_schema.version` equals the shipped schema's.
-- [ ] **AC10 — docs and hygiene.** The texts of §S1 (help) and §S5 are present. None of these still says that
+- [x] **AC10 — docs and hygiene.** The texts of §S1 (help) and §S5 are present. None of these still says that
   only `test` reads the marker: the CHANGELOG `[Unreleased]`, DN-crucible-live-test-progress,
   `clients/bun-crucible.py`, or the tests of §S6. `docs/changes/` is historical and out of scope. The code and
   tests add no CR id literal.
