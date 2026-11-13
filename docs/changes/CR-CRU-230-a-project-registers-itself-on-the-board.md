@@ -155,7 +155,10 @@ The refusals in steps 2–4 run before anything is written, so they never write 
 **Reading:**
 
 - The file is split into lines on `\n`. A trailing `\r` is not part of a line's text.
-- A `CRUCIBLE_PROJECT_KEY=` line's value is the text after the first `=`, stripped of whitespace.
+- A key line is one the clients' own readers take as the key: its stripped text does not start with `#`, and the
+  text before its first `=`, stripped, is `CRUCIBLE_PROJECT_KEY`. So `export CRUCIBLE_PROJECT_KEY=…` and a
+  commented line are not key lines.
+- A key line's value is the text after the first `=`, stripped of whitespace.
 - With several such lines, the last one counts, as the clients' readers do.
 - An empty value, or no such line, means no key. Quotes are not removed.
 
@@ -168,7 +171,9 @@ The refusals in steps 2–4 run before anything is written, so they never write 
 - **Line endings:**
   - A replaced line keeps its own line ending.
   - An appended line uses the file's first line ending (`\r\n` or `\n`).
-  - If the file does not end in a line ending, one is added before the appended line.
+  - If the file does not end in a line ending, the file's first line ending is added before the appended line.
+  - A file with no line ending at all uses `\n`.
+  - A replaced key line is replaced whole, leading whitespace included.
 - **Everything else is kept byte for byte:** other lines, comments, order, and the line endings.
 - **A key already set** is never written: `envWritten: already-set`. Step 2 has already answered or refused it.
 - **Without `--write-env`,** nothing is written and `envWritten: not-asked`.
