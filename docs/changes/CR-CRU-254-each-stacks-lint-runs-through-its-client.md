@@ -37,7 +37,8 @@ shared client module of its own, shipped with the fleet); CR-CRU-056 (the gated-
     first file that parses wins.
   - **The fields:**
     - `command` is a non-empty list of non-empty strings, run in the project directory;
-    - `format` names the board's decoder (CR-CRU-199), and may be omitted, which means `raw`.
+    - `format` names the board's decoder (CR-CRU-199), and may be omitted, in which case the client posts none and
+      the board detects the format, falling back to raw.
   - **A malformed table is refused**, naming the file, before any linter starts.
   - **Defaults when nothing is declared:**
     - rust: `cargo clippy --workspace --all-targets --all-features -- -D warnings`, format `clippy`. This is today's

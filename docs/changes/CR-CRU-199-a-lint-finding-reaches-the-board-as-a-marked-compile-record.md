@@ -137,7 +137,8 @@ the command for each capture.
   - A quoted source line (`#![deny(clippy::all)]` under "the lint level is defined here") is never read as a code.
 - **rustc's own lints** (for example `unused_variables`) take their name from the `#[warn(<name>)]` note as the
   code, or from a `-D <name>` / `-W <name>` note (kebab case read as snake case), the form `-D warnings` prints
-  (amended at GREEN 942). An `E####` error keeps its code.
+  (amended at GREEN 942). This applies under the `clippy` decoder only: a `rustc` compile record decodes exactly as
+  before this CR (amended at VERIFY 944). An `E####` error keeps its code.
 - **The trailer** `error: could not compile … due to N previous error…; M warnings emitted` is not a finding.
 
 **`gcc`** takes a trailing bracketed check as the code. When the bracket holds several comma-separated items,
@@ -158,8 +159,8 @@ the code is the first item that is not a flag (`-warnings-as-errors` is dropped)
   - the Lint group heads with its count, and each record shows its tool;
   - a tab with no lint records shows no Lint group;
   - a tab with only lint records shows the Lint group and no `no compile events yet` line.
-- **A lint record's card:** names the tool and reads `N lint errors` (fail-red) or `lint clean` (pass-green), never
-  `errors` alone and never "compile". Its `data-kind` is the one §S0 settles.
+- **A lint record's card:** names the tool and reads `N lint errors` (fail-red; `1 lint error` singular, amended at
+  VERIFY 944) or `lint clean` (pass-green), never `errors` alone and never "compile". Its `data-kind` is the one §S0 settles.
 - **A lint record's drill-in:**
   - findings grouped by file, each with its rule code where the tool gives one;
   - a clean record reads `clean lint — no findings`;
@@ -172,7 +173,8 @@ the code is the first item that is not a flag (`-warnings-as-errors` is dropped)
   The line reads as if lint records did not exist: the projects rollup (`/api/v2/projects`) keeps `lastEvent` as
   the newest run and gains `lastEventNotLint`, the brief of the newest run that is not a lint record, or null.
   `projectStatus` reads it when `lastEvent` is a lint record. A project whose runs are all lint records shows the
-  newest lint record's own wording (`✗ N lint errors` / `lint clean`), never a compile verdict (amended at RED 943).
+  newest lint record's own wording (`✗ N lint errors`, `✗ 1 lint error` singular / `lint clean`), never a compile
+  verdict (amended at RED 943 and VERIFY 944).
 - **`/api/v2/status`:**
   - `lastCompile` is the newest compile record that is not a lint record;
   - `lastLint` is the newest lint record, or null.
@@ -243,7 +245,8 @@ the code is the first item that is not a flag (`-warnings-as-errors` is dropped)
 - [ ] **AC10 — a lint record says lint wherever it is shown.**
   - **Card:** a failing lint card reads `N lint errors` and names its tool; a clean one reads `lint clean`; neither
     says "compile".
-  - **Drill-in:** codes grouped by file, or `clean lint — no findings`.
+  - **Drill-in:** headed `<tool> lint · N errors · M warnings` as F5L draws it (amended at VERIFY 944), codes
+    grouped by file, or `clean lint — no findings`.
   - **Agent outcome:** after a lint post, the agent's last outcome reads `lint · …`.
   - **Project status line:** a newer lint record does not change the line's compile verdict.
 - [ ] **AC11 — status keeps compile and lint apart.** With a compile record followed by a newer lint record,
