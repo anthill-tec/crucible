@@ -81,26 +81,30 @@ CR-CRU-254 gives every client a `lint` verb that posts on this route. This CR ma
 
 `/api/v2/runs/compile` accepts two fields for a lint post: `lint` and `runnerExit`.
 
-**`lint`**
+#### `lint`
+
 - **Absent:** a compile record, as today.
 - **A non-empty string:** a lint record.
 - **Any other value** (empty, or not a string): refused with 400, naming the field. Nothing is stored.
 - The marker is written to the event's payload. It is returned on the event, and in every brief built from it
   (fold F6: `eventBrief` gains `lint` when set and omits it otherwise).
 
-**`runnerExit`** (fold F1)
+#### `runnerExit` (fold F1)
+
 - Validated as on `/runs` (`refuseBadRunnerExit`): an integer ≥ 0, or absent.
 - On a lint post, a non-zero exit with no `error` finding stores one synthetic `error` diagnostic: "the linter
   exited N but its output records no error", with no file and no code.
 - On a compile post, `runnerExit` keeps today's meaning.
 
-**A clean lint post** (fold F2)
+#### A clean lint post (fold F2)
+
 - A lint post with `runnerExit: 0` may carry empty `errors`. It stores a clean lint record with zero findings.
 - The decoders' "a failed build is never shown as clean" guards (go's message-only error, gcc's no-error→raw) do
   not apply to a lint post with `runnerExit: 0`.
 - A compile post with empty `errors` is still refused.
 
-**The verdict**
+#### The verdict
+
 - For a lint record: `LINT FAILED — N errors, M warnings` or `LINT OK — M warnings`.
 - A compile record's verdict is unchanged.
 - The hint after a lint post names the Lint group, not the compile panel (fold F6, `hints`).
@@ -111,6 +115,7 @@ All four are proved on captured output in a new `tests/fixtures/lint/`, whose RE
 the command for each capture.
 
 **`ruff`** reads `--output-format concise` lines: `PATH:LINE:COL: CODE message`.
+
 - Each finding takes file, line, col, code and message, at level `error`.
 - A fix marker `[*]` before the message is stripped.
 - A syntax error (`PATH:LINE:COL: invalid-syntax: …`) is a finding coded `invalid-syntax`.
@@ -119,6 +124,7 @@ the command for each capture.
   `All checks passed!`.
 
 **`clippy`** reads cargo clippy's human output, as `rustc` does, with three changes:
+
 - **The code.** Each clippy lint is coded `clippy::<name>`.
   - The name comes first from the help URL's `#<name>` (under `master/` or a versioned `rust-<v>/` path).
   - The fallback is the `= note: #[warn(clippy::<name>)]` / `#[deny(…)]` line, kebab-case `-D clippy::<name>`
