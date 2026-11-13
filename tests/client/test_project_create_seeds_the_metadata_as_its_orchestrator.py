@@ -183,6 +183,22 @@ class ProjectCreateRefusesAnAgentRoleConflictTest(BoardDoubleMixin, unittest.Tes
         self.assertIn("GREEN", self.error_without_key(axi))
         self.assertIn("9173", self.error_without_key(axi))
 
+    def test_a_historical_row_with_no_role_is_refused_saying_with_no_role_never_none(self):
+        row = self.board.add_agent(self.key, AGENT, "ORCHESTRATOR")
+        del row["role"]  # a row from before roles: no `role` key at all
+        row_before = dict(row)
+        root = self.project_root(self.ENV)
+        result, axi = self.run_verb(root, "--write-env", token=TOKEN, agent=AGENT)
+
+        self._assert_refused_and_untouched(root, result, axi, row_before, row)
+        conflicts = [w for w in axi.get("warnings") or []
+                     if isinstance(w, dict) and w.get("code") == "agent-role-conflict"]
+        self.assertEqual(len(conflicts), 1, axi.get("warnings"))
+        for detail in (self.error_without_key(axi),
+                       str(conflicts[0].get("detail")).replace(self.key, "")):
+            self.assertIn("with no role", detail)
+            self.assertNotIn("None", detail)
+
 
 if __name__ == "__main__":
     unittest.main()

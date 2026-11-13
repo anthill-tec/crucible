@@ -414,28 +414,56 @@ class BoardDouble:
         self._thread.join(timeout=5)
 
 
+#: The ports of the checkout's dev board and the shipped default (the
+#: production install). No scratch fleet ever declares either.
+PRODUCTION_BOARD_PORTS = (3849, 3850)
+
+
+def _refuse_production_board(url):
+    if urllib.parse.urlsplit(url).port in PRODUCTION_BOARD_PORTS:
+        raise RuntimeError(
+            f"refusing a scratch fleet that declares {url!r}: that is the dev "
+            "board or the production install")
+
+
 class ScratchFleet:
     """A copy of `clients/` whose own and install configuration both declare
-    `board_url`, checked in process before any drive."""
+    `board_url`, checked in process before any drive.
 
-    def __init__(self, board_url):
+    With `install_board_url` (a dead loopback port), the fleet's own and
+    install configuration declare THAT instead, so only a project dir's own
+    `crucible.toml` can lead a drive to the double at `board_url`. Neither
+    address may be the dev board's or the production install's."""
+
+    def __init__(self, board_url, install_board_url=None):
         self.board_url = board_url
+        self.fleet_board_url = install_board_url or board_url
+        _refuse_production_board(board_url)
+        _refuse_production_board(self.fleet_board_url)
         self.root = Path(tempfile.mkdtemp(prefix="project-create-fleet-"))
         self.clients = self.root / "clients"
         shutil.copytree(CLIENTS_DIR, self.clients,
                         ignore=shutil.ignore_patterns("__pycache__"))
-        declare_board(self.clients / "crucible.toml", board_url)
-        declare_board(self.root / "crucible.toml", board_url)
-        axi = load_module(self.clients / "_crucible_axi.py",
-                          f"project_create_fleet_{id(self)}")
-        axi.bind_project_dir(None)
-        resolved = axi.resolve_base_url()
-        if resolved != board_url:
+        declare_board(self.clients / "crucible.toml", self.fleet_board_url)
+        declare_board(self.root / "crucible.toml", self.fleet_board_url)
+        resolved = self.resolves(None)
+        if resolved != self.fleet_board_url:
             self.close()
             raise RuntimeError(
-                f"the scratch fleet resolves {resolved!r}, not the double "
-                f"{board_url!r}; refusing to drive a client that would post "
-                "elsewhere")
+                f"the scratch fleet resolves {resolved!r}, not the declared "
+                f"{self.fleet_board_url!r}; refusing to drive a client that "
+                "would post elsewhere")
+
+    def resolves(self, project_dir):
+        """The board this fleet's own shared module resolves with
+        `project_dir` bound (None: no project dir), asked in process."""
+        axi = load_module(self.clients / "_crucible_axi.py",
+                          f"project_create_fleet_{id(self)}")
+        axi.bind_project_dir(None if project_dir is None else str(project_dir))
+        try:
+            return axi.resolve_base_url()
+        finally:
+            axi.bind_project_dir(None)
 
     def script(self, client="python"):
         return self.clients / CLIENT_SCRIPTS[client]

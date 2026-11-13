@@ -19,14 +19,20 @@ argparse's "invalid choice" (exit 2, no envelope, no request).
 """
 
 import os
+import shutil
 import unittest
 
 from tests.client.project_create_harness import (
     ARCHIVED_PROJECT_HELP,
     ENVELOPE_HELP,
+    BoardDouble,
     BoardDoubleMixin,
+    ScratchFleet,
+    closed_port_url,
+    drive,
     empty_or_malformed_keys,
     key_for_token,
+    make_project_dir,
     names_code,
 )
 
@@ -249,6 +255,166 @@ class ProjectCreateRefusesAnArchivedTokenProjectTest(BoardDoubleMixin, unittest.
         self.assertEqual([(m, p) for m, p, _b in self.board.requests],
                          [("GET", "/api/v2/projects?archived=true")])
         self.assertFalse((root / ".env").exists(), "nothing is written")
+
+
+class ProjectCreateRefusesAnEnvKeyWhoseStoredTokenDiffersTest(BoardDoubleMixin, unittest.TestCase):
+    """A UUID key in `.env` whose project stores a `PROJECT_TOKEN` other than
+    `--token`: refused as `project-token-mismatch`, naming both tokens, after
+    the one metadata read and before anything is registered, patched or
+    written. A project storing the same token, or none, proceeds."""
+
+    STORED_TOKEN = "first-owner"  # noqa: S105 -- a project token, not a secret
+    ENV = f"A=1\nCRUCIBLE_PROJECT_KEY={OTHER_KEY}\nB=2\n".encode()
+
+    def test_a_stored_token_other_than_the_flags_is_refused_naming_both_after_only_the_metadata_read(self):
+        for extra in ((), ("--write-env",)):
+            with self.subTest(flags=extra):
+                self.board.reset()
+                stored = {"PROJECT_TOKEN": self.STORED_TOKEN, "KEPT": "yes"}
+                self.board.add_project(OTHER_KEY, name="made by hand",
+                                       metadata=stored)
+                root = self.project_root(self.ENV)
+                result, axi = self.run_verb(root, *extra, token=TOKEN)
+
+                self.assertEqual(result.returncode, 1,
+                                 f"exit 1 expected; stderr={result.stderr!r}")
+                self.assertTrue(axi, f"no envelope: {result.stdout!r} {result.stderr!r}")
+                self.assertIs(axi.get("ok"), False)
+                error = str(axi.get("error"))
+                self.assertIn(self.STORED_TOKEN, error,
+                              "the refusal names the project's stored token")
+                self.assertIn(TOKEN, error, "the refusal names --token")
+                mismatches = [w for w in axi.get("warnings") or []
+                              if isinstance(w, dict)
+                              and w.get("code") == "project-token-mismatch"]
+                self.assertEqual(len(mismatches), 1,
+                                 f"one project-token-mismatch warning: {axi.get('warnings')!r}")
+                self.assertEqual(mismatches[0].get("detail"), axi.get("error"),
+                                 "the warning carries the refusal's own detail")
+                self.assertEqual(
+                    [(m, p) for m, p, _b in self.board.requests],
+                    [("GET", f"/api/v2/projects/{OTHER_KEY}/metadata")],
+                    "only the metadata read: no agents read, no register, no PATCH")
+                self.assertEqual(self.board.registers(), [])
+                self.assertEqual(self.board.patches(), [])
+                self.assertEqual(self.board.projects[OTHER_KEY]["metadata"], stored,
+                                 "the stored token is never overwritten")
+                self.assertEqual((root / ".env").read_bytes(), self.ENV,
+                                 ".env is byte-identical")
+
+    def _assert_proceeds(self, root, result, axi):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIs(axi.get("ok"), True, axi)
+        self.assertEqual(axi.get("projectKey"), OTHER_KEY)
+        self.assertEqual(axi.get("source"), "env")
+        self.assertIs(axi.get("created"), False)
+        self.assertFalse(names_code(axi, "project-token-mismatch"), axi)
+        self.assertEqual(
+            [(m, p) for m, p, _b in self.board.requests],
+            [("GET", f"/api/v2/projects/{OTHER_KEY}/metadata"),
+             ("GET", f"/api/v2/agents?project={OTHER_KEY}"),
+             ("POST", "/api/v2/agents/register"),
+             ("PATCH", f"/api/v2/projects/{OTHER_KEY}/metadata")])
+        self.assertEqual(self.board.patches()[0][2].get("set"), {"PROJECT_TOKEN": TOKEN})
+        self.assertEqual((root / ".env").read_bytes(), self.ENV)
+        self.assertEqual(axi.get("envWritten"), "already-set")
+
+    def test_a_stored_token_equal_to_the_flags_proceeds_to_register_and_patch(self):
+        self.board.add_project(OTHER_KEY, name="made by hand",
+                               metadata={"PROJECT_TOKEN": TOKEN})
+        root = self.project_root(self.ENV)
+        result, axi = self.run_verb(root, "--write-env", token=TOKEN)
+
+        self._assert_proceeds(root, result, axi)
+        self.assertEqual(axi.get("metadata"), {"PROJECT_TOKEN": TOKEN})
+
+    def test_a_project_with_no_stored_token_proceeds_to_register_and_patch(self):
+        self.board.add_project(OTHER_KEY, name="made by hand",
+                               metadata={"KEPT": "yes"})
+        root = self.project_root(self.ENV)
+        result, axi = self.run_verb(root, "--write-env", token=TOKEN)
+
+        self._assert_proceeds(root, result, axi)
+        self.assertEqual(axi.get("metadata"), {"KEPT": "yes", "PROJECT_TOKEN": TOKEN})
+
+
+class ProjectCreatePostsToTheBoardItsProjectDeclaresTest(unittest.TestCase):
+    """The fleet's own and install `crucible.toml` name a dead port; only the
+    project dir's own `crucible.toml` names the double. Every request landing
+    on the double, with the run `ok: true`, shows the project's own
+    configuration chose the board -- a verb that never bound `--project-dir`
+    would resolve the dead port and reach nothing."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.board = BoardDouble()
+        cls.dead_board = closed_port_url()
+        try:
+            cls.fleet = ScratchFleet(cls.board.base_url,
+                                     install_board_url=cls.dead_board)
+        except BaseException:
+            cls.board.close()
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.fleet.close()
+        cls.board.close()
+        super().tearDownClass()
+
+    def setUp(self):
+        super().setUp()
+        self.board.reset()
+
+    def _project_root(self, env_bytes=None):
+        root = make_project_dir(self.board.base_url, env_bytes)
+        self.addCleanup(shutil.rmtree, root, True)
+        # The fixture itself: the fleet alone resolves the dead port, and only
+        # the project dir bound leads it to the double.
+        self.assertEqual(self.fleet.resolves(None), self.dead_board)
+        self.assertEqual(self.fleet.resolves(root), self.board.base_url)
+        return root
+
+    def test_a_create_whose_fleet_names_a_dead_board_reaches_the_double_its_project_declares(self):
+        root = self._project_root()
+        key = key_for_token(TOKEN)
+        result, axi = drive(self.fleet, root, "--write-env", token=TOKEN)
+
+        self.assertEqual(result.returncode, 0,
+                         f"exit 0 expected; stderr={result.stderr!r}")
+        self.assertIs(axi.get("ok"), True, axi)
+        self.assertEqual(
+            [(m, p) for m, p, _b in self.board.requests],
+            [("GET", "/api/v2/projects?archived=true"),
+             ("POST", "/api/v2/projects"),
+             ("GET", f"/api/v2/agents?project={key}"),
+             ("POST", "/api/v2/agents/register"),
+             ("PATCH", f"/api/v2/projects/{key}/metadata")],
+            "every request lands on the double the project declares")
+        self.assertEqual((axi.get("context") or {}).get("board"), self.board.base_url,
+                         "the envelope names the project's board")
+        self.assertEqual(axi.get("projectKey"), key)
+        self.assertIs(axi.get("created"), True)
+        self.assertEqual(len(self.board.project_rows(key)), 1)
+        self.assertEqual((root / ".env").read_bytes(),
+                         f"CRUCIBLE_PROJECT_KEY={key}\n".encode())
+
+    def test_an_env_key_whose_fleet_names_a_dead_board_is_read_from_the_double_its_project_declares(self):
+        self.board.add_project(OTHER_KEY, name="made by hand")
+        env = f"CRUCIBLE_PROJECT_KEY={OTHER_KEY}\n".encode()
+        root = self._project_root(env)
+        result, axi = drive(self.fleet, root, token=TOKEN)
+
+        self.assertEqual(result.returncode, 0,
+                         f"exit 0 expected; stderr={result.stderr!r}")
+        self.assertIs(axi.get("ok"), True, axi)
+        self.assertEqual(axi.get("source"), "env")
+        self.assertEqual(self.board.requests[0][:2],
+                         ("GET", f"/api/v2/projects/{OTHER_KEY}/metadata"),
+                         "the .env key's project is read on the project's board")
+        self.assertEqual(len(self.board.patches()), 1, self.board.requests)
+        self.assertEqual((axi.get("context") or {}).get("board"), self.board.base_url)
 
 
 if __name__ == "__main__":
