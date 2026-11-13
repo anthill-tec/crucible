@@ -1,6 +1,6 @@
 # CR-CRU-230 — a project registers itself on the board
 
-**Status:** PENDING — filed 2026-11-04 (Model B CReq, Sandesh 1517; accepted by user ruling the same day); gap
+**Status:** COMPLETED — merged 2026-11-13 · filed 2026-11-04 (Model B CReq, Sandesh 1517; accepted by user ruling the same day); gap
 analysis ran 2026-11-13 · Pre-review: ran — another project's surface (Model B's `init --register` consumes the
 verb), user rulings at design, 8 points (9 findings folded; two by user ruling)
 **Type:** feature
@@ -235,15 +235,15 @@ the board refused or never answered carries the board's error and help, with no 
 
 ## Acceptance criteria
 
-- [ ] **AC1 — it creates the project and returns its key.** Against a board that does not know the token,
+- [x] **AC1 — it creates the project and returns its key.** Against a board that does not know the token,
   `project-create --project-dir R --name N --token t --agent a` posts exactly one `POST /api/v2/projects` with
   `{key: project_key_for_token("t"), name: "N", type: "backend", sutRoot: <R absolute>}`. It exits 0, and the
   envelope carries `projectKey` equal to that key, `created: true` and `source: token`. `--type frontend` posts
   `type: "frontend"`.
-- [ ] **AC2 — idempotent by token.** A second run with the same token, whatever its `--name`, answers the same
+- [x] **AC2 — idempotent by token.** A second run with the same token, whatever its `--name`, answers the same
   `projectKey` with `created: false`. Both runs together created one project on the board. `project_key_for_token`
   is pure: equal tokens give equal keys, different tokens different keys, and the value is a valid UUID.
-- [ ] **AC3 — a key already in `.env` is used, never replaced.** With a UUID `CRUCIBLE_PROJECT_KEY` the board knows,
+- [x] **AC3 — a key already in `.env` is used, never replaced.** With a UUID `CRUCIBLE_PROJECT_KEY` the board knows,
   the verb posts no create, and answers that key with `created: false` and `source: env`, even when it differs from
   the token's key.
   - These are refused, each naming the key, posting nothing and leaving `.env` byte-identical:
@@ -254,7 +254,7 @@ the board refused or never answered carries the board's error and help, with no 
       no register and no PATCH). A project with no stored token, or the same one, proceeds.
   - The token's key held by an archived project is refused (`project-archived`), with no create posted and nothing
     written.
-- [ ] **AC4 — `.env` is read and written as §S3 states.** For each case the file afterwards is as §S3 states and
+- [x] **AC4 — `.env` is read and written as §S3 states.** For each case the file afterwards is as §S3 states and
   every other byte is unchanged:
   - an empty `CRUCIBLE_PROJECT_KEY=` line between other lines;
   - no such line;
@@ -265,7 +265,7 @@ the board refused or never answered carries the board's error and help, with no 
   - a key already set (`already-set`, file unchanged).
 
   Without `--write-env`, `.env` is never written.
-- [ ] **AC5 — the metadata is seeded in the same call.** After the create, the verb registers `--agent` with role
+- [x] **AC5 — the metadata is seeded in the same call.** After the create, the verb registers `--agent` with role
   ORCHESTRATOR on the key, with §S2's payload. It then sends one PATCH whose `set` holds `PROJECT_TOKEN`,
   `PROJECT_ACRONYM` (only with `--acronym`) and each `--set` pair. The envelope's `metadata` is the board's map.
   - On the existing-project path, the same register and PATCH run when `--agent` is absent from the project, or is
@@ -274,7 +274,7 @@ the board refused or never answered carries the board's error and help, with no 
     `agent-role-conflict`. Its row is
     unchanged, no PATCH is sent and `.env` is not written.
   - The verb sends no unregister.
-- [ ] **AC6 — errors are envelopes.** Each of these exits non-zero with `ok: false`, an `error` and a `help`, and
+- [x] **AC6 — errors are envelopes.** Each of these exits non-zero with `ok: false`, an `error` and a `help`, and
   never a bare exit or a traceback:
   - no `--agent`, on a `.env` with no key and with no `.env` at all: the fleet's own `agent-identity-required`
     hard-stop envelope, unchanged (its exit code and shape are the fleet's), with an empty context;
@@ -293,25 +293,25 @@ the board refused or never answered carries the board's error and help, with no 
   - a conflicting `--set PROJECT_TOKEN=`.
 
   Without `--project-dir`, argparse refuses with exit 2.
-- [ ] **AC7 — open, as the board's form.** The create post carries no agent, and a board with no agent registered
+- [x] **AC7 — open, as the board's form.** The create post carries no agent, and a board with no agent registered
   anywhere accepts it. No `src/` file changes in this CR.
-- [ ] **AC8 — every client has it.** Each of the six clients parses `project-create` with the flags of §S2 and the
+- [x] **AC8 — every client has it.** Each of the six clients parses `project-create` with the flags of §S2 and the
   help line, and delegates to the shared implementation. One end-to-end run per client against a test board gives
   the same envelope fields.
-- [ ] **AC9 — no empty key is sent.** On every path of AC1–AC6, no request `project-create` makes carries an empty
+- [x] **AC9 — no empty key is sent.** On every path of AC1–AC6, no request `project-create` makes carries an empty
   or non-UUID project key, in its path or its body.
-- [ ] **AC10 — the module and the move.**
+- [x] **AC10 — the module and the move.**
   - `clients/_crucible_project.py` exists, is loaded and re-exported by the core, and defines the `project-meta`
     names of §S1 and `project-create`'s. The core defines none of them.
   - The module imports only the standard library, and the shared modules' ruff check covers it.
   - The `project-meta` tests pass unchanged. The core is at least 80 lines under `CORE_LINE_LIMIT`.
   - Every list and fixture §S1 names includes the module, and an install ships it.
-- [ ] **AC11 — the census and the PRD.**
+- [x] **AC11 — the census and the PRD.**
   - `tests/clients-never-self-register-a-project.test.ts` passes with go and the new module listed. The bare
     creation route appears only in `clients/_crucible_project.py`.
   - The PRD and the DN state §S6's text.
   - `tests/client-fleet-docs-no-self-registration-wording.test.ts` passes and finds `project-create` in both slices.
-- [ ] **AC12 — docs and hygiene.**
+- [x] **AC12 — docs and hygiene.**
   - The CHANGELOG and README entries of §S6 are present.
   - `HELP_STEPS`, `SHARED_CENSUS` and the envelope census include the verb.
   - The code and tests add no CR id literal, `§` or AC number.
