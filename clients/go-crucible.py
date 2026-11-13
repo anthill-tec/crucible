@@ -78,9 +78,9 @@ Project + Crucible endpoint:
   Project path resolution: --project-dir > $GO_CRUCIBLE_PROJECT_DIR > the git
   repo containing the current directory > the current directory.
   Posts to the first `[client] url` declared by the project's crucible.toml,
-then the install's, else the shipped http://localhost:3849; v2 endpoints ONLY:
-/api/v2/agents/register|unregister, /api/v2/runs/start, the run's /stream
-(codec go-test) and /api/v2/runs (the stream's close).
+  then the install's, else the shipped http://localhost:3849; v2 endpoints
+  ONLY: /api/v2/agents/register|unregister, /api/v2/runs/start, the run's
+  /stream (codec go-test) and /api/v2/runs (the stream's close).
   The client parses no test result; the board decodes go's own stream.
 
 Examples:
