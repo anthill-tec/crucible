@@ -216,6 +216,11 @@ def _claim_consecutive_ports(count, attempts=64):
             base = probe.getsockname()[1]
         if base + count - 1 > 65535:
             continue
+        # The kernel's ephemeral range does not overlap the shipped window by
+        # default, but nothing guarantees it: a span that would touch the
+        # window is skipped, never bound.
+        if base <= SHIPPED_RANGE_MAX and base + count - 1 >= SHIPPED_RANGE_MIN:
+            continue
         held = []
         for offset in range(count):
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
