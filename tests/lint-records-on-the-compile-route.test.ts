@@ -560,6 +560,40 @@ describe("a lint post's verdict follows the linter", () => {
     expect(compile.diagnostics).toHaveLength(0);
   });
 
+  test("regression guard: a compile post (no lint) with runnerExit -1 is still accepted as today: the exit is neither validated nor used", async () => {
+    const handle = boot();
+    const key = await seedProject(handle);
+    const answer = await postAccepted(handle, key, {
+      format: "rustc",
+      runnerExit: -1,
+      errors: RUSTC_ONE_ERROR,
+    });
+
+    expect(answer.verdict).toBe("COMPILE FAILED — 1 errors, 0 warnings");
+    const compile = await storedCompile(handle, answer.event as string);
+    expect(compile.diagnostics).toHaveLength(1);
+    expect(await compileEventCount(handle, key)).toBe(1);
+  });
+
+  test("a lint post with runnerExit 0 whose output decodes an error is never overridden by the exit: `LINT FAILED — 1 errors, 0 warnings`, only the decoded finding", async () => {
+    const handle = boot();
+    const key = await seedProject(handle);
+    const answer = await postAccepted(handle, key, {
+      lint: "clippy",
+      format: "rustc",
+      runnerExit: 0,
+      errors: RUSTC_ONE_ERROR,
+    });
+
+    expect(answer.verdict).toBe("LINT FAILED — 1 errors, 0 warnings");
+    expect({ errors: answer.errors, warnings: answer.warnings }).toEqual({ errors: 1, warnings: 0 });
+    const compile = await storedCompile(handle, answer.event as string);
+    expect(compile.errorCount).toBe(1);
+    expect(compile.diagnostics).toEqual([
+      { file: "src/lib.rs", line: 12, col: 5, code: "E0308", message: "mismatched types", level: "error" },
+    ]);
+  });
+
   for (const [label, runnerExit] of [
     ["-1", -1],
     ['"x"', "x"],
@@ -626,6 +660,45 @@ describe("a clean lint run with empty output is filed", () => {
     const compile = await storedCompile(handle, answer.event as string);
     expect(compile.errorCount).toBe(0);
     expect(compile.diagnostics).toHaveLength(0);
+  });
+
+  test("a lint post with empty errors and runnerExit 2 is stored with exactly one synthetic error naming exit 2, and answers `LINT FAILED — 1 errors, 0 warnings`", async () => {
+    const handle = boot();
+    const key = await seedProject(handle);
+    const answer = await postAccepted(handle, key, {
+      lint: "ruff",
+      format: "rustc",
+      runnerExit: 2,
+      errors: "",
+    });
+
+    expect(answer.verdict).toBe("LINT FAILED — 1 errors, 0 warnings");
+    const event = await fromDetail(handle, answer.event as string);
+    expect(event.lint).toBe("ruff");
+    const compile = event.compile as StoredCompile;
+    expect({ errorCount: compile.errorCount, warningCount: compile.warningCount }).toEqual({
+      errorCount: 1,
+      warningCount: 0,
+    });
+    expect(compile.diagnostics).toHaveLength(1);
+    const synthetic = compile.diagnostics[0]!;
+    expect(synthetic.level).toBe("error");
+    expect(hasKey(synthetic as unknown as Record<string, unknown>, "file")).toBe(false);
+    expect(hasKey(synthetic as unknown as Record<string, unknown>, "code")).toBe(false);
+    expect(synthetic.message).toMatch(/\b2\b/);
+    expect(await compileEventCount(handle, key)).toBe(1);
+  });
+
+  test("a lint post with empty errors and no runnerExit is refused as a compile post is (400), and nothing is stored", async () => {
+    const handle = boot();
+    const key = await seedProject(handle);
+
+    const res = await postCompile(handle, key, { lint: "ruff", format: "rustc", errors: "" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error).toBe("errors must be a non-empty string");
+    expect(await compileEventCount(handle, key)).toBe(0);
   });
 
   test("regression guard: a compile post (no lint) with empty errors is still refused, and nothing is stored", async () => {
@@ -723,7 +796,7 @@ async function registerBoundAgent(handle: ServerHandle, key: string, agentId: st
 }
 
 describe("the agent's last outcome after a lint post says lint", () => {
-  test("a lint post with two errors writes `lint · 2 errors` onto the agent, never `compile`, and the idle line carries it", async () => {
+  test("a lint post with two errors writes exactly `lint · 2 errors · ingested` onto the agent, and the idle line carries it", async () => {
     const handle = boot();
     const key = await seedProject(handle);
     const agentId = "green-lint-outcome";
@@ -740,14 +813,32 @@ describe("the agent's last outcome after a lint post says lint", () => {
     expect(res.status).toBe(200);
 
     const agent = await agentById(handle, key, agentId);
-    expect(agent.message.startsWith("lint · 2 errors")).toBe(true);
-    expect(agent.message).not.toContain("compile");
+    expect(agent.message).toBe("lint · 2 errors · ingested");
     expect(agent.idleLine).toBeDefined();
-    expect(agent.idleLine).toContain("last run lint · 2 errors");
+    expect(agent.idleLine).toContain("last run lint · 2 errors · ingested, ");
     expect(agent.idleLine).not.toContain("compile");
   });
 
-  test("a lint post with no error (warnings only, exit 0) writes `lint · clean` onto the agent", async () => {
+  test("a lint post with one error writes exactly `lint · 1 error · ingested` onto the agent (singular)", async () => {
+    const handle = boot();
+    const key = await seedProject(handle);
+    const agentId = "green-lint-one";
+    await registerBoundAgent(handle, key, agentId);
+
+    const res = await sendJson(handle, "POST", COMPILE_ROUTE, {
+      projectKey: key,
+      agentId,
+      lint: "clippy",
+      format: "rustc",
+      runnerExit: 1,
+      errors: RUSTC_ONE_ERROR,
+    });
+    expect(res.status).toBe(200);
+
+    expect((await agentById(handle, key, agentId)).message).toBe("lint · 1 error · ingested");
+  });
+
+  test("a lint post with no error (warnings only, exit 0) writes exactly `lint · clean · ingested` onto the agent", async () => {
     const handle = boot();
     const key = await seedProject(handle);
     const agentId = "green-lint-clean";
@@ -763,10 +854,7 @@ describe("the agent's last outcome after a lint post says lint", () => {
     });
     expect(res.status).toBe(200);
 
-    const agent = await agentById(handle, key, agentId);
-    expect(agent.message.startsWith("lint · clean")).toBe(true);
-    expect(agent.message).not.toContain("compile");
-    expect(agent.message).not.toContain("errors");
+    expect((await agentById(handle, key, agentId)).message).toBe("lint · clean · ingested");
   });
 
   test("regression guard: a compile post (no lint) still writes `compile · 1 error · ingested` onto the agent", async () => {
