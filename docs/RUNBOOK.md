@@ -275,6 +275,11 @@ test-run rollup *before* deletion, so what it contributed to that day's totals
 survives pruning, while a `lifecycle` event contributes nothing to a rollup and
 is simply pruned. Rollups and active-cycle state are untouched.
 
+**Lint records count like compile records.** A lint run is filed as a
+`compile` event marked with its linter, so lint records count toward the
+retention cap, fold into the daily rollup and count in a release's run count
+exactly as compile records do. Nothing about retention changes for them.
+
 **A run's coverage files go with the run.** A green run filed with a coverage
 report keeps the report's files with it, one row per file, and retention
 removes them with the run, as it removes the run's tree. Nothing caps the
