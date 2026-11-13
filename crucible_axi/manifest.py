@@ -544,7 +544,8 @@ def run_manifest_stage(target_dir: str, force: bool = False,
     A file that already EXISTS is filled in rather than laid down: a server
     file naming no `[server] port` gains the listener's port, and an install
     file declaring no `[client] url` gains the board url, built from the port
-    the server file names after that step. Only an absent key is filled
+    the server file names after that step (a freshly laid install file takes
+    its url by the same rule). Only an absent key is filled
     (`fill_absent_setting`); a value already set is never changed. Each fill
     is reported under `filled`, each file the fill could not safely touch
     under `notFilled`, a fill makes the stage `converged: False`, and a filled
@@ -555,12 +556,8 @@ def run_manifest_stage(target_dir: str, force: bool = False,
     authored: dict = {}
     fills = _Fills(recorded_config_digests(target_dir), authored)
     client_config = operator_config_path(target_dir)
-    wrote_config = lay_down_operator_config(target_dir)
-    if wrote_config:
-        if listener:
-            apply_setting(client_config, CLIENT_TABLE, CLIENT_URL_KEY,
-                          listener["url"], block=_CLIENT_TABLE_BLOCK)
-        authored[client_config] = Path(client_config).read_bytes()
+    laid_client = lay_down_operator_config(target_dir)
+    wrote_config = laid_client
     server_report: dict | None = None
     if server_config is not None:
         source = server_config.get("source")
@@ -579,7 +576,14 @@ def run_manifest_stage(target_dir: str, force: bool = False,
         else:
             server_report = {"path": None,
                              "reason": server_config.get("reason")}
-    if listener and client_config not in authored:
+    if laid_client:
+        if listener:
+            apply_setting(client_config, CLIENT_TABLE, CLIENT_URL_KEY,
+                          _client_url(server_config or {}, server_report,
+                                      listener),
+                          block=_CLIENT_TABLE_BLOCK)
+        authored[client_config] = Path(client_config).read_bytes()
+    elif listener:
         fills.fill(client_config, CLIENT_TABLE, CLIENT_URL_KEY,
                    _client_url(server_config or {}, server_report, listener),
                    block=_CLIENT_TABLE_BLOCK)
