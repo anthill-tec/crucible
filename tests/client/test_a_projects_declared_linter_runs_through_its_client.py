@@ -250,9 +250,17 @@ class TheCommandIsFoundOrRefusedTest(LintDriveMixin, unittest.TestCase):
         self.assertEqual(body.get("lint"), "ruff", f"{body!r}")
 
     def _bun_project(self, command):
-        root = self.project(
-            "\n[bun]\npackage_dir = \"web\"\n" + lint_table(command))
+        root = self.project(lint_table(command))
+        config = root / "crucible.toml"
+        # The one `[bun]` table the shipped limits already hold, at the start
+        # of its line (a commented example names it too).
+        config.write_text(
+            config.read_text(encoding="utf-8").replace(
+                "\n[bun]\n", "\n[bun]\npackage_dir = \"web\"\n", 1),
+            encoding="utf-8")
         (root / "web").mkdir()
+        (root / "web" / "package.json").write_text(
+            '{"name": "web", "private": true}\n', encoding="utf-8")
         return root
 
     def test_a_bun_projects_linter_runs_in_its_package_directory(self):
