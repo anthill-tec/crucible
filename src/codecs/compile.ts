@@ -68,8 +68,10 @@ const TSC_LINE = /^(.+?)\((\d+),(\d+)\):\s+(error|warning)\s+(TS\d+):\s+(.*)$/;
 // GCC: FILE never starts with `[` and never contains `: ` (it may contain spaces).
 const GCC_DIAGNOSTIC = /^(?!\[)((?:(?!: ).)+?):(\d+):(\d+): (fatal error|error|warning): (.*)$/;
 // A trailing bracket: a compiler flag (`[-Wunused-variable]`) or a linter's check
-// (`[readability-braces-around-statements]`, `[check,-warnings-as-errors]`).
-const GCC_BRACKET = /^(.*) \[([^\]]+)\]$/;
+// (`[readability-braces-around-statements]`, `[check,-warnings-as-errors]`). Anchored at the
+// tail and holding no bracket, so a line with many ` [` decodes in linear time; the message
+// is cut before the match.
+const GCC_BRACKET = / \[([^[\]]+)\]$/;
 // Sourced link error, older (`FILE:LINE: …`) and newer (`FILE:LINE:(SECTION+OFFSET): …`) linkers.
 // SECTION holds neither `(` nor `)`, so a long line with an unclosed `(` decodes in linear time.
 const GCC_LINK_SOURCED = /^(?!\[)((?:(?!: ).)+?):(\d+):(?:\([^()]*\):)? (undefined reference to .*)$/;
@@ -244,10 +246,10 @@ function parseGcc(lines: string[]): CompileDiagnostic[] {
         level: compiler[4] === "warning" ? "warning" : "error",
         message: compiler[5] ?? "",
       };
-      const bracket = diagnostic.message.match(GCC_BRACKET);
-      const code = bracket ? bracketCode(bracket[2] ?? "") : undefined;
+      const bracket = GCC_BRACKET.exec(diagnostic.message);
+      const code = bracket ? bracketCode(bracket[1] ?? "") : undefined;
       if (bracket && code !== undefined) {
-        diagnostic.message = bracket[1] ?? "";
+        diagnostic.message = diagnostic.message.slice(0, bracket.index);
         diagnostic.code = code;
       }
       diagnostics.push(diagnostic);
