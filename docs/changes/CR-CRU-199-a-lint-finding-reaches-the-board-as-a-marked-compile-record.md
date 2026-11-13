@@ -94,11 +94,16 @@ CR-CRU-254 gives every client a `lint` verb that posts on this route. This CR ma
 - Validated as on `/runs` (`refuseBadRunnerExit`): an integer ≥ 0, or absent.
 - On a lint post, a non-zero exit with no `error` finding stores one synthetic `error` diagnostic: "the linter
   exited N but its output records no error", with no file and no code.
-- On a compile post, `runnerExit` keeps today's meaning.
+- On a compile post, `runnerExit` keeps today's meaning: it is neither validated nor used (amended at RED 941).
+- A lint post's decoded counts are never overridden by the exit: `runnerExit: 0` with a decoded error still
+  answers `LINT FAILED` (amended at RED 941).
 
 #### A clean lint post (fold F2)
 
 - A lint post with `runnerExit: 0` may carry empty `errors`. It stores a clean lint record with zero findings.
+- A lint post with empty `errors` and a non-zero `runnerExit` is stored with the one synthetic error, and answers
+  `LINT FAILED`. A lint post with empty `errors` and no `runnerExit` is refused as a compile post is (amended at
+  RED 941).
 - The decoders' "a failed build is never shown as clean" guards (go's message-only error, gcc's no-error→raw) do
   not apply to a lint post with `runnerExit: 0`.
 - A compile post with empty `errors` is still refused.
@@ -157,7 +162,8 @@ the code is the first item that is not a flag (`-warnings-as-errors` is dropped)
   - a clean record reads `clean lint — no findings`;
   - the raw-output toggle is kept.
 - **The agent's last outcome** (`compileOutcome`, written by `recordCompileEvent`): a lint record writes
-  `lint · N errors` (or `lint · clean`) rather than `compile · …`.
+  `lint · N errors · ingested` (`1 error` singular), or `lint · clean · ingested` when there are no errors, rather
+  than `compile · …` (amended at RED 941).
 - **The project status line** (`projectStatus`, `public/app-logic.mjs`): its compile verdict (`✓ compiled` /
   `✗ N errors`) is taken from the newest compile record that is not a lint record. A lint record never sets it.
 - **`/api/v2/status`:**
