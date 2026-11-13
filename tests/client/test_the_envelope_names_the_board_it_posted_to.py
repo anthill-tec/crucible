@@ -25,6 +25,11 @@ Two halves, and the second is the one that keeps the first honest:
 the distribution's own package data declares -- rather than against a literal.
 That is the same bytes the resolver falls back to, and the same bytes a reader
 meets in the file they edit, so the document and the behaviour cannot disagree.
+That holds for an install whose own `crucible.toml` declares no `url`; an
+install that declares one is the machine's own board, and the comparison is
+made with it instead. So the unit class loads the shared module from a scratch
+fleet with NO install file, rather than from the checkout, whose install file
+is an operator's own and may name any board.
 
 ── Tiers ──────────────────────────────────────────────────────────────────
 
@@ -111,13 +116,23 @@ class TheContextNamesANonDefaultBoardTest(unittest.TestCase):
     """
 
     def setUp(self):
-        self.axi = _load_module(AXI_MODULE_PATH, "envelope_board_unit")
+        # A scratch fleet with no install file: the comparison under test is
+        # with the shipped declaration, which is what an install that declares
+        # no `url` falls back to. The checkout's own install file is operator
+        # state and is not what this class is about.
+        self.fleet_root = Path(tempfile.mkdtemp(prefix="envelope-board-fleet-"))
+        _scripts, shipped_config, install_config = _scratch_fleet(self.fleet_root)
+        self.assertFalse(Path(install_config).exists(),
+                         "fixture precondition: the scratch install has no file")
+        self.axi = _load_module(Path(shipped_config).parent / AXI_MODULE_PATH.name,
+                                "envelope_board_unit")
         self.project_dir = Path(tempfile.mkdtemp(prefix="envelope-board-"))
         self.config = self.project_dir / CONFIG_NAME
 
     def tearDown(self):
         self.axi.bind_project_dir(None)
         shutil.rmtree(self.project_dir, ignore_errors=True)
+        shutil.rmtree(self.fleet_root, ignore_errors=True)
 
     def _context(self, declared):
         declare_board(self.config, declared)
