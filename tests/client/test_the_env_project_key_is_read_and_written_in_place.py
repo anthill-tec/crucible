@@ -206,5 +206,37 @@ class TheReaderReadsTheLastKeyLineTest(_EnvFileCase):
             f"CRUCIBLE_PROJECT_KEY={KEY}\nA=1\nCRUCIBLE_PROJECT_KEY=\n".encode(), None)
 
 
+class WhatAKeyLineIsAndTheEndingAddedBeforeAnAppendedLineTest(_EnvFileCase):
+
+    def test_a_crlf_file_with_no_final_ending_gains_crlf_before_the_appended_line(self):
+        self.given(b"A=1\r\nB=2")
+        self.assertEqual(self.write_key(), "written")
+        self.assert_file(b"A=1\r\nB=2\r\n" + LINE + b"\r\n")
+
+    def test_a_one_line_file_with_no_ending_gains_a_newline(self):
+        self.given(b"A=1")
+        self.assertEqual(self.write_key(), "written")
+        self.assert_file(b"A=1\n" + LINE + b"\n")
+
+    def test_a_commented_key_line_is_not_a_key_line(self):
+        content = b"# CRUCIBLE_PROJECT_KEY=x\n"
+        self.given(content)
+        self.assertIsNone(self.read_key())
+        self.assertEqual(self.write_key(), "written")
+        self.assert_file(content + LINE + b"\n")
+
+    def test_an_exported_key_line_is_not_a_key_line(self):
+        content = b"export CRUCIBLE_PROJECT_KEY=x\n"
+        self.given(content)
+        self.assertIsNone(self.read_key())
+        self.assertEqual(self.write_key(), "written")
+        self.assert_file(content + LINE + b"\n")
+
+    def test_a_key_line_with_leading_whitespace_is_replaced_whole(self):
+        self.given(b"A=1\n  CRUCIBLE_PROJECT_KEY=\nB=2\n")
+        self.assertEqual(self.write_key(), "written")
+        self.assert_file(b"A=1\n" + LINE + b"\nB=2\n")
+
+
 if __name__ == "__main__":
     unittest.main()
