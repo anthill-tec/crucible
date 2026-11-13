@@ -22,6 +22,7 @@ It imports only the standard library.
 
 import argparse
 import pathlib
+import re
 import typing
 import uuid
 
@@ -222,3 +223,280 @@ def write_env_project_key(root, key):
         text += ending
     path.write_bytes(f"{text}{line}{ending}".encode())
     return "written"
+
+# ── `project-create`: a project registers itself on the board ───────────────
+
+PROJECT_CREATE_VERB = "project-create"
+
+PROJECT_KEY_UNKNOWN_CODE = "project-key-unknown"
+PROJECT_KEY_ARCHIVED_CODE = "project-key-archived"
+PROJECT_KEY_MALFORMED_CODE = "project-key-malformed"
+PROJECT_ARCHIVED_CODE = "project-archived"
+AGENT_ROLE_CONFLICT_CODE = "agent-role-conflict"
+
+_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
+_ACRONYM_RE = re.compile(r"[A-Z][A-Z0-9]*")
+_META_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]*")
+_UUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+# pi-lens-ignore: S105 — a metadata key's name, not a secret
+_TOKEN_META_KEY = "PROJECT_TOKEN"
+_ACRONYM_META_KEY = "PROJECT_ACRONYM"
+_ORCHESTRATOR = "ORCHESTRATOR"
+
+#: The next move a refusal of the verb's own arguments names.
+_USAGE_STEP = (f"{PROJECT_CREATE_VERB} --project-dir <root> --name <display name> "
+               "--token <token> --agent <id>")
+
+class _Stopped(Exception):
+    """`project-create` stopped short: `code` names the refusal (None for a
+    request the board refused or never answered), `detail` is the envelope's
+    `error` and `help` its next steps."""
+
+    def __init__(self, code, detail, help_steps):
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+        self.help = list(help_steps)
+
+def add_project_create_args(parser):
+    """The flags of `project-create`, registered here so the six clients
+    cannot drift into six flag surfaces. `--agent` is not argparse-required:
+    the fleet's identity hard stop answers its absence."""
+    parser.add_argument(
+        "--project-dir", dest="project_dir", required=True,
+        help="The project's root: the directory whose .env holds (or will "
+             "hold) its key. Required; never resolved from the cwd or git.")
+    parser.add_argument("--name", help="The project's display name on the board.")
+    parser.add_argument(
+        "--token",
+        help="The project's token (lowercase letters, digits and '-'); its "
+             "key is derived from it, so a re-run finds the same project.")
+    parser.add_argument(
+        "--agent",
+        help="Agent id — REQUIRED: registered as the project's ORCHESTRATOR "
+             "to seed its metadata.")
+    parser.add_argument(
+        "--acronym", help="The project's acronym (uppercase), seeded as "
+                          "PROJECT_ACRONYM.")
+    parser.add_argument(
+        "--type", dest="project_type", choices=("backend", "frontend"),
+        default="backend", help="The project's type (default: backend).")
+    parser.add_argument(
+        "--set", dest="meta_set", action="append", type=parse_meta_set,
+        default=None, metavar="KEY=VALUE",
+        help="Seed one more metadata key (split on the FIRST '='); repeatable.")
+    parser.add_argument(
+        "--write-env", dest="write_env", action="store_true",
+        help="Write the key into <root>/.env when its key line is empty or "
+             "missing; a key already set is never replaced.")
+
+def cmd_project_create(args, project_dir, ops):
+    """Create this project on the board, or find it, by its token, then
+    register `--agent` as its ORCHESTRATOR and seed its metadata.
+
+    The order is fixed: the arguments and `.env` are refused before any
+    request; a UUID key in `.env` is used when the board knows it, else the
+    token's key is created (an archived one refused); the agent is registered
+    unless it is on the project under another role or bound to a cycle; one
+    metadata PATCH seeds the token, the acronym and each `--set`; and
+    `--write-env` writes the key last. The key is never read through
+    `ops.project_key` or `ops.context`, so no request carries an empty key.
+
+    A refusal or a failure is `ok: false` with exit 1. One after the project
+    is settled still carries its key and still honours `--write-env`, unless
+    it is the role conflict, which writes nothing."""
+    agent_id = ops.agent_id(args)
+    root = str(project_dir)
+    fields = {"projectKey": None, "created": False, "source": None,
+              "name": None, "metadata": None, "envWritten": "not-asked"}
+    try:
+        key = _settle_project(args, root, ops, fields)
+    except _Stopped as stop:
+        return _emit_project_create(ops, fields, agent_id, stop)
+    try:
+        _seed_project(args, root, key, agent_id, ops, fields)
+    except _Stopped as stop:
+        if stop.code != AGENT_ROLE_CONFLICT_CODE:
+            fields["envWritten"] = _env_written(args, root, key)
+        return _emit_project_create(ops, fields, agent_id, stop)
+    fields["envWritten"] = _env_written(args, root, key)
+    return _emit_project_create(ops, fields, agent_id)
+
+def _settle_project(args, root, ops, fields):
+    """Refuse the arguments, then find the project by the `.env` key or
+    create it by the token's. Answers the key; raises `_Stopped`."""
+    _refuse_arguments(args, root)
+    _core.bind_project_dir(root)
+    env_key = read_env_project_key(root)
+    if env_key is not None and not _UUID_RE.fullmatch(env_key):
+        raise _Stopped(
+            PROJECT_KEY_MALFORMED_CODE,
+            f"{root}/.env holds CRUCIBLE_PROJECT_KEY={env_key}, which is not "
+            "a UUID; project-create never replaces a key already set",
+            [("write the project's UUID key into .env, or empty its "
+              "CRUCIBLE_PROJECT_KEY line to create the token's project")])
+    if env_key is not None:
+        fields.update(projectKey=env_key, source="env")
+        _find_by_env_key(env_key, ops)
+        return env_key
+    key = project_key_for_token(args.token)
+    fields.update(projectKey=key, source="token")
+    _create_by_token(args, root, key, ops, fields)
+    return key
+
+def _refuse_arguments(args, root):
+    """The refusals that precede any request: the root, the name, the
+    token, the acronym and each `--set` key."""
+    acronym = args.acronym
+    if not pathlib.Path(root).is_dir():
+        _refuse_usage(f"--project-dir {root} is not a directory")
+    if not args.name:
+        _refuse_usage("--name is empty: the project needs a display name")
+    if not _TOKEN_RE.fullmatch(args.token or ""):
+        _refuse_usage(f"--token {args.token!r} is not lowercase letters, digits "
+                      "and '-', starting with a letter or digit")
+    if acronym is not None and not _ACRONYM_RE.fullmatch(acronym):
+        _refuse_usage(f"--acronym {acronym!r} is not an uppercase letter "
+                      "followed by uppercase letters or digits")
+    for meta_key, value in args.meta_set or []:
+        if not _META_KEY_RE.fullmatch(meta_key):
+            _refuse_usage(f"--set key {meta_key!r} is not an environment-variable "
+                          "name (uppercase letters, digits and '_')")
+        if meta_key == _ENV_KEY_NAME:
+            _refuse_usage(f"--set {_ENV_KEY_NAME} is refused: the key is the "
+                          "board's, never seeded")
+        if meta_key == _TOKEN_META_KEY and value != args.token:
+            _refuse_usage(f"--set {_TOKEN_META_KEY}={value} differs from --token "
+                          f"{args.token}")
+        if (meta_key == _ACRONYM_META_KEY and acronym is not None
+                and value != acronym):
+            _refuse_usage(f"--set {_ACRONYM_META_KEY}={value} differs from "
+                          f"--acronym {acronym}")
+
+def _refuse_usage(detail):
+    raise _Stopped(None, detail, [_USAGE_STEP])
+
+def _find_by_env_key(key, ops):
+    """The `.env` key's project, read by its metadata: known, or refused as
+    unknown or archived."""
+    resp = ops.get(project_metadata_path(key)) or {}
+    if resp.get("ok"):
+        return
+    error = str((_core.server_failure_body(resp) or {}).get("error") or "")
+    if error.startswith("unknown project:"):
+        raise _Stopped(
+            PROJECT_KEY_UNKNOWN_CODE,
+            f"the board at {_core.resolve_base_url()} holds no project under "
+            f"the key {key} that .env holds; project-create never replaces a "
+            "key already set",
+            [("write the key of a project the board holds into .env, or "
+              "empty its CRUCIBLE_PROJECT_KEY line to create the token's "
+              "project")])
+    if error.startswith("project is archived:"):
+        raise _Stopped(
+            PROJECT_KEY_ARCHIVED_CODE,
+            f"the project under the key {key} that .env holds is archived",
+            _board_failure(resp).help)
+    raise _board_failure(resp)
+
+def _create_by_token(args, root, key, ops, fields):
+    """Create the token's project, unless an archived project holds its key.
+    `created` is the board's `changed`, and `name` its stored name."""
+    listed = ops.get("/api/v2/projects?archived=true") or {}
+    if not listed.get("ok"):
+        raise _board_failure(listed)
+    if any(p.get("key") == key for p in listed.get("projects") or []):
+        raise _Stopped(
+            PROJECT_ARCHIVED_CODE,
+            f"the token's project, key {key}, is archived on the board",
+            [(f"POST /api/v2/projects/{key}/unarchive — restore the project, "
+              f"then re-run {PROJECT_CREATE_VERB}")])
+    resp = ops.post("/api/v2/projects", {
+        "key": key, "name": args.name, "type": args.project_type,
+        "sutRoot": root}) or {}
+    if not resp.get("ok"):
+        raise _board_failure(resp)
+    fields["created"] = bool(resp.get("changed"))
+    fields["name"] = (resp.get("project") or {}).get("name")
+
+def _seed_project(args, root, key, agent_id, ops, fields):
+    """Register `agent_id` as the project's ORCHESTRATOR, unless it is there
+    under another role or bound to a cycle, then send the one metadata
+    PATCH. `metadata` is the board's map after it."""
+    listed = ops.get(f"/api/v2/agents?project={key}") or {}
+    if not listed.get("ok"):
+        raise _board_failure(listed)
+    for row in listed.get("agents") or []:
+        if row.get("agentId") == agent_id:
+            _refuse_role_conflict(agent_id, row)
+    resp = ops.post("/api/v2/agents/register", {
+        "agentId": agent_id, "projectKey": key, "status": "online",
+        "message": "Registering the project", "role": _ORCHESTRATOR,
+        "identity": {"displayName": agent_id, "source": "claude-md",
+                     "repoPath": root}}) or {}
+    if not resp.get("ok"):
+        raise _board_failure(resp)
+    seed = {_TOKEN_META_KEY: args.token}
+    if args.acronym is not None:
+        seed[_ACRONYM_META_KEY] = args.acronym
+    seed.update(args.meta_set or [])
+    resp = ops.patch(project_metadata_path(key),
+                     {"agentId": agent_id, "set": seed}) or {}
+    if not resp.get("ok"):
+        raise _board_failure(resp)
+    fields["metadata"] = resp.get("metadata") or {}
+
+def _refuse_role_conflict(agent_id, row):
+    """Refuse an agent already on the project under another role, or bound
+    to a cycle, naming its role and its cycle."""
+    role = row.get("role")
+    cycle = row.get("boundCycleId")
+    if role == _ORCHESTRATOR and cycle is None:
+        return
+    held = f"role {role}" if cycle is None else f"role {role}, bound to cycle {cycle}"
+    raise _Stopped(
+        AGENT_ROLE_CONFLICT_CODE,
+        f"agent {agent_id} is already on this project under {held}; it is not "
+        "re-registered as ORCHESTRATOR, and nothing is changed",
+        [("re-run with an --agent that is not on the project, or with this "
+          "agent once its registration has ended")])
+
+def _board_failure(resp):
+    """The `_Stopped` of a request the board refused or never answered: its
+    own error and help, or the reachability step."""
+    parsed = _core.server_failure_body(resp) or {}
+    steps = resp.get("help")
+    if isinstance(steps, list) and steps:
+        help_steps = [str(s) for s in steps]
+    else:
+        help_steps = (_core.server_failure_help(resp)
+                      or [(f"check the Crucible server is running / reachable "
+                           f"at {_core.resolve_base_url()}"), PROJECT_CREATE_VERB])
+    return _Stopped(None, parsed.get("error") or resp.get("error")
+                    or "the board refused the request", help_steps)
+
+def _env_written(args, root, key):
+    """`--write-env`'s outcome: the writer's answer, or `not-asked`."""
+    if not args.write_env:
+        return "not-asked"
+    return write_env_project_key(root, key)
+
+def _emit_project_create(ops, fields, agent_id, stop=None):
+    """Emit the verb's envelope and answer its exit code. The context is
+    built from the key once one is known, and is empty before."""
+    key = fields["projectKey"]
+    context = _core.axi_context(key, agent_id=agent_id) if key else {}
+    ok = stop is None
+    result = dict(fields)
+    warnings = []
+    if stop is None:
+        result["help"] = list(_core.HELP_STEPS[PROJECT_CREATE_VERB])
+    else:
+        result["error"] = stop.detail
+        result["help"] = stop.help
+        if stop.code:
+            warnings.append({"code": stop.code, "detail": stop.detail})
+    ops.emit(PROJECT_CREATE_VERB, ok, result, context, warnings,
+             f"{PROJECT_CREATE_VERB}: ok={ok} key={key} created={fields['created']}")
+    return 0 if ok else 1

@@ -1706,6 +1706,7 @@ HELP_STEPS = {
     "abort": ["status"],
     "status": ["cycle-activate <id>"],
     "cr-close": ["status"],
+    "project-create": ["register --agent <id> --role ORCHESTRATOR", "project-meta"],
 }
 
 # §S4 — the `help[]` of `status`'s two empty-board states, told apart by the
