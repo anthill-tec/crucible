@@ -471,6 +471,22 @@ describe("a lint record's card says lint, never compile", () => {
     expect(compileCard.querySelector('[data-testid="icon-glyph"]')!.getAttribute("data-kind")).toBe("compile");
     expect(textOf(compileCard)).not.toContain("lint");
   });
+
+  test("a failing lint card with one error reads '1 lint error' (singular) in the fail-red class", async () => {
+    const key = "lint-card-one-1";
+    const now = Date.now();
+    const failing = goVetBrief(key, "lco-lint-1", now - 1000);
+    await mountApp({
+      key,
+      events: [{ ...failing, errors: 1, diagnostics: failing.diagnostics!.slice(0, 1) }],
+    });
+    const body = await openCompileTab();
+
+    const pill = card(body, "lco-lint-1").querySelector('[data-testid="ratio-pill"]');
+    expect(pill).not.toBeNull();
+    expect(textOf(pill)).toBe("1 lint error");
+    expect(pill!.className).toContain("app-ratio-fail");
+  });
 });
 
 // ── The drill-in ────────────────────────────────────────────────────────────
@@ -685,5 +701,122 @@ describe("a lint record's drill-in shows its findings by file with their rule co
     body = await openDrillIn("ldg-compile-clean");
     expect(body.textContent ?? "").toContain("clean compile — no diagnostics");
     expect(body.textContent ?? "").not.toContain("clean lint");
+  });
+});
+
+// ── The drill-in's heading ──────────────────────────────────────────────────────────
+//
+// A lint record's drill-in is headed by its tool — `<tool> lint · N errors ·
+// M warnings` — never by the decoder that read its output. A compile record's
+// is headed by its format, as before.
+
+/** The drill-in's heading line (`[data-testid="compile-status"]`), as text. */
+function drillInHeading(body: Element): string {
+  const heading = body.querySelector('[data-testid="compile-status"]');
+  expect(heading).not.toBeNull();
+  return textOf(heading);
+}
+
+/** A failing clang-tidy lint record, decoded through gcc: two errors, no warning. */
+function clangTidyLint(key: string, id: string, timestamp: number): { brief: EventBriefFixture; detail: EventDetailFixture } {
+  const diagnostics: DiagnosticFixture[] = [
+    { file: "src/main.c", line: 4, col: 13, code: "readability-braces-around-statements", message: "statement should be inside braces", level: "error" },
+    { file: "src/util.c", line: 9, col: 5, code: "bugprone-branch-clone", message: "repeated branch body in conditional chain", level: "error" },
+  ];
+  const common = { id, projectKey: key, agentId: "tidy-agent-GREEN", kind: "compile" as const, tier: "unit", codec: "gcc", timestamp };
+  return {
+    brief: {
+      ...common,
+      total: 0,
+      passed: 0,
+      failed: 0,
+      pending: 0,
+      duration_ms: 0,
+      hasCoverage: false,
+      errors: 2,
+      warnings: 0,
+      diagnostics,
+      lint: "clang-tidy",
+    },
+    detail: {
+      ...common,
+      compile: {
+        format: "gcc",
+        errorCount: 2,
+        warningCount: 0,
+        diagnostics,
+        raw: [
+          "src/main.c:4:13: error: statement should be inside braces [readability-braces-around-statements,-warnings-as-errors]",
+          "src/util.c:9:5: error: repeated branch body in conditional chain [bugprone-branch-clone,-warnings-as-errors]",
+        ].join("\n"),
+      },
+      lint: "clang-tidy",
+    },
+  };
+}
+
+describe("a lint record's drill-in is headed '<tool> lint · N errors · M warnings'", () => {
+  test("a clang-tidy lint record decoded through gcc is headed exactly 'clang-tidy lint · 2 errors · 0 warnings', never by gcc", async () => {
+    const key = "lint-heading-tidy-1";
+    const now = Date.now();
+    const fx = clangTidyLint(key, "lht-lint-1", now - 1000);
+    await mountApp({ key, events: [fx.brief], eventDetails: { "lht-lint-1": fx.detail } });
+    const body = await openDrillIn("lht-lint-1");
+
+    const heading = drillInHeading(body);
+    expect(heading).toBe("clang-tidy lint · 2 errors · 0 warnings");
+    expect(heading).not.toContain("gcc");
+  });
+
+  test("a clippy lint record is headed exactly 'clippy lint · 2 errors · 2 warnings'", async () => {
+    const key = "lint-heading-clippy-1";
+    const now = Date.now();
+    const fx = clippyLint(key, "lhc-lint-1", now - 1000);
+    const extraWarning: DiagnosticFixture = {
+      file: "src/checkpoint.rs",
+      line: 60,
+      col: 1,
+      code: "clippy::let_unit_value",
+      message: "this let-binding has unit value",
+      level: "warning",
+    };
+    const detail: EventDetailFixture = {
+      ...fx.detail,
+      compile: { ...fx.detail.compile, warningCount: 2, diagnostics: [...fx.detail.compile.diagnostics, extraWarning] },
+    };
+    await mountApp({ key, events: [{ ...fx.brief, warnings: 2 }], eventDetails: { "lhc-lint-1": detail } });
+    const body = await openDrillIn("lhc-lint-1");
+
+    expect(drillInHeading(body)).toBe("clippy lint · 2 errors · 2 warnings");
+  });
+
+  // GUARD — passes today: a compile record's drill-in keeps its format as its
+  // heading. It fails if the lint heading leaks onto compile records.
+  test("a compile record's drill-in heading is unchanged: exactly 'rustc · 1 errors · 0 warnings', with no 'lint'", async () => {
+    const key = "lint-heading-guard-1";
+    const now = Date.now();
+    const brief = compileBrief(key, "lhg-compile-1", now - 1000);
+    const detail: EventDetailFixture = {
+      id: "lhg-compile-1",
+      projectKey: key,
+      agentId: "build-agent-RED",
+      kind: "compile",
+      tier: "unit",
+      codec: "rustc",
+      timestamp: now - 1000,
+      compile: {
+        format: "rustc",
+        errorCount: 1,
+        warningCount: 0,
+        diagnostics: brief.diagnostics!,
+        raw: "error[E0308]: mismatched types\n --> src/checkpoint.rs:142:9",
+      },
+    };
+    await mountApp({ key, events: [brief], eventDetails: { "lhg-compile-1": detail } });
+    const body = await openDrillIn("lhg-compile-1");
+
+    const heading = drillInHeading(body);
+    expect(heading).toBe("rustc · 1 errors · 0 warnings");
+    expect(heading).not.toContain("lint");
   });
 });

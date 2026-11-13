@@ -18,14 +18,26 @@
 //  - a clean lint run with empty output is filed; an empty compile post is
 //    still refused (a guard);
 //  - the agent's last outcome says `lint · …`;
-//  - the hint after a lint post names lint, not the compile panel.
+//  - the hint after a lint post names lint, not the compile panel;
+//  - a lint post rides the run lifecycle as a compile post does: it closes the
+//    open run whose `runId` it carries, it is refused on a run that streams
+//    its record, and it stamps the release it names;
+//  - a store holding compile rows written before the marker existed (payload
+//    with no `lint` key, seeded straight into the store) opens and reads every
+//    row back as a plain compile record.
 //
 // Every lint post here uses a decoder that exists today (`rustc`, or a format
 // that falls to detection), so no decoder output is pinned.
 import { describe, test, expect, afterEach } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { startServer } from "../src/server.ts";
 import type { ServerHandle } from "../src/server.ts";
 import { hints } from "../src/hints.ts";
+import type { CompileReport } from "../src/codecs/compile.ts";
+import { eventLine, sendBatch, STREAM_CODEC, utf8 } from "./helpers/run-stream-harness.ts";
 
 const handles: ServerHandle[] = [];
 
@@ -872,5 +884,216 @@ describe("the agent's last outcome after a lint post says lint", () => {
     expect(res.status).toBe(200);
 
     expect((await agentById(handle, key, agentId)).message).toBe("compile · 1 error · ingested");
+  });
+});
+
+// ── A lint post rides the run lifecycle as a compile post does ──────────────
+
+/** Opens a run for the orchestrator with `POST /api/v2/runs/start`; answers its runId. */
+async function openRun(handle: ServerHandle, key: string, extra: Record<string, unknown> = {}): Promise<string> {
+  const res = await sendJson(handle, "POST", "/api/v2/runs/start", { projectKey: key, agentId: ORCHESTRATOR, ...extra });
+  expect(res.status).toBe(202);
+  expect(typeof res.body.runId).toBe("string");
+  return res.body.runId as string;
+}
+
+async function openRunIds(handle: ServerHandle, key: string): Promise<string[]> {
+  const body = await getJson(handle, `/api/v2/events?project=${key}`);
+  return (body.openRuns as { runId: string }[]).map((r) => r.runId);
+}
+
+/** Every stored event id of the project, read off the store (a registration's lifecycle row included). */
+function storedEventIds(handle: ServerHandle, key: string): string[] {
+  return handle.store.listEvents(key, Number.MAX_SAFE_INTEGER).map((e) => e.id);
+}
+
+/** A complete green stream of one passing test, as a streamed run sends it. */
+const ONE_PASS_STREAM =
+  eventLine({ event: "run-start", total: 1 }) +
+  eventLine({
+    event: "test-end",
+    id: "t1",
+    name: "adds",
+    suite: "math",
+    file: "src/math.ts",
+    status: "pass",
+    duration_ms: 3,
+  }) +
+  eventLine({ event: "run-end", total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 3 });
+
+describe("a lint post rides the run lifecycle as a compile post does", () => {
+  test("regression guard: a lint post carrying the runId of an open run closes that run — the run reads ended, settled by the lint record, which carries the lint marker", async () => {
+    const handle = boot();
+    const key = await seedProject(handle);
+    const runId = await openRun(handle, key);
+    expect(await openRunIds(handle, key)).toContain(runId);
+
+    const answer = await postAccepted(handle, key, {
+      runId,
+      lint: "clippy",
+      format: "rustc",
+      runnerExit: 1,
+      errors: RUSTC_ONE_ERROR,
+    });
+    const eventId = answer.event as string;
+
+    expect(await openRunIds(handle, key)).not.toContain(runId);
+    const run = handle.store.getRun(runId);
+    expect({ state: run?.state, eventId: run?.eventId }).toEqual({ state: "ended", eventId });
+    const event = await fromDetail(handle, eventId);
+    expect({ kind: event.kind, lint: event.lint }).toEqual({ kind: "compile", lint: "clippy" });
+    // The closed run's lifecycle rides the record, as it does on a compile close.
+    expect(typeof event.startedAt).toBe("number");
+    // Exactly one compile-kind record: the close stored nothing beside it.
+    expect(await compileEventCount(handle, key)).toBe(1);
+  });
+
+  test("regression guard: a lint post naming a streamed run's runId is refused (400 naming crucible-events), stores nothing and leaves the run open for its stream close", async () => {
+    const handle = boot();
+    const key = await seedProject(handle);
+    const runId = await openRun(handle, key, { stack: "bun", tier: "unit" });
+    const batch = await sendBatch(handle, runId, { projectKey: key, agentId: ORCHESTRATOR, from: 0, data: ONE_PASS_STREAM });
+    expect(batch.status, JSON.stringify(batch.body)).toBe(200);
+    expect(batch.body.held).toBe(utf8(ONE_PASS_STREAM));
+    const before = storedEventIds(handle, key);
+
+    const res = await postCompile(handle, key, {
+      runId,
+      lint: "clippy",
+      format: "rustc",
+      runnerExit: 1,
+      errors: RUSTC_ONE_ERROR,
+    });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(400);
+    expect(res.body.ok).toBe(false);
+    expect(String(res.body.error)).toContain("crucible-events");
+    expect(res.body.event).toBeUndefined();
+    expect(storedEventIds(handle, key)).toEqual(before);
+    expect(handle.store.getRun(runId)?.state).toBe("open");
+
+    // The stream is still held whole, and the proper close takes it.
+    const proper = await sendJson(handle, "POST", "/api/v2/runs", {
+      projectKey: key,
+      agentId: ORCHESTRATOR,
+      runId,
+      codec: STREAM_CODEC,
+    });
+    expect(proper.status, JSON.stringify(proper.body)).toBe(200);
+    expect(storedEventIds(handle, key)).toEqual([proper.body.event as string, ...before]);
+    expect(handle.store.getRun(runId)?.state).toBe("ended");
+  });
+
+  test("regression guard: a lint post naming a declared release stamps that release on its record, beside its lint marker, as a compile post does", async () => {
+    const handle = boot();
+    const key = await seedProject(handle);
+    handle.store.upsertQueueEntry(
+      key,
+      { cr: "CR-FX-4.5.0", release: "4.5.0", wave: "1", title: "Fixture CR" },
+      "fixture-setup",
+    );
+
+    const answer = await postAccepted(handle, key, {
+      lint: "clippy",
+      format: "rustc",
+      runnerExit: 1,
+      errors: RUSTC_ONE_ERROR,
+      release: "4.5.0",
+    });
+    const eventId = answer.event as string;
+
+    const event = await fromDetail(handle, eventId);
+    expect({ lint: event.lint, release: event.release }).toEqual({ lint: "clippy", release: "4.5.0" });
+    // The release is stamped in its own column, read off the store's connection.
+    const db = (handle.store as unknown as { db: Database }).db;
+    const column = db.query<{ release: unknown }, [string]>("SELECT release FROM events WHERE id = ?").get(eventId);
+    expect(column?.release).toBe("4.5.0");
+  });
+});
+
+// ── A store written before the marker existed reads back as compile records ──
+
+/** A compile report as the store kept it; no linter ever named. */
+function keptReport(format: string, errors: number, warnings: number): CompileReport {
+  const diagnostics: CompileReport["diagnostics"] = [
+    ...Array.from({ length: errors }, (_, i) => ({
+      file: "src/lib.rs",
+      line: 10 + i,
+      col: 5,
+      code: "E0308",
+      message: "mismatched types",
+      level: "error" as const,
+    })),
+    ...Array.from({ length: warnings }, (_, i) => ({
+      file: "src/main.rs",
+      line: 20 + i,
+      col: 9,
+      message: "unused variable: `x`",
+      level: "warning" as const,
+    })),
+  ];
+  return { format, errorCount: errors, warningCount: warnings, diagnostics, raw: `${format} output` };
+}
+
+describe("a store holding compile rows written before the marker existed", () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    while (dirs.length > 0) rmSync(dirs.pop()!, { recursive: true, force: true });
+  });
+
+  test("regression guard: compile rows seeded with no lint in their payload read back on the events list and on status with no lint, their counts unchanged, and lastLint null", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lint-route-old-store-"));
+    dirs.push(dir);
+    const dbPath = join(dir, "crucible.db");
+
+    // Seed: the store's own lower-level writer, then each row's payload
+    // rewritten by SQL to the shape a store wrote before the marker: no `lint`.
+    const seeder = startServer({ port: 0, dbPath });
+    const key = crypto.randomUUID();
+    let older: string;
+    let newer: string;
+    try {
+      seeder.store.addProject({ key, name: `lint-route-old-${key}`, type: "backend", sutRoot: "/tmp/p" });
+      older = seeder.store.recordCompileEvent(key, ORCHESTRATOR, keptReport("rustc", 2, 1), { codec: "rustc" }).id;
+      await Bun.sleep(5);
+      newer = seeder.store.recordCompileEvent(key, ORCHESTRATOR, keptReport("tsc", 1, 0), { codec: "tsc" }).id;
+    } finally {
+      seeder.stop();
+    }
+    const raw = new Database(dbPath);
+    try {
+      raw.query("UPDATE events SET payload = NULL WHERE id = ?").run(older);
+      raw.query("UPDATE events SET payload = ? WHERE id = ?").run(JSON.stringify({ incomplete: "legacy" }), newer);
+      const lintKeys = raw
+        .query<{ n: number }, [string]>(
+          "SELECT COUNT(*) AS n FROM events WHERE project_key = ? AND kind = 'compile' AND json_extract(payload, '$.lint') IS NOT NULL",
+        )
+        .get(key);
+      expect(lintKeys?.n).toBe(0);
+    } finally {
+      raw.close();
+    }
+
+    // Open it, and read every record back.
+    const handle = startServer({ port: 0, dbPath });
+    handles.push(handle);
+
+    const expected: Record<string, { codec: string; errors: number; warnings: number }> = {
+      [older]: { codec: "rustc", errors: 2, warnings: 1 },
+      [newer]: { codec: "tsc", errors: 1, warnings: 0 },
+    };
+    const listed = (await listedEvents(handle, key)).filter((e) => e.kind === "compile");
+    expect(listed.map((e) => e.id).sort()).toEqual([older, newer].sort());
+    for (const brief of listed) {
+      expect({ id: brief.id, hasLint: hasKey(brief, "lint") }).toEqual({ id: brief.id, hasLint: false });
+      expect({ codec: brief.codec, errors: brief.errors, warnings: brief.warnings }).toEqual(expected[brief.id]!);
+    }
+
+    const status = await statusOf(handle, key);
+    expect(status.lastCompile).not.toBeNull();
+    expect(status.lastCompile!.id).toBe(newer);
+    expect(hasKey(status.lastCompile!, "lint")).toBe(false);
+    expect(status.lastLint).toBeNull();
   });
 });

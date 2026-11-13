@@ -242,6 +242,74 @@ describe("clippy decoder — a real cargo clippy run decodes to exact counts and
   });
 });
 
+// ── rustc keeps its own decoding ───────────────────────────────────────────────
+//
+// Naming rustc's own lints by their level note is the clippy decoder's job.
+// A plain `rustc` compile record decodes as it always has: only an `E####`
+// carries a code.
+
+/**
+ * DERIVED input: the `unused_variables` block cut out of the real capture
+ * clippy-mixed.txt — from its `warning: unused variable` head down to the
+ * blank line that ends it, its `#[warn(unused_variables)]` note included.
+ */
+function derivedUnusedVariablesBlock(): string {
+  const lines = fixture(CLIPPY_MIXED).split("\n");
+  const start = lines.findIndex((line) => line.startsWith("warning: unused variable"));
+  const end = lines.indexOf("", start);
+  expect({ start: start >= 0, end: end > start }).toEqual({ start: true, end: true });
+  return lines.slice(start, end).join("\n");
+}
+
+describe("rustc decoder — a rustc lint warning carries no code on a compile record", () => {
+  test("a rustc unused_variables warning with its #[warn(unused_variables)] note (derived from clippy-mixed) hinted rustc decodes to one warning with no code", () => {
+    const input = derivedUnusedVariablesBlock();
+    // The note that names the lint is in the input.
+    expect(input).toContain("`#[warn(unused_variables)]`");
+    const report = parseCompile(input, "rustc");
+    expect(report.format).toBe("rustc");
+    expect(report.diagnostics).toStrictEqual([
+      { file: "shop/src/main.rs", line: 14, col: 9, message: "unused variable: `unused`", level: "warning" },
+    ]);
+    expect(report.errorCount).toBe(0);
+    expect(report.warningCount).toBe(1);
+  });
+
+  test("the same derived unused_variables block, unhinted, is detected as rustc and decodes to one warning with no code", () => {
+    const input = derivedUnusedVariablesBlock();
+    const report = parseCompile(input);
+    expect(report.format).toBe("rustc");
+    expect(report.diagnostics).toStrictEqual([
+      { file: "shop/src/main.rs", line: 14, col: 9, message: "unused variable: `unused`", level: "warning" },
+    ]);
+  });
+
+  test("clippy-deny-warnings-rustc-lint (a `-D unused-variables` note) hinted rustc gives the unused-variable error no code, and no finding any code", () => {
+    const report = parseCompile(fixture(CLIPPY_DENY_WARNINGS_RUSTC_LINT), "rustc");
+    expect(report.format).toBe("rustc");
+    expect(report.diagnostics.find((d) => d.message === "unused variable: `spare`")).toStrictEqual({
+      file: "src/main.rs",
+      line: 2,
+      col: 9,
+      message: "unused variable: `spare`",
+      level: "error",
+    });
+    expect(report.diagnostics.filter((d) => d.code !== undefined)).toEqual([]);
+  });
+
+  test("regression guard: clippy-mixed hinted rustc keeps the E0308 error's code", () => {
+    const report = parseCompile(fixture(CLIPPY_MIXED), "rustc");
+    expect(report.diagnostics.find((d) => d.message === "mismatched types")).toStrictEqual({
+      file: "broken/src/lib.rs",
+      line: 2,
+      col: 22,
+      code: "E0308",
+      message: "mismatched types",
+      level: "error",
+    });
+  });
+});
+
 // ── clang-tidy, through gcc ─────────────────────────────────────────────────
 
 const CLANG_TIDY_WARNINGS = "clang-tidy-warnings.txt";

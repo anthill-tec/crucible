@@ -262,3 +262,105 @@ describe("projectStatus never words a lint brief as a compile verdict", () => {
     expect(status.text).not.toMatch(COMPILE_VERDICT);
   });
 });
+
+// ── A lint-only project reads its newest lint record's own words ──────────────
+
+/** Posts a clippy lint record over `errors` with the linter's `runnerExit`; answers its event id. */
+async function postLint(handle: ServerHandle, key: string, errors: string, runnerExit: number): Promise<string> {
+  const answer = await postJson(handle, "/api/v2/runs/compile", {
+    projectKey: key,
+    agentId: ORCHESTRATOR,
+    format: "rustc",
+    lint: "clippy",
+    runnerExit,
+    errors,
+  });
+  await Bun.sleep(5);
+  return answer.event as string;
+}
+
+/** Three passing junit cases. */
+const JUNIT_THREE_PASS = [
+  '<testsuite name="Suite1" tests="3">',
+  '<testcase name="t1" time="0.01"/>',
+  '<testcase name="t2" time="0.02"/>',
+  '<testcase name="t3" time="0.03"/>',
+  "</testsuite>",
+].join("\n");
+
+/** Posts a green test run of three passing cases on `/api/v2/runs`; answers its event id. */
+async function postGreenTestRun(handle: ServerHandle, key: string): Promise<string> {
+  const answer = await postJson(handle, "/api/v2/runs", {
+    projectKey: key,
+    agentId: ORCHESTRATOR,
+    codec: "junit",
+    data: JUNIT_THREE_PASS,
+  });
+  await Bun.sleep(5);
+  return answer.event as string;
+}
+
+describe("a project whose runs are all lint records reads its newest lint record's own words", () => {
+  test("a lint-only project with two lint errors reads exactly '✗ 2 lint errors · just now' in the fail tone, from projectStatus and on the mounted line", async () => {
+    const handle = boot();
+    const key = await seedProject(handle, "status-lint-only-two");
+    await postLint(handle, key, CLIPPY_TWO_ERRORS, 101);
+    const rollup = await rollupOf(handle, key);
+    const events = await eventsOf(handle, key);
+
+    expect(projectStatus(rollup)).toEqual({ text: "✗ 2 lint errors · just now", tone: "fail" });
+
+    const line = await mountStatusLine(rollup, events);
+    expect(lineText(line)).toBe("✗ 2 lint errors · just now");
+    expect(line.className).toContain("app-ratio-fail");
+    expect(line.className).not.toContain("app-ratio-pass");
+  });
+
+  test("a lint-only project whose lint run is clean reads exactly 'lint clean · just now' in the pass tone, from projectStatus and on the mounted line", async () => {
+    const handle = boot();
+    const key = await seedProject(handle, "status-lint-only-clean");
+    await postLint(handle, key, RUSTC_ONE_WARNING, 0);
+    const rollup = await rollupOf(handle, key);
+    const events = await eventsOf(handle, key);
+
+    expect(projectStatus(rollup)).toEqual({ text: "lint clean · just now", tone: "pass" });
+
+    const line = await mountStatusLine(rollup, events);
+    expect(lineText(line)).toBe("lint clean · just now");
+    expect(line.className).toContain("app-ratio-pass");
+    expect(line.className).not.toContain("app-ratio-fail");
+  });
+
+  test("a lint-only project with one lint error reads exactly '✗ 1 lint error · just now' (singular) in the fail tone, from projectStatus and on the mounted line", async () => {
+    const handle = boot();
+    const key = await seedProject(handle, "status-lint-only-one");
+    await postLint(handle, key, RUSTC_ONE_ERROR, 1);
+    const rollup = await rollupOf(handle, key);
+    const events = await eventsOf(handle, key);
+
+    expect(projectStatus(rollup)).toEqual({ text: "✗ 1 lint error · just now", tone: "fail" });
+
+    const line = await mountStatusLine(rollup, events);
+    expect(lineText(line)).toBe("✗ 1 lint error · just now");
+    expect(line.className).toContain("app-ratio-fail");
+  });
+});
+
+describe("a lint record after a test run leaves the line on the test run", () => {
+  test("compile, then a green test run, then a failing lint run reads the test ratio '✓ green · 3/3 · just now' in the pass tone, from projectStatus and on the mounted line", async () => {
+    const handle = boot();
+    const key = await seedProject(handle, "status-compile-test-lint");
+    await postCompile(handle, key, RUSTC_ONE_ERROR);
+    await postGreenTestRun(handle, key);
+    await postLint(handle, key, CLIPPY_TWO_ERRORS, 101);
+    const rollup = await rollupOf(handle, key);
+    const events = await eventsOf(handle, key);
+
+    expect(projectStatus(rollup)).toEqual({ text: "✓ green · 3/3 · just now", tone: "pass" });
+
+    const line = await mountStatusLine(rollup, events);
+    expect(lineText(line)).toBe("✓ green · 3/3 · just now");
+    expect(line.className).toContain("app-ratio-pass");
+    expect(lineText(line)).not.toContain("lint");
+  });
+});
