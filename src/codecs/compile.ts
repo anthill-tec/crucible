@@ -1,5 +1,6 @@
 // CR-CRU-002 §S2 — Compile codecs: parseCompile / detectFormat.
-// Parses compiler error output (rustc / javac / python / tsc / gcc / go) into a CompileReport.
+// Parses compiler error output (rustc / javac / python / tsc / gcc / go) and linter output
+// (ruff, cargo clippy; clang-tidy through gcc, go vet through go) into a CompileReport.
 // Never rejects: unrecognized input falls back to format "raw"; so does a gcc report
 // holding no error diagnostic, so a failed build is never shown as clean. A go report
 // holding no positioned diagnostic is one message-only error, for the same reason.
@@ -37,19 +38,37 @@ const HINT_ALIASES: Record<string, string> = {
   arduino: "gcc",
   go: "go",
   golang: "go",
+  ruff: "ruff",
+  clippy: "clippy",
+  "go vet": "go",
+  "clang-tidy": "gcc",
 };
 
 const RUSTC_HEAD = /^(error|warning)(?:\[(E\d+)\])?:\s*(.*)$/;
 const RUSTC_LOCATION = /^\s*-->\s*(.+?):(\d+):(\d+)\s*$/;
 // ANY rustc summary trailer ("… generated N warnings") is excluded from diagnostics.
 const RUSTC_SUMMARY = /generated \d+ warnings?/;
+// cargo's per-crate trailer: `could not compile `NAME` … due to N previous error…`.
+const CARGO_TRAILER = /^could not compile /;
+// rustc's own lint, named by its level note: `= note: `#[warn(unused_variables)]` …`.
+const RUSTC_LINT_NOTE = /^\s*= note: `#\[(?:warn|deny|forbid)\(([a-z_][a-z0-9_]*)\)\]`/;
+// A clippy lint's help URL, on master or a versioned `rust-<v>` path: `…/index.html#<name>`.
+const CLIPPY_URL = /rust-lang\.github\.io\/rust-clippy\/(?:master|rust-[\d.]+)\/index\.html#([\w-]+)/;
+// A clippy lint's level note: `#[warn(clippy::<name>)]`, `#[deny(clippy::<name>)]` or `-D clippy::<name>`.
+// Only the lint the note opens with counts, never the group it is implied by.
+const CLIPPY_NOTE = /^\s*= note: `(?:#\[(?:warn|deny|forbid)\(|-[DWF] )clippy::([\w-]+)/;
+// ruff `--output-format concise`: `PATH:LINE:COL: CODE [*] message`, or a syntax error
+// `PATH:LINE:COL: invalid-syntax: message`. Summary lines never take this shape.
+const RUFF_LINE = /^(?!\[)((?:(?!: ).)+?):(\d+):(\d+): (?:(invalid-syntax): |([A-Z]+[0-9]+) )(?:\[\*\] )?(.*)$/;
 const JAVAC_LINE = /^\[(ERROR|WARNING)\]\s+(.+?):\[(\d+),(\d+)\]\s+(.*)$/;
 const PYTHON_FRAME = /^\s*File "([^"]+)", line (\d+)/;
 const PYTHON_FINAL = /^\w*(?:Error|Exception)\b.*$/;
 const TSC_LINE = /^(.+?)\((\d+),(\d+)\):\s+(error|warning)\s+(TS\d+):\s+(.*)$/;
 // GCC: FILE never starts with `[` and never contains `: ` (it may contain spaces).
 const GCC_DIAGNOSTIC = /^(?!\[)((?:(?!: ).)+?):(\d+):(\d+): (fatal error|error|warning): (.*)$/;
-const GCC_FLAG = /^(.*) \[(-[^\]]*)\]$/;
+// A trailing bracket: a compiler flag (`[-Wunused-variable]`) or a linter's check
+// (`[readability-braces-around-statements]`, `[check,-warnings-as-errors]`).
+const GCC_BRACKET = /^(.*) \[([^\]]+)\]$/;
 // Sourced link error, older (`FILE:LINE: …`) and newer (`FILE:LINE:(SECTION+OFFSET): …`) linkers.
 // SECTION holds neither `(` nor `)`, so a long line with an unclosed `(` decodes in linear time.
 const GCC_LINK_SOURCED = /^(?!\[)((?:(?!: ).)+?):(\d+):(?:\([^()]*\):)? (undefined reference to .*)$/;
@@ -83,18 +102,26 @@ export function detectFormat(errors: string, hint?: string): string {
   return "raw";
 }
 
-function parseRustc(lines: string[]): CompileDiagnostic[] {
+/**
+ * rustc's human output; cargo clippy's when `clippy` is set. An `E####` keeps its code;
+ * a lint with no such code is coded by its level note. Under clippy a clippy lint is
+ * coded `clippy::<name>` and cargo's `could not compile` trailer is not a finding.
+ */
+function parseRustc(lines: string[], clippy = false): CompileDiagnostic[] {
   const diagnostics: CompileDiagnostic[] = [];
   for (let i = 0; i < lines.length; i++) {
     const head = lines[i]?.match(RUSTC_HEAD);
     if (!head) continue;
     const [, levelWord, code, message] = head;
     if (RUSTC_SUMMARY.test(message ?? "")) continue; // summary trailer, not a diagnostic
+    if (clippy && CARGO_TRAILER.test(message ?? "")) continue;
     const diagnostic: CompileDiagnostic = {
       message: message ?? "",
       level: levelWord === "error" ? "error" : "warning",
     };
+    const lintCode = code === undefined ? lintName(lines, i + 1, clippy) : undefined;
     if (code !== undefined) diagnostic.code = code;
+    else if (lintCode !== undefined) diagnostic.code = lintCode;
     const location = lines[i + 1]?.match(RUSTC_LOCATION);
     if (location) {
       diagnostic.file = location[1];
@@ -103,6 +130,50 @@ function parseRustc(lines: string[]): CompileDiagnostic[] {
       i++;
     }
     diagnostics.push(diagnostic);
+  }
+  return diagnostics;
+}
+
+/**
+ * The lint a diagnostic reports, read from its own lines (up to the next diagnostic head).
+ * Under clippy a clippy lint's help URL wins, then its level note, kebab case read as snake
+ * case; a quoted source line is never read. Otherwise rustc's own lint note names it.
+ */
+function lintName(lines: string[], from: number, clippy: boolean): string | undefined {
+  let clippyNote: string | undefined;
+  let rustcNote: string | undefined;
+  for (let j = from; j < lines.length; j++) {
+    const line = lines[j] ?? "";
+    if (RUSTC_HEAD.test(line)) break;
+    if (clippy) {
+      const url = line.match(CLIPPY_URL);
+      if (url) return `clippy::${snakeCase(url[1] ?? "")}`;
+      const note = line.match(CLIPPY_NOTE);
+      if (note && clippyNote === undefined) clippyNote = `clippy::${snakeCase(note[1] ?? "")}`;
+    }
+    const rustc = line.match(RUSTC_LINT_NOTE);
+    if (rustc && rustcNote === undefined) rustcNote = rustc[1];
+  }
+  return clippyNote ?? rustcNote;
+}
+
+function snakeCase(name: string): string {
+  return name.replaceAll("-", "_");
+}
+
+function parseRuff(lines: string[]): CompileDiagnostic[] {
+  const diagnostics: CompileDiagnostic[] = [];
+  for (const line of lines) {
+    const match = line.match(RUFF_LINE);
+    if (!match) continue;
+    diagnostics.push({
+      file: match[1] ?? "",
+      line: Number(match[2]),
+      col: Number(match[3]),
+      code: match[4] ?? match[5] ?? "",
+      message: match[6] ?? "",
+      level: "error",
+    });
   }
   return diagnostics;
 }
@@ -173,10 +244,11 @@ function parseGcc(lines: string[]): CompileDiagnostic[] {
         level: compiler[4] === "warning" ? "warning" : "error",
         message: compiler[5] ?? "",
       };
-      const flag = diagnostic.message.match(GCC_FLAG);
-      if (flag) {
-        diagnostic.message = flag[1] ?? "";
-        diagnostic.code = flag[2] ?? "";
+      const bracket = diagnostic.message.match(GCC_BRACKET);
+      const code = bracket ? bracketCode(bracket[2] ?? "") : undefined;
+      if (bracket && code !== undefined) {
+        diagnostic.message = bracket[1] ?? "";
+        diagnostic.code = code;
       }
       diagnostics.push(diagnostic);
       continue;
@@ -196,6 +268,19 @@ function parseGcc(lines: string[]): CompileDiagnostic[] {
     if (object) diagnostics.push({ level: "error", message: object[1] ?? "" });
   }
   return diagnostics;
+}
+
+/**
+ * The code a trailing bracket names, or undefined when it is not a flag or check list.
+ * A single item is the code as written. Of several comma-separated items the code is
+ * the first that is not a flag (`-warnings-as-errors` is dropped); when every item is
+ * a flag the whole bracket stays the code.
+ */
+function bracketCode(content: string): string | undefined {
+  if (!content.startsWith("-") && /\s/.test(content)) return undefined;
+  const items = content.split(",");
+  if (items.length === 1) return content;
+  return items.find((item) => item !== "" && !item.startsWith("-")) ?? content;
 }
 
 function parseGo(lines: string[]): CompileDiagnostic[] {
@@ -292,6 +377,12 @@ export function parseCompile(
     switch (format) {
       case "rustc":
         diagnostics = parseRustc(lines);
+        break;
+      case "clippy":
+        diagnostics = parseRustc(lines, true);
+        break;
+      case "ruff":
+        diagnostics = parseRuff(lines);
         break;
       case "javac":
         diagnostics = parseJavac(lines);
