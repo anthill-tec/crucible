@@ -293,7 +293,10 @@ def fill_absent_setting(path: str, table: str, key: str, value,
     * Only a regular file (or a link to one) that parses is filled.
     * The file is read again immediately before the write, and written only
       when it is still exactly the bytes the decision was made on, so a
-      `serve --port` that landed first wins.
+      `serve --port` that landed first wins. A race lost that way is told
+      two ways: a key already present at the first read is `present` and
+      silent; bytes that changed between that read and the re-read are
+      reported `notFilled`, even when the change set the key.
     * A CRLF file stays CRLF.
     * The written file is parsed back; if it no longer parses or does not
       yield `value`, the original bytes are restored and the fill reported
