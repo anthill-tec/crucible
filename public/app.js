@@ -1286,7 +1286,7 @@
             "data-testid": "ratio-pill",
             class: `app-pill ${errors > 0 ? "app-ratio-fail" : "app-ratio-pass"}`,
           },
-          errors > 0 ? `${errors} lint errors` : "lint clean",
+          errors === 1 ? "1 lint error" : errors > 0 ? `${errors} lint errors` : "lint clean",
         );
       }
       if (e.kind === "compile") {

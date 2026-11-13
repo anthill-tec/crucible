@@ -427,7 +427,8 @@ export function projectStatus(project) {
       const rel = relativeTime(last.timestamp, Date.now());
       const errors = last.errors ?? 0;
       if (errors === 0) return { text: `lint clean · ${rel}`, tone: "pass" };
-      return { text: `✗ ${errors} lint errors · ${rel}`, tone: "fail" };
+      const noun = errors === 1 ? "lint error" : "lint errors";
+      return { text: `✗ ${errors} ${noun} · ${rel}`, tone: "fail" };
     }
   }
   const rel = relativeTime(last.timestamp, Date.now());
