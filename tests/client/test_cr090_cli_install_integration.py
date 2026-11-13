@@ -88,6 +88,8 @@ EXPECTED_FLEET_FILES = frozenset({
     "_crucible_run.py",
     # The release-notes verb's module, loaded the same way and as eagerly.
     "_crucible_release.py",
+    # A project's own verbs' module, loaded the same way and as eagerly.
+    "_crucible_project.py",
     "toon.py",
     "STATUS-CONTRACT.md",
     # CR-CRU-138 §S4 -- the distribution's own limit declarations, package

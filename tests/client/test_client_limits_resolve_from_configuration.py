@@ -164,6 +164,8 @@ SHIPPED_DATA_PATH = CLIENTS_DIR / "crucible.toml"
 RUN_MODULE_PATH = CLIENTS_DIR / "_crucible_run.py"
 #: The release-notes module the shared module loads the same way.
 RELEASE_MODULE_PATH = CLIENTS_DIR / "_crucible_release.py"
+#: A project's own verbs' module, loaded the same way.
+PROJECT_MODULE_PATH = CLIENTS_DIR / "_crucible_project.py"
 
 #: The files the fixture's scratch fleet carries: the shared module under test,
 #: the run module it loads from its own directory, the client whose REAL entry
@@ -171,7 +173,8 @@ RELEASE_MODULE_PATH = CLIENTS_DIR / "_crucible_release.py"
 #: own directory, and the shipped package data the loader falls back to. A
 #: clients-only copy lays down a module that cannot resolve anything.
 _SCRATCH_FLEET = (AXI_MODULE_PATH, RUN_MODULE_PATH, RELEASE_MODULE_PATH,
-                  BUN_CLIENT_PATH, TOON_MODULE_PATH, SHIPPED_DATA_PATH)
+                  PROJECT_MODULE_PATH, BUN_CLIENT_PATH, TOON_MODULE_PATH,
+                  SHIPPED_DATA_PATH)
 
 #: The four fields §S1b requires of every limit -- DOCUMENTATION, all of it.
 #: A vocabulary, not a limit. `value` is deliberately NOT one of them: it is

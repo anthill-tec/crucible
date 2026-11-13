@@ -459,7 +459,7 @@ class TheSharedModuleDefinesTheIngestHelpersOnceTest(unittest.TestCase):
     them, and each does what both clients' copies did."""
 
     SHARED_MODULES = ("_crucible_axi.py", "_crucible_run.py",
-                      "_crucible_release.py")
+                      "_crucible_release.py", "_crucible_project.py")
 
     def setUp(self):
         self.axi = load_client("_crucible_axi.py")

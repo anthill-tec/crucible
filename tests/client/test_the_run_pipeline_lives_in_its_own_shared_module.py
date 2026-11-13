@@ -60,7 +60,9 @@ CORE_MODULE = CLIENTS / "_crucible_axi.py"
 RUN_MODULE = CLIENTS / "_crucible_run.py"
 # The release-notes verb's module, loaded by the core the same way.
 RELEASE_MODULE = CLIENTS / "_crucible_release.py"
-SHARED_MODULES = (CORE_MODULE, RUN_MODULE, RELEASE_MODULE)
+# A project's own verbs' module, loaded by the core the same way.
+PROJECT_MODULE = CLIENTS / "_crucible_project.py"
+SHARED_MODULES = (CORE_MODULE, RUN_MODULE, RELEASE_MODULE, PROJECT_MODULE)
 CLIENT_FILES = ("bun-crucible.py", "python-crucible.py", "mvn-crucible.py",
                 "rust-crucible.py", "arduino-crucible.py")
 
@@ -68,6 +70,9 @@ CLIENT_FILES = ("bun-crucible.py", "python-crucible.py", "mvn-crucible.py",
 # scanned file may reach ten thousand lines; the core keeps headroom below it.
 CORE_LINE_LIMIT = 9_200
 RUN_LINE_LIMIT = 10_000
+# The headroom the core keeps under its limit once a project's own verbs have
+# moved out of it.
+CORE_HEADROOM_LINES = 80
 
 # The names the run pipeline is made of, as the design enumerates them, and
 # the one emitter lifted into it.
@@ -300,6 +305,14 @@ class TheSharedModulesHaveHeadroomUnderTheCitationGuardTest(unittest.TestCase):
             lines, CORE_LINE_LIMIT,
             f"clients/_crucible_axi.py is {lines} lines by the citation guard's "
             f"count, over {CORE_LINE_LIMIT}: the run pipeline still lives in it")
+
+    def test_the_core_keeps_eighty_lines_of_headroom_under_its_line_limit(self):
+        lines = len(_source(CORE_MODULE).split("\n"))
+        self.assertLessEqual(
+            lines, CORE_LINE_LIMIT - CORE_HEADROOM_LINES,
+            f"clients/_crucible_axi.py is {lines} lines by the citation guard's "
+            f"count, fewer than {CORE_HEADROOM_LINES} under its limit of "
+            f"{CORE_LINE_LIMIT}: a project's own verbs still live in it")
 
     def test_the_run_module_is_under_the_citation_guards_threshold(self):
         _require_run_module(self)

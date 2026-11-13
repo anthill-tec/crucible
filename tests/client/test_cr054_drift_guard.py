@@ -66,8 +66,10 @@ AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 RUN_MODULE_PATH = CLIENTS_DIR / "_crucible_run.py"
 # The release-notes verb's module, loaded by path the same way.
 RELEASE_MODULE_PATH = CLIENTS_DIR / "_crucible_release.py"
+# A project's own verbs' module, loaded by path the same way.
+PROJECT_MODULE_PATH = CLIENTS_DIR / "_crucible_project.py"
 SHARED_MODULE_NAMES = (AXI_MODULE_PATH.name, RUN_MODULE_PATH.name,
-                       RELEASE_MODULE_PATH.name)
+                       RELEASE_MODULE_PATH.name, PROJECT_MODULE_PATH.name)
 
 CLIENT_FILES = {
     "bun": CLIENTS_DIR / "bun-crucible.py",

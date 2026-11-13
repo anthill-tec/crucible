@@ -1462,6 +1462,9 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
         # The release-notes module is loaded the same way, and travels too.
         shutil.copy(CLIENTS_DIR / "_crucible_release.py",
                     cls.tmp_dir / "_crucible_release.py")
+        # And so is a project's own verbs' module.
+        shutil.copy(CLIENTS_DIR / "_crucible_project.py",
+                    cls.tmp_dir / "_crucible_project.py")
         shutil.copy(TOON_PATH, cls.tmp_dir / "toon.py")
         # CR-CRU-131 §S1c — the limit declarations travel as PACKAGE DATA beside
         # `_crucible_axi.py`, so a copy of the module without them is a broken
