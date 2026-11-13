@@ -88,9 +88,10 @@ modules); CR-CRU-056 (the gated-run pre-flight)
   - the help steps;
   - the gate stage, with its warning;
   - `_run_brief`'s lint wording (fold F11).
-- **The shared core** (9117 lines, guard 9200) gains only what cannot live elsewhere: the loader, and a
-  carried-warnings channel through which the gate's `lint-not-declared` reaches the gate's envelope (fold F11).
-  The expected growth is under 40 lines. Anything more moves to `_crucible_lint.py`.
+- **The shared core** (9117 lines) keeps its standing 80-line headroom under its 9200 guard, so it ends at or
+  under 9120 (amended at RED 946: the headroom pin is CR-CRU-221's invariant). It gains only the loader's entry;
+  the carried-warnings channel through which the gate's `lint-not-declared` reaches the gate's envelope (fold F11)
+  lives in `_crucible_lint.py` or rides an existing core seam.
   `HELP_STEPS["check"]` becomes the lint step where a gate runs lint next.
 - **Every list and fixture that names the shared modules gains `_crucible_lint.py`** (fold F9, the CR-CRU-230 §S1
   precedent):
@@ -121,7 +122,7 @@ modules); CR-CRU-056 (the gated-run pre-flight)
 **Where it runs, and how the command is found** (fold F6):
 
 - Every client runs the command in the project directory, except bun, which runs it in its package directory
-  (`[bun] dir`), where `check` runs.
+  (`[bun] package_dir`), where `check` runs.
 - A first word holding no `/` is looked up on PATH.
 - A first word holding `/` is resolved against that run directory, as `.venv/bin/ruff` or
   `./node_modules/.bin/eslint` are.
@@ -268,7 +269,7 @@ Then Model B is told over Sandesh, answering #1488. The message names the rust m
 - [ ] **AC5 — the command is found, or refused.**
   - A first word not on PATH is refused, naming it, and nothing is posted.
   - A first word holding `/` (`.venv/bin/ruff`) is resolved against the run directory, and runs.
-  - In a bun project with `[bun] dir`, the command runs in the package directory.
+  - In a bun project with `[bun] package_dir`, the command runs in the package directory.
 - [ ] **AC6 — the defaults and the marker.**
   - **Rust:** with no `[lint]`, a rust project runs the workspace clippy command with `CARGO_BUILD_JOBS` set, and
     files `format: "clippy"`, `lint: "clippy"`.
@@ -317,7 +318,7 @@ Then Model B is told over Sandesh, answering #1488. The message names the rust m
   - the RUNBOOK's Lint section;
   - the CHANGELOG, with the rust mapping.
 - [ ] **AC14 — budgets and boundaries.**
-  - The core stays at or under 9200 lines.
+  - The core stays at or under 9120 lines (its 80-line headroom under the 9200 guard).
   - `SHARED_MODULE_LINE_BUDGETS` pins `_crucible_lint.py` and the core's new count in all three copies.
   - No `src/` or `public/` file changes.
 - [ ] **AC15 — the clients' `runs` and `run` say lint.**
