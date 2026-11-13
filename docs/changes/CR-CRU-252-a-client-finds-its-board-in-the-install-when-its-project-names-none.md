@@ -107,6 +107,11 @@ A file that declares a `url` is not touched. A plan with no `listener` (no local
 - **Anything else is skipped:** a file that is skipped (not regular, does not parse) is reported the same way, and
   the install does not fail.
 - **Convergence:** a run that filled any file reports its `[manifest]` stage `converged: false`.
+- **The url follows the server file:** the `[client] url` fill is built from the port the server file names after
+  §S3's step (so a `serve --port Q` that won the race gives `Q`), else from the listener's port.
+- **A mistyped port:** a server `port` that is present but not an integer (`"3850"`) is the operator's and is left
+  alone. The server does not read it, so it boots on the template's port. The listener is therefore the template's
+  port, with no probe, and the url fill uses that port.
 
 ### §S3 — the installer fills in a missing `[server] port`, keeping the live one
 
@@ -145,7 +150,8 @@ install record's digest for it, because it was the install's own and unedited. A
     not describe the chain, and gain no text.
   - a CHANGELOG `### Changed` line.
 - **The install output:** the `[manifest]` stage row carries `filled: [{path, key, value}]` and
-  `notFilled: [{path, key, reason}]`. Each list is omitted when empty. `run_install` threads both, and
+  `notFilled: [{path, key, reason}]`. `key` is written table-qualified, `[client] url` or `[server] port`, and a
+  port's `value` is an integer. Each list is omitted when empty. `run_install` threads both, and
   `cmd_install` renders them, so an operator reads each filled file, its key and the value written, including the
   port.
 
