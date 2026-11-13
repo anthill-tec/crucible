@@ -124,3 +124,27 @@ describe("§S3/AC Docs — DN-client-fleet-inventory's `_project_key` row drops 
     expect(row).toMatch(CLIENTS_NEVER_REGISTER_PROJECTS);
   });
 });
+
+// The explicit verb a project registers itself with is named in both slices:
+// the PRD's duplicate-key bullet and the inventory's `_project_key` row.
+describe("both slices name the project-create verb", () => {
+  test("the PRD's duplicate-key bullet names project-create", () => {
+    const bullet = slice(
+      readText(PRD_PATH),
+      "`POST /api/projects/add` with an existing key",
+      "- Heartbeat `identity`",
+      PRD_PATH,
+    );
+    expect(bullet).toContain("project-create");
+  });
+
+  test("the inventory's `_project_key` row names project-create", () => {
+    const row = slice(
+      readText(DN_PATH),
+      "| `_project_key` |",
+      "## Functions I could not confidently classify",
+      DN_PATH,
+    );
+    expect(row).toContain("project-create");
+  });
+});
