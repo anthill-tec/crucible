@@ -233,6 +233,7 @@ PROJECT_KEY_ARCHIVED_CODE = "project-key-archived"
 PROJECT_KEY_MALFORMED_CODE = "project-key-malformed"
 PROJECT_ARCHIVED_CODE = "project-archived"
 AGENT_ROLE_CONFLICT_CODE = "agent-role-conflict"
+ARGUMENT_REFUSED_CODE = "argument-refused"
 
 _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
 _ACRONYM_RE = re.compile(r"[A-Z][A-Z0-9]*")
@@ -375,7 +376,7 @@ def _refuse_arguments(args, root):
                           f"--acronym {acronym}")
 
 def _refuse_usage(detail):
-    raise _Stopped(None, detail, [_USAGE_STEP])
+    raise _Stopped(ARGUMENT_REFUSED_CODE, detail, [_USAGE_STEP])
 
 def _find_by_env_key(key, ops):
     """The `.env` key's project, read by its metadata: known, or refused as
