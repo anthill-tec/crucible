@@ -184,6 +184,7 @@ def _with_listener_values(text, values):
                 f"`{key}` exactly once; it declared it {replaced} times")
     return text
 
+
 #: §S4 -- the manifest key the fleet's OWN shipped data is declared under.
 #: FLEET content, deliberately NOT the operator's `config`: one is package
 #: data replaced on every upgrade, the other is an operator's file that
