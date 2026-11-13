@@ -136,14 +136,17 @@ the command for each capture.
     normalised to snake case.
   - A quoted source line (`#![deny(clippy::all)]` under "the lint level is defined here") is never read as a code.
 - **rustc's own lints** (for example `unused_variables`) take their name from the `#[warn(<name>)]` note as the
-  code. An `E####` error keeps its code.
+  code, or from a `-D <name>` / `-W <name>` note (kebab case read as snake case), the form `-D warnings` prints
+  (amended at GREEN 942). An `E####` error keeps its code.
 - **The trailer** `error: could not compile … due to N previous error…; M warnings emitted` is not a finding.
 
 **`gcc`** takes a trailing bracketed check as the code. When the bracket holds several comma-separated items,
 the code is the first item that is not a flag (`-warnings-as-errors` is dropped). Two cases:
 
-- On a **lint post**, the no-error→raw fallback does not apply, so a clang-tidy run of only warnings keeps its
-  findings and codes.
+- On a **lint post that states its `runnerExit`** (any value), the no-error→raw fallback does not apply, so a
+  clang-tidy run of only warnings keeps its findings and codes; a non-zero exit with no error still gets §S1's
+  synthetic error. A lint post with no `runnerExit` keeps the fallback, so unreadable output is never filed clean
+  (amended at GREEN 942).
 - On a **compile post** the fallback stands, unchanged (PRD §4.5).
 
 **Hint aliases:** `ruff`, `clippy`, `go vet` → `go`, `clang-tidy` → `gcc`.
