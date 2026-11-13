@@ -18,7 +18,9 @@
 //     the `#[warn(clippy::…)]` / `#[deny(…)]` / `-D clippy::…` note, kebab case
 //     read as snake case), a quoted source line such as
 //     `#![deny(clippy::all)]` is never a code, rustc's own lints are coded by
-//     the name in their `#[warn(<name>)]` note, an `E####` keeps its code, and
+//     the name in their `#[warn(<name>)]` note or their `-D <name>` /
+//     `-W <name>` note (kebab case read as snake case, the form `-D warnings`
+//     prints), an `E####` keeps its code, and
 //     cargo's `could not compile …` trailer is never a finding;
 //   - gcc takes a trailing bracketed check as the code, the first
 //     comma-separated item that is not a flag (`-warnings-as-errors` is
@@ -136,6 +138,7 @@ describe("ruff decoder — a real ruff run decodes to exactly its findings", () 
 const CLIPPY_MIXED = "clippy-mixed.txt";
 const CLIPPY_DENY_WARNINGS = "clippy-deny-warnings.txt";
 const CLIPPY_CLEAN = "clippy-clean.txt";
+const CLIPPY_DENY_WARNINGS_RUSTC_LINT = "clippy-deny-warnings-rustc-lint.txt";
 
 const CLIPPY_MIXED_FINDINGS: Diagnostic[] = [
   finding("broken/src/lib.rs", 2, 22, "E0308", "error", "mismatched types"),
@@ -202,6 +205,18 @@ describe("clippy decoder — a real cargo clippy run decodes to exact counts and
     expect(report.diagnostics).toStrictEqual(CLIPPY_DENY_WARNINGS_FINDINGS);
     expect(report.errorCount).toBe(1);
     expect(report.warningCount).toBe(0);
+  });
+
+  test("clippy-deny-warnings-rustc-lint (rustc's unused variable under `-D warnings`) hinted clippy decodes to one error coded unused_variables from the kebab-case `-D unused-variables` note, its trailer dropped", () => {
+    const input = fixture(CLIPPY_DENY_WARNINGS_RUSTC_LINT);
+    const report = parseCompile(input, "clippy");
+    expect(report.format).not.toBe("raw");
+    expect(report.diagnostics).toStrictEqual([
+      finding("src/main.rs", 2, 9, "unused_variables", "error", "unused variable: `spare`"),
+    ]);
+    expect(report.errorCount).toBe(1);
+    expect(report.warningCount).toBe(0);
+    expect(report.raw).toBe(input);
   });
 
   test("clippy-mixed with its help-URL lines removed hinted clippy still codes each lint from its #[warn]/#[deny] note, never clippy::all", () => {

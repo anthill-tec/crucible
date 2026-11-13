@@ -4,8 +4,8 @@ Real linter runs, captured 2026-11-13 from small scratch sources. Each command r
 below with stdout and stderr sent to one file (`> out.txt 2>&1`), so each file keeps the tool's own order.
 The files are kept byte for byte (trailing spaces included), with one exception: an absolute scratch path
 the tool printed was rewritten to a relative one. That touched only cargo's `Checking … (<dir>)` lines,
-which now read `(clippy-mixed/broken)`, `(clippy-mixed/shop)`, `(clippy-deny-warnings)` and
-`(clippy-clean)`, and clang-tidy's two file paths, which now read `a.c`.
+which now read `(clippy-mixed/broken)`, `(clippy-mixed/shop)`, `(clippy-deny-warnings)`,
+`(clippy-deny-warnings-unused)` and `(clippy-clean)`, and clang-tidy's two file paths, which now read `a.c`.
 
 | Tool | Version |
 |---|---|
@@ -22,6 +22,7 @@ which now read `(clippy-mixed/broken)`, `(clippy-mixed/shop)`, `(clippy-deny-war
 | `ruff-clean.txt` | `ruff-clean/` | `python -m ruff check --isolated --no-cache --select F --output-format concise ok.py` | 0 |
 | `clippy-mixed.txt` | `clippy-mixed/` (a two-member workspace) | `cargo clippy --offline --keep-going -j 1` | 101 |
 | `clippy-deny-warnings.txt` | `clippy-deny-warnings/` | `cargo clippy --offline -- -D warnings` | 101 |
+| `clippy-deny-warnings-rustc-lint.txt` | `clippy-deny-warnings-unused/` | `cargo clippy --offline -- -D warnings` | 101 |
 | `clippy-clean.txt` | `clippy-clean/` | `cargo clippy --offline` | 0 |
 | `clang-tidy-warnings.txt` | `clang-tidy/` | `clang-tidy -checks='-*,readability-braces-around-statements' a.c --` | 0 |
 | `clang-tidy-warnings-as-errors.txt` | `clang-tidy/` | `clang-tidy -checks='-*,readability-braces-around-statements' --warnings-as-errors='readability-braces-around-statements' a.c --` | 1 |
@@ -127,6 +128,19 @@ fn double(n: i32) -> i32 {
 
 fn main() {
     println!("{}", double(21));
+}
+```
+
+### `clippy-deny-warnings-unused/` — for `clippy-deny-warnings-rustc-lint.txt`
+
+Captured 2026-11-13 with the same toolchain. `Cargo.toml` is a bare `[package]` (`name = "tally"`,
+`version = "0.1.0"`, `edition = "2021"`) with an empty `[dependencies]`. `src/main.rs` (rustc's own
+`unused_variables`, denied by `-D warnings`, so its note reads `` `-D unused-variables` implied by `-D warnings` ``):
+
+```rust
+fn main() {
+    let spare = 7;
+    println!("tally");
 }
 ```
 
