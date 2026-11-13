@@ -129,7 +129,7 @@ const RUSTC_ONE_WARNING = ["warning: unused variable: `x`", " --> src/main.rs:2:
 const LINTER_FAILED_NO_FINDING = [
   "ruff failed",
   "  Cause: Failed to parse /p/pyproject.toml",
-  "  Cause: TOML parse failed at line 3, column 1",
+  "  Cause: TOML parse failed",
 ].join("\n");
 
 /** One tsc error — a plain compile post, as the sibling compile tests post. */
