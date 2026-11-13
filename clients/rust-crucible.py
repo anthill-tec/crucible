@@ -121,6 +121,12 @@ _STACK = "rust"
 # before adopting. setdefault → override via CARGO_BUILD_JOBS env for a one-off.
 WORKSPACE_BUILD_JOBS = "10"
 
+# The workspace clippy the gate's lint step runs, and `lint`'s default: its
+# format and its lint marker are both `clippy`.
+_WORKSPACE_CLIPPY_CMD = ("cargo", "clippy", "--workspace", "--all-targets",
+                         "--all-features", "--", "-D", "warnings")
+_CLIPPY_LINT = "clippy"
+
 # A gate lock older than this is treated as ABANDONED and reclaimed regardless of the
 # holder pid — the portable backstop for an uncatchable SIGKILL/oomd whose pid was
 # later recycled (see _acquire_gate_lock). No legit gate run approaches 2h.
@@ -1316,10 +1322,11 @@ def _file_reports(project_dir, agent_id, report_paths, *, raw=None,
 
 
 def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check", run_id=None,
-                         release=None, cycle_id=None):
+                         release=None, cycle_id=None, runner_exit=None):
     """Helper: ingest rustc / clippy stderr to /api/v2/runs/compile. `run_id` is
     the OPEN run a test verb's compile fallback closes; `cycle_id` a `--cycle`
-    the result is filed under."""
+    the result is filed under. A `clippy` kind is a lint record: it carries
+    the `clippy` format, the lint marker and clippy's exit (`runner_exit`)."""
     err_count = stderr_text.count("error[E") + stderr_text.count("error: ")
     warn_count = stderr_text.count("warning:")
     payload = {
@@ -1328,6 +1335,9 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check", run_i
         "errors": stderr_text,
         "agentId": agent_id,
     }
+    if kind == _CLIPPY_LINT:
+        payload.update({"format": _CLIPPY_LINT, "lint": _CLIPPY_LINT,
+                        "runnerExit": runner_exit})
     context = _axi().cycle_context(_run_context(), cycle_id)
     if context:
         payload["context"] = context
@@ -1540,10 +1550,10 @@ def cmd_clippy(args):
     rc = result.returncode
     if args.agent:
         ingest_rc = _ingest_rustc_stderr(project_dir, args.agent, result.stderr,
-                                         kind="clippy", cycle_id=cycle)
+                                         kind="clippy", cycle_id=cycle,
+                                         runner_exit=result.returncode)
         if ingest_rc != 0:
             warnings.append(_axi().ingest_failed_warning("clippy", _base_url()))
-        rc = ingest_rc
     # §S1 — the lint WARNING count is `lints`, never `warnings`: `emit_axi`
     # unconditionally overwrites `axi["warnings"]` with the STRUCTURED warnings
     # list, so a result field of that name would be clobbered by it.
@@ -1597,7 +1607,7 @@ def _clippy_workspace_gate(project_dir, agent, cycle_id=None):
     """
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", WORKSPACE_BUILD_JOBS)  # full-workspace compile — see constant
-    cmd = ["cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"]
+    cmd = list(_WORKSPACE_CLIPPY_CMD)
     # §S3 — every human line here is interactive-only; stdout is the envelope's.
     print(f"[crucible:clippy-gate] running: {' '.join(cmd)}", file=sys.stderr)
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=project_dir, env=env)
@@ -1607,7 +1617,8 @@ def _clippy_workspace_gate(project_dir, agent, cycle_id=None):
           f"errors={err_count} warnings={warn_count}", file=sys.stderr)
     warnings = []
     if agent and _ingest_rustc_stderr(project_dir, agent, result.stderr, kind="clippy",
-                                      cycle_id=cycle_id) != 0:
+                                      cycle_id=cycle_id,
+                                      runner_exit=result.returncode) != 0:
         warnings.append(_axi().ingest_failed_warning("workspace clippy", _base_url()))
     if result.returncode != 0:
         tail = "\n".join(result.stderr.strip().splitlines()[-25:])
@@ -2436,6 +2447,16 @@ def cmd_project_meta(args):
     required). Delegates to the shared implementation."""
     return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
 
+def cmd_lint(args):
+    """Run the project's declared linter, else the workspace clippy the gate
+    runs, and, with --agent, file it as a lint record. Delegates to the
+    shared lint runner."""
+    return _axi().cmd_lint(
+        args, _resolve_project_dir(args.project_dir), _ops(), stack=_STACK,
+        default=_axi().lint_default(
+            _WORKSPACE_CLIPPY_CMD, _CLIPPY_LINT,
+            env={"CARGO_BUILD_JOBS": WORKSPACE_BUILD_JOBS}))
+
 def cmd_project_create(args):
     """Create this project on the board, or find it, by its token. The root
     is `--project-dir` made absolute, never resolved here. Delegates to the
@@ -2978,6 +2999,7 @@ def main():
     _axi().add_filing_cycle_arg(c)
     _add_project_dir_arg(c)
     c.set_defaults(func=cmd_check)
+    _axi().add_lint_verb(sub, cmd_lint, add_args=(_add_project_dir_arg,))
 
     cl = sub.add_parser(
         "clippy",

@@ -2209,6 +2209,14 @@ def cmd_project_meta(args):
     required). Delegates to the shared implementation."""
     return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
 
+def cmd_lint(args):
+    """Run the project's declared linter in the package dir `check` runs in
+    and, with --agent, file it as a lint record. Delegates to the shared lint
+    runner."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    return _axi().cmd_lint(args, project_dir, _ops(), stack=_STACK,
+                           run_dir=_resolve_package_dir(args.package_dir, project_dir))
+
 def cmd_project_create(args):
     """Create this project on the board, or find it, by its token. The root
     is `--project-dir` made absolute, never resolved here. Delegates to the
@@ -2893,6 +2901,8 @@ def main():
     _add_package_dir_arg(c)
     _add_project_dir_arg(c)
     c.set_defaults(func=cmd_check)
+    _axi().add_lint_verb(sub, cmd_lint,
+                         add_args=(_add_package_dir_arg, _add_project_dir_arg))
 
     pmg = sub.add_parser("pre-merge-gate",
                          help="ORCHESTRATOR pre-merge: fail-fast tsc check → regression WITH "

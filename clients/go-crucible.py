@@ -1431,6 +1431,18 @@ def cmd_project_meta(args):
     return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
 
 
+def cmd_lint(args):
+    """Run the project's declared linter, else `go vet ./...` in each module
+    under the project dir, and, with --agent, file it as one lint record.
+    Delegates to the shared lint runner."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    return _axi().cmd_lint(
+        args, project_dir, _ops(), stack=_STACK,
+        default=_axi().lint_default(
+            ("go", "vet", "./..."), "go vet",
+            run_dirs=_discover_modules(project_dir)))
+
+
 def cmd_project_create(args):
     """Create this project on the board, or find it, by its token, under
     `--project-dir` made absolute. Delegates to the shared implementation."""
@@ -1943,6 +1955,8 @@ def _add_plan_verbs(sub):
                           "(--set/--unset).")
     _add_project_dir_arg(pmv)
     pmv.set_defaults(func=cmd_project_meta)
+
+    _axi().add_lint_verb(sub, cmd_lint, add_args=(_add_project_dir_arg,))
 
     pcv = sub.add_parser("project-create",
                          help="Create this project on the board, or find it, by its "

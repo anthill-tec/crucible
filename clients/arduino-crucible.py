@@ -1452,6 +1452,11 @@ def cmd_project_meta(args):
     required). Delegates to the shared implementation."""
     return _axi().cmd_project_meta(args, _project_dir(args), _ops())
 
+def cmd_lint(args):
+    """Run the project's declared linter in the project dir and, with
+    --agent, file it as a lint record. Delegates to the shared lint runner."""
+    return _axi().cmd_lint(args, _project_dir(args), _ops(), stack=_STACK)
+
 def cmd_project_create(args):
     """Create this project on the board, or find it, by its token. The root
     is `--project-dir` made absolute: `_project_dir`, which exits on a
@@ -1880,6 +1885,7 @@ def main():
                         help="arduino-cli compile -> /api/v2/runs/compile on failure")
     _axi().add_filing_cycle_arg(ck)
     ck.set_defaults(func=cmd_check)
+    _axi().add_lint_verb(sub, cmd_lint, add_args=(_add_project_dir_arg,))
 
     cpl = sub.add_parser("compile", parents=[common],
                          help="arduino-cli compile -> /api/v2/runs/compile on failure (§S3)")

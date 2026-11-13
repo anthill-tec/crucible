@@ -1869,6 +1869,12 @@ def cmd_project_meta(args):
     required). Delegates to the shared implementation."""
     return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
 
+def cmd_lint(args):
+    """Run the project's declared linter in the project dir and, with
+    --agent, file it as a lint record. Delegates to the shared lint runner."""
+    return _axi().cmd_lint(args, _resolve_project_dir(args.project_dir), _ops(),
+                           stack=_STACK)
+
 def cmd_project_create(args):
     """Create this project on the board, or find it, by its token. The root
     is `--project-dir` made absolute, never resolved here. Delegates to the
@@ -2347,6 +2353,7 @@ def main():
     _add_python_arg(c)
     _add_project_dir_arg(c)
     c.set_defaults(func=cmd_check)
+    _axi().add_lint_verb(sub, cmd_lint, add_args=(_add_project_dir_arg,))
 
     pmg = sub.add_parser(
         "pre-merge-gate",
