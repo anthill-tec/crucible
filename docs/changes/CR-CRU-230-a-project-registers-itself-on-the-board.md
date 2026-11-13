@@ -146,8 +146,10 @@ unreachable board, or a refused archived read or create) stops there: no registe
 written, since no key has been confirmed.
 
 **Refusal codes.** Each refusal's envelope carries the detail as `error` and one warning whose `code` is the
-refusal's code (`project-key-unknown`, `agent-role-conflict`, …) with the same detail. `project-key-unknown`'s detail
-names the key and the board.
+refusal's code (`project-key-unknown`, `agent-role-conflict`, …) with the same detail. Every step-1 refusal of the
+verb's own arguments (the root, the name, the token, the acronym, a `--set`) has the code `argument-refused`. A request
+the board refused or never answered carries the board's error and help, with no code of its own.
+`project-key-unknown`'s detail names the key and the board.
 
 **The envelope:**
 
