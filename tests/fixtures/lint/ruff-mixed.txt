@@ -1,0 +1,7 @@
+a.py:1:8: F401 [*] `os` imported but unused
+b.py:2:25: F821 Undefined name `missing_offset`
+c.py:1:12: invalid-syntax: Expected a parameter or the end of the parameter list
+c.py:1:13: invalid-syntax: Expected `)`, found newline
+missing.py:1:1: E902 No such file or directory (os error 2)
+Found 5 errors.
+[*] 1 fixable with the `--fix` option.

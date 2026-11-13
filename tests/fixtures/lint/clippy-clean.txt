@@ -1,0 +1,2 @@
+    Checking tidy v0.1.0 (clippy-clean)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s

@@ -1,0 +1,13 @@
+2 warnings generated.
+a.c:2:13: warning: statement should be inside braces [readability-braces-around-statements]
+    2 |   if (x > 0)
+      |             ^
+      |              {
+    3 |     return 1;
+      |              
+a.c:4:13: warning: statement should be inside braces [readability-braces-around-statements]
+    4 |   if (x < 0)
+      |             ^
+      |              {
+    5 |     return -1;
+      |               
