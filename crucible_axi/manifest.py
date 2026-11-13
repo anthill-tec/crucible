@@ -77,12 +77,12 @@ CLIENT_URL_KEY = "url"
 # shipped templates are commented), so a table appended to it carries its own
 # sentence rather than landing as a bare key nobody can interpret.
 _CLIENT_TABLE_BLOCK = """
-# ── The BOARD this project reports to (CR-CRU-139 §S1a) ─────────────────
+# ── The BOARD this project reports to ────────────────────────────────────
 #
-# The installer wrote this URL from the port it PROBED for the server it
-# provisioned here, so the board this machine's clients post to and the port
-# that machine's server listens on are one decision recorded twice. Edit it to
-# point this install at another board; a re-install never overwrites it.
+# The installer wrote this URL from the port the server provisioned on this
+# machine listens on, so this machine's clients post to the board it serves.
+# Edit it to point this install at another board; a re-install never
+# overwrites it.
 """
 
 # CR-CRU-090 §S2 — the two candidates for the SOURCE client fleet, derived from
