@@ -9104,7 +9104,8 @@
                 errorCount > 0 ? "app-ratio-fail" : "app-ratio-pass"
               }`,
             },
-            `${format} · ${errorCount} errors · ${warningCount} warnings`,
+            // A lint record is headed by its tool, never by the decoder it went through.
+            `${lint ? `${d.lint} lint` : format} · ${errorCount} errors · ${warningCount} warnings`,
           ),
           groups.size === 0
             ? div(
