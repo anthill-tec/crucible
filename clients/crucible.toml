@@ -234,10 +234,11 @@ max = 500
 # shell and every sub-agent had to remember — and forgetting was silent: the
 # run simply landed on the default, which on a machine carrying a production
 # instance is the production board. It is a DECLARATION here instead, resolved
-# through the same chain and at the same POINT OF USE as the limits above: the
-# PROJECT's own `crucible.toml` first, then the installed copy, then this
-# shipped data. Nothing to export, and a per-project answer that survives every
-# verb and every sub-agent.
+# at the same POINT OF USE as the limits above but BY TABLE: the first file that
+# declares a non-empty `url` wins — the PROJECT's own `crucible.toml`, then the
+# installed copy — a file without one is passed over, and this shipped data is
+# the last resort. Nothing to export, and a per-project answer that survives
+# every verb and every sub-agent.
 
 [client]
 # The board every verb of every client posts to. The shipped value is the
@@ -246,6 +247,6 @@ max = 500
 # instance beside a production one declares that instance's address in the
 # project's own file — `url = "http://localhost:3850"` — and every client in
 # that project follows, with nothing exported.
-# A project file declaring nothing here still wins; the install's is not read.
+# A project file declaring no `url` here is passed over for the install's.
 url = "http://localhost:3849"
 

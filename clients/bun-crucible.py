@@ -58,8 +58,8 @@ Project + Crucible endpoint:
   value resolves against <project-dir>.
   Bun resolution: --bun > $BUN_CRUCIBLE_BUN > `bun` on PATH.
   Run-lifecycle opt-out (CR-CRU-017 §S4): --no-lifecycle > $BUN_CRUCIBLE_NO_LIFECYCLE.
-  Posts to the board the project's `crucible.toml` declares (`[client] url`,
-  shipped default http://localhost:3849), v2 endpoints ONLY:
+  Posts to the first `[client] url` declared by the project's crucible.toml,
+  then the install's, else the shipped http://localhost:3849; v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs, /api/v2/runs/start|compile,
   /api/v2/projects/<key>/plans. This in-repo clients/ copy is the SOURCE OF
   TRUTH (CR-CRU-008 Risk section) — ~/.claude/scripts/ mirrors it.

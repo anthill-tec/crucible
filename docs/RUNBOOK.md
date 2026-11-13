@@ -432,6 +432,12 @@ provisioned server move in lockstep; on an already-current machine it reports
   when the installed server is exactly the new release's pinned version.
 - A systemd `--user` unit is refreshed by the same run, so the daemon is the new
   version rather than a new binary behind an old process.
+- A re-install fills a missing `[client] url` into the install's `crucible.toml`
+  and a missing `[server] port` into the server's, never overwrites one that is
+  set, and names what it filled: the `[manifest]` stage lists each filled file
+  with its key and value under `filled`, and each file it left alone with the
+  reason under `notFilled`. The port filled is the one the server boots on
+  today, never a probed one.
 - The `[fleet]` stage overwrites the stack-declaration schema at
   `<target-dir>/clients/crucible-declaration.schema.json`, and the `[manifest]`
   stage lists it in `crucible-clients.json` under the `declaration_schema` key
@@ -668,20 +674,26 @@ crucible-axi serve
 
 ### The board — `[client]`, in the project's own file
 
-Where the clients post is the project's own setting, declared in the
-`crucible.toml` of the project directory they run in, beside the `.env` they
-already read:
+Where the clients post is `[client] url`, read from a chain of three steps:
+the `crucible.toml` of the project directory they run in (beside the `.env`
+they already read), then the install's `crucible.toml`, then the shipped one.
+The first file that declares a non-empty `url` wins. A file with no `url` — no
+`[client]` table, a missing, empty or non-string `url`, or a file that does not
+parse — is passed over for the next, so a project file that declares only
+`[gate] skip` reaches the board its install names:
 
 ```toml
 [client]
 url = "http://localhost:3849"
 ```
 
-That is the shipped default too. The value is re-read at the point of use, so
-an edit takes effect on the next verb with nothing restarted and nothing
-exported — and a verb that resolves a board other than the shipped one names
-it as `context.board` in its own envelope, so a run that landed somewhere
-unexpected is legible in the output of the command that sent it.
+That is the shipped default, the chain's last resort. The value is re-read at
+the point of use, so an edit takes effect on the next verb with nothing
+restarted and nothing exported — and a verb that resolves a board other than
+the machine's own names it as `context.board` in its own envelope: the board is
+named when it differs from the install's declared `url`, or from the shipped
+one when the install declares none. A run that landed somewhere unexpected is
+legible in the output of the command that sent it.
 
 ### A development board beside a production one
 

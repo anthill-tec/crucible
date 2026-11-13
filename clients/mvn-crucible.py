@@ -55,8 +55,8 @@ Project + Crucible endpoint:
   Optional .env keys: CRUCIBLE_MAVEN_DIR, CRUCIBLE_COMPOSE_FILE,
     CRUCIBLE_DOCKER_SERVICES, CRUCIBLE_BIND_MOUNT_PATHS, CRUCIBLE_COVERAGE_PROFILE
     (read only with regression --coverage, and by pre-merge-gate).
-  Posts to the board the project's `crucible.toml` declares (`[client] url`,
-  shipped default http://localhost:3849), v2 endpoints ONLY:
+  Posts to the first `[client] url` declared by the project's crucible.toml,
+  then the install's, else the shipped http://localhost:3849; v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs (codec junit, coverage
   codec jacoco), /api/v2/runs/compile. Every report travels inline, as its
   text; the client parses none of them.

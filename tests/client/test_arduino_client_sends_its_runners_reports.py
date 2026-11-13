@@ -1121,7 +1121,7 @@ class NoBoardNoFiguresTest(_ArduinoProject, unittest.TestCase):
 # verbs move out of the core into their own module, so the core's budget is
 # re-recorded lower and that module's is added. The verb that creates a
 # project grows that module, and the core by its help steps.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9097, "_crucible_run.py": 1972,
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9117, "_crucible_run.py": 1972,
                               "_crucible_release.py": 266,
                               "_crucible_project.py": 521}
 

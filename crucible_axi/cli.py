@@ -196,6 +196,17 @@ def cmd_install(args) -> int:
             fields["server_config"] = (
                 {"path": install.abbreviate_home(str(written))} if written
                 else {"reason": server_config.get("reason")})
+        # A re-install's fills: each file it filled with the key and the value
+        # written, and each it left alone with why, so the operator reads the
+        # port and the url this machine now carries. Paths are abbreviated
+        # for display only, like `server_config`'s; the stage row keeps them
+        # absolute.
+        for field in ("filled", "notFilled"):
+            if stage.get(field):
+                fields[field] = [
+                    {**entry,
+                     "path": install.abbreviate_home(str(entry["path"]))}
+                    for entry in stage[field]]
         stage_fields.append(fields)
     result_fields = {
         "stages": stage_fields,

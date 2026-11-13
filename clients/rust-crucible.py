@@ -49,8 +49,8 @@ Project + Crucible endpoint:
   Reads CRUCIBLE_PROJECT_KEY from <project-dir>/.env.
   Project path resolution: --project-dir > $RUST_CRUCIBLE_PROJECT_DIR > the git repo
   containing the current directory. No project is hardcoded — works in ANY Cargo repo.
-  Posts to the board the project's `crucible.toml` declares (`[client] url`,
-  shipped default http://localhost:3849), v2 endpoints ONLY:
+  Posts to the first `[client] url` declared by the project's crucible.toml,
+  then the install's, else the shipped http://localhost:3849; v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs/start, the run's
   /tests list and /stream (codec nextest), /api/v2/runs (the stream's close,
   coverage codec lcov; `auto-ingest`'s codec junit), /api/v2/runs/compile.

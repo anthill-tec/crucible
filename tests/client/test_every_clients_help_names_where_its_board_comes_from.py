@@ -2,11 +2,12 @@
 
 The board a client posts to is `[client] url` in `crucible.toml`, resolved from
 the project's file, then the install's, then the shipped one -- and the FIRST
-file that exists and parses wins, whether or not it holds a `[client]` table.
-So a project file with no `[client] url` falls straight through to the shipped
-address, while a malformed one falls through to the next file. None of that is
-visible to an operator today: no client's `--help` prints it, and the shared
-transport's connection-failure and timeout messages name only the address.
+file that DECLARES a non-empty `[client] url` wins. A file without one (no
+`[client]` table, no `url`, an empty or non-string one, or a file that does not
+parse) is passed over for the next, and the shipped address is the last
+resort. No `--help` may still say that a project file without the key uses the
+shipped address: that was the first-file-that-parses rule, which the chain no
+longer follows for the board.
 
 What this file pins:
 
@@ -15,7 +16,8 @@ What this file pins:
     the real client script as a subprocess, the way the fleet census drives it
     (`drive_verb` in `test_client_fleet_envelope_census.py`) -- carries, in its
     DESCRIPTION, the `[client] url` key, the project -> install -> shipped
-    order and the fall-through rule. And all five carry it from ONE text held
+    order and the fall-through rule, and none of them states the retired
+    rule. And all of them carry it from ONE text held
     by the shared client module (`clients/_crucible_axi.py`), never five hand
     copies.
 
@@ -28,9 +30,10 @@ What this file pins:
 
 Wording is pinned only as far as the requirement fixes it: the literal key
 `[client] url`, the three layers in their precedence order, and the words that
-state the fall-through rule (the first file that parses, a file WITHOUT the key,
-a MALFORMED file falling THROUGH). Whitespace is normalised on both sides
-because two clients let argparse re-wrap their description.
+state the fall-through rule (the FIRST file DECLARING a NON-EMPTY url wins, a
+file WITHOUT one is PASSED OVER, the shipped address is the LAST RESORT).
+Whitespace is normalised on both sides because two clients let argparse
+re-wrap their description.
 """
 
 import ast
@@ -59,10 +62,15 @@ CLIENT_URL_KEY = "[client] url"
 #: The three layers of the resolution chain, in precedence order.
 RESOLUTION_ORDER = ("project", "install", "shipped")
 
-#: The words that state the fall-through rule: the FIRST file that exists and
-#: PARSES wins, so a project file WITHOUT the key uses the shipped address,
-#: while a MALFORMED one falls THROUGH to the next file.
-FALL_THROUGH_TERMS = ("first", "parses", "without", "malformed", "through")
+#: The words that state the fall-through rule: the FIRST file DECLARING a
+#: NON-EMPTY url wins, a file WITHOUT one is PASSED OVER, and the shipped
+#: address is the LAST RESORT.
+FALL_THROUGH_TERMS = ("first", "declar", "non-empty", "without",
+                      "passed over", "last resort")
+
+#: The retired rule's words: under the first-file-that-parses rule a project
+#: file without the key USES THE SHIPPED ADDRESS. No help may still say so.
+RETIRED_RULE_PHRASES = ("uses the shipped address",)
 
 #: A port nothing listens on without root: loopback refuses it instantly.
 UNREACHABLE_BOARD = "http://127.0.0.1:1"
@@ -219,9 +227,24 @@ class EveryClientsTopLevelHelpNamesTheBoardConfigurationTest(unittest.TestCase):
         self.assertEqual(
             offenders, {},
             "the top-level --help description must state that the first "
-            "file that exists and parses wins -- a project file without "
-            f"`{CLIENT_URL_KEY}` uses the shipped address, a malformed one "
-            f"falls through to the next file; it does not in: {offenders!r}")
+            f"file declaring a non-empty `{CLIENT_URL_KEY}` wins, that a file "
+            "without one is passed over, and that the shipped address is the "
+            f"last resort; it does not in: {offenders!r}")
+
+    def test_no_clients_top_level_help_says_a_file_without_the_key_uses_the_shipped_address(self):
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            description = self.description_of(client_key).lower()
+            stated = [phrase for phrase in RETIRED_RULE_PHRASES
+                      if phrase in description]
+            if stated:
+                offenders[client_key] = {"states": stated,
+                                         "description": description}
+        self.assertEqual(
+            offenders, {},
+            "no top-level --help may still say that a project file without "
+            f"`{CLIENT_URL_KEY}` uses the shipped address -- such a file is "
+            f"passed over for the install's; it does in: {offenders!r}")
 
     def test_all_five_carry_one_shared_text_held_by_the_shared_module(self):
         shared_texts = {

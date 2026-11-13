@@ -426,8 +426,9 @@ class DeclaredGateSkipFromConfigFileTest(_DirectGateRunCase):
         """A project `crucible.toml` that EXISTS but has no `[gate]` table
         wins the one walk all the same: the install's `[gate] skip =
         ["pr", "ci"]` is not consulted, so no `--skip` token reaches the
-        argv. The same rule `resolve_base_url` applies to `[client] url` --
-        the first file that reads is the answer, whatever it declares."""
+        argv. The first file that reads is the answer, whatever it
+        declares. `[client] url` does not follow this rule: `resolve_base_url`
+        passes over a file that declares no `url` for the next one."""
         _write_gate_toml(self.project_dir,
                          '[limits.roadmap_list_rows]\nvalue = 30\n')
         _write_gate_toml(self.install_dir, '[gate]\nskip = ["pr", "ci"]\n')
