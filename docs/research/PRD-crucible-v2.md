@@ -221,7 +221,7 @@ requirements verbatim. Highlights that are easy to get wrong:
   an explicit act: the board's "+ Add project" form, `POST /api/v2/projects`, or a
   client's `project-create` verb. A client never registers a project on meeting an
   unknown key, and `project-create` is the one client verb that creates one. Every
-  client, arduino included, reads only `CRUCIBLE_PROJECT_KEY` from that `.env`, and only
+  client, arduino included, reads only `CRUCIBLE_PROJECT_KEY` from the project's `.env`, and only
   `project-create --write-env` writes it.
 - Heartbeat `identity` is optional and preserved when omitted; **top-level `displayName`/
   `source` are tolerated but ignored**.
