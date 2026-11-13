@@ -62,14 +62,15 @@ Issues = "https://github.com/anthill-tec/crucible/issues"
 #                            test_python_runner_is_declared_by_the_project.py
 #                            and
 #                            test_pytest_fixture_stays_out_of_this_repos_suite.py.
-#   ruff                   — this project's linter, run on the rule set
-#                            `[tool.ruff.lint]` below declares. The tests run
+#   ruff                   — this project's linter. Both named demanders run
 #                            it as `python -m ruff` from the suite's own
 #                            interpreter, never a ruff found on PATH, so the
-#                            version is the one pinned here. Named demanders:
+#                            version is one within the range declared here.
 #                            test_the_client_fleet_is_typed_lean_and_lint_clean.py
-#                            and
-#                            test_the_run_pipeline_lives_in_its_own_shared_module.py.
+#                            runs the project's rule set, the one
+#                            `[tool.ruff.lint]` below declares;
+#                            test_the_run_pipeline_lives_in_its_own_shared_module.py
+#                            runs `--select F` on the two shared modules.
 dev = ["coverage>=7", "build>=1", "pytest>=9", "ruff>=0.16,<0.17"]
 
 [project.scripts]

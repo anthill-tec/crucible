@@ -20,8 +20,9 @@ What is asserted here:
     moved `ingest_reports`; two clients loaded in one process each get a run
     module of their own; the installer's loader reaches the run module;
   * the gated-run bookkeeping is defined in the core and nowhere else;
-  * both shared modules are clean under `ruff check --select F`, and the run
-    module imports only the standard library;
+  * both shared modules are clean under `ruff check --select F`, run as
+    `python -m ruff` from this interpreter (the `dev` group provides it), and
+    the run module imports only the standard library;
   * one emitter: the run module defines `emit_run_axi`, it builds the
     envelope the clients' own emitters built, and each client's emitter is
     one `return _axi().emit_run_axi(...)` passing the context built with
@@ -545,19 +546,26 @@ class NoClientReachesTheRunModuleButThroughAxiTest(unittest.TestCase):
 # ── clean ───────────────────────────────────────────────────────────────────
 
 def _ruff():
-    found = shutil.which("ruff")
-    if found:
-        return found
-    sibling = Path(sys.executable).with_name("ruff")
-    return str(sibling) if sibling.is_file() else None
+    """The ruff this interpreter's environment installs, as `python -m ruff`,
+    never a ruff found on PATH: the `dev` group provides it."""
+    return [sys.executable, "-m", "ruff"]
 
 
 class TheSharedModulesAreCleanTest(unittest.TestCase):
 
     def test_ruff_finds_nothing_in_either_shared_module(self):
         ruff = _ruff()
-        if ruff is None:
-            self.skipTest("ruff is not installed on this machine")
+        # The `dev` group provides ruff, so its absence is a failure, never a
+        # skip.
+        version = subprocess.run(
+            [*ruff, "--version"], cwd=REPO_ROOT, capture_output=True,
+            text=True, timeout=120, check=False)
+        self.assertEqual(
+            version.returncode, 0,
+            "ruff is not installed in this interpreter's environment "
+            f"({sys.executable}); install the `dev` group with "
+            "`pip install '.[dev]'`.\n"
+            f"{version.stdout}{version.stderr}")
         _require_run_module(self)
         # ruff only warns, and still exits 0, on a path that does not exist,
         # so each module's presence is asserted before it is linted.
@@ -565,7 +573,7 @@ class TheSharedModulesAreCleanTest(unittest.TestCase):
             self.assertTrue(path.is_file(),
                             f"{path.relative_to(REPO_ROOT)} exists to be linted")
         completed = subprocess.run(
-            [ruff, "check", "--no-cache", "--select", "F",
+            [*ruff, "check", "--no-cache", "--select", "F",
              *(str(path) for path in SHARED_MODULES)],
             cwd=REPO_ROOT, capture_output=True, text=True, timeout=120,
             check=False)
