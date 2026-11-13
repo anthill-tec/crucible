@@ -514,6 +514,8 @@ def _resolve_listener(destination: str, source: str) -> dict | None:
       own `port` is what the copy carries.
 
     A template declaring no `port` gives None wherever the answer falls to it.
+    A TOML boolean is not an integer port here, in either file: the server
+    does not read one.
     """
     declared = _config_table(source, manifest.SERVER_TABLE)
     exists = os.path.lexists(destination)
@@ -526,16 +528,17 @@ def _resolve_listener(destination: str, source: str) -> dict | None:
         host = _DEFAULT_LISTENER_HOST
 
     port = configured.get(manifest.SERVER_PORT_KEY)
-    if not isinstance(port, int) and exists:
+    configured_port = isinstance(port, int) and not isinstance(port, bool)
+    if not configured_port and exists:
         port = declared.get(manifest.SERVER_PORT_KEY)
-    elif not isinstance(port, int):
+    elif not configured_port:
         low = declared.get(manifest.SERVER_PORT_RANGE_MIN_KEY)
         high = declared.get(manifest.SERVER_PORT_RANGE_MAX_KEY)
         if isinstance(low, int) and isinstance(high, int):
             port = _first_bindable_port(host, low, high, source)
         else:
             port = declared.get(manifest.SERVER_PORT_KEY)
-    if not isinstance(port, int):
+    if not isinstance(port, int) or isinstance(port, bool):
         return None
     return {"host": host, "port": port, "url": _board_url(host, port)}
 
