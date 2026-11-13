@@ -912,6 +912,11 @@ export interface RecordEventMeta {
    * no such key.
    */
   incomplete?: string;
+  /**
+   * The linter a compile record was posted by, stored on its event as `lint`.
+   * Omitting it stores a compile record exactly as before.
+   */
+  lint?: string;
 }
 
 export type ChangeKind = "projects" | "agents" | "events";
@@ -3591,15 +3596,18 @@ function ingestOutcome(summary: RunSchema["summary"]): string {
  * The outcome of an ACCEPTED compile ingest, in `ingestOutcome`'s style and
  * written onto the agent's `message` the same way (`recordCompileEvent`):
  * `compile · 2 errors · ingested` (`1 error` singular). A payload carrying no
- * error count reads as none counted.
+ * error count reads as none counted. A lint record says lint instead:
+ * `lint · 2 errors · ingested`, or `lint · clean · ingested` with no error.
  */
-function compileOutcome(compile: unknown): string {
+function compileOutcome(compile: unknown, lint?: string): string {
   const errorCount =
     typeof compile === "object" && compile !== null
       ? (compile as { errorCount?: unknown }).errorCount
       : undefined;
   const count = typeof errorCount === "number" ? errorCount : 0;
-  return `compile · ${count} ${count === 1 ? "error" : "errors"} · ingested`;
+  const errors = `${count} ${count === 1 ? "error" : "errors"}`;
+  if (lint !== undefined) return `lint · ${count === 0 ? "clean" : errors} · ingested`;
+  return `compile · ${errors} · ingested`;
 }
 
 export class Store {
@@ -4646,7 +4654,7 @@ export class Store {
     compile: CompileReport,
     meta?: Pick<
       RecordEventMeta,
-      "tier" | "stack" | "framework" | "context" | "codec" | "role" | "lifecycle" | "release"
+      "tier" | "stack" | "framework" | "context" | "codec" | "role" | "lifecycle" | "release" | "lint"
     >,
   ): RunEvent {
     // A compile report is stored as rows; a value that is not one is refused
@@ -4657,7 +4665,7 @@ export class Store {
     // and, as a test ingest does, the server writes the compile outcome onto
     // the agent, so a run that ended in a compile ingest never reads
     // `ingesting…`.
-    this.touchAgent(projectKey, agentId, { message: compileOutcome(compile) });
+    this.touchAgent(projectKey, agentId, { message: compileOutcome(compile, meta?.lint) });
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -4666,6 +4674,7 @@ export class Store {
       tier: meta?.tier ?? "unit",
       timestamp: Date.now(),
       compile,
+      ...(meta?.lint !== undefined ? { lint: meta.lint } : {}),
       ...(meta?.codec !== undefined ? { codec: meta.codec } : {}),
       ...(meta?.release !== undefined ? { release: meta.release } : {}),
       ...(meta?.stack !== undefined ? { stack: meta.stack } : {}),
@@ -6556,6 +6565,8 @@ export class Store {
       ...(event.abortReason !== undefined ? { abortReason: event.abortReason } : {}),
       // CR-CRU-200 §S3 — an untrusted stream's reason rides the same blob.
       ...(event.incomplete !== undefined ? { incomplete: event.incomplete } : {}),
+      // A lint record's linter rides the same blob: no column, no migration.
+      ...(event.lint !== undefined ? { lint: event.lint } : {}),
       // CR-CRU-038 §S2b — run-level raw output rides the generic payload blob.
       ...(event.raw !== undefined ? { raw: event.raw } : {}),
       // CR-CRU-073 §S1 — the gated release version rides the generic payload
@@ -6973,6 +6984,8 @@ export class Store {
         : {}),
       // CR-CRU-200 §S3 — ABSENT on a complete run (never null).
       ...(typeof payload.incomplete === "string" ? { incomplete: payload.incomplete } : {}),
+      // A lint record's linter; ABSENT on every record posted without one.
+      ...(typeof payload.lint === "string" ? { lint: payload.lint } : {}),
       // CR-CRU-073 §S1 — the gated version (payload) and the retirement marker
       // (column); each ABSENT when its stored value is (never fabricated).
       ...(typeof payload.version === "string" ? { version: payload.version } : {}),

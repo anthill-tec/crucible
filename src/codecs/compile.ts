@@ -267,7 +267,23 @@ function rawReport(errors: string): CompileReport {
   };
 }
 
-export function parseCompile(errors: string, formatHint?: string): CompileReport {
+/**
+ * Which decoders' "a failed build is never shown as clean" guards apply. Each
+ * defaults to on; a caller that knows the run succeeded (a linter that exited
+ * 0) turns one off so an empty or finding-free report stays clean.
+ */
+export interface CompileGuards {
+  /** gcc: a report holding no error diagnostic falls back to raw. */
+  gccNoErrorToRaw?: boolean;
+  /** go: a report with no positioned diagnostic becomes one message-only error. */
+  goMessageOnly?: boolean;
+}
+
+export function parseCompile(
+  errors: string,
+  formatHint?: string,
+  guards: CompileGuards = {},
+): CompileReport {
   try {
     const format = detectFormat(errors, formatHint);
     const lines = errors.split("\n");
@@ -289,12 +305,16 @@ export function parseCompile(errors: string, formatHint?: string): CompileReport
       case "gcc":
         diagnostics = parseGcc(lines);
         // A gcc report with no error diagnostic is never shown as clean.
-        if (!diagnostics.some((d) => d.level === "error")) return rawReport(errors);
+        if (guards.gccNoErrorToRaw !== false && !diagnostics.some((d) => d.level === "error")) {
+          return rawReport(errors);
+        }
         break;
       case "go":
         diagnostics = parseGo(lines);
         // A go report with no positioned diagnostic is still a failure, never shown as clean.
-        if (diagnostics.length === 0) diagnostics = [goMessageOnly(lines)];
+        if (guards.goMessageOnly !== false && diagnostics.length === 0) {
+          diagnostics = [goMessageOnly(lines)];
+        }
         break;
       default:
         return rawReport(errors);

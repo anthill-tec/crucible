@@ -22,6 +22,7 @@ export const hints: Record<
   | "roleRequired"
   | "afterRed"
   | "afterCompile"
+  | "afterLint"
   | "readEvidence"
   | "unknownProject"
   | "archivedProject"
@@ -85,6 +86,10 @@ export const hints: Record<
   /** After a compile ingest. */
   afterCompile: [
     "compile events route to the compile panel — ingest the next test run to update the run verdict",
+  ],
+  /** After a lint ingest (a compile post naming its linter). */
+  afterLint: [
+    "lint records route to the Lint group on the Compile tab — post the next lint run after fixing its findings",
   ],
   /** 404/400 unknown project — the call that fixes it. */
   unknownProject: [

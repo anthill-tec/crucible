@@ -5,6 +5,7 @@
 import { codecs, isRecordStreamCodec, parseRunBody, parseStreamBody, viewCodecs } from "./codecs/index.ts";
 import type { Codec, IngestWarning } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
+import type { CompileGuards } from "./codecs/compile.ts";
 import { parseNextestList } from "./codecs/nextest.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
@@ -120,6 +121,8 @@ interface V2Body {
   context?: unknown;
   // the exit code of the runner that produced a run ingest
   runnerExit?: unknown;
+  // the linter a compile post names, which makes it a lint record
+  lint?: unknown;
   // CR-CRU-011 §S0 — cycle-plan routes
   cr?: unknown;
   // CR-CRU-021 §S6.11 — optional CR title captured at plan filing
@@ -2027,12 +2030,28 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   const badStack = refuseBadStack(body);
   if (badStack !== null) return badStack;
 
-  if (typeof body.errors !== "string" || body.errors.length === 0) {
+  // A post naming its linter in `lint` files a lint record; any other value
+  // than a non-empty string is refused before anything is stored.
+  const lint = body.lint;
+  if (lint !== undefined && (typeof lint !== "string" || lint.length === 0)) {
+    return fail(400, "lint must be a non-empty string when present — compile NOT stored");
+  }
+  // The linter's exit is read on a lint post only; a compile post's
+  // `runnerExit` is neither validated nor used.
+  let lintExit: number | undefined;
+  if (lint !== undefined) {
+    const badExit = refuseBadRunnerExit(body);
+    if (badExit !== null) return badExit;
+    if (typeof body.runnerExit === "number") lintExit = body.runnerExit;
+  }
+
+  // A lint post that states its exit may be empty: the linter printed nothing.
+  if (typeof body.errors !== "string" || (body.errors.length === 0 && lintExit === undefined)) {
     return fail(400, "errors must be a non-empty string");
   }
 
   const format = typeof body.format === "string" ? body.format : undefined;
-  const report = parseCompile(body.errors, format);
+  const report = fileLinterExit(parseCompile(body.errors, format, lintGuards(lintExit)), lintExit);
   // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
   // BEFORE recordCompileEvent's touchAgent — no row created or resurrected).
   const caller = requireRegisteredCaller(store, pk.key, body);
@@ -2065,14 +2084,16 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
     ...(attach.role !== undefined ? { role: attach.role } : {}),
     ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
     ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
+    ...(lint !== undefined ? { lint } : {}),
   });
   if (close.runId !== undefined && close.lifecycle !== undefined) {
     store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
   }
+  const noun = lint !== undefined ? "LINT" : "COMPILE";
   const verdict =
     report.errorCount > 0
-      ? `COMPILE FAILED — ${report.errorCount} errors, ${report.warningCount} warnings`
-      : `COMPILE OK — ${report.warningCount} warnings`;
+      ? `${noun} FAILED — ${report.errorCount} errors, ${report.warningCount} warnings`
+      : `${noun} OK — ${report.warningCount} warnings`;
   return evidenceResponse(
     {
       ok: true,
@@ -2083,8 +2104,36 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
       verdict,
     },
     // §S3 — panel-routing reminder after a compile ingest.
-    { help: hints.afterCompile },
+    // A lint record's reminder names the Lint group instead.
+    { help: lint !== undefined ? hints.afterLint : hints.afterCompile },
   );
+}
+
+/**
+ * The decoders' never-clean guards a lint post turns off: a linter that
+ * exited 0 succeeded, so its report stays clean even when it printed nothing.
+ * Every other post keeps every guard.
+ */
+function lintGuards(lintExit: number | undefined): CompileGuards {
+  return lintExit === 0 ? { gccNoErrorToRaw: false, goMessageOnly: false } : {};
+}
+
+/**
+ * A linter that exited non-zero over output that records no error is never
+ * filed as clean: the report gains one error naming the exit, with no file and
+ * no code, counted in its error count. A zero or absent exit, or a report that
+ * already holds an error, leaves the report as decoded.
+ */
+function fileLinterExit(report: CompileReport, lintExit: number | undefined): CompileReport {
+  if (lintExit === undefined || lintExit === 0 || report.errorCount > 0) return report;
+  return {
+    ...report,
+    errorCount: report.errorCount + 1,
+    diagnostics: [
+      ...report.diagnostics,
+      { level: "error", message: `the linter exited ${lintExit} but its output records no error` },
+    ],
+  };
 }
 
 // ── CR-CRU-013 §S1+§S4b — gate/milestone event routes ───────────────────────
@@ -5480,6 +5529,8 @@ function eventBrief(event: RunEvent) {
     ...(event.type !== undefined ? { type: event.type } : {}),
     ...(event.label !== undefined ? { label: event.label } : {}),
     ...(event.commit !== undefined ? { commit: event.commit } : {}),
+    // A lint record's linter; key ABSENT on every record posted without one.
+    ...(event.lint !== undefined ? { lint: event.lint } : {}),
     ...(compile !== undefined
       ? {
           errors: compile.errorCount,
@@ -5834,13 +5885,16 @@ function handleStatus(store: Store, req: Request, url: URL): Response {
   }
   const events = store.listEvents(project, Number.MAX_SAFE_INTEGER);
   const lastTest = events.find((e) => e.kind === "test");
-  const lastCompile = events.find((e) => e.kind === "compile");
+  // A lint record is compile-kind; the newest of each is answered apart.
+  const lastCompile = events.find((e) => e.kind === "compile" && e.lint === undefined);
+  const lastLint = events.find((e) => e.kind === "compile" && e.lint !== undefined);
   return reply(req, url, {
     ok: true,
     status: {
       hasData: events.length > 0,
       lastTest: lastTest !== undefined ? eventBrief(lastTest) : null,
       lastCompile: lastCompile !== undefined ? eventBrief(lastCompile) : null,
+      lastLint: lastLint !== undefined ? eventBrief(lastLint) : null,
     },
   });
 }
