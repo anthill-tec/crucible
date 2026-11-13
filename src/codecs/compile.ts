@@ -104,9 +104,10 @@ export function detectFormat(errors: string, hint?: string): string {
 }
 
 /**
- * rustc's human output; cargo clippy's when `clippy` is set. An `E####` keeps its code;
- * a lint with no such code is coded by its level note. Under clippy a clippy lint is
- * coded `clippy::<name>` and cargo's `could not compile` trailer is not a finding.
+ * rustc's human output; cargo clippy's when `clippy` is set. An `E####` keeps its code.
+ * Under clippy a lint with no such code is coded by its level note (a clippy lint as
+ * `clippy::<name>`, rustc's own by its name) and cargo's `could not compile` trailer is
+ * not a finding. A plain rustc report codes its `E####` errors only.
  */
 function parseRustc(lines: string[], clippy = false): CompileDiagnostic[] {
   const diagnostics: CompileDiagnostic[] = [];
@@ -120,7 +121,7 @@ function parseRustc(lines: string[], clippy = false): CompileDiagnostic[] {
       message: message ?? "",
       level: levelWord === "error" ? "error" : "warning",
     };
-    const lintCode = code === undefined ? lintName(lines, i + 1, clippy) : undefined;
+    const lintCode = clippy && code === undefined ? lintName(lines, i + 1) : undefined;
     if (code !== undefined) diagnostic.code = code;
     else if (lintCode !== undefined) diagnostic.code = lintCode;
     const location = lines[i + 1]?.match(RUSTC_LOCATION);
@@ -136,22 +137,20 @@ function parseRustc(lines: string[], clippy = false): CompileDiagnostic[] {
 }
 
 /**
- * The lint a diagnostic reports, read from its own lines (up to the next diagnostic head).
- * Under clippy a clippy lint's help URL wins, then its level note, kebab case read as snake
- * case; a quoted source line is never read. Otherwise rustc's own lint note names it.
+ * The lint a clippy-decoded diagnostic reports, read from its own lines (up to the next
+ * diagnostic head). A clippy lint's help URL wins, then its level note, kebab case read as
+ * snake case; a quoted source line is never read. Otherwise rustc's own lint note names it.
  */
-function lintName(lines: string[], from: number, clippy: boolean): string | undefined {
+function lintName(lines: string[], from: number): string | undefined {
   let clippyNote: string | undefined;
   let rustcNote: string | undefined;
   for (let j = from; j < lines.length; j++) {
     const line = lines[j] ?? "";
     if (RUSTC_HEAD.test(line)) break;
-    if (clippy) {
-      const url = line.match(CLIPPY_URL);
-      if (url) return `clippy::${snakeCase(url[1] ?? "")}`;
-      const note = line.match(CLIPPY_NOTE);
-      if (note && clippyNote === undefined) clippyNote = `clippy::${snakeCase(note[1] ?? "")}`;
-    }
+    const url = line.match(CLIPPY_URL);
+    if (url) return `clippy::${snakeCase(url[1] ?? "")}`;
+    const note = line.match(CLIPPY_NOTE);
+    if (note && clippyNote === undefined) clippyNote = `clippy::${snakeCase(note[1] ?? "")}`;
     const rustc = line.match(RUSTC_LINT_NOTE);
     if (rustc && rustcNote === undefined) rustcNote = snakeCase(rustc[1] ?? rustc[2] ?? "");
   }
