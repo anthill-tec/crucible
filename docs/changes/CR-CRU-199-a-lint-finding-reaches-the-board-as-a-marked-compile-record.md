@@ -169,9 +169,10 @@ the code is the first item that is not a flag (`-warnings-as-errors` is dropped)
   than `compile · …` (amended at RED 941).
 - **The project status line** (`projectStatus`, `public/app-logic.mjs`): its compile verdict (`✓ compiled` /
   `✗ N errors`) is taken from the newest compile record that is not a lint record. A lint record never sets it.
-  The projects rollup (`/api/v2/projects`) keeps `lastEvent` as the newest run and gains `lastCompile`, the brief
-  of the newest non-lint compile record or null, which `projectStatus` reads when `lastEvent` is a lint record. With
-  no such record the line shows what it shows for a project with no run (amended at RED 943).
+  The line reads as if lint records did not exist: the projects rollup (`/api/v2/projects`) keeps `lastEvent` as
+  the newest run and gains `lastEventNotLint`, the brief of the newest run that is not a lint record, or null.
+  `projectStatus` reads it when `lastEvent` is a lint record. A project whose runs are all lint records shows the
+  newest lint record's own wording (`✗ N lint errors` / `lint clean`), never a compile verdict (amended at RED 943).
 - **`/api/v2/status`:**
   - `lastCompile` is the newest compile record that is not a lint record;
   - `lastLint` is the newest lint record, or null.
