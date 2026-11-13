@@ -1039,6 +1039,8 @@ describe("a store holding compile rows written before the marker existed", () =>
   const dirs: string[] = [];
 
   afterEach(() => {
+    // The server holding the store file stops before its directory goes.
+    while (handles.length > 0) handles.pop()?.stop();
     while (dirs.length > 0) rmSync(dirs.pop()!, { recursive: true, force: true });
   });
 
