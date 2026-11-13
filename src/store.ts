@@ -5941,11 +5941,14 @@ export class Store {
    * live in their own tables and are never read here. Same scope as
    * `newestEvent`: not archived, not retired.
    */
-  newestRun(projectKey: string): RunEvent | undefined {
+  newestRun(projectKey: string, skipLint = false): RunEvent | undefined {
+    // A lint record carries its linter in the payload blob; skipping lint
+    // reads the newest run as if no lint record existed.
+    const notLint = skipLint ? "AND json_extract(payload, '$.lint') IS NULL" : "";
     const row = this.db
       .query<EventRow, [string]>(
         `SELECT * FROM events WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}
-           AND retired_at IS NULL AND kind != 'lifecycle'
+           AND retired_at IS NULL AND kind != 'lifecycle' ${notLint}
          ORDER BY timestamp DESC, rowid DESC LIMIT 1`,
       )
       .get(projectKey);

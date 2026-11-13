@@ -575,6 +575,9 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
     // event shown), and each UTC day's newest coverage-bearing run.
     const last = store.newestEvent(project.key);
     const lastRun = store.newestRun(project.key);
+    // The status line reads as if lint records did not exist, so the rollup
+    // also carries the newest run that is not a lint record.
+    const lastRunNotLint = lastRun?.lint !== undefined ? store.newestRun(project.key, true) : lastRun;
     const coverageDays = store.listCoverageDays(project.key);
     // §S4 (CR-CRU-001) discards coverage on failed runs, so any stored
     // coverage belongs to a green run — newest one wins.
@@ -627,6 +630,7 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
       agentsTotal: agents.length,
       // §S0 (CR-CRU-006) — same flattened brief shape as the events list.
       lastEvent: lastRun !== undefined ? eventBrief(lastRun) : null,
+      lastEventNotLint: lastRunNotLint !== undefined ? eventBrief(lastRunNotLint) : null,
       latestGreenCoverage: greenCovered?.coverage ?? null,
       // CR-CRU-007 integration AC (§nav table) — the id of that SAME green
       // coverage event, so the client's coverage meter can open its drill-in.

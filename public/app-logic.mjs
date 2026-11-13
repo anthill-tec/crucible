@@ -409,10 +409,27 @@ export function agentRole(agent) {
  * are never shown), an aborted test run as aborted, and a test run — or a
  * brief that names no kind — by its ratio. `tone` is "pass", "fail" or null
  * (no run yet, or an aborted run: neither pass nor fail).
+ *
+ * The line reads as if lint records did not exist: when the last run is a
+ * lint record the newest run that is not one (`lastEventNotLint`) is read
+ * instead; with none, the lint record is worded as lint, never as a compile
+ * verdict.
  */
 export function projectStatus(project) {
-  const last = project.lastEvent;
+  let last = project.lastEvent;
   if (last === null || last === undefined) return { text: "no runs yet", tone: null };
+  const isLint = (e) => typeof e.lint === "string" && e.lint !== "";
+  if (isLint(last)) {
+    const notLint = project.lastEventNotLint;
+    if (notLint !== null && notLint !== undefined) {
+      last = notLint;
+    } else {
+      const rel = relativeTime(last.timestamp, Date.now());
+      const errors = last.errors ?? 0;
+      if (errors === 0) return { text: `lint clean · ${rel}`, tone: "pass" };
+      return { text: `✗ ${errors} lint errors · ${rel}`, tone: "fail" };
+    }
+  }
   const rel = relativeTime(last.timestamp, Date.now());
   if (last.kind === "compile") {
     const errors = last.errors ?? 0;
