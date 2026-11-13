@@ -563,22 +563,9 @@ def run_manifest_stage(target_dir: str, force: bool = False,
     wrote_config = laid_client
     server_report: dict | None = None
     if server_config is not None:
-        source = server_config.get("source")
-        if source:
-            written = server_config["path"]
-            if lay_down_config(source, written):
-                wrote_config = True
-                if listener:
-                    apply_setting(written, SERVER_TABLE, SERVER_PORT_KEY,
-                                  listener["port"])
-                authored[written] = Path(written).read_bytes()
-            elif listener:
-                fills.fill(written, SERVER_TABLE, SERVER_PORT_KEY,
-                           listener["port"])
-            server_report = {"path": written, "reason": None}
-        else:
-            server_report = {"path": None,
-                             "reason": server_config.get("reason")}
+        server_report, laid_server = _server_config_step(
+            server_config, listener, fills, authored)
+        wrote_config = wrote_config or laid_server
     if laid_client:
         if listener:
             apply_setting(client_config, CLIENT_TABLE, CLIENT_URL_KEY,
@@ -613,6 +600,31 @@ def run_manifest_stage(target_dir: str, force: bool = False,
     if fills.not_filled:
         result["notFilled"] = fills.not_filled
     return result
+
+
+def _server_config_step(server_config: dict, listener: dict | None,
+                        fills: _Fills, authored: dict) -> tuple[dict, bool]:
+    """Lay the server's file down or fill it in, as `run_manifest_stage`'s
+    plan says; answer the stage's `server_config` report and whether the file
+    was freshly laid down.
+
+    A plan with no `source` writes nothing and reports its reason. A file this
+    call lays down gets the listener's port and is recorded in `authored`; a
+    file that already exists has only an absent port filled, through `fills`.
+    """
+    source = server_config.get("source")
+    if not source:
+        return {"path": None, "reason": server_config.get("reason")}, False
+    written = server_config["path"]
+    laid = lay_down_config(source, written)
+    if laid:
+        if listener:
+            apply_setting(written, SERVER_TABLE, SERVER_PORT_KEY,
+                          listener["port"])
+        authored[written] = Path(written).read_bytes()
+    elif listener:
+        fills.fill(written, SERVER_TABLE, SERVER_PORT_KEY, listener["port"])
+    return {"path": written, "reason": None}, laid
 
 
 class _Fills:
