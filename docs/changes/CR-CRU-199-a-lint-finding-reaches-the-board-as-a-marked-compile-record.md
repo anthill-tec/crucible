@@ -1,6 +1,6 @@
 # CR-CRU-199 — a lint finding reaches the board as a marked compile record, and shows as its own group
 
-**Status:** PENDING · filed 2026-10-19 (Model B question, Sandesh #1486; user ruling: lint is Crucible's surface,
+**Status:** COMPLETED — merged 2026-11-13 · filed 2026-10-19 (Model B question, Sandesh #1486; user ruling: lint is Crucible's surface,
 through a `lint` verb in every client, in 0.4.0) · gap analysis ran 2026-11-13
 (`test-reports/work/cr199-gap-analysis.md`); design D1–D8 approved by the user 2026-11-13 · **re-scoped
 2026-11-13** (user ruling, split for ease of execution): this CR is the BOARD side; the clients' `lint` verb is
@@ -196,28 +196,28 @@ the code is the first item that is not a flag (`-warnings-as-errors` is dropped)
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the marker is accepted, stored and returned.**
+- [x] **AC1 — the marker is accepted, stored and returned.**
   - A post with `lint: "ruff"` stores a record whose event, and whose brief, carry `lint: "ruff"`.
   - A post without `lint` stores a record whose event and brief carry no `lint`, byte-for-byte as today's.
   - `lint: ""` and `lint: 5` are refused with 400 naming `lint`, and store nothing.
-- [ ] **AC2 — old records read as compile records.** A store holding compile records written before this change
+- [x] **AC2 — old records read as compile records.** A store holding compile records written before this change
   (no `lint` in their payload) opens and reads every record back unchanged, with no `lint`. There is no schema
   migration.
-- [ ] **AC3 — the verdict follows the linter.**
+- [x] **AC3 — the verdict follows the linter.**
   - A lint record with errors answers `LINT FAILED — N errors, M warnings`; a clean one, `LINT OK — M warnings`.
   - A lint post with `runnerExit: 2` and output holding no finding (`ruff failed …`) stores one synthetic error
     naming exit 2, and answers `LINT FAILED`.
   - A bad `runnerExit` is refused as on `/runs`.
   - A compile record's wording is unchanged.
-- [ ] **AC4 — a clean lint run is filed.**
+- [x] **AC4 — a clean lint run is filed.**
   - A lint post with `format: "go vet"`, `runnerExit: 0` and empty `errors` stores a clean lint record with zero
     findings, answering `LINT OK — 0 warnings`.
   - A captured clean clippy run and a captured ruff `All checks passed!` do the same.
   - A compile post with empty `errors` is still refused.
-- [ ] **AC5 — ruff is decoded.** A captured ruff 0.16 output holding a fixable finding (`[*]`), an unfixable one,
+- [x] **AC5 — ruff is decoded.** A captured ruff 0.16 output holding a fixable finding (`[*]`), an unfixable one,
   an `invalid-syntax` line and both summary lines decodes to exactly its findings. Each has file, line, col, code
   and a message without `[*]`, at level `error`. No summary line becomes a finding.
-- [ ] **AC6 — clippy is decoded.** A captured clippy output decodes to exact counts. It holds:
+- [x] **AC6 — clippy is decoded.** A captured clippy output decodes to exact counts. It holds:
   - a `warn` lint;
   - a `deny` lint (declared through `#![deny(clippy::all)]`);
   - a lint under `-D warnings`;
@@ -231,34 +231,34 @@ the code is the first item that is not a flag (`-warnings-as-errors` is dropped)
   - the `E####` keeps its code;
   - none is `clippy::all`;
   - the trailer is not a finding.
-- [ ] **AC7 — clang-tidy is decoded.**
+- [x] **AC7 — clang-tidy is decoded.**
   - On a lint post, a captured warning line ending `[readability-braces-around-statements]` decodes as a warning
     with that code, and is not stored raw.
   - A captured `--warnings-as-errors` line (`[…,-warnings-as-errors]`) decodes as an error with the check's code.
   - On a compile post, gcc output with no error falls to raw as today.
-- [ ] **AC8 — the hint aliases.** `ruff`, `clippy`, `go vet` and `clang-tidy` select their decoders. A captured
+- [x] **AC8 — the hint aliases.** `ruff`, `clippy`, `go vet` and `clang-tidy` select their decoders. A captured
   `go vet` output decodes through `go`.
-- [ ] **AC9 — the Compile tab groups lint apart** (the approved storyboard frame).
+- [x] **AC9 — the Compile tab groups lint apart** (the approved storyboard frame).
   - With one compile record and one lint record: a compile group and a Lint group, each holding its record.
   - With no lint record: no Lint group.
   - With only lint records: the Lint group, and no `no compile events yet`.
-- [ ] **AC10 — a lint record says lint wherever it is shown.**
+- [x] **AC10 — a lint record says lint wherever it is shown.**
   - **Card:** a failing lint card reads `N lint errors` and names its tool; a clean one reads `lint clean`; neither
     says "compile".
   - **Drill-in:** headed `<tool> lint · N errors · M warnings` as F5L draws it (amended at VERIFY 944), codes
     grouped by file, or `clean lint — no findings`.
   - **Agent outcome:** after a lint post, the agent's last outcome reads `lint · …`.
   - **Project status line:** a newer lint record does not change the line's compile verdict.
-- [ ] **AC11 — status keeps compile and lint apart.** With a compile record followed by a newer lint record,
+- [x] **AC11 — status keeps compile and lint apart.** With a compile record followed by a newer lint record,
   `/api/v2/status` answers `lastCompile` = the compile record and `lastLint` = the lint record. With no lint record,
   `lastLint` is null.
-- [ ] **AC12 — the words.** Each of these exists and says what §S4 says:
+- [x] **AC12 — the words.** Each of these exists and says what §S4 says:
   - the PRD's lint section;
   - §4.5's decoders and lint exception;
   - the status shape and route body;
   - the RUNBOOK retention line;
   - the CHANGELOG entry.
-- [ ] **AC13 — nothing else moves.** The existing compile, run, status, brief, agent-outcome and project-status
+- [x] **AC13 — nothing else moves.** The existing compile, run, status, brief, agent-outcome and project-status
   suites pass unedited. The pre-review found no test this breaks. Any edit is listed.
 
 ## Non-goals
