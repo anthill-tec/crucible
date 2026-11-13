@@ -165,6 +165,11 @@ Releases before 0.3.0 are described only on GitHub Releases.
   any form, is never overwritten. The `[manifest]` stage names each file it filled with its key and
   value under `filled`, and each file it could not safely touch with the reason under `notFilled`.
   The range is probed only for a server file the install lays down fresh.
+- **The project's ruff rule set is pinned.** `pyproject.toml` declares `[tool.ruff.lint]` with
+  `select = ["E4", "E7", "E9", "F"]`, so `ruff check` reads the same rules on every machine, and
+  `ruff` joins the `dev` optional dependencies (`pip install '.[dev]'`). `clients`, `crucible_axi`
+  and `tests` pass it clean. The installer's own tests now declare only ephemeral ports in the
+  server templates they provision, never one in the shipped 3800–3899 window.
 
 ### Removed
 
