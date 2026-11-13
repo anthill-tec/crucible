@@ -191,10 +191,24 @@ class _FillCase(_InstallerConnectionCase):
                 if isinstance(entry, dict) and entry.get("path") == path]
 
     def assert_names_key(self, entry, table, key):
-        self.assertIn(
-            entry.get("key"), (key, f"{table}.{key}",
-                               f"[{table}] {key}"),
-            f"the entry must name the key it is about, `{key}` of `[{table}]`; got {entry!r}")
+        """An entry names its key table-qualified, in exactly one form:
+        `[client] url`, `[server] port`."""
+        self.assertEqual(
+            f"[{table}] {key}", entry.get("key"),
+            f"the entry must name the key it is about table-qualified, "
+            f"`[{table}] {key}`; got {entry!r}")
+
+    def assert_port_value(self, entry, port):
+        """A filled port's value is the integer written, never its string
+        and never a boolean."""
+        value = entry.get("value")
+        self.assertIs(
+            int, type(value),
+            f"a filled port's value is an integer; got {value!r} "
+            f"({type(value).__name__}) in {entry!r}")
+        self.assertEqual(
+            port, value,
+            f"the output must name the port written, {port:d}; got {entry!r}")
 
     def single_entry(self, row, field, path, table, key):
         entries = self.entries_for(row, field, path)
@@ -245,6 +259,55 @@ class AReinstallFillsAMissingClientUrlTest(_FillCase):
         self.assertEqual(
             server_before, Path(self.server_config).read_bytes(),
             "a server file that already names its port is not touched")
+
+    def test_the_comment_block_a_fill_writes_says_the_url_follows_the_provisioned_servers_port(self):
+        """The commented block a filled `[client]` table arrives under is read
+        by the operator. It says the url comes from the port the server
+        provisioned on this machine listens on. It never says the port was
+        probed -- a re-install fills the live port, it probes nothing -- and,
+        being operator text, it names no change-request id and no section
+        sign."""
+        self.provision()
+        named = self.other_port()
+        self.place_server_file(_server_file_naming(named))
+        before = self.place_install_file()
+
+        self.install_once()
+
+        after = Path(self.install_config).read_bytes()
+        self.assertEqual(
+            _url(named), _table(self.install_config, CLIENT_TABLE).get(URL_KEY),
+            "fixture sanity: the install file must have been filled before "
+            f"its comment block can be read; it reads {after.decode('utf-8')!r}")
+        added = after[len(before):].decode("utf-8")
+        comments = [line.strip().lstrip("#").strip()
+                    for line in added.splitlines()
+                    if line.strip().startswith("#")]
+        prose = " ".join(text for text in comments if text)
+        self.assertTrue(
+            prose,
+            f"the fill must append a commented block; it appended {added!r}")
+        self.assertNotIn(
+            "probed", prose.lower(),
+            "a re-install fills the live port and probes nothing, so the "
+            f"block must not say the port was probed; it reads {prose!r}")
+        self.assertIsNone(
+            re.search(r"CR-", prose),
+            f"the block is operator text and names no change-request id; it "
+            f"reads {prose!r}")
+        self.assertNotIn(
+            "\u00a7", prose,
+            f"the block is operator text and carries no section sign; it "
+            f"reads {prose!r}")
+        self.assertRegex(
+            prose.lower(),
+            r"\burl\b",
+            f"the block must say what the url is; it reads {prose!r}")
+        self.assertRegex(
+            " ".join(prose.lower().split()),
+            r"port the server provisioned (on this machine|here) listens on",
+            "the block must say the url comes from the port the server "
+            f"provisioned on this machine listens on; it reads {prose!r}")
 
     def test_the_run_that_fills_reports_the_file_key_and_value_and_does_not_converge(self):
         """The filling run's `[manifest]` stage is `converged: false` and its
@@ -496,10 +559,7 @@ class TheLivePortIsKeptTest(_FillCase):
         row = self.manifest_row(stages)
         entry = self.single_entry(row, "filled", self.server_config,
                                   SERVER_TABLE, PORT_KEY)
-        self.assertIn(
-            entry.get("value"), (ports[0], str(ports[0])),
-            f"the output must name the port written, {ports[0]:d}; got "
-            f"{entry!r}")
+        self.assert_port_value(entry, ports[0])
         url_entry = self.single_entry(row, "filled", self.install_config,
                                       CLIENT_TABLE, URL_KEY)
         self.assertEqual(_url(ports[0]), url_entry.get("value"))
@@ -550,6 +610,50 @@ class TheLivePortIsKeptTest(_FillCase):
         self.assertEqual(
             [], self.entries_for(self.manifest_row(stages), "filled",
                                  self.server_config),
+            "a present `port` is never reported filled")
+
+    def test_a_boolean_port_is_left_as_it_is_and_the_url_names_the_templates_port(self):
+        """`port = true` is present, so it is the operator's and the server
+        file is byte-identical after install. A boolean is not a port: the
+        server does not read it and boots on the template's port, so the
+        install file's filled url names the template's port, and no url the
+        install writes carries the boolean."""
+        self.provision()
+        server_before = self.place_server_file(
+            "[server]\nport = true\n\n[limits.roadmap_list_rows]\n"
+            "value = 5\n")
+        self.assertIs(
+            True, _table(self.server_config, SERVER_TABLE).get(PORT_KEY),
+            "fixture sanity: the server file must declare a TOML boolean port")
+        self.place_install_file()
+
+        stages = self.install_once()
+
+        self.assertEqual(
+            server_before, Path(self.server_config).read_bytes(),
+            "a `port` present with a boolean value is the operator's and "
+            "must be left as it is")
+        url = _table(self.install_config, CLIENT_TABLE).get(URL_KEY)
+        self.assertEqual(
+            _url(self.template_port), url,
+            "a boolean port is not one the server reads, so the server boots "
+            f"on the template's port {self.template_port:d} and the install "
+            "file's url must name that port; the file reads "
+            f"{Path(self.install_config).read_text(encoding='utf-8')!r}")
+        row = self.manifest_row(stages)
+        url_entry = self.single_entry(row, "filled", self.install_config,
+                                      CLIENT_TABLE, URL_KEY)
+        self.assertEqual(
+            _url(self.template_port), url_entry.get("value"),
+            f"the output must name the url written; got {url_entry!r}")
+        written_urls = [url] + [entry.get("value")
+                                for entry in self.entries(row, "filled")]
+        self.assertEqual(
+            [], [value for value in written_urls if "True" in str(value)],
+            "no url the install writes may carry the boolean; the written "
+            f"values are {written_urls!r}")
+        self.assertEqual(
+            [], self.entries_for(row, "filled", self.server_config),
             "a present `port` is never reported filled")
 
 
@@ -603,6 +707,56 @@ class AServeThatLandsFirstWinsTest(_FillCase):
             [], self.entries_for(self.manifest_row(stages), "filled",
                                  self.server_config),
             "a fill that was skipped is not reported as filled")
+
+    def test_a_fresh_install_file_laid_down_after_a_lost_race_names_the_port_serve_wrote(self):
+        """No install file exists yet, so the stage lays one down. The plan
+        decided the template's port off a port-less server file, then
+        `serve --port` wrote a port of its own and won. The server boots on
+        the port its file names, so the freshly laid install file's url names
+        that port, not the template's."""
+        self.provision()
+        self.place_server_file(PORTLESS_SERVER_FILE)
+        self.assertFalse(
+            os.path.lexists(self.install_config),
+            "fixture sanity: the install file must not exist yet, so the "
+            "stage lays it down fresh")
+        served = self.other_port()
+        real_plan = self.install.server_config_plan
+        seen = {}
+
+        def plan_then_serve():
+            plan = real_plan()
+            seen["listener"] = plan.get("listener")
+            self.install.write_listener_settings(port=served)
+            seen["raced"] = Path(self.server_config).read_bytes()
+            return plan
+
+        with mock.patch.object(self.install, "server_config_plan",
+                               plan_then_serve):
+            self.install_once()
+
+        self.assertIn("raced", seen,
+                      "fixture sanity: the race must have been staged")
+        self.assertEqual(
+            self.template_port, (seen["listener"] or {}).get("port"),
+            "fixture sanity: the plan read a port-less server file, so it "
+            f"decided the template's port {self.template_port:d}; it decided "
+            f"{seen['listener']!r}")
+        self.assertEqual(
+            seen["raced"], Path(self.server_config).read_bytes(),
+            "the server file is exactly what `serve` left")
+        after = Path(self.install_config).read_bytes()
+        self.assertEqual(
+            _url(served), _table(self.install_config, CLIENT_TABLE).get(URL_KEY),
+            f"the server file names {served:d} after the race, so the freshly "
+            f"laid install file's url must name {served:d}, not the template's "
+            f"{self.template_port:d}; it reads {after.decode('utf-8')!r}")
+        self.assertEqual(
+            _digest(after),
+            self.manifest.recorded_config_digests(self.target_dir).get(
+                self.install_config),
+            "a freshly laid install file is the install's own, so its record "
+            "must hold the bytes it was left with")
 
 
 # ===========================================================================
@@ -754,11 +908,7 @@ class TheInstallOutputNamesWhatItFilledTest(_FillCase):
             f"envelope reads {out.getvalue()!r}")
         port_entry = self.single_entry(row, "filled", self.server_config,
                                        SERVER_TABLE, PORT_KEY)
-        self.assertIn(
-            port_entry.get("value"), (self.template_port,
-                                      str(self.template_port)),
-            "the output must name the port written into the server file; the "
-            f"envelope reads {out.getvalue()!r}")
+        self.assert_port_value(port_entry, self.template_port)
 
 
 if __name__ == "__main__":
