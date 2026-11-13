@@ -344,10 +344,10 @@ def _read_project_config(table=LIMITS_TABLE):
     operator should create.
 
     `table` names the TOP-LEVEL table wanted -- `[limits]` for the three a
-    client enforces, `[client]` for CR-CRU-139 §S2's board. ONE walk, because
-    the two settings live in one file and resolve by one rule: a second walk
-    with its own precedence is how a project's file comes to decide one datum
-    and not the other.
+    client enforces, `[gate]` for the skip list. CR-CRU-139's `[client]` is
+    not read through here: it resolves BY TABLE (`resolve_base_url`), so a project
+    file that declares no `url` is passed over for the install's rather than
+    hiding it, while a limit keeps the first file that parses.
 
     `tomllib` is stdlib (3.11+; this repo runs 3.14) and already in the tree at
     `clients/rust-crucible.py`."""
@@ -447,10 +447,11 @@ def resolve_limit(name):
 
 
 def resolve_base_url():
-    """CR-CRU-139 §S2 -- the BOARD this client posts to, resolved at the POINT
-    OF USE from the same chain and the same bound project dir `resolve_limit()`
-    reads: the project's own `[client] url`, else the install's, else the
-    distribution's shipped declaration.
+    """CR-CRU-139 -- the BOARD this client posts to, at the POINT OF USE, over
+    the candidates `resolve_limit()` reads, but BY TABLE: the first file -- the
+    project's, then the install's -- that DECLARES a non-empty string
+    `[client] url` wins, a file without one is passed over, and the shipped
+    declaration is the last resort.
 
     THE ONE PLACE the fleet's board is spelled. It replaces five module
     constants bound at import from `$CRUCIBLE_URL` (arduino also honoured
@@ -466,15 +467,33 @@ def resolve_base_url():
     first request, and a verb given a different project must post to a
     different project's board.
 
-    A FILE never raises here -- a mistyped or absent `[client]` table falls
-    through to the shipped declaration exactly as a missing limit does, because
-    a client that cannot read a config file must still degrade rather than
-    break."""
-    _, table = _read_project_config(CLIENT_TABLE)
-    url = table.get(CLIENT_BOARD_FIELD) if table else None
-    if isinstance(url, str) and url.strip():
-        return url.strip()
+    A FILE never raises here -- an absent, unparseable or board-less file is
+    passed over, because a client that cannot read a config file must still
+    degrade rather than break."""
+    for path in _project_config_candidates():
+        url = _declared_board(path)
+        if url:
+            return url
     return shipped_board()
+
+
+def _declared_board(path):
+    """The stripped non-empty string `[client] url` the file at `path`
+    declares, or None when it is absent, does not parse, or declares none."""
+    try:
+        with open(path, "rb") as fh:
+            table = tomllib.load(fh).get(CLIENT_TABLE)
+    except (OSError, ValueError):  # ValueError covers TOMLDecodeError.
+        return None
+    url = table.get(CLIENT_BOARD_FIELD) if isinstance(table, dict) else None
+    return url.strip() or None if isinstance(url, str) else None
+
+
+def _machine_board():
+    """The machine's own board: the install file's usable `[client] url`, or
+    the shipped declaration when the install declares none."""
+    installed = os.path.join(_INSTALL_DIR, _SHIPPED_DATA_FILENAME)
+    return _declared_board(installed) or shipped_board()
 
 
 #: Where the board's address is read from, in the order `resolve_base_url`
@@ -486,16 +505,16 @@ BOARD_SOURCE = (f"the address is `[{CLIENT_TABLE}] {CLIENT_BOARD_FIELD}` from "
 
 #: The ONE text every client appends to its top-level `--help` description:
 #: the key the board is read from, the order of the chain, and the rule
-#: `_read_project_config` resolves it by -- the first file that exists and
-#: parses wins, whether or not it holds a `[client]` table.
+#: `resolve_base_url` resolves it by -- the first file that DECLARES a
+#: non-empty `url` wins, and a file without one is passed over.
 BOARD_CONFIGURATION_HELP = (
     f"Board: every verb posts to `[{CLIENT_TABLE}] {CLIENT_BOARD_FIELD}`, read "
     "from the project's crucible.toml,\n"
-    "then the install's, then the shipped one. The first file that exists and "
-    "parses wins:\n"
-    f"a project file without `[{CLIENT_TABLE}] {CLIENT_BOARD_FIELD}` uses the "
-    "shipped address, while a\n"
-    "malformed one falls through to the next file.")
+    "then the install's. The first file that declares a non-empty one wins; "
+    "a file\n"
+    "without one (or that does not parse) is passed over, and the shipped "
+    "address\n"
+    "is the last resort.")
 
 
 class GateSkipDeclarationError(ValueError):
@@ -881,18 +900,19 @@ def axi_context(project_key, agent_id=None, cr=None, cycle_id=AXI_UNSET):
     Absent env keys are OMITTED; a supplied `cycle_id=None` is kept as an
     EXPLICIT null (the §S3 orphan signal), never silently dropped.
 
-    §S4 -- and the BOARD, when the verb resolved one that is not the
-    distribution's own declaration. The silent failure this project carries is
+    And the BOARD, when the verb resolved one that is not the machine's own
+    (`_machine_board`). The silent failure this project carries is
     a run reported into the wrong board: removing the export that caused it
     does not make the effect visible, so the envelope names the target at the
-    moment it happens. Named only when it DIFFERS from `shipped_board()`,
-    under the same omit-absent rule every other key here follows -- a key
+    moment it happens. Named only when it DIFFERS from the install's declared
+    `url`, or from the shipped one when the install declares none, under the
+    same omit-absent rule every other key here follows -- a key
     emitted on every exit carries no signal, because an operator scanning for
     "which board?" would have to read the value on every line to find the one
     line that differs."""
     ctx = {"projectKey": project_key}
     board = resolve_base_url()
-    if board != shipped_board():
+    if board != _machine_board():
         ctx["board"] = board
     if agent_id:
         ctx["agentId"] = agent_id

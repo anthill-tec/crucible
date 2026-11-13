@@ -72,8 +72,8 @@ Project + Crucible endpoint:
   (if present) > the interpreter running this script. The unittest runner needs
   only the standard library (Python 3.12 or later); the pytest runner needs pytest
   (and, for --coverage, coverage.py) plus any imports the code-under-test needs.
-  Posts to the board the project's `crucible.toml` declares (`[client] url`,
-  shipped default http://localhost:3849), v2 endpoints ONLY:
+  Posts to the first `[client] url` declared by the project's crucible.toml,
+  then the install's, else the shipped http://localhost:3849; v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs, /api/v2/runs/compile,
   /api/v2/projects/<key>/plans, /api/v2/gates, /api/v2/milestones.
 

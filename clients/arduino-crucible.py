@@ -6,8 +6,8 @@
 """arduino-crucible.py — Arduino-firmware stack script (global, like bun/rust-crucible.py).
 
 Runs native host tests / firmware compile and reports to Crucible via the v2 API
-(the board the project's `crucible.toml` declares as `[client] url`, shipped
-default http://localhost:3849). Mirrors the bun/rust/python/mvn
+(the first `[client] url` declared by the project's crucible.toml, then the
+install's, else the shipped http://localhost:3849). Mirrors the bun/rust/python/mvn
 `.env` + /api/v2/* ingest pattern: identity from the SUBPROJECT's .env
 (CRUCIBLE_PROJECT_KEY only, as the other four clients read it). The client never
 registers a project: a key the board does not hold is refused by the board, and
