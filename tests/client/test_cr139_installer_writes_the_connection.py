@@ -988,19 +988,18 @@ class AConfiguredPortIsNeverReProbedTest(_InstallerConnectionCase):
             "because the whole file was reconstructed around it is a "
             "coincidence, not the rule" % (self.server_config,))
 
-    def test_a_file_that_exists_but_names_no_port_is_probed_not_defaulted(self):
-        """AC, the same rule read at its own boundary: "if the file already
-        names one, the install USES it". What decides is a CONFIGURED PORT, and
-        never the mere PRESENCE of a file.
+    def test_a_file_that_exists_but_names_no_port_takes_the_templates_port_unprobed(self):
+        """A server file that exists and declares no `[server] port` is the
+        file a LIVE server boots from, and that server listens on the
+        template's own `port`. The install keeps that live port: it writes the
+        template's `port` into the file, never a probed one, because a re-probe
+        would move a running board off its port at its next restart. The
+        client file names the same port. Only a server file the install lays
+        down fresh has its port probed out of the range.
 
-        A `crucible.toml` that exists and declares no `[%s] %s` -- placed by
-        hand, or carried over from a layout that predates this CR -- names
-        nothing to honour. An install that skipped the probe for it would fall
-        through to the template's shipped `port`, which is `3849`: the address
-        a production instance holds on the two-instance machine this CR serves.
-        That is the silent fallback §S1a forbids, arriving in the one state
-        where nobody would look for it, because the install reports success.
-        """ % (SERVER_TABLE, PORT_KEY)
+        Nothing here binds the template's port: it is a number written into a
+        scratch file, and the range this fixture declares is ephemeral.
+        """
         ports = self.declare_range(width=2)
         shipped_default = _table(self.template, SERVER_TABLE)[PORT_KEY]
         os.makedirs(self.store_dir, exist_ok=True)
@@ -1010,20 +1009,25 @@ class AConfiguredPortIsNeverReProbedTest(_InstallerConnectionCase):
 
         self.install_once()
 
+        self.assertEqual(
+            shipped_default,
+            _table(self.server_config, SERVER_TABLE).get(PORT_KEY),
+            f"the server's file exists but declares no `[{SERVER_TABLE}] "
+            f"{PORT_KEY}`, so the install must write the template's own port "
+            f"({shipped_default}), the one its server boots on, without "
+            "probing; the file reads "
+            f"{Path(self.server_config).read_text(encoding='utf-8')!r}")
         url_port = _url_port(self.written_url())
-        self.assertNotEqual(
+        self.assertEqual(
             shipped_default, url_port,
-            "§S1a: the server's file exists but declares no `[%s] %s`, so "
-            "there was nothing to honour and the install must PROBE. It wrote "
-            "the template's shipped default (%d) into %s instead -- the "
-            "production board's own address on this machine, written by an "
-            "install that then reported success"
-            % (SERVER_TABLE, PORT_KEY, shipped_default, self.install_config))
-        self.assertIn(
+            f"the client file at {self.install_config} must name the same "
+            f"port the server file now names ({shipped_default}); it names "
+            f"{self.written_url()!r}")
+        self.assertNotIn(
             url_port, ports,
-            "§S1a: the install must take a port out of the range its resolved "
-            "template declares (%r); the client file names %r"
-            % (ports, self.written_url()))
+            "no probe may run for a server file that already exists: the "
+            f"client file names {self.written_url()!r}, a port out of the "
+            f"probed range {ports!r}")
 
 
 # ===========================================================================
