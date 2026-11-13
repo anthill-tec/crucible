@@ -473,7 +473,8 @@ def drive(fleet, project_dir, *extra, client="python", agent="orch-1",
     if name is not None:
         argv += ["--name", name]
     if token is not None:
-        argv += ["--token", token]
+        # One argv item, so a token that begins with '-' reaches the verb.
+        argv += [f"--token={token}"]
     if agent is not None:
         argv += ["--agent", agent]
     argv += list(extra)
