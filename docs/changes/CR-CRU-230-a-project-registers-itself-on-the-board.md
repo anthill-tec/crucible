@@ -141,12 +141,19 @@ CR-CRU-187 (a verb's own shared module, loaded by path); CR-CRU-221 (the core's 
 
 **A failure after step 3** (a refused or failed register or PATCH, or an unreachable board) is `ok: false` with
 exit 1. The envelope still carries `projectKey` and `created`, and step 6 still runs, so a re-run completes the seed.
-The refusals in steps 2–4 run before anything is written, so they never write `.env`.
+The refusals in steps 2–4 run before anything is written, so they never write `.env`. A failure *in* step 2 or 3 (an
+unreachable board, or a refused archived read or create) stops there: no register, no PATCH, and `.env` is not
+written, since no key has been confirmed.
+
+**Refusal codes.** Each refusal's envelope carries the detail as `error` and one warning whose `code` is the
+refusal's code (`project-key-unknown`, `agent-role-conflict`, …) with the same detail. `project-key-unknown`'s detail
+names the key and the board.
 
 **The envelope:**
 
-- **Fields:** `verb: project-create`, `projectKey`, `created`, `source` (`token` or `env`), `name`, `metadata` (the
-  board's map after the PATCH), `envWritten` (`written`, `already-set` or `not-asked`), and
+- **Fields:** `verb: project-create`, `projectKey`, `created`, `source` (`token` or `env`), `name` (the board's
+  stored name from the create reply; `null` on the `env` path, which reads no project), `metadata` (the board's map
+  after the PATCH), `envWritten` (`written`, `already-set` or `not-asked`), and
   `help: ["register --agent <id> --role ORCHESTRATOR", "project-meta"]`.
 - **The stderr line:** `project-create: ok=<b> key=<key> created=<b>`.
 
@@ -220,7 +227,7 @@ The refusals in steps 2–4 run before anything is written, so they never write 
   `project-create` is the stated exception, covered by AC9.
 - **The CHANGELOG `[Unreleased]`**, under `### Added`: the verb, its idempotence by token, `--write-env`, the
   seeding and the explicit `--project-dir`.
-- **The README:** the verb in the client verb list.
+- **The README:** names the verb where it describes the client fleet (it has no verb list).
 
 ## Acceptance criteria
 
@@ -262,7 +269,8 @@ The refusals in steps 2–4 run before anything is written, so they never write 
   - The verb sends no unregister.
 - [ ] **AC6 — errors are envelopes.** Each of these exits non-zero with `ok: false`, an `error` and a `help`, and
   never a bare exit or a traceback:
-  - no `--agent` (`agent-identity-required`), on a `.env` with no key and with no `.env` at all;
+  - no `--agent`, on a `.env` with no key and with no `.env` at all: the fleet's own `agent-identity-required`
+    hard-stop envelope, unchanged (its exit code and shape are the fleet's), with an empty context;
   - an unreachable board, posting nothing further;
   - a refused create, carrying the board's error;
   - a refused register or PATCH after a create, still carrying `projectKey` and still honouring `--write-env`;
