@@ -164,6 +164,7 @@ SHARED_CENSUS = {
     "next": _READ,
     "cr-depends": _ROADMAP,
     "project-meta": _ROADMAP,
+    "project-create": _ROADMAP,
     "release-propose": _ROADMAP,
     "cr-plan": _ROADMAP,
     "wave-sequence": _ROADMAP,

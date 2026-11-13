@@ -856,13 +856,20 @@ def _get_census():
     truthy-compatible with every existing bool-style check in this file
     (`if per_verb[v]`, `not per_verb[v]`, `.get(v)`): a non-empty axi dict
     (it always carries at least `verb`/`ok`) is truthy exactly where `True`
-    was, and `None` is falsy exactly where `False` was."""
+    was, and `None` is falsy exactly where `False` was.
+
+    `project-create` is the one verb driven elsewhere: it creates a project, so
+    it runs against a board double answering its routes (the create, the
+    archived list, the agents list, the register and the metadata PATCH), from
+    a scratch copy of the fleet that can reach nothing else, with
+    `--project-dir` a scratch dir of its own (`_ProjectCreateDrive`)."""
     global _CENSUS_CACHE
     if _CENSUS_CACHE is not None:
         return _CENSUS_CACHE
     fake_bin_dir = _build_fake_bin_dir()
     toon_module = _load_toon_module()
     census = {}
+    project_create = _ProjectCreateDrive()
     try:
         for client_key, script_path in CLIENT_FILES.items():
             project_dir = _make_project_dir(client_key)
@@ -870,17 +877,67 @@ def _get_census():
                 verbs = enumerate_verbs(client_key, script_path)
                 per_verb = {}
                 for verb_name, subparser in verbs.items():
-                    argv = build_argv(verb_name, subparser, project_dir)
-                    result = drive_verb(script_path, argv, project_dir, fake_bin_dir)
+                    if verb_name == PROJECT_CREATE_VERB:
+                        result = project_create.drive(client_key, subparser,
+                                                      fake_bin_dir)
+                    else:
+                        argv = build_argv(verb_name, subparser, project_dir)
+                        result = drive_verb(script_path, argv, project_dir,
+                                            fake_bin_dir)
                     emits, axi = classify_envelope(result.stdout, toon_module)
                     per_verb[verb_name] = axi if emits else None
                 census[client_key] = per_verb
             finally:
                 shutil.rmtree(project_dir, ignore_errors=True)
     finally:
+        project_create.close()
         shutil.rmtree(fake_bin_dir, ignore_errors=True)
     _CENSUS_CACHE = census
     return census
+
+
+PROJECT_CREATE_VERB = "project-create"
+
+
+class _ProjectCreateDrive:
+    """The census's drive of `project-create`: a board double answering the
+    verb's routes and a scratch fleet declaring it, both started on first use,
+    and a fresh scratch `--project-dir` and an emptied board per drive, so each
+    client creates its project anew.
+
+    The fixtures live in `tests/client/project_create_harness.py`, which
+    itself imports this module's board declaration helpers -- so they are
+    imported here, at first use, rather than at this module's top."""
+
+    def __init__(self):
+        self.board = None
+        self.fleet = None
+
+    def drive(self, client_key, subparser, fake_bin_dir):
+        from tests.client import project_create_harness as harness
+        board, fleet = self.board, self.fleet
+        if board is None or fleet is None:
+            board = self.board = harness.BoardDouble()
+            fleet = self.fleet = harness.ScratchFleet(board.base_url)
+        board.reset()
+        project_dir = harness.make_project_dir(board.base_url)
+        try:
+            argv = build_argv(PROJECT_CREATE_VERB, subparser, project_dir)
+            # The verb's name and token, whether or not argparse requires them.
+            for flag, value in (("--name", "detector-name"),
+                                ("--token", f"detector-{client_key}")):
+                if flag not in argv:
+                    argv += [flag, value]
+            return drive_verb(fleet.script(client_key), argv, project_dir,
+                              fake_bin_dir, board=board.base_url)
+        finally:
+            shutil.rmtree(project_dir, ignore_errors=True)
+
+    def close(self):
+        if self.fleet is not None:
+            self.fleet.close()
+        if self.board is not None:
+            self.board.close()
 
 
 class EnvelopeDetectorNonVacuityTest(unittest.TestCase):
@@ -1165,6 +1222,26 @@ class EnvelopeCensusTest(unittest.TestCase):
             offenders, {},
             f"every THE_42-SHARED verb must show enveloped in every client "
             f"that defines it: {offenders!r}")
+
+    def test_project_create_is_enumerated_and_answers_ok_in_all_six_clients(self):
+        """`project-create` is a verb of every client, and its census drive --
+        a scratch `--project-dir` with no `.env`, against a board double
+        answering the create, the archived list, the agents list, the register
+        and the metadata PATCH -- is a real `ok: true` envelope naming the
+        verb, holding the key it created."""
+        offenders = {}
+        for client, per_verb in self.census.items():
+            axi = per_verb.get(PROJECT_CREATE_VERB)
+            if (not axi or axi.get("verb") != PROJECT_CREATE_VERB
+                    or axi.get("ok") is not True
+                    or axi.get("created") is not True
+                    or not axi.get("projectKey")):
+                offenders[client] = axi
+        self.assertEqual(set(self.census), set(CLIENT_FILES))
+        self.assertEqual(
+            offenders, {},
+            f"project-create must emit an ok:true envelope, created:true, in "
+            f"every client: {offenders!r}")
 
     def test_milestone_confirmed_enveloped_fleet_wide(self):
         """CR-CRU-058 C2 GREEN fix (this is the RED-cycle predecessor test's
@@ -1462,6 +1539,9 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
         # The release-notes module is loaded the same way, and travels too.
         shutil.copy(CLIENTS_DIR / "_crucible_release.py",
                     cls.tmp_dir / "_crucible_release.py")
+        # And so is a project's own verbs' module.
+        shutil.copy(CLIENTS_DIR / "_crucible_project.py",
+                    cls.tmp_dir / "_crucible_project.py")
         shutil.copy(TOON_PATH, cls.tmp_dir / "toon.py")
         # CR-CRU-131 §S1c — the limit declarations travel as PACKAGE DATA beside
         # `_crucible_axi.py`, so a copy of the module without them is a broken

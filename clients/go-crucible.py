@@ -1430,6 +1430,12 @@ def cmd_project_meta(args):
     return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
 
 
+def cmd_project_create(args):
+    """Create this project on the board, or find it, by its token, under
+    `--project-dir` made absolute. Delegates to the shared implementation."""
+    return _axi().cmd_project_create(args, os.path.abspath(args.project_dir), _ops())
+
+
 def cmd_release_propose(args):
     """Record or revise a proposed release. Delegates to the shared implementation."""
     return _axi().cmd_release_propose(args, _resolve_project_dir(args.project_dir), _ops())
@@ -1937,6 +1943,12 @@ def _add_plan_verbs(sub):
     _add_project_dir_arg(pmv)
     pmv.set_defaults(func=cmd_project_meta)
 
+    pcv = sub.add_parser("project-create",
+                         help="Create this project on the board, or find it, by its "
+                              "token; print its key (`--write-env` writes it to .env).")
+    _axi().add_project_create_args(pcv)
+    pcv.set_defaults(func=cmd_project_create)
+
     _axi().add_roadmap_verbs(
         sub,
         {"release-propose": cmd_release_propose, "cr-plan": cmd_cr_plan,
@@ -1973,9 +1985,12 @@ def main():
     # Dispatch through the shared `run_verb`, which turns a typed hard stop
     # (an undeclared agent identity among them) into the ok:false envelope +
     # a non-zero exit instead of an unhandled traceback.
+    # `project-create` reads no key of its own: its hard stop or escaped
+    # failure carries an empty context.
+    project_key_fn = (None if args.cmd == _axi().PROJECT_CREATE_VERB else
+                      lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None))))
     sys.exit(_axi().run_verb(
-        args.func, args,
-        lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None))),
+        args.func, args, project_key_fn,
         ops_fn=_ops,
         project_dir_fn=lambda a: _resolve_project_dir(getattr(a, "project_dir", None))))
 

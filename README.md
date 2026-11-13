@@ -7,7 +7,9 @@ workflow. It is two cooperating stacks behind one product:
   cycles and events, and streams live changes over SSE; and
 - a **Python client fleet** (`crucible-axi` — `_crucible_axi.py` plus the
   per-stack `{bun,python,rust,mvn,arduino,go}-crucible.py` scripts) that runs a
-  stack's tests AND ingests the results to the server under an agent id.
+  stack's tests AND ingests the results to the server under an agent id. A new
+  project registers itself with any client's `project-create` verb, which
+  creates the project on the board, or finds it, by its token.
 
 RED/GREEN/VERIFY agents report every run through the stack client; the server
 gives orchestrators a live picture of the fleet, the cycle plan, and coverage.
@@ -41,9 +43,9 @@ fails outright with that remedy), provisions the server user-scoped via
 `bun add -g @anthill-tec/crucible-server@<pinned>` — Bun's global prefix lives
 under `$HOME`, so there is no system-permission problem — then creates its
 target directory (`--target-dir`, default `~/.crucible`), lays the
-`*-crucible.py` **client fleet** (the six clients, the four shared modules
+`*-crucible.py` **client fleet** (the six clients, the five shared modules
 they load by path — `_crucible_axi.py`, `_crucible_run.py`,
-`_crucible_release.py` and `toon.py` — the
+`_crucible_release.py`, `_crucible_project.py` and `toon.py` — the
 `subtest_runner.py` the Python client runs, `STATUS-CONTRACT.md`, the
 shipped `crucible.toml` limit defaults and the stack-declaration schema
 `crucible-declaration.schema.json`) down in `<target-dir>/clients/`, and

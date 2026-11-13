@@ -117,20 +117,22 @@ CR-CRU-187 (a verb's own shared module, loaded by path); CR-CRU-221 (the core's 
    - `.env` holds a `CRUCIBLE_PROJECT_KEY` value (§S3) that is not a UUID: `project-key-malformed`, naming the
      value. A quoted value is one of these.
 2. **A key in `.env`.** If `.env` holds a UUID key, `GET …/projects/<that key>/metadata`:
-   - **200:** that is the project. Step 3 is skipped, and the result is `created: false`, `source: env`;
+   - **200:** that is the project, unless its metadata holds a `PROJECT_TOKEN` other than `--token`: then refuse with
+     `project-token-mismatch`, naming both tokens, before anything is registered, patched or written (user ruling at
+     VERIFY). Otherwise step 3 is skipped, and the result is `created: false`, `source: env`;
    - **404 "unknown project":** refuse with `project-key-unknown`. The detail names the key and the board, and says
      the verb never replaces a key already set;
    - **404 "project is archived":** refuse with `project-key-archived`, carrying the board's help.
 
-   Nothing is posted on either refusal.
+   Nothing is posted on any of these refusals.
 3. **Create.** First `GET /api/v2/projects?archived=true`. If the token's key is among the archived projects, refuse
    with `project-archived`, carrying the un-archive step; nothing is posted or written. Otherwise
    `POST /api/v2/projects` with `{key: project_key_for_token(token), name, type, sutRoot: <root>}`.
    - `created` is the board's `changed`, and `source: token`.
    - A refused or unreachable post is `ok: false`, carrying the board's error and help, or the reachability step.
 4. **Register.**
-   - `GET /api/v2/agents?project=<key>`. If `--agent` is already there with a role other than ORCHESTRATOR, or with
-     a cycle binding, refuse with `agent-role-conflict`, naming its role and cycle. Nothing is registered, patched or
+   - `GET /api/v2/agents?project=<key>`. If `--agent` is already there with a role other than ORCHESTRATOR, with no
+     role (a historical row; the detail says "with no role"), or with a cycle binding, refuse with `agent-role-conflict`, naming its role and cycle. Nothing is registered, patched or
      written.
    - Otherwise, `POST /api/v2/agents/register` with the module's own payload: `{agentId, projectKey: <key>,
      status: "online", message: "Registering the project", role: "ORCHESTRATOR",
@@ -141,12 +143,21 @@ CR-CRU-187 (a verb's own shared module, loaded by path); CR-CRU-221 (the core's 
 
 **A failure after step 3** (a refused or failed register or PATCH, or an unreachable board) is `ok: false` with
 exit 1. The envelope still carries `projectKey` and `created`, and step 6 still runs, so a re-run completes the seed.
-The refusals in steps 2–4 run before anything is written, so they never write `.env`.
+The refusals in steps 2–4 run before anything is written, so they never write `.env`. A failure *in* step 2 or 3 (an
+unreachable board, or a refused archived read or create) stops there: no register, no PATCH, and `.env` is not
+written, since no key has been confirmed.
+
+**Refusal codes.** Each refusal's envelope carries the detail as `error` and one warning whose `code` is the
+refusal's code (`project-key-unknown`, `agent-role-conflict`, …) with the same detail. Every step-1 refusal of the
+verb's own arguments (the root, the name, the token, the acronym, a `--set`) has the code `argument-refused`. A request
+the board refused or never answered carries the board's error and help, with no code of its own.
+`project-key-unknown`'s detail names the key and the board.
 
 **The envelope:**
 
-- **Fields:** `verb: project-create`, `projectKey`, `created`, `source` (`token` or `env`), `name`, `metadata` (the
-  board's map after the PATCH), `envWritten` (`written`, `already-set` or `not-asked`), and
+- **Fields:** `verb: project-create`, `projectKey`, `created`, `source` (`token` or `env`), `name` (the board's
+  stored name from the create reply; `null` on the `env` path, which reads no project), `metadata` (the board's map
+  after the PATCH), `envWritten` (`written`, `already-set` or `not-asked`), and
   `help: ["register --agent <id> --role ORCHESTRATOR", "project-meta"]`.
 - **The stderr line:** `project-create: ok=<b> key=<key> created=<b>`.
 
@@ -155,7 +166,10 @@ The refusals in steps 2–4 run before anything is written, so they never write 
 **Reading:**
 
 - The file is split into lines on `\n`. A trailing `\r` is not part of a line's text.
-- A `CRUCIBLE_PROJECT_KEY=` line's value is the text after the first `=`, stripped of whitespace.
+- A key line is one the clients' own readers take as the key: its stripped text does not start with `#`, and the
+  text before its first `=`, stripped, is `CRUCIBLE_PROJECT_KEY`. So `export CRUCIBLE_PROJECT_KEY=…` and a
+  commented line are not key lines.
+- A key line's value is the text after the first `=`, stripped of whitespace.
 - With several such lines, the last one counts, as the clients' readers do.
 - An empty value, or no such line, means no key. Quotes are not removed.
 
@@ -168,7 +182,9 @@ The refusals in steps 2–4 run before anything is written, so they never write 
 - **Line endings:**
   - A replaced line keeps its own line ending.
   - An appended line uses the file's first line ending (`\r\n` or `\n`).
-  - If the file does not end in a line ending, one is added before the appended line.
+  - If the file does not end in a line ending, the file's first line ending is added before the appended line.
+  - A file with no line ending at all uses `\n`.
+  - A replaced key line is replaced whole, leading whitespace included.
 - **Everything else is kept byte for byte:** other lines, comments, order, and the line endings.
 - **A key already set** is never written: `envWritten: already-set`. Step 2 has already answered or refused it.
 - **Without `--write-env`,** nothing is written and `envWritten: not-asked`.
@@ -201,7 +217,7 @@ The refusals in steps 2–4 run before anything is written, so they never write 
   > A project is registered by an explicit act: the board's "+ Add project" form, `POST /api/v2/projects`, or a
   > client's `project-create` verb. A client never registers a project on meeting an unknown key, and
   > `project-create` is the one client verb that creates one. Every client, arduino included, reads only
-  > `CRUCIBLE_PROJECT_KEY` from that `.env`, and only `project-create --write-env` writes it.
+  > `CRUCIBLE_PROJECT_KEY` from the project's `.env`, and only `project-create --write-env` writes it.
 - **DN-client-fleet-inventory.** In the `_project_key` row, "Clients never register projects" becomes: "A client
   never registers a project on meeting an unknown key; `project-create` is the one explicit verb that does."
 - **`tests/client-fleet-docs-no-self-registration-wording.test.ts`** keeps its slices, which still match
@@ -215,7 +231,7 @@ The refusals in steps 2–4 run before anything is written, so they never write 
   `project-create` is the stated exception, covered by AC9.
 - **The CHANGELOG `[Unreleased]`**, under `### Added`: the verb, its idempotence by token, `--write-env`, the
   seeding and the explicit `--project-dir`.
-- **The README:** the verb in the client verb list.
+- **The README:** names the verb where it describes the client fleet (it has no verb list).
 
 ## Acceptance criteria
 
@@ -233,7 +249,9 @@ The refusals in steps 2–4 run before anything is written, so they never write 
   - These are refused, each naming the key, posting nothing and leaving `.env` byte-identical:
     - one the board does not know (`project-key-unknown`);
     - one whose project is archived (`project-key-archived`, with the board's help);
-    - a value that is not a UUID, quoted or not (`project-key-malformed`).
+    - a value that is not a UUID, quoted or not (`project-key-malformed`);
+    - one whose project's stored `PROJECT_TOKEN` differs from `--token` (`project-token-mismatch`, naming both;
+      no register and no PATCH). A project with no stored token, or the same one, proceeds.
   - The token's key held by an archived project is refused (`project-archived`), with no create posted and nothing
     written.
 - [ ] **AC4 — `.env` is read and written as §S3 states.** For each case the file afterwards is as §S3 states and
@@ -252,12 +270,14 @@ The refusals in steps 2–4 run before anything is written, so they never write 
   `PROJECT_ACRONYM` (only with `--acronym`) and each `--set` pair. The envelope's `metadata` is the board's map.
   - On the existing-project path, the same register and PATCH run when `--agent` is absent from the project, or is
     an unbound ORCHESTRATOR there.
-  - If it is there under another role, or bound to a cycle, the verb exits 1 with `agent-role-conflict`. Its row is
+  - If it is there under another role, with no role (a historical row), or bound to a cycle, the verb exits 1 with
+    `agent-role-conflict`. Its row is
     unchanged, no PATCH is sent and `.env` is not written.
   - The verb sends no unregister.
 - [ ] **AC6 — errors are envelopes.** Each of these exits non-zero with `ok: false`, an `error` and a `help`, and
   never a bare exit or a traceback:
-  - no `--agent` (`agent-identity-required`), on a `.env` with no key and with no `.env` at all;
+  - no `--agent`, on a `.env` with no key and with no `.env` at all: the fleet's own `agent-identity-required`
+    hard-stop envelope, unchanged (its exit code and shape are the fleet's), with an empty context;
   - an unreachable board, posting nothing further;
   - a refused create, carrying the board's error;
   - a refused register or PATCH after a create, still carrying `projectKey` and still honouring `--write-env`;

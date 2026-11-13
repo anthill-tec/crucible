@@ -2114,6 +2114,12 @@ def cmd_project_meta(args):
     required). Delegates to the shared implementation."""
     return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
 
+def cmd_project_create(args):
+    """Create this project on the board, or find it, by its token. The root
+    is `--project-dir` made absolute, never resolved here. Delegates to the
+    shared implementation."""
+    return _axi().cmd_project_create(args, os.path.abspath(args.project_dir), _ops())
+
 # ── CR-CRU-091 §S3/§S9 — roadmap registration: five thin delegators ────────
 #
 # The verbs land ONCE in `clients/_crucible_axi.py` (the CR-CRU-054 DRY rule);
@@ -2822,6 +2828,13 @@ def main():
     _add_project_args(pmv)
     pmv.set_defaults(func=cmd_project_meta)
 
+    # A project registers itself on the board, under its own required root.
+    pcv = sub.add_parser("project-create",
+                         help="Create this project on the board, or find it, by its "
+                              "token; print its key (`--write-env` writes it to .env).")
+    _axi().add_project_create_args(pcv)
+    pcv.set_defaults(func=cmd_project_create)
+
     # ── CR-CRU-091 §S3 — roadmap registration (ORCHESTRATOR only). The five
     # subparsers are built by the SHARED registrar so the five clients cannot
     # drift into five different flag surfaces for one verb.
@@ -2958,9 +2971,12 @@ def main():
     # CR-CRU-044 §S5 — dispatch through the shared `run_verb`, which turns an
     # UNDECLARED agent identity into the ok:false hard-stop envelope + a
     # non-zero exit (POSTing nothing) instead of an unhandled traceback.
+    # `project-create` reads no key of its own: its hard stop or escaped
+    # failure carries an empty context.
+    project_key_fn = (None if args.cmd == _axi().PROJECT_CREATE_VERB else
+                      lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None))))
     sys.exit(_axi().run_verb(
-        args.func, args,
-        lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None))),
+        args.func, args, project_key_fn,
         ops_fn=_ops,
         project_dir_fn=lambda a: _resolve_project_dir(getattr(a, "project_dir", None))))
 

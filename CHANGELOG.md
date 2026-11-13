@@ -113,6 +113,16 @@ Releases before 0.3.0 are described only on GitHub Releases.
   - A title is the CR's latest merged plan's, else its queue entry's, and is written on one line.
     A CR with neither is its id alone.
   - The verb only reads the board and takes no `--agent`.
+- **A project registers itself on the board.** Every client's `project-create --project-dir <root>
+  --name <name> --token <token> --agent <id>` creates the project, or finds it, and prints its key.
+  The key is derived from the token, so a re-run with the same token answers the same project with
+  `created: false`, whatever its `--name`. A UUID key already in the project's `.env` is used and
+  never replaced; one the board does not know, or whose project is archived, is refused.
+  - `--project-dir` is required: the verb never looks for the root in the working directory or git.
+  - The same call registers `--agent` as the project's ORCHESTRATOR and seeds its metadata:
+    `PROJECT_TOKEN`, `PROJECT_ACRONYM` (with `--acronym`) and each `--set KEY=VALUE`.
+  - `--write-env` writes `CRUCIBLE_PROJECT_KEY=<key>` into `<root>/.env` when its key line is
+    empty or missing, keeping every other byte. Without it, `.env` is never written.
 
 ### Changed
 

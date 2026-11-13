@@ -217,10 +217,12 @@ All 13 endpoints, payloads, response shapes, and behavioral invariants cataloged
 requirements verbatim. Highlights that are easy to get wrong:
 
 - `projectKey` must be a valid UUID → HTTP 400 `{ok:false, error}` otherwise.
-- `POST /api/projects/add` with an existing key → HTTP 400. Clients never register
-  projects: a project is registered by an explicit act — the board's "+ Add project"
-  form, or `POST /api/v2/projects`, which issues the key the project's `.env` carries.
-  Every client, arduino included, reads only `CRUCIBLE_PROJECT_KEY` from that `.env`.
+- `POST /api/projects/add` with an existing key → HTTP 400. A project is registered by
+  an explicit act: the board's "+ Add project" form, `POST /api/v2/projects`, or a
+  client's `project-create` verb. A client never registers a project on meeting an
+  unknown key, and `project-create` is the one client verb that creates one. Every
+  client, arduino included, reads only `CRUCIBLE_PROJECT_KEY` from the project's `.env`, and only
+  `project-create --write-env` writes it.
 - Heartbeat `identity` is optional and preserved when omitted; **top-level `displayName`/
   `source` are tolerated but ignored**.
 - `/api/ingest` `dataPath` accepts a file OR a directory (all `TEST-*.xml` inside).

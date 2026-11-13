@@ -109,7 +109,8 @@ CHECKOUT_CONFIG = REPO_ROOT / CONFIG_NAME
 #: from its own directory, and the package data it reads. A module copied
 #: without its declarations can resolve nothing at all.
 _SCRATCH_FLEET = (CLIENTS_DIR / "_crucible_axi.py", CLIENTS_DIR / "_crucible_run.py",
-                  CLIENTS_DIR / "_crucible_release.py", CLIENTS_DIR / CONFIG_NAME)
+                  CLIENTS_DIR / "_crucible_release.py",
+                  CLIENTS_DIR / "_crucible_project.py", CLIENTS_DIR / CONFIG_NAME)
 
 CLIENT_LIMITS = ("truncate_field_chars", "error_detail_chars", "roadmap_list_rows")
 
