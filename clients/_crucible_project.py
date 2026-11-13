@@ -331,6 +331,7 @@ def _settle_project(args, root, ops, fields):
     """Refuse the arguments, then find the project by the `.env` key or
     create it by the token's. Answers the key; raises `_Stopped`."""
     _refuse_arguments(args, root)
+    # Pre-bind `ops.base_url` names the install's board, unused: each request resolves it.
     _core.bind_project_dir(root)
     env_key = read_env_project_key(root)
     if env_key is not None and not _UUID_RE.fullmatch(env_key):
