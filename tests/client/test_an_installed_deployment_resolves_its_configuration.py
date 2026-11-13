@@ -156,6 +156,8 @@ from pathlib import Path
 from unittest import mock
 
 from tests.client.test_cr139_installer_writes_the_connection import (
+    SHIPPED_RANGE_MAX,
+    SHIPPED_RANGE_MIN,
     _claim_consecutive_ports,
 )
 
@@ -595,6 +597,15 @@ class _InstalledDeploymentCase(unittest.TestCase):
             declared, {key: server_table.get(key) for key in declared},
             "fixture sanity: the provisioned template must declare this "
             "test's own ephemeral listener values")
+        for key in declared:
+            value = server_table.get(key)
+            self.assertFalse(
+                SHIPPED_RANGE_MIN <= value <= SHIPPED_RANGE_MAX,
+                "fixture sanity: the provisioned template would declare "
+                f"`{key} = {value}`, inside the shipped "
+                f"{SHIPPED_RANGE_MIN}-{SHIPPED_RANGE_MAX} window that carries "
+                "a live board on a development workstation; every port this "
+                "suite declares must be an ephemeral one it claimed")
         package = self.install._provisioned_server_package_dir()
         os.makedirs(os.path.join(package, "src"), exist_ok=True)
         Path(package, "src", CONFIG_NAME).write_text(template, encoding="utf-8")

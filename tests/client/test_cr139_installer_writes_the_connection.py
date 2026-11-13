@@ -419,6 +419,15 @@ class _InstallerConnectionCase(unittest.TestCase):
             range_min, range_max = self.consecutive_ports(2)
         if port is None:
             port = _claim_port_outside(range_min, range_max)
+        for key, value in ("port", port), (RANGE_MIN_KEY, range_min), \
+                (RANGE_MAX_KEY, range_max):
+            self.assertFalse(
+                SHIPPED_RANGE_MIN <= value <= SHIPPED_RANGE_MAX,
+                "fixture sanity: the provisioned template would declare "
+                f"`{key} = {value}`, inside the shipped "
+                f"{SHIPPED_RANGE_MIN}-{SHIPPED_RANGE_MAX} window that carries a "
+                "live board on a development workstation; every port this "
+                "suite declares must be an ephemeral one it claimed")
         package = self.install._provisioned_server_package_dir()
         os.makedirs(os.path.join(package, "src"), exist_ok=True)
         text = _without_server_table(
