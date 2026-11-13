@@ -15,12 +15,14 @@ because `cli` imports `install`, so `install` importing `cli` back would be
 circular; `manifest` is imported by both, so neither has to import the other.
 """
 
+# pi-lens-ignore: I001 — pi-lens lints with its own ruff configuration, which sets no target version, so ruff files `tomllib` as third-party whatever the declared floor
 from __future__ import annotations
 
 import hashlib
 import importlib.metadata
 import json
 import os
+import tomllib
 from pathlib import Path
 
 # The six client stacks that ship a `*-crucible.py` client — exactly these,
@@ -225,27 +227,112 @@ def apply_setting(path: str, table: str, key: str, value, block: str = "") -> by
     document, preceded by `block` (its own commented introduction) so a key an
     operator did not write still arrives explained.
     """
-    text = Path(path).read_text(encoding="utf-8")
+    text = _setting_text(Path(path).read_text(encoding="utf-8"), table, key,
+                         value, block)
+    Path(path).write_text(text, encoding="utf-8")
+    return text.encode("utf-8")
+
+
+def _setting_text(text: str, table: str, key: str, value, block: str = "",
+                  newline: str = "\n") -> str:
+    """`text` with `table`'s `key` set to `value`: the line rewrite
+    `apply_setting` performs, on a string. `newline` is the line ending every
+    line it ADDS carries, so a CRLF document stays CRLF; the lines it keeps
+    are kept byte for byte."""
     assignment = f"{key} = {_toml_literal(value)}"
     lines = text.split("\n")
     body = _table_body(lines, table)
     if body is None:
-        separator = "" if text.endswith("\n") else "\n"
-        text = f"{text}{separator}{block}[{table}]\n{assignment}\n"
+        separator = "" if text.endswith("\n") else newline
+        added = f"{block}[{table}]\n{assignment}\n".replace("\n", newline)
+        return f"{text}{separator}{added}"
+    start, end = body
+    ending = newline[:-1]
+    for index in range(start, end):
+        if _assigns(lines[index], key):
+            lines[index] = assignment + ending
+            break
     else:
-        start, end = body
-        for index in range(start, end):
-            if _assigns(lines[index], key):
-                lines[index] = assignment
-                break
-        else:
-            insert = end
-            while insert > start and not lines[insert - 1].strip():
-                insert -= 1
-            lines.insert(insert, assignment)
-        text = "\n".join(lines)
-    Path(path).write_text(text, encoding="utf-8")
-    return text.encode("utf-8")
+        insert = end
+        while insert > start and not lines[insert - 1].strip():
+            insert -= 1
+        lines.insert(insert, assignment + ending)
+    return "\n".join(lines)
+
+
+def _parsed(data: bytes) -> dict:
+    """`data` parsed as a TOML document; raises `ValueError` (a decode or
+    TOML error) when it is not one."""
+    return tomllib.loads(data.decode("utf-8"))
+
+
+def _declared(document: dict, table: str, key: str):
+    """Whether `document`'s `table` declares `key`, as `(table_ok, present,
+    value)`: `table_ok` is False when `table` is there but is not a table."""
+    body = document.get(table, {})
+    if not isinstance(body, dict):
+        return False, False, None
+    return True, key in body, body.get(key)
+
+
+def fill_key_label(table: str, key: str) -> str:
+    """How a filled or refused key is named in the stage's output."""
+    return f"[{table}] {key}"
+
+
+def fill_absent_setting(path: str, table: str, key: str, value,
+                        block: str = "") -> tuple[str, bytes | str | None]:
+    """Write `table`'s `key = value` into the EXISTING file at `path` only if
+    the key is absent, and say what happened.
+
+    Answers `("filled", <the bytes before the fill>)`, `("present", None)`
+    when the key is there in any form (it is the operator's, whatever its
+    value), or `("notFilled", <reason>)`. It never raises: a file it cannot
+    safely touch is left as it was and reported, and the install goes on.
+
+    * Only a regular file (or a link to one) that parses is filled.
+    * The file is read again immediately before the write, and written only
+      when it is still exactly the bytes the decision was made on, so a
+      `serve --port` that landed first wins.
+    * A CRLF file stays CRLF.
+    * The written file is parsed back; if it no longer parses or does not
+      yield `value`, the original bytes are restored and the fill reported
+      as not done.
+    """
+    if not os.path.isfile(path):
+        return "notFilled", ("not a regular file, so the install does not "
+                             "write into it")
+    try:
+        original = Path(path).read_bytes()
+        try:
+            document = _parsed(original)
+        except ValueError as exc:
+            return "notFilled", f"does not parse as TOML ({exc}), so it is left as it is"
+        table_ok, present, _value = _declared(document, table, key)
+        if not table_ok:
+            return "notFilled", f"`{table}` is not a table, so it is left as it is"
+        if present:
+            return "present", None
+        newline = "\r\n" if b"\r\n" in original else "\n"
+        filled = _setting_text(original.decode("utf-8"), table, key, value,
+                               block, newline).encode("utf-8")
+        if Path(path).read_bytes() != original:
+            return "notFilled", ("changed while the install was filling it, "
+                                 "so it is left as it is")
+        Path(path).write_bytes(filled)
+        try:
+            _ok, _present, written = _declared(
+                _parsed(Path(path).read_bytes()), table, key)
+        except ValueError:
+            written = None
+        if written != value:
+            Path(path).write_bytes(original)
+            return "notFilled", (
+                f"the filled file would not parse back with {key} = "
+                f"{_toml_literal(value)}, so its original bytes were restored")
+    except OSError as exc:
+        return "notFilled", f"could not be read or written ({exc})"
+    return "filled", original
 
 
 def install_record_path(target_dir: str) -> str:
@@ -453,12 +540,23 @@ def run_manifest_stage(target_dir: str, force: bool = False,
     recording the install's own value would be indistinguishable from an
     operator's edit, and `uninstall --purge` would take the retention branch on
     every machine that ever probed a port.
+
+    A file that already EXISTS is filled in rather than laid down: a server
+    file naming no `[server] port` gains the listener's port, and an install
+    file declaring no `[client] url` gains the board url, built from the port
+    the server file names after that step. Only an absent key is filled
+    (`fill_absent_setting`); a value already set is never changed. Each fill
+    is reported under `filled`, each file the fill could not safely touch
+    under `notFilled`, a fill makes the stage `converged: False`, and a filled
+    file is re-recorded only when its bytes before the fill were the ones the
+    install record holds for it. Anything else is the operator's.
     """
     listener = (server_config or {}).get("listener")
     authored: dict = {}
+    fills = _Fills(recorded_config_digests(target_dir), authored)
+    client_config = operator_config_path(target_dir)
     wrote_config = lay_down_operator_config(target_dir)
     if wrote_config:
-        client_config = operator_config_path(target_dir)
         if listener:
             apply_setting(client_config, CLIENT_TABLE, CLIENT_URL_KEY,
                           listener["url"], block=_CLIENT_TABLE_BLOCK)
@@ -474,10 +572,19 @@ def run_manifest_stage(target_dir: str, force: bool = False,
                     apply_setting(written, SERVER_TABLE, SERVER_PORT_KEY,
                                   listener["port"])
                 authored[written] = Path(written).read_bytes()
+            elif listener:
+                fills.fill(written, SERVER_TABLE, SERVER_PORT_KEY,
+                           listener["port"])
             server_report = {"path": written, "reason": None}
         else:
             server_report = {"path": None,
                              "reason": server_config.get("reason")}
+    if listener and client_config not in authored:
+        fills.fill(client_config, CLIENT_TABLE, CLIENT_URL_KEY,
+                   _client_url(server_config or {}, server_report, listener),
+                   block=_CLIENT_TABLE_BLOCK)
+    if fills.filled:
+        wrote_config = True
     record_configs(target_dir, authored)
     manifest = build_manifest(
         target_dir,
@@ -494,4 +601,54 @@ def run_manifest_stage(target_dir: str, force: bool = False,
     result = {"path": path, "converged": converged}
     if server_report is not None:
         result["server_config"] = server_report
+    if fills.filled:
+        result["filled"] = fills.filled
+    if fills.not_filled:
+        result["notFilled"] = fills.not_filled
     return result
+
+
+class _Fills:
+    """What one `[manifest]` run filled in and refused to, and the record of
+    each filled file that was the install's own."""
+
+    def __init__(self, recorded: dict, authored: dict) -> None:
+        self.recorded = recorded
+        self.authored = authored
+        self.filled: list[dict] = []
+        self.not_filled: list[dict] = []
+
+    def fill(self, path: str, table: str, key: str, value,
+             block: str = "") -> None:
+        outcome, detail = fill_absent_setting(path, table, key, value, block)
+        label = fill_key_label(table, key)
+        if outcome == "notFilled":
+            self.not_filled.append({"path": path, "key": label,
+                                    "reason": detail})
+        elif outcome == "filled" and isinstance(detail, bytes):
+            self.filled.append({"path": path, "key": label, "value": value})
+            if self.recorded.get(path) == config_digest(detail):
+                self.authored[path] = Path(path).read_bytes()
+
+
+def _client_url(server_config: dict, server_report: dict | None,
+                listener: dict) -> str:
+    """The board url an install file is filled with: the port the server file
+    names NOW (after its own fill, so a `serve --port` that won the race
+    gives its port), else the listener's. The url is built by the plan's
+    `board_url` rule, so this module never imports the installer back; a
+    plan without one answers the listener's own url."""
+    written = (server_report or {}).get("path")
+    port = None
+    if written and os.path.isfile(written):
+        try:
+            _ok, _present, port = _declared(
+                _parsed(Path(written).read_bytes()), SERVER_TABLE,
+                SERVER_PORT_KEY)
+        except (OSError, ValueError):
+            port = None
+    board_url = server_config.get("board_url")
+    if (not isinstance(port, int) or isinstance(port, bool)
+            or port == listener["port"] or board_url is None):
+        return listener["url"]
+    return board_url(listener["host"], port)

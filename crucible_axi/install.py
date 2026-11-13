@@ -495,32 +495,30 @@ def _resolve_listener(destination: str, source: str) -> dict | None:
     """The listener this machine's server should use, as
     `{"host", "port", "url"}`, or None when nothing declares one.
 
-    THE decision §S1a exists to make, and it has exactly two branches:
+    It has three branches:
 
-    * a file already at `destination` that NAMES a port DECIDES. It is never
-      re-probed, not even while an instance is listening on the port it names —
-      renumbering a running board orphans every client whose own file names the
-      old port.
-    * otherwise the range is read from the file the install RESOLVED (the
-      template it is about to copy) and probed, first bindable port winning.
-      The bounds are data in that file rather than a constant here, so an
-      operator can narrow them and a test can declare its own.
+    * a file already at `destination` that names an integer port DECIDES. It
+      is never re-probed, not even while an instance is listening on the port
+      it names: renumbering a running board orphans every client whose own
+      file names the old port.
+    * a file already at `destination` that names NO integer port (the key is
+      absent, or present with a mistyped value the server does not read)
+      takes the template's own `port`, with no probe. That is the port the
+      provisioned server boots on today, so it is the live one; a probe would
+      move a running board off its port at its next restart.
+    * no file there yet: the range is read from the file the install RESOLVED
+      (the template it is about to copy) and probed, first bindable port
+      winning. The bounds are data in that file rather than a constant here,
+      so an operator can narrow them and a test can declare its own. A
+      template declaring no range is not an error: nothing is probed and its
+      own `port` is what the copy carries.
 
-    The gate is the absence of a CONFIGURED PORT, deliberately, and not the
-    absence of the FILE: a `crucible.toml` that exists but declares no
-    `[server] port` — hand-placed, carried over from an older layout, or
-    written by anything that is not this installer — names nothing to honour,
-    so honouring it means falling through to the template's shipped default.
-    That default is `3849` on a machine whose production instance already holds
-    it, which is the silent fallback §S1a forbids in the one state where it is
-    hardest to notice: the install reports success and the next boot collides.
-
-    A template declaring no range is not an error: nothing is probed and its
-    own `port` is what the copy carries, exactly as before this CR.
+    A template declaring no `port` gives None wherever the answer falls to it.
     """
     declared = _config_table(source, manifest.SERVER_TABLE)
+    exists = os.path.lexists(destination)
     configured = (_config_table(destination, manifest.SERVER_TABLE)
-                  if os.path.lexists(destination) else {})
+                  if exists else {})
 
     host = configured.get(manifest.SERVER_HOST_KEY,
                           declared.get(manifest.SERVER_HOST_KEY))
@@ -528,7 +526,9 @@ def _resolve_listener(destination: str, source: str) -> dict | None:
         host = _DEFAULT_LISTENER_HOST
 
     port = configured.get(manifest.SERVER_PORT_KEY)
-    if not isinstance(port, int):
+    if not isinstance(port, int) and exists:
+        port = declared.get(manifest.SERVER_PORT_KEY)
+    elif not isinstance(port, int):
         low = declared.get(manifest.SERVER_PORT_RANGE_MIN_KEY)
         high = declared.get(manifest.SERVER_PORT_RANGE_MAX_KEY)
         if isinstance(low, int) and isinstance(high, int):
@@ -573,6 +573,10 @@ def server_config_plan() -> dict:
         listener = _resolve_listener(destination, source)
         if listener is not None:
             plan["listener"] = listener
+            # The rule a url is built by, carried so the stage can build one
+            # for the port the server file names after its fill without
+            # importing this module back.
+            plan["board_url"] = _board_url
         return plan
     return {
         "path": destination,
@@ -1546,6 +1550,14 @@ def run_install(target_dir, stage_runners=None, force=False,
                 "path": str(written) if written else None,
                 "reason": server_config.get("reason"),
             }
+        # What the `[manifest]` stage filled into a file that already existed
+        # (`{path, key, value}`) and what it could not safely touch
+        # (`{path, key, reason}`), each with the ABSOLUTE path, for the same
+        # reason as `server_config`'s: it names the file to look at.
+        for field in ("filled", "notFilled"):
+            entries = result.get(field)
+            if entries:
+                stage[field] = [dict(entry) for entry in entries]
         # A RESTART is disclosed (CR-CRU-071 AC9): it drops every live SSE
         # subscriber, so an operator watching an upgrade must see that it
         # happened on purpose rather than infer it from a broken stream.
