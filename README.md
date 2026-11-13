@@ -7,7 +7,9 @@ workflow. It is two cooperating stacks behind one product:
   cycles and events, and streams live changes over SSE; and
 - a **Python client fleet** (`crucible-axi` — `_crucible_axi.py` plus the
   per-stack `{bun,python,rust,mvn,arduino,go}-crucible.py` scripts) that runs a
-  stack's tests AND ingests the results to the server under an agent id.
+  stack's tests AND ingests the results to the server under an agent id. A new
+  project registers itself with any client's `project-create` verb, which
+  creates the project on the board, or finds it, by its token.
 
 RED/GREEN/VERIFY agents report every run through the stack client; the server
 gives orchestrators a live picture of the fleet, the cycle plan, and coverage.
