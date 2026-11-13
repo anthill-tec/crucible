@@ -231,6 +231,8 @@ PROJECT_CREATE_VERB = "project-create"
 PROJECT_KEY_UNKNOWN_CODE = "project-key-unknown"
 PROJECT_KEY_ARCHIVED_CODE = "project-key-archived"
 PROJECT_KEY_MALFORMED_CODE = "project-key-malformed"
+# pi-lens-ignore: S105 — a refusal code, not a secret
+PROJECT_TOKEN_MISMATCH_CODE = "project-token-mismatch"  # noqa: S105
 PROJECT_ARCHIVED_CODE = "project-archived"
 AGENT_ROLE_CONFLICT_CODE = "agent-role-conflict"
 ARGUMENT_REFUSED_CODE = "argument-refused"
@@ -297,7 +299,8 @@ def cmd_project_create(args, project_dir, ops):
     register `--agent` as its ORCHESTRATOR and seed its metadata.
 
     The order is fixed: the arguments and `.env` are refused before any
-    request; a UUID key in `.env` is used when the board knows it, else the
+    request; a UUID key in `.env` is used when the board knows it and it
+    stores no other token, else the
     token's key is created (an archived one refused); the agent is registered
     unless it is on the project under another role or bound to a cycle; one
     metadata PATCH seeds the token, the acronym and each `--set`; and
@@ -339,7 +342,7 @@ def _settle_project(args, root, ops, fields):
               "CRUCIBLE_PROJECT_KEY line to create the token's project")])
     if env_key is not None:
         fields.update(projectKey=env_key, source="env")
-        _find_by_env_key(env_key, ops)
+        _find_by_env_key(env_key, args.token, ops)
         return env_key
     key = project_key_for_token(args.token)
     fields.update(projectKey=key, source="token")
@@ -378,11 +381,22 @@ def _refuse_arguments(args, root):
 def _refuse_usage(detail):
     raise _Stopped(ARGUMENT_REFUSED_CODE, detail, [_USAGE_STEP])
 
-def _find_by_env_key(key, ops):
+def _find_by_env_key(key, token, ops):
     """The `.env` key's project, read by its metadata: known, or refused as
-    unknown or archived."""
+    unknown or archived, or as storing a token other than `token` (an empty
+    stored token is none)."""
     resp = ops.get(project_metadata_path(key)) or {}
     if resp.get("ok"):
+        stored = (resp.get("metadata") or {}).get(_TOKEN_META_KEY)
+        if stored and stored != token:
+            raise _Stopped(
+                PROJECT_TOKEN_MISMATCH_CODE,
+                f"the project under the key {key} that .env holds stores "
+                f"{_TOKEN_META_KEY} {stored}, not --token {token}; "
+                "project-create never replaces a project's token",
+                [(f"re-run with --token {stored}, the project's own, or empty "
+                  ".env's CRUCIBLE_PROJECT_KEY line to create the token's "
+                  "project")])
         return
     error = str((_core.server_failure_body(resp) or {}).get("error") or "")
     if error.startswith("unknown project:"):
