@@ -150,6 +150,14 @@ Releases before 0.3.0 are described only on GitHub Releases.
   flags go only to a `bun-test` entry with `junit: flag` (or a script with no entry); any other
   script run with `--coverage` carries one `coverage-not-measured` warning. An unmarked project runs
   as before.
+- **A client finds its board in the install when its project names none.** A client takes
+  `[client] url` from the first `crucible.toml` that declares a non-empty one: the project's, then
+  the install's. A file without one, or one that does not parse, is passed over, and the shipped
+  `http://localhost:3849` is the last resort. Before this, a project file without `[client]` sent
+  every verb to the shipped address and the install's file was never read. The limits and
+  `[gate] skip` keep the first file that parses. An envelope names `context.board` only when the
+  board differs from the install's declared `url`, or from the shipped one when the install declares
+  none.
 
 ### Removed
 
