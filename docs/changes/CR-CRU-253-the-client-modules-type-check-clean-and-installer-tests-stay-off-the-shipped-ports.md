@@ -27,7 +27,7 @@ CR-CRU-252 (the installer's fill step)
 - **Ruff has no project configuration, and the tree is not clean.** `pyproject.toml` declares no `[tool.ruff]`,
   so ruff falls back to whatever rule set the machine's ruff defaults to (ruff 0.16.8 here: 1122 findings over
   `clients crucible_axi tests`). On ruff's classic default set (`E4`, `E7`, `E9`, `F`), `clients/` and
-  `crucible_axi/` are clean and `tests/` carries 22 findings (12 `F541`, 8 `F401`, 1 `E741`, 1 `F841`) over 15
+  `crucible_axi/` are clean and `tests/` carries 22 findings (12 `F541`, 8 `F401`, 1 `E741`, 1 `F841`) over 16
   modules. CR-CRU-254 declares ruff as this project's linter, so the rule set must be the project's and the tree
   clean on it first.
 
