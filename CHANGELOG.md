@@ -21,8 +21,8 @@ Releases before 0.3.0 are described only on GitHub Releases.
   - Two decoders, `ruff` and `clippy`, and the hint aliases `go vet` and `clang-tidy`. On a lint post
     stating its exit, gcc's no-error fallback to raw is off, so clang-tidy warnings are decoded.
   - The Compile tab draws a Lint group beside the Compile group, each headed with its count. A lint
-    card names its tool, carries a broom glyph and reads `N lint errors` or `lint clean`; its drill-in
-    shows each finding's rule code.
+    card names its tool, carries a broom glyph and reads `N lint errors` (`1 lint error` for one) or
+    `lint clean`; its drill-in is headed `<tool> lint` and shows each finding's rule code.
   - `/api/v2/status` gains `lastLint`, and `lastCompile` never holds a lint record. The projects
     rollup gains `lastEventNotLint`, so a project's status line reads as if lint records did not
     exist. Lint records count toward retention as compile records do.
