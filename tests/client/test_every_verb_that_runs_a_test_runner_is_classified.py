@@ -295,6 +295,16 @@ _RELEASE_NOTES_READ = _READ
 for _own_census in CLIENT_CENSUS.values():
     _own_census["release-notes"] = _RELEASE_NOTES_READ
 
+# The lint verb, owed to all six clients the same way: it runs the project's
+# linter -- never a test runner -- and files its output as a lint record on the
+# compile route, through the shared lint runner.
+_LINT_VERB = exempt(
+    "the lint verb: it runs the project's linter, never a test runner, and "
+    "files its output as a lint record on the compile route through the "
+    "shared lint runner")
+for _own_census in CLIENT_CENSUS.values():
+    _own_census["lint"] = _LINT_VERB
+
 
 # ── enumeration: the subcommands and their handlers, from the real parser ──
 
@@ -387,8 +397,45 @@ SHARED_STREAMED_CLOSE = "close_streamed_run"
 # shared ingest does. A call of it handed a runner exit is a filing that
 # carries the runner's exit.
 SHARED_STREAM_CLOSE = "close_stream"
+
+# The shared lint runner, `clients/_crucible_lint.py`, files every lint run on
+# the compile route through `post_ingest` itself, and a client's `lint` hands
+# its run to it. A call of any function that module defines and that reaches
+# `post_ingest` is therefore that verb's ingest call. The functions are read
+# off the module rather than named here: what the module calls them is its
+# own choice. A checkout without the module has none.
+LINT_MODULE_PATH = CLIENTS_DIR / "_crucible_lint.py"
+SHARED_LINT = "<the shared lint post>"
+
+
+def _shared_lint_posts():
+    """The top-level functions of the shared lint runner that reach a
+    `post_ingest` call, directly or through one another."""
+    if not LINT_MODULE_PATH.is_file():
+        return frozenset()
+    tree = ast.parse(LINT_MODULE_PATH.read_text(encoding="utf-8"))
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef)}
+
+    def calls_any(node, names):
+        return any(isinstance(n, ast.Call) and _callee_name(n) in names
+                   for n in ast.walk(node))
+
+    posting = {name for name, node in functions.items()
+               if calls_any(node, {"post_ingest"})}
+    grew = True
+    while grew:
+        grew = False
+        for name, node in functions.items():
+            if name not in posting and calls_any(node, posting):
+                posting.add(name)
+                grew = True
+    return frozenset(posting)
+
+
+SHARED_LINT_POSTS = _shared_lint_posts()
 INGEST_CALLEES = ("post_ingest", SHARED_INGEST, SHARED_STREAMED_CLOSE,
-                  SHARED_STREAM_CLOSE)
+                  SHARED_STREAM_CLOSE, *sorted(SHARED_LINT_POSTS))
 
 
 def _shared_ingest_name():
@@ -1289,6 +1336,8 @@ def ingest_sites(source):
                 site = (SHARED_CLOSE, SHARED_STREAMED_CLOSE, RUNS_ROUTE)
             elif callee == SHARED_STREAM_CLOSE:
                 site = (SHARED_ONE_CLOSE, SHARED_STREAM_CLOSE, RUNS_ROUTE)
+            elif callee in SHARED_LINT_POSTS:
+                site = (SHARED_LINT, SHARED_LINT, COMPILE_ROUTE)
             elif callee == "post_ingest":
                 route = (call.args[1].value if len(call.args) >= 2
                          and isinstance(call.args[1], ast.Constant)
@@ -1411,6 +1460,12 @@ ROUTE_TABLE = {
         "check": routes((), _GO_COMPILE),
     },
 }
+
+# Every client's `lint` files its lint record through the shared lint runner,
+# on the compile route: no report.
+_THROUGH_THE_SHARED_LINT_POST = {(SHARED_LINT, SHARED_LINT, COMPILE_ROUTE)}
+for _client_routes in ROUTE_TABLE.values():
+    _client_routes["lint"] = routes((), _THROUGH_THE_SHARED_LINT_POST)
 
 
 def _route_lines(table):

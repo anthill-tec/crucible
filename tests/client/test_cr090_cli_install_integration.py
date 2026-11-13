@@ -90,6 +90,9 @@ EXPECTED_FLEET_FILES = frozenset({
     "_crucible_release.py",
     # A project's own verbs' module, loaded the same way and as eagerly.
     "_crucible_project.py",
+    # The shared lint runner every client's `lint` verb is built on, loaded
+    # the same way and as eagerly.
+    "_crucible_lint.py",
     "toon.py",
     "STATUS-CONTRACT.md",
     # CR-CRU-138 §S4 -- the distribution's own limit declarations, package

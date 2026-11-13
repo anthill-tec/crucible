@@ -1049,7 +1049,11 @@ class NoBoardNoFiguresTest(_RustProject, unittest.TestCase):
 # creates a project grows that module, and the core by its help steps.
 SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9117, "_crucible_run.py": 1974,
                               "_crucible_release.py": 266,
-                              "_crucible_project.py": 521}
+                              "_crucible_project.py": 521,
+                              # The shared lint runner's budget is a
+                              # placeholder until the module lands: the change
+                              # that adds it records its real count here.
+                              "_crucible_lint.py": 0}
 _OWN_RESULT_LINES = ("ingest junit:", "regression: ok=",
                      "workspace regression: ok=", "smoke-test: ok=")
 

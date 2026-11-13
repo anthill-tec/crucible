@@ -346,6 +346,9 @@ if argv[:1] == ["list"]:
         package["TestGoFiles"] = files
     sys.stdout.write(json.dumps(package, indent="\t") + "\n")
     sys.exit(0)
+if argv[:1] == ["vet"]:
+    # `go vet ./...`, the go client's default lint, finding nothing.
+    sys.exit(0)
 if argv[:1] != ["test"]:
     sys.stderr.write("fake go: unsupported invocation: " + repr(argv) + "\n")
     sys.exit(2)
@@ -459,6 +462,20 @@ def install_project_limits(project_dir):
     return Path(project_dir) / "crucible.toml"
 
 
+def declare_census_lint(config_path):
+    """Declare the census project's `[lint]`: a linter that is this
+    interpreter printing one clean line, named by an absolute path so no PATH
+    the drive is given can change what runs. Every client's `lint` then runs
+    and files something with its cycle, and no real linter is ever run."""
+    path = Path(config_path)
+    command = [sys.executable, "-c", "print('census lint: nothing found')"]
+    path.write_text(
+        path.read_text(encoding="utf-8").rstrip("\n")
+        + f"\n\n[lint]\ncommand = {json.dumps(command)}\nname = \"census-lint\"\n",
+        encoding="utf-8")
+    return path
+
+
 def _make_project_dir(client_key):
     """A throwaway project fixture: `.env` with CRUCIBLE_PROJECT_KEY (+
     CRUCIBLE_PROJECT_NAME for arduino, which reads it), plus whatever each
@@ -479,6 +496,7 @@ def _make_project_dir(client_key):
         env_lines.append("CRUCIBLE_PROJECT_NAME=detector-project\n")
     (d / ".env").write_text("".join(env_lines))
     install_project_limits(d)
+    declare_census_lint(d / "crucible.toml")
     if client_key == "python":
         tests_dir = d / "tests"
         tests_dir.mkdir()
@@ -1542,6 +1560,9 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
         # And so is a project's own verbs' module.
         shutil.copy(CLIENTS_DIR / "_crucible_project.py",
                     cls.tmp_dir / "_crucible_project.py")
+        # And so is the shared lint runner.
+        shutil.copy(CLIENTS_DIR / "_crucible_lint.py",
+                    cls.tmp_dir / "_crucible_lint.py")
         shutil.copy(TOON_PATH, cls.tmp_dir / "toon.py")
         # CR-CRU-131 §S1c — the limit declarations travel as PACKAGE DATA beside
         # `_crucible_axi.py`, so a copy of the module without them is a broken
