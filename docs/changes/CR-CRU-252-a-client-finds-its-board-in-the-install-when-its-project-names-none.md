@@ -1,6 +1,6 @@
 # CR-CRU-252 — a client finds its board in the install when its project names none
 
-**Status:** PENDING — filed 2026-11-13 (user ruling: in 0.4.0, wave 8, before CR-CRU-199, which stays last as the
+**Status:** COMPLETED — merged 2026-11-13 · filed 2026-11-13 (user ruling: in 0.4.0, wave 8, before CR-CRU-199, which stays last as the
 release's hygiene CR); gap analysis ran 2026-11-13, user rulings at design · Pre-review: ran 2026-11-13 (it
 changes what an install writes on a machine carrying a production board, and another project's skill documents the
 old chain); CHANGES, 7 findings folded
@@ -167,12 +167,12 @@ This step is not part of the code and has no AC.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — a project file without `[client]` falls through to the install's.** A scratch fleet whose install
+- [x] **AC1 — a project file without `[client]` falls through to the install's.** A scratch fleet whose install
   `crucible.toml` declares `[client] url = <board double>`, and whose project `crucible.toml` declares only
   `[gate] skip`, posts a verb's requests to the double. The envelope names no `context.board`, because the board is
   the install's own (see AC3's `context.board` bullet).
-- [ ] **AC2 — the project's own `url` still wins.** With both files declaring a `url`, the project's is used.
-- [ ] **AC3 — what is passed over.** Each of these project files falls through to the install's `url`:
+- [x] **AC2 — the project's own `url` still wins.** With both files declaring a `url`, the project's is used.
+- [x] **AC3 — what is passed over.** Each of these project files falls through to the install's `url`:
   - no `[client]` table;
   - `[client]` with no `url`;
   - an empty or whitespace `url`;
@@ -183,9 +183,9 @@ This step is not part of the code and has no AC.
   With neither file declaring one, the shipped `http://localhost:3849` is answered, and nothing raises.
   - **`context.board`:** with the install declaring `url = U`, a verb resolving `U` names no `context.board`, and a
     verb resolving another board names it.
-- [ ] **AC4 — limits are unchanged.** A project file that parses with no `[limits]` still decides the limits as
+- [x] **AC4 — limits are unchanged.** A project file that parses with no `[limits]` still decides the limits as
   today. The existing limit-chain tests pass unedited.
-- [ ] **AC5 — a re-install writes the missing `[client] url`.** In a throwaway `HOME`, an existing install
+- [x] **AC5 — a re-install writes the missing `[client] url`.** In a throwaway `HOME`, an existing install
   `crucible.toml` in the 17 Sep shape (limits, no `[client]`) gains `[client] url = <listener url>` under its comment
   block after `install`. Every other byte is kept.
   - The filling run's `[manifest]` stage is `converged: false`, and its output names the file, the key and the value.
@@ -195,9 +195,9 @@ This step is not part of the code and has no AC.
     - a file that does not parse;
     - a directory at the path;
     - a file whose fill would not re-parse (a `[client]  # note` header).
-- [ ] **AC6 — a set `url` is never overwritten.** An install file that declares `[client] url = X` keeps `X`, byte
+- [x] **AC6 — a set `url` is never overwritten.** An install file that declares `[client] url = X` keeps `X`, byte
   for byte, after `install`.
-- [ ] **AC7 — the live port is kept.** In a throwaway `HOME` with a provisioned server whose existing server file
+- [x] **AC7 — the live port is kept.** In a throwaway `HOME` with a provisioned server whose existing server file
   names no port, `install` writes the template's `[server] port` (no probe), and the install file's
   `[client] url` names the same port. The proof holds even while that port is occupied on the machine, so it shows
   no probe ran. The output names the port written.
@@ -205,11 +205,11 @@ This step is not part of the code and has no AC.
     It is inverted under this AC.
   - A template with no `port` fills nothing.
   - A `port` present with a mistyped value (`"3850"`) is left as it is.
-- [ ] **AC8 — a fresh install still probes.** With no server file yet, the port is the first bindable one in the
+- [x] **AC8 — a fresh install still probes.** With no server file yet, the port is the first bindable one in the
   range, as today. Every other CR-CRU-139 installer test passes unedited.
-- [ ] **AC9 — the record.** A filled-in file that matched its recorded digest is re-recorded. A filled-in file that
+- [x] **AC9 — the record.** A filled-in file that matched its recorded digest is re-recorded. A filled-in file that
   did not, or that had no record, is not recorded, and `uninstall --purge` keeps it.
-- [ ] **AC10 — the words.**
+- [x] **AC10 — the words.**
   - Each of the six clients' real top-level `--help` states that the first file declaring a non-empty
     `[client] url` wins and a file without one is passed over. No `--help` says a project file without one uses
     the shipped address. `tests/client/test_every_clients_help_names_where_its_board_comes_from.py`, which pins the
@@ -218,7 +218,7 @@ This step is not part of the code and has no AC.
   - The RUNBOOK describes the three-step chain and the `context.board` rule.
   - The CHANGELOG has the line.
   - The real `crucible-axi install` output, under a throwaway `HOME`, names a filled file, its key and its value.
-- [ ] **AC11 — production is never touched.** Every test runs against a throwaway `HOME` and a board double or a
+- [x] **AC11 — production is never touched.** Every test runs against a throwaway `HOME` and a board double or a
   scratch board. No test reads or writes `~/.crucible`, `~/.local/share/crucible`, :3849 or :3850.
 
 ## Non-goals
