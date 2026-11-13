@@ -52,7 +52,6 @@ Fallback:
 """
 
 import contextlib
-import copy
 import importlib.util
 import io
 import os

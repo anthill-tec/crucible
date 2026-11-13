@@ -1441,8 +1441,8 @@ class ExplicitOptOutSkipsTheUnitStageTest(_UnitFixtureCase):
             f"${NO_SERVICE_ENV_VAR} is set")
         self.assertTrue(
             os.path.isfile(unit),
-            f"an opted-out teardown must LEAVE the unit file in place -- the "
-            f"operator asked crucible-axi not to manage their systemd (AC4)")
+            "an opted-out teardown must LEAVE the unit file in place -- the "
+            "operator asked crucible-axi not to manage their systemd (AC4)")
         self.assertEqual(
             Path(unit).read_text(encoding="utf-8"), before,
             "the opted-out teardown must not modify the unit either (AC4)")

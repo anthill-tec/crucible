@@ -927,9 +927,9 @@ class DashboardParameterisedLiftTest(unittest.TestCase):
                 if client == "mvn":
                     self.assertTrue(
                         hasattr(ns, "maven_dir") and ns.maven_dir is None,
-                        f"mvn-crucible.py's cmd_dashboard must still pass "
-                        f"maven_dir=None (its own cmd_status's extra field) "
-                        f"after the parameterised lift")
+                        "mvn-crucible.py's cmd_dashboard must still pass "
+                        "maven_dir=None (its own cmd_status's extra field) "
+                        "after the parameterised lift")
                 else:
                     self.assertFalse(
                         hasattr(ns, "maven_dir"),

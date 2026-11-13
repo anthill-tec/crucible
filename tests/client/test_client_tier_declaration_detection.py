@@ -412,8 +412,8 @@ class _DeclarationProbe:
         still = ""
         if tier is not None:
             probe = self.drive(self.refuse_argv(tier))
-            line = next((l for l in probe.err.splitlines()
-                         if TIER_RUN_UNDECLARED_CODE in l), "")
+            line = next((err_line for err_line in probe.err.splitlines()
+                         if TIER_RUN_UNDECLARED_CODE in err_line), "")
             if line:
                 still = (f" Driven with only the flags this verb DOES accept, "
                          f"and with the declaration in place, the same cell "

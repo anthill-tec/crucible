@@ -69,7 +69,7 @@ STREAM_FILE = "crucible-events.ndjson"
 # read/cleared them without needing a second real subprocess run per case.
 def _junit_suite(name, failures, testcase_name):
     fail_child = (
-        f'<failure message="planted">planted failure</failure>' if failures else ""
+        '<failure message="planted">planted failure</failure>' if failures else ""
     )
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'

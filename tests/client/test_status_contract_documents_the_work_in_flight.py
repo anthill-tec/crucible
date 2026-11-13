@@ -85,8 +85,8 @@ class StatusContractDocumentsTheWorkInFlightTest(unittest.TestCase):
         normalized = _normalize(text)
         self.assertIn(
             "| filed |", normalized,
-            f"the top-level envelope field table must gain a `filed` "
-            f"row (§S2's second published project fact); none found")
+            "the top-level envelope field table must gain a `filed` "
+            "row (§S2's second published project fact); none found")
         self.assertIn(
             "ever filed", normalized,
             "the `filed` row must state the §S2 computation — the number "

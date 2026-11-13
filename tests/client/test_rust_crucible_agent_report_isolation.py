@@ -255,9 +255,9 @@ class AgentDirectoryJunitMoveAndReadTest(_BaseRustIsolationTest):
         moved_content = Path(moved[0]).read_text() if moved else ""
         self.assertNotIn(
             "stale_0", moved_content,
-            f"the STALE junit already sitting in the agent's own directory "
-            f"from a prior run must be WIPED before this run's fresh moved "
-            f"junit lands there; the agent's directory still carries stale content",
+            "the STALE junit already sitting in the agent's own directory "
+            "from a prior run must be WIPED before this run's fresh moved "
+            "junit lands there; the agent's directory still carries stale content",
         )
         self.assertEqual(
             moved_content, GOOD_JUNIT_XML,
