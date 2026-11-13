@@ -1,6 +1,6 @@
 # CR-CRU-253 — the client modules type-check clean, and the installer tests stay off the shipped ports
 
-**Status:** PENDING · filed 2026-11-13 (user ruling: CR-CRU-199 split in three for ease of execution; this is
+**Status:** COMPLETED — merged 2026-11-13 · filed 2026-11-13 (user ruling: CR-CRU-199 split in three for ease of execution; this is
 the client hygiene added to CR-CRU-199 on 2026-11-04, plus two items carried from CR-CRU-252's VERIFY and RED) ·
 gap analysis: `test-reports/work/cr199-gap-analysis.md` (F10, F11)
 **Type:** maintenance
@@ -62,18 +62,18 @@ behaviour changes.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the run module type-checks clean.** An LSP probe of `clients/_crucible_run.py` reports no
+- [x] **AC1 — the run module type-checks clean.** An LSP probe of `clients/_crucible_run.py` reports no
   `reportAttributeAccessIssue` on `_core`. The run-module and client suites pass unedited.
-- [ ] **AC2 — the manifest stage is back under its old weight.**
+- [x] **AC2 — the manifest stage is back under its old weight.**
   - Ruff's McCabe check (`C901`, max-complexity 10) passes for `run_manifest_stage`, pinned by a test that runs it.
   - The installer suites pass unedited, including CR-CRU-252's fill module.
-- [ ] **AC3 — no installer test touches the shipped window.**
+- [x] **AC3 — no installer test touches the shipped window.**
   - `provision_server`'s template declares no port and no range bound inside 3800–3899.
   - A guard test asserts this for every installer-test helper that writes a server template.
-- [ ] **AC4 — ruff passes on the project's own rule set.** `ruff check clients crucible_axi tests` from the repo
+- [x] **AC4 — ruff passes on the project's own rule set.** `ruff check clients crucible_axi tests` from the repo
   root, with no other configuration, exits 0. A test runs it. Every edited test module still passes, with the same
   counts.
-- [ ] **AC5 — the budgets.** `SHARED_MODULE_LINE_BUDGETS`' `_crucible_run.py` entry follows the module's new line
+- [x] **AC5 — the budgets.** `SHARED_MODULE_LINE_BUDGETS`' `_crucible_run.py` entry follows the module's new line
   count in all three copies. The core's count is unchanged.
 
 ## Non-goals

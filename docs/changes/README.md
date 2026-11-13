@@ -184,7 +184,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-197](CR-CRU-197-the-python-client-runs-a-pytest-project.md) | the python client runs a pytest project | feature | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-198](CR-CRU-198-the-python-floor-is-3.14-and-the-scans-report-what-matters.md) | the python floor is 3.14, and the lint and secrets scans report what matters | maintenance | PENDING | — | 8 (0.4.0) |
 | [CR-CRU-199](CR-CRU-199-a-lint-finding-reaches-the-board-as-a-marked-compile-record.md) | a lint finding reaches the board as a marked compile record, and shows as its own group | feature | PENDING | — | 8 (0.4.0) |
-| [CR-CRU-253](CR-CRU-253-the-client-modules-type-check-clean-and-installer-tests-stay-off-the-shipped-ports.md) | the client modules type-check clean, and the installer tests stay off the shipped ports | maintenance | PENDING | — | 3 (0.4.0) |
+| [CR-CRU-253](CR-CRU-253-the-client-modules-type-check-clean-and-installer-tests-stay-off-the-shipped-ports.md) | the client modules type-check clean, and the installer tests stay off the shipped ports | maintenance | COMPLETED | — | 3 (0.4.0) |
 | [CR-CRU-254](CR-CRU-254-each-stacks-lint-runs-through-its-client.md) | each stack's lint runs through its client, and the gate runs it after check | feature | PENDING | 199, 253 | 8 (0.4.0) |
 | [CR-CRU-200](CR-CRU-200-an-open-run-takes-its-test-stream-and-shows-it-live.md) | an open run takes its test stream and shows it live | feature | PENDING | 152, 206 | 8 (0.4.0) |
 | [CR-CRU-201](CR-CRU-201-a-bun-project-streams-its-tests-declared-in-one-table.md) | a bun project streams its tests, declared in one table per script | feature | PENDING | 200 | 8 (0.4.0) |
