@@ -432,6 +432,12 @@ provisioned server move in lockstep; on an already-current machine it reports
   when the installed server is exactly the new release's pinned version.
 - A systemd `--user` unit is refreshed by the same run, so the daemon is the new
   version rather than a new binary behind an old process.
+- A re-install fills a missing `[client] url` into the install's `crucible.toml`
+  and a missing `[server] port` into the server's, never overwrites one that is
+  set, and names what it filled: the `[manifest]` stage lists each filled file
+  with its key and value under `filled`, and each file it left alone with the
+  reason under `notFilled`. The port filled is the one the server boots on
+  today, never a probed one.
 - The `[fleet]` stage overwrites the stack-declaration schema at
   `<target-dir>/clients/crucible-declaration.schema.json`, and the `[manifest]`
   stage lists it in `crucible-clients.json` under the `declaration_schema` key

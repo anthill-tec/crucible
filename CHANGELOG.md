@@ -158,6 +158,13 @@ Releases before 0.3.0 are described only on GitHub Releases.
   `[gate] skip` keep the first file that parses. An envelope names `context.board` only when the
   board differs from the install's declared `url`, or from the shipped one when the install declares
   none.
+- **A re-install fills in the connection an older install never wrote, keeping the live port.** An
+  existing server `crucible.toml` with no `[server] port` gains the port its server boots on today,
+  the template's own `port`, with no probe. An existing install `crucible.toml` with no `[client] url`
+  gains the board url built from that port. Only an absent key is filled; a value already set, in
+  any form, is never overwritten. The `[manifest]` stage names each file it filled with its key and
+  value under `filled`, and each file it could not safely touch with the reason under `notFilled`.
+  The range is probed only for a server file the install lays down fresh.
 
 ### Removed
 
