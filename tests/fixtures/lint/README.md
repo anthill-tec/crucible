@@ -1,6 +1,6 @@
 # Linter output
 
-Real linter runs, captured 2026-11-14 from small scratch sources. Each command ran in the directory named
+Real linter runs, captured 2026-11-13 from small scratch sources. Each command ran in the directory named
 below with stdout and stderr sent to one file (`> out.txt 2>&1`), so each file keeps the tool's own order.
 The files are kept byte for byte (trailing spaces included), with one exception: an absolute scratch path
 the tool printed was rewritten to a relative one. That touched only cargo's `Checking … (<dir>)` lines,
