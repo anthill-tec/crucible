@@ -63,7 +63,7 @@ TIERS = ("unit", "module", "integration", "e2e", "bdd")
 FILING_VERBS = (("test", "regression") + TIERS
                 + ("check", "compile", "auto-ingest", "pre-merge-gate",
                    "smoke-test", "docker-e2e-gate", "clippy", "workspace-clippy",
-                   "workspace-regression", "regression-ingest"))
+                   "workspace-regression", "regression-ingest", "lint"))
 
 # The verbs whose run files a compile or lint result, or files a run, in the
 # fixture below: the "would FAIL and file" proof. Tier and regression verbs are
@@ -77,7 +77,8 @@ STEP_VERBS = {
              "pre-merge-gate", "smoke-test", "docker-e2e-gate", "regression"),
     "arduino": ("check", "compile", "auto-ingest", "pre-merge-gate"),
     # go files a streamed run from each of its three running verbs; it has no
-    # compile or lint step of its own yet.
+    # compile step of its own, and its `lint` is proved refused by the
+    # refusal itself, as every client's is.
     "go": ("test", "regression", "pre-merge-gate"),
 }
 

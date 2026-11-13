@@ -1047,13 +1047,10 @@ class NoBoardNoFiguresTest(_RustProject, unittest.TestCase):
 # A project's own verbs move out of the core into their own module, so the
 # core's budget is re-recorded lower and that module's is added. The verb that
 # creates a project grows that module, and the core by its help steps.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9117, "_crucible_run.py": 1974,
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9118, "_crucible_run.py": 1974,
                               "_crucible_release.py": 266,
                               "_crucible_project.py": 521,
-                              # The shared lint runner's budget is a
-                              # placeholder until the module lands: the change
-                              # that adds it records its real count here.
-                              "_crucible_lint.py": 0}
+                              "_crucible_lint.py": 282}
 _OWN_RESULT_LINES = ("ingest junit:", "regression: ok=",
                      "workspace regression: ok=", "smoke-test: ok=")
 
