@@ -22,6 +22,7 @@ export const hints: Record<
   | "roleRequired"
   | "afterRed"
   | "afterCompile"
+  | "afterLint"
   | "readEvidence"
   | "unknownProject"
   | "archivedProject"
@@ -53,7 +54,7 @@ export const hints: Record<
   /** GET /api/v2 — orientation for a fresh agent. */
   orientation: [
     "POST /api/v2/projects {name, key?, type?, sutRoot?} — create a project (key auto-generated when omitted)",
-    "GET /api/v2/projects — projects with rollups (agentsOnline, agentsTotal, lastEvent — the newest test run or compile result, latestGreenCoverage)",
+    "GET /api/v2/projects — projects with rollups (agentsOnline, agentsTotal, lastEvent — the newest test run or compile result, lastEventNotLint — the newest run that is not a lint record, latestGreenCoverage)",
     "POST /api/v2/agents/register {projectKey, agentId, role} — register an agent (role: RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report)",
     cycleEvidence,
     "GET /api/v2/health — service health",
@@ -85,6 +86,10 @@ export const hints: Record<
   /** After a compile ingest. */
   afterCompile: [
     "compile events route to the compile panel — ingest the next test run to update the run verdict",
+  ],
+  /** After a lint ingest (a compile post naming its linter). */
+  afterLint: [
+    "lint records route to the Lint group on the Compile tab — post the next lint run after fixing its findings",
   ],
   /** 404/400 unknown project — the call that fixes it. */
   unknownProject: [

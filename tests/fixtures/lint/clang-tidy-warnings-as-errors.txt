@@ -1,0 +1,14 @@
+2 warnings generated.
+a.c:2:13: error: statement should be inside braces [readability-braces-around-statements,-warnings-as-errors]
+    2 |   if (x > 0)
+      |             ^
+      |              {
+    3 |     return 1;
+      |              
+a.c:4:13: error: statement should be inside braces [readability-braces-around-statements,-warnings-as-errors]
+    4 |   if (x < 0)
+      |             ^
+      |              {
+    5 |     return -1;
+      |               
+2 warnings treated as errors

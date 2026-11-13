@@ -492,6 +492,37 @@ describe("gcc codec — a long line decodes in bounded time", () => {
   );
 });
 
+describe("gcc codec — a message holding many ' [' with no closing ']' decodes in bounded time", () => {
+  // The trailing-bracket code is read off the message's tail. A message that
+  // opens ` [` many times and never closes one holds no code, and reading it
+  // must not backtrack through every ` [` against every later character.
+  // 20 000 openings decode in about 0.35 s under that backtracking, so the
+  // count is 60 000: the cost grows with its square, a linear read takes
+  // milliseconds.
+  const OPENINGS = 60_000;
+  const BUDGET_MS = 1_000;
+  const PER_TEST_TIMEOUT_MS = 120_000;
+
+  test(
+    "a gcc error line whose message holds 60 000 ' [' and no ']' hinted gcc decodes to one error with no code in under one second",
+    () => {
+      const message = `expected expression${" [".repeat(OPENINGS)}`;
+      const input = `src/a.c:3:7: error: ${message}`;
+      const start = performance.now();
+      const report = parseCompile(input, "gcc");
+      const elapsedMs = performance.now() - start;
+      expect(report.format).toBe("gcc");
+      expect(report.diagnostics).toStrictEqual([
+        { file: "src/a.c", line: 3, col: 7, level: "error", message },
+      ]);
+      expect(report.errorCount).toBe(1);
+      expect(report.warningCount).toBe(0);
+      expect(elapsedMs).toBeLessThan(BUDGET_MS);
+    },
+    PER_TEST_TIMEOUT_MS,
+  );
+});
+
 describe("gcc codec — detection order and link-line file rule (regression guard: passes today)", () => {
   test("regression guard: unhinted rustc output carrying a cc-rs gcc warning line stays rustc", () => {
     const input = [

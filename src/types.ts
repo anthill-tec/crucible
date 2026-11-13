@@ -435,6 +435,11 @@ export interface RunEvent {
    * cut, or the run was aborted). ABSENT — never null — on a complete run.
    */
   incomplete?: string;
+  /**
+   * The linter a compile-kind record was posted by, which makes it a lint
+   * record. ABSENT — never null — on every compile record and every other kind.
+   */
+  lint?: string;
 }
 
 /** CR-CRU-162 §G2 — the three answers `no-mistakes axi respond` accepts. */

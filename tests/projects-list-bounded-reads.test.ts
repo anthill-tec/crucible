@@ -165,8 +165,12 @@ async function wholeHistoryProjects(archived: boolean): Promise<unknown[]> {
     const last = events[0];
     // The last RUN: the newest events-table row that is not a registration
     // (`lifecycle`): a test run or a compile result. Milestones and gates
-    // live in their own tables and are never a run.
+    // live in their own tables and are never a run. The last run that is not a
+    // lint record: the newest such row that carries no `lint` marker.
     const lastRun = events.find((e) => e.kind === "test" || e.kind === "compile");
+    const lastRunNotLint = events.find(
+      (e) => (e.kind === "test" || e.kind === "compile") && e.lint === undefined,
+    );
     const greenCovered = events.find((e) => e.coverage !== undefined);
     const byDay = new Map<string, number>();
     for (const r of store.listRollups(p.key)) {
@@ -192,6 +196,8 @@ async function wholeHistoryProjects(archived: boolean): Promise<unknown[]> {
       agentsOnline: agents.filter((a) => a.liveness !== "tombstoned").length,
       agentsTotal: agents.length,
       lastEvent: lastRun !== undefined ? await briefOf(p.key, lastRun.id) : null,
+      lastEventNotLint:
+        lastRunNotLint !== undefined ? await briefOf(p.key, lastRunNotLint.id) : null,
       latestGreenCoverage: greenCovered?.coverage ?? null,
       ...(greenCovered !== undefined ? { latestCoverageEventId: greenCovered.id } : {}),
       ...(coverageTrend.length > 0 ? { coverageTrend } : {}),

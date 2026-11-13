@@ -238,6 +238,10 @@ requirements verbatim. Highlights that are easy to get wrong:
 - Dashboard can create, rename, and re-type projects.
 - `GET /api/projects` returns `{ok, projects:[…]}` with per-project rollups (agent count, last run —
   the newest test run or compile result, latest green coverage) so the dashboard renders from one call.
+- The rollup's `lastEvent` is the newest run, a lint record included (§4.5.1). Beside it, `lastEventNotLint` is the
+  brief of the newest run that is not a lint record, or null. The project's status line reads `lastEventNotLint`
+  when `lastEvent` is a lint record, so a lint run never sets its `✓ compiled` / `✗ N errors` verdict. A project
+  whose runs are all lint records shows the lint record's own wording: `✗ N lint errors` or `lint clean`.
 
 ### 4.3 Agent lifecycle
 - Heartbeat upserts the agent, bumps `lastSeen`, applies §3.2 identity semantics.
@@ -413,8 +417,36 @@ registry** translating each tool's native output into one **canonical RunSchema*
   `typescript` (`file.ts(line,col): error TSxxxx`), `gcc` (`file:line:col: error|warning: msg`
   and `undefined reference to …` link errors; a report with no error falls back to raw).
   Unknown/absent format → best-effort detect → raw fallback (never reject).
+- Two lint decoders: `ruff` (`file:line:col: CODE message`, the fixable `[*]` mark dropped, the summary lines never a
+  finding) and `clippy` (rustc's shape, each lint coded `clippy::<name>` from its help URL, rustc lints coded by
+  name, the `could not compile` trailer never a finding). The hint aliases are `ruff`, `clippy`, `go vet` → `go`
+  and `clang-tidy` → `gcc`, so a clang-tidy warning decodes with its `[check-name]` as its code.
+- The lint exception: on a lint post that states the linter's exit (`runnerExit`), gcc's no-error fallback to raw
+  is off, so a clang-tidy run holding only warnings is decoded, not stored raw; a compile post keeps the fallback.
 - Records a `kind:"compile"` event; response `summary.failed` = errors, `.pending` =
   warnings (v1 client convention).
+
+#### 4.5.1 Lint records
+
+`lint` is a client verb. The gate runs it after `check`, fail-fast, and each project declares its linter in its
+client config. A lint run reaches the board on the compile route, and its findings are marked compile records:
+the event's `kind` stays `compile` and its payload carries `lint: "<tool>"`, the linter's name. There is no new
+event kind, route or column. `check` never lints, and a compile record never carries the marker.
+
+`POST /api/v2/runs/compile` takes two optional body fields for this. `lint` is the linter's name, a non-empty
+string (anything else is refused with a 400 naming `lint`). `runnerExit` is the linter's exit code, validated as
+`/runs` validates it, and read on a lint post only.
+
+The linter's exit is the verdict. A lint post with `runnerExit: 0` and empty `errors` is filed as a clean record
+with zero findings. A non-zero exit whose output decodes to no error gains one synthetic error naming the exit, so
+a failing linter is never shown clean. A lint record answers `LINT FAILED — N errors, M warnings` or
+`LINT OK — M warnings`, and the posting agent's last outcome reads `lint · N errors · ingested` or
+`lint · clean · ingested`.
+
+On the dashboard, the Compile tab draws compile records and lint records in two groups, `Compile · N` and
+`Lint · N`. A lint card names its tool, carries the broom glyph and reads `N lint errors` or `lint clean`; its
+drill-in shows each finding's rule code within its file, or `clean lint — no findings`. Ingest status keeps the
+two apart: `lastCompile` never holds a lint record, and `lastLint` holds the newest one.
 
 ### 4.6 Panel routing (invariant)
 Compile events and test events are separate streams in the UI — a compile failure never
@@ -466,8 +498,9 @@ change hints; the SPA refetches affected slices. Poll fallback every 5 s when SS
 
 ### 4.9 Ingest status (v2 defined shape)
 `GET /api/ingest/status?projectKey&type=` →
-`{ok, status: {hasData, lastTest: <event summary+id+ts>|null, lastCompile: …|null}}`.
-Omitted `type` ⇒ `unit`.
+`{ok, status: {hasData, lastTest: <event summary+id+ts>|null, lastCompile: …|null, lastLint: …|null}}`.
+Omitted `type` ⇒ `unit`. `lastCompile` is the newest compile record that is not a lint record, and `lastLint` the
+newest lint record, or null (§4.5.1).
 
 ### 4.10 Service health (v1 parity — the backend is monitored too)
 `GET /api/health` → `{ok, status:"healthy", version, uptime_s, counts:{projects, agents,

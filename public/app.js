@@ -1273,7 +1273,22 @@
     // `N/N` pass-green / `F ✗ of N` fail-red / compile `E errors` fail-red
     // when E>0 and pass-green when clean (compile cards NEVER show a
     // test-ratio shape; the amber compile pill is retired).
+    // A lint record is a compile-kind event carrying the linter's name.
+    const isLintRecord = (e) =>
+      e.kind === "compile" && typeof e.lint === "string" && e.lint !== "";
+
     const RatioPill = (e) => {
+      if (isLintRecord(e)) {
+        // A lint record's pill says lint, never a bare error count.
+        const errors = e.errors ?? 0;
+        return span(
+          {
+            "data-testid": "ratio-pill",
+            class: `app-pill ${errors > 0 ? "app-ratio-fail" : "app-ratio-pass"}`,
+          },
+          errors === 1 ? "1 lint error" : errors > 0 ? `${errors} lint errors` : "lint clean",
+        );
+      }
       if (e.kind === "compile") {
         const errors = e.errors ?? 0;
         return span(
@@ -1416,7 +1431,7 @@
           span({
             "data-testid": "icon-glyph",
             class: "app-icon-mask",
-            "data-kind": e.kind === "compile" ? "compile" : "test",
+            "data-kind": isLintRecord(e) ? "lint" : e.kind === "compile" ? "compile" : "test",
           }),
         ),
         div(
@@ -1425,7 +1440,10 @@
             { class: "app-evt-line" },
             span({ class: "app-agent-id" }, e.agentId),
             span({ "data-testid": "tier-badge", class: "app-pill app-tier-badge" }, e.tier),
-            e.codec !== undefined && e.codec !== null
+            // A lint card names its linter where a run names its codec.
+            isLintRecord(e)
+              ? span({ "data-testid": "lint-tool", class: "app-pill app-codec-badge" }, e.lint)
+              : e.codec !== undefined && e.codec !== null
               ? span(
                   { "data-testid": "codec-badge", class: "app-pill app-codec-badge" },
                   // §S4 F7 — the +lcov suffix marks a coverage-bearing
@@ -3828,10 +3846,28 @@
             }),
           ),
           () => {
-            const compiles = visibleEvents().filter((e) => e.kind === "compile");
-            return compiles.length === 0
-              ? div({ class: "app-empty" }, "no compile events yet")
-              : div(compiles.map(EventCard));
+            // Compile records and lint records sit in their own groups,
+            // compile first; a group with no records is not drawn.
+            const records = visibleEvents().filter((e) => e.kind === "compile");
+            if (records.length === 0) return div({ class: "app-empty" }, "no compile events yet");
+            const groups = [
+              { key: "compile", name: "Compile", cards: records.filter((e) => !isLintRecord(e)) },
+              { key: "lint", name: "Lint", cards: records.filter(isLintRecord) },
+            ];
+            return div(
+              groups
+                .filter((g) => g.cards.length > 0)
+                .map((g) =>
+                  div(
+                    { "data-testid": "compile-group", "data-group": g.key, class: "app-compile-group" },
+                    div(
+                      { "data-testid": "compile-group-heading", class: "app-compile-group-heading" },
+                      `${g.name} · ${g.cards.length}`,
+                    ),
+                    g.cards.map(EventCard),
+                  ),
+                ),
+            );
           },
         ),
       );
@@ -9051,6 +9087,8 @@
         const warningCount = compile.warningCount ?? 0;
         const format = compile.format ?? "compile";
         const hasRaw = typeof compile.raw === "string" && compile.raw.length > 0;
+        // A lint record shows each finding's rule code and its own empty line.
+        const lint = typeof d.lint === "string" && d.lint !== "";
         const groups = new Map();
         for (const diag of compile.diagnostics ?? []) {
           const file = diag.file ?? "(unknown file)";
@@ -9066,10 +9104,14 @@
                 errorCount > 0 ? "app-ratio-fail" : "app-ratio-pass"
               }`,
             },
-            `${format} · ${errorCount} errors · ${warningCount} warnings`,
+            // A lint record is headed by its tool, never by the decoder it went through.
+            `${lint ? `${d.lint} lint` : format} · ${errorCount} errors · ${warningCount} warnings`,
           ),
           groups.size === 0
-            ? div({ class: "app-empty" }, "clean compile — no diagnostics")
+            ? div(
+                { class: "app-empty" },
+                lint ? "clean lint — no findings" : "clean compile — no diagnostics",
+              )
             : [...groups.entries()].map(([file, lines]) =>
                 div(
                   { "data-testid": "diag-group", class: "app-diag-group" },
@@ -9080,6 +9122,9 @@
                         "data-testid": "diag-line",
                         class: `app-diag-line app-diag-${diag.level}`,
                       },
+                      lint && typeof diag.code === "string" && diag.code !== ""
+                        ? span({ "data-testid": "diag-code", class: "app-chip app-diag-code" }, diag.code)
+                        : null,
                       L.diagnosticLine(diag, true),
                     ),
                   ),

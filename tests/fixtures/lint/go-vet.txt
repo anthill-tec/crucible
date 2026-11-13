@@ -1,0 +1,2 @@
+report/report.go:6:22: fmt.Sprintf format %d has arg name of wrong type string
+report/report.go:10:20: fmt.Printf format %s has arg a + b of wrong type int

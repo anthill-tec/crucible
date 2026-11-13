@@ -94,11 +94,16 @@ CR-CRU-254 gives every client a `lint` verb that posts on this route. This CR ma
 - Validated as on `/runs` (`refuseBadRunnerExit`): an integer ≥ 0, or absent.
 - On a lint post, a non-zero exit with no `error` finding stores one synthetic `error` diagnostic: "the linter
   exited N but its output records no error", with no file and no code.
-- On a compile post, `runnerExit` keeps today's meaning.
+- On a compile post, `runnerExit` keeps today's meaning: it is neither validated nor used (amended at RED 941).
+- A lint post's decoded counts are never overridden by the exit: `runnerExit: 0` with a decoded error still
+  answers `LINT FAILED` (amended at RED 941).
 
 #### A clean lint post (fold F2)
 
 - A lint post with `runnerExit: 0` may carry empty `errors`. It stores a clean lint record with zero findings.
+- A lint post with empty `errors` and a non-zero `runnerExit` is stored with the one synthetic error, and answers
+  `LINT FAILED`. A lint post with empty `errors` and no `runnerExit` is refused as a compile post is (amended at
+  RED 941).
 - The decoders' "a failed build is never shown as clean" guards (go's message-only error, gcc's no-error→raw) do
   not apply to a lint post with `runnerExit: 0`.
 - A compile post with empty `errors` is still refused.
@@ -131,14 +136,18 @@ the command for each capture.
     normalised to snake case.
   - A quoted source line (`#![deny(clippy::all)]` under "the lint level is defined here") is never read as a code.
 - **rustc's own lints** (for example `unused_variables`) take their name from the `#[warn(<name>)]` note as the
-  code. An `E####` error keeps its code.
+  code, or from a `-D <name>` / `-W <name>` note (kebab case read as snake case), the form `-D warnings` prints
+  (amended at GREEN 942). This applies under the `clippy` decoder only: a `rustc` compile record decodes exactly as
+  before this CR (amended at VERIFY 944). An `E####` error keeps its code.
 - **The trailer** `error: could not compile … due to N previous error…; M warnings emitted` is not a finding.
 
 **`gcc`** takes a trailing bracketed check as the code. When the bracket holds several comma-separated items,
 the code is the first item that is not a flag (`-warnings-as-errors` is dropped). Two cases:
 
-- On a **lint post**, the no-error→raw fallback does not apply, so a clang-tidy run of only warnings keeps its
-  findings and codes.
+- On a **lint post that states its `runnerExit`** (any value), the no-error→raw fallback does not apply, so a
+  clang-tidy run of only warnings keeps its findings and codes; a non-zero exit with no error still gets §S1's
+  synthetic error. A lint post with no `runnerExit` keeps the fallback, so unreadable output is never filed clean
+  (amended at GREEN 942).
 - On a **compile post** the fallback stands, unchanged (PRD §4.5).
 
 **Hint aliases:** `ruff`, `clippy`, `go vet` → `go`, `clang-tidy` → `gcc`.
@@ -150,16 +159,22 @@ the code is the first item that is not a flag (`-warnings-as-errors` is dropped)
   - the Lint group heads with its count, and each record shows its tool;
   - a tab with no lint records shows no Lint group;
   - a tab with only lint records shows the Lint group and no `no compile events yet` line.
-- **A lint record's card:** names the tool and reads `N lint errors` (fail-red) or `lint clean` (pass-green), never
-  `errors` alone and never "compile". Its `data-kind` is the one §S0 settles.
+- **A lint record's card:** names the tool and reads `N lint errors` (fail-red; `1 lint error` singular, amended at
+  VERIFY 944) or `lint clean` (pass-green), never `errors` alone and never "compile". Its `data-kind` is the one §S0 settles.
 - **A lint record's drill-in:**
   - findings grouped by file, each with its rule code where the tool gives one;
   - a clean record reads `clean lint — no findings`;
   - the raw-output toggle is kept.
 - **The agent's last outcome** (`compileOutcome`, written by `recordCompileEvent`): a lint record writes
-  `lint · N errors` (or `lint · clean`) rather than `compile · …`.
+  `lint · N errors · ingested` (`1 error` singular), or `lint · clean · ingested` when there are no errors, rather
+  than `compile · …` (amended at RED 941).
 - **The project status line** (`projectStatus`, `public/app-logic.mjs`): its compile verdict (`✓ compiled` /
   `✗ N errors`) is taken from the newest compile record that is not a lint record. A lint record never sets it.
+  The line reads as if lint records did not exist: the projects rollup (`/api/v2/projects`) keeps `lastEvent` as
+  the newest run and gains `lastEventNotLint`, the brief of the newest run that is not a lint record, or null.
+  `projectStatus` reads it when `lastEvent` is a lint record. A project whose runs are all lint records shows the
+  newest lint record's own wording (`✗ N lint errors`, `✗ 1 lint error` singular / `lint clean`), never a compile
+  verdict (amended at RED 943 and VERIFY 944).
 - **`/api/v2/status`:**
   - `lastCompile` is the newest compile record that is not a lint record;
   - `lastLint` is the newest lint record, or null.
@@ -230,7 +245,8 @@ the code is the first item that is not a flag (`-warnings-as-errors` is dropped)
 - [ ] **AC10 — a lint record says lint wherever it is shown.**
   - **Card:** a failing lint card reads `N lint errors` and names its tool; a clean one reads `lint clean`; neither
     says "compile".
-  - **Drill-in:** codes grouped by file, or `clean lint — no findings`.
+  - **Drill-in:** headed `<tool> lint · N errors · M warnings` as F5L draws it (amended at VERIFY 944), codes
+    grouped by file, or `clean lint — no findings`.
   - **Agent outcome:** after a lint post, the agent's last outcome reads `lint · …`.
   - **Project status line:** a newer lint record does not change the line's compile verdict.
 - [ ] **AC11 — status keeps compile and lint apart.** With a compile record followed by a newer lint record,

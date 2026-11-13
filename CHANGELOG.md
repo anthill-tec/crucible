@@ -12,6 +12,20 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ### Added
 
+- **A lint finding reaches the board as a marked compile record.** A linter's run posts to
+  `POST /api/v2/runs/compile` with `lint: "<tool>"` and the linter's `runnerExit`, and is stored as a
+  lint record: a compile event carrying its linter's name, with no new kind, route or column.
+  - The linter's exit is the verdict: a clean exit with no output is filed clean, and a non-zero exit
+    whose output records no error gains one synthetic error naming the exit. A lint record answers
+    `LINT FAILED — N errors, M warnings` or `LINT OK — M warnings`.
+  - Two decoders, `ruff` and `clippy`, and the hint aliases `go vet` and `clang-tidy`. On a lint post
+    stating its exit, gcc's no-error fallback to raw is off, so clang-tidy warnings are decoded.
+  - The Compile tab draws a Lint group beside the Compile group, each headed with its count. A lint
+    card names its tool, carries a broom glyph and reads `N lint errors` (`1 lint error` for one) or
+    `lint clean`; its drill-in is headed `<tool> lint` and shows each finding's rule code.
+  - `/api/v2/status` gains `lastLint`, and `lastCompile` never holds a lint record. The projects
+    rollup gains `lastEventNotLint`, so a project's status line reads as if lint records did not
+    exist. Lint records count toward retention as compile records do.
 - **A run's coverage is kept and shown file by file.** The board keeps each file of a green run's
   coverage report with the run: its name, its lines and, where the report states them, its
   functions. The Coverage tab lists the files of the project's latest green coverage run beneath

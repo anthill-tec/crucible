@@ -58,16 +58,20 @@ declare module "../public/app-logic.mjs" {
     disabled: boolean;
   }
 
+  export interface ProjectRunBriefLike {
+    kind?: string;
+    status?: string;
+    lint?: string;
+    total: number;
+    passed: number;
+    failed: number;
+    errors?: number;
+    timestamp: number;
+  }
+
   export interface ProjectRollupLike {
-    lastEvent?: {
-      kind?: string;
-      status?: string;
-      total: number;
-      passed: number;
-      failed: number;
-      errors?: number;
-      timestamp: number;
-    } | null;
+    lastEvent?: ProjectRunBriefLike | null;
+    lastEventNotLint?: ProjectRunBriefLike | null;
   }
 
   export interface ProjectStatus {
