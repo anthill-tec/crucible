@@ -53,7 +53,10 @@ binds or connects to a port in 3800–3899.
 ### §S4 — the project's ruff rule set is pinned, and the tree is clean on it
 
 `pyproject.toml` gains `[tool.ruff.lint] select = ["E4", "E7", "E9", "F"]`, so `ruff check` reads the
-project's rule set on any machine. The 22 findings in `tests/` are fixed: an unused import removed, an f-string
+project's rule set on any machine. `ruff` joins the `dev` optional-dependency group (the toolchain the python
+client drives, installed by `pip install '.[dev]'`), so the tests below run it as `python -m ruff` from the
+project's own environment rather than whatever ruff a machine has on PATH (amended 2026-11-13 at RED: the
+project's `.venv` had no ruff). The 22 findings in `tests/` are fixed: an unused import removed, an f-string
 without placeholders made a plain string, the ambiguous name renamed, and the unused variable dropped. No test's
 behaviour changes.
 
