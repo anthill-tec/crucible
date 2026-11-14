@@ -26,6 +26,8 @@ from pathlib import Path
 
 import tomllib
 
+from tests.client.changelog_section import changelog_section
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MVN_CLIENT = REPO_ROOT / "clients" / "mvn-crucible.py"
 SHIPPED_TOML = REPO_ROOT / "clients" / "crucible.toml"
@@ -38,10 +40,7 @@ VIEW_CODEC = "surefire-console"
 
 
 def _unreleased_stack_section(text):
-    unreleased = text.split("## [Unreleased]", 1)
-    if len(unreleased) < 2:
-        return ""
-    body = re.split(r"(?m)^## \[", unreleased[1], maxsplit=1)[0]
+    body = changelog_section(text)
     found = re.search(r"(?ms)^### Stack declaration changes\n(.*?)(?=^### |\Z)", body)
     return found.group(1) if found else ""
 

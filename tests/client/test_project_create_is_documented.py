@@ -17,6 +17,7 @@ documents names the verb, and `HELP_STEPS` has no entry for it.
 import re
 import unittest
 
+from tests.client.changelog_section import changelog_section
 from tests.client.project_create_harness import CLIENTS_DIR, REPO_ROOT, load_module
 
 PRD = REPO_ROOT / "docs" / "research" / "PRD-crucible-v2.md"
@@ -43,12 +44,10 @@ def _dn_project_key_row():
 
 
 def _unreleased_added_bullets():
-    """The top-level bullets of `## [Unreleased]` → `### Added`, each with
-    its nested lines."""
-    text = CHANGELOG.read_text(encoding="utf-8")
-    unreleased = text[text.index("## [Unreleased]"):]
-    unreleased = unreleased[:unreleased.index("\n## [", 1)]
-    added = unreleased[unreleased.index("### Added"):]
+    """The top-level bullets of the section being written → `### Added`,
+    each with its nested lines."""
+    section = changelog_section(CHANGELOG.read_text(encoding="utf-8"))
+    added = section[section.index("### Added"):]
     following = added.find("\n### ", 1)
     added = added if following == -1 else added[:following]
     return [b for b in re.split(r"\n(?=- )", added) if b.startswith("- ")]

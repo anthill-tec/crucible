@@ -30,6 +30,8 @@ import re
 import unittest
 from pathlib import Path
 
+from tests.client.changelog_section import changelog_section
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 DN = REPO_ROOT / "docs" / "research" / "DN-crucible-live-test-progress.md"
@@ -57,13 +59,6 @@ GATE = re.compile(r"(?i)\bgate\b|`pre-merge-gate`")
 REGRESSION = "`regression`"
 
 
-def _unreleased(text):
-    parts = text.split("## [Unreleased]", 1)
-    if len(parts) < 2:
-        return ""
-    return re.split(r"(?m)^## \[", parts[1], maxsplit=1)[0]
-
-
 def _subsection(body, title):
     found = re.search(rf"(?ms)^### {re.escape(title)}\n(.*?)(?=^### |\Z)", body)
     return found.group(1) if found else ""
@@ -87,7 +82,7 @@ class NothingStillSaysOnlyTestReadsTheMarkerTest(unittest.TestCase):
 
     def test_the_changelogs_unreleased_section(self):
         self.assert_clean("CHANGELOG [Unreleased]",
-                          _unreleased(CHANGELOG.read_text(encoding="utf-8")))
+                          changelog_section(CHANGELOG.read_text(encoding="utf-8")))
 
     def test_the_live_test_progress_design_note(self):
         self.assert_clean(DN.name, DN.read_text(encoding="utf-8"))
@@ -104,7 +99,7 @@ class NothingStillSaysOnlyTestReadsTheMarkerTest(unittest.TestCase):
 class TheChangelogSaysRegressionAndTheGateReadTheMarkerTest(unittest.TestCase):
 
     def setUp(self):
-        self.unreleased = _unreleased(CHANGELOG.read_text(encoding="utf-8"))
+        self.unreleased = changelog_section(CHANGELOG.read_text(encoding="utf-8"))
 
     def test_the_marker_bullet_names_regression_and_the_gate_and_the_tier_verbs_ignoring_it(self):
         stack = _subsection(self.unreleased, "Stack declaration changes")

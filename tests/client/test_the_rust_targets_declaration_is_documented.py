@@ -27,6 +27,8 @@ from pathlib import Path
 
 import tomllib
 
+from tests.client.changelog_section import changelog_section
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_TOML = REPO_ROOT / "clients" / "crucible.toml"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
@@ -49,10 +51,7 @@ def _targets_section(text):
 
 
 def _unreleased_stack_section(text):
-    unreleased = text.split("## [Unreleased]", 1)
-    if len(unreleased) < 2:
-        return ""
-    body = re.split(r"(?m)^## \[", unreleased[1], maxsplit=1)[0]
+    body = changelog_section(text)
     found = re.search(r"(?ms)^### Stack declaration changes\n(.*?)(?=^### |\Z)", body)
     return found.group(1) if found else ""
 

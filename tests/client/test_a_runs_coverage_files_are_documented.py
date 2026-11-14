@@ -23,6 +23,7 @@ import re
 import unittest
 from pathlib import Path
 
+from tests.client.changelog_section import changelog_section
 from tests.client.kept_coverage_answer import FILE_KEYS, ROW_KEYS
 from tests.client.stored_run_coverage import RUN_VERB_CLIENTS
 from tests.client.test_client_fleet_envelope_census import enumerate_verbs
@@ -39,14 +40,6 @@ GATE_KEY = "coverageRuns"
 FLAG = "--files"
 #: The bullet of the product document that names a composed gate's keys.
 GATE_BULLET_HEAD = "**The gate runs every declared framework.**"
-
-
-def unreleased(text):
-    """The changelog's `[Unreleased]` body, up to the next release heading."""
-    parts = text.split("## [Unreleased]", 1)
-    if len(parts) != 2:
-        return ""
-    return re.split(r"(?m)^## \[", parts[1], maxsplit=1)[0]
 
 
 def gate_bullet(text):
@@ -83,13 +76,13 @@ def not_named(text, names):
 class TheReadersReadWhatTheyAreAskedTest(unittest.TestCase):
     """Proofs of the readers above, on text written here."""
 
-    def test_unreleased_is_the_body_under_its_heading_and_nothing_of_a_release(self):
+    def test_the_section_is_the_body_under_the_topmost_heading_and_nothing_below(self):
         text = ("# Changelog\n\n## [Unreleased]\n\n- `fileCount` here\n\n"
                 "## [0.3.0] - 2026-10-10\n\n- `moreFiles` there\n")
-        body = unreleased(text)
+        body = changelog_section(text)
         self.assertIn("`fileCount`", body)
         self.assertNotIn("moreFiles", body)
-        self.assertEqual(unreleased("# Changelog\n\n## [0.3.0]\n"), "")
+        self.assertEqual(changelog_section("# Changelog\n\n- `fileCount` here\n"), "")
 
     def test_the_gate_bullet_ends_at_the_next_bullet_of_its_indent(self):
         text = ("- outer\n"
@@ -114,7 +107,7 @@ class TheReadersReadWhatTheyAreAskedTest(unittest.TestCase):
     def test_the_documents_and_the_bullet_are_there_to_read(self):
         for path in (CHANGELOG, README, RUNBOOK, PRD):
             self.assertTrue(path.is_file(), f"{path} is a file")
-        self.assertNotEqual(unreleased(CHANGELOG.read_text(encoding="utf-8")).strip(), "",
+        self.assertNotEqual(changelog_section(CHANGELOG.read_text(encoding="utf-8")).strip(), "",
                             "the changelog has an [Unreleased] body")
         self.assertIn(GATE_BULLET_HEAD,
                       gate_bullet(PRD.read_text(encoding="utf-8")),
@@ -124,7 +117,7 @@ class TheReadersReadWhatTheyAreAskedTest(unittest.TestCase):
 class TheChangelogNamesTheBlockTheFlagAndTheGatesRowsTest(unittest.TestCase):
 
     def setUp(self):
-        self.body = unreleased(CHANGELOG.read_text(encoding="utf-8"))
+        self.body = changelog_section(CHANGELOG.read_text(encoding="utf-8"))
 
     def test_unreleased_names_every_key_of_the_block(self):
         self.assertEqual(not_named(self.body, BLOCK_KEYS), [],

@@ -22,6 +22,7 @@ import subprocess
 import sys
 import unittest
 
+from tests.client.changelog_section import changelog_section
 from tests.client.test_the_declaration_schema_is_documented import (
     CHANGELOG,
     README,
@@ -99,12 +100,6 @@ CHECK_TESTS = re.compile(r"`(?:[\w.-]+ )?check --tests`")
 COVERAGE_FLAG = re.compile(r"--coverage\b")
 
 
-def _unreleased(text):
-    """The CHANGELOG's `[Unreleased]` body, up to the next release heading."""
-    parts = text.split("## [Unreleased]", 1)
-    return re.split(r"(?m)^## \[", parts[1], maxsplit=1)[0] if len(parts) == 2 else ""
-
-
 def _go_blocks(text):
     """The paragraphs and top-level bullets of `text` that are about Go."""
     return [block for block in _blocks(text) if ABOUT_GO.search(block)]
@@ -135,7 +130,7 @@ class _NamesGosCheckAndCoverage:
 class TheChangelogNamesGosCheckAndCoverageTest(_NamesGosCheckAndCoverage, unittest.TestCase):
 
     def text(self):
-        return _unreleased(CHANGELOG.read_text(encoding="utf-8"))
+        return changelog_section(CHANGELOG.read_text(encoding="utf-8"))
 
     def test_states_go_coverage_is_statement_coverage_on_the_lines_axis(self):
         stated = any(re.search(r"(?i)\bstatement", block) and re.search(r"\blines\b", block)
@@ -276,7 +271,7 @@ class _NamesGosTiers:
 class TheChangelogNamesGosTiersTest(_NamesGosTiers, unittest.TestCase):
 
     def text(self):
-        return _unreleased(CHANGELOG.read_text(encoding="utf-8"))
+        return changelog_section(CHANGELOG.read_text(encoding="utf-8"))
 
     def test_says_check_tests_compiles_each_declared_tier(self):
         stated = any(CHECK_TESTS.search(block) and re.search(r"(?i)\btiers?\b", block)

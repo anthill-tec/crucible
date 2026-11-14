@@ -25,6 +25,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { changelogSection } from "./helpers/changelog-section.ts";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const read = (...parts: string[]): string => readFileSync(path.join(REPO_ROOT, ...parts), "utf8");
@@ -127,13 +128,11 @@ describe("RELEASING.md names the release-notes verb where it sends the operator 
 // CHANGELOG.md
 // ---------------------------------------------------------------------------
 
-/** The changelog's `[Unreleased]` section: from its heading to the next release heading. */
+/** The changelog's section being written: the body of its topmost release heading. */
 function unreleased(): string {
-  const changelog = read("CHANGELOG.md");
-  const start = changelog.indexOf("## [Unreleased]");
-  if (start === -1) throw new Error("CHANGELOG.md has no [Unreleased] section");
-  const next = changelog.indexOf("\n## [", start + 1);
-  return next === -1 ? changelog.slice(start) : changelog.slice(start, next);
+  const section = changelogSection(read("CHANGELOG.md"));
+  if (section === "") throw new Error("CHANGELOG.md has no [Unreleased] section");
+  return section;
 }
 
 /** The section's entries: each top-level list item with its nested items and continuations, whitespace-collapsed. */

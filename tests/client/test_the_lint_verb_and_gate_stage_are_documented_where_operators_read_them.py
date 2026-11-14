@@ -47,6 +47,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
+from tests.client.changelog_section import changelog_section
 from tests.client.lint_verb_harness import LintDriveMixin, lint_table
 from tests.client.test_client_fleet_envelope_census import (
     CLIENT_FILES,
@@ -145,13 +146,6 @@ def section(text, heading, level):
     end = next((i for i in range(start + 1, len(lines))
                 if re.match(rf"^#{{1,{level}}} ", lines[i])), len(lines))
     return "\n".join(lines[start:end])
-
-
-def unreleased(text):
-    parts = text.split("## [Unreleased]", 1)
-    if len(parts) < 2:
-        return ""
-    return re.split(r"(?m)^## \[", parts[1], maxsplit=1)[0]
 
 
 def bullets(text):
@@ -405,7 +399,7 @@ class TheChangelogNamesTheLintVerbAndTheRustMappingTest(unittest.TestCase):
     """The CHANGELOG's `[Unreleased]` section."""
 
     def setUp(self):
-        self.body = unreleased(CHANGELOG.read_text(encoding="utf-8"))
+        self.body = changelog_section(CHANGELOG.read_text(encoding="utf-8"))
         self.assertTrue(self.body, "the CHANGELOG has an [Unreleased] section")
 
     def test_an_entry_names_the_lint_verb_in_every_client(self):

@@ -14,6 +14,7 @@ import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { changelogSection } from "./helpers/changelog-section.ts";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PRD = readFileSync(path.join(REPO_ROOT, "docs", "research", "PRD-crucible-v2.md"), "utf8");
@@ -121,7 +122,7 @@ describe("the RUNBOOK says lint records count toward retention", () => {
 
 describe("the CHANGELOG records lint records", () => {
   test("its Unreleased section has an entry naming lint records", () => {
-    const unreleased = section(CHANGELOG, /^## \[Unreleased\]/);
+    const unreleased = flat(changelogSection(CHANGELOG));
     expect(unreleased, "the CHANGELOG has an Unreleased section").toBeDefined();
     expect(/\blint records?\b/i.test(unreleased ?? ""), "an unreleased entry names lint records").toBe(true);
   });
