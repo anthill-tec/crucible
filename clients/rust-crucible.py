@@ -1538,21 +1538,22 @@ def cmd_clippy(args):
           f"errors={err_count} warnings={warn_count}", file=sys.stderr)
     ok = result.returncode == 0
     warnings = list(preflight_warnings)
-    rc = result.returncode
+    # A cargo killed by a signal exits, posts and reports `128 + <signal>`.
+    rc = _axi().lint_exit_code(result.returncode)
     if args.agent:
         ingest_rc = _ingest_rustc_stderr(
             project_dir, args.agent, result.stderr, kind="clippy", cycle_id=cycle,
-            runner_exit=_axi().lint_exit_code(result.returncode))
+            runner_exit=rc)
         if ingest_rc != 0:
             warnings.append(_axi().ingest_failed_warning("clippy", _base_url()))
     # §S1 — the lint WARNING count is `lints`, never `warnings`: `emit_axi`
     # unconditionally overwrites `axi["warnings"]` with the STRUCTURED warnings
     # list, so a result field of that name would be clobbered by it.
     _emit_axi("clippy", ok,
-              {"exit": result.returncode, "errors": err_count, "lints": warn_count,
+              {"exit": rc, "errors": err_count, "lints": warn_count,
                "help": _clippy_help(ok, err_count, warn_count, args.crate)},
               _axi_context(project_dir, agent_id=args.agent), warnings,
-              f"clippy: ok={ok} exit={result.returncode} "
+              f"clippy: ok={ok} exit={rc} "
               f"errors={err_count} warnings={warn_count}")
     return rc
 
@@ -1607,16 +1608,16 @@ def _clippy_workspace_gate(project_dir, agent, cycle_id=None):
     print(f"[crucible:clippy-gate] cargo clippy exit={result.returncode} "
           f"errors={err_count} warnings={warn_count}", file=sys.stderr)
     warnings = []
+    # A cargo killed by a signal is `128 + <signal>` in the post and the exit.
+    exit_code = _axi().lint_exit_code(result.returncode)
     if agent and _ingest_rustc_stderr(project_dir, agent, result.stderr, kind="clippy",
-                                      cycle_id=cycle_id,
-                                      runner_exit=_axi().lint_exit_code(
-                                          result.returncode)) != 0:
+                                      cycle_id=cycle_id, runner_exit=exit_code) != 0:
         warnings.append(_axi().ingest_failed_warning("workspace clippy", _base_url()))
     if result.returncode != 0:
         tail = "\n".join(result.stderr.strip().splitlines()[-25:])
         print(f"[crucible:clippy-gate] ⛔ ABORT — clippy -D warnings failed:\n{tail}",
               file=sys.stderr)
-    return {"exit": result.returncode, "errors": err_count, "lints": warn_count,
+    return {"exit": exit_code, "errors": err_count, "lints": warn_count,
             "warnings": warnings}
 
 
