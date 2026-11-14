@@ -1,6 +1,6 @@
 # CR-CRU-257 — the doc tests read the changelog section being written
 
-**Status:** PENDING · filed 2026-11-14 (release fix: found by the 0.4.0 release's own doc checks; user ruling: a
+**Status:** COMPLETED — merged 2026-11-14 (on release/0.4.0) · filed 2026-11-14 (release fix: found by the 0.4.0 release's own doc checks; user ruling: a
 release-fix CR, committed on `release/0.4.0`)
 **Type:** fix
 **Points:** 2
@@ -52,16 +52,16 @@ The modules:
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the reader.** Each helper, given a changelog whose topmost section is `## [Unreleased]`, answers that
+- [x] **AC1 — the reader.** Each helper, given a changelog whose topmost section is `## [Unreleased]`, answers that
   section; given one whose topmost section is `## [0.4.0] - 2026-11-14` (no `[Unreleased]`), answers that section;
   each ends at the next `## [` heading or the link block. Proved on small inline changelogs.
-- [ ] **AC2 — every listed module reads through it.** No listed module names `[Unreleased]` in a lookup; each reads
+- [x] **AC2 — every listed module reads through it.** No listed module names `[Unreleased]` in a lookup; each reads
   the section through its language's helper.
-- [ ] **AC3 — green on the release branch.** On `release/0.4.0` every listed module passes.
-- [ ] **AC5 — green across the next release** (amended at VERIFY 953). On a changelog with a new `## [Unreleased]`
+- [x] **AC3 — green on the release branch.** On `release/0.4.0` every listed module passes.
+- [x] **AC5 — green across the next release** (amended at VERIFY 953). On a changelog with a new `## [Unreleased]`
   written above `[0.4.0]` (holding no 0.4.0 entry), every listed module still passes against the real entries
   below it. Proved on an inline changelog built from the real one with such a section prepended.
-- [ ] **AC4 — nothing else moves.** No file outside `tests/` changes; the doc suites (`tests/docs-*`, the tripwire,
+- [x] **AC4 — nothing else moves.** No file outside `tests/` changes; the doc suites (`tests/docs-*`, the tripwire,
   the citations test) pass.
 
 ## Non-goals
