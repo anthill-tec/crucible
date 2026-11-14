@@ -1615,7 +1615,8 @@ def _check_gate(args, project_dir):
 
 def cmd_pre_merge_gate(args):
     """ORCHESTRATOR pre-merge gate — the ONLY path that measures coverage. Steps:
-    fail-fast `check` (py_compile) → full `regression --coverage`."""
+    check → lint → regression: fail-fast `check` (py_compile), the fail-fast
+    lint stage, then the full `regression --coverage`."""
     # A gate scoped to named suites is refused before anything else: this
     # surface enumerates no declaration, so every `--suites` is.
     _axi().refuse_unrunnable_scoped_gate(
@@ -1663,9 +1664,11 @@ def cmd_pre_merge_gate(args):
                       f"pre-merge-gate: ok=False exit={state['exit']} — "
                       f"aborted at the py_compile check step")
             return state["exit"] or 1
-    # The lint stage follows check: a failing linter stops the gate here.
+    # The lint stage follows check: a failing linter stops the gate here, its
+    # envelope keeping check's warnings.
     stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
-                                     agent_id=args.agent, verb="pre-merge-gate")
+                                     agent_id=args.agent, verb="pre-merge-gate",
+                                     carried_warnings=check_warnings)
     if stopped is not None:
         return stopped
     reg_args = argparse.Namespace(

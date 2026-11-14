@@ -1540,9 +1540,9 @@ def cmd_clippy(args):
     warnings = list(preflight_warnings)
     rc = result.returncode
     if args.agent:
-        ingest_rc = _ingest_rustc_stderr(project_dir, args.agent, result.stderr,
-                                         kind="clippy", cycle_id=cycle,
-                                         runner_exit=result.returncode)
+        ingest_rc = _ingest_rustc_stderr(
+            project_dir, args.agent, result.stderr, kind="clippy", cycle_id=cycle,
+            runner_exit=_axi().lint_exit_code(result.returncode))
         if ingest_rc != 0:
             warnings.append(_axi().ingest_failed_warning("clippy", _base_url()))
     # §S1 — the lint WARNING count is `lints`, never `warnings`: `emit_axi`
@@ -1609,7 +1609,8 @@ def _clippy_workspace_gate(project_dir, agent, cycle_id=None):
     warnings = []
     if agent and _ingest_rustc_stderr(project_dir, agent, result.stderr, kind="clippy",
                                       cycle_id=cycle_id,
-                                      runner_exit=result.returncode) != 0:
+                                      runner_exit=_axi().lint_exit_code(
+                                          result.returncode)) != 0:
         warnings.append(_axi().ingest_failed_warning("workspace clippy", _base_url()))
     if result.returncode != 0:
         tail = "\n".join(result.stderr.strip().splitlines()[-25:])
