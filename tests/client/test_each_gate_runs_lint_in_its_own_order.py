@@ -588,8 +588,10 @@ class RustGateRunsLintFirstTest(_EveryGateLintCases, unittest.TestCase):
         return ("--min-free-g", "0", "--keep-target")
 
     def is_test(self, call):
-        return call["tool"] == "cargo" and ("nextest" in call["argv"]
-                                            or "llvm-cov" in call["argv"])
+        # The nextest refusal's version read is the gate's pre-flight, not a
+        # test stage.
+        return (call["tool"] == "cargo" and call["argv"][:2] != ["nextest", "--version"]
+                and ("nextest" in call["argv"] or "llvm-cov" in call["argv"]))
 
     def is_clippy(self, call):
         return call["tool"] == "cargo" and _first_word(call) == "clippy"
@@ -606,8 +608,10 @@ class RustGateMapsItsClippyStepToLintTest(_GateDrive, unittest.TestCase):
         return ("--min-free-g", "0", "--keep-target")
 
     def is_test(self, call):
-        return call["tool"] == "cargo" and ("nextest" in call["argv"]
-                                            or "llvm-cov" in call["argv"])
+        # The nextest refusal's version read is the gate's pre-flight, not a
+        # test stage.
+        return (call["tool"] == "cargo" and call["argv"][:2] != ["nextest", "--version"]
+                and ("nextest" in call["argv"] or "llvm-cov" in call["argv"]))
 
     def clippy_calls(self):
         return [c for c in self.calls("cargo") if _first_word(c) == "clippy"]
