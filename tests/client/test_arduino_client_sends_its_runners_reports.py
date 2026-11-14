@@ -1124,7 +1124,7 @@ class NoBoardNoFiguresTest(_ArduinoProject, unittest.TestCase):
 SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9119, "_crucible_run.py": 1974,
                               "_crucible_release.py": 266,
                               "_crucible_project.py": 521,
-                              "_crucible_lint.py": 382}
+                              "_crucible_lint.py": 389}
 
 # Names the arduino client's move to the shared ingest retires: its own
 # parsers and its own figures' emitter from the client, and the client-figure

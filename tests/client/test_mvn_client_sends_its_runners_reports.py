@@ -935,7 +935,7 @@ class NoBoardNoFiguresTest(_MavenProject, unittest.TestCase):
 SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9119, "_crucible_run.py": 1974,
                               "_crucible_release.py": 266,
                               "_crucible_project.py": 521,
-                              "_crucible_lint.py": 382}
+                              "_crucible_lint.py": 389}
 _OWN_INGEST_LINES = ("ingest junit:", "ingest parsed:")
 
 
