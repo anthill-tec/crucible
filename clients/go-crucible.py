@@ -707,7 +707,12 @@ def cmd_pre_merge_gate(args):
     if isinstance(found, int):
         return found
     project_dir, agent, modules = found
-    # The lint stage comes first: a failing linter stops the gate here.
+    # The board's codec health is read before the lint stage, as the rust gate
+    # reads it: a gate the board cannot file runs no linter and posts nothing.
+    refused = _codec_refusal(verb, args, project_dir, agent, _get("/api/v2/health"))
+    if refused is not None:
+        return refused
+    # The lint stage comes next: a failing linter stops the gate here.
     stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
                                      agent_id=agent, verb=verb,
                                      default=_go_vet_default(modules))
@@ -797,13 +802,9 @@ def _gated_go_run(verb, args, project_dir, agent, modules, plan=None,
     holds, is then checked for a test it cannot run alone, before any run
     opens. `tier` is the tier a run without a plan is filed under."""
     health = _get("/api/v2/health")
-    coverage_codec = GO_COVERAGE_CODEC if getattr(args, "coverage", False) else None
-    refused = _axi()._ingest_health_refusal(health, GO_TEST_CODEC, coverage_codec)
-    if refused:
-        codecs = " and ".join(f"`{name}`" for name in (GO_TEST_CODEC, coverage_codec)
-                              if name)
-        return _refuse(verb, project_dir, agent, refused,
-                       [f"point the project at a board that decodes {codecs}"])
+    refused = _codec_refusal(verb, args, project_dir, agent, health)
+    if refused is not None:
+        return refused
     if clashing is None and plan is not None and plan.clashes:
         clashing = plan
     if clashing is not None:
@@ -814,6 +815,20 @@ def _gated_go_run(verb, args, project_dir, agent, modules, plan=None,
                           close_fn=_close_gate_identity) as identity:
         return _go_test_run(verb, args, project_dir, agent, modules, health,
                             plan, tier, identity)
+
+
+def _codec_refusal(verb, args, project_dir, agent, health):
+    """The exit of a run refused because the board whose health is `health`
+    cannot decode `go test -json` (or, with --coverage, the go coverage
+    profile), after its one refusal envelope; else None."""
+    coverage_codec = GO_COVERAGE_CODEC if getattr(args, "coverage", False) else None
+    refused = _axi()._ingest_health_refusal(health, GO_TEST_CODEC, coverage_codec)
+    if not refused:
+        return None
+    codecs = " and ".join(f"`{name}`" for name in (GO_TEST_CODEC, coverage_codec)
+                          if name)
+    return _refuse(verb, project_dir, agent, refused,
+                   [f"point the project at a board that decodes {codecs}"])
 
 
 def _open_gate_identity(project_dir, agent_id, cycle_id, message):
