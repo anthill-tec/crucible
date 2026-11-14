@@ -904,8 +904,14 @@ class GoStatesItsStackOnEveryIngestTest(_ClientIngestCase):
                          f"go {verb}: the run is closed once from its go-test "
                          f"stream, naming the go stack; {where}")
         self.assert_ingest_states_the_stack(recorder, RUNS, START_ACCEPTED)
+        # The gate's lint stage files its one lint run on the compile route;
+        # every other verb files no report.
+        lint_posts = ([("go vet", "go")] if verb == "pre-merge-gate" else [])
+        self.assertEqual([(body.get("lint"), body.get("stack"))
+                          for body in recorder.bodies(COMPILE)], lint_posts,
+                         f"go {verb}: its lint post names the go stack; {where}")
         self.assertEqual([path for path in recorder.paths() if path in (PARSED, COMPILE)],
-                         [], f"go {verb} files no report; {where}")
+                         [COMPILE] * len(lint_posts), f"go {verb} files no report; {where}")
 
     def assert_a_refused_start_files_nothing(self, verb):
         recorder = self.drive_verb(START_REFUSED, verb)
