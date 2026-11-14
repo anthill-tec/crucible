@@ -431,7 +431,8 @@ def _scratch_fleet(root):
     clients = Path(root) / "clients"
     clients.mkdir(parents=True)
     for name in ("_crucible_axi.py", "_crucible_run.py", "_crucible_release.py",
-                 "_crucible_project.py", "toon.py", CONFIG_NAME):
+                 "_crucible_project.py", "_crucible_lint.py", "toon.py",
+                 CONFIG_NAME):
         shutil.copyfile(CLIENTS_DIR / name, clients / name)
     scripts = {}
     for client, script_path in CLIENT_FILES.items():

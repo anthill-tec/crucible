@@ -428,8 +428,46 @@ registry** translating each tool's native output into one **canonical RunSchema*
 
 #### 4.5.1 Lint records
 
-`lint` is a client verb. The gate runs it after `check`, fail-fast, and each project declares its linter in its
-client config. A lint run reaches the board on the compile route, and its findings are marked compile records:
+`lint` is a client verb, in every client. The gate runs it after `check` where a gate has one, fail-fast, and a
+project declares its linter in a `[lint]` table of its `crucible.toml`:
+
+```toml
+[lint]
+command = ["ruff", "check", "--output-format", "concise", "."]
+format = "ruff"
+```
+
+- `command` is a non-empty list of non-empty strings. It runs in the project directory (bun: its package
+  directory). A first word holding no `/` is looked up on PATH; one holding a `/` resolves against that directory.
+  A command that is not found is refused, naming it, and nothing is posted.
+- `format` is optional: the board's decoder for the output. Without it the client posts none, and the board
+  detects the format.
+- `name` is optional, a non-empty string. The marker posted as `lint` is `name`, else `format`, else the basename
+  of the command's first word.
+- A malformed table is refused, naming its file, before any linter starts.
+
+The table resolves as `[gate]` does: the project's own file first, then the install's, the first file that parses
+winning. A project with no file of its own inherits an install-wide `[lint]`, whatever its stack, and it replaces
+that stack's default.
+
+The defaults, when nothing is declared: rust runs `cargo clippy --workspace --all-targets --all-features -- -D
+warnings` with format `clippy` and its `CARGO_BUILD_JOBS`; go runs `go vet ./...` in each module, with format
+`go vet`, joined into one post whose exit is the first non-zero one. python, bun, maven and arduino have none. A
+declared `command` replaces the default. With nothing declared and no default, `lint` answers `ok: true` with
+`skipped: not-declared` and posts nothing, and a gate goes on with a `lint-not-declared` warning.
+
+Each client's `pre-merge-gate` runs lint in its own order. A failing lint stops the gate at `stage: lint` with
+`lint-gate-abort`; `--skip-lint` skips the stage, and `--skip-check` never does.
+
+| Client | Gate order |
+|---|---|
+| python, bun | `check` → **lint** → tests |
+| arduino | `compile` → **lint** → tests |
+| rust | **lint** (formerly its clippy step) → regression → coverage |
+| go | **lint** → `gate_regression` |
+| maven | **lint** → docker-up → … (a lint failure starts no container) |
+
+A lint run reaches the board on the compile route, and its findings are marked compile records:
 the event's `kind` stays `compile` and its payload carries `lint: "<tool>"`, the linter's name. There is no new
 event kind, route or column. `check` never lints, and a compile record never carries the marker.
 

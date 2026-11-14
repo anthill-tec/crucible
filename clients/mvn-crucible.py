@@ -1910,6 +1910,11 @@ def cmd_pre_merge_gate(args):
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
         release=getattr(args, "release", None), context=_run_context())
+    # The lint stage comes first: a failing linter starts no container.
+    stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
+                                     agent_id=args.agent, verb="pre-merge-gate")
+    if stopped is not None:
+        return stopped
     up_args = argparse.Namespace(
         project_dir=args.project_dir, compose_file=args.compose_file,
         no_wait=True, services=None, all_services=False, maven_dir=args.maven_dir)
@@ -2113,6 +2118,12 @@ def cmd_project_meta(args):
     --agent) or, with --set/--unset, a write (PATCH …/metadata, --agent
     required). Delegates to the shared implementation."""
     return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
+
+def cmd_lint(args):
+    """Run the project's declared linter in the project dir and, with
+    --agent, file it as a lint record. Delegates to the shared lint runner."""
+    return _axi().cmd_lint(args, _resolve_project_dir(args.project_dir), _ops(),
+                           stack=_STACK)
 
 def cmd_project_create(args):
     """Create this project on the board, or find it, by its token. The root
@@ -2638,7 +2649,14 @@ def main():
     _add_project_args(dd)
     dd.set_defaults(func=cmd_docker_down)
 
-    pmg = sub.add_parser("pre-merge-gate", help="ORCHESTRATOR: docker-up → regression → docker-down.")
+    pmg = sub.add_parser(
+        "pre-merge-gate",
+        help="ORCHESTRATOR: fail-fast lint → docker-up → regression → docker-down.",
+        description="The gate's stages, in order: fail-fast lint → docker-up → regression → "
+                    "docker-down. The lint stage runs the project's [lint] table (mvn "
+                    "checkstyle:check, say); with none it is skipped with a lint-not-declared "
+                    "warning, and a failing lint stops the gate before docker-up, so it starts "
+                    "no container. --skip-lint skips the lint stage.")
     pmg.add_argument("--agent", required=True,
                      help="Agent id to ingest under — REQUIRED. A free-form identifier that "
                           "must already be registered (`register --agent <id> --role <role>`); "
@@ -2653,6 +2671,7 @@ def main():
                      help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE). "
                           "The gate always measures coverage, so it always applies here; "
                           "on regression it applies only with --coverage.")
+    _axi().add_skip_lint_arg(pmg)
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)
@@ -2678,6 +2697,7 @@ def main():
     _add_mvn_flags(ck)
     _add_project_args(ck)
     ck.set_defaults(func=cmd_check)
+    _axi().add_lint_verb(sub, cmd_lint, add_args=(_add_project_args,))
 
     pf = sub.add_parser("plan-file",
                         help="File a cycle plan; prints the ASSIGNED numeric cycle ids. "

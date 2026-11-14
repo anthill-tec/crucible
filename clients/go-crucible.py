@@ -707,6 +707,17 @@ def cmd_pre_merge_gate(args):
     if isinstance(found, int):
         return found
     project_dir, agent, modules = found
+    # The board's codec health is read before the lint stage, as the rust gate
+    # reads it: a gate the board cannot file runs no linter and posts nothing.
+    refused = _codec_refusal(verb, args, project_dir, agent, _get("/api/v2/health"))
+    if refused is not None:
+        return refused
+    # The lint stage comes next: a failing linter stops the gate here.
+    stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
+                                     agent_id=agent, verb=verb,
+                                     default=_go_vet_default(modules))
+    if stopped is not None:
+        return stopped
 
     def whole_suite():
         return _gated_go_run(verb, args, project_dir, agent, modules,
@@ -791,13 +802,9 @@ def _gated_go_run(verb, args, project_dir, agent, modules, plan=None,
     holds, is then checked for a test it cannot run alone, before any run
     opens. `tier` is the tier a run without a plan is filed under."""
     health = _get("/api/v2/health")
-    coverage_codec = GO_COVERAGE_CODEC if getattr(args, "coverage", False) else None
-    refused = _axi()._ingest_health_refusal(health, GO_TEST_CODEC, coverage_codec)
-    if refused:
-        codecs = " and ".join(f"`{name}`" for name in (GO_TEST_CODEC, coverage_codec)
-                              if name)
-        return _refuse(verb, project_dir, agent, refused,
-                       [f"point the project at a board that decodes {codecs}"])
+    refused = _codec_refusal(verb, args, project_dir, agent, health)
+    if refused is not None:
+        return refused
     if clashing is None and plan is not None and plan.clashes:
         clashing = plan
     if clashing is not None:
@@ -808,6 +815,20 @@ def _gated_go_run(verb, args, project_dir, agent, modules, plan=None,
                           close_fn=_close_gate_identity) as identity:
         return _go_test_run(verb, args, project_dir, agent, modules, health,
                             plan, tier, identity)
+
+
+def _codec_refusal(verb, args, project_dir, agent, health):
+    """The exit of a run refused because the board whose health is `health`
+    cannot decode `go test -json` (or, with --coverage, the go coverage
+    profile), after its one refusal envelope; else None."""
+    coverage_codec = GO_COVERAGE_CODEC if getattr(args, "coverage", False) else None
+    refused = _axi()._ingest_health_refusal(health, GO_TEST_CODEC, coverage_codec)
+    if not refused:
+        return None
+    codecs = " and ".join(f"`{name}`" for name in (GO_TEST_CODEC, coverage_codec)
+                          if name)
+    return _refuse(verb, project_dir, agent, refused,
+                   [f"point the project at a board that decodes {codecs}"])
 
 
 def _open_gate_identity(project_dir, agent_id, cycle_id, message):
@@ -1431,6 +1452,20 @@ def cmd_project_meta(args):
     return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
 
 
+def cmd_lint(args):
+    """Run the project's declared linter, else `go vet ./...` in each module
+    under the project dir, and, with --agent, file it as one lint record.
+    Delegates to the shared lint runner."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    return _axi().cmd_lint(args, project_dir, _ops(), stack=_STACK,
+                           default=_go_vet_default(_discover_modules(project_dir)))
+
+
+def _go_vet_default(modules):
+    """The go default linter: `go vet ./...` in each of `modules`, in order."""
+    return _axi().lint_default(("go", "vet", "./..."), "go vet", run_dirs=modules)
+
+
 def cmd_project_create(args):
     """Create this project on the board, or find it, by its token, under
     `--project-dir` made absolute. Delegates to the shared implementation."""
@@ -1723,12 +1758,22 @@ def _add_gate_verbs(sub):
     dir plus each declared tier as a suite of its own, its outcome the gate's
     milestone."""
     g = sub.add_parser("pre-merge-gate",
-                       help=("ORCHESTRATOR pre-merge gate: the untagged run "
+                       help=("ORCHESTRATOR pre-merge gate: fail-fast lint → "
+                             "the untagged run "
                              "over every module, filed under regression, and "
                              "each declared tier as a suite of its own, its "
                              "outcome posted as the pre-merge-gate "
-                             "milestone."))
+                             "milestone."),
+                       description=("The gate's stages, in order: fail-fast lint → "
+                                    "the untagged run over every module, filed under "
+                                    "regression, and each declared tier as a suite of "
+                                    "its own. The lint stage runs the project's [lint] "
+                                    "table, else go's default, `go vet ./...` in each "
+                                    "module, joined into one lint record; a failing "
+                                    "lint stops the gate before the tests. --skip-lint "
+                                    "skips the lint stage."))
     _add_run_args(g)
+    _axi().add_skip_lint_arg(g)
     _add_gate_cycle_arg(g)
     _axi().add_run_release_arg(g)
     _axi().add_gate_suites_arg(g)
@@ -1943,6 +1988,8 @@ def _add_plan_verbs(sub):
                           "(--set/--unset).")
     _add_project_dir_arg(pmv)
     pmv.set_defaults(func=cmd_project_meta)
+
+    _axi().add_lint_verb(sub, cmd_lint, add_args=(_add_project_dir_arg,))
 
     pcv = sub.add_parser("project-create",
                          help="Create this project on the board, or find it, by its "

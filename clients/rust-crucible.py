@@ -121,6 +121,12 @@ _STACK = "rust"
 # before adopting. setdefault → override via CARGO_BUILD_JOBS env for a one-off.
 WORKSPACE_BUILD_JOBS = "10"
 
+# The workspace clippy the gate's lint step runs, and `lint`'s default: its
+# format and its lint marker are both `clippy`.
+_WORKSPACE_CLIPPY_CMD = ("cargo", "clippy", "--workspace", "--all-targets",
+                         "--all-features", "--", "-D", "warnings")
+_CLIPPY_LINT = "clippy"
+
 # A gate lock older than this is treated as ABANDONED and reclaimed regardless of the
 # holder pid — the portable backstop for an uncatchable SIGKILL/oomd whose pid was
 # later recycled (see _acquire_gate_lock). No legit gate run approaches 2h.
@@ -435,15 +441,6 @@ def _docker_up_failed_warning(verb):
         "code": "docker-up-failed",
         "detail": (f"{verb} aborted: the compose stack never came up, so no "
                    f"tests were run and nothing was ingested"),
-    }
-
-
-def _clippy_gate_abort_warning():
-    return {
-        "code": "clippy-gate-abort",
-        "detail": ("the pre-merge gate stopped at its fail-fast clippy "
-                   "-D warnings step — the coverage regression never ran, so "
-                   "this gate says NOTHING about the test suite"),
     }
 
 
@@ -1316,10 +1313,11 @@ def _file_reports(project_dir, agent_id, report_paths, *, raw=None,
 
 
 def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check", run_id=None,
-                         release=None, cycle_id=None):
+                         release=None, cycle_id=None, runner_exit=None):
     """Helper: ingest rustc / clippy stderr to /api/v2/runs/compile. `run_id` is
     the OPEN run a test verb's compile fallback closes; `cycle_id` a `--cycle`
-    the result is filed under."""
+    the result is filed under. A `clippy` kind is a lint record: it carries
+    the `clippy` format, the lint marker and clippy's exit (`runner_exit`)."""
     err_count = stderr_text.count("error[E") + stderr_text.count("error: ")
     warn_count = stderr_text.count("warning:")
     payload = {
@@ -1328,6 +1326,9 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check", run_i
         "errors": stderr_text,
         "agentId": agent_id,
     }
+    if kind == _CLIPPY_LINT:
+        payload.update({"format": _CLIPPY_LINT, "lint": _CLIPPY_LINT,
+                        "runnerExit": runner_exit})
     context = _axi().cycle_context(_run_context(), cycle_id)
     if context:
         payload["context"] = context
@@ -1537,21 +1538,22 @@ def cmd_clippy(args):
           f"errors={err_count} warnings={warn_count}", file=sys.stderr)
     ok = result.returncode == 0
     warnings = list(preflight_warnings)
-    rc = result.returncode
+    # A cargo killed by a signal exits, posts and reports `128 + <signal>`.
+    rc = _axi().lint_exit_code(result.returncode)
     if args.agent:
-        ingest_rc = _ingest_rustc_stderr(project_dir, args.agent, result.stderr,
-                                         kind="clippy", cycle_id=cycle)
+        ingest_rc = _ingest_rustc_stderr(
+            project_dir, args.agent, result.stderr, kind="clippy", cycle_id=cycle,
+            runner_exit=rc)
         if ingest_rc != 0:
             warnings.append(_axi().ingest_failed_warning("clippy", _base_url()))
-        rc = ingest_rc
     # §S1 — the lint WARNING count is `lints`, never `warnings`: `emit_axi`
     # unconditionally overwrites `axi["warnings"]` with the STRUCTURED warnings
     # list, so a result field of that name would be clobbered by it.
     _emit_axi("clippy", ok,
-              {"exit": result.returncode, "errors": err_count, "lints": warn_count,
+              {"exit": rc, "errors": err_count, "lints": warn_count,
                "help": _clippy_help(ok, err_count, warn_count, args.crate)},
               _axi_context(project_dir, agent_id=args.agent), warnings,
-              f"clippy: ok={ok} exit={result.returncode} "
+              f"clippy: ok={ok} exit={rc} "
               f"errors={err_count} warnings={warn_count}")
     return rc
 
@@ -1597,7 +1599,7 @@ def _clippy_workspace_gate(project_dir, agent, cycle_id=None):
     """
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", WORKSPACE_BUILD_JOBS)  # full-workspace compile — see constant
-    cmd = ["cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"]
+    cmd = list(_WORKSPACE_CLIPPY_CMD)
     # §S3 — every human line here is interactive-only; stdout is the envelope's.
     print(f"[crucible:clippy-gate] running: {' '.join(cmd)}", file=sys.stderr)
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=project_dir, env=env)
@@ -1606,14 +1608,16 @@ def _clippy_workspace_gate(project_dir, agent, cycle_id=None):
     print(f"[crucible:clippy-gate] cargo clippy exit={result.returncode} "
           f"errors={err_count} warnings={warn_count}", file=sys.stderr)
     warnings = []
+    # A cargo killed by a signal is `128 + <signal>` in the post and the exit.
+    exit_code = _axi().lint_exit_code(result.returncode)
     if agent and _ingest_rustc_stderr(project_dir, agent, result.stderr, kind="clippy",
-                                      cycle_id=cycle_id) != 0:
+                                      cycle_id=cycle_id, runner_exit=exit_code) != 0:
         warnings.append(_axi().ingest_failed_warning("workspace clippy", _base_url()))
     if result.returncode != 0:
         tail = "\n".join(result.stderr.strip().splitlines()[-25:])
         print(f"[crucible:clippy-gate] ⛔ ABORT — clippy -D warnings failed:\n{tail}",
               file=sys.stderr)
-    return {"exit": result.returncode, "errors": err_count, "lints": warn_count,
+    return {"exit": exit_code, "errors": err_count, "lints": warn_count,
             "warnings": warnings}
 
 
@@ -2139,11 +2143,13 @@ def cmd_pre_merge_gate(args):
     — mandatory for CRs whose gap-analysis flags boot/connector/Bridge/provider
     wiring, and at pre-release. See rust-orchestration.md (Pre-merge gate / E2E gate).
 
-    Step 0 (default-on, fail-fast): a workspace `clippy --all-targets --all-features
-    -- -D warnings` lint gate runs BEFORE the coverage regression — a lint failure
-    aborts the gate without paying for the full llvm-cov build. The workspace was
-    cleaned to zero `-D warnings` by CR-NAI-305 (2026-06-05), so this is enforced by
-    default; pass `--skip-clippy` only for a deliberate bypass.
+    Step 0 (default-on, fail-fast): the shared lint stage runs BEFORE the coverage
+    regression — the project's declared `[lint]`, else the workspace `clippy
+    --all-targets --all-features -- -D warnings` — so a lint failure aborts the
+    gate without paying for the full llvm-cov build. The workspace was cleaned to
+    zero `-D warnings` by CR-NAI-305 (2026-06-05), so this is enforced by default;
+    pass `--skip-lint` (or its older name `--skip-clippy`) only for a deliberate
+    bypass.
     """
     # A gate scoped to named suites that cannot run as asked is refused before
     # anything else.
@@ -2151,40 +2157,23 @@ def cmd_pre_merge_gate(args):
         args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK, get=_get,
         project_key=lambda: _project_key(_resolve_project_dir(args.project_dir)))
     project_dir = _resolve_project_dir(args.project_dir)
-    # The gate files from its first step on (clippy files a lint result), so an
+    # The gate files from its first step on (lint files a lint result), so an
     # unattributed gate is refused before that step.
     _axi().refuse_unattributed_run(
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
         release=getattr(args, "release", None), context=_run_context())
-    # The streamed run's checks come before the clippy step: a gate that
+    # The streamed run's checks come before the lint stage: a gate that
     # cannot stream runs nothing.
     refused = _nextest_refusal(args, "pre-merge-gate", project_dir, args.profile,
                                coverage=True, gate=True)
     if refused is not None:
         return refused
-    if not getattr(args, "skip_clippy", False):
-        gate = _clippy_workspace_gate(project_dir, args.agent,
-                                      cycle_id=getattr(args, "cycle", None))
-        if gate["exit"] != 0:
-            print("[crucible] pre-merge gate FAILED at the clippy -D warnings step — "
-                  "skipped the coverage regression. Fix the lints first "
-                  "(or --skip-clippy to bypass).", file=sys.stderr)
-            # §S2 — the state reached is "aborted at step 0, the regression
-            # never ran": the next action is the lints, never the gate's own
-            # successor. A passing gate falls through to the regression
-            # envelope below, whose help[] is derived from the RUN state.
-            _emit_axi("pre-merge-gate", False,
-                      {"stage": "clippy", "exit": gate["exit"],
-                       "errors": gate["errors"], "lints": gate["lints"],
-                       "help": _clippy_help(False, gate["errors"], gate["lints"],
-                                            "the workspace")
-                               + ["re-run pre-merge-gate --agent <agentId>"]},
-                      _axi_context(project_dir, agent_id=args.agent),
-                      gate["warnings"] + [_clippy_gate_abort_warning()],
-                      f"pre-merge-gate: ok=False exit={gate['exit']} — "
-                      f"aborted at the clippy -D warnings step")
-            return gate["exit"]
+    stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
+                                     agent_id=args.agent, verb="pre-merge-gate",
+                                     default=_workspace_lint_default())
+    if stopped is not None:
+        return stopped
 
     ws_args = argparse.Namespace(
         project_dir=args.project_dir,
@@ -2435,6 +2424,19 @@ def cmd_project_meta(args):
     --agent) or, with --set/--unset, a write (PATCH …/metadata, --agent
     required). Delegates to the shared implementation."""
     return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
+
+def cmd_lint(args):
+    """Run the project's declared linter, else the workspace clippy the gate
+    runs, and, with --agent, file it as a lint record. Delegates to the
+    shared lint runner."""
+    return _axi().cmd_lint(args, _resolve_project_dir(args.project_dir), _ops(),
+                           stack=_STACK, default=_workspace_lint_default())
+
+def _workspace_lint_default():
+    """The rust default linter: the workspace clippy, with its build-job
+    cap."""
+    return _axi().lint_default(_WORKSPACE_CLIPPY_CMD, _CLIPPY_LINT,
+                               env={"CARGO_BUILD_JOBS": WORKSPACE_BUILD_JOBS})
 
 def cmd_project_create(args):
     """Create this project on the board, or find it, by its token. The root
@@ -2978,6 +2980,7 @@ def main():
     _axi().add_filing_cycle_arg(c)
     _add_project_dir_arg(c)
     c.set_defaults(func=cmd_check)
+    _axi().add_lint_verb(sub, cmd_lint, add_args=(_add_project_dir_arg,))
 
     cl = sub.add_parser(
         "clippy",
@@ -3001,7 +3004,7 @@ def main():
     wcl = sub.add_parser(
         "workspace-clippy",
         help="Workspace clippy --all-targets --all-features -- -D warnings — the "
-             "pre-merge gate's fail-fast step 1, standalone. With --agent: ingest.",
+             "pre-merge gate's default lint command, standalone. With --agent: ingest.",
     )
     wcl.add_argument("--agent", help="If set, ingest stderr as compile errors")
     _axi().add_filing_cycle_arg(wcl)
@@ -3133,10 +3136,17 @@ def main():
 
     pmg = sub.add_parser(
         "pre-merge-gate",
-        help="ORCHESTRATOR pre-merge (docker-FREE): fail-fast clippy --workspace --all-targets "
-             "--all-features -- -D warnings (default-on; --skip-clippy to bypass) → workspace-regression "
+        help="ORCHESTRATOR pre-merge (docker-FREE): fail-fast lint (by default cargo clippy "
+             "--workspace --all-targets --all-features -- -D warnings; --skip-lint to bypass) → "
+             "workspace-regression "
              "--all-features -P ci (excludes the docker-infra tier, keeps in-process full-boot e2e) + ingest. "
              "Docker-infra tests run via docker-e2e-gate.",
+        description="The gate's stages, in order: fail-fast lint (formerly the gate's clippy "
+                    "stage) → workspace-regression -P ci → coverage. The lint stage runs the "
+                    "project's [lint] table, else rust's default, cargo clippy --workspace "
+                    "--all-targets --all-features -- -D warnings with CARGO_BUILD_JOBS; a "
+                    "failing lint stops the gate before the tests. --skip-lint skips the lint "
+                    "stage, and --skip-clippy is an alias of --skip-lint.",
     )
     pmg.add_argument("--agent", required=True, help="Agent id (typically vidushi)")
     pmg.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")
@@ -3157,13 +3167,9 @@ def main():
     # CR-NAI-305 (2026-06-05) on the workspace this client was written
     # against. That is lineage for a maintainer; it moved out of the printed
     # help (CR-CRU-097 §S2/AC2) because a help line naming another project's
-    # backlog teaches every user of this client the wrong thing.
-    pmg.add_argument(
-        "--skip-clippy", action="store_true",
-        help="Bypass the fail-fast clippy gate. By DEFAULT the gate runs `clippy --workspace "
-             "--all-targets --all-features -- -D warnings` BEFORE the coverage regression and "
-             "aborts on any lint. Pass this only for a deliberate bypass.",
-    )
+    # backlog teaches every user of this client the wrong thing. The gate's
+    # clippy step is its lint stage, so its old flag names it too.
+    _axi().add_skip_lint_arg(pmg, "--skip-clippy")
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)

@@ -1913,6 +1913,12 @@ def cmd_pre_merge_gate(args):
                       f"pre-merge-gate: ok=False exit={state['exit']} — "
                       f"aborted at the tsc check step")
             return 1
+    # The lint stage follows check, in the package dir check runs in.
+    stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
+                                     agent_id=args.agent, verb="pre-merge-gate",
+                                     run_dir=package_dir)
+    if stopped is not None:
+        return stopped
     # CR-CRU-112 §S1/§S2 — the gate's scope is this stack's whole suite PLUS
     # every declared suite another stack owns, each run by the client of the
     # stack that OWNS it. Additive, never exclusionary: the whole-suite
@@ -2209,6 +2215,14 @@ def cmd_project_meta(args):
     required). Delegates to the shared implementation."""
     return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
 
+def cmd_lint(args):
+    """Run the project's declared linter in the package dir `check` runs in
+    and, with --agent, file it as a lint record. Delegates to the shared lint
+    runner."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    return _axi().cmd_lint(args, project_dir, _ops(), stack=_STACK,
+                           run_dir=_resolve_package_dir(args.package_dir, project_dir))
+
 def cmd_project_create(args):
     """Create this project on the board, or find it, by its token. The root
     is `--project-dir` made absolute, never resolved here. Delegates to the
@@ -2391,7 +2405,7 @@ _HELP_STEPS = {
     "test": ["cycle-done <id>", "status"],
     "regression": ["cycle-done <id>", "status"],
     "auto-ingest": ["cycle-done <id>", "status"],
-    "check": ["test --agent <agentId>"],
+    "check": ["lint --agent <agentId>", "test --agent <agentId>"],
     "cycle-add": ["cycle-activate <id>"],
     "checkpoint": ["status"],
     "stop": ["status"],
@@ -2893,16 +2907,28 @@ def main():
     _add_package_dir_arg(c)
     _add_project_dir_arg(c)
     c.set_defaults(func=cmd_check)
+    _axi().add_lint_verb(sub, cmd_lint,
+                         add_args=(_add_package_dir_arg, _add_project_dir_arg))
 
     pmg = sub.add_parser("pre-merge-gate",
-                         help="ORCHESTRATOR pre-merge: fail-fast tsc check → regression WITH "
+                         help="ORCHESTRATOR pre-merge: fail-fast tsc check → lint → "
+                              "regression WITH "
                               "coverage, measured for a `bun-test` flag whole-suite run "
                               "(regression --coverage measures it too); a marked "
                               "whole-suite run of another framework, or any other marked "
                               "run bun's coverage flags do not reach, carries a "
-                              "`coverage-not-measured` warning instead.")
+                              "`coverage-not-measured` warning instead.",
+                         description="The gate's stages, in order: fail-fast tsc check → "
+                                     "lint → regression WITH coverage. The lint stage runs "
+                                     "the project's [lint] table in the package directory, "
+                                     "where check runs; with none it is skipped with a "
+                                     "lint-not-declared warning, and a failing lint stops "
+                                     "the gate before the tests. --skip-lint skips the lint "
+                                     "stage; --skip-check skips the check stage only, never "
+                                     "lint.")
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     pmg.add_argument("--skip-check", action="store_true", help="Bypass the fail-fast tsc check")
+    _axi().add_skip_lint_arg(pmg)
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)

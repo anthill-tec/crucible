@@ -63,7 +63,10 @@ RUN_MODULE = CLIENTS / "_crucible_run.py"
 RELEASE_MODULE = CLIENTS / "_crucible_release.py"
 # A project's own verbs' module, loaded by the core the same way.
 PROJECT_MODULE = CLIENTS / "_crucible_project.py"
-SHARED_MODULES = (CORE_MODULE, RUN_MODULE, RELEASE_MODULE, PROJECT_MODULE)
+# The shared lint runner, loaded by the core the same way.
+LINT_MODULE = CLIENTS / "_crucible_lint.py"
+SHARED_MODULES = (CORE_MODULE, RUN_MODULE, RELEASE_MODULE, PROJECT_MODULE,
+                  LINT_MODULE)
 CLIENT_FILES = ("bun-crucible.py", "python-crucible.py", "mvn-crucible.py",
                 "rust-crucible.py", "arduino-crucible.py")
 

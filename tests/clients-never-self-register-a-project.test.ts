@@ -35,6 +35,7 @@ const SHARED_MODULES = [
   "_crucible_run.py",
   "_crucible_release.py",
   PROJECT_MODULE,
+  "_crucible_lint.py",
 ];
 
 function readClientSource(fileName: string): string {

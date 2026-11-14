@@ -50,7 +50,7 @@ Subcommands:
                         reports to /api/v2/runs.
   check                 python -m py_compile over given paths (default app/ + tests/);
                         ingest any errors to /api/v2/runs/compile. Syntax gate.
-  pre-merge-gate        ORCHESTRATOR gate: fail-fast check → regression --coverage.
+  pre-merge-gate        ORCHESTRATOR gate: fail-fast check → lint → regression --coverage.
   plan-file             File a cycle plan → the assigned NUMERIC cycle ids.
   plan-backfill         Backfill a plan's wave (PATCH wave-only; open OR closed).
   cycle-activate <id>   Transition a cycle to active.
@@ -1615,7 +1615,8 @@ def _check_gate(args, project_dir):
 
 def cmd_pre_merge_gate(args):
     """ORCHESTRATOR pre-merge gate — the ONLY path that measures coverage. Steps:
-    fail-fast `check` (py_compile) → full `regression --coverage`."""
+    check → lint → regression: fail-fast `check` (py_compile), the fail-fast
+    lint stage, then the full `regression --coverage`."""
     # A gate scoped to named suites is refused before anything else: this
     # surface enumerates no declaration, so every `--suites` is.
     _axi().refuse_unrunnable_scoped_gate(
@@ -1663,6 +1664,13 @@ def cmd_pre_merge_gate(args):
                       f"pre-merge-gate: ok=False exit={state['exit']} — "
                       f"aborted at the py_compile check step")
             return state["exit"] or 1
+    # The lint stage follows check: a failing linter stops the gate here, its
+    # envelope keeping check's warnings.
+    stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
+                                     agent_id=args.agent, verb="pre-merge-gate",
+                                     carried_warnings=check_warnings)
+    if stopped is not None:
+        return stopped
     reg_args = argparse.Namespace(
         agent=args.agent, coverage=True, cov_source=args.cov_source,
         start_dir=args.start_dir, pattern=args.pattern, reports=args.reports,
@@ -1868,6 +1876,12 @@ def cmd_project_meta(args):
     --agent) or, with --set/--unset, a write (PATCH …/metadata, --agent
     required). Delegates to the shared implementation."""
     return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
+
+def cmd_lint(args):
+    """Run the project's declared linter in the project dir and, with
+    --agent, file it as a lint record. Delegates to the shared lint runner."""
+    return _axi().cmd_lint(args, _resolve_project_dir(args.project_dir), _ops(),
+                           stack=_STACK)
 
 def cmd_project_create(args):
     """Create this project on the board, or find it, by its token. The root
@@ -2347,16 +2361,23 @@ def main():
     _add_python_arg(c)
     _add_project_dir_arg(c)
     c.set_defaults(func=cmd_check)
+    _axi().add_lint_verb(sub, cmd_lint, add_args=(_add_project_dir_arg,))
 
     pmg = sub.add_parser(
         "pre-merge-gate",
-        help="ORCHESTRATOR pre-merge: fail-fast py_compile check → regression WITH "
+        help="ORCHESTRATOR pre-merge: fail-fast py_compile check → lint → regression WITH "
              "coverage.py (always measured here; regression --coverage measures it too).",
+        description="The gate's stages, in order: fail-fast py_compile check → lint → "
+                    "regression WITH coverage.py. The lint stage runs the project's [lint] "
+                    "table; with none it is skipped with a lint-not-declared warning, and a "
+                    "failing lint stops the gate before the tests. --skip-lint skips the lint "
+                    "stage; --skip-check skips the check stage only, never lint.",
     )
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     pmg.add_argument("--cov-source", default=None, help=_COV_SOURCE_HELP)
     pmg.add_argument("--skip-check", action="store_true",
                      help="Bypass the fail-fast py_compile check step")
+    _axi().add_skip_lint_arg(pmg)
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)

@@ -975,7 +975,7 @@ def axi_object(verb, ok, result_fields, context, warnings):
     axi.update(result_fields)
     axi["context"] = context
     axi["warnings"] = list(warnings) + limit_disclosure_warnings()
-    return axi
+    return _LINT.carry_gate_lint(axi)
 
 
 def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None,
@@ -1718,7 +1718,7 @@ HELP_STEPS = {
     "test": ["cycle-done <id>", "status"],
     "regression": ["cycle-done <id>", "status"],
     "auto-ingest": ["cycle-done <id>", "status"],
-    "check": ["test --agent <agentId>"],
+    "check": ["lint --agent <agentId>", "test --agent <agentId>"],
     "cycle-add": ["cycle-activate <id>"],
     "cycle-skip": CYCLE_SKIP_HELP_STEPS,
     "checkpoint": ["status"],
@@ -3464,7 +3464,7 @@ def build_run_rows(events):
         row["agent"] = event.get("agentId")
         row["cycleId"] = event.get("cycleId")
         row["release"] = event.get("release")
-        rows.append(row)
+        rows.append(_LINT.lint_run_row(row, event))
     return rows
 
 
@@ -3555,7 +3555,7 @@ def _run_brief(event):
     lines = ((event.get("coverage") or {}).get("lines") or {}).get("percent")
     if lines is not None:
         brief["coverageLines"] = lines
-    return brief
+    return _LINT.lint_brief(brief, event)
 
 
 def _run_suite_rows(event):
@@ -3668,8 +3668,7 @@ def cmd_run(args, project_dir, ops):
                   "diagnostics": truncate_rows(
                       diagnostics, full=bool(getattr(args, "full", False))),
                   "totalCount": len(diagnostics)}
-        legacy = (f"run: ok=True {event_id} compile errors={brief.get('errors')} "
-                  f"warnings={brief.get('warnings')}")
+        legacy = _LINT.compile_run_line(event_id, brief)
     emit(RUN_VERB, True, {**fields, "help": ["runs --cycle <id>"]},
          ops.context(project_dir), [], legacy)
     return 0
@@ -6571,6 +6570,7 @@ def forget_ingested_run():
     _filed_runs.clear()
     _emitted_run_counts = None
     forget_gate_suite_results()
+    _LINT.forget_gate_lint()
 
 
 def forget_gate_suite_results():
@@ -7666,6 +7666,8 @@ _reexport_run_module(_RUN)
 # The release notes verb's module, loaded and re-exported the same way.
 _reexport_module(_load_sibling_module("_crucible_release.py", "_release"))
 _reexport_module(_load_sibling_module("_crucible_project.py", "_project"))
+# The shared lint runner, loaded the same way; `runs` and `run` read it.
+_reexport_module(_LINT := _load_sibling_module("_crucible_lint.py", "_lint"))
 
 
 # The gated-run bracket in flight in this process (`gated_run`): its trap, and

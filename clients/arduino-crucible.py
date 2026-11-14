@@ -1289,6 +1289,12 @@ def cmd_pre_merge_gate(args):
                       f"pre-merge-gate: ok=False exit={state['exit']} — "
                       f"aborted at the arduino-cli compile step")
             return state["exit"] or 1
+    # The lint stage follows compile: a failing linter stops the gate here.
+    stopped = _axi().gate_lint_stage(args, pd, _ops(), stack=_STACK,
+                                     agent_id=_axi().optional_agent_id(args),
+                                     verb="pre-merge-gate")
+    if stopped is not None:
+        return stopped
     reg_args = argparse.Namespace(
         agent=args.agent, project_dir=args.project_dir,
         dir=getattr(args, "dir", None), coverage=True,
@@ -1451,6 +1457,11 @@ def cmd_project_meta(args):
     --agent) or, with --set/--unset, a write (PATCH …/metadata, --agent
     required). Delegates to the shared implementation."""
     return _axi().cmd_project_meta(args, _project_dir(args), _ops())
+
+def cmd_lint(args):
+    """Run the project's declared linter in the project dir and, with
+    --agent, file it as a lint record. Delegates to the shared lint runner."""
+    return _axi().cmd_lint(args, _project_dir(args), _ops(), stack=_STACK)
 
 def cmd_project_create(args):
     """Create this project on the board, or find it, by its token. The root
@@ -1880,6 +1891,7 @@ def main():
                         help="arduino-cli compile -> /api/v2/runs/compile on failure")
     _axi().add_filing_cycle_arg(ck)
     ck.set_defaults(func=cmd_check)
+    _axi().add_lint_verb(sub, cmd_lint, add_args=(_add_project_dir_arg,))
 
     cpl = sub.add_parser("compile", parents=[common],
                          help="arduino-cli compile -> /api/v2/runs/compile on failure (§S3)")
@@ -1887,10 +1899,18 @@ def main():
     cpl.set_defaults(func=cmd_compile)
 
     pmg = sub.add_parser("pre-merge-gate", parents=[common],
-                         help="fail-fast compile -> regression --coverage")
+                         help="fail-fast compile -> lint -> regression --coverage",
+                         description="The gate's stages, in order: fail-fast arduino-cli "
+                                     "compile -> lint -> regression --coverage over the native "
+                                     "host tests. The lint stage runs the project's [lint] "
+                                     "table (clang-tidy, say); with none it is skipped with a "
+                                     "lint-not-declared warning, and a failing lint stops the "
+                                     "gate before the tests. --skip-lint skips the lint stage; "
+                                     "--skip-check skips the compile stage only, never lint.")
     pmg.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     pmg.add_argument("--skip-check", action="store_true",
                      help="skip the fail-fast arduino-cli compile step")
+    _axi().add_skip_lint_arg(pmg)
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)
