@@ -1,6 +1,6 @@
 """The shipped declaration schema is written down where its readers look.
 
-  - The CHANGELOG's `[Unreleased]` "Stack declaration changes" names the schema
+  - A "Stack declaration changes" subsection of the changelog names the schema
     file `crucible-declaration.schema.json`, its installed path
     (`<target-dir>/clients/crucible-declaration.schema.json`) and its version,
     which must equal the shipped file's own `version`: one more than before
@@ -10,6 +10,9 @@
     does not know, and with no schema writes nothing it cannot check.
   - The rust part names rust's new skip of another stack's `[targets]` entry.
   - `go-test` joining the arduino and maven skip sets is named.
+  - Every release's "Stack declaration changes" is searched, each part of it
+    read within its own release's subsection, so a later release's subsection
+    never hides the one that records these.
   - README and `docs/RUNBOOK.md` name the manifest's `declaration_schema` key.
 
 Invocation:
@@ -22,7 +25,7 @@ import re
 import unittest
 from pathlib import Path
 
-from tests.client.changelog_section import changelog_section
+from tests.client.changelog_section import changelog_entries
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
@@ -59,10 +62,12 @@ OTHER_STACK_SKIP = re.compile(
     r"|\bskip\w*\b[^.]{0,120}\b(?:another|other)\s+stack)")
 
 
-def _unreleased_stack_section(text):
-    body = changelog_section(text)
-    found = re.search(r"(?ms)^### Stack declaration changes\n(.*?)(?=^### |\Z)", body)
-    return found.group(1) if found else ""
+def _stack_declaration_sections(text):
+    """Every `### Stack declaration changes` subsection of the changelog's
+    release sections, newest first, each up to the next `### ` heading: one
+    release's own."""
+    return re.findall(r"(?ms)^### Stack declaration changes\n(.*?)(?=^### |\Z)",
+                      changelog_entries(text))
 
 
 def _stack_part(section, *names):
@@ -84,6 +89,16 @@ def _schema_part(section):
     return section[start:following.start() if following else len(section)]
 
 
+def _stack_parts(sections, *names):
+    """One stack's parts, each read within its own subsection, joined."""
+    return "\n".join(part for part in (_stack_part(s, *names) for s in sections) if part)
+
+
+def _schema_parts(sections):
+    """The schema parts, each read within its own subsection, joined."""
+    return "\n".join(part for part in map(_schema_part, sections) if part)
+
+
 def _blocks(text):
     """Paragraphs and top-level bullets, each as one string."""
     return [block for block in re.split(r"\n\s*\n|\n(?=- )", text) if block.strip()]
@@ -96,12 +111,13 @@ def _shipped_version():
 class TheChangelogNamesTheDeclarationSchemaTest(unittest.TestCase):
 
     def setUp(self):
-        self.section = _unreleased_stack_section(CHANGELOG.read_text(encoding="utf-8"))
-        self.schema = _schema_part(self.section)
+        self.sections = _stack_declaration_sections(CHANGELOG.read_text(encoding="utf-8"))
+        self.section = "\n".join(self.sections)
+        self.schema = _schema_parts(self.sections)
 
     def test_the_section_names_the_schema_file(self):
         self.assertIn(f"`{SCHEMA_NAME}`", self.section,
-                      "[Unreleased] Stack declaration changes names the schema file")
+                      "the changelog's Stack declaration changes names the schema file")
 
     def test_the_section_names_the_schemas_installed_path(self):
         self.assertRegex(self.schema, INSTALLED_PATH)
@@ -128,13 +144,13 @@ class TheChangelogNamesTheDeclarationSchemaTest(unittest.TestCase):
                 self.assertRegex(self.section, pattern, clause)
 
     def test_the_rust_part_names_the_skip_of_another_stacks_entry(self):
-        rust = _stack_part(self.section, "rust")
+        rust = _stack_parts(self.sections, "rust")
         self.assertTrue(rust, "the section keeps a rust part")
         self.assertRegex(rust, OTHER_STACK_SKIP)
 
     def test_go_test_joining_the_arduino_and_maven_skip_sets_is_named(self):
-        arduino = _stack_part(self.section, "arduino")
-        maven = _stack_part(self.section, "maven", "mvn")
+        arduino = _stack_parts(self.sections, "arduino")
+        maven = _stack_parts(self.sections, "maven", "mvn")
         per_part = all("`go-test`" in part and re.search(r"(?i)skip", part)
                        for part in (arduino, maven))
         one_block = any("`go-test`" in block

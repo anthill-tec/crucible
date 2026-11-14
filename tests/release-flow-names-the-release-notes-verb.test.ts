@@ -7,8 +7,8 @@
 // the notes name it as the way to start the section:
 //  - RELEASING.md's "Write the release notes" step;
 //  - the notes line of RELEASING.md's "Release at a glance" block;
-//  - the CHANGELOG's [Unreleased] section, which names the verb, its
-//    `--format markdown` and `--date`, and what each line carries.
+//  - the changelog, in whichever release section records it, which names the
+//    verb, its `--format markdown` and `--date`, and what each line carries.
 // (The notes guard's refusal in scripts/release.sh names it too; that is
 // driven for real beside the guard's other refusals, in
 // tests/release-notes-guard.test.ts.)
@@ -25,7 +25,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { changelogSection } from "./helpers/changelog-section.ts";
+import { changelogEntries, changelogText } from "./helpers/changelog-section.ts";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const read = (...parts: string[]): string => readFileSync(path.join(REPO_ROOT, ...parts), "utf8");
@@ -128,11 +128,11 @@ describe("RELEASING.md names the release-notes verb where it sends the operator 
 // CHANGELOG.md
 // ---------------------------------------------------------------------------
 
-/** The changelog's section being written: the body of its topmost release heading. */
-function unreleased(): string {
-  const section = changelogSection(read("CHANGELOG.md"));
-  if (section === "") throw new Error("CHANGELOG.md has no [Unreleased] section");
-  return section;
+/** The changelog's entries: the bodies of every release section. */
+function recorded(): string {
+  const entries = changelogEntries(changelogText());
+  if (entries === "") throw new Error("the changelog has no entries to read");
+  return entries;
 }
 
 /** The section's entries: each top-level list item with its nested items and continuations, whitespace-collapsed. */
@@ -158,16 +158,16 @@ function missingFacts(entry: string): string[] {
 
 describe("the CHANGELOG's unreleased section says what the release-notes verb does", () => {
   test("an unreleased entry names release-notes, --format markdown and --date, and says each line carries a title and an id", () => {
-    const entries = entriesOf(unreleased()).filter((e) => VERB_NAME.test(e));
+    const entries = entriesOf(recorded()).filter((e) => VERB_NAME.test(e));
     // The entry closest to complete, so a failure lists only what it lacks.
     const best = entries
       .map((entry) => ({ entry, missing: missingFacts(entry) }))
       .sort((a, b) => a.missing.length - b.missing.length)[0];
-    expect(best?.missing ?? ["no unreleased entry names the release-notes verb"]).toEqual([]);
+    expect(best?.missing ?? ["no entry of the changelog names the release-notes verb"]).toEqual([]);
   });
 
   test("the changelog has an unreleased section with entries to read", () => {
-    expect(entriesOf(unreleased()).filter((e) => e.startsWith("- ")).length).toBeGreaterThanOrEqual(1);
+    expect(entriesOf(recorded()).filter((e) => e.startsWith("- ")).length).toBeGreaterThanOrEqual(1);
   });
 });
 

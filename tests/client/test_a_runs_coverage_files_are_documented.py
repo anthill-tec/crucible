@@ -1,8 +1,9 @@
 """The coverage a run's envelope states, `run --files` and a gate's
 `coverageRuns` are documented, and the `run` verb's help names `--files`.
 
-  * The CHANGELOG's `[Unreleased]` names every key of the `coverage` block
-    and every key of one of its file rows, `run --files`, and `coverageRuns`.
+  * The changelog names every key of the `coverage` block and every key of
+    one of its file rows, `run --files`, and `coverageRuns`, in whichever
+    release section records them.
   * `README.md` and `docs/RUNBOOK.md` each name the `coverage` block,
     `--files` and `coverageRuns`.
   * `docs/research/PRD-crucible-v2.md` names `coverageRuns` in its bullet on
@@ -23,7 +24,7 @@ import re
 import unittest
 from pathlib import Path
 
-from tests.client.changelog_section import changelog_section
+from tests.client.changelog_section import changelog_entries, changelog_section
 from tests.client.kept_coverage_answer import FILE_KEYS, ROW_KEYS
 from tests.client.stored_run_coverage import RUN_VERB_CLIENTS
 from tests.client.test_client_fleet_envelope_census import enumerate_verbs
@@ -77,12 +78,16 @@ class TheReadersReadWhatTheyAreAskedTest(unittest.TestCase):
     """Proofs of the readers above, on text written here."""
 
     def test_the_section_is_the_body_under_the_topmost_heading_and_nothing_below(self):
-        text = ("# Changelog\n\n## [Unreleased]\n\n- `fileCount` here\n\n"
+        text = ("# Changelog\n\n## [0.4.0] - 2026-11-14\n\n- `fileCount` here\n\n"
                 "## [0.3.0] - 2026-10-10\n\n- `moreFiles` there\n")
         body = changelog_section(text)
         self.assertIn("`fileCount`", body)
         self.assertNotIn("moreFiles", body)
         self.assertEqual(changelog_section("# Changelog\n\n- `fileCount` here\n"), "")
+        entries = changelog_entries(text)
+        self.assertIn("`fileCount`", entries)
+        self.assertIn("`moreFiles`", entries)
+        self.assertEqual(changelog_entries("# Changelog\n\n- `fileCount` here\n"), "")
 
     def test_the_gate_bullet_ends_at_the_next_bullet_of_its_indent(self):
         text = ("- outer\n"
@@ -107,8 +112,8 @@ class TheReadersReadWhatTheyAreAskedTest(unittest.TestCase):
     def test_the_documents_and_the_bullet_are_there_to_read(self):
         for path in (CHANGELOG, README, RUNBOOK, PRD):
             self.assertTrue(path.is_file(), f"{path} is a file")
-        self.assertNotEqual(changelog_section(CHANGELOG.read_text(encoding="utf-8")).strip(), "",
-                            "the changelog has an [Unreleased] body")
+        self.assertNotEqual(changelog_entries(CHANGELOG.read_text(encoding="utf-8")).strip(), "",
+                            "the changelog has entries to read")
         self.assertIn(GATE_BULLET_HEAD,
                       gate_bullet(PRD.read_text(encoding="utf-8")),
                       "the product document has the gate's bullet")
@@ -117,25 +122,25 @@ class TheReadersReadWhatTheyAreAskedTest(unittest.TestCase):
 class TheChangelogNamesTheBlockTheFlagAndTheGatesRowsTest(unittest.TestCase):
 
     def setUp(self):
-        self.body = changelog_section(CHANGELOG.read_text(encoding="utf-8"))
+        self.body = changelog_entries(CHANGELOG.read_text(encoding="utf-8"))
 
     def test_unreleased_names_every_key_of_the_block(self):
         self.assertEqual(not_named(self.body, BLOCK_KEYS), [],
-                         "CHANGELOG.md [Unreleased] names each key of the "
+                         "the changelog names each key of the "
                          "`coverage` block as a code span")
 
     def test_unreleased_names_every_key_of_a_file_row(self):
         self.assertEqual(not_named(self.body, ROW_KEYS), [],
-                         "CHANGELOG.md [Unreleased] names each key of a file "
+                         "the changelog names each key of a file "
                          "row as a code span")
 
     def test_unreleased_names_run_with_its_files_flag(self):
         self.assertTrue(names_run_with_the_flag(self.body),
-                        "CHANGELOG.md [Unreleased] names `run --files`")
+                        "the changelog names `run --files`")
 
     def test_unreleased_names_the_gates_coverage_runs(self):
         self.assertEqual(not_named(self.body, (GATE_KEY,)), [],
-                         "CHANGELOG.md [Unreleased] names `coverageRuns`")
+                         "the changelog names `coverageRuns`")
 
 
 class TheReadmeAndTheRunbookNameThemTest(unittest.TestCase):

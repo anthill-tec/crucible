@@ -1,7 +1,7 @@
 """The `lint` verb and the gate's lint stage are described where an operator
 reads them: every client's `--help`, the shipped `clients/crucible.toml`, the
-PRD's lint-records section (4.5.1), the RUNBOOK's Lint section, the CHANGELOG's
-`[Unreleased]` section, and the next steps an envelope names.
+PRD's lint-records section (4.5.1), the RUNBOOK's Lint section, the changelog's
+release sections, and the next steps an envelope names.
 
 What this file pins, phrase by phrase (never whole sentences, so the wording
 stays the writer's):
@@ -28,9 +28,11 @@ stays the writer's):
 - **The RUNBOOK** has a `## Lint` section naming the table, the defaults, the
   gate's stage and its `--skip-lint`, the install fallback, and the table a
   checkout of this repo adds to its own `crucible.toml`.
-- **The CHANGELOG's `[Unreleased]`** has an entry naming the `lint` verb in
-  every client, and the rust gate's mapping: `stage: "lint"`,
-  `lint-gate-abort`, and `--skip-clippy` kept as an alias of `--skip-lint`.
+- **The changelog**, in whichever release section records them, has an entry
+  naming the `lint` verb in every client (one bullet, counted within one
+  release's `### ` subsection, never across releases), and the rust gate's
+  mapping: `stage: "lint"`, `lint-gate-abort`, and `--skip-clippy` kept as an
+  alias of `--skip-lint`.
 - **Next steps.** `HELP_STEPS["check"]` names `lint` as a step, since a gate
   runs lint after check; a clean `lint` names the tests as its next step and
   a failing one names `lint` again, each as a runnable verb, as every other
@@ -47,7 +49,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from tests.client.changelog_section import changelog_section
+from tests.client.changelog_section import changelog_entries
 from tests.client.lint_verb_harness import LintDriveMixin, lint_table
 from tests.client.test_client_fleet_envelope_census import (
     CLIENT_FILES,
@@ -396,18 +398,21 @@ class TheRunbooksLintSectionTest(unittest.TestCase):
 
 
 class TheChangelogNamesTheLintVerbAndTheRustMappingTest(unittest.TestCase):
-    """The CHANGELOG's `[Unreleased]` section."""
+    """The changelog's release sections, every one of them."""
 
     def setUp(self):
-        self.body = changelog_section(CHANGELOG.read_text(encoding="utf-8"))
-        self.assertTrue(self.body, "the CHANGELOG has an [Unreleased] section")
+        self.body = changelog_entries(CHANGELOG.read_text(encoding="utf-8"))
+        self.assertTrue(self.body, "the changelog has entries to read")
 
     def test_an_entry_names_the_lint_verb_in_every_client(self):
-        found = [b for b in bullets(self.body)
-                 if "`lint`" in b and re.search(r"(?i)\bverb\b", b)
-                 and re.search(r"(?i)\b(?:every|each|all(?: six)?)\b[^.]{0,30}\bclients?\b", b)]
-        self.assertEqual(len(found), 1,
-                         "one entry names the `lint` verb in every client")
+        # Counted within each `### ` subsection, which is one release's own.
+        found = [[b for b in bullets(subsection)
+                  if "`lint`" in b and re.search(r"(?i)\bverb\b", b)
+                  and re.search(r"(?i)\b(?:every|each|all(?: six)?)\b[^.]{0,30}\bclients?\b", b)]
+                 for subsection in re.findall(r"(?ms)^### .*?(?=^### |\Z)", self.body)]
+        self.assertIn(1, [len(entries) for entries in found],
+                      "one release's subsection has one entry naming the `lint` verb "
+                      "in every client")
 
     def test_it_maps_the_rust_gates_stage_to_lint(self):
         self.assertRegex(self.body, r'stage:\s*"lint"')

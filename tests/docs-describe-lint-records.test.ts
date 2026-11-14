@@ -9,17 +9,18 @@
 //  - the PRD's status shape names `lastLint` beside `lastCompile`;
 //  - the PRD's compile route body names `lint` and `runnerExit`;
 //  - the RUNBOOK's retention section says lint records count toward retention;
-//  - the CHANGELOG's unreleased section has an entry naming lint records.
+//  - the changelog has an entry naming lint records, in whichever release
+//    section records it.
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { changelogSection } from "./helpers/changelog-section.ts";
+import { changelogEntries, changelogText } from "./helpers/changelog-section.ts";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PRD = readFileSync(path.join(REPO_ROOT, "docs", "research", "PRD-crucible-v2.md"), "utf8");
 const RUNBOOK = readFileSync(path.join(REPO_ROOT, "docs", "RUNBOOK.md"), "utf8");
-const CHANGELOG = readFileSync(path.join(REPO_ROOT, "CHANGELOG.md"), "utf8");
+const CHANGELOG = changelogText();
 
 /** Collapses every run of whitespace to one space, so a phrase may wrap. */
 function flat(text: string): string {
@@ -122,8 +123,8 @@ describe("the RUNBOOK says lint records count toward retention", () => {
 
 describe("the CHANGELOG records lint records", () => {
   test("its Unreleased section has an entry naming lint records", () => {
-    const unreleased = flat(changelogSection(CHANGELOG));
-    expect(unreleased, "the CHANGELOG has an Unreleased section").toBeDefined();
-    expect(/\blint records?\b/i.test(unreleased ?? ""), "an unreleased entry names lint records").toBe(true);
+    const entries = flat(changelogEntries(CHANGELOG));
+    expect(entries.trim(), "the changelog has entries to read").not.toBe("");
+    expect(/\blint records?\b/i.test(entries), "an entry of the changelog names lint records").toBe(true);
   });
 });

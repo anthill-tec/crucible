@@ -5,8 +5,10 @@ fleet's help steps say how a project is registered.
   → HTTP 400." still opens with that sentence, and names `project-create` and
   `--write-env`.
 - The client-fleet inventory's `_project_key` row names `project-create`.
-- The CHANGELOG's `[Unreleased]` `### Added` holds a bullet naming
-  `project-create`, its token, `--write-env` and `--project-dir`.
+- One release's `### Added` in the changelog holds exactly one bullet naming
+  `project-create`, and it names its token, `--write-env` and
+  `--project-dir`. Every release's `### Added` is searched, so a later
+  release's never hides the one that records the verb.
 - The README names `project-create`.
 - The shared core's `HELP_STEPS` has a `project-create` entry.
 
@@ -17,7 +19,7 @@ documents names the verb, and `HELP_STEPS` has no entry for it.
 import re
 import unittest
 
-from tests.client.changelog_section import changelog_section
+from tests.client.changelog_section import changelog_entries
 from tests.client.project_create_harness import CLIENTS_DIR, REPO_ROOT, load_module
 
 PRD = REPO_ROOT / "docs" / "research" / "PRD-crucible-v2.md"
@@ -43,13 +45,16 @@ def _dn_project_key_row():
     raise AssertionError("the inventory has no `_project_key` row")
 
 
-def _unreleased_added_bullets():
-    """The top-level bullets of the section being written → `### Added`,
-    each with its nested lines."""
-    section = changelog_section(CHANGELOG.read_text(encoding="utf-8"))
-    added = section[section.index("### Added"):]
-    following = added.find("\n### ", 1)
-    added = added if following == -1 else added[:following]
+def _added_subsections():
+    """Every `### Added` subsection of the changelog's release sections,
+    newest first, each up to the next `### ` heading: one release's own."""
+    entries = changelog_entries(CHANGELOG.read_text(encoding="utf-8"))
+    return re.findall(r"(?ms)^### Added\n.*?(?=^### |\Z)", entries)
+
+
+def _top_level_bullets(added):
+    """The top-level bullets of one `### Added`, each with its nested
+    lines."""
     return [b for b in re.split(r"\n(?=- )", added) if b.startswith("- ")]
 
 
@@ -65,10 +70,16 @@ class ProjectCreateIsDocumentedTest(unittest.TestCase):
         self.assertIn("project-create", _dn_project_key_row())
 
     def test_the_unreleased_added_section_has_a_bullet_for_the_verb(self):
-        bullets = [b for b in _unreleased_added_bullets() if "project-create" in b]
-        self.assertEqual(len(bullets), 1,
-                         f"one Added bullet names project-create; found {len(bullets)}")
-        bullet = bullets[0]
+        naming = [[b for b in _top_level_bullets(added) if "project-create" in b]
+                  for added in _added_subsections()]
+        once = [bullets[0] for bullets in naming if len(bullets) == 1]
+        self.assertTrue(once,
+                        "one release's Added in the changelog names project-create in "
+                        f"exactly one bullet; bullets naming it, Added by Added: "
+                        f"{[len(bullets) for bullets in naming]}")
+        # The oldest release recording the verb in one bullet is the one
+        # that added it.
+        bullet = once[-1]
         self.assertIn("token", bullet.lower())
         self.assertIn("--write-env", bullet)
         self.assertIn("--project-dir", bullet)

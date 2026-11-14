@@ -9,10 +9,11 @@ where its readers look.
     `crucible.targets` uses the same vocabulary, and the standard rust
     profiles `default`, `ci` and `e2e` with what each selects.
   - The rust client's help names the table and the minimum nextest, 0.9.130.
-  - The CHANGELOG's `[Unreleased]` entry carries a "Stack declaration changes"
-    section naming, for rust: the table, the rust entry, the standard
-    profiles, that undeclared profiles stream by default, the minimum nextest
-    and the retirement of `--ignore-run-fail`.
+  - A "Stack declaration changes" subsection of the changelog names, for
+    rust: the table, the rust entry, the standard profiles, that undeclared
+    profiles stream by default, the minimum nextest and the retirement of
+    `--ignore-run-fail`. Every release's subsection of that name is searched,
+    so a later one never hides the one that records it.
 
 Invocation:
     .venv/bin/python clients/python-crucible.py test \
@@ -27,7 +28,7 @@ from pathlib import Path
 
 import tomllib
 
-from tests.client.changelog_section import changelog_section
+from tests.client.changelog_section import changelog_entries
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_TOML = REPO_ROOT / "clients" / "crucible.toml"
@@ -50,10 +51,11 @@ def _targets_section(text):
     return "\n".join(lines[start:end])
 
 
-def _unreleased_stack_section(text):
-    body = changelog_section(text)
-    found = re.search(r"(?ms)^### Stack declaration changes\n(.*?)(?=^### |\Z)", body)
-    return found.group(1) if found else ""
+def _stack_declaration_sections(text):
+    """Every `### Stack declaration changes` subsection of the changelog's
+    release sections, newest first, each one release's own."""
+    return re.findall(r"(?ms)^### Stack declaration changes\n(.*?)(?=^### |\Z)",
+                      changelog_entries(text))
 
 
 def _rust_part(section):
@@ -112,11 +114,12 @@ class TheRustClientsHelpNamesTheTableTest(unittest.TestCase):
 class TheChangelogsStackDeclarationChangesNameTheRustTableTest(unittest.TestCase):
 
     def setUp(self):
-        self.section = _unreleased_stack_section(CHANGELOG.read_text(encoding="utf-8"))
-        self.rust = _rust_part(self.section)
+        self.sections = _stack_declaration_sections(CHANGELOG.read_text(encoding="utf-8"))
+        self.rust = "\n".join(part for part in map(_rust_part, self.sections) if part)
 
     def test_the_unreleased_entry_carries_the_section_with_a_rust_part(self):
-        self.assertTrue(self.section, "[Unreleased] has a Stack declaration changes section")
+        self.assertTrue(any(section.strip() for section in self.sections),
+                        "the changelog has a Stack declaration changes section")
         self.assertTrue(self.rust, "the section has a part for the rust stack")
 
     def test_the_rust_part_names_the_table_and_the_rust_entry(self):

@@ -5,23 +5,23 @@
 // passage that already speaks of a run's coverage files, and that passage
 // must say that a file inside, or outside, the run's tree is what is kept, or
 // is not:
-//  - the changelog's unreleased section;
+//  - the changelog, in whichever release section records it;
 //  - the runbook, where it says how a run's coverage files are kept;
 //  - the product document's section on the codec translation layer.
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { changelogSection } from "./helpers/changelog-section.ts";
+import { changelogEntries, changelogText } from "./helpers/changelog-section.ts";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const read = (...parts: string[]): string => readFileSync(path.join(REPO_ROOT, ...parts), "utf8");
 
-/** The changelog's section being written: the body of its topmost release heading. */
-function unreleased(): string {
-  const section = changelogSection(read("CHANGELOG.md"));
-  if (section === "") throw new Error("CHANGELOG.md has no [Unreleased] section");
-  return section;
+/** The changelog's entries: the bodies of every release section. */
+function recorded(): string {
+  const entries = changelogEntries(changelogText());
+  if (entries === "") throw new Error("the changelog has no entries to read");
+  return entries;
 }
 
 /** The product document's section on the codec translation layer: from its heading to the next heading of its level. */
@@ -58,8 +58,8 @@ function blocksOnFilesByTheTree(text: string): string[] {
 describe("the documents say a run's coverage keeps only the files inside its tree", () => {
   test("the changelog's unreleased section says a coverage file outside the run's tree is not kept", () => {
     expect(
-      blocksOnFilesByTheTree(unreleased()).length,
-      "an unreleased entry on coverage files placing a file inside or outside the run's tree",
+      blocksOnFilesByTheTree(recorded()).length,
+      "an entry of the changelog on coverage files placing a file inside or outside the run's tree",
     ).toBeGreaterThanOrEqual(1);
   });
 
@@ -80,7 +80,7 @@ describe("the documents say a run's coverage keeps only the files inside its tre
 
 describe("the passages the rule is written into are there to be read", () => {
   test("the changelog has an unreleased section that speaks of coverage files", () => {
-    expect(blocksAboutCoverageFiles(unreleased()).length).toBeGreaterThanOrEqual(1);
+    expect(blocksAboutCoverageFiles(recorded()).length).toBeGreaterThanOrEqual(1);
   });
 
   test("the runbook speaks of how a run's coverage files are kept", () => {

@@ -2,9 +2,9 @@
 // file by file, and the tests of that feature name no change request.
 //
 // Facts are pinned, never whole sentences:
-//  - the changelog's unreleased section names the read of a run's files
-//    (`?depth=coverage`) and the two keys the ingest answer gains
-//    (`coverageFileCount`, `coverageFiles`);
+//  - the changelog, in whichever release section records it, names the read
+//    of a run's files (`?depth=coverage`) and the two keys the ingest answer
+//    gains (`coverageFileCount`, `coverageFiles`);
 //  - the product document names the per-file list in its run schema table, the
 //    same read, the two keys beside what `/runs` adds to its answer, and the
 //    file table;
@@ -15,16 +15,16 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { changelogSection } from "./helpers/changelog-section.ts";
+import { changelogEntries, changelogText } from "./helpers/changelog-section.ts";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const read = (...parts: string[]): string => readFileSync(path.join(REPO_ROOT, ...parts), "utf8");
 
-/** The changelog's section being written: the body of its topmost release heading. */
-function unreleased(): string {
-  const section = changelogSection(read("CHANGELOG.md"));
-  if (section === "") throw new Error("coverage-file-table-docs: CHANGELOG.md has no [Unreleased] section");
-  return section;
+/** The changelog's entries: the bodies of every release section. */
+function recorded(): string {
+  const entries = changelogEntries(changelogText());
+  if (entries === "") throw new Error("coverage-file-table-docs: the changelog has no entries to read");
+  return entries;
 }
 
 /** A document's blocks: its text cut at blank lines and at each list item. */
@@ -42,19 +42,19 @@ function blocksAboutCoverageFiles(text: string): string[] {
 
 describe("the changelog's unreleased section states the per-file coverage", () => {
   test("it names the read of a run's coverage files", () => {
-    expect(unreleased()).toContain("?depth=coverage");
+    expect(recorded()).toContain("?depth=coverage");
   });
 
   test("it names the two keys the ingest answer gains", () => {
-    expect(unreleased()).toContain("coverageFileCount");
-    expect(unreleased()).toContain("coverageFiles");
+    expect(recorded()).toContain("coverageFileCount");
+    expect(recorded()).toContain("coverageFiles");
   });
 
   test("it says the board keeps a run's coverage file by file and shows it", () => {
-    const blocks = blocksAboutCoverageFiles(unreleased()).filter(
+    const blocks = blocksAboutCoverageFiles(recorded()).filter(
       (block) => /\bkeeps?\b|\bkept\b|\bstores?\b|\bstored\b/i.test(block) && /\bshows?\b|\bshown\b|\blists?\b|\blisted\b|\btable\b/i.test(block),
     );
-    expect(blocks.length, "an unreleased entry saying coverage files are kept and shown").toBeGreaterThanOrEqual(1);
+    expect(blocks.length, "an entry of the changelog saying coverage files are kept and shown").toBeGreaterThanOrEqual(1);
   });
 });
 

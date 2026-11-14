@@ -1,10 +1,14 @@
 """The go client is written down where its readers look.
 
-  - The CHANGELOG's `[Unreleased]` "Stack declaration changes" names the
+  - A "Stack declaration changes" subsection of the changelog names the
     declaration schema's version 2, the `go` stack and its `[go] module_dir`
     table, and states that a package's `TestMain` runs twice per run (the
     `go test -list` that counts the run's total builds and starts every test
-    binary once more).
+    binary once more). Every release's subsection of that name is searched,
+    so a later one never hides the one that records these.
+  - A check that a fact IS recorded searches every release section of the
+    changelog; the check that stale wording is ABSENT reads only the section
+    being written.
   - README names the Go client by its file, `go-crucible.py`.
   - `docs/RUNBOOK.md` names the Go client in words ("the Go client") and its
     floor, go 1.24, but never its file name: the RUNBOOK documents no
@@ -22,15 +26,15 @@ import subprocess
 import sys
 import unittest
 
-from tests.client.changelog_section import changelog_section
+from tests.client.changelog_section import changelog_entries, changelog_section
 from tests.client.test_the_declaration_schema_is_documented import (
     CHANGELOG,
     README,
     RUNBOOK,
     _blocks,
-    _schema_part,
-    _stack_part,
-    _unreleased_stack_section,
+    _schema_parts,
+    _stack_declaration_sections,
+    _stack_parts,
 )
 
 GO_CLIENT = "go-crucible.py"
@@ -42,11 +46,12 @@ GO_LIST = re.compile(r"`go test -list")
 class TheChangelogNamesTheGoStackTest(unittest.TestCase):
 
     def setUp(self):
-        self.section = _unreleased_stack_section(CHANGELOG.read_text(encoding="utf-8"))
-        self.go = _stack_part(self.section, "go", "Go")
+        self.sections = _stack_declaration_sections(CHANGELOG.read_text(encoding="utf-8"))
+        self.section = "\n".join(self.sections)
+        self.go = _stack_parts(self.sections, "go", "Go")
 
     def test_the_schema_part_states_version_two(self):
-        stated = {int(n) for n in VERSION_STATED.findall(_schema_part(self.section))}
+        stated = {int(n) for n in VERSION_STATED.findall(_schema_parts(self.sections))}
         self.assertIn(2, stated, f"the schema part states version 2; stated {sorted(stated)}")
 
     def test_the_section_keeps_a_go_part(self):
@@ -62,7 +67,7 @@ class TheChangelogNamesTheGoStackTest(unittest.TestCase):
         joined = any("`go`" in block and re.search(r"(?i)\bstack\b", block)
                      and "crucible-declaration.schema.json" in block
                      for block in _blocks(self.section))
-        self.assertTrue(joined or ("`go`" in _schema_part(self.section)),
+        self.assertTrue(joined or ("`go`" in _schema_parts(self.sections)),
                         "the schema part names the `go` stack it gains")
 
     def test_the_go_part_states_that_test_main_runs_twice_per_run(self):
@@ -130,7 +135,7 @@ class _NamesGosCheckAndCoverage:
 class TheChangelogNamesGosCheckAndCoverageTest(_NamesGosCheckAndCoverage, unittest.TestCase):
 
     def text(self):
-        return changelog_section(CHANGELOG.read_text(encoding="utf-8"))
+        return changelog_entries(CHANGELOG.read_text(encoding="utf-8"))
 
     def test_states_go_coverage_is_statement_coverage_on_the_lines_axis(self):
         stated = any(re.search(r"(?i)\bstatement", block) and re.search(r"\blines\b", block)
@@ -254,23 +259,33 @@ def _says_go_declares_no_tier(text):
 class _NamesGosTiers:
     """A document names, each in a block about Go, every fact of
     `GO_TIER_FACTS`, and nowhere says go declares no tier. A subclass states
-    `text()` and is a `TestCase`."""
+    `text()`, the text the facts are found in, and is a `TestCase`; it may
+    state `stale_text()`, the text that must not say go declares no tier,
+    which is `text()` unless it says otherwise."""
 
     def text(self):
         raise NotImplementedError
+
+    def stale_text(self):
+        return self.text()
 
     def test_names_every_fact_of_gos_build_tag_tiers(self):
         _assert_none(_missing_facts(_go_blocks(self.text())),
                      "no one block about Go names these facts")
 
     def test_nothing_says_go_declares_no_tier(self):
-        _assert_none(_says_go_declares_no_tier(self.text()),
+        _assert_none(_says_go_declares_no_tier(self.stale_text()),
                      "these say go declares no tier")
 
 
 class TheChangelogNamesGosTiersTest(_NamesGosTiers, unittest.TestCase):
+    """The facts are found in every release section of the changelog; the
+    stale wording is looked for only in the section being written."""
 
     def text(self):
+        return changelog_entries(CHANGELOG.read_text(encoding="utf-8"))
+
+    def stale_text(self):
         return changelog_section(CHANGELOG.read_text(encoding="utf-8"))
 
     def test_says_check_tests_compiles_each_declared_tier(self):

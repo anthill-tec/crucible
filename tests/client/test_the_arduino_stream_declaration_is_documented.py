@@ -14,8 +14,10 @@ where their readers look.
   - The live-progress DN no longer calls arduino's runner one Crucible owns:
     it is the project's own harness, writing `crucible-events` under the
     `CRUCIBLE_STREAM` make contract.
-  - The CHANGELOG's `[Unreleased]` "Stack declaration changes" has an arduino
+  - A "Stack declaration changes" subsection of the changelog has an arduino
     part naming the declaration and the `CRUCIBLE_STREAM` make contract.
+    Every release's subsection of that name is searched, so a later one never
+    hides the one that records it.
 
 Invocation:
     .venv/bin/python clients/python-crucible.py test \
@@ -32,7 +34,7 @@ from pathlib import Path
 
 import tomllib
 
-from tests.client.changelog_section import changelog_section
+from tests.client.changelog_section import changelog_entries
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARDUINO_CLIENT = REPO_ROOT / "clients" / "arduino-crucible.py"
@@ -64,10 +66,11 @@ def _root_description():
     return result.stdout.split("positional arguments:", 1)[0]
 
 
-def _unreleased_stack_section(text):
-    body = changelog_section(text)
-    found = re.search(r"(?ms)^### Stack declaration changes\n(.*?)(?=^### |\Z)", body)
-    return found.group(1) if found else ""
+def _stack_declaration_sections(text):
+    """Every `### Stack declaration changes` subsection of the changelog's
+    release sections, newest first, each one release's own."""
+    return re.findall(r"(?ms)^### Stack declaration changes\n(.*?)(?=^### |\Z)",
+                      changelog_entries(text))
 
 
 def _arduino_part(section):
@@ -160,11 +163,13 @@ class TheDNSaysArduinosRunnerIsTheProjectsOwnTest(unittest.TestCase):
 class TheChangelogNamesTheArduinoDeclarationTest(unittest.TestCase):
 
     def setUp(self):
-        self.arduino = _arduino_part(_unreleased_stack_section(
+        parts = map(_arduino_part, _stack_declaration_sections(
             CHANGELOG.read_text(encoding="utf-8")))
+        self.arduino = "\n".join(part for part in parts if part)
 
     def test_the_stack_declaration_changes_have_an_arduino_part(self):
-        self.assertTrue(self.arduino, "[Unreleased] Stack declaration changes: For the arduino stack")
+        self.assertTrue(self.arduino,
+                        "the changelog's Stack declaration changes: For the arduino stack")
 
     def test_the_arduino_part_names_the_declaration(self):
         self.assertRegex(self.arduino, ENTRY_KEY)

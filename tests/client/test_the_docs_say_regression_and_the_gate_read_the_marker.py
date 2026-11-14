@@ -2,11 +2,13 @@
 marker, and nothing still says that only `test` reads it.
 
 - No sentence saying only `test` reads the marker (or that the gate ignores
-  it) remains in: the CHANGELOG's `[Unreleased]` section,
+  it) remains in: the changelog section being written (its topmost one),
   `docs/research/DN-crucible-live-test-progress.md`, `clients/bun-crucible.py`,
   or the tests that pinned the old rule. `docs/changes/` is historical and is
   not read.
-- The CHANGELOG `[Unreleased]`:
+- The changelog, in whichever release section records it (every release's
+  subsection of a name is searched, and a bullet is counted within one
+  release's subsection, never across releases):
   - its marker bullet names `regression` and the gate as readers, and the
     tier verbs as ignoring it;
   - a `### Changed` bullet says a bun project's `regression` and the gate's
@@ -30,7 +32,7 @@ import re
 import unittest
 from pathlib import Path
 
-from tests.client.changelog_section import changelog_section
+from tests.client.changelog_section import changelog_entries, changelog_section
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
@@ -59,9 +61,10 @@ GATE = re.compile(r"(?i)\bgate\b|`pre-merge-gate`")
 REGRESSION = "`regression`"
 
 
-def _subsection(body, title):
-    found = re.search(rf"(?ms)^### {re.escape(title)}\n(.*?)(?=^### |\Z)", body)
-    return found.group(1) if found else ""
+def _subsections(body, title):
+    """Every `### <title>` subsection of `body`, newest first, each up to the
+    next `### ` heading: one release's own."""
+    return re.findall(rf"(?ms)^### {re.escape(title)}\n(.*?)(?=^### |\Z)", body)
 
 
 def _bullets(text):
@@ -81,7 +84,7 @@ class NothingStillSaysOnlyTestReadsTheMarkerTest(unittest.TestCase):
                          f"{name} still says only `test` reads the marker")
 
     def test_the_changelogs_unreleased_section(self):
-        self.assert_clean("CHANGELOG [Unreleased]",
+        self.assert_clean("the changelog section being written",
                           changelog_section(CHANGELOG.read_text(encoding="utf-8")))
 
     def test_the_live_test_progress_design_note(self):
@@ -99,44 +102,50 @@ class NothingStillSaysOnlyTestReadsTheMarkerTest(unittest.TestCase):
 class TheChangelogSaysRegressionAndTheGateReadTheMarkerTest(unittest.TestCase):
 
     def setUp(self):
-        self.unreleased = changelog_section(CHANGELOG.read_text(encoding="utf-8"))
+        self.entries = changelog_entries(CHANGELOG.read_text(encoding="utf-8"))
 
     def test_the_marker_bullet_names_regression_and_the_gate_and_the_tier_verbs_ignoring_it(self):
-        stack = _subsection(self.unreleased, "Stack declaration changes")
-        bullets = [b for b in _bullets(stack) if MARKER in b and "tier verbs" in b]
-        self.assertEqual(len(bullets), 1,
-                         f"one bullet states the marker's readers; bullets={_bullets(stack)!r}")
-        bullet = bullets[0] if bullets else ""
+        stacks = _subsections(self.entries, "Stack declaration changes")
+        naming = [[b for b in _bullets(stack) if MARKER in b and "tier verbs" in b]
+                  for stack in stacks]
+        once = [bullets[0] for bullets in naming if len(bullets) == 1]
+        self.assertTrue(once,
+                        f"one release's Stack declaration changes has one bullet stating the "
+                        f"marker's readers; bullets stating them, release by release: "
+                        f"{[len(bullets) for bullets in naming]}")
+        # The oldest release stating them in one bullet is the one that
+        # wrote the rule down.
+        bullet = once[-1] if once else ""
         self.assertIn(REGRESSION, bullet, bullet)
         self.assertRegex(bullet, GATE, bullet)
         self.assertRegex(bullet, r"(?i)tier\s+verbs\s+ignore", bullet)
 
     def test_a_changed_bullet_says_regression_and_the_gate_run_the_marked_entry_and_coverage_goes_only_to_bun_test(self):
-        changed = _subsection(self.unreleased, "Changed")
-        found = [b for b in _bullets(changed)
-                 if REGRESSION in b and GATE.search(b) and MARKER in b
-                 and "`bun-test`" in b and re.search(r"(?i)coverage", b)]
-        self.assertEqual(len(found), 1,
-                         f"one `### Changed` bullet names `regression`, the gate, the "
-                         f"marked entry and coverage flags only to a `bun-test` entry; "
-                         f"bullets={_bullets(changed)!r}")
+        found = [[b for b in _bullets(changed)
+                  if REGRESSION in b and GATE.search(b) and MARKER in b
+                  and "`bun-test`" in b and re.search(r"(?i)coverage", b)]
+                 for changed in _subsections(self.entries, "Changed")]
+        self.assertIn(1, [len(bullets) for bullets in found],
+                      "one release's `### Changed` has one bullet naming `regression`, the "
+                      "gate, the marked entry and coverage flags only to a `bun-test` entry")
 
     def test_a_version_bullet_names_the_marked_entrys_gate_exemption_and_its_readers(self):
         version = json.loads(SCHEMA.read_text(encoding="utf-8"))["version"]
-        stack = _subsection(self.unreleased, "Stack declaration changes")
-        found = [b for b in _bullets(stack)
-                 if re.search(rf"(?i)\bversion\s+{version}\b", b)
-                 and re.search(r"(?i)\bexempt", b)
-                 and (MARKER in b or re.search(r"(?i)\bmarked\b", b))
-                 and REGRESSION in b and GATE.search(b)]
-        self.assertEqual(len(found), 1,
-                         f"one bullet says version {version} exempts the marked entry "
-                         f"from the gate's key rule and names its readers; "
-                         f"bullets={_bullets(stack)!r}")
+        found = [[b for b in _bullets(stack)
+                  if re.search(rf"(?i)\bversion\s+{version}\b", b)
+                  and re.search(r"(?i)\bexempt", b)
+                  and (MARKER in b or re.search(r"(?i)\bmarked\b", b))
+                  and REGRESSION in b and GATE.search(b)]
+                 for stack in _subsections(self.entries, "Stack declaration changes")]
+        self.assertIn(1, [len(bullets) for bullets in found],
+                      f"one release's Stack declaration changes has one bullet saying version "
+                      f"{version} exempts the marked entry from the gate's key rule and "
+                      f"naming its readers")
 
     def test_version_two_adding_the_go_stack_is_still_named(self):
-        stack = _subsection(self.unreleased, "Stack declaration changes")
-        self.assertIn("Version 2 adds the `go` stack", stack)
+        stacks = _subsections(self.entries, "Stack declaration changes")
+        self.assertTrue(any("Version 2 adds the `go` stack" in stack for stack in stacks),
+                        "a Stack declaration changes names version 2 adding the `go` stack")
 
 
 class TheDesignNoteSaysRegressionAndTheGateReadTheMarkerTest(unittest.TestCase):

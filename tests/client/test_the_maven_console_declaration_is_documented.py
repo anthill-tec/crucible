@@ -1,9 +1,10 @@
 """The maven console declaration is written down where its readers look.
 
-  - The CHANGELOG's `[Unreleased]` "Stack declaration changes" has a maven
+  - A "Stack declaration changes" subsection of the changelog has a maven
     part naming the declaration (`[targets.<tier>]`, `framework =
     "surefire"`, `console = "surefire-console"`) and the `surefire-console`
-    view codec.
+    view codec. Every release's subsection of that name is searched, so a
+    later one never hides the one that records it.
   - The shipped `clients/crucible.toml` names the maven entry in a comment:
     its `[targets.<tier>]` key and its fields. It still declares no live
     `targets` table.
@@ -26,7 +27,7 @@ from pathlib import Path
 
 import tomllib
 
-from tests.client.changelog_section import changelog_section
+from tests.client.changelog_section import changelog_entries
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MVN_CLIENT = REPO_ROOT / "clients" / "mvn-crucible.py"
@@ -39,10 +40,11 @@ ENTRY_FIELDS = (r'framework\s*=\s*"surefire"', r'console\s*=\s*"surefire-console
 VIEW_CODEC = "surefire-console"
 
 
-def _unreleased_stack_section(text):
-    body = changelog_section(text)
-    found = re.search(r"(?ms)^### Stack declaration changes\n(.*?)(?=^### |\Z)", body)
-    return found.group(1) if found else ""
+def _stack_declaration_sections(text):
+    """Every `### Stack declaration changes` subsection of the changelog's
+    release sections, newest first, each one release's own."""
+    return re.findall(r"(?ms)^### Stack declaration changes\n(.*?)(?=^### |\Z)",
+                      changelog_entries(text))
 
 
 def _maven_part(section):
@@ -67,12 +69,13 @@ def _root_help():
 class TheChangelogNamesTheMavenDeclarationTest(unittest.TestCase):
 
     def setUp(self):
-        self.maven = _maven_part(_unreleased_stack_section(
+        parts = map(_maven_part, _stack_declaration_sections(
             CHANGELOG.read_text(encoding="utf-8")))
+        self.maven = "\n".join(part for part in parts if part)
 
     def test_the_stack_declaration_changes_have_a_maven_part(self):
         self.assertTrue(self.maven,
-                        "[Unreleased] Stack declaration changes: For the maven stack")
+                        "the changelog's Stack declaration changes: For the maven stack")
 
     def test_the_maven_part_names_the_declaration(self):
         self.assertIn(TABLE, self.maven)
