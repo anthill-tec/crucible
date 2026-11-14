@@ -62,6 +62,7 @@ import json
 import os
 import shutil
 import stat
+import sys
 import tempfile
 import threading
 import unittest
@@ -158,6 +159,21 @@ def _python_project_dir_with_syntax_error():
     app_dir = project_dir / "app"
     app_dir.mkdir(parents=True, exist_ok=True)
     (app_dir / "broken.py").write_text("def broken(:\n    pass\n")
+    return project_dir
+
+
+def _rust_project_dir_with_failing_lint():
+    """A rust project fixture identical to `_make_project_dir("rust")` but
+    for its `[lint]`, which declares a linter that fails. The gate's lint
+    stage runs the declaration in place of the clippy default, so this is the
+    step that fails."""
+    project_dir = _make_project_dir("rust")
+    config = project_dir / "crucible.toml"
+    head = config.read_text(encoding="utf-8").split("\n\n[lint]\n")[0]
+    command = [sys.executable, "-c", "import sys; sys.exit(1)"]
+    config.write_text(
+        head + f"\n\n[lint]\ncommand = {json.dumps(command)}\nname = \"census-lint\"\n",
+        encoding="utf-8")
     return project_dir
 
 
@@ -521,6 +537,7 @@ class PreMergeGateStateDerivedHelpTest(unittest.TestCase):
             fail_drive=lambda: _drive_with_bin_dir(
                 "rust", "pre-merge-gate",
                 lambda: _build_bin_dir_with_override("cargo", _FAIL_CARGO_CLIPPY_BODY),
+                project_dir_factory=_rust_project_dir_with_failing_lint,
                 extra_argv=["--min-free-g", "1"]),
             pass_drive=lambda: _drive_with_bin_dir(
                 "rust", "pre-merge-gate", _build_fake_bin_dir,
