@@ -2144,8 +2144,10 @@ def cmd_pre_merge_gate(args):
     Step 0 (default-on, fail-fast): the shared lint stage runs BEFORE the coverage
     regression — the project's declared `[lint]`, else the workspace `clippy
     --all-targets --all-features -- -D warnings` — so a lint failure aborts the
-    gate without paying for the full llvm-cov build. Pass `--skip-lint` (or its
-    older name `--skip-clippy`) only for a deliberate bypass.
+    gate without paying for the full llvm-cov build. The workspace was cleaned to
+    zero `-D warnings` by CR-NAI-305 (2026-06-05), so this is enforced by default;
+    pass `--skip-lint` (or its older name `--skip-clippy`) only for a deliberate
+    bypass.
     """
     # A gate scoped to named suites that cannot run as asked is refused before
     # anything else.
@@ -3152,7 +3154,12 @@ def main():
         "--keep-target", action="store_true",
         help="Skip the post-run `cargo clean` reclaim (keep target/ artifacts).",
     )
-    # The gate's clippy step is its lint stage, so its old flag names it too.
+    # The zero-warning baseline this gate defends was established by
+    # CR-NAI-305 (2026-06-05) on the workspace this client was written
+    # against. That is lineage for a maintainer; it moved out of the printed
+    # help (CR-CRU-097 §S2/AC2) because a help line naming another project's
+    # backlog teaches every user of this client the wrong thing. The gate's
+    # clippy step is its lint stage, so its old flag names it too.
     _axi().add_skip_lint_arg(pmg, "--skip-clippy")
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
