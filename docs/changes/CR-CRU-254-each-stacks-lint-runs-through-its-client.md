@@ -186,6 +186,11 @@ Each client's `pre-merge-gate` gains a `lint` stage. Its place in each client's 
 - **Failing:** the gate stops there and answers the failure, with the lint event.
 - **Skipped:** the gate continues, and the envelope's warnings carry `lint-not-declared`.
 - **Every gate gains `--skip-lint`.** `--skip-check` skips `check` only, never lint.
+- **A gate given `--release` beside `--cycle` is refused before its lint stage** (amended at gate 950): the shared
+  stage refuses the pair through the release hard stop (`release-run-refused`), so the linter never runs and
+  nothing is posted. The board's other release refusals (an undeclared release, an agent bound to a cycle) are known
+  only to the board, at the run's start; a gate refused that way has already filed its lint record, which stays, as
+  an honest record of a linter that ran.
 - **The rust gate's machine contract changes.** Model B's stack files read it, so the mapping is stated here and in
   the CHANGELOG:
 
