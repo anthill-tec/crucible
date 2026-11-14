@@ -226,6 +226,38 @@ max = 500
 # declared run on a board whose health lists no `surefire-console` under
 # `codecs.view`; another stack's entry is skipped.
 
+# ── The linter a project runs: [lint] ───────────────────────────────────
+#
+# Every client's `lint` verb, and the `pre-merge-gate` lint stage, run the
+# linter a project declares in its OWN `crucible.toml`:
+#
+#     [lint]
+#     command = ["ruff", "check", "--output-format", "concise", "."]
+#     format = "ruff"      # <- the board's decoder for the output; optional
+#     name = "ruff"        # <- the linter's name on the board; optional
+#
+# `command` is a non-empty list of non-empty strings, run in the project dir
+# (bun: its package dir). A first word holding no `/` is looked up on PATH; one
+# holding a `/` (`.venv/bin/ruff`) resolves against that directory. The
+# record's `lint` marker is `name`, else `format`, else the command's first
+# word. The linter's exit is the verdict. A malformed table is REFUSED, naming
+# this file, before anything runs.
+#
+# The table resolves as `[gate]` does: the PROJECT's own file first, then the
+# installed copy, the first file that parses winning. A project file without
+# `[lint]` hides the install's; a project with no file of its own inherits an
+# install-wide `[lint]`, whatever its stack, and it replaces that stack's
+# default.
+#
+# The defaults, when nothing is declared: rust runs `cargo clippy --workspace
+# --all-targets --all-features -- -D warnings` (format `clippy`, with
+# CARGO_BUILD_JOBS); go runs `go vet ./...` in each module (format `go vet`).
+# python, bun, maven and arduino have none: their `lint` answers
+# `skipped: not-declared`, and their gate goes on with a `lint-not-declared`
+# warning. A declared `command` replaces the default.
+#
+# The shipped install declares NO [lint] table: nothing is declared here.
+
 # ── The BOARD this fleet posts to ──────────────────────────────────────────
 #
 # CR-CRU-139 §S2. A connection is configuration too. The board a client posts

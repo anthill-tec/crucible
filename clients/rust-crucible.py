@@ -3002,7 +3002,7 @@ def main():
     wcl = sub.add_parser(
         "workspace-clippy",
         help="Workspace clippy --all-targets --all-features -- -D warnings — the "
-             "pre-merge gate's fail-fast step 1, standalone. With --agent: ingest.",
+             "pre-merge gate's default lint command, standalone. With --agent: ingest.",
     )
     wcl.add_argument("--agent", help="If set, ingest stderr as compile errors")
     _axi().add_filing_cycle_arg(wcl)
@@ -3134,10 +3134,17 @@ def main():
 
     pmg = sub.add_parser(
         "pre-merge-gate",
-        help="ORCHESTRATOR pre-merge (docker-FREE): fail-fast clippy --workspace --all-targets "
-             "--all-features -- -D warnings (default-on; --skip-clippy to bypass) → workspace-regression "
+        help="ORCHESTRATOR pre-merge (docker-FREE): fail-fast lint (by default cargo clippy "
+             "--workspace --all-targets --all-features -- -D warnings; --skip-lint to bypass) → "
+             "workspace-regression "
              "--all-features -P ci (excludes the docker-infra tier, keeps in-process full-boot e2e) + ingest. "
              "Docker-infra tests run via docker-e2e-gate.",
+        description="The gate's stages, in order: fail-fast lint (formerly the gate's clippy "
+                    "stage) → workspace-regression -P ci → coverage. The lint stage runs the "
+                    "project's [lint] table, else rust's default, cargo clippy --workspace "
+                    "--all-targets --all-features -- -D warnings with CARGO_BUILD_JOBS; a "
+                    "failing lint stops the gate before the tests. --skip-lint skips the lint "
+                    "stage, and --skip-clippy is an alias of --skip-lint.",
     )
     pmg.add_argument("--agent", required=True, help="Agent id (typically vidushi)")
     pmg.add_argument("--profile", default="ci", help="Nextest profile (default: ci)")

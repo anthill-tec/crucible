@@ -1743,11 +1743,20 @@ def _add_gate_verbs(sub):
     dir plus each declared tier as a suite of its own, its outcome the gate's
     milestone."""
     g = sub.add_parser("pre-merge-gate",
-                       help=("ORCHESTRATOR pre-merge gate: the untagged run "
+                       help=("ORCHESTRATOR pre-merge gate: fail-fast lint → "
+                             "the untagged run "
                              "over every module, filed under regression, and "
                              "each declared tier as a suite of its own, its "
                              "outcome posted as the pre-merge-gate "
-                             "milestone."))
+                             "milestone."),
+                       description=("The gate's stages, in order: fail-fast lint → "
+                                    "the untagged run over every module, filed under "
+                                    "regression, and each declared tier as a suite of "
+                                    "its own. The lint stage runs the project's [lint] "
+                                    "table, else go's default, `go vet ./...` in each "
+                                    "module, joined into one lint record; a failing "
+                                    "lint stops the gate before the tests. --skip-lint "
+                                    "skips the lint stage."))
     _add_run_args(g)
     _axi().add_skip_lint_arg(g)
     _add_gate_cycle_arg(g)

@@ -1718,7 +1718,7 @@ HELP_STEPS = {
     "test": ["cycle-done <id>", "status"],
     "regression": ["cycle-done <id>", "status"],
     "auto-ingest": ["cycle-done <id>", "status"],
-    "check": ["test --agent <agentId>"],
+    "check": ["lint --agent <agentId>", "test --agent <agentId>"],
     "cycle-add": ["cycle-activate <id>"],
     "cycle-skip": CYCLE_SKIP_HELP_STEPS,
     "checkpoint": ["status"],

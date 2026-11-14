@@ -193,10 +193,9 @@ def _file_lint(ops, project_dir, agent_id, cycle_id, stack, spec, marker,
                              stack=stack) or {}
 
 
-def _lint_help(ok, marker):
-    if ok:
-        return [f"{marker} is clean: run the tests next"]
-    return [f"fix what {marker} reported, then re-run {LINT_VERB}"]
+def _lint_help(ok):
+    """The next step: the tests after a clean lint, else lint again."""
+    return ["test --agent <agentId>" if ok else f"{LINT_VERB} --agent <agentId>"]
 
 
 def _emit_lint_refusal(ops, project_dir, agent_id, warnings, refusal):
@@ -253,7 +252,7 @@ def cmd_lint(args, project_dir, ops, *, stack, run_dir=None, default=None):
     ops.emit(LINT_VERB, ok,
              {"linter": marker, "declared": declared, "exit": exit_code,
               "errors": errors, "lints": lints, "event": event,
-              "help": _lint_help(ok, marker)},
+              "help": _lint_help(ok)},
              ops.context(project_dir, agent_id=agent_id), warnings,
              f"{LINT_VERB}: ok={ok} linter={marker} exit={exit_code}")
     return 0 if ok else 1

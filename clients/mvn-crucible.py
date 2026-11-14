@@ -2649,7 +2649,14 @@ def main():
     _add_project_args(dd)
     dd.set_defaults(func=cmd_docker_down)
 
-    pmg = sub.add_parser("pre-merge-gate", help="ORCHESTRATOR: docker-up → regression → docker-down.")
+    pmg = sub.add_parser(
+        "pre-merge-gate",
+        help="ORCHESTRATOR: fail-fast lint → docker-up → regression → docker-down.",
+        description="The gate's stages, in order: fail-fast lint → docker-up → regression → "
+                    "docker-down. The lint stage runs the project's [lint] table (mvn "
+                    "checkstyle:check, say); with none it is skipped with a lint-not-declared "
+                    "warning, and a failing lint stops the gate before docker-up, so it starts "
+                    "no container. --skip-lint skips the lint stage.")
     pmg.add_argument("--agent", required=True,
                      help="Agent id to ingest under — REQUIRED. A free-form identifier that "
                           "must already be registered (`register --agent <id> --role <role>`); "

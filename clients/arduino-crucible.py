@@ -1899,7 +1899,14 @@ def main():
     cpl.set_defaults(func=cmd_compile)
 
     pmg = sub.add_parser("pre-merge-gate", parents=[common],
-                         help="fail-fast compile -> regression --coverage")
+                         help="fail-fast compile -> lint -> regression --coverage",
+                         description="The gate's stages, in order: fail-fast arduino-cli "
+                                     "compile -> lint -> regression --coverage over the native "
+                                     "host tests. The lint stage runs the project's [lint] "
+                                     "table (clang-tidy, say); with none it is skipped with a "
+                                     "lint-not-declared warning, and a failing lint stops the "
+                                     "gate before the tests. --skip-lint skips the lint stage; "
+                                     "--skip-check skips the compile stage only, never lint.")
     pmg.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     pmg.add_argument("--skip-check", action="store_true",
                      help="skip the fail-fast arduino-cli compile step")

@@ -2362,8 +2362,13 @@ def main():
 
     pmg = sub.add_parser(
         "pre-merge-gate",
-        help="ORCHESTRATOR pre-merge: fail-fast py_compile check → regression WITH "
+        help="ORCHESTRATOR pre-merge: fail-fast py_compile check → lint → regression WITH "
              "coverage.py (always measured here; regression --coverage measures it too).",
+        description="The gate's stages, in order: fail-fast py_compile check → lint → "
+                    "regression WITH coverage.py. The lint stage runs the project's [lint] "
+                    "table; with none it is skipped with a lint-not-declared warning, and a "
+                    "failing lint stops the gate before the tests. --skip-lint skips the lint "
+                    "stage; --skip-check skips the check stage only, never lint.",
     )
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     pmg.add_argument("--cov-source", default=None, help=_COV_SOURCE_HELP)

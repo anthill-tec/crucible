@@ -2405,7 +2405,7 @@ _HELP_STEPS = {
     "test": ["cycle-done <id>", "status"],
     "regression": ["cycle-done <id>", "status"],
     "auto-ingest": ["cycle-done <id>", "status"],
-    "check": ["test --agent <agentId>"],
+    "check": ["lint --agent <agentId>", "test --agent <agentId>"],
     "cycle-add": ["cycle-activate <id>"],
     "checkpoint": ["status"],
     "stop": ["status"],
@@ -2911,12 +2911,21 @@ def main():
                          add_args=(_add_package_dir_arg, _add_project_dir_arg))
 
     pmg = sub.add_parser("pre-merge-gate",
-                         help="ORCHESTRATOR pre-merge: fail-fast tsc check → regression WITH "
+                         help="ORCHESTRATOR pre-merge: fail-fast tsc check → lint → "
+                              "regression WITH "
                               "coverage, measured for a `bun-test` flag whole-suite run "
                               "(regression --coverage measures it too); a marked "
                               "whole-suite run of another framework, or any other marked "
                               "run bun's coverage flags do not reach, carries a "
-                              "`coverage-not-measured` warning instead.")
+                              "`coverage-not-measured` warning instead.",
+                         description="The gate's stages, in order: fail-fast tsc check → "
+                                     "lint → regression WITH coverage. The lint stage runs "
+                                     "the project's [lint] table in the package directory, "
+                                     "where check runs; with none it is skipped with a "
+                                     "lint-not-declared warning, and a failing lint stops "
+                                     "the gate before the tests. --skip-lint skips the lint "
+                                     "stage; --skip-check skips the check stage only, never "
+                                     "lint.")
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     pmg.add_argument("--skip-check", action="store_true", help="Bypass the fail-fast tsc check")
     _axi().add_skip_lint_arg(pmg)
