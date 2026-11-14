@@ -2,7 +2,9 @@
 same post and the same envelope from all six. Rust and go lint by default when
 nothing is declared, a declared command replaces the default, the other four
 skip, and `check` never runs a declared linter, on any of the six. A linter
-killed by a signal is filed by every client with a non-negative exit.
+killed by a signal is filed by every client with a non-negative exit. Every
+client's `lint` names the run the board filed in its envelope's `events`, and
+`check`'s envelope keeps its `events` as it is: its compile post is not named.
 
 Every drive is a real subprocess of a client from a scratch copy of the fleet,
 against a recording double of the board (`tests/client/lint_verb_harness.py`).
@@ -112,6 +114,49 @@ class EveryClientRunsTheSameLintTest(LintDriveMixin, unittest.TestCase):
                     observed, reference,
                     f"{client}'s lint differs from python's: it is implemented "
                     f"more than once")
+
+
+class EveryClientNamesItsFiledLintRunInEventsTest(LintDriveMixin, unittest.TestCase):
+    """One declaration, six clients: each `lint --agent` the board files
+    answers `events` equal to `[<the board's event id>]`, the same id as its
+    `event`. Each client is answered with its own id, so no client can be
+    credited with another's filing."""
+
+    def setUp(self):
+        super().setUp()
+        self.fake(RUFF)
+        self.say((("out", "app/a.py:1:1: F401 `os` imported but unused\n"),),
+                 exit_code=1)
+
+    def test_every_clients_filed_lint_run_is_named_in_events_by_the_boards_event_id(self):
+        root = self.project(lint_table([RUFF, "check", "."], format="ruff"))
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                event = f"evt-lint-events-fixture-{client}"
+                self.board.reset()
+                self.board.answer_counts(1, 0, event=event)
+                result, axi = self.filed(client, root)
+                why = f"{client}: envelope={axi!r} stderr={result.stderr[-1500:]}"
+                self.one_compile_post(result, axi)
+                self.assertEqual((axi.get("verb"), axi.get("event")), ("lint", event), why)
+                self.assertEqual(axi.get("events"), [event],
+                                 f"the filed lint run is named in events, once; {why}")
+                self.assertEqual(axi.get("events"), [axi.get("event")],
+                                 f"events names the same id as event; {why}")
+
+    def test_a_rust_default_clippy_lint_run_is_named_in_events(self):
+        self.fake("cargo")
+        self.say((("err", "warning: unused variable: `x`\n"),), exit_code=0)
+        event = "evt-lint-events-fixture-rust-default"
+        self.board.answer_counts(0, 1, event=event)
+        root = self.project(None)
+        result, axi = self.filed("rust", root)
+        why = f"envelope={axi!r} stderr={result.stderr[-1500:]}"
+        self.one_compile_post(result, axi)
+        self.assertEqual((axi.get("verb"), axi.get("declared"), axi.get("event")),
+                         ("lint", "default", event), why)
+        self.assertEqual(axi.get("events"), [event],
+                         f"the default linter's filed run is named too; {why}")
 
 
 class RustAndGoLintByDefaultTest(LintDriveMixin, unittest.TestCase):
@@ -234,6 +279,23 @@ class CheckNeverLintsTest(LintDriveMixin, unittest.TestCase):
         self.assertEqual(axi.get("verb"), "check",
                          f"stdout={result.stdout!r} stderr={result.stderr[-1500:]}")
         self.assertEqual(self.calls(RUFF), [], "check ran the declared linter")
+
+    def test_python_checks_envelope_names_no_event_after_its_compile_post(self):
+        self.board.answer_counts(0, 0, event="evt-check-fixture-0001")
+        root = self.project(lint_table([RUFF, "check", "."], format="ruff"))
+        (root / "app").mkdir()
+        # Python's check files its compile run only when the compile fails.
+        (root / "app" / "broken.py").write_text("def broken(:\n")
+        result, axi = self.filed("python", root, verb="check")
+        why = (f"envelope={axi!r} posts={self.board.compile_posts()!r} "
+               f"stderr={result.stderr[-1500:]}")
+        self.assertEqual((axi.get("verb"), axi.get("ok")), ("check", False), why)
+        posts = self.board.compile_posts()
+        self.assertEqual(len(posts), 1, f"check posts its compile run once; {why}")
+        self.assertNotIn("lint", posts[0], f"check's post is no lint record; {why}")
+        self.assertEqual(self.calls(RUFF), [], f"check ran the declared linter; {why}")
+        self.assertEqual(axi.get("events"), [],
+                         f"check's compile post is not named in events; {why}")
 
     def test_rust_check_runs_no_declared_linter_and_no_clippy(self):
         root = self.project(lint_table([RUFF, "check", "."], format="ruff"))
