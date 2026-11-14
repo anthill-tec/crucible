@@ -125,6 +125,23 @@ class RustsClippyVerbsFileASignalKilledCargoWithANonNegativeExitTest(LintDriveMi
         result, axi = self.filed("rust", self.root, verb="workspace-clippy")
         self.assertFiledWithTheSignalExit(result, axi)
 
+    def assertExitsWithTheSignalExit(self, result, axi, verb):
+        why = f"envelope={axi!r} stderr={result.stderr[-1500:]}"
+        self.assertEqual((axi.get("verb"), axi.get("ok"), axi.get("exit")),
+                         (verb, False, SIGTERM_EXIT),
+                         f"the envelope's exit matches the post's; {why}")
+        self.assertEqual(result.returncode, SIGTERM_EXIT,
+                         f"the process exits as a shell reports it; {why}")
+
+    def test_clippy_exits_143_with_its_envelope_saying_so_for_a_cargo_killed_by_sigterm(self):
+        result, axi = self.filed("rust", self.root, "--crate", CRATE,
+                                 "--deny-warnings", verb="clippy")
+        self.assertExitsWithTheSignalExit(result, axi, "clippy")
+
+    def test_workspace_clippy_exits_143_with_its_envelope_saying_so_for_a_cargo_killed_by_sigterm(self):
+        result, axi = self.filed("rust", self.root, verb="workspace-clippy")
+        self.assertExitsWithTheSignalExit(result, axi, "workspace-clippy")
+
 
 if __name__ == "__main__":
     unittest.main()
