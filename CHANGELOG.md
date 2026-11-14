@@ -12,6 +12,22 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ### Added
 
+- **Every client has a `lint` verb.** `python`, `bun`, `rust`, `go`, `mvn` and `arduino-crucible.py lint
+  [--agent ID] [--cycle N]` run the linter a project declares in a `[lint]` table of its `crucible.toml`
+  (`command`, a list; optional `format` and `name`) and, with `--agent`, file its output on the compile
+  route as a lint record carrying `lint`, `format` and `runnerExit`. The linter's exit is the verdict.
+  - The table resolves as `[gate]` does: the project's file, then the install's. A project with no file
+    of its own inherits an install-wide `[lint]`, which replaces its stack's default.
+  - The defaults: rust runs `cargo clippy --workspace --all-targets --all-features -- -D warnings`, go
+    runs `go vet ./...` in each module. Other stacks have none, and answer `skipped: not-declared`.
+  - Each `pre-merge-gate` gains a fail-fast lint stage in its own order: python and bun `check` → lint
+    → tests, arduino `compile` → lint → tests, rust lint → regression, go lint → its regression run,
+    maven lint → docker-up. A failing lint stops the gate with `lint-gate-abort`; nothing declared
+    goes on with a `lint-not-declared` warning; `--skip-lint` skips the stage.
+  - `runs` and `run` word a lint record as `lint` and its tool; its brief keeps `kind: "compile"`.
+  - `check`'s next step names `lint`; a clean lint's names `test`, a failing one's `lint` again.
+  - The shipped `crucible.toml` documents `[lint]` in a commented block and declares none.
+
 - **A lint finding reaches the board as a marked compile record.** A linter's run posts to
   `POST /api/v2/runs/compile` with `lint: "<tool>"` and the linter's `runnerExit`, and is stored as a
   lint record: a compile event carrying its linter's name, with no new kind, route or column.
@@ -293,6 +309,20 @@ For the rust stack (`crucible.toml` and `.config/nextest.toml`):
 - **`--ignore-run-fail` is retired.** `workspace-regression` and `regression` refuse it: a coverage
   run now always writes its lcov with `cargo llvm-cov report --failure-mode all`.
 - **A board that lists no `nextest` under `codecs.stream`** refuses the run before anything runs.
+- **The gate's clippy step is its lint stage.** `pre-merge-gate` runs `lint` first, whose rust default
+  is the same workspace clippy command, so a project with no `[lint]` lints as before. A declared
+  `[lint]` replaces it. Model B's stack files read the gate's envelope; the mapping:
+
+  | Before | After |
+  |---|---|
+  | `stage: "clippy"` | `stage: "lint"` |
+  | `errors`, `lints` | `errors`, `lints` (unchanged) |
+  | `clippy-gate-abort` | `lint-gate-abort`, the same in every client |
+  | `--skip-clippy` | `--skip-lint`; `--skip-clippy` stays as its alias |
+  | `CARGO_BUILD_JOBS` env | unchanged |
+
+  `clippy` and `workspace-clippy` keep their arguments; their records now carry `lint: "clippy"`,
+  and a failing `clippy` exits non-zero.
 
 For the arduino stack (`crucible.toml` and the native `Makefile`):
 

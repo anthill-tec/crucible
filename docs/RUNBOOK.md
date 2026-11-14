@@ -374,6 +374,54 @@ via `POST /api/v2/runs/start` and not yet settled. Reading `runs` to find out
 what an agent filed finds nothing and has already produced one false
 accusation (CR-CRU-140).
 
+## Lint
+
+Every client has a `lint` verb. It runs the linter a project declares in a `[lint]` table of its
+`crucible.toml` and, given an agent id, files the output on the compile route as a lint record. The linter's exit
+is the verdict.
+
+```toml
+[lint]
+command = ["ruff", "check", "--output-format", "concise", "."]
+format = "ruff"
+```
+
+- `command` is required: a non-empty list of non-empty strings, run in the project directory (bun: its package
+  directory). A first word holding a `/`, such as `.venv/bin/ruff`, resolves against that directory; any other is
+  looked up on PATH. A command that is not found is refused, naming it.
+- `format` is optional: the board's decoder for the output (`ruff`, `clippy`, `go vet`, `gcc` and so on).
+- `name` is optional: the linter's name on the board. Without it the record is marked with `format`, else the
+  command's first word.
+- A malformed table is refused, naming its file, before anything runs.
+
+**The defaults.** With no `[lint]`, rust runs `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+(with `CARGO_BUILD_JOBS`, as its gate always has), and go runs `go vet ./...` in each module. python, bun, maven
+and arduino have no default: their `lint` answers `skipped: not-declared`. A declared `command` replaces a default.
+
+**The gate.** Each client's `pre-merge-gate` runs a fail-fast lint stage: after `check` in python and bun, after
+`compile` in arduino, and first in rust, go and maven (before docker-up, so a lint failure starts no container). A
+failing lint stops the gate at `stage: lint` with a `lint-gate-abort` warning. With nothing declared and no default
+the gate goes on with a `lint-not-declared` warning. `--skip-lint` skips the stage (rust keeps `--skip-clippy` as
+its alias); `--skip-check` never skips lint.
+
+**Warning: the install's table is inherited.** The table resolves as `[gate]` does: the project's own
+`crucible.toml` first, then the install's, the first file that parses winning. A project file without `[lint]`
+hides the install's. But a project with no file of its own inherits an install-wide `[lint]`, whatever its stack,
+and that table replaces the stack's default: a rust project would run the install's ruff instead of clippy. Declare
+`[lint]` per project, not in the install's file.
+
+**This checkout's own table.** Crucible's root `crucible.toml` is git-ignored operator state, so a new checkout adds
+the table itself, beside its `[client]` url:
+
+```toml
+[lint]
+command = ["ruff", "check", "--output-format", "concise", "clients", "crucible_axi", "tests"]
+format = "ruff"
+```
+
+The ruff rule set itself is the tracked `pyproject.toml`'s. The gate then lints the checkout's python before its
+tests.
+
 ## Schema versions and migration
 
 The store carries its schema version in `PRAGMA user_version`, and the server
