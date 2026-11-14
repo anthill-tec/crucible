@@ -975,7 +975,7 @@ def axi_object(verb, ok, result_fields, context, warnings):
     axi.update(result_fields)
     axi["context"] = context
     axi["warnings"] = list(warnings) + limit_disclosure_warnings()
-    return axi
+    return _LINT.carry_gate_lint(axi)
 
 
 def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None,
@@ -6570,6 +6570,7 @@ def forget_ingested_run():
     _filed_runs.clear()
     _emitted_run_counts = None
     forget_gate_suite_results()
+    _LINT.forget_gate_lint()
 
 
 def forget_gate_suite_results():

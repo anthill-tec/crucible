@@ -444,15 +444,6 @@ def _docker_up_failed_warning(verb):
     }
 
 
-def _clippy_gate_abort_warning():
-    return {
-        "code": "clippy-gate-abort",
-        "detail": ("the pre-merge gate stopped at its fail-fast clippy "
-                   "-D warnings step — the coverage regression never ran, so "
-                   "this gate says NOTHING about the test suite"),
-    }
-
-
 def _gate_lock_path(project_dir):
     """The STANDARD gate-lock path — the MAIN repo ROOT (parent of the common
     git dir), NOT inside .git, SHARED across all worktrees. Matches
@@ -2150,11 +2141,11 @@ def cmd_pre_merge_gate(args):
     — mandatory for CRs whose gap-analysis flags boot/connector/Bridge/provider
     wiring, and at pre-release. See rust-orchestration.md (Pre-merge gate / E2E gate).
 
-    Step 0 (default-on, fail-fast): a workspace `clippy --all-targets --all-features
-    -- -D warnings` lint gate runs BEFORE the coverage regression — a lint failure
-    aborts the gate without paying for the full llvm-cov build. The workspace was
-    cleaned to zero `-D warnings` by CR-NAI-305 (2026-06-05), so this is enforced by
-    default; pass `--skip-clippy` only for a deliberate bypass.
+    Step 0 (default-on, fail-fast): the shared lint stage runs BEFORE the coverage
+    regression — the project's declared `[lint]`, else the workspace `clippy
+    --all-targets --all-features -- -D warnings` — so a lint failure aborts the
+    gate without paying for the full llvm-cov build. Pass `--skip-lint` (or its
+    older name `--skip-clippy`) only for a deliberate bypass.
     """
     # A gate scoped to named suites that cannot run as asked is refused before
     # anything else.
@@ -2162,40 +2153,23 @@ def cmd_pre_merge_gate(args):
         args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK, get=_get,
         project_key=lambda: _project_key(_resolve_project_dir(args.project_dir)))
     project_dir = _resolve_project_dir(args.project_dir)
-    # The gate files from its first step on (clippy files a lint result), so an
+    # The gate files from its first step on (lint files a lint result), so an
     # unattributed gate is refused before that step.
     _axi().refuse_unattributed_run(
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
         release=getattr(args, "release", None), context=_run_context())
-    # The streamed run's checks come before the clippy step: a gate that
+    # The streamed run's checks come before the lint stage: a gate that
     # cannot stream runs nothing.
     refused = _nextest_refusal(args, "pre-merge-gate", project_dir, args.profile,
                                coverage=True, gate=True)
     if refused is not None:
         return refused
-    if not getattr(args, "skip_clippy", False):
-        gate = _clippy_workspace_gate(project_dir, args.agent,
-                                      cycle_id=getattr(args, "cycle", None))
-        if gate["exit"] != 0:
-            print("[crucible] pre-merge gate FAILED at the clippy -D warnings step — "
-                  "skipped the coverage regression. Fix the lints first "
-                  "(or --skip-clippy to bypass).", file=sys.stderr)
-            # §S2 — the state reached is "aborted at step 0, the regression
-            # never ran": the next action is the lints, never the gate's own
-            # successor. A passing gate falls through to the regression
-            # envelope below, whose help[] is derived from the RUN state.
-            _emit_axi("pre-merge-gate", False,
-                      {"stage": "clippy", "exit": gate["exit"],
-                       "errors": gate["errors"], "lints": gate["lints"],
-                       "help": _clippy_help(False, gate["errors"], gate["lints"],
-                                            "the workspace")
-                               + ["re-run pre-merge-gate --agent <agentId>"]},
-                      _axi_context(project_dir, agent_id=args.agent),
-                      gate["warnings"] + [_clippy_gate_abort_warning()],
-                      f"pre-merge-gate: ok=False exit={gate['exit']} — "
-                      f"aborted at the clippy -D warnings step")
-            return gate["exit"]
+    stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
+                                     agent_id=args.agent, verb="pre-merge-gate",
+                                     default=_workspace_lint_default())
+    if stopped is not None:
+        return stopped
 
     ws_args = argparse.Namespace(
         project_dir=args.project_dir,
@@ -2451,11 +2425,14 @@ def cmd_lint(args):
     """Run the project's declared linter, else the workspace clippy the gate
     runs, and, with --agent, file it as a lint record. Delegates to the
     shared lint runner."""
-    return _axi().cmd_lint(
-        args, _resolve_project_dir(args.project_dir), _ops(), stack=_STACK,
-        default=_axi().lint_default(
-            _WORKSPACE_CLIPPY_CMD, _CLIPPY_LINT,
-            env={"CARGO_BUILD_JOBS": WORKSPACE_BUILD_JOBS}))
+    return _axi().cmd_lint(args, _resolve_project_dir(args.project_dir), _ops(),
+                           stack=_STACK, default=_workspace_lint_default())
+
+def _workspace_lint_default():
+    """The rust default linter: the workspace clippy, with its build-job
+    cap."""
+    return _axi().lint_default(_WORKSPACE_CLIPPY_CMD, _CLIPPY_LINT,
+                               env={"CARGO_BUILD_JOBS": WORKSPACE_BUILD_JOBS})
 
 def cmd_project_create(args):
     """Create this project on the board, or find it, by its token. The root
@@ -3175,17 +3152,8 @@ def main():
         "--keep-target", action="store_true",
         help="Skip the post-run `cargo clean` reclaim (keep target/ artifacts).",
     )
-    # The zero-warning baseline this gate defends was established by
-    # CR-NAI-305 (2026-06-05) on the workspace this client was written
-    # against. That is lineage for a maintainer; it moved out of the printed
-    # help (CR-CRU-097 §S2/AC2) because a help line naming another project's
-    # backlog teaches every user of this client the wrong thing.
-    pmg.add_argument(
-        "--skip-clippy", action="store_true",
-        help="Bypass the fail-fast clippy gate. By DEFAULT the gate runs `clippy --workspace "
-             "--all-targets --all-features -- -D warnings` BEFORE the coverage regression and "
-             "aborts on any lint. Pass this only for a deliberate bypass.",
-    )
+    # The gate's clippy step is its lint stage, so its old flag names it too.
+    _axi().add_skip_lint_arg(pmg, "--skip-clippy")
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)

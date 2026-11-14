@@ -1663,6 +1663,11 @@ def cmd_pre_merge_gate(args):
                       f"pre-merge-gate: ok=False exit={state['exit']} — "
                       f"aborted at the py_compile check step")
             return state["exit"] or 1
+    # The lint stage follows check: a failing linter stops the gate here.
+    stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
+                                     agent_id=args.agent, verb="pre-merge-gate")
+    if stopped is not None:
+        return stopped
     reg_args = argparse.Namespace(
         agent=args.agent, coverage=True, cov_source=args.cov_source,
         start_dir=args.start_dir, pattern=args.pattern, reports=args.reports,
@@ -2364,6 +2369,7 @@ def main():
     pmg.add_argument("--cov-source", default=None, help=_COV_SOURCE_HELP)
     pmg.add_argument("--skip-check", action="store_true",
                      help="Bypass the fail-fast py_compile check step")
+    _axi().add_skip_lint_arg(pmg)
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)

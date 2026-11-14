@@ -707,6 +707,12 @@ def cmd_pre_merge_gate(args):
     if isinstance(found, int):
         return found
     project_dir, agent, modules = found
+    # The lint stage comes first: a failing linter stops the gate here.
+    stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
+                                     agent_id=agent, verb=verb,
+                                     default=_go_vet_default(modules))
+    if stopped is not None:
+        return stopped
 
     def whole_suite():
         return _gated_go_run(verb, args, project_dir, agent, modules,
@@ -1436,11 +1442,13 @@ def cmd_lint(args):
     under the project dir, and, with --agent, file it as one lint record.
     Delegates to the shared lint runner."""
     project_dir = _resolve_project_dir(args.project_dir)
-    return _axi().cmd_lint(
-        args, project_dir, _ops(), stack=_STACK,
-        default=_axi().lint_default(
-            ("go", "vet", "./..."), "go vet",
-            run_dirs=_discover_modules(project_dir)))
+    return _axi().cmd_lint(args, project_dir, _ops(), stack=_STACK,
+                           default=_go_vet_default(_discover_modules(project_dir)))
+
+
+def _go_vet_default(modules):
+    """The go default linter: `go vet ./...` in each of `modules`, in order."""
+    return _axi().lint_default(("go", "vet", "./..."), "go vet", run_dirs=modules)
 
 
 def cmd_project_create(args):
@@ -1741,6 +1749,7 @@ def _add_gate_verbs(sub):
                              "outcome posted as the pre-merge-gate "
                              "milestone."))
     _add_run_args(g)
+    _axi().add_skip_lint_arg(g)
     _add_gate_cycle_arg(g)
     _axi().add_run_release_arg(g)
     _axi().add_gate_suites_arg(g)

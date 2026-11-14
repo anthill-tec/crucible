@@ -1910,6 +1910,11 @@ def cmd_pre_merge_gate(args):
         _get, _project_key(project_dir), args.agent,
         cycle_id=getattr(args, "cycle", None),
         release=getattr(args, "release", None), context=_run_context())
+    # The lint stage comes first: a failing linter starts no container.
+    stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
+                                     agent_id=args.agent, verb="pre-merge-gate")
+    if stopped is not None:
+        return stopped
     up_args = argparse.Namespace(
         project_dir=args.project_dir, compose_file=args.compose_file,
         no_wait=True, services=None, all_services=False, maven_dir=args.maven_dir)
@@ -2659,6 +2664,7 @@ def main():
                      help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE). "
                           "The gate always measures coverage, so it always applies here; "
                           "on regression it applies only with --coverage.")
+    _axi().add_skip_lint_arg(pmg)
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)

@@ -42,6 +42,7 @@ It imports only the standard library.
 import os
 import shutil
 import subprocess
+import sys
 import typing
 
 #: The core this module is bound to: a live view of `_crucible_axi.py`'s
@@ -256,6 +257,105 @@ def cmd_lint(args, project_dir, ops, *, stack, run_dir=None, default=None):
              ops.context(project_dir, agent_id=agent_id), warnings,
              f"{LINT_VERB}: ok={ok} linter={marker} exit={exit_code}")
     return 0 if ok else 1
+
+
+# ── the gate's lint stage ───────────────────────────────────────────────────
+
+LINT_GATE_STAGE = "lint"
+LINT_GATE_ABORT = "lint-gate-abort"
+LINT_NOT_DECLARED = "lint-not-declared"
+
+_SKIP_LINT_HELP = "Skip the gate's lint stage."
+
+#: What a gate's lint stage that let the gate go on hands to the gate's own
+#: envelope: the lint event it filed, and its warnings. Cleared once per verb
+#: dispatch, beside the core's record of what the invocation ingested.
+_gate_carry = {"events": [], "warnings": []}
+
+
+def add_skip_lint_arg(parser, *aliases):
+    """Register `--skip-lint` (and any older name for it) on a gate."""
+    parser.add_argument("--skip-lint", *aliases, dest="skip_lint",
+                        action="store_true", help=_SKIP_LINT_HELP)
+
+
+def forget_gate_lint():
+    """Drop what an earlier verb's lint stage carried."""
+    _gate_carry["events"].clear()
+    _gate_carry["warnings"].clear()
+
+
+def carry_gate_lint(axi):
+    """An envelope with the gate's lint event at the head of its `events` and
+    the lint stage's warnings after its own, each at most once. Returns it."""
+    events = list(axi.get("events") or [])
+    axi["events"] = [e for e in _gate_carry["events"] if e not in events] + events
+    axi["warnings"] = axi["warnings"] + [
+        w for w in _gate_carry["warnings"] if w not in axi["warnings"]]
+    return axi
+
+
+def gate_lint_stage(args, project_dir, ops, *, stack, agent_id, verb,
+                    run_dir=None, default=None):
+    """A gate's fail-fast lint stage, run after the gate's refusals and
+    pre-flight. Returns None when the gate goes on -- lint passed, was skipped
+    by `--skip-lint`, or has nothing declared and no default (warned
+    `lint-not-declared`) -- else emits the gate's one envelope, stopped at
+    `stage: lint` with `lint-gate-abort`, and returns its exit.
+
+    The lint run is filed as `lint` files it; its event joins the gate
+    envelope's `events` either way."""
+    if getattr(args, "skip_lint", False):
+        return None
+    marker, errors, lints = None, None, None
+    try:
+        spec, _declared = resolve_lint_declaration(default)
+        if spec is None:
+            _gate_carry["warnings"].append({
+                "code": LINT_NOT_DECLARED,
+                "detail": (f"{verb} skipped its lint stage: nothing is declared "
+                           f"in a [{LINT_TABLE}] table and the stack has no "
+                           f"default linter")})
+            return None
+        marker = lint_marker(spec)
+        output, exit_code = run_lint_command(spec, run_dir or project_dir)
+    except LintRefused as refusal:
+        return _emit_gate_lint_abort(
+            ops, project_dir, agent_id, verb, marker or LINT_VERB, 1,
+            {"error": str(refusal)})
+    print(f"[crucible] {verb}: lint stage {marker} exit={exit_code}",
+          file=sys.stderr)
+    if agent_id:
+        resp = _file_lint(ops, project_dir, agent_id, getattr(args, "cycle", None),
+                          stack, spec, marker, output, exit_code)
+        if resp.get("ok"):
+            errors, lints = resp.get("errors"), resp.get("warnings")
+            if resp.get("event"):
+                _gate_carry["events"].append(resp["event"])
+        else:
+            _gate_carry["warnings"].append(
+                _core.ingest_failed_warning(verb, ops.base_url))
+    if exit_code == 0:
+        return None
+    sys.stderr.write(output)
+    return _emit_gate_lint_abort(ops, project_dir, agent_id, verb, marker,
+                                 exit_code, {"errors": errors, "lints": lints})
+
+
+def _emit_gate_lint_abort(ops, project_dir, agent_id, verb, marker, exit_code,
+                          fields):
+    ops.emit(verb, False,
+             {"stage": LINT_GATE_STAGE, "exit": exit_code, "linter": marker,
+              **fields,
+              "help": _core.gate_step_abort_help(
+                  verb, f"fix what {marker} reported (or --skip-lint to bypass)")},
+             ops.context(project_dir, agent_id=agent_id),
+             [{"code": LINT_GATE_ABORT,
+               "detail": (f"{verb} stopped at its fail-fast lint stage -- "
+                          f"{marker} failed; the tests never ran, so this gate "
+                          f"says NOTHING about the test suite")}],
+             f"{verb}: ok=False exit={exit_code} -- aborted at the lint stage")
+    return exit_code or 1
 
 
 # ── a lint record read back by `runs` and `run` ─────────────────────────────

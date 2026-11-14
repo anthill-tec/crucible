@@ -1913,6 +1913,12 @@ def cmd_pre_merge_gate(args):
                       f"pre-merge-gate: ok=False exit={state['exit']} — "
                       f"aborted at the tsc check step")
             return 1
+    # The lint stage follows check, in the package dir check runs in.
+    stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
+                                     agent_id=args.agent, verb="pre-merge-gate",
+                                     run_dir=package_dir)
+    if stopped is not None:
+        return stopped
     # CR-CRU-112 §S1/§S2 — the gate's scope is this stack's whole suite PLUS
     # every declared suite another stack owns, each run by the client of the
     # stack that OWNS it. Additive, never exclusionary: the whole-suite
@@ -2913,6 +2919,7 @@ def main():
                               "`coverage-not-measured` warning instead.")
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     pmg.add_argument("--skip-check", action="store_true", help="Bypass the fail-fast tsc check")
+    _axi().add_skip_lint_arg(pmg)
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)

@@ -1289,6 +1289,12 @@ def cmd_pre_merge_gate(args):
                       f"pre-merge-gate: ok=False exit={state['exit']} — "
                       f"aborted at the arduino-cli compile step")
             return state["exit"] or 1
+    # The lint stage follows compile: a failing linter stops the gate here.
+    stopped = _axi().gate_lint_stage(args, pd, _ops(), stack=_STACK,
+                                     agent_id=_axi().optional_agent_id(args),
+                                     verb="pre-merge-gate")
+    if stopped is not None:
+        return stopped
     reg_args = argparse.Namespace(
         agent=args.agent, project_dir=args.project_dir,
         dir=getattr(args, "dir", None), coverage=True,
@@ -1897,6 +1903,7 @@ def main():
     pmg.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     pmg.add_argument("--skip-check", action="store_true",
                      help="skip the fail-fast arduino-cli compile step")
+    _axi().add_skip_lint_arg(pmg)
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
     _axi().add_gate_suites_arg(pmg)
