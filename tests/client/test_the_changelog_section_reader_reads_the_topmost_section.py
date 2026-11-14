@@ -127,6 +127,30 @@ class TheSectionEndsWhereItShouldTest(unittest.TestCase):
         self.assertIn("- the unreleased entry names `alpha`", section)
         self.assertNotIn("example.invalid", section)
 
+    def test_a_link_definition_inside_the_section_does_not_end_it(self):
+        # Only the link block after the last heading ends a section; a link
+        # line an entry cites stays in the section it sits in.
+        text = PREAMBLE + (
+            "## [Unreleased]\n"
+            "\n"
+            "- the unreleased entry cites [the guide][guide]\n"
+            "\n"
+            "[guide]: https://guide.invalid/unreleased\n"
+            "\n"
+            "- after the link, an entry names `alpha`\n"
+            "\n"
+            "## [0.3.0] - 2026-10-10\n"
+            "\n"
+            "- the released entry names `omega`\n"
+            "\n"
+            "[Unreleased]: https://example.invalid/compare/v0.3.0...HEAD\n"
+        )
+        section = changelog_section(text)
+        self.assertIn("[guide]: https://guide.invalid/unreleased", section)
+        self.assertIn("- after the link, an entry names `alpha`", section)
+        self.assertNotIn("omega", section)
+        self.assertNotIn("example.invalid", section)
+
     def test_a_sub_heading_stays_inside_the_section(self):
         section = changelog_section(WITH_SUB_HEADINGS)
         self.assertIn("### Added", section)

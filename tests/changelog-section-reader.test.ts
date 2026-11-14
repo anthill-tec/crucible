@@ -127,6 +127,32 @@ describe("the section ends where it should", () => {
     expect(section).not.toContain("example.invalid");
   });
 
+  // Only the link block after the last heading ends a section; a link line an
+  // entry cites stays in the section it sits in.
+  test("a link definition inside the section does not end it", () => {
+    const text = PREAMBLE + [
+      "## [Unreleased]",
+      "",
+      "- the unreleased entry cites [the guide][guide]",
+      "",
+      "[guide]: https://guide.invalid/unreleased",
+      "",
+      "- after the link, an entry names `alpha`",
+      "",
+      "## [0.3.0] - 2026-10-10",
+      "",
+      "- the released entry names `omega`",
+      "",
+      "[Unreleased]: https://example.invalid/compare/v0.3.0...HEAD",
+      "",
+    ].join("\n");
+    const section = changelogSection(text);
+    expect(section).toContain("[guide]: https://guide.invalid/unreleased");
+    expect(section).toContain("- after the link, an entry names `alpha`");
+    expect(section).not.toContain("omega");
+    expect(section).not.toContain("example.invalid");
+  });
+
   test("a sub-heading stays inside the section", () => {
     const section = changelogSection(WITH_SUB_HEADINGS);
     expect(section).toContain("### Added");

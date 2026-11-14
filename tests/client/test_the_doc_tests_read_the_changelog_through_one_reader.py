@@ -16,10 +16,20 @@ text, once its escapes, a leading inline-flag group, a leading `^` and
 leading whitespace are set aside, BEGINS with a `## [Unreleased` heading.
 That is the shape of every lookup key (`"## [Unreleased]"`,
 `/^## \\[Unreleased\\]/`, `r"(?m)^## \\[Unreleased\\]"`), and also of a
-constant holding one for a later lookup. It leaves alone the words a test
-prints when it fails ("the changelog has an [Unreleased] body") and an
-inline changelog written as a reader's own fixture, which begins with its
-title, not with the heading.
+constant holding one for a later lookup. A regular expression's whitespace
+class (`\\s`, `\\s+`, `\\s*`) counts as the space it stands for, so
+`r"^##\\s+\\[Unreleased"` is a lookup too. So is a bare key: a literal that is
+the bracketed label alone (`"[Unreleased]"`, `"\\[Unreleased\\]"`). It leaves
+alone the words a test prints when it fails ("the changelog has an
+[Unreleased] body") and an inline changelog written as a reader's own
+fixture, which begins with its title, not with the heading.
+
+Each doc test reads through the readers its checks need
+(`tests/client/changelog_check_kinds.py`): a check that a feature IS
+recorded reads every release section, through `changelog_entries` /
+`changelogEntries`; a check that stale wording is ABSENT reads the section
+being written, through `changelog_section` / `changelogSection`. A module
+imports and calls each reader it needs.
 
 Invocation:
     .venv/bin/python clients/python-crucible.py test \
@@ -30,6 +40,14 @@ import ast
 import re
 import unittest
 from pathlib import Path
+
+from tests.client.changelog_check_kinds import (
+    BUN_CHECKS,
+    PYTHON_CHECKS,
+    PYTHON_READERS,
+    TS_READERS,
+    readers_needed,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -57,12 +75,22 @@ BUN_DOC_TESTS = (
 PYTHON_READER_MODULE = "tests.client.changelog_section"
 PYTHON_READER = "changelog_section"
 TS_READER = "changelogSection"
-TS_READER_IMPORT = re.compile(
-    r"import\s*\{[^}]*\b" + TS_READER + r"\b[^}]*\}\s*from\s*"
-    r"""["']\./helpers/changelog-section(?:\.ts)?["']""")
+
+
+def ts_reader_import(reader):
+    return re.compile(
+        r"import\s*\{[^}]*\b" + reader + r"\b[^}]*\}\s*from\s*"
+        r"""["']\./helpers/changelog-section(?:\.ts)?["']""")
+
+
+TS_READER_IMPORT = ts_reader_import(TS_READER)
 
 _INLINE_FLAGS = re.compile(r"^\(\?[a-zA-Z]+\)")
 _UNRELEASED_HEADING = re.compile(r"#{1,6}\s*\[Unreleased")
+#: A bare key: the label alone, bracketed, with nothing after it.
+_UNRELEASED_KEY = re.compile(r"\[Unreleased\]?\s*$")
+#: A regular expression's whitespace class, with its quantifier.
+_REGEX_WHITESPACE = re.compile(r"\\s[+*?]?")
 
 
 def python_path(name):
@@ -77,13 +105,15 @@ def is_unreleased_lookup(text):
     """Whether a literal's text is a lookup key for the `[Unreleased]`
     heading: it begins with the heading once escapes, inline flags, a `^`
     and leading whitespace are set aside."""
-    text = re.sub(r"\\[nrt]", " ", text).replace("\\", "")
+    text = re.sub(r"\\[nrt]", " ", text)
+    text = _REGEX_WHITESPACE.sub(" ", text).replace("\\", "")
     while True:
         stripped = _INLINE_FLAGS.sub("", text.lstrip()).lstrip("^")
         if stripped == text:
             break
         text = stripped
-    return _UNRELEASED_HEADING.match(text) is not None
+    return (_UNRELEASED_HEADING.match(text) is not None
+            or _UNRELEASED_KEY.match(text) is not None)
 
 
 def python_docstring_nodes(tree):
@@ -190,24 +220,44 @@ def ts_lookups(source):
     return [text for text in literals if is_unreleased_lookup(text)]
 
 
-def python_reads_through_the_reader(source):
-    """The module imports the python reader from its module and calls it."""
+def python_reads_through_the_reader(source, reader=PYTHON_READER):
+    """The module imports the python reader `reader` from its module and
+    calls it."""
     tree = ast.parse(source)
     local_names = {alias.asname or alias.name
                    for node in ast.walk(tree)
                    if isinstance(node, ast.ImportFrom) and node.module == PYTHON_READER_MODULE
-                   for alias in node.names if alias.name == PYTHON_READER}
+                   for alias in node.names if alias.name == reader}
     called = any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                  and node.func.id in local_names
                  for node in ast.walk(tree))
     return bool(local_names) and called
 
 
-def ts_reads_through_the_reader(source):
-    """The module imports the TypeScript reader from tests/helpers/ and calls it."""
+def ts_reads_through_the_reader(source, reader=TS_READER):
+    """The module imports the TypeScript reader `reader` from tests/helpers/
+    and calls it."""
     _, code = ts_code_literals_and_code(source)
-    return (TS_READER_IMPORT.search(code) is not None
-            and re.search(r"\b" + TS_READER + r"\s*\(", code) is not None)
+    return (ts_reader_import(reader).search(code) is not None
+            and re.search(r"\b" + reader + r"\s*\(", code) is not None)
+
+
+def python_readers_missing(name):
+    """The readers a python doc test's checks need that it does not import
+    and call: `changelog_entries` for a RECORDED check, `changelog_section`
+    for an ABSENT one."""
+    source = python_path(name).read_text(encoding="utf-8")
+    return [reader for reader in readers_needed(PYTHON_CHECKS[name], PYTHON_READERS)
+            if not python_reads_through_the_reader(source, reader)]
+
+
+def ts_readers_missing(name):
+    """The readers a bun doc test's checks need that it does not import and
+    call: `changelogEntries` for a RECORDED check, `changelogSection` for an
+    ABSENT one."""
+    source = bun_path(name).read_text(encoding="utf-8")
+    return [reader for reader in readers_needed(BUN_CHECKS[name], TS_READERS)
+            if not ts_reads_through_the_reader(source, reader)]
 
 
 class TheRuleReadsWhatItIsAskedTest(unittest.TestCase):
@@ -218,6 +268,34 @@ class TheRuleReadsWhatItIsAskedTest(unittest.TestCase):
                      "(?m)^## \\[Unreleased\\]", "\\n## [Unreleased]"):
             with self.subTest(text=text):
                 self.assertTrue(is_unreleased_lookup(text))
+
+    def test_a_heading_pattern_with_a_regex_whitespace_class_is_a_lookup(self):
+        for text in ("^##\\s+\\[Unreleased", "^##\\s*\\[Unreleased\\]",
+                     "(?m)^##\\s\\[Unreleased\\]"):
+            with self.subTest(text=text):
+                self.assertTrue(is_unreleased_lookup(text))
+
+    def test_a_bare_unreleased_key_is_a_lookup(self):
+        for text in ("[Unreleased]", "\\[Unreleased\\]", "^\\[Unreleased", " [Unreleased] "):
+            with self.subTest(text=text):
+                self.assertTrue(is_unreleased_lookup(text))
+
+    def test_a_link_definition_and_a_message_opening_with_the_label_are_not_bare_keys(self):
+        for text in ("[Unreleased]: https://example.invalid/compare/v0.3.0...HEAD",
+                     "[Unreleased] has a Stack declaration changes section",
+                     "Unreleased"):
+            with self.subTest(text=text):
+                self.assertFalse(is_unreleased_lookup(text))
+
+    def test_the_two_new_shapes_are_found_in_code_and_left_alone_in_prose(self):
+        python = ('"""Reads the `[Unreleased]` key and its heading."""\n'
+                  'KEY = "[Unreleased]"\n'
+                  'HEADING = re.compile(r"^##\\s+\\[Unreleased")\n')
+        self.assertEqual(python_lookups(python), ["[Unreleased]", "^##\\s+\\[Unreleased"])
+        ts = ('// sections["[Unreleased]"]\n'
+              'const body = sections["[Unreleased]"];\n'
+              'const at = CHANGELOG.search(/^##\\s+\\[Unreleased/m);\n')
+        self.assertEqual(ts_lookups(ts), ["[Unreleased]", "^##\\s+\\[Unreleased"])
 
     def test_a_failure_message_and_a_fixture_changelog_are_not_lookups(self):
         for text in ("the changelog has an [Unreleased] body",
@@ -264,6 +342,49 @@ class TheRuleReadsWhatItIsAskedTest(unittest.TestCase):
             '// import { changelogSection } from "./helpers/changelog-section.ts";\n'
             "const body = changelogSection(CHANGELOG);\n"))
 
+    def test_reading_through_the_entries_reader_needs_its_own_import_and_a_call(self):
+        both = ("from tests.client.changelog_section import changelog_entries, changelog_section\n"
+                "ALL = changelog_entries(TEXT)\nTOP = changelog_section(TEXT)\n")
+        self.assertTrue(python_reads_through_the_reader(both, "changelog_entries"))
+        self.assertTrue(python_reads_through_the_reader(both, "changelog_section"))
+        self.assertFalse(python_reads_through_the_reader(
+            "from tests.client.changelog_section import changelog_section\n"
+            "ALL = changelog_section(TEXT)\n", "changelog_entries"))
+        self.assertFalse(python_reads_through_the_reader(
+            "from tests.client.changelog_section import changelog_entries\n",
+            "changelog_entries"))
+        self.assertTrue(ts_reads_through_the_reader(
+            'import { changelogEntries } from "./helpers/changelog-section.ts";\n'
+            "const all = changelogEntries(CHANGELOG);\n", "changelogEntries"))
+        self.assertFalse(ts_reads_through_the_reader(
+            'import { changelogSection } from "./helpers/changelog-section.ts";\n'
+            "const all = changelogSection(CHANGELOG);\n", "changelogEntries"))
+
+    def test_a_module_needs_the_entries_reader_for_a_recorded_check_and_the_section_reader_for_an_absent_one(self):
+        self.assertEqual(readers_needed({"recorded": ("a",), "absent": ()}, PYTHON_READERS),
+                         ["changelog_entries"])
+        self.assertEqual(readers_needed({"recorded": ("a",), "absent": ("b",)}, PYTHON_READERS),
+                         ["changelog_entries", "changelog_section"])
+        self.assertEqual(readers_needed({"recorded": (), "absent": ("b",)}, TS_READERS),
+                         ["changelogSection"])
+
+    def test_every_listed_doc_test_has_its_checks_classified(self):
+        self.assertEqual(sorted(PYTHON_CHECKS), sorted(PYTHON_DOC_TESTS))
+        self.assertEqual(sorted(BUN_CHECKS), sorted(BUN_DOC_TESTS))
+        for name, kinds in {**PYTHON_CHECKS, **BUN_CHECKS}.items():
+            with self.subTest(module=name):
+                self.assertTrue(kinds["recorded"], f"{name} has a RECORDED check")
+                self.assertFalse(set(kinds["recorded"]) & set(kinds["absent"]))
+
+    def test_the_bun_classification_is_the_one_the_bun_next_release_test_runs(self):
+        source = (REPO_ROOT / "tests" /
+                  "doc-tests-find-their-features-across-the-next-release.test.ts"
+                  ).read_text(encoding="utf-8")
+        for kinds in BUN_CHECKS.values():
+            for check in kinds["recorded"]:
+                with self.subTest(check=check):
+                    self.assertIn('"' + check + '"', source)
+
     def test_every_listed_doc_test_is_there_to_read(self):
         self.assertEqual(len(PYTHON_DOC_TESTS) + len(BUN_DOC_TESTS), 13)
         for path in [*map(python_path, PYTHON_DOC_TESTS), *map(bun_path, BUN_DOC_TESTS)]:
@@ -292,21 +413,19 @@ class EveryDocTestReadsThroughItsLanguagesReaderTest(unittest.TestCase):
 
     maxDiff = None
 
-    def test_every_python_doc_test_reads_the_section_through_the_python_reader(self):
-        missing = [name for name in PYTHON_DOC_TESTS
-                   if not python_reads_through_the_reader(
-                       python_path(name).read_text(encoding="utf-8"))]
-        self.assertEqual(missing, [],
-                         "each python doc test imports `changelog_section` from "
-                         "tests/client/changelog_section.py and calls it")
+    def test_every_python_doc_test_reads_through_the_readers_its_checks_need(self):
+        missing = {name: python_readers_missing(name) for name in PYTHON_DOC_TESTS}
+        self.assertEqual({name: readers for name, readers in missing.items() if readers}, {},
+                         "each python doc test imports from tests/client/changelog_section.py "
+                         "and calls `changelog_entries` for its RECORDED checks and "
+                         "`changelog_section` for its ABSENT ones")
 
-    def test_every_bun_doc_test_reads_the_section_through_the_typescript_reader(self):
-        missing = [name for name in BUN_DOC_TESTS
-                   if not ts_reads_through_the_reader(
-                       bun_path(name).read_text(encoding="utf-8"))]
-        self.assertEqual(missing, [],
-                         "each bun doc test imports `changelogSection` from "
-                         "tests/helpers/changelog-section.ts and calls it")
+    def test_every_bun_doc_test_reads_through_the_readers_its_checks_need(self):
+        missing = {name: ts_readers_missing(name) for name in BUN_DOC_TESTS}
+        self.assertEqual({name: readers for name, readers in missing.items() if readers}, {},
+                         "each bun doc test imports from tests/helpers/changelog-section.ts "
+                         "and calls `changelogEntries` for its RECORDED checks and "
+                         "`changelogSection` for its ABSENT ones")
 
 
 if __name__ == "__main__":
