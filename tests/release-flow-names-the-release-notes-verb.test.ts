@@ -226,13 +226,23 @@ function git(args: string[]): { stdout: string; exitCode: number; stderr: string
   return { stdout: res.stdout.toString(), stderr: res.stderr.toString(), exitCode: res.exitCode };
 }
 
-/** Where this branch left `develop` (the local branch, else its remote-tracking copy). */
+/**
+ * Where this branch left `develop`: of the local branch and its remote-tracking
+ * copy, the fork point nearest HEAD (a stale ref must not widen the branch's additions).
+ */
 function forkPoint(): string {
+  let best: { base: string; ahead: number } | undefined;
   for (const ref of ["develop", "origin/develop"]) {
     const res = git(["merge-base", ref, "HEAD"]);
-    if (res.exitCode === 0) return res.stdout.trim();
+    if (res.exitCode !== 0) continue;
+    const base = res.stdout.trim();
+    const count = git(["rev-list", "--count", `${base}..HEAD`]);
+    if (count.exitCode !== 0) continue;
+    const ahead = Number(count.stdout.trim());
+    if (best === undefined || ahead < best.ahead) best = { base, ahead };
   }
-  throw new Error("neither develop nor origin/develop is reachable, so the branch's added lines cannot be read");
+  if (best === undefined) throw new Error("neither develop nor origin/develop is reachable, so the branch's added lines cannot be read");
+  return best.base;
 }
 
 const CLASSIFIED_TREES = ["clients", "src", "scripts"];
