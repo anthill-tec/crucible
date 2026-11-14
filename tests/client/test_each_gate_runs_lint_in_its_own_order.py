@@ -30,6 +30,9 @@ client's own order, fail-fast:
 - The python gate's `check` warnings ride the envelope of a lint abort.
 - A go gate on a board that does not decode `go-test` is refused before its
   lint stage: no linter runs and nothing is filed.
+- A gate given `--release` beside `--cycle` is refused by the release hard
+  stop (`release-run-refused`) before its lint stage, in every client: no
+  linter runs and nothing is filed.
 
 Every drive is a real subprocess of a client from a scratch copy of the fleet,
 against the recording board double of `tests/client/lint_verb_harness.py`. No
@@ -102,6 +105,13 @@ CHECK_COMPILED_NOTHING = "check-compiled-nothing"
 
 #: The exit a shell reports for a process killed by SIGTERM: 128 + 15.
 SIGTERM_EXIT = 128 + int(signal.SIGTERM)
+
+#: A release run takes no cycle: the pair a gate refuses before its lint.
+RELEASE = "9.9.9-gate-fixture"
+CYCLE = 7
+#: The release hard stop's code, on its stderr line, and its help's step.
+RELEASE_RUN_REFUSED = "release-run-refused"
+RELEASE_TAKES_NO_CYCLE = "a release run takes no --cycle"
 
 #: What the failing clippy prints, and the board decodes: errors, warnings.
 CLIPPY_ERRORS = 2
@@ -411,6 +421,29 @@ class _EveryGateLintCases(_GateDrive):
                          f"`lint`); {why}")
         self.assertNotIn(f"the {GATE} run", detail,
                          f"never the bare gate: its tests never ran; {why}")
+
+    def test_a_release_beside_a_cycle_is_refused_before_the_linter_runs(self):
+        result, axi = self.gate(self.declaring_project(),
+                                "--release", RELEASE, "--cycle", str(CYCLE))
+        why = self.why(result, axi)
+        self.assertGateEnvelope(result, axi)
+        self.assertIs(axi.get("ok"), False, why)
+        self.assertNotEqual(result.returncode, 0, why)
+        self.assertIn(RELEASE_RUN_REFUSED, result.stderr,
+                      f"the release hard stop answers; {why}")
+        error = str(axi.get("error"))
+        self.assertIn(RELEASE, error, f"the refusal names the release; {why}")
+        self.assertIn("--cycle", error, f"the refusal names --cycle; {why}")
+        self.assertTrue(any(str(step).startswith(RELEASE_TAKES_NO_CYCLE)
+                            for step in axi.get("help") or []),
+                        f"the release hard stop's help; {why}")
+        self.assertEqual(self.calls(LINTER), [], f"the linter never runs; {why}")
+        filed = [(method, path) for method, path, _body in self.board.writes()
+                 if urllib.parse.urlsplit(path).path.startswith("/api/v2/runs")]
+        self.assertEqual(filed, [], f"nothing is filed on a run route; {why}")
+        self.assertEqual(self.board.compile_posts(), [], why)
+        self.assertEqual([c for c in self.calls() if self.is_test(c)], [],
+                         f"no test stage runs; {why}")
 
 
 class _MalformedLintCases(_GateDrive):
