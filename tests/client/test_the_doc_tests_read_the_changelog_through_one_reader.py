@@ -31,6 +31,10 @@ recorded reads every release section, through `changelog_entries` /
 being written, through `changelog_section` / `changelogSection`. A module
 imports and calls each reader it needs.
 
+No listed doc test names `[Unreleased]` in a code literal at all, a failure
+message included: a message says "the changelog" or "the section being
+written". Docstrings and comments are prose and may still name it.
+
 Invocation:
     .venv/bin/python clients/python-crucible.py test \
         --tests tests.client.test_the_doc_tests_read_the_changelog_through_one_reader
@@ -211,6 +215,12 @@ def ts_code_literals_and_code(source):
     return literals, "".join(code)
 
 
+def literals_naming_unreleased(literals):
+    """The literals whose text holds the `[Unreleased]` label anywhere, a
+    failure message's words included."""
+    return [text for text in literals if "[Unreleased]" in text.replace("\\", "")]
+
+
 def python_lookups(source):
     return [text for text in python_code_literals(source) if is_unreleased_lookup(text)]
 
@@ -326,6 +336,22 @@ class TheRuleReadsWhatItIsAskedTest(unittest.TestCase):
                   'throw new Error("CHANGELOG.md has no [Unreleased] section");\n')
         self.assertEqual(ts_lookups(source), ["## [Unreleased]", "^## \\[Unreleased\\]"])
 
+    def test_a_literal_naming_unreleased_is_found_in_code_and_left_alone_in_prose(self):
+        python = ('"""Reads the `[Unreleased]` section."""\n'
+                  '# the CHANGELOG [Unreleased] body\n'
+                  'def body():\n'
+                  '    """The [Unreleased] body."""\n'
+                  '    return "the changelog has an [Unreleased] body"\n'
+                  'MESSAGE = f"{1} names the section being written"\n')
+        self.assertEqual(literals_naming_unreleased(python_code_literals(python)),
+                         ["the changelog has an [Unreleased] body"])
+        ts = ('// CHANGELOG.md has no [Unreleased] section\n'
+              'test("its Unreleased section has an entry", () => {});\n'
+              'throw new Error("CHANGELOG.md has no [Unreleased] section");\n'
+              'const key = /\\[Unreleased\\]/;\n')
+        self.assertEqual(literals_naming_unreleased(ts_code_literals_and_code(ts)[0]),
+                         ["CHANGELOG.md has no [Unreleased] section", "\\[Unreleased\\]"])
+
     def test_reading_through_the_reader_needs_the_import_and_a_call(self):
         self.assertTrue(python_reads_through_the_reader(
             "from tests.client.changelog_section import changelog_section\n"
@@ -407,6 +433,18 @@ class NoDocTestLooksTheSectionUpByNameTest(unittest.TestCase):
                  for name in BUN_DOC_TESTS}
         self.assertEqual({name: keys for name, keys in found.items() if keys}, {},
                          "a bun doc test looks the `[Unreleased]` heading up by name")
+
+    def test_no_doc_test_has_a_literal_naming_unreleased(self):
+        found = {
+            **{name: literals_naming_unreleased(python_code_literals(
+                python_path(name).read_text(encoding="utf-8"))) for name in PYTHON_DOC_TESTS},
+            **{name: literals_naming_unreleased(ts_code_literals_and_code(
+                bun_path(name).read_text(encoding="utf-8"))[0]) for name in BUN_DOC_TESTS},
+        }
+        self.assertEqual({name: texts for name, texts in found.items() if texts}, {},
+                         "a doc test's string literal (a failure message included) names "
+                         "`[Unreleased]`; it says \"the changelog\" or \"the section being "
+                         "written\" instead")
 
 
 class EveryDocTestReadsThroughItsLanguagesReaderTest(unittest.TestCase):
