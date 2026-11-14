@@ -178,10 +178,12 @@ max = 500
 #
 # A profile with no entry, or a project with no `crucible.toml`, is undeclared
 # and runs exactly as if it declared that entry: it streams by default. An
-# entry naming another `framework`, `codec` or `path`, or declaring `junit`,
-# `console` or `coverage` (a rust run's record is its stream, and its coverage
-# follows the verb), is REFUSED before anything runs, naming the table and the
-# field. A project file that does not parse is refused too.
+# entry naming another stack's framework (`arduino-native`, `surefire`,
+# `pytest`, `go-test`, ...) is that stack's and is skipped. Any other
+# `framework`, `codec` or `path`, or a `junit`, `console` or `coverage` field
+# (a rust run's record is its stream, and its coverage follows the verb), is
+# REFUSED before anything runs, naming the table and the field. A project file
+# that does not parse is refused too.
 #
 # Read from the PROJECT's own file only, never the installed copy: an install
 # entry would make one project every other project's declaration.

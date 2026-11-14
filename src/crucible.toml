@@ -13,9 +13,10 @@
 #
 # It is package data, replaced wholesale by the next upgrade. The file an
 # OPERATOR edits is the `crucible.toml` beside the server's own DATABASE,
-# found by the same rule that finds the database (`$CRUCIBLE_DB`, else
-# `<cwd>/data/crucible.db`, else the XDG data dir). Add a `value = …` line to
-# a limit's table THERE; a value set here would be overwritten on upgrade.
+# found by the same rule that finds the database (`$CRUCIBLE_DB`, else an
+# already-existing `<cwd>/data/crucible.db`, else the XDG data dir). Add a
+# `value = …` line to a limit's table THERE; a value set here would be
+# overwritten on upgrade.
 #
 # ── Why only the SERVER's five limits are here ────────────────────────────
 #

@@ -48,12 +48,14 @@ they load by path — `_crucible_axi.py`, `_crucible_run.py`,
 `_crucible_release.py`, `_crucible_project.py`, `_crucible_lint.py` and
 `toon.py` — the
 `subtest_runner.py` the Python client runs, `STATUS-CONTRACT.md`, the
-shipped `crucible.toml` limit defaults and the stack-declaration schema
+shipped `crucible.toml` limit defaults, the shipped Vitest and Playwright
+reporters under `reporters/` and the stack-declaration schema
 `crucible-declaration.schema.json`) down in `<target-dir>/clients/`, and
 writes the client discovery **manifest** naming those paths into it; the
 manifest's `declaration_schema` key lists the schema as `{path, version}`. Those
-three stages — `server`, `fleet`, `manifest`, in that order, so the manifest is
-written only after the paths it names exist — are the whole install. It reports
+four stages — `server`, `fleet`, `manifest` and `unit` (the systemd `--user`
+service, below), in that order, so the manifest is written only after the paths
+it names exist — are the whole install. It reports
 a TOON-AXI envelope naming each stage's installed
 path plus the absolute Bun it resolved. A second run at the same version is a
 no-op; re-running after an upgrade re-provisions the server, because the
@@ -135,8 +137,9 @@ user-scoped server package and its `crucible-server` symlink, via
 stage in the usual TOON-AXI envelope and names the two things it deliberately
 kept — the **store** (`$XDG_DATA_HOME/crucible`, else `~/.local/share/crucible`)
 and the **config** (`<target-dir>/crucible-clients.json`) — with their paths,
-marked `retained`. Stage order is `server`, `config`, `store`: destructive last,
-so a failing step can never leave your data gone and the program still installed.
+marked `retained`. Stage order is `unit`, `server`, `config`, `store`: the
+service first, destructive last, so a failing step can never leave your data
+gone and the program still installed.
 
 Destroying data is opt-in and explicit:
 
@@ -180,7 +183,8 @@ pip install -e '.[dev]'
   name is also declared in a test file the untagged build compiles.
   `regression` runs the untagged tests and then every declared tier's tests.
   The `pre-merge-gate` runs each declared tier as a suite with its own row,
-  beside the `untagged` row, filed under `regression`.
+  filed under that tier, beside the `untagged` row (the whole run), filed
+  under `regression`; `e2e` is listed and excluded.
   A run that kept coverage states a `coverage` block in its envelope: its
   lines and functions percents, its file count and its 10 least covered files.
   `run <event-id> --files <n>|all` lists a stored run's files in the same

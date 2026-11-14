@@ -514,8 +514,9 @@ provisioned server move in lockstep; on an already-current machine it reports
   declares is refused, and so is a tier test whose name is also declared in a
   test file the untagged build compiles. `regression` runs the untagged tests
   and then every declared tier's tests. The `pre-merge-gate` runs each
-  declared tier as a suite with its own row, beside the `untagged` row, filed
-  under `regression`. `check --tests` also compiles each declared tier's test
+  declared tier as a suite with its own row, filed under that tier, beside the
+  `untagged` row (the whole run), filed under `regression`; `e2e` is listed
+  and excluded. `check --tests` also compiles each declared tier's test
   files under its tag. A module whose `go.mod` `go list` rejects has
   `regression` and the gate refused (`declaration-refused`), not run red, even
   in a project that declares no tier.
@@ -564,9 +565,11 @@ Facts worth knowing when it misbehaves:
   bearing: the published `crucible-server` bin is a shim that spawns `bun`
   itself, and a unit inherits no shell PATH. Without it the service dies
   `status=127` (`spawn bun ENOENT`) in a `Restart=on-failure` loop.
-- **Only the `CRUCIBLE_*` vars that were set at install time are forwarded**, so
-  change the port or store by re-running `crucible-axi install` with the new
-  values (it rewrites the unit only when the text actually changes).
+- **Only `CRUCIBLE_DB`, when it was set at install time, is forwarded.** Change
+  the store by re-running `crucible-axi install` with the new value (it
+  rewrites the unit only when the text actually changes). Change the port in
+  the `[server]` table of the server's own `crucible.toml` (see "The listener"
+  below), then `systemctl --user restart crucible-server`.
 - **`systemctl --user stop` is a clean stop**, not a failure: the server
   checkpoints active cycles on SIGTERM and exits, and the unit reports
   `Result=success`.
@@ -587,9 +590,9 @@ curl -fsSL https://raw.githubusercontent.com/anthill-tec/crucible/master/install
 
 A plain uninstall reverses **program artifacts only** — the user-scoped server
 package and its `crucible-server` symlink (`bun remove -g`, using the same
-absolute Bun the install resolved). Stage order is `server`, `config`, `store`:
-destructive last, so a failing step can never leave data gone and the program
-installed.
+absolute Bun the install resolved). Stage order is `unit`, `server`, `config`,
+`store`: the service first, destructive last, so a failing step can never leave
+data gone and the program installed.
 
 Kept by default, and named with their paths in the envelope:
 
