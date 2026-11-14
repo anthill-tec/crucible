@@ -1419,8 +1419,10 @@ ROUTE_TABLE = {
            for verb in ("test", "unit", "integration", "e2e", "module", "bdd",
                         "smoke-test", "docker-e2e-gate", "workspace-regression",
                         "regression", "regression-ingest")},
-        # The gate's clippy step files a rustc compile ingest: no report. Its
-        # declared profiles (`_test_run`) and its whole suite
+        # The gate's lint stage (its former clippy step) files through the
+        # shared lint runner, added with every client's gate below; its whole
+        # suite still files a rustc compile ingest when a list does not
+        # build: no report. Its declared profiles (`_test_run`) and its whole suite
         # (`_workspace_regression_run`) both close through the shared
         # streamed close.
         "pre-merge-gate": routes(_THROUGH_THE_SHARED_CLOSE, _RUST_RUSTC),
@@ -1466,6 +1468,14 @@ ROUTE_TABLE = {
 _THROUGH_THE_SHARED_LINT_POST = {(SHARED_LINT, SHARED_LINT, COMPILE_ROUTE)}
 for _client_routes in ROUTE_TABLE.values():
     _client_routes["lint"] = routes((), _THROUGH_THE_SHARED_LINT_POST)
+
+# Every client's `pre-merge-gate` runs `lint` as a stage of its own, so it
+# files its lint record through the same shared lint runner, beside whatever
+# its other stages file: no report.
+for _client_routes in ROUTE_TABLE.values():
+    _gate_routes = _client_routes["pre-merge-gate"]
+    _client_routes["pre-merge-gate"] = routes(
+        _gate_routes.report, _gate_routes.no_report | _THROUGH_THE_SHARED_LINT_POST)
 
 
 def _route_lines(table):
