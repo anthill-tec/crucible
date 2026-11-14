@@ -10,6 +10,27 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-14
+
+### Upgrading
+
+- **Re-run `crucible-axi install` after upgrading.** It fills two settings an older install never wrote,
+  and never overwrites a value already set:
+  - the install's `crucible.toml` gains `[client] url`, built from the port the board already listens on,
+    so the clients reach the board through configuration rather than the shipped default;
+  - the server's own settings file gains `[server] port`, the port that server already boots on (no
+    new port is probed).
+
+  The install output lists each file it `filled`, and each it left alone under `notFilled` with the
+  reason.
+- **The rust gate's lint step is renamed.** A stack file or script that reads the rust
+  `pre-merge-gate` envelope now sees `stage: "lint"` instead of `"clippy"`, and the warning
+  `lint-gate-abort` instead of `clippy-gate-abort`. `--skip-clippy` still works, as an alias of
+  `--skip-lint`.
+- **Every gate runs a lint stage.** A project with no `[lint]` table, and no default for its stack,
+  gets a `lint-not-declared` warning and its gate goes on; declare the project's linter in a
+  `[lint]` table of its `crucible.toml` to lint it.
+
 ### Added
 
 - **Every client has a `lint` verb.** `python`, `bun`, `rust`, `go`, `mvn` and `arduino-crucible.py lint
@@ -217,6 +238,9 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ### Fixed
 
+- **A filed lint run is named in its envelope's `events`.** `lint --agent` lists the board's event
+  for its run in `events`, as every verb that files a run does; `events` stays empty when nothing
+  was filed.
 - **The Runs tab stays responsive while a run streams.** A streamed batch updates only the running
   cards, which sit in a container of their own; the timeline of settled runs is no longer rebuilt
   and re-styled on every batch. The timeline's rows skip their style and layout while off screen.
@@ -451,5 +475,6 @@ For the go stack (`crucible.toml`):
   - the e2e drive counts the phone feature once per browser engine;
   - the WebKit phone tap is engine-neutral.
 
-[Unreleased]: https://github.com/anthill-tec/crucible/compare/0.3.0...HEAD
+[Unreleased]: https://github.com/anthill-tec/crucible/compare/0.4.0...HEAD
+[0.4.0]: https://github.com/anthill-tec/crucible/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/anthill-tec/crucible/compare/0.2.2...0.3.0
