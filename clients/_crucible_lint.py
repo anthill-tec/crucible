@@ -307,12 +307,22 @@ def gate_lint_stage(args, project_dir, ops, *, stack, agent_id, verb,
     by `--skip-lint`, or has nothing declared and no default (warned
     `lint-not-declared`) -- else emits the gate's one envelope, stopped at
     `stage: lint` with an earlier stage's `carried_warnings` and
-    `lint-gate-abort`, and returns its exit.
+    `lint-gate-abort`, and returns its exit. A `--release` beside `--cycle`,
+    which the board refuses at the run's start, is refused here first by the
+    release hard stop: no linter runs and nothing is posted.
 
     The lint run is filed as `lint` files it; its event joins the gate
     envelope's `events` either way."""
     if getattr(args, "skip_lint", False):
         return None
+    release, cycle_id = getattr(args, "release", None), getattr(args, "cycle", None)
+    if release and cycle_id is not None:
+        refusal = _core.ReleaseRunRefused(release, "a release run takes no --cycle")
+        refusal.detail = (f"{verb} refused --release {release} beside --cycle "
+                          f"{cycle_id} before its lint stage: a release run takes "
+                          f"no cycle, so nothing ran and nothing was posted")
+        return _core.emit_release_run_refused_hard_stop(
+            verb, refusal, ops.context(project_dir, agent_id=agent_id))
     marker, errors, lints = None, None, None
     try:
         spec, _declared = resolve_lint_declaration(default)
@@ -332,7 +342,7 @@ def gate_lint_stage(args, project_dir, ops, *, stack, agent_id, verb,
     print(f"[crucible] {verb}: lint stage {marker} exit={exit_code}",
           file=sys.stderr)
     if agent_id:
-        resp = _file_lint(ops, project_dir, agent_id, getattr(args, "cycle", None),
+        resp = _file_lint(ops, project_dir, agent_id, cycle_id,
                           stack, spec, marker, output, exit_code)
         if resp.get("ok"):
             errors, lints = resp.get("errors"), resp.get("warnings")
