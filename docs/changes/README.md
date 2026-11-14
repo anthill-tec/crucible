@@ -188,6 +188,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-254](CR-CRU-254-each-stacks-lint-runs-through-its-client.md) | each stack's lint runs through its client, and the gate runs it after check | feature | COMPLETED | 199, 253 | 13 (0.4.0) |
 | [CR-CRU-256](CR-CRU-256-a-filed-lint-run-is-named-in-its-envelopes-events.md) | a filed lint run is named in its envelope's events | fix | COMPLETED | 254 | 8 (0.4.0) |
 | [CR-CRU-255](CR-CRU-255-a-gate-whose-only-run-fails-answers-not-ok.md) | a gate whose only run fails answers not ok | fix | PENDING | — | 9 (0.5.0) |
+| [CR-CRU-258](CR-CRU-258-a-gate-drive-never-stalls-on-the-tools-own-output.md) | a gate drive never stalls on the tool's own output | fix | PENDING | — | 9 (0.5.0) |
 | [CR-CRU-200](CR-CRU-200-an-open-run-takes-its-test-stream-and-shows-it-live.md) | an open run takes its test stream and shows it live | feature | COMPLETED | 152, 206 | 8 (0.4.0) |
 | [CR-CRU-201](CR-CRU-201-a-bun-project-streams-its-tests-declared-in-one-table.md) | a bun project streams its tests, declared in one table per script | feature | COMPLETED | 200 | 8 (0.4.0) |
 | [CR-CRU-202](CR-CRU-202-a-rust-run-streams-its-tests-through-nextest.md) | a rust run streams its tests through nextest | feature | COMPLETED | 200 | 8 (0.4.0) |
