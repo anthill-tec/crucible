@@ -3479,7 +3479,7 @@ def _runs_scope(args):
     if release is not None:
         return {"release": release}, f"release {release}"
     try:
-        cycle_id = int(cycle)
+        cycle_id = int(str(cycle))
     except ValueError:
         return None, f"--cycle {cycle!r} is not an integer: {RUNS_USAGE}"
     return {"cycleId": str(cycle_id)}, f"cycle {cycle_id}"
@@ -7632,7 +7632,7 @@ def _load_sibling_module(file_name, suffix):
     spec.loader.exec_module(module)
     # Bound after it has run: its own `_core = None` would overwrite a binding
     # made before.
-    module._core = _CoreView(globals())
+    module.__dict__["_core"] = _CoreView(globals())
     return module
 
 
@@ -7994,7 +7994,7 @@ def _failing_tests(ops, filed_runs):
     for run in filed_runs:
         if not run["run"].get("failed"):
             continue
-        names.extend(_event_failing_tests(ops, run["event"]))
+        names.extend(_event_failing_tests(ops, run["event"]) or [])
     return names
 
 
@@ -8030,7 +8030,7 @@ def _gate_suite_entries(ops, results):
         if result["outcome"] == GATE_OUTCOME_FAIL:
             entry["failingTests"] = [
                 name for event_id in result["events"]
-                for name in _event_failing_tests(ops, event_id)]
+                for name in _event_failing_tests(ops, event_id) or []]
         entries.append(entry)
     return entries
 
