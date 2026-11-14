@@ -50,7 +50,7 @@ Subcommands:
                         reports to /api/v2/runs.
   check                 python -m py_compile over given paths (default app/ + tests/);
                         ingest any errors to /api/v2/runs/compile. Syntax gate.
-  pre-merge-gate        ORCHESTRATOR gate: fail-fast check → regression --coverage.
+  pre-merge-gate        ORCHESTRATOR gate: fail-fast check → lint → regression --coverage.
   plan-file             File a cycle plan → the assigned NUMERIC cycle ids.
   plan-backfill         Backfill a plan's wave (PATCH wave-only; open OR closed).
   cycle-activate <id>   Transition a cycle to active.
