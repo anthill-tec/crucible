@@ -24,17 +24,22 @@ What is pinned:
     naming it, and nothing is posted; a bun project's linter runs in its
     package directory;
   * the marker is the declared `name`, else the declared `format`, else the
-    basename of the command's first word.
+    basename of the command's first word;
+  * a linter killed by a signal is filed with the exit a shell reports for
+    it (128 + the signal, so SIGTERM is 143), which the board accepts, and
+    the verdict is a failure with an exit that is never negative.
 
 Invocation:
     .venv/bin/python clients/python-crucible.py test --agent <id> --tests \
         tests.client.test_a_projects_declared_linter_runs_through_its_client
 """
 
+import signal
 import unittest
 
 from tests.client.lint_verb_harness import (
     AGENT,
+    BAD_RUNNER_EXIT,
     CYCLE,
     DEFAULT_EVENT,
     PROJECT_KEY,
@@ -53,6 +58,11 @@ INTERLEAVED = (("out", "app/a.py:1:1: F401 `os` imported but unused\n"),
                ("err", "warning: ruff found a stale cache\n"),
                ("out", "app/b.py:2:5: E711 comparison to None\n"))
 INTERLEAVED_TEXT = "".join(text for _stream, text in INTERLEAVED)
+
+#: What a linter the system stops prints before it dies, and the exit a shell
+#: reports for a process killed by SIGTERM: 128 + 15.
+KILLED_OUTPUT = "app/a.py:1:1: F401 `os` imported but unused\n"
+SIGTERM_EXIT = 128 + int(signal.SIGTERM)
 
 
 def _ruff_table(command=None, **fields):
@@ -321,6 +331,57 @@ class TheMarkerIsTheNameElseTheFormatElseTheBasenameTest(LintDriveMixin, unittes
         root = self.project(_ruff_table())
         _result, axi = self.filed("python", root)
         self.assertEqual(axi.get("event"), DEFAULT_EVENT, f"{axi!r}")
+
+
+class ALinterKilledByASignalIsFiledWithANonNegativeExitTest(LintDriveMixin,
+                                                            unittest.TestCase):
+    """The declared linter prints, then kills itself with SIGTERM. Its exit
+    is the one a shell reports, 128 + the signal, never the negative return
+    code `subprocess` gives a signal-killed child; the board double refuses a
+    negative `runnerExit` as the board does."""
+
+    def setUp(self):
+        super().setUp()
+        self.fake(RUFF)
+        self.say((("out", KILLED_OUTPUT),), kill_signal=signal.SIGTERM)
+        self.board.answer_counts(1, 0)
+        self.root = self.project(_ruff_table())
+
+    def test_the_post_carries_runner_exit_143_for_a_linter_killed_by_sigterm(self):
+        result, axi = self.filed("python", self.root)
+        body = self.one_compile_post(result, axi)
+        self.assertEqual(
+            (body.get("lint"), body.get("runnerExit")), ("ruff", SIGTERM_EXIT),
+            f"a SIGTERM-killed linter is filed with exit 128 + 15; body={body!r}")
+        self.assertIn(KILLED_OUTPUT, body.get("errors") or "",
+                      f"what it printed before it died is posted; body={body!r}")
+
+    def test_the_board_accepts_the_post_of_a_linter_killed_by_a_signal(self):
+        result, axi = self.filed("python", self.root)
+        self.assertEqual(len(self.board.compile_posts()), 1, f"{axi!r}")
+        self.assertNotIn(
+            "ingest-failed", warning_codes(axi),
+            f"the board takes the post (a negative runnerExit is refused with "
+            f"{BAD_RUNNER_EXIT!r}); envelope={axi!r} stderr={result.stderr[-1500:]}")
+        self.assertEqual((axi.get("event"), axi.get("errors"), axi.get("lints")),
+                         (DEFAULT_EVENT, 1, 0),
+                         f"the filed event and the board's counts; {axi!r}")
+
+    def test_lint_fails_with_a_non_negative_exit_for_a_linter_killed_by_a_signal(self):
+        result, axi = self.filed("python", self.root)
+        why = f"envelope={axi!r} stderr={result.stderr[-1500:]}"
+        self.assertEqual((axi.get("verb"), axi.get("ok"), axi.get("exit")),
+                         ("lint", False, SIGTERM_EXIT), why)
+        self.assertNotEqual(result.returncode, 0, why)
+        self.assertGreaterEqual(result.returncode, 0,
+                                f"the client exits, it is never killed; {why}")
+
+    def test_lint_without_agent_reports_the_same_non_negative_exit_and_posts_nothing(self):
+        result, axi = self.run_client("python", self.root)
+        why = f"envelope={axi!r} stderr={result.stderr[-1500:]}"
+        self.assertEqual((axi.get("ok"), axi.get("exit")), (False, SIGTERM_EXIT), why)
+        self.assertEqual(self.board.compile_posts(), [], why)
+        self.assertNotEqual(result.returncode, 0, why)
 
 
 if __name__ == "__main__":

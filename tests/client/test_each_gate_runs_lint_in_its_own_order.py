@@ -20,6 +20,16 @@ client's own order, fail-fast:
   `stage: "lint"` with `errors` and `lints`, warns `lint-gate-abort` and never
   `clippy-gate-abort`, keeps `CARGO_BUILD_JOBS`, is still skipped by
   `--skip-clippy`, and a declared `[lint]` replaces its clippy default.
+- A lint post the board refuses warns `ingest-failed` naming the lint step,
+  never the bare gate.
+- A malformed `[lint]` (`command = []`) stops the gate at its lint stage with
+  an `error`, exit 1 and `lint-gate-abort`, and nothing is filed.
+- A linter killed by a signal stops the python gate at `lint` with the exit a
+  shell reports for it (128 + the signal), never a negative one, and the
+  board takes its post.
+- The python gate's `check` warnings ride the envelope of a lint abort.
+- A go gate on a board that does not decode `go-test` is refused before its
+  lint stage: no linter runs and nothing is filed.
 
 Every drive is a real subprocess of a client from a scratch copy of the fleet,
 against the recording board double of `tests/client/lint_verb_harness.py`. No
@@ -42,6 +52,7 @@ Invocation:
 import json
 import re
 import shutil
+import signal
 import sys
 import unittest
 import urllib.parse
@@ -54,6 +65,11 @@ from tests.client.lint_verb_harness import (
     LintDriveMixin,
     lint_table,
     warning_codes,
+)
+from tests.client.live_run_harness import (
+    GO_TEST_STREAM_CODEC,
+    HEALTH_PATHS,
+    board_health,
 )
 from tests.client.project_create_harness import ScratchFleet
 from tests.client.test_client_fleet_envelope_census import (
@@ -80,6 +96,12 @@ STAGE = "lint"
 LINT_GATE_ABORT = "lint-gate-abort"
 CLIPPY_GATE_ABORT = "clippy-gate-abort"
 LINT_NOT_DECLARED = "lint-not-declared"
+INGEST_FAILED = "ingest-failed"
+#: The python `check` stage's warning when it found nothing to compile.
+CHECK_COMPILED_NOTHING = "check-compiled-nothing"
+
+#: The exit a shell reports for a process killed by SIGTERM: 128 + 15.
+SIGTERM_EXIT = 128 + int(signal.SIGTERM)
 
 #: What the failing clippy prints, and the board decodes: errors, warnings.
 CLIPPY_ERRORS = 2
@@ -373,6 +395,51 @@ class _EveryGateLintCases(_GateDrive):
                             f"the gate goes on to its tests; {why}")
         self.assertNotEqual(axi.get("stage"), STAGE, why)
 
+    def test_a_refused_lint_post_warns_ingest_failed_naming_the_lint_step(self):
+        self.failing_lint()
+        self.board.refuse_compile(400, "the board double refuses this lint post")
+        result, axi = self.gate(self.declaring_project())
+        why = self.why(result, axi)
+        self.assertEqual(axi.get("stage"), STAGE, why)
+        failed = [w for w in axi.get("warnings") or []
+                  if isinstance(w, dict) and w.get("code") == INGEST_FAILED]
+        self.assertEqual(len(failed), 1,
+                         f"one ingest-failed warning, the lint post's; {why}")
+        detail = str(failed[0].get("detail"))
+        self.assertRegex(detail, r"\blint\b",
+                         f"the warning names the lint step (`{GATE} lint` or "
+                         f"`lint`); {why}")
+        self.assertNotIn(f"the {GATE} run", detail,
+                         f"never the bare gate: its tests never ran; {why}")
+
+
+class _MalformedLintCases(_GateDrive):
+    """A gate whose project declares `command = []`: refused at its lint
+    stage before any linter runs, and nothing filed."""
+
+    def test_an_empty_lint_command_stops_the_gate_at_lint_with_an_error_and_files_nothing(self):
+        root = self.project(lint_table([]))
+        self.prepare(root)
+        result, axi = self.gate(root)
+        why = self.why(result, axi)
+        self.assertGateEnvelope(result, axi)
+        self.assertEqual((axi.get("stage"), axi.get("ok")), (STAGE, False), why)
+        error = axi.get("error")
+        self.assertIsInstance(error, str, why)
+        self.assertIn("crucible.toml", str(error),
+                      f"the refusal names the file declaring the table; {why}")
+        self.assertEqual(result.returncode, 1, why)
+        self.assertEqual(warning_codes(axi).count(LINT_GATE_ABORT), 1, why)
+        # The gate's own outcome (its milestone and heartbeats) is not a
+        # filing of a run: nothing reaches the run or compile routes.
+        filed = [(method, path) for method, path, _body in self.board.writes()
+                 if urllib.parse.urlsplit(path).path.startswith("/api/v2/runs")]
+        self.assertEqual(filed, [], f"the gate files nothing; {why}")
+        self.assertEqual(self.board.compile_posts(), [], why)
+        self.assertEqual(self.calls(LINTER), [], why)
+        self.assertEqual([c for c in self.calls() if self.is_test(c)], [],
+                         f"no test stage runs; {why}")
+
 
 class _CheckFirstCases(_GateDrive):
     """The cases of a gate whose lint stage follows its `check` (python, bun)
@@ -425,8 +492,9 @@ class _NoDefaultCases(_GateDrive):
 
 # ── python ──────────────────────────────────────────────────────────────────
 
-class PythonGateRunsLintAfterCheckTest(_NoDefaultCases, _CheckFirstCases,
-                                       _EveryGateLintCases, unittest.TestCase):
+class PythonGateRunsLintAfterCheckTest(_MalformedLintCases, _NoDefaultCases,
+                                       _CheckFirstCases, _EveryGateLintCases,
+                                       unittest.TestCase):
     CLIENT = "python"
     STAGE_TOOLS = ("python",)
 
@@ -455,6 +523,33 @@ class PythonGateRunsLintAfterCheckTest(_NoDefaultCases, _CheckFirstCases,
         return (call["tool"] == "python" and call["argv"][:1] != ["-c"]
                 and not self.is_check(call)
                 and call["argv"][:3] != ["-m", "coverage", "lcov"])
+
+    def test_a_linter_killed_by_a_signal_stops_the_gate_at_lint_with_a_non_negative_exit(self):
+        self.say((("out", "app/a.py:1:1: F401 `os` imported but unused\n"),),
+                 kill_signal=signal.SIGTERM)
+        result, axi = self.gate(self.declaring_project())
+        why = self.why(result, axi)
+        self.assertEqual((axi.get("stage"), axi.get("ok"), axi.get("exit")),
+                         (STAGE, False, SIGTERM_EXIT), why)
+        self.assertNotEqual(result.returncode, 0, why)
+        lint_posts = [b for b in self.board.compile_posts() if b.get("lint")]
+        self.assertEqual([b.get("runnerExit") for b in lint_posts], [SIGTERM_EXIT], why)
+        self.assertNotIn(INGEST_FAILED, warning_codes(axi),
+                         f"the board takes the post; {why}")
+        self.assertIn(LINT_EVENT, carried_events(axi), why)
+        self.assertEqual([c for c in self.calls() if self.is_test(c)], [], why)
+
+    def test_checks_warning_rides_the_envelope_of_a_lint_abort(self):
+        # No `app` or `tests` here: `check` compiles nothing and says so.
+        self.failing_lint()
+        root = self.project(lint_table([LINTER, "check", "."], format=MARKER))
+        result, axi = self.gate(root)
+        why = self.why(result, axi)
+        self.assertEqual(axi.get("stage"), STAGE, why)
+        codes = warning_codes(axi)
+        self.assertEqual(codes.count(CHECK_COMPILED_NOTHING), 1,
+                         f"check's warning survives the lint abort; {why}")
+        self.assertEqual(codes.count(LINT_GATE_ABORT), 1, why)
 
 
 # ── bun ─────────────────────────────────────────────────────────────────────
@@ -535,6 +630,73 @@ class MavenGateRunsLintBeforeDockerUpTest(_NoDefaultCases, _EveryGateLintCases,
 
 # ── go ──────────────────────────────────────────────────────────────────────
 
+class _GoTestRefusingGateBoard(GateBoard):
+    """The gate board double whose health lists no `go-test` codec, as the
+    go tier verb refusal test scripts it."""
+
+    def route(self, method, path):
+        if method == "GET" and urllib.parse.urlsplit(path).path in HEALTH_PATHS:
+            health = board_health()
+            for kind in ("test", "stream"):
+                health["codecs"][kind] = [c for c in health["codecs"][kind]
+                                          if c != GO_TEST_STREAM_CODEC]
+            return 200, health
+        return super().route(method, path)
+
+
+class GoGateRefusesABoardWithoutGoTestBeforeItsLintStageTest(_GateDrive,
+                                                             unittest.TestCase):
+    """The go gate reads the board's health before its lint stage, as the
+    rust gate does: a refused gate runs no linter and files nothing."""
+
+    CLIENT = "go"
+    STAGE_TOOLS = ("go",)
+    LINT_WORDS = {"go": ("vet",)}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.board = _GoTestRefusingGateBoard()
+        try:
+            cls.fleet = ScratchFleet(cls.board.base_url)
+        except BaseException:
+            cls.board.close()
+            raise
+        cls.toolchain_bin = _build_fake_bin_dir()
+
+    def prepare(self, root):
+        write_go_module(root)
+
+    def is_test(self, call):
+        return call["tool"] == "go" and _first_word(call) == "test"
+
+    def is_vet(self, call):
+        return call["tool"] == "go" and _first_word(call) == "vet"
+
+    def assertRefusedBeforeLint(self, result, axi):
+        why = self.why(result, axi)
+        self.assertGateEnvelope(result, axi)
+        self.assertIs(axi.get("ok"), False, why)
+        self.assertNotEqual(result.returncode, 0, why)
+        self.assertIn(GO_TEST_STREAM_CODEC, json.dumps(axi),
+                      f"the refusal names the codec; {why}")
+        self.assertNotEqual(axi.get("stage"), STAGE, why)
+        self.assertEqual([b for b in self.board.compile_posts() if b.get("lint")], [],
+                         f"no lint post reaches the board; {why}")
+        self.assertEqual([c for c in self.calls() if self.is_test(c)], [], why)
+        return why
+
+    def test_a_declared_linter_never_runs_on_a_board_without_go_test(self):
+        result, axi = self.gate(self.declaring_project())
+        why = self.assertRefusedBeforeLint(result, axi)
+        self.assertEqual(self.calls(LINTER), [], f"the linter never runs; {why}")
+
+    def test_the_default_go_vet_never_runs_on_a_board_without_go_test(self):
+        result, axi = self.gate(self.undeclaring_project())
+        why = self.assertRefusedBeforeLint(result, axi)
+        self.assertEqual([c for c in self.calls() if self.is_vet(c)], [],
+                         f"go vet never runs; {why}")
+
+
 class GoGateRunsLintFirstTest(_EveryGateLintCases, unittest.TestCase):
     CLIENT = "go"
     STAGE_TOOLS = ("go",)
@@ -579,7 +741,8 @@ class GoGateRunsLintFirstTest(_EveryGateLintCases, unittest.TestCase):
 
 # ── rust ────────────────────────────────────────────────────────────────────
 
-class RustGateRunsLintFirstTest(_EveryGateLintCases, unittest.TestCase):
+class RustGateRunsLintFirstTest(_MalformedLintCases, _EveryGateLintCases,
+                                unittest.TestCase):
     CLIENT = "rust"
     STAGE_TOOLS = ("cargo",)
     LINT_WORDS = {"cargo": ("clippy",)}

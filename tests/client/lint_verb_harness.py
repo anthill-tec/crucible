@@ -11,7 +11,9 @@ THE BOARD DOUBLE answers the routes a `lint` drive uses:
   answers as `handleCompileIngest` does for a lint post (`src/v2.ts`): `ok`,
   the stored `event`, and the decoded `errors` and `warnings` counts. A test
   scripts the counts it answers with (`answer_counts`) or a refusal
-  (`refuse_compile`, e.g. 400 or 413).
+  (`refuse_compile`, e.g. 400 or 413). Unscripted, it refuses a lint post
+  whose `runnerExit` is not a non-negative integer with the board's own 400
+  (`refuseBadRunnerExit`), before anything is counted.
 - the health routes -- the health a board that decodes the clients' reports
   answers (`live_run_harness.board_health`).
 - `GET /api/v2/agents?...` -- an empty agent list, so the gated-run pre-flight
@@ -28,7 +30,8 @@ come from a JSON script: `.fake-lint.json` in its working directory when one is
 there, else the file `$FAKE_LINT_SCRIPT` names, else nothing and exit 0. A
 script is `{"chunks": [["out"|"err", text], ...], "exit": n}`; each chunk is
 written to its stream and flushed before the next, so a merged capture keeps
-their order. As `go` it also answers the toolchain probes (`go env GOVERSION`,
+their order. A script with `"signal": n` kills the linter with that signal
+once its chunks are written, as a linter the system stopped dies. As `go` it also answers the toolchain probes (`go env GOVERSION`,
 `go version`) the go client makes.
 
 No drive ever reaches the dev board (:3850), the production install (:3849)
@@ -95,6 +98,19 @@ STRIPPED_ENV = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID",
 
 
 # ── the board double ─────────────────────────────────────────────────────────
+
+#: The board's refusal of a run ingest whose `runnerExit` is not an integer
+#: at or above 0 (`refuseBadRunnerExit`, `src/v2.ts`).
+BAD_RUNNER_EXIT = "runnerExit must be a non-negative integer — run NOT stored"
+
+
+def _valid_runner_exit(body):
+    """An absent `runnerExit`, or an integer (never a bool) at or above 0."""
+    if "runnerExit" not in body:
+        return True
+    value = body["runnerExit"]
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
 
 class LintBoard:
     """A recording double of the board's compile route and the reads a lint
@@ -172,6 +188,10 @@ class LintBoard:
             if self.refusal is not None:
                 status, error = self.refusal
                 return status, {"ok": False, "error": error}
+            body = self.requests[-1][2] if self.requests else None
+            if (isinstance(body, dict) and "lint" in body
+                    and not _valid_runner_exit(body)):
+                return 400, {"ok": False, "error": BAD_RUNNER_EXIT}
             errors, warnings = self.counts
             verdict = (f"LINT FAILED — {errors} errors, {warnings} warnings"
                        if errors else f"LINT OK — {warnings} warnings")
@@ -203,6 +223,7 @@ class LintBoard:
 _FAKE_LINTER_BODY = r'''
 import json
 import os
+import signal
 import sys
 
 argv = sys.argv[1:]
@@ -235,6 +256,9 @@ for stream, text in script.get("chunks", []):
     target = sys.stdout if stream == "out" else sys.stderr
     target.write(text)
     target.flush()
+if script.get("signal"):
+    signal.signal(script["signal"], signal.SIG_DFL)
+    os.kill(os.getpid(), script["signal"])
 sys.exit(script.get("exit", 0))
 '''
 
@@ -250,11 +274,15 @@ def write_fake_linter(directory, name):
     return path
 
 
-def write_script(path, chunks=(), exit_code=0):
+def write_script(path, chunks=(), exit_code=0, kill_signal=None):
     """Write a fake-linter script at `path`: `chunks` is a sequence of
-    `(stream, text)` pairs, `stream` being `out` or `err`."""
-    Path(path).write_text(json.dumps({"chunks": [list(c) for c in chunks],
-                                      "exit": exit_code}), encoding="utf-8")
+    `(stream, text)` pairs, `stream` being `out` or `err`. With
+    `kill_signal`, the linter kills itself with that signal after its chunks
+    instead of exiting."""
+    script = {"chunks": [list(c) for c in chunks], "exit": exit_code}
+    if kill_signal is not None:
+        script["signal"] = int(kill_signal)
+    Path(path).write_text(json.dumps(script), encoding="utf-8")
     return Path(path)
 
 
@@ -382,9 +410,10 @@ class LintDriveMixin:
     def fake(self, name, directory=None):
         return write_fake_linter(directory or self.bin, name)
 
-    def say(self, chunks=(), exit_code=0):
-        """Script what the fake linter prints and how it exits."""
-        write_script(self.script, chunks, exit_code)
+    def say(self, chunks=(), exit_code=0, kill_signal=None):
+        """Script what the fake linter prints and how it exits (or, with
+        `kill_signal`, the signal it dies by)."""
+        write_script(self.script, chunks, exit_code, kill_signal)
 
     def calls(self, tool=None):
         return [c for c in read_log(self.log) if tool is None or c["tool"] == tool]
@@ -413,7 +442,7 @@ class LintDriveMixin:
 
 
 __all__ = [
-    "AGENT", "CLIENTS", "CLIENT_SCRIPTS", "COMPILE_ROUTE", "CYCLE",
+    "AGENT", "BAD_RUNNER_EXIT", "CLIENTS", "CLIENT_SCRIPTS", "COMPILE_ROUTE", "CYCLE",
     "DEFAULT_EVENT", "LintBoard", "LintDriveMixin", "PROJECT_KEY",
     "append_table", "closed_port_url", "declared_source", "drive",
     "lint_table", "make_project", "read_log", "warning_codes",

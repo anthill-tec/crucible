@@ -1,7 +1,8 @@
 """Every client has a `lint` verb, built once: the same declaration gives the
 same post and the same envelope from all six. Rust and go lint by default when
 nothing is declared, a declared command replaces the default, the other four
-skip, and `check` never runs a declared linter.
+skip, and `check` never runs a declared linter, on any of the six. A linter
+killed by a signal is filed by every client with a non-negative exit.
 
 Every drive is a real subprocess of a client from a scratch copy of the fleet,
 against a recording double of the board (`tests/client/lint_verb_harness.py`).
@@ -15,6 +16,7 @@ Invocation:
 """
 
 import importlib.util
+import signal
 import unittest
 
 from tests.client.lint_verb_harness import (
@@ -25,10 +27,14 @@ from tests.client.lint_verb_harness import (
     LintDriveMixin,
     declared_source,
     lint_table,
+    warning_codes,
     write_script,
 )
 
 RUFF = "lint-fixture-ruff"
+
+#: The exit a shell reports for a process killed by SIGTERM: 128 + 15.
+SIGTERM_EXIT = 128 + int(signal.SIGTERM)
 
 #: The rust default: today's gate step, unchanged.
 CLIPPY_WORKSPACE_ARGV = ["clippy", "--workspace", "--all-targets", "--all-features",
@@ -237,6 +243,80 @@ class CheckNeverLintsTest(LintDriveMixin, unittest.TestCase):
         self.assertEqual(self.calls(RUFF), [], "check ran the declared linter")
         self.assertEqual([c["argv"][:1] for c in self.calls("cargo")], [["check"]],
                          "check runs cargo check alone")
+
+    def _check(self, client, root, *argv, env=None, cwd=None):
+        result, axi = self.filed(client, root, *argv, verb="check", env=env,
+                                 cwd=cwd)
+        why = (f"{client}: envelope={axi!r} stdout={result.stdout[-800:]!r} "
+               f"stderr={result.stderr[-1500:]}")
+        self.assertEqual(axi.get("verb"), "check", f"the drive reached check; {why}")
+        self.assertIn("exit", axi, f"check ran its compile, it was not refused; {why}")
+        self.assertNotIn("error", axi, f"check ran its compile, it was not refused; {why}")
+        return result, axi, why
+
+    def test_bun_check_runs_no_declared_linter(self):
+        root = self.project(lint_table([RUFF, "check", "."], format="ruff"))
+        (root / "package.json").write_text('{"name": "lint-check-fixture"}\n')
+        _result, axi, why = self._check("bun", root)
+        self.assertEqual(self.calls(RUFF), [], f"check ran the declared linter; {why}")
+        self.assertEqual([b for b in self.board.compile_posts() if b.get("lint")], [],
+                         f"check files no lint record; {why}")
+
+    def test_go_check_runs_no_declared_linter_and_no_go_vet(self):
+        self.fake("go")
+        root = self.project(lint_table([RUFF, "check", "."], format="ruff"))
+        (root / "go.mod").write_text("module example.com/checkfixture\n\ngo 1.24\n")
+        (root / "checkfixture.go").write_text("package checkfixture\n")
+        # Go's check finds its module from the directory it is run in.
+        _result, axi, why = self._check("go", root, cwd=root)
+        self.assertEqual(self.calls(RUFF), [], f"check ran the declared linter; {why}")
+        self.assertEqual([c["argv"] for c in self.calls("go") if c["argv"][:1] == ["vet"]],
+                         [], f"check runs no go vet; {why}")
+        self.assertEqual([c["argv"] for c in self.calls("go") if c["argv"][:1] == ["build"]],
+                         [["build", "./..."]], f"check runs its go build alone; {why}")
+        self.assertEqual([b for b in self.board.compile_posts() if b.get("lint")], [],
+                         f"check files no lint record; {why}")
+
+    def test_mvn_check_runs_no_declared_linter(self):
+        root = self.project(lint_table([RUFF, "check", "."], format="ruff"))
+        (root / "pom.xml").write_text("<project/>\n")
+        _result, axi, why = self._check("mvn", root)
+        self.assertEqual(self.calls(RUFF), [], f"check ran the declared linter; {why}")
+        self.assertEqual([b for b in self.board.compile_posts() if b.get("lint")], [],
+                         f"check files no lint record; {why}")
+
+    def test_arduino_check_runs_no_declared_linter(self):
+        root = self.project(lint_table([RUFF, "check", "."], format="ruff"))
+        _result, axi, why = self._check("arduino", root)
+        self.assertEqual(self.calls(RUFF), [], f"check ran the declared linter; {why}")
+        self.assertEqual([b for b in self.board.compile_posts() if b.get("lint")], [],
+                         f"check files no lint record; {why}")
+
+
+class EveryClientFilesASignalKilledLinterWithANonNegativeExitTest(LintDriveMixin,
+                                                                  unittest.TestCase):
+    """One declaration whose linter kills itself with SIGTERM, six clients:
+    each files `runnerExit` 143 (128 + 15), the board double takes it, and
+    `lint` fails with that exit."""
+
+    def test_every_client_files_runner_exit_143_and_fails_with_it(self):
+        self.fake(RUFF)
+        self.say((("out", "app/a.py:1:1: F401 `os` imported but unused\n"),),
+                 kill_signal=signal.SIGTERM)
+        root = self.project(lint_table([RUFF, "check", "."], format="ruff"))
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                self.board.reset()
+                self.board.answer_counts(1, 0)
+                result, axi = self.filed(client, root)
+                body = self.one_compile_post(result, axi)
+                why = f"{client}: body={body!r} envelope={axi!r}"
+                self.assertEqual(body.get("runnerExit"), SIGTERM_EXIT, why)
+                self.assertNotIn("ingest-failed", warning_codes(axi),
+                                 f"the board takes the post; {why}")
+                self.assertEqual((axi.get("ok"), axi.get("exit")), (False, SIGTERM_EXIT), why)
+                self.assertNotEqual(result.returncode, 0, why)
+                self.assertGreaterEqual(result.returncode, 0, why)
 
 
 if __name__ == "__main__":

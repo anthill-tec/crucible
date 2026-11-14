@@ -13,9 +13,10 @@ Invocation:
         tests.client.test_rusts_clippy_filings_carry_the_lint_marker
 """
 
+import signal
 import unittest
 
-from tests.client.lint_verb_harness import LintDriveMixin
+from tests.client.lint_verb_harness import LintDriveMixin, warning_codes
 
 CRATE = "probe"
 
@@ -24,6 +25,9 @@ CLIPPY_FAILURE = ("error: this comparison involving the minimum or maximum eleme
                   "is always true\n --> src/lib.rs:3:5\n"
                   "error: could not compile `probe` (lib) due to 1 previous error\n")
 CLIPPY_EXIT = 101
+
+#: The exit a shell reports for a cargo killed by SIGTERM: 128 + 15.
+SIGTERM_EXIT = 128 + int(signal.SIGTERM)
 
 CLIPPY_ARGV = ["clippy", "-p", CRATE, "--", "-D", "warnings"]
 WORKSPACE_CLIPPY_ARGV = ["clippy", "--workspace", "--all-targets", "--all-features",
@@ -88,6 +92,38 @@ class RustsClippyVerbsFileALintRecordTest(LintDriveMixin, unittest.TestCase):
         body = self.one_compile_post(result, axi)
         self.assertNotIn("lint", body, f"check is a compile, not a lint; {body!r}")
         self.assertEqual(body.get("format"), "rustc", f"{body!r}")
+
+
+class RustsClippyVerbsFileASignalKilledCargoWithANonNegativeExitTest(LintDriveMixin,
+                                                                     unittest.TestCase):
+    """`cargo clippy` prints, then is killed by SIGTERM. `clippy` and
+    `workspace-clippy` file its exit as a shell reports it, 128 + 15, never
+    the negative return code; the board double refuses a negative
+    `runnerExit` as the board does."""
+
+    def setUp(self):
+        super().setUp()
+        self.fake("cargo")
+        self.say((("err", CLIPPY_FAILURE),), kill_signal=signal.SIGTERM)
+        self.board.answer_counts(2, 0)
+        self.root = self.project(None)
+
+    def assertFiledWithTheSignalExit(self, result, axi):
+        body = self.one_compile_post(result, axi)
+        why = f"body={body!r} envelope={axi!r} stderr={result.stderr[-1500:]}"
+        self.assertEqual((body.get("lint"), body.get("runnerExit")),
+                         ("clippy", SIGTERM_EXIT), why)
+        self.assertNotIn("ingest-failed", warning_codes(axi),
+                         f"the board takes the post; {why}")
+
+    def test_clippy_files_runner_exit_143_for_a_cargo_killed_by_sigterm(self):
+        result, axi = self.filed("rust", self.root, "--crate", CRATE,
+                                 "--deny-warnings", verb="clippy")
+        self.assertFiledWithTheSignalExit(result, axi)
+
+    def test_workspace_clippy_files_runner_exit_143_for_a_cargo_killed_by_sigterm(self):
+        result, axi = self.filed("rust", self.root, verb="workspace-clippy")
+        self.assertFiledWithTheSignalExit(result, axi)
 
 
 if __name__ == "__main__":
