@@ -22,8 +22,7 @@
 //    each one reads the changelog it is pointed at, and every check that
 //    reads the changelog is classified.
 //  - On the next release's changelog, every RECORDED check passes.
-// The classification, check by check, is RECORDED below and in
-// tests/client/changelog_check_kinds.py; no bun doc test has an ABSENT check.
+// The classification, check by check, is RECORDED below; no bun doc test has an ABSENT check.
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

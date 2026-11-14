@@ -13,9 +13,9 @@ part of it:
     never fails it. Its reader is `changelog_section` / `changelogSection`.
 
 A python check is named `Class.method` within its module under
-`tests/client/`; a bun check is named `innermost describe › test title` within
-its file under `tests/`. Every check of a listed module that reads the
-changelog is here, and nothing else is.
+`tests/client/`. Every check of a listed module that reads the changelog is
+here, and nothing else is. The bun doc tests' classification is RECORDED in
+tests/doc-tests-find-their-features-across-the-next-release.test.ts.
 """
 
 #: The python doc tests, under tests/client/: module -> the kinds of its checks.
@@ -155,53 +155,3 @@ PYTHON_CHECKS = {
         "absent": (),
     },
 }
-
-#: The bun doc tests, under tests/: file stem -> the kinds of its checks.
-BUN_CHECKS = {
-    "docs-describe-lint-records": {
-        "recorded": (
-            "the CHANGELOG records lint records › "
-            "its Unreleased section has an entry naming lint records",
-        ),
-        "absent": (),
-    },
-    "coverage-file-table-docs": {
-        "recorded": (
-            "the changelog's unreleased section states the per-file coverage › "
-            "it names the read of a run's coverage files",
-            "the changelog's unreleased section states the per-file coverage › "
-            "it names the two keys the ingest answer gains",
-            "the changelog's unreleased section states the per-file coverage › "
-            "it says the board keeps a run's coverage file by file and shows it",
-        ),
-        "absent": (),
-    },
-    "coverage-outside-the-runs-tree-docs": {
-        "recorded": (
-            "the documents say a run's coverage keeps only the files inside its tree › "
-            "the changelog's unreleased section says a coverage file outside the run's tree is not kept",
-            "the passages the rule is written into are there to be read › "
-            "the changelog has an unreleased section that speaks of coverage files",
-        ),
-        "absent": (),
-    },
-    "release-flow-names-the-release-notes-verb": {
-        "recorded": (
-            "the CHANGELOG's unreleased section says what the release-notes verb does › "
-            "an unreleased entry names release-notes, --format markdown and --date, "
-            "and says each line carries a title and an id",
-            "the CHANGELOG's unreleased section says what the release-notes verb does › "
-            "the changelog has an unreleased section with entries to read",
-        ),
-        "absent": (),
-    },
-}
-
-#: Each kind's reader, by language.
-PYTHON_READERS = {"recorded": "changelog_entries", "absent": "changelog_section"}
-TS_READERS = {"recorded": "changelogEntries", "absent": "changelogSection"}
-
-
-def readers_needed(kinds, readers):
-    """The readers a module's checks need: one per kind it has a check of."""
-    return sorted(readers[kind] for kind in ("recorded", "absent") if kinds[kind])
