@@ -221,10 +221,10 @@ def cmd_lint(args, project_dir, ops, *, stack, run_dir=None, default=None):
     `--agent` -- one post of its output on the compile route.
 
     The envelope names the `linter`, where it was `declared`, its `exit`, the
-    board's `errors` and `lints` counts and the filed `event` (each null when
-    nothing was filed), or `skipped: not-declared`. A board that refused the
-    post, or never answered, adds the ingest-failed warning; the verdict is
-    the linter's exit either way."""
+    board's `errors` and `lints` counts and the filed `event`, which `events`
+    names (null and `[]` when nothing was filed), or `skipped: not-declared`.
+    A board that refused the post, or never answered, adds the ingest-failed
+    warning; the verdict is the linter's exit either way."""
     agent_id = getattr(args, "agent", None)
     cycle_id = getattr(args, "cycle", None)
     warnings = list(_core.preflight_cycle_warnings(
@@ -258,7 +258,7 @@ def cmd_lint(args, project_dir, ops, *, stack, run_dir=None, default=None):
     ops.emit(LINT_VERB, ok,
              {"linter": marker, "declared": declared, "exit": exit_code,
               "errors": errors, "lints": lints, "event": event,
-              "help": _lint_help(ok)},
+              "events": [event] if event else [], "help": _lint_help(ok)},
              ops.context(project_dir, agent_id=agent_id), warnings,
              f"{LINT_VERB}: ok={ok} linter={marker} exit={exit_code}")
     return 0 if ok else 1
