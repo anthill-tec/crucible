@@ -408,6 +408,19 @@ class _AScopedOwnStackGate(_OnTheBoard):
                              {"projectKey": board.key, "agentId": agent,
                               "role": "ORCHESTRATOR"})
             assert reg.get("ok"), f"gate agent registration failed: {reg!r}"
+            # The gate's lint stage runs the project's declared linter in
+            # place of the clippy default: it is re-declared as a recording
+            # `census-lint` in the bin dir, found on PATH, so its one
+            # invocation is logged beside every other step's.
+            linter = bin_dir / "census-lint"
+            linter.write_text(f"#!{sys.executable}\n" + _LOG_SNIPPET
+                              + "print('census lint: nothing found')\n")
+            linter.chmod(0o755)
+            config = project_dir / "crucible.toml"
+            head = config.read_text(encoding="utf-8").split("\n\n[lint]\n")[0]
+            config.write_text(
+                head + f"\n\n[lint]\ncommand = {json.dumps(['census-lint'])}\n"
+                       "name = \"census-lint\"\n", encoding="utf-8")
         argv = ([GATE_VERB, "--agent", agent, "--project-dir", str(project_dir),
                  "--cycle", str(cycle_id)] + list(cls.EXTRA) + list(extra))
         result = drive_verb(CLIENT_FILES[cls.CLIENT], argv, project_dir, bin_dir,
@@ -499,7 +512,7 @@ class AScopedRustGateRunsTheWholeSuiteTest(_AScopedOwnStackGate):
     CLIENT = "rust"
     GATED = ("unit", "integration")
     EXCLUDED = "e2e"
-    STEP_0 = ("cargo", "clippy")
+    STEP_0 = ("census-lint",)
     # The streamed `cargo nextest run`: not the version read or the list it
     # makes before the run.
     WHOLE_SUITE = ("cargo", "nextest", "run")
