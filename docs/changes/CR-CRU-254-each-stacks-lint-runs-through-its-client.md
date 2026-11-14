@@ -1,6 +1,6 @@
 # CR-CRU-254 — each stack's lint runs through its client, and the gate runs it after check
 
-**Status:** PENDING · filed 2026-11-13 (user ruling: CR-CRU-199 split in three for ease of execution; this is
+**Status:** COMPLETED — merged 2026-11-14 · filed 2026-11-13 (user ruling: CR-CRU-199 split in three for ease of execution; this is
 the client side of the lint design Model B asked for, Sandesh #1486 → #1488) · gap analysis:
 `test-reports/work/cr199-gap-analysis.md`; design D1, D2, D5–D7 approved by the user 2026-11-13; Crucible's own
 gate declares ruff (user ruling 2026-11-13) · Pre-review: ran 2026-11-13 (it changes every client, the gate's
@@ -244,7 +244,7 @@ Then Model B is told over Sandesh, answering #1488. The message names the rust m
 
 ## Acceptance criteria
 
-- [ ] **AC1 — a declared linter runs and files.**
+- [x] **AC1 — a declared linter runs and files.**
   - **Setup:** a scratch python project declaring `[lint]` ruff, run against a board double.
   - **It runs:** `python-crucible.py lint --agent A` runs the declared command in the project directory.
   - **It posts** `format: "ruff"`, `lint: "ruff"`, `runnerExit` and the output (stdout and stderr in order) to
@@ -256,26 +256,26 @@ Then Model B is told over Sandesh, answering #1488. The message names the rust m
     - `declared: declared:<file>`;
     - `errors` and `lints` from the board's answer;
     - the `event`.
-- [ ] **AC2 — the linter's exit code is the verdict.**
+- [x] **AC2 — the linter's exit code is the verdict.**
   - A linter exiting 1 makes `lint` answer `ok: false`, and the client exits non-zero.
   - A linter exiting 0 answers `ok: true`, even if its output holds warnings.
   - If the board refuses the post or cannot be reached, the verdict still follows the exit, and the ingest-failed
     warning is present.
-- [ ] **AC3 — nothing declared is skipped, not refused.**
+- [x] **AC3 — nothing declared is skipped, not refused.**
   - A python project with no `[lint]` answers `ok: true`, `skipped: not-declared`, and posts nothing.
   - Without `--agent`, a declared linter runs, and nothing is posted.
-- [ ] **AC4 — the declaration's resolution and refusals.**
+- [x] **AC4 — the declaration's resolution and refusals.**
   - Any of these is refused before anything runs, and the refusal names the file:
     - `command = "ruff check"` (a string);
     - `command = []`;
     - an empty entry;
     - a non-string `format` or `name`.
   - A `[lint]` declared only in the install's file answers `declared: declared:<install file>`.
-- [ ] **AC5 — the command is found, or refused.**
+- [x] **AC5 — the command is found, or refused.**
   - A first word not on PATH is refused, naming it, and nothing is posted.
   - A first word holding `/` (`.venv/bin/ruff`) is resolved against the run directory, and runs.
   - In a bun project with `[bun] package_dir`, the command runs in the package directory.
-- [ ] **AC6 — the defaults and the marker.**
+- [x] **AC6 — the defaults and the marker.**
   - **Rust:** with no `[lint]`, a rust project runs the workspace clippy command with `CARGO_BUILD_JOBS` set, and
     files `format: "clippy"`, `lint: "clippy"`.
   - **Go:** a go project with two modules runs `go vet ./...` in each, and files one post with
@@ -283,7 +283,7 @@ Then Model B is told over Sandesh, answering #1488. The message names the rust m
   - In each, a declared `command` replaces the default.
   - `["python", "-m", "ruff", …]` with `format = "ruff"` posts `lint: "ruff"`.
   - A declared `name` wins.
-- [ ] **AC7 — every client has the verb, and the censuses hold** (fold F10).
+- [x] **AC7 — every client has the verb, and the censuses hold** (fold F10).
   - Each of the six clients' `lint` resolves through the shared module.
   - **`test_every_verb_that_runs_a_test_runner_is_classified`:**
     - it classifies `lint`;
@@ -294,43 +294,43 @@ Then Model B is told over Sandesh, answering #1488. The message names the rust m
   - **`test_client_fleet_envelope_census` and its importers:**
     - its fake `go` answers `vet`;
     - its census projects declare `[lint]`.
-- [ ] **AC8 — rust's clippy verbs carry the marker, and clippy's exit is its own.**
+- [x] **AC8 — rust's clippy verbs carry the marker, and clippy's exit is its own.**
   - `clippy` and `workspace-clippy` keep their arguments and commands.
   - Their posts carry `lint: "clippy"`, `format: "clippy"` and `runnerExit`.
   - `check`'s post carries no marker.
   - A failing `clippy` exits non-zero even when its ingest succeeds.
-- [ ] **AC9 — each gate runs lint in its order.** In each client's `pre-merge-gate`:
+- [x] **AC9 — each gate runs lint in its order.** In each client's `pre-merge-gate`:
   - a failing lint stops the gate at the place §S3's table gives, before any test tier and, for maven, before
     docker-up, naming the lint stage;
   - a skipped lint continues, with a `lint-not-declared` warning in the gate's envelope;
   - `--skip-lint` skips it;
   - `--skip-check` does not.
-- [ ] **AC10 — check never lints.** Each client's `check` runs no declared linter, whatever `[lint]` declares.
-- [ ] **AC11 — the module ships.**
+- [x] **AC10 — check never lints.** Each client's `check` runs no declared linter, whatever `[lint]` declares.
+- [x] **AC11 — the module ships.**
   - A sandboxed install lays `_crucible_lint.py` down with the fleet.
   - An installed client's `lint` loads it.
   - Every list in §S1 names it.
-- [ ] **AC12 — Crucible's own declaration.**
+- [x] **AC12 — Crucible's own declaration.**
   - Ruff passes on `clients`, `crucible_axi` and `tests` with the project's rule set.
   - The RUNBOOK names the table a checkout adds.
   - After the merge, the orchestrator adds the table to the local root file without touching `[client]`. A
     `bun-crucible.py lint` there answers `declared: declared:<root file>` and `ok: true`. This is recorded at
     close-out, since a test cannot read an untracked file.
-- [ ] **AC13 — the words.** Each of these says what §S1–§S4 say:
+- [x] **AC13 — the words.** Each of these says what §S1–§S4 say:
   - every client's help;
   - the shipped toml's commented `[lint]` block;
   - PRD §4.5.1;
   - the RUNBOOK's Lint section;
   - the CHANGELOG, with the rust mapping.
-- [ ] **AC14 — budgets and boundaries.**
+- [x] **AC14 — budgets and boundaries.**
   - The core stays at or under 9120 lines (its 80-line headroom under the 9200 guard).
   - `SHARED_MODULE_LINE_BUDGETS` pins `_crucible_lint.py` and the core's new count in all three copies.
   - No `src/` or `public/` file changes.
-- [ ] **AC15 — the clients' `runs` and `run` say lint.**
+- [x] **AC15 — the clients' `runs` and `run` say lint.**
   - For a lint record, the brief keeps `kind: "compile"` and carries `lint`.
   - `runs` and `run` word it as `lint` and its tool.
   - A compile record's brief and wording are unchanged.
-- [ ] **AC16 — the rust gate's contract mapping** (fold F4). The rust gate's envelope reads:
+- [x] **AC16 — the rust gate's contract mapping** (fold F4). The rust gate's envelope reads:
   - `stage: "lint"`;
   - `errors` and `lints`;
   - the warning `lint-gate-abort` on an aborted lint step.
