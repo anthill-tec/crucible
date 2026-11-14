@@ -8,8 +8,6 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each re
 also the body of its [GitHub Release](https://github.com/anthill-tec/crucible/releases).
 Releases before 0.3.0 are described only on GitHub Releases.
 
-## [Unreleased]
-
 ## [0.4.0] - 2026-11-14
 
 ### Upgrading
@@ -475,6 +473,5 @@ For the go stack (`crucible.toml`):
   - the e2e drive counts the phone feature once per browser engine;
   - the WebKit phone tap is engine-neutral.
 
-[Unreleased]: https://github.com/anthill-tec/crucible/compare/0.4.0...HEAD
 [0.4.0]: https://github.com/anthill-tec/crucible/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/anthill-tec/crucible/compare/0.2.2...0.3.0
