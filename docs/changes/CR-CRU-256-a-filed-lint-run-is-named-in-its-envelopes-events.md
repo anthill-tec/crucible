@@ -1,6 +1,6 @@
 # CR-CRU-256 — a filed lint run is named in its envelope's events
 
-**Status:** PENDING · filed 2026-11-14 (user ruling: a patch CR in the current wave, found at CR-CRU-254's merge)
+**Status:** COMPLETED — merged 2026-11-14 · filed 2026-11-14 (user ruling: a patch CR in the current wave, found at CR-CRU-254's merge)
 **Type:** fix
 **Points:** 1
 **Wave:** 8 (0.4.0)
@@ -39,11 +39,11 @@ the `lint` verb's own. A reader that collects what an invocation filed from `eve
 
 ## Acceptance criteria
 
-- [ ] **AC1 — a filed lint run is named.** In each of the six clients, `lint --agent A` against a board double that
+- [x] **AC1 — a filed lint run is named.** In each of the six clients, `lint --agent A` against a board double that
   files the post answers `events` equal to `[<the board's event id>]`, the same id as `event`.
-- [ ] **AC2 — nothing filed, nothing named.** `lint` with no `--agent`, with nothing declared, with a refused post
+- [x] **AC2 — nothing filed, nothing named.** `lint` with no `--agent`, with nothing declared, with a refused post
   (400) and with the board unreachable answers `events: []`.
-- [ ] **AC3 — nothing else moves.** The gate's lint stage still names its lint event once in the gate's `events`;
+- [x] **AC3 — nothing else moves.** The gate's lint stage still names its lint event once in the gate's `events`;
   `check`'s envelope is unchanged; the core's line count is unchanged.
 
 ## Non-goals
