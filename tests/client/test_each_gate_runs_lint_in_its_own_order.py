@@ -365,6 +365,31 @@ class _EveryGateLintCases(_GateDrive):
         self.assertNotIn(CLIPPY_GATE_ABORT, warning_codes(axi), why)
         self.assertIn(LINT_EVENT, carried_events(axi), why)
 
+    def test_a_failing_lints_abort_names_its_lint_event_exactly_once_in_events(self):
+        # A guard: the gate's lint stage already names its event; the lint
+        # verb's own `events` must not make the gate name it twice.
+        self.failing_lint()
+        result, axi = self.gate(self.declaring_project())
+        why = self.why(result, axi)
+        self.assertEqual(axi.get("stage"), STAGE, why)
+        events = axi.get("events")
+        if not isinstance(events, list):
+            self.fail(f"the gate's envelope carries an events list; {why}")
+        self.assertEqual(events.count(LINT_EVENT), 1,
+                         f"the lint event is named once in the gate's events; {why}")
+
+    def test_a_passing_lints_gate_names_its_lint_event_exactly_once_in_events(self):
+        # A guard, as above, for the gate that went on past its lint stage.
+        result, axi = self.gate(self.declaring_project())
+        why = self.why(result, axi)
+        self.assertGateEnvelope(result, axi)
+        self.assertNotEqual(axi.get("stage"), STAGE, why)
+        events = axi.get("events")
+        if not isinstance(events, list):
+            self.fail(f"the gate's envelope carries an events list; {why}")
+        self.assertEqual(events.count(LINT_EVENT), 1,
+                         f"the lint event is named once in the gate's events; {why}")
+
     def test_a_failing_lint_is_filed_once_with_its_marker_and_exit(self):
         self.failing_lint()
         result, axi = self.gate(self.declaring_project())

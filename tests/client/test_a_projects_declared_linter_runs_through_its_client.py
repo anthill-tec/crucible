@@ -15,6 +15,10 @@ What is pinned:
   * a clean run that printed nothing is posted too;
   * the envelope names the linter, where it was declared, its exit, the
     board's two counts as `errors` and `lints`, and the filed event;
+  * the envelope's `events` names the filed lint run -- the board's event
+    id, the same as `event` -- and is `[]` whenever nothing was filed: no
+    `--agent`, nothing declared, a post the board refused, a board that never
+    answered;
   * the linter's exit is the verdict, whatever the output says and whether or
     not the board took the post;
   * nothing declared is a skip, not a refusal, and posts nothing; no `--agent`
@@ -222,6 +226,97 @@ class NothingDeclaredIsSkippedAndNoAgentPostsNothingTest(LintDriveMixin, unittes
             (axi.get("errors"), axi.get("lints"), axi.get("event")),
             (None, None, None), f"nothing was filed; {axi!r}")
         self.assertNotEqual(result.returncode, 0, f"{axi!r}")
+
+
+#: The event id the board double files the lint run under in the `events`
+#: cases: not the double's default, so only the board's answer can name it.
+FILED_EVENT = "evt-lint-fixture-events-0001"
+
+
+class TheLintEnvelopeNamesWhatItFiledInEventsTest(LintDriveMixin, unittest.TestCase):
+    """`events` names the lint run the board filed, as every envelope names
+    what its invocation filed; when nothing was filed it is `[]`."""
+
+    def setUp(self):
+        super().setUp()
+        self.fake(RUFF)
+
+    def _why(self, result, axi):
+        return (f"envelope={axi!r} posts={self.board.compile_posts()!r} "
+                f"stderr={result.stderr[-2000:]}")
+
+    def test_a_filed_clean_lint_run_is_named_in_events_by_the_boards_event_id(self):
+        self.say((), exit_code=0)
+        self.board.answer_counts(0, 0, event=FILED_EVENT)
+        root = self.project(_ruff_table())
+        result, axi = self.filed("python", root)
+        why = self._why(result, axi)
+        self.one_compile_post(result, axi)
+        self.assertEqual((axi.get("verb"), axi.get("ok")), ("lint", True), why)
+        self.assertEqual(axi.get("event"), FILED_EVENT, why)
+        self.assertEqual(axi.get("events"), [FILED_EVENT],
+                         f"the filed lint run is named in events, once; {why}")
+
+    def test_a_filed_failing_lint_run_is_named_in_events_by_the_boards_event_id(self):
+        self.say(INTERLEAVED, exit_code=1)
+        self.board.answer_counts(2, 1, event=FILED_EVENT)
+        root = self.project(_ruff_table())
+        result, axi = self.filed("python", root)
+        why = self._why(result, axi)
+        self.one_compile_post(result, axi)
+        self.assertEqual((axi.get("verb"), axi.get("ok"), axi.get("exit")),
+                         ("lint", False, 1), why)
+        self.assertEqual(axi.get("events"), [axi.get("event")],
+                         f"events names the same id as event; {why}")
+        self.assertEqual(axi.get("events"), [FILED_EVENT],
+                         f"a failing linter's filed run is named too; {why}")
+        self.assertNotEqual(result.returncode, 0, why)
+
+    def test_without_agent_nothing_is_filed_and_events_is_empty(self):
+        self.say(INTERLEAVED, exit_code=1)
+        self.board.answer_counts(2, 1, event=FILED_EVENT)
+        root = self.project(_ruff_table())
+        result, axi = self.run_client("python", root)
+        why = self._why(result, axi)
+        self.assertEqual(len(self.calls(RUFF)), 1, f"the linter ran; {why}")
+        self.assertEqual(self.board.writes(), [], f"no --agent: nothing posted; {why}")
+        self.assertEqual((axi.get("verb"), axi.get("event")), ("lint", None), why)
+        self.assertEqual(axi.get("events"), [], f"nothing filed, nothing named; {why}")
+
+    def test_with_nothing_declared_the_skip_answers_events_empty(self):
+        self.board.answer_counts(0, 0, event=FILED_EVENT)
+        root = self.project(None)
+        result, axi = self.filed("python", root)
+        why = self._why(result, axi)
+        self.assertEqual((axi.get("verb"), axi.get("ok"), axi.get("skipped")),
+                         ("lint", True, "not-declared"), why)
+        self.assertEqual(self.board.compile_posts(), [], why)
+        self.assertEqual(axi.get("events"), [], f"a skip files nothing; {why}")
+
+    def test_a_post_the_board_refuses_with_400_answers_events_empty(self):
+        self.say((("out", "app/a.py:1:1: F401 unused\n"),), exit_code=1)
+        self.board.refuse_compile(400, "HTTP 400 refused by the double")
+        root = self.project(_ruff_table())
+        result, axi = self.filed("python", root)
+        why = self._why(result, axi)
+        self.assertEqual(len(self.board.compile_posts()), 1,
+                         f"the run was posted, and refused; {why}")
+        self.assertIn("ingest-failed", warning_codes(axi), why)
+        self.assertIsNone(axi.get("event"), why)
+        self.assertEqual(axi.get("events"), [],
+                         f"a refused post filed nothing, so names nothing; {why}")
+
+    def test_an_unreachable_board_answers_events_empty(self):
+        self.say((), exit_code=0)
+        root = self.project(_ruff_table(), board_url=closed_port_url())
+        result, axi = self.filed("python", root)
+        why = self._why(result, axi)
+        self.assertEqual(len(self.calls(RUFF)), 1, f"the linter still ran; {why}")
+        self.assertEqual((axi.get("verb"), axi.get("ok")), ("lint", True), why)
+        self.assertIn("ingest-failed", warning_codes(axi), why)
+        self.assertIsNone(axi.get("event"), why)
+        self.assertEqual(axi.get("events"), [],
+                         f"an unreachable board filed nothing; {why}")
 
 
 class TheCommandIsFoundOrRefusedTest(LintDriveMixin, unittest.TestCase):
