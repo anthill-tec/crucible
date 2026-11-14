@@ -36,6 +36,16 @@ The modules:
 - **One reader per language.** One python helper under `tests/client/` and one TypeScript helper under
   `tests/helpers/`, each a few lines; every listed module reads the section through it. No module keeps its own
   `[Unreleased]` lookup.
+- **Two readings, by what a check asks** (amended at VERIFY 953, user ruling 2026-11-14). The topmost section
+  alone goes stale the moment the next release's `## [Unreleased]` is written above it, so:
+  - a check that a feature IS recorded searches every release section of the changelog (`[Unreleased]` and every
+    dated section, the link block at the foot excluded), so it stays green across releases;
+  - a check that stale wording is ABSENT reads only the section being written (the topmost one), so an old
+    release's honest record of its day never fails it.
+
+  Each helper gains the second reader; each check uses the one that matches what it asks. A link-definition line
+  ends a section only in the link block after the last heading. Failure messages name "the changelog" or "the
+  section being written", never `[Unreleased]`.
 - **What the tests check is unchanged.** Only where they look moves. No production code, no doc and no fixture
   changes; `release-notes-extractor`'s own `[Unreleased]` fixture is out of scope (it tests the extractor on a
   fixture).
@@ -48,6 +58,9 @@ The modules:
 - [ ] **AC2 — every listed module reads through it.** No listed module names `[Unreleased]` in a lookup; each reads
   the section through its language's helper.
 - [ ] **AC3 — green on the release branch.** On `release/0.4.0` every listed module passes.
+- [ ] **AC5 — green across the next release** (amended at VERIFY 953). On a changelog with a new `## [Unreleased]`
+  written above `[0.4.0]` (holding no 0.4.0 entry), every listed module still passes against the real entries
+  below it. Proved on an inline changelog built from the real one with such a section prepended.
 - [ ] **AC4 — nothing else moves.** No file outside `tests/` changes; the doc suites (`tests/docs-*`, the tripwire,
   the citations test) pass.
 
