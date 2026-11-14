@@ -239,9 +239,9 @@ max = 500
 # `command` is a non-empty list of non-empty strings, run in the project dir
 # (bun: its package dir). A first word holding no `/` is looked up on PATH; one
 # holding a `/` (`.venv/bin/ruff`) resolves against that directory. The
-# record's `lint` marker is `name`, else `format`, else the command's first
-# word. The linter's exit is the verdict. A malformed table is REFUSED, naming
-# this file, before anything runs.
+# record's `lint` marker is `name`, else `format`, else the basename of the
+# command's first word (`ruff` for `.venv/bin/ruff`). The linter's exit is the
+# verdict. A malformed table is REFUSED, naming this file, before anything runs.
 #
 # The table resolves as `[gate]` does: the PROJECT's own file first, then the
 # installed copy, the first file that parses winning. A project file without

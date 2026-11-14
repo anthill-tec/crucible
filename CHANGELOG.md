@@ -316,7 +316,7 @@ For the rust stack (`crucible.toml` and `.config/nextest.toml`):
   | Before | After |
   |---|---|
   | `stage: "clippy"` | `stage: "lint"` |
-  | `errors`, `lints` | `errors`, `lints` (unchanged) |
+  | `errors`, `lints` | `errors`, `lints` (unchanged), null when the board refuses the lint post |
   | `clippy-gate-abort` | `lint-gate-abort`, the same in every client |
   | `--skip-clippy` | `--skip-lint`; `--skip-clippy` stays as its alias |
   | `CARGO_BUILD_JOBS` env | unchanged |

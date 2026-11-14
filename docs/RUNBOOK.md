@@ -391,7 +391,7 @@ format = "ruff"
   looked up on PATH. A command that is not found is refused, naming it.
 - `format` is optional: the board's decoder for the output (`ruff`, `clippy`, `go vet`, `gcc` and so on).
 - `name` is optional: the linter's name on the board. Without it the record is marked with `format`, else the
-  command's first word.
+  basename of the command's first word (`ruff` for `.venv/bin/ruff`).
 - A malformed table is refused, naming its file, before anything runs.
 
 **The defaults.** With no `[lint]`, rust runs `cargo clippy --workspace --all-targets --all-features -- -D warnings`
