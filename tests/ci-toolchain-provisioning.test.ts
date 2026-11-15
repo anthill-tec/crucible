@@ -701,6 +701,8 @@ const ACTION_RUNTIMES: Record<string, string> = {
   // A composite action runs no Node runtime of its own, so it can never carry
   // a deprecated one — §S5: "not a Node action, never annotated".
   "pypa/gh-action-pypi-publish@release/v1": "composite",
+  // Measured 2026-11-15: test-python installs cargo-nextest with it.
+  "taiki-e/install-action@v2": "composite",
 };
 
 /** The pin this repository REQUIRES for each action it uses — policy, not
@@ -722,6 +724,7 @@ const REQUIRED_PINS: Record<string, string> = {
   "actions/download-artifact": "v8.0.1",
   "oven-sh/setup-bun": "v2",
   "pypa/gh-action-pypi-publish": "release/v1",
+  "taiki-e/install-action": "v2",
 };
 
 type UsesSite = {
