@@ -50,7 +50,8 @@ Project + Crucible endpoint:
   Project path resolution: --project-dir > $RUST_CRUCIBLE_PROJECT_DIR > the git repo
   containing the current directory. No project is hardcoded — works in ANY Cargo repo.
   Posts to the first `[client] url` declared by the project's crucible.toml,
-  then the install's, else the shipped http://localhost:3849; v2 endpoints ONLY:
+  then the install's (with neither declaring one, a verb that must reach the
+  board refuses); v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs/start, the run's
   /tests list and /stream (codec nextest), /api/v2/runs (the stream's close,
   coverage codec lcov; `auto-ingest`'s codec junit), /api/v2/runs/compile.
@@ -211,14 +212,14 @@ def _resolve_services(arg_value, project_dir):
 def _base_url():
     """CR-CRU-139 §S2 — the BOARD this client posts to, read at the POINT OF
     USE from the fleet's ONE resolver: the project's own `crucible.toml`
-    (`[client] url`), else the install's, else the distribution's shipped
-    declaration.
+    (`[client] url`), else the install's; with neither declaring one it
+    refuses.
 
     A call rather than the module constant this line used to hold. A constant
     bound at import was a setting no edit an operator made could reach, and it
     froze the board for the whole process — so a verb handed a different
     `--project-dir` posted to the previous one's board. `resolve_base_url()` in
-    `_crucible_axi.py` documents the resolution and the environment channel it
+    `_crucible_board.py` documents the resolution and the environment channel it
     retired."""
     return _axi().resolve_base_url()
 
@@ -317,7 +318,7 @@ def _ops():
         project_key=_project_key, plans_path=_plans_path,
         open_plans=_open_plans, resolve_plan=_resolve_plan_or_emit,
         post_gate=_post_gate, post_milestone=_post_milestone,
-        base_url=_base_url())
+        base_url=_base_url)
 
 
 def _run_context():
@@ -2208,7 +2209,7 @@ def cmd_pre_merge_gate(args):
         whole_suite_alone=lambda: cmd_workspace_regression(
             ws_args, verb="pre-merge-gate", name_unfiled=True),
         context=_axi_context(project_dir, agent_id=args.agent),
-        crucible_url=_base_url())
+        crucible_url=_base_url)
 
 
 def cmd_docker_e2e_gate(args):

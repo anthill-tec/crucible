@@ -126,17 +126,11 @@ def _toon():
 CLIENT_LIMIT_NAMES = ("truncate_field_chars", "error_detail_chars",
                       "roadmap_list_rows")
 
-#: The two TOP-LEVEL tables a client reads out of that one file, and the ONE
-#: field the second carries. `[limits]` is CR-CRU-131's; `[client]` is
-#: CR-CRU-139 §S2's BOARD -- the connection, which is configuration for exactly
-#: the reasons a limit is: bound at import from `$CRUCIBLE_URL` it was a
-#: setting no edit an operator made could reach, and forgetting the export was
-#: silent, landing the run on the default -- the PRODUCTION board on a machine
-#: running two instances. Spelled here rather than at each read so the file's
-#: schema is stated once.
+#: The TOP-LEVEL table a client's limits are read out of that one file.
+#: `[limits]` is CR-CRU-131's; the board's `[client]` table is the board
+#: module's (`_crucible_board.py`). Spelled here rather than at each read so
+#: the file's schema is stated once.
 LIMITS_TABLE = "limits"
-CLIENT_TABLE = "client"
-CLIENT_BOARD_FIELD = "url"
 
 #: §S1 -- the gate steps a project NEVER runs, declared once in the same
 #: file (`[gate] skip = ["pr", "ci"]`) instead of remembered on every
@@ -307,33 +301,6 @@ def shipped_limits():
             for name in CLIENT_LIMIT_NAMES}
 
 
-def shipped_board():
-    """§S1c/§S2 -- the BOARD the distribution's own data declares: the last
-    resort of the chain, and the value every deleted `CRUCIBLE_URL` constant
-    defaulted to.
-
-    A DATA FILE rather than a literal here, for §S1c's reason exactly: the
-    address a reader READS in the file they edit and the address the code falls
-    back to must be the same bytes, or the documentation and the behaviour are
-    two copies of one datum. So this raises rather than inventing a default --
-    a distribution whose own data cannot say where it posts is broken in a way
-    no fallback could honestly paper over, which is how `shipped_limits()`
-    already treats a missing declaration."""
-    path = shipped_data_path()
-    with open(path, "rb") as fh:
-        parsed = tomllib.load(fh)
-    table = parsed.get(CLIENT_TABLE)
-    url = table.get(CLIENT_BOARD_FIELD) if isinstance(table, dict) else None
-    if not isinstance(url, str) or not url.strip():
-        raise RuntimeError(
-            f"{path} declares no `[{CLIENT_TABLE}] {CLIENT_BOARD_FIELD}`, so this "
-            "distribution cannot say which "
-            "board it posts to. The last resort is PACKAGE DATA rather than a "
-            "literal in this module, and there is deliberately no address here "
-            "to fall back to.")
-    return url.strip()
-
-
 def _read_project_config(table=LIMITS_TABLE):
     """One walk of the chain, at the point of use -- never cached.
 
@@ -444,77 +411,6 @@ def resolve_limit(name):
     declaration = (shipped if tables is None
                    else _declared_limit(shipped, tables.get(name)))
     return _effective_limit(name, declaration, path)[0]
-
-
-def resolve_base_url():
-    """CR-CRU-139 -- the BOARD this client posts to, at the POINT OF USE, over
-    the candidates `resolve_limit()` reads, but BY TABLE: the first file -- the
-    project's, then the install's -- that DECLARES a non-empty string
-    `[client] url` wins, a file without one is passed over, and the shipped
-    declaration is the last resort.
-
-    THE ONE PLACE the fleet's board is spelled. It replaces five module
-    constants bound at import from `$CRUCIBLE_URL` (arduino also honoured
-    `$CRUCIBLE_BASE`), which had two defects a limit had already been cured of:
-    a value bound at import is a setting no later state can reach -- a second
-    verb in one process inherits the first one's board -- and a channel that
-    must be EXPORTED is one that fails silently when it is forgotten, landing
-    the run on the shipped default, which on a machine carrying a production
-    instance is the production board.
-
-    Point of use, never cached, for the same reason every limit is re-read: the
-    project dir a verb resolved (`--project-dir` included) is bound before the
-    first request, and a verb given a different project must post to a
-    different project's board.
-
-    A FILE never raises here -- an absent, unparseable or board-less file is
-    passed over, because a client that cannot read a config file must still
-    degrade rather than break."""
-    for path in _project_config_candidates():
-        url = _declared_board(path)
-        if url:
-            return url
-    return shipped_board()
-
-
-def _declared_board(path):
-    """The stripped non-empty string `[client] url` the file at `path`
-    declares, or None when it is absent, does not parse, or declares none."""
-    try:
-        with open(path, "rb") as fh:
-            table = tomllib.load(fh).get(CLIENT_TABLE)
-    except (OSError, ValueError):  # ValueError covers TOMLDecodeError.
-        return None
-    url = table.get(CLIENT_BOARD_FIELD) if isinstance(table, dict) else None
-    return url.strip() or None if isinstance(url, str) else None
-
-
-def _machine_board():
-    """The machine's own board: the install file's usable `[client] url`, or
-    the shipped declaration when the install declares none."""
-    installed = os.path.join(_INSTALL_DIR, _SHIPPED_DATA_FILENAME)
-    return _declared_board(installed) or shipped_board()
-
-
-#: Where the board's address is read from, in the order `resolve_base_url`
-#: walks it. The transport's connection-failure and timeout messages carry it,
-#: so an operator facing an unreachable board learns which key to correct.
-BOARD_SOURCE = (f"the address is `[{CLIENT_TABLE}] {CLIENT_BOARD_FIELD}` from "
-                "the project's crucible.toml, then the install's, then the "
-                "shipped one")
-
-#: The ONE text every client appends to its top-level `--help` description:
-#: the key the board is read from, the order of the chain, and the rule
-#: `resolve_base_url` resolves it by -- the first file that DECLARES a
-#: non-empty `url` wins, and a file without one is passed over.
-BOARD_CONFIGURATION_HELP = (
-    f"Board: every verb posts to `[{CLIENT_TABLE}] {CLIENT_BOARD_FIELD}`, read "
-    "from the project's crucible.toml,\n"
-    "then the install's. The first file that declares a non-empty one wins; "
-    "a file\n"
-    "without one (or that does not parse) is passed over, and the shipped "
-    "address\n"
-    "is the last resort.")
 
 
 class GateSkipDeclarationError(ValueError):
@@ -646,7 +542,7 @@ def http_request(base_url, method, path, payload=None, timeout=None):
 
     `base_url` is passed in rather than resolved here: the transport's job is
     to make the call, and its callers (every client's own `_request`) read the
-    address from `resolve_base_url()` above at the point of use — one
+    address from `resolve_base_url()` (the board module) at the point of use — one
     resolution, one transport, and a caller free to name a board explicitly
     without this function acquiring a second opinion about where to post.
 
@@ -905,14 +801,18 @@ def axi_context(project_key, agent_id=None, cr=None, cycle_id=AXI_UNSET):
     a run reported into the wrong board: removing the export that caused it
     does not make the effect visible, so the envelope names the target at the
     moment it happens. Named only when it DIFFERS from the install's declared
-    `url`, or from the shipped one when the install declares none, under the
+    `url` (always, when the install declares none), under the
     same omit-absent rule every other key here follows -- a key
     emitted on every exit carries no signal, because an operator scanning for
     "which board?" would have to read the value on every line to find the one
-    line that differs."""
+    line that differs. With no board declared there is none to name, and this
+    never raises: it builds the refusal's own envelope."""
     ctx = {"projectKey": project_key}
-    board = resolve_base_url()
-    if board != _machine_board():
+    try:
+        board = resolve_base_url()
+    except BoardUndeclared:
+        board = None
+    if board is not None and board != _machine_board():
         ctx["board"] = board
     if agent_id:
         ctx["agentId"] = agent_id
@@ -1359,7 +1259,7 @@ def truncate_field(value, full=False):
 # binding ON the agent row, and §S3b retired implicit creation. An unconditional
 # cleanup therefore DELETES a caller-owned registration together with its
 # binding, and the next gated run under the same identity ingests unattached.
-# Observed live 2026-08-01 on the :3849 board: `vidushi` registered bound to
+# Observed live 2026-08-01 on the dev board: `vidushi` registered bound to
 # cycle 152; `python-crucible.py regression --agent vidushi` ingested stamped
 # 152 and then ran its cleanup; the immediately following
 # `bun-crucible.py regression --agent vidushi` landed with NO cycle.
@@ -1957,6 +1857,8 @@ def _active_cycle_ids(get, project_key):
     try:
         resp = get(f"{plans_path(project_key)}?status={PLANS_STATUS_OPEN}",
                    timeout=PREFLIGHT_TIMEOUT_S)
+    except BoardUndeclared:
+        raise  # no board declared is a refusal, never an unanswered read
     except Exception:  # an unanswered read refuses nothing — see docstring
         return ()
     if not isinstance(resp, dict) or not resp.get("ok"):
@@ -2022,6 +1924,10 @@ def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
             print(no_cycle_line(),
                   file=stream if stream is not None else sys.stderr)
             return [no_cycle_warning()]
+    except BoardUndeclared:
+        # No board declared is not an unanswered board: the run refuses here,
+        # before its runner spawns, as `UnattributedRunRefused` does.
+        raise
     except Exception:
         # Attribution is a courtesy; a suite must never become unrunnable
         # because it could not be computed.
@@ -2069,7 +1975,8 @@ def server_unreachable_help(verb, base_url):
     """CR-CRU-058 §S2 — the state-derived `help[]` for a run that produced real
     results but could not record them: pointing at the verb's normal successor
     would walk the orchestrator past a run that was never ingested."""
-    return [f"check the Crucible server is running / reachable at {base_url}, "
+    return [f"check the Crucible server is running / reachable at "
+            f"{board_address(base_url)}, "
             f"then re-run {verb} --agent <agentId>",
             "status"]
 
@@ -2081,7 +1988,8 @@ def ingest_failed_warning(verb, base_url):
     run happened but is NOT recorded. Mirrors `plans_unavailable_warning`."""
     return {
         "code": "ingest-failed",
-        "detail": (f"the {verb} run completed but its ingest to {base_url} "
+        "detail": (f"the {verb} run completed but its ingest to "
+                   f"{board_address(base_url)} "
                    f"did not succeed — the evidence is NOT on the board"),
     }
 
@@ -2828,6 +2736,11 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
             getattr(args, "cmd", None), refusal,
             _hard_stop_context(args, project_key_fn, refusal.agent_id),
             offers_release=hasattr(args, "release"))
+    except BoardUndeclared as refusal:
+        return emit_board_undeclared_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
     except RunAbandoned as abandoned:
         # A signal that escaped a gated-run bracket: the bracket already
         # aborted its open run and removed its identity.
@@ -2847,7 +2760,12 @@ def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
                                getattr(args, "agent", None)))
     if (getattr(args, "cmd", None) == GATE_VERB and ops_fn is not None
             and project_dir_fn is not None):
-        record_gate_outcome(args, code, project_dir_fn(args), ops_fn())
+        try:
+            record_gate_outcome(args, code, project_dir_fn(args), ops_fn())
+        except BoardUndeclared as refusal:
+            # The gate's envelope is out; the tail reports on stderr only.
+            report_board_undeclared(refusal)
+            code = code or 1
     return code
 
 
@@ -3026,11 +2944,14 @@ class ClientOps:
     `module._post` / `module._emit_axi` / `module._agent_id` — the fleet's
     established harness idiom — instead of holding a stale reference captured
     at import time.
+
+    `base_url` may be the client's own resolver, called at each read, so a
+    verb that sends nothing resolves no board.
     """
 
     __slots__ = ("get", "post", "patch", "emit", "context", "agent_id",
                  "project_key", "plans_path", "open_plans", "resolve_plan",
-                 "post_gate", "post_milestone", "base_url")
+                 "post_gate", "post_milestone", "_base_url")
 
     def __init__(self, *, get, post, patch, emit, context, agent_id,
                  project_key, plans_path, open_plans, resolve_plan,
@@ -3047,7 +2968,12 @@ class ClientOps:
         self.resolve_plan = resolve_plan
         self.post_gate = post_gate
         self.post_milestone = post_milestone
-        self.base_url = base_url
+        self._base_url = base_url
+
+    @property
+    def base_url(self):
+        """The board, resolved at this read when a resolver was given."""
+        return self._base_url() if callable(self._base_url) else self._base_url
 
 
 def cmd_status(args, project_dir, ops):
@@ -7668,6 +7594,17 @@ _reexport_module(_load_sibling_module("_crucible_release.py", "_release"))
 _reexport_module(_load_sibling_module("_crucible_project.py", "_project"))
 # The shared lint runner, loaded the same way; `runs` and `run` read it.
 _reexport_module(_LINT := _load_sibling_module("_crucible_lint.py", "_lint"))
+# The board a client posts to and the refusal when none is declared, loaded
+# the same way; the names this module uses itself are bound by name.
+_BOARD = _load_sibling_module("_crucible_board.py", "_board")
+BOARD_SOURCE = _BOARD.BOARD_SOURCE
+BoardUndeclared = _BOARD.BoardUndeclared
+resolve_base_url = _BOARD.resolve_base_url
+board_address = _BOARD.board_address
+_machine_board = _BOARD._machine_board
+emit_board_undeclared_hard_stop = _BOARD.emit_board_undeclared_hard_stop
+report_board_undeclared = _BOARD.report_board_undeclared
+_reexport_module(_BOARD)
 
 
 # The gated-run bracket in flight in this process (`gated_run`): its trap, and

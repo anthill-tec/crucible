@@ -59,7 +59,8 @@ Project + Crucible endpoint:
   Bun resolution: --bun > $BUN_CRUCIBLE_BUN > `bun` on PATH.
   Run-lifecycle opt-out (CR-CRU-017 §S4): --no-lifecycle > $BUN_CRUCIBLE_NO_LIFECYCLE.
   Posts to the first `[client] url` declared by the project's crucible.toml,
-  then the install's, else the shipped http://localhost:3849; v2 endpoints ONLY:
+  then the install's (with neither declaring one, a verb that must reach the
+  board refuses); v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs, /api/v2/runs/start|compile,
   /api/v2/projects/<key>/plans. This in-repo clients/ copy is the SOURCE OF
   TRUTH (CR-CRU-008 Risk section) — ~/.claude/scripts/ mirrors it.
@@ -231,14 +232,14 @@ def _project_key(project_dir):
 def _base_url():
     """CR-CRU-139 §S2 — the BOARD this client posts to, read at the POINT OF
     USE from the fleet's ONE resolver: the project's own `crucible.toml`
-    (`[client] url`), else the install's, else the distribution's shipped
-    declaration.
+    (`[client] url`), else the install's; with neither declaring one it
+    refuses.
 
     A call rather than the module constant this line used to hold. A constant
     bound at import was a setting no edit an operator made could reach, and it
     froze the board for the whole process — so a verb handed a different
     `--project-dir` posted to the previous one's board. `resolve_base_url()` in
-    `_crucible_axi.py` documents the resolution and the environment channel it
+    `_crucible_board.py` documents the resolution and the environment channel it
     retired."""
     return _axi().resolve_base_url()
 
@@ -1952,7 +1953,7 @@ def cmd_pre_merge_gate(args):
             script=suite.target),
         whole_framework=DEFAULT_FRAMEWORK, whole_script=marked,
         context=_axi_context(project_dir, agent_id=args.agent),
-        crucible_url=_base_url())
+        crucible_url=_base_url)
 
 
 def _gate_marked_script(package_dir):
@@ -2390,7 +2391,7 @@ def _ops():
         project_key=_project_key, plans_path=_plans_path,
         open_plans=_open_plans, resolve_plan=_resolve_plan_or_emit,
         post_gate=_post_gate, post_milestone=_post_milestone,
-        base_url=_base_url())
+        base_url=_base_url)
 
 
 # §S15 — per-verb next-step command TEMPLATES: every envelope names the sane

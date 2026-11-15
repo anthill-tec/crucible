@@ -238,6 +238,7 @@ STORE_DIR_NAME = "crucible"
 # the same reason.
 # And `_crucible_project.py`, a project's own verbs' module, loaded the same way.
 # And `_crucible_lint.py`, the shared lint runner, loaded the same way.
+# And `_crucible_board.py`, the board a client posts to, loaded the same way.
 # And `reporters/vitest-crucible.ts` and `reporters/playwright-crucible.ts`,
 # the shipped Vitest and Playwright reporters, in the `reporters/` subdirectory the bun client hands a runner as
 # `CRUCIBLE_REPORTERS`; a name may carry a `/`-separated subdirectory, which
@@ -257,6 +258,7 @@ FLEET_FILES = (
     "_crucible_release.py",
     "_crucible_project.py",
     "_crucible_lint.py",
+    "_crucible_board.py",
     "toon.py",
     "STATUS-CONTRACT.md",
     manifest.CONFIG_FILENAME,
