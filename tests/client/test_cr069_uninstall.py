@@ -61,7 +61,10 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-from tests.client import client_script
+from tests.client import (
+    client_script,
+    install_clients_candidates,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -109,7 +112,12 @@ def _import_fresh(*module_names):
     for mod in list(sys.modules):
         if mod == "crucible_axi" or mod.startswith("crucible_axi."):
             del sys.modules[mod]
-    return tuple(importlib.import_module(name) for name in module_names)
+    modules = tuple(importlib.import_module(name) for name in module_names)
+    # CR-CRU-260: the core `crucible_axi.cli` vendors takes the test install;
+    # `tearDownModule` purges this generation, so the binding stays here.
+    manifest = importlib.import_module("crucible_axi.manifest")
+    manifest._CLIENTS_CANDIDATES = install_clients_candidates(manifest)
+    return modules
 
 
 def _load_toon_module():
@@ -1006,6 +1014,14 @@ class BunIsNeverRemovedTest(_UninstallFixtureCase):
             f"`--purge` must succeed before AC5 can be asserted; "
             f"stdout={purge_out!r} stderr={purge_err!r}")
         self._assert_bun_intact("after a --purge uninstall")
+
+
+def tearDownModule():
+    """Purge the `crucible_axi` generation bound to the test install, so no
+    later module imports it."""
+    for name in list(sys.modules):
+        if name == "crucible_axi" or name.startswith("crucible_axi."):
+            del sys.modules[name]
 
 
 if __name__ == "__main__":

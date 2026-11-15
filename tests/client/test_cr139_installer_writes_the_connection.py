@@ -105,7 +105,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 from urllib.parse import urlsplit
-from tests.client import CLIENT_SOURCE_DIR
+from tests.client import (
+    CLIENT_SOURCE_DIR,
+    install_clients_candidates,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_NAME = "crucible.toml"
@@ -373,6 +376,12 @@ class _InstallerConnectionCase(unittest.TestCase):
         self.install = importlib.import_module("crucible_axi.install")
         self.manifest = importlib.import_module("crucible_axi.manifest")
         self.cli = importlib.import_module("crucible_axi.cli")
+        # CR-CRU-260: the core the CLI vendors takes the test install.
+        candidates = mock.patch.object(
+            self.manifest, "_CLIENTS_CANDIDATES",
+            install_clients_candidates(self.manifest))
+        candidates.start()
+        self.addCleanup(candidates.stop)
 
         self.store_dir = self.install.store_dir()
         os.environ["CRUCIBLE_DB"] = os.path.join(self.store_dir, "crucible.db")

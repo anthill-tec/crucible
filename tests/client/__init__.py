@@ -182,6 +182,13 @@ def client_script(name):
     return TEST_INSTALL_CLIENTS / name
 
 
+def install_clients_candidates(manifest):
+    """`manifest._CLIENTS_CANDIDATES` with the checkout's `clients/` replaced
+    by the test install's: patched in, the core `crucible_axi.cli` vendors
+    takes the test install, never the repo root."""
+    return (str(TEST_INSTALL_CLIENTS),) + tuple(manifest._CLIENTS_CANDIDATES[1:])
+
+
 def load_client(name, module_name=None):
     """A FRESH module loaded from `<test install>/clients/<name>` on every
     call, so no binding leaks from one test's module into another's."""
