@@ -79,9 +79,10 @@ import urllib.error
 import urllib.request
 from argparse import Namespace
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 
 
@@ -458,7 +459,7 @@ class HarnessIsolationTest(unittest.TestCase):
 
     def test_no_client_reaches_for_the_harness_lane_plan(self):
         offenders = {}
-        for path in sorted(CLIENTS_DIR.glob("*.py")):
+        for path in sorted(CLIENT_SOURCE_DIR.glob("*.py")):
             text = path.read_text(encoding="utf-8", errors="replace")
             hits = [token for token in self.FORBIDDEN if token in text]
             if hits:

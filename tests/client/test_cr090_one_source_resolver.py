@@ -59,12 +59,13 @@ from pathlib import Path
 from unittest import mock
 
 from crucible_axi import cli, install, manifest
+from tests.client import CLIENT_SOURCE_DIR
 
 # The two candidates §S2 preserves, derived from the PACKAGE's own location
 # rather than from any module-private tuple -- so the assertion survives the
 # private tuples being deleted, which is the point of the cycle.
 _PACKAGE_DIR = os.path.dirname(os.path.abspath(manifest.__file__))
-CHECKOUT_CANDIDATE = os.path.join(os.path.dirname(_PACKAGE_DIR), "clients")
+CHECKOUT_CANDIDATE = str(CLIENT_SOURCE_DIR)
 PACKAGE_DATA_CANDIDATE = os.path.join(_PACKAGE_DIR, "clients")
 
 _REAL_ISDIR = os.path.isdir

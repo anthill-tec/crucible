@@ -105,6 +105,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 from urllib.parse import urlsplit
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_NAME = "crucible.toml"
@@ -114,7 +115,7 @@ CONFIG_NAME = "crucible.toml"
 #: PROVISIONED package (`_provisioned_server_config_source()`), which is what
 #: lets a test declare its own bounds without an environment knob.
 SHIPPED_SERVER_DATA = REPO_ROOT / "src" / CONFIG_NAME
-SHIPPED_CLIENT_DATA = REPO_ROOT / "clients" / CONFIG_NAME
+SHIPPED_CLIENT_DATA = CLIENT_SOURCE_DIR / CONFIG_NAME
 
 #: The `[server]` table §S1 adds, and the flat keys it carries -- agreed with
 #: the §S1 (server-side) suite so one GREEN satisfies both files.

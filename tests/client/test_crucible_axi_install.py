@@ -97,10 +97,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client import CLIENT_SOURCE_DIR, client_script
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
-TOON_PATH = REPO_ROOT / "clients" / "toon.py"
-STATUS_CONTRACT_PATH = REPO_ROOT / "clients" / "STATUS-CONTRACT.md"
+TOON_PATH = client_script("toon.py")
+STATUS_CONTRACT_PATH = CLIENT_SOURCE_DIR / "STATUS-CONTRACT.md"
 
 EXPECTED_CLIENT_STACKS = {"bun", "python", "rust", "mvn", "arduino", "go"}
 

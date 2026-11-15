@@ -92,10 +92,12 @@ from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
     BOARD_RESOLVER,
     declare_and_require_board,
 )
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
+AXI_MODULE_PATH_SOURCE = CLIENT_SOURCE_DIR / "_crucible_axi.py"
 
 CLIENT_FILES = {
     "bun": CLIENTS_DIR / "bun-crucible.py",
@@ -290,7 +292,7 @@ class HttpCoreSingleLocusOfTruthTest(unittest.TestCase):
                     f"{{'ok': False, 'error': ...}} result after delegating")
 
     def test_request_transport_call_lives_in_the_shared_axi_module(self):
-        source = AXI_MODULE_PATH.read_text()
+        source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             "urllib.request.urlopen(", source,
             "clients/_crucible_axi.py must own the real HTTP transport call "
@@ -328,7 +330,7 @@ class HttpCoreSingleLocusOfTruthTest(unittest.TestCase):
                     f"a path outside the home directory unchanged")
 
     def test_abbrev_home_path_logic_lives_in_the_shared_axi_module(self):
-        source = AXI_MODULE_PATH.read_text()
+        source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             'os.path.expanduser("~")', source,
             "clients/_crucible_axi.py must own the real home-dir-collapse "
@@ -344,7 +346,7 @@ class HttpCoreStdlibOnlyTest(unittest.TestCase):
     this is not a guard that is born green with nothing new to prove."""
 
     def test_shared_module_gains_the_http_core_and_stays_stdlib_only(self):
-        source = AXI_MODULE_PATH.read_text()
+        source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             "urllib.request.urlopen(", source,
             "the §S2 HTTP-core lift must land the real transport call in "

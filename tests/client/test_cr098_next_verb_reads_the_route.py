@@ -50,10 +50,13 @@ from pathlib import Path
 from unittest import mock
 from urllib.parse import parse_qsl, urlsplit
 
-from tests.client import cr098_next_oracle
+from tests.client import (
+    TEST_INSTALL_CLIENTS,
+    cr098_next_oracle,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TOON_PATH = CLIENTS_DIR / "toon.py"
 

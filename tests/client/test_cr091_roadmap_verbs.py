@@ -60,9 +60,10 @@ from unittest import mock
 # installed project has; the fleet census owns that helper (one fixture shape
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
 from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 TOON_PATH = CLIENTS_DIR / "toon.py"
 
 CLIENT_FILES = {
@@ -938,7 +939,7 @@ class RoadmapVerbsLandOnceTest(unittest.TestCase):
     lives in `clients/_crucible_axi.py`. A reviewer diffing two client files
     must see near-identical thin registrations."""
 
-    SHARED = CLIENTS_DIR / "_crucible_axi.py"
+    SHARED = CLIENT_SOURCE_DIR / "_crucible_axi.py"
     DELEGATORS = ("cmd_release_propose", "cmd_cr_plan", "cmd_wave_sequence",
                   "cmd_cr_supersede", "cmd_cr_void")
 

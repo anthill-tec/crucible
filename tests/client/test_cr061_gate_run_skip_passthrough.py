@@ -87,9 +87,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 
 CLIENT_FILES = {

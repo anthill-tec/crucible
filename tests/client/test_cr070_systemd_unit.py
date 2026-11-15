@@ -78,6 +78,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -158,7 +159,7 @@ def _import_fresh(*module_names):
 
 def _load_toon_module():
     spec = importlib.util.spec_from_file_location(
-        "crucible_toon_cr070", str(REPO_ROOT / "clients" / "toon.py"))
+        "crucible_toon_cr070", str(client_script("toon.py")))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

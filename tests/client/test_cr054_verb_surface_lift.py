@@ -175,10 +175,12 @@ from tests.client.test_client_fleet_envelope_census import (
     _UNREACHABLE_CRUCIBLE_URL,
     declare_and_require_board,
 )
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
+AXI_MODULE_PATH_SOURCE = CLIENT_SOURCE_DIR / "_crucible_axi.py"
 
 CLIENT_FILES = {
     "bun": CLIENTS_DIR / "bun-crucible.py",
@@ -307,7 +309,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
             f"the following clients still carry cmd_status's REAL "
             f"unavailable-degrade logic in their own source instead of "
             f"delegating to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own cmd_status's real logic after "
@@ -357,7 +359,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
             f"the following clients still carry cmd_stop's REAL "
             f"checkpointed-count reporting in their own source instead of "
             f"delegating to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own cmd_stop's real logic after "
@@ -401,7 +403,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
             f"the following clients still carry cmd_checkpoint's REAL "
             f"checkpoint-POST logic in their own source instead of "
             f"delegating to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own cmd_checkpoint's real logic "
@@ -444,7 +446,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
             f"the following clients still carry cmd_abort's REAL abort-POST "
             f"logic in their own source instead of delegating to "
             f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own cmd_abort's real logic after "
@@ -510,7 +512,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
             f"the following clients still carry cmd_cycle_add's REAL "
             f"cycle-append POST logic in their own source instead of "
             f"delegating to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own cmd_cycle_add's real logic "
@@ -550,7 +552,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
             f"the following clients still carry cmd_cr_close's REAL "
             f"close-PATCH logic in their own source instead of delegating to "
             f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own cmd_cr_close's real logic "
@@ -630,7 +632,7 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase, _ProjectDirFixtu
             f"the following clients still carry _post_gate's REAL endpoint "
             f"in their own source instead of delegating to "
             f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own _post_gate's real logic "
@@ -681,7 +683,7 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase, _ProjectDirFixtu
             f"the following clients still carry _post_milestone's REAL "
             f"endpoint in their own source instead of delegating to "
             f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own _post_milestone's real logic "
@@ -719,7 +721,7 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase, _ProjectDirFixtu
             f"the following clients still carry _add_gate_cycle_arg's REAL "
             f"argparse binding in their own source instead of delegating to "
             f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own _add_gate_cycle_arg's real "
@@ -746,7 +748,7 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase, _ProjectDirFixtu
             f"the following clients still carry cmd_gate_report's REAL gate "
             f"assembly logic in their own source instead of delegating to "
             f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own cmd_gate_report's real logic "
@@ -801,7 +803,7 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase, _ProjectDirFixtu
             f"the following clients still carry cmd_gate_run's REAL polling "
             f"logic in their own source instead of delegating to "
             f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own cmd_gate_run's real polling "
@@ -848,7 +850,7 @@ class CycleTransitionSingleLocusTest(unittest.TestCase, _ProjectDirFixture):
             f"the following clients still carry _cycle_transition's REAL "
             f"plan-scan/PATCH logic in their own source instead of "
             f"delegating to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own _cycle_transition's real "
@@ -911,7 +913,7 @@ class DashboardParameterisedLiftTest(unittest.TestCase):
             f"Namespace inline in cmd_dashboard instead of delegating the "
             f"(parameterised) construction to clients/_crucible_axi.py: "
             f"{offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own the parameterised "
@@ -983,7 +985,7 @@ class MilestoneStderrDriftCorrectionTest(unittest.TestCase, _ProjectDirFixture):
             f"`file=sys.stderr` print in their own source instead of "
             f"delegating to clients/_crucible_axi.py (CR-CRU-054 §S2b "
             f"lift): {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             marker, axi_source,
             "clients/_crucible_axi.py must own cmd_milestone's "
@@ -1621,7 +1623,7 @@ class IdentitySourceOnTheWireDriftCorrectionTest(unittest.TestCase, _ProjectDirF
         key must match exactly the set of sites the tests above drive. A NEW
         payload-building site fails here instead of shipping with only the
         static scans behind it -- the precise gap this class closes."""
-        found = {"_crucible_axi": _identity_payload_sites(AXI_MODULE_PATH)}
+        found = {"_crucible_axi": _identity_payload_sites(AXI_MODULE_PATH_SOURCE)}
         for client, path in CLIENT_FILES.items():
             found[client] = _identity_payload_sites(path)
         self.assertEqual(

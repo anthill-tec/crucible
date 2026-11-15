@@ -24,9 +24,10 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 
 CLIENT_FILES = {
     "bun": CLIENTS_DIR / "bun-crucible.py",
@@ -36,7 +37,7 @@ CLIENT_FILES = {
     "arduino": CLIENTS_DIR / "arduino-crucible.py",
 }
 
-AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
+AXI_MODULE_PATH = CLIENT_SOURCE_DIR / "_crucible_axi.py"
 
 
 def _defined_function_names(path):
@@ -479,7 +480,7 @@ class DriftedFindingsAreStillPresentTest(unittest.TestCase):
         it. This is the flip named in the class docstring's running-score
         convention; it replaces the "still present" pin this test used to
         make (that pin was only ever true while arduino held a private copy)."""
-        axi_path = CLIENTS_DIR / "_crucible_axi.py"
+        axi_path = CLIENT_SOURCE_DIR / "_crucible_axi.py"
         axi_body = self._body_after_signature(axi_path, "http_request")
         self.assertIn(
             'json.loads(body) if body else {"ok": True}', axi_body,
@@ -2258,7 +2259,7 @@ class Cr108TrackRuleIsNotRederivedByTheFleetTest(unittest.TestCase):
 
     def test_no_file_in_clients_derives_the_track_list_itself(self):
         offenders = {}
-        for path in sorted(CLIENTS_DIR.glob("*.py")):
+        for path in sorted(CLIENT_SOURCE_DIR.glob("*.py")):
             found = _track_set_computations(
                 path.read_text(encoding="utf-8"), filename=str(path))
             if found:

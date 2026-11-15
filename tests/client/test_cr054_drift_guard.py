@@ -57,9 +57,10 @@ import tempfile
 import unittest
 from collections import defaultdict
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = CLIENT_SOURCE_DIR
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 # The run pipeline the shared module loads by path and re-exports: a
 # shared module too, where the fleet's shared code is supposed to live.

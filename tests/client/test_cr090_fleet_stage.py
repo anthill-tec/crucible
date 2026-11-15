@@ -83,12 +83,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client import CLIENT_SOURCE_DIR
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # The SOURCE of truth for the copy: the repo checkout's own fleet directory,
 # which is what `manifest.source_clients_dir()` resolves to in a source
 # checkout and what the wheel force-includes as `crucible_axi/clients`.
-SOURCE_CLIENTS_DIR = REPO_ROOT / "clients"
+SOURCE_CLIENTS_DIR = CLIENT_SOURCE_DIR
 
 # §S1 -- the packaged fleet, exactly. Five clients plus the two shared modules
 # they load by file path plus the status contract the manifest publishes.
