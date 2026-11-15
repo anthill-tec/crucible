@@ -77,9 +77,10 @@ from tests.client.test_client_fleet_envelope_census import (
     declare_and_require_board,
     install_project_limits,
 )
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
+SCRIPT_PATH = client_script("bun-crucible.py")
 
 
 def _load_bun_crucible_module():

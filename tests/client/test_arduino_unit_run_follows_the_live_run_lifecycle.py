@@ -78,9 +78,10 @@ from tests.client.live_run_harness import (
     board_health,
     project_toml_declaring,
 )
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ARDUINO_SCRIPT = REPO_ROOT / "clients" / "arduino-crucible.py"
+ARDUINO_SCRIPT = client_script("arduino-crucible.py")
 
 AGENT = "arduino-run-lifecycle-fixture"
 PROJECT_KEY = "test-key-arduino-run-lifecycle"

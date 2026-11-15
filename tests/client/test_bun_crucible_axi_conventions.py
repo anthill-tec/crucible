@@ -104,9 +104,11 @@ from tests.client.test_cr054_fleet_inventory import (
     _defined_function_names,
     _single_verb_registrar_delegator,
 )
+from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
+SCRIPT_PATH = client_script("bun-crucible.py")
+SCRIPT_PATH_SOURCE = CLIENT_SOURCE_DIR / "bun-crucible.py"
 
 # CR-CRU-030 C2 (cycle 84) -- fixtures for HelpArrayCoverageTest's ingest-verb
 # help[] tests below (test/regression need a fake `bun` executable, same
@@ -980,14 +982,14 @@ class BunCrucibleQueueFileRegistrationTest(unittest.TestCase):
         """AC1's delegator and AC6's DRY half in one: a body longer than the
         single `return _axi().cmd_queue_file(...)` means the parse or the POST
         leaked back into a client."""
-        counts = _defined_function_names(SCRIPT_PATH)
+        counts = _defined_function_names(SCRIPT_PATH_SOURCE)
         self.assertEqual(
             counts.get("cmd_queue_file", 0), 1,
             f"{SCRIPT_PATH.name} must define `cmd_queue_file` exactly once "
             f"(§S1 fleet parity; a duplicate def would silently make the "
             f"SECOND one win at import time); defined "
             f"{counts.get('cmd_queue_file', 0)}x")
-        node = next(n for n in ast.walk(ast.parse(SCRIPT_PATH.read_text()))
+        node = next(n for n in ast.walk(ast.parse(SCRIPT_PATH_SOURCE.read_text()))
                     if isinstance(n, ast.FunctionDef)
                     and n.name == "cmd_queue_file")
         body = [stmt for stmt in node.body
@@ -1015,7 +1017,7 @@ class BunCrucibleQueueFileRegistrationTest(unittest.TestCase):
 
     def test_the_client_registers_queue_file_through_the_shared_registrar(self):
         delegator = _single_verb_registrar_delegator(
-            SCRIPT_PATH, "add_queue_file_verb")
+            SCRIPT_PATH_SOURCE, "add_queue_file_verb")
         self.assertEqual(
             delegator, "cmd_queue_file",
             f"{SCRIPT_PATH.name} must register the verb by handing its OWN "
@@ -1028,7 +1030,7 @@ class BunCrucibleQueueFileRegistrationTest(unittest.TestCase):
         verb, which forks the flag surface the shared registrar exists to keep
         identical. After §S1 no client spells it — that one included."""
         self.assertNotIn(
-            "queue-file", _add_parser_verb_names(SCRIPT_PATH),
+            "queue-file", _add_parser_verb_names(SCRIPT_PATH_SOURCE),
             f"the `queue-file` subparser is built ONCE, by "
             f"`_crucible_axi.add_queue_file_verb`; {SCRIPT_PATH.name} spells "
             f"its own")

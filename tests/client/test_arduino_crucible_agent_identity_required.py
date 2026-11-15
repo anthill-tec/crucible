@@ -38,10 +38,12 @@ from tests.client.test_client_fleet_envelope_census import (
     _UNREACHABLE_CRUCIBLE_URL,
     declare_and_require_board,
 )
+from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "clients" / "arduino-crucible.py"
-CLIENTS_DIR = REPO_ROOT / "clients"
+SCRIPT_PATH = client_script("arduino-crucible.py")
+SCRIPT_PATH_SOURCE = CLIENT_SOURCE_DIR / "arduino-crucible.py"
+CLIENTS_DIR = CLIENT_SOURCE_DIR
 
 _RELAY_MARKER = "agent-identity-relay-marker-arduino321"
 _FINAL_SNAPSHOT = (
@@ -312,7 +314,7 @@ class ExplicitAgentStillWorksTest(_BaseAgentIdentityTest):
 class NoFilenameFallbackSurvivesTest(unittest.TestCase):
 
     def test_arduino_crucible_source_has_no_filename_derived_agent_fallback(self):
-        source = SCRIPT_PATH.read_text()
+        source = SCRIPT_PATH_SOURCE.read_text()
         self.assertNotRegex(
             source, r'or "arduino-crucible"',
             "clients/arduino-crucible.py must not fall back to a fabricated "

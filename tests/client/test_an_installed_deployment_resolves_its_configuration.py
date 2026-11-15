@@ -160,6 +160,7 @@ from tests.client.test_cr139_installer_writes_the_connection import (
     SHIPPED_RANGE_MIN,
     _claim_consecutive_ports,
 )
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_NAME = "crucible.toml"
@@ -167,7 +168,7 @@ CONFIG_NAME = "crucible.toml"
 #: The distribution's own data, in the checkout: the bytes the installer lays
 #: down and the table the fleet falls back to are ONE datum (CR-CRU-131 §S1c),
 #: so every expectation below is READ BACK off it rather than written out.
-SHIPPED_CLIENT_DATA = REPO_ROOT / "clients" / CONFIG_NAME
+SHIPPED_CLIENT_DATA = CLIENT_SOURCE_DIR / CONFIG_NAME
 SHIPPED_SERVER_DATA = REPO_ROOT / "src" / CONFIG_NAME
 
 

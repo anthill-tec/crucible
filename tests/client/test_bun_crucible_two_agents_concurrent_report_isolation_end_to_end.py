@@ -65,9 +65,10 @@ import urllib.request
 from pathlib import Path
 
 from tests.client.test_client_fleet_envelope_census import declare_and_require_board
+from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 BUN_CLIENT_PATH = CLIENTS_DIR / "bun-crucible.py"
 
 # The env keys cleared before every subprocess drive so an ambient

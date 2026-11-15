@@ -58,9 +58,11 @@ from tests.client.test_client_fleet_envelope_census import (
     _UNREACHABLE_CRUCIBLE_URL,
     declare_and_require_board,
 )
+from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
+SCRIPT_PATH = client_script("bun-crucible.py")
+SCRIPT_PATH_SOURCE = CLIENT_SOURCE_DIR / "bun-crucible.py"
 
 PASS_JUNIT_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <testsuites>
@@ -257,7 +259,7 @@ class ClientSourceGrepSweepTest(_BaseAutoAttachTest):
     caller did not bind or explicitly send." """
 
     def test_source_never_reads_workflow_cycle_id_env_var(self):
-        occurrences = SCRIPT_PATH.read_text().count("WORKFLOW_CYCLE_ID")
+        occurrences = SCRIPT_PATH_SOURCE.read_text().count("WORKFLOW_CYCLE_ID")
         self.assertEqual(
             occurrences, 0,
             f"bun-crucible.py must not reference WORKFLOW_CYCLE_ID anywhere "
@@ -266,7 +268,7 @@ class ClientSourceGrepSweepTest(_BaseAutoAttachTest):
         )
 
     def test_source_contains_no_client_side_cycle_resolver_references(self):
-        text = SCRIPT_PATH.read_text()
+        text = SCRIPT_PATH_SOURCE.read_text()
         for banned in ("resolve_attach_cycle", "resolve_active_cycle_id"):
             self.assertNotIn(
                 banned, text,

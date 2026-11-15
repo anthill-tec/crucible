@@ -31,9 +31,10 @@ from tests.client.test_client_fleet_envelope_census import (
     declare_board,
     install_project_limits,
 )
+from tests.client import client_script
 
 REPO = Path(__file__).resolve().parents[2]
-CLIENT_PATH = REPO / "clients" / "arduino-crucible.py"
+CLIENT_PATH = client_script("arduino-crucible.py")
 FIXTURE = REPO / "tests" / "fixtures" / "arduino-cli" / "renesas-uno-minima-default.txt"
 
 COMPILE = "/api/v2/runs/compile"

@@ -54,9 +54,10 @@ from tests.client.live_run_harness import (
     load_client,
     scrubbed_env,
 )
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PYTHON_CLIENT = REPO_ROOT / "clients" / "python-crucible.py"
+PYTHON_CLIENT = client_script("python-crucible.py")
 
 PYTHON_AGENT = "python-stream-count-agent"
 PYTHON_PROJECT_KEY = "python-stream-count-key"

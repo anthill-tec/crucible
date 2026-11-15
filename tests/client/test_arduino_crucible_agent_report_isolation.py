@@ -55,10 +55,11 @@ from unittest import mock
 
 from tests.client.live_run_harness import get_answering_health
 from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "clients" / "arduino-crucible.py"
-TOON_PATH = REPO_ROOT / "clients" / "toon.py"
+SCRIPT_PATH = client_script("arduino-crucible.py")
+TOON_PATH = client_script("toon.py")
 
 GOOD_NATIVE_JUNIT_XML = (
     '<?xml version="1.0"?>'

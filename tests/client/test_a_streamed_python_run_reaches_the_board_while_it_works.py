@@ -31,9 +31,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.client.live_run_harness import scrubbed_env
 from tests.client.real_board import RealBoard
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PYTHON_SCRIPT = REPO_ROOT / "clients" / "python-crucible.py"
+PYTHON_SCRIPT = client_script("python-crucible.py")
 REAL_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 
 AGENT = "python-live-stream-agent"

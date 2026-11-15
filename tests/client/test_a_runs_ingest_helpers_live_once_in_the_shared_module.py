@@ -48,9 +48,10 @@ import unittest
 from pathlib import Path
 
 from tests.client.live_run_harness import load_client
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS = REPO_ROOT / "clients"
+CLIENTS = CLIENT_SOURCE_DIR
 
 OWN_FUNCTIONS = ("_filed_run", "_coverage_not_measured_warning")
 OWN_CONSTANT = "COVERAGE_NOT_MEASURED_CODE"

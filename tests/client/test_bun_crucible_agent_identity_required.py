@@ -54,10 +54,12 @@ from tests.client.test_client_fleet_envelope_census import (
     _UNREACHABLE_CRUCIBLE_URL,
     declare_and_require_board,
 )
+from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
-CLIENTS_DIR = REPO_ROOT / "clients"
+SCRIPT_PATH = client_script("bun-crucible.py")
+SCRIPT_PATH_SOURCE = CLIENT_SOURCE_DIR / "bun-crucible.py"
+CLIENTS_DIR = CLIENT_SOURCE_DIR
 
 # A distinctive marker planted in the fake `no-mistakes`'s snapshot -- proves
 # gate-run reached (or did not reach) the underlying axi run at all.
@@ -357,7 +359,7 @@ class ExplicitAgentStillWorksTest(_BaseAgentIdentityTest):
 class NoFilenameFallbackSurvivesTest(unittest.TestCase):
 
     def test_bun_crucible_source_has_no_filename_derived_agent_fallback(self):
-        source = SCRIPT_PATH.read_text()
+        source = SCRIPT_PATH_SOURCE.read_text()
         self.assertNotRegex(
             source, r'or "bun-crucible"',
             "clients/bun-crucible.py must not fall back to a fabricated "

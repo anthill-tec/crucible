@@ -52,9 +52,10 @@ from tests.client.test_client_fleet_envelope_census import (
     _UNREACHABLE_CRUCIBLE_URL,
     declare_and_require_board,
 )
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
+SCRIPT_PATH = client_script("bun-crucible.py")
 
 _ENV_KEYS = (
     "WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID", "WORKFLOW_CYCLE",

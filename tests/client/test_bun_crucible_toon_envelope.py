@@ -76,9 +76,10 @@ from unittest import mock
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
 from tests.client.live_run_harness import get_answering_health
 from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
+SCRIPT_PATH = client_script("bun-crucible.py")
 
 PASS_JUNIT_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <testsuites>
