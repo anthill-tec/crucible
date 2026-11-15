@@ -28,8 +28,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.client import client_script
 from tests.client.live_run_harness import (
-    CLIENTS,
     REPO_ROOT,
     RecordingBoard,
     install_project,
@@ -39,8 +39,8 @@ from tests.client.live_run_harness import (
 )
 
 TOON = load_toon()
-GO_CLIENT = CLIENTS / "go-crucible.py"
-PYTHON_CLIENT = CLIENTS / "python-crucible.py"
+GO_CLIENT = client_script("go-crucible.py")
+PYTHON_CLIENT = client_script("python-crucible.py")
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "go-client"
 AGENT = "go-runner"
 PROJECT_KEY = "pk-go-run"

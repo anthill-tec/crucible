@@ -30,7 +30,9 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from tests.client import TEST_INSTALL_MARKER, establish_test_install, pid_alive
 from tests.client.go_client_harness import (
     GO_CLIENT,
     GoProject,
@@ -39,7 +41,7 @@ from tests.client.go_client_harness import (
     go_toolchain_gap,
     said,
 )
-from tests.client.live_run_harness import CLIENTS, new_scratch
+from tests.client.live_run_harness import new_scratch
 from tests.client.test_client_fleet_envelope_census import (
     declare_board,
     would_resolve,
@@ -202,19 +204,18 @@ class AModuleThatCannotBeFoundIsRefusedTest(_ModuleDir):
         self.assert_refused(p, result, "[go] module_dir = worker/sub holds no go.mod")
 
     def install_declaring(self, board_url):
-        """A go client of this test's own: the core fleet copied into
-        `<install>/clients/`, inside a parent this test owns, and the install's
-        `crucible.toml` declaring `board_url`. Answers the copied client."""
-        install = Path(tempfile.mkdtemp(prefix="go-install-"))
-        self.addCleanup(shutil.rmtree, install, ignore_errors=True)
-        clients = install / "clients"
-        clients.mkdir()
-        fleet = (sorted(CLIENTS.glob("_crucible_*.py"))
-                 + [GO_CLIENT, CLIENTS / "toon.py", CLIENTS / "crucible.toml"])
-        for source in fleet:
-            shutil.copyfile(source, clients / source.name)
+        """A go client of this test's own: a test install laid down by the
+        suite's helper inside a parent this test owns (removed with it), its
+        `crucible.toml` declaring `board_url`. Answers the install's client."""
+        parent = tempfile.mkdtemp(prefix="go-install-parent-")
+        self.addCleanup(shutil.rmtree, parent, ignore_errors=True)
+        environ = {}
+        with mock.patch.object(tempfile, "tempdir", parent):
+            install = Path(establish_test_install(
+                environ, pid=os.getpid(), pid_alive=pid_alive, at_exit=self.addCleanup))
+        self.assertEqual(environ, {TEST_INSTALL_MARKER: str(install)})
         declare_board(install / "crucible.toml", board_url)
-        return clients / GO_CLIENT.name
+        return install / "clients" / GO_CLIENT.name
 
     def test_a_crucible_toml_that_does_not_parse_declares_nothing(self):
         p = self.project()
