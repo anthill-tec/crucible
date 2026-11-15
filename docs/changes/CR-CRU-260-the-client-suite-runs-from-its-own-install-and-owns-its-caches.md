@@ -4,7 +4,7 @@
 rulings 2026-11-15: a test-only install rather than a client setting, and a suite-owned maven repository kept between
 runs)
 **Type:** fix
-**Points:** 5
+**Points:** 13 (re-scored from 5 at gap analysis, 2026-11-15, user ruling: one CR in four cycles)
 **Wave:** 8 (0.4.0)
 **Depends on:** CR-CRU-259
 **Labels:** tests, client, ci, release
@@ -31,15 +31,29 @@ state. The client suite breaks it three ways.
 ## Design
 
 - **A test-only install.** One harness helper per language (python under `tests/client/`, TypeScript under
-  `tests/helpers/`) lays down, once per test process, a temporary install directory holding `clients/` (a link to the
-  checkout's) and its own `crucible.toml`: no `[client] url`, no `[lint]` or `[run]` tables, no limits overrides. It is
-  removed at process exit. Because the client derives `_INSTALL_DIR` from its own path, a client loaded or spawned from
-  there reads only that file; no product code changes and no environment seam is added (CR-CRU-131 stands).
+  `tests/helpers/`) lays down, once per test process, a temporary install directory holding `clients` (a symlink to
+  the checkout's, so edits stay live and nothing is duplicated) and its own `crucible.toml`: no `[client] url`, no
+  `[lint]` or `[run]` tables, no limits overrides. It is removed at process exit. Because the client derives
+  `_INSTALL_DIR` from `dirname(abspath(__file__))`, which does not resolve symlinks, and every client loads its
+  siblings by that same path, a client loaded or spawned from there reads only that file; no product code changes and
+  no environment seam is added (CR-CRU-131 stands).
+- **Two constants, two uses.** The helper exports the test install's client paths (to LOAD or SPAWN a client) and the
+  checkout's client source directory (to READ client source, or to COPY it into a test's own install). Source scans,
+  line budgets and citations read the source constant; nothing loads or spawns from it.
 - **One constant.** Every test that loads or spawns a client takes its path from that helper. No test module builds
   its own path to the checkout's `clients/`. `986cda36`'s per-module binds fold into the helper where they duplicate
   it.
 - **A test declares its board.** With CR-CRU-259 and no url in the test install, a test that reaches a board without
-  declaring one gets the refusal: it fails loudly instead of leaking.
+  declaring one gets the refusal: it fails loudly instead of leaking. Declarations reuse the existing spellings,
+  `declare_and_require_board` (python, `test_client_fleet_envelope_census.py`) and `declareClientBoard` (bun,
+  `tests/helpers/client-board.ts`); no third spelling is added.
+- **No test reads the operator's board.** The live-census legs of `queue-release-membership-mandatory.test.ts`,
+  `queue-historical-membership.test.ts` and `roadmap-visual-grammar.test.ts`, which read the dev board through the root
+  `crucible.toml` and the root `.env`'s project key, are removed; each file's synthetic-board tests stay.
+  `declaredClientBoard()` loses its `REPO_ROOT` default (user ruling 2026-11-15).
+- **A copied client is laid out as an install.** A test that copies client modules into a temp dir puts them under
+  `<dir>/clients/`, so their `_INSTALL_DIR` is the temp dir and never `/tmp` (the census scratch copies in
+  `test_client_fleet_envelope_census.py`, VERIFY 958 Sug5).
 - **A suite-owned maven repository.** The integration tests that run maven take `-Dmaven.repo.local=<suite repo>` from
   their fixture; the suite repo is a git-ignored path in the checkout (`.cache/test-suite/m2`). A provisioning script
   (`scripts/provision-test-caches.sh`, or a bun script beside the other test scripts) fills it online with what the
@@ -56,8 +70,9 @@ state. The client suite breaks it three ways.
 - [ ] **AC1 — no operator config.** A full run of both suites in a clean clone with an operator `crucible.toml` at its
   root whose `[client] url`, limits, `[lint]` and `[run]` differ from the defaults gives the same pass/fail per test as
   without it; and no test reads the root file (proved by the audit census: no open of `<repo>/crucible.toml`).
-- [ ] **AC2 — one path.** No test module or helper outside the two harness helpers names the checkout's `clients/`
-  directory as a place to load or spawn a client from (a guard test over `tests/`).
+- [ ] **AC2 — one path.** No test module or helper outside the two harness helpers builds a path to the checkout's
+  `clients/` (a guard test over `tests/`, python and TypeScript); source reads and copies take the helper's source
+  constant, loads and spawns its test-install paths. The guard is proved on a planted module that builds its own path.
 - [ ] **AC3 — maven.** With `HOME` pointing at an empty directory and no network, the maven live-run tests pass from a
   provisioned suite repo; with the suite repo empty they fail naming the provisioning script.
 - [ ] **AC4 — wheels.** With no network, the three wheel modules pass.
@@ -72,8 +87,19 @@ state. The client suite breaks it three ways.
   `test_declared_target_report_mechanism`, `test_bun_crucible_axi_conventions`, the five
   `test_*_crucible_agent_identity_required`, the five census modules' module-level cases, and others
   (`test-reports/work/dep-census-py.out`). Each now declares the board it reaches, or asserts the refusal.
-  **Added 2026-11-15 (user ruling):** CR-CRU-259 and CR-CRU-260 are pushed together, and that CI run must be green
-  before CR-CRU-261's close-out.
+  The bun suite, run the same way with no root toml, shows none either. **Added 2026-11-15 (user ruling):**
+  CR-CRU-259 and CR-CRU-260 are pushed together, and that CI run must be green before CR-CRU-261's close-out.
+- [ ] **AC8 — copies are installs.** No test copies a client module anywhere but under a `clients/` directory of its own
+  temp install; with a `crucible.toml` planted in the temp dir's parent, the census scratch copies still pass.
+- [ ] **AC9 — no operator board.** No test reads the root `.env` or resolves a board from the repo root;
+  `declaredClientBoard` takes its directory explicitly (a guard over `tests/`).
+
+## Cycles
+
+1. The python test install, its guard (AC2, python half) and the python migration (AC1, AC6).
+2. AC7's board declarations and AC8 (the census scratch copies).
+3. The bun test install, its migration (AC2, TypeScript half) and AC9.
+4. Maven's suite repository and provisioning script, offline wheels, CI and its pins (AC3, AC4, AC5).
 
 ## Non-goals
 
