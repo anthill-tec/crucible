@@ -81,11 +81,15 @@ from unittest import mock
 from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
     declare_and_require_board,
 )
-from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
+from tests.client import (
+    CLIENT_SOURCE_DIR,
+    TEST_INSTALL_CLIENTS,
+    client_script,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = TEST_INSTALL_CLIENTS
-AXI_MODULE = CLIENT_SOURCE_DIR / "_crucible_axi.py"
+AXI_MODULE = client_script("_crucible_axi.py")
 
 CLIENT_FILES = {
     "bun": CLIENTS_DIR / "bun-crucible.py",
@@ -365,7 +369,7 @@ def _functions_handed_the_parser(path, parser_names):
 def _shared_functions_declaring(flag):
     """The top-level functions of the SHARED module whose body declares `flag`
     through an `add_argument(...)` call."""
-    tree = ast.parse(AXI_MODULE.read_text())
+    tree = ast.parse((CLIENT_SOURCE_DIR / AXI_MODULE.name).read_text())
     declaring = set()
     for node in tree.body:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

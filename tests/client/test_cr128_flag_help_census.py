@@ -125,6 +125,8 @@ import unittest
 from collections import Counter
 from pathlib import Path
 
+from tests.client import CLIENT_SOURCE_DIR, client_script
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
@@ -464,6 +466,16 @@ def _scope_of(node, receiver, tree, bindings, enclosing):
     return ("verb:%s" % verb) if verb is not None else ("var:%s" % var)
 
 
+def _loadable(walked):
+    """Where a walked file is LOADED from: a fleet client from the test install
+    (never the checkout, whose install is the repo root); a test's own
+    mutant file where it was written."""
+    walked = Path(walked)
+    if walked.parent.resolve() == CLIENT_SOURCE_DIR.resolve():
+        return client_script(walked.name)
+    return walked
+
+
 def walk_flag_declarations(sources=None, resolve_help=True):
     """Every option-bearing `add_argument` in `sources`, DERIVED from the AST.
 
@@ -481,7 +493,7 @@ def walk_flag_declarations(sources=None, resolve_help=True):
         namespace = {}
         if resolve_help:
             namespace = vars(_load_module_by_path(
-                path, "cr128_flag_help_%s" % source))
+                _loadable(path), f"cr128_flag_help_{source}"))
         try:
             label = str(path.relative_to(REPO_ROOT))
         except ValueError:
@@ -760,7 +772,7 @@ class FlagHelpCensusWalkerMutationTest(unittest.TestCase):
 
     def test_stripping_a_literal_help_turns_the_census_red_naming_that_flag(self):
         before = undescribed(walk_flag_declarations(
-            {"bun": CENSUS_SOURCES["bun"]}, resolve_help=False))
+            {"bun": client_script(Path(CENSUS_SOURCES["bun"]).name)}, resolve_help=False))
         sources, target = self._mutated_copy(
             "bun", lambda d: isinstance(d.help_node, ast.Constant))
         new = self._new_offenders(sources, before)
@@ -773,7 +785,7 @@ class FlagHelpCensusWalkerMutationTest(unittest.TestCase):
 
     def test_stripping_a_non_literal_help_constant_turns_the_census_red(self):
         before = undescribed(walk_flag_declarations(
-            {"axi": CENSUS_SOURCES["axi"]}, resolve_help=False))
+            {"axi": client_script(Path(CENSUS_SOURCES["axi"]).name)}, resolve_help=False))
         sources, target = self._mutated_copy(
             "axi", lambda d: isinstance(d.help_node, ast.Name))
         new = self._new_offenders(sources, before)
@@ -1262,7 +1274,7 @@ class RunReadVerbFlagsDescribeThemselvesTest(unittest.TestCase):
     def test_every_flag_of_runs_and_run_carries_its_own_help_in_every_client(self):
         problems = []
         for client, path in sorted(FLAG_HELP_CLIENTS.items()):
-            verbs = enumerate_verbs(client, Path(path))
+            verbs = enumerate_verbs(client, client_script(Path(path).name))
             for verb, required in RUN_READ_VERB_FLAGS.items():
                 subparser = verbs.get(verb)
                 if subparser is None:
