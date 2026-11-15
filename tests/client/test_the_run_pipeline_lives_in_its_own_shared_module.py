@@ -54,7 +54,10 @@ from pathlib import Path
 from unittest import mock
 
 from tests.client.live_run_harness import get_answering_health, load_client
-from tests.client import CLIENT_SOURCE_DIR
+from tests.client import (
+    CLIENT_SOURCE_DIR,
+    install_clients_candidates,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS = CLIENT_SOURCE_DIR
@@ -484,8 +487,10 @@ class TheInstallersLoaderReachesTheRunModuleTest(unittest.TestCase):
 
     def test_the_cli_loader_loads_the_core_and_its_run_module_from_the_source_clients(self):
         from crucible_axi import cli, manifest
-        core = cli._load_client_module("_crucible_axi")
-        source_dir = Path(manifest.source_clients_dir())
+        with mock.patch.object(manifest, "_CLIENTS_CANDIDATES",
+                               install_clients_candidates(manifest)):
+            core = cli._load_client_module("_crucible_axi")
+            source_dir = Path(manifest.source_clients_dir())
         run_namespace(self, core, expected_dir=source_dir)
         self.assertIs(core.RunAbandoned,
                       core.ingest_reports.__globals__.get("RunAbandoned"))

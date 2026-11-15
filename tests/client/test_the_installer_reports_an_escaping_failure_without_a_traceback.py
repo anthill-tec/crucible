@@ -46,6 +46,7 @@ from tests.client.test_client_fleet_envelope_census import (
 from tests.client.test_cr066_serve_and_target_dir import (
     _import_fresh,
     _run_cli,
+    tearDownModule,  # noqa: F401 -- purges the bound crucible_axi generation
 )
 
 
