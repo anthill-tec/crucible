@@ -60,10 +60,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
+AXI_MODULE_PATH_SOURCE = CLIENT_SOURCE_DIR / "_crucible_axi.py"
 TOON_PATH = CLIENTS_DIR / "toon.py"
 # The queue verb's implementation is SHARED (CR-CRU-054): one function, five
 # delegating clients. It is therefore driven through ONE client end-to-end —
@@ -347,7 +349,7 @@ class NoScanDepthSurvivesOnTheQueueReadPath(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.source = AXI_MODULE_PATH.read_text()
+        cls.source = AXI_MODULE_PATH_SOURCE.read_text()
         cls.tree = ast.parse(cls.source)
         cls.constants = _module_level_int_constants(cls.tree)
 

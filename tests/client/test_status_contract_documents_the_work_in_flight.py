@@ -24,9 +24,10 @@ import json
 import re
 import unittest
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-STATUS_CONTRACT_PATH = REPO_ROOT / "clients" / "STATUS-CONTRACT.md"
+STATUS_CONTRACT_PATH = CLIENT_SOURCE_DIR / "STATUS-CONTRACT.md"
 
 
 def _normalize(text):

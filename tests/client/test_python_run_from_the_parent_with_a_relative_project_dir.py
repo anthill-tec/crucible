@@ -26,6 +26,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from tests.client import client_script
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.client.live_run_harness import (  # noqa: E402
@@ -37,7 +38,7 @@ from tests.client.live_run_harness import (  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REAL_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
-CLIENT_PATH = REPO_ROOT / "clients" / "python-crucible.py"
+CLIENT_PATH = client_script("python-crucible.py")
 
 AGENT = "relative-project-dir-agent"
 PROJECT_KEY = "relative-project-dir-run-key"

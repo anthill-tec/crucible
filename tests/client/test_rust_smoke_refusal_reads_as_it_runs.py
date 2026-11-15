@@ -15,9 +15,10 @@ import ast
 import textwrap
 import unittest
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUST_CLIENT = REPO_ROOT / "clients" / "rust-crucible.py"
+RUST_CLIENT = CLIENT_SOURCE_DIR / "rust-crucible.py"
 INDENT = 4
 
 

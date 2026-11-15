@@ -24,9 +24,10 @@ import unittest
 from pathlib import Path
 
 from tests.client.test_a_clients_board_is_its_projects_configuration import CONFIG_NAME
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SHIPPED_CONFIG = REPO_ROOT / "clients" / CONFIG_NAME
+SHIPPED_CONFIG = CLIENT_SOURCE_DIR / CONFIG_NAME
 RUNBOOK = REPO_ROOT / "docs" / "RUNBOOK.md"
 
 #: The sentence the shipped `[client]` comment carries for the fall-through,

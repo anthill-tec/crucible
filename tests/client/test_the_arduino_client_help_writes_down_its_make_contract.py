@@ -63,9 +63,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ARDUINO_CLIENT = REPO_ROOT / "clients" / "arduino-crucible.py"
+ARDUINO_CLIENT = client_script("arduino-crucible.py")
 
 CONTRACT_VARIABLES = ("REPORTS_DIR", "COVERAGE_DIR", "TESTS", "TEST_NAME")
 NARROWING_FLAGS = ("--tests", "--name")

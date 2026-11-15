@@ -67,9 +67,10 @@ from tests.client.live_run_harness import (
     project_toml_declaring,
     write_fake_cargo,
 )
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUST_SCRIPT = REPO_ROOT / "clients" / "rust-crucible.py"
+RUST_SCRIPT = client_script("rust-crucible.py")
 
 AGENT = "rust-run-lifecycle-fixture"
 PROJECT_KEY = "test-key-rust-run-lifecycle"

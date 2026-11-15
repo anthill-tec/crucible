@@ -32,9 +32,10 @@ from tests.client.test_client_fleet_envelope_census import (
     declare_board,
     install_project_limits,
 )
+from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 CLIENT_FILES = {client: CLIENTS_DIR / f"{client}-crucible.py"
                 for client in ("python", "bun", "rust", "mvn", "arduino", "go")}
 
