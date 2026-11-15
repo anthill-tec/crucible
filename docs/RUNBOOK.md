@@ -490,7 +490,11 @@ provisioned server move in lockstep; on an already-current machine it reports
   set, and names what it filled: the `[manifest]` stage lists each filled file
   with its key and value under `filled`, and each file it left alone with the
   reason under `notFilled`. The port filled is the one the server boots on
-  today, never a probed one.
+  today, never a probed one. An install that leaves that file with no
+  `[client] url` (no server on this machine, or a fill it could not make)
+  names the file and the key under `boardUndeclared`, and its `help` says to
+  declare `[client] url = "http://<host>:<port>"` there, because a client with
+  no board declared refuses.
 - The `[fleet]` stage overwrites the stack-declaration schema at
   `<target-dir>/clients/crucible-declaration.schema.json`, and the `[manifest]`
   stage lists it in `crucible-clients.json` under the `declaration_schema` key
