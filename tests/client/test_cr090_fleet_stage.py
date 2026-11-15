@@ -1481,7 +1481,9 @@ class FleetStageConfinementAndModeTest(_FleetConvergenceCase):
         it and the landed modes compared against a known, non-coincidental
         set. `shutil.copyfile` copies bytes only, so every file starts at the
         umask's mode and the two stand-ins are then chmod'd explicitly."""
-        source_dir = os.path.join(self.outside, "stand-in-source")
+        # Laid out as a source install's `clients/`: the installer reads each
+        # packaged file by name from this directory, whatever it is called.
+        source_dir = os.path.join(self.outside, "stand-in-source", "clients")
         os.makedirs(source_dir, exist_ok=True)
         for name in sorted(EXPECTED_FLEET_FILES):
             destination = os.path.join(source_dir, name)

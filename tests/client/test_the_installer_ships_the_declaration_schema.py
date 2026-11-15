@@ -122,7 +122,9 @@ class _SchemaInstallCase(unittest.TestCase):
     def stand_in_packaged_dir(self, schema_text=None):
         """A copy of the packaged fleet under the scratch root. `schema_text`
         replaces the schema's bytes; `None` removes the schema altogether."""
-        packaged = os.path.join(self.root, "packaged")
+        # Laid out as a source install's `clients/`: the installer reads each
+        # packaged file by name from this directory, whatever it is called.
+        packaged = os.path.join(self.root, "packaged", "clients")
         shutil.copytree(self.manifest.source_clients_dir(), packaged,
                         ignore=shutil.ignore_patterns("__pycache__"))
         schema = os.path.join(packaged, SCHEMA_NAME)

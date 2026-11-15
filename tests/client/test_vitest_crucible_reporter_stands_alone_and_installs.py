@@ -117,8 +117,10 @@ class ReporterLoadsWithNoNodeModulesAboveItTest(unittest.TestCase):
 
     def test_the_reporter_copied_alone_loads_and_streams(self):
         _assert_reporter_exists(self)
-        reporters = Path(self.isolated, "reporters")
-        reporters.mkdir()
+        # Laid out as an install's `clients/reporters/`; still no
+        # `node_modules` anywhere above it.
+        reporters = Path(self.isolated, "clients", "reporters")
+        reporters.mkdir(parents=True)
         shutil.copyfile(REPORTER, reporters / REPORTER_NAME)
         ancestors = [p for p in [reporters, *reporters.parents]
                      if (p / "node_modules").exists()]

@@ -358,7 +358,10 @@ class Cr046UvEnvironmentGateTest(unittest.TestCase):
         corrupt_dir = tempfile.mkdtemp(prefix="cr046-corrupt-",
                                         dir=self.tmp_root)
         self.addCleanup(shutil.rmtree, corrupt_dir, ignore_errors=True)
-        corrupt_path = os.path.join(corrupt_dir, "corrupt-bun-crucible.py")
+        # The copy sits under the scratch install's `clients/`, so its
+        # install is `corrupt_dir` and never the temp root above it.
+        os.makedirs(os.path.join(corrupt_dir, "clients"))
+        corrupt_path = os.path.join(corrupt_dir, "clients", "corrupt-bun-crucible.py")
 
         text = Path(source_path).read_text(encoding="utf-8")
         corrupted = text.replace(

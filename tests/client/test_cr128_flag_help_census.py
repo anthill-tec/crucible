@@ -732,7 +732,9 @@ class FlagHelpCensusWalkerMutationTest(unittest.TestCase):
         """A copy of `source` with the `help=` keyword removed from the first
         declaration `pick` selects, plus that declaration as it stood."""
         original = Path(CENSUS_SOURCES[source])
-        copy_path = self.tmp / original.name
+        # The copy sits under the scratch install's `clients/`.
+        copy_path = self.tmp / "clients" / original.name
+        copy_path.parent.mkdir(exist_ok=True)
         shutil.copyfile(original, copy_path)
         sources = {source: copy_path}
         target = next(d for d in walk_flag_declarations(sources, resolve_help=False)

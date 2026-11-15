@@ -1486,10 +1486,14 @@ class SyntheticSourceEnvelopeDetectorProofTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # The scratch dir is an install: the copies sit under its `clients/`,
+        # so a copy's install is this dir and never the temp root above it.
         cls.tmp_dir = Path(tempfile.mkdtemp(prefix="cr058-s4-synthetic-"))
-        cls.script_path = cls.tmp_dir / "synthetic-crucible.py"
+        cls.clients_dir = cls.tmp_dir / "clients"
+        cls.clients_dir.mkdir()
+        cls.script_path = cls.clients_dir / "synthetic-crucible.py"
         cls.script_path.write_text(_SYNTHETIC_CLIENT_SOURCE)
-        shutil.copy(TOON_PATH, cls.tmp_dir / "toon.py")
+        shutil.copy(TOON_PATH, cls.clients_dir / "toon.py")
         cls.toon_module = _load_toon_module()
         cls.fake_bin_dir = _build_fake_bin_dir()
         cls.project_dir = Path(tempfile.mkdtemp(prefix="cr058-s4-synthetic-project-"))
@@ -1555,29 +1559,34 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
             "python-crucible.py's dispatch shape changed -- update this "
             "proof's insertion point")
 
+        # The scratch dir is an install: the copies sit under its `clients/`,
+        # so the copied core's `_INSTALL_DIR` is this dir and never the temp
+        # root above it, whose `crucible.toml` this test does not own.
         cls.tmp_dir = Path(tempfile.mkdtemp(prefix="cr058-s4-real-copy-"))
-        shutil.copy(CLIENTS_DIR / "_crucible_axi.py", cls.tmp_dir / "_crucible_axi.py")
+        cls.clients_dir = cls.tmp_dir / "clients"
+        cls.clients_dir.mkdir()
+        shutil.copy(CLIENTS_DIR / "_crucible_axi.py", cls.clients_dir / "_crucible_axi.py")
         # The shared module loads its run pipeline by path from its own
         # directory, so the run module travels with it.
-        shutil.copy(CLIENTS_DIR / "_crucible_run.py", cls.tmp_dir / "_crucible_run.py")
+        shutil.copy(CLIENTS_DIR / "_crucible_run.py", cls.clients_dir / "_crucible_run.py")
         # The release-notes module is loaded the same way, and travels too.
         shutil.copy(CLIENTS_DIR / "_crucible_release.py",
-                    cls.tmp_dir / "_crucible_release.py")
+                    cls.clients_dir / "_crucible_release.py")
         # And so is a project's own verbs' module.
         shutil.copy(CLIENTS_DIR / "_crucible_project.py",
-                    cls.tmp_dir / "_crucible_project.py")
+                    cls.clients_dir / "_crucible_project.py")
         # And so is the shared lint runner.
         shutil.copy(CLIENTS_DIR / "_crucible_lint.py",
-                    cls.tmp_dir / "_crucible_lint.py")
+                    cls.clients_dir / "_crucible_lint.py")
         # And so is the board module.
         shutil.copy(CLIENTS_DIR / "_crucible_board.py",
-                    cls.tmp_dir / "_crucible_board.py")
-        shutil.copy(TOON_PATH, cls.tmp_dir / "toon.py")
+                    cls.clients_dir / "_crucible_board.py")
+        shutil.copy(TOON_PATH, cls.clients_dir / "toon.py")
         # CR-CRU-131 §S1c — the limit declarations travel as PACKAGE DATA beside
         # `_crucible_axi.py`, so a copy of the module without them is a broken
         # distribution rather than a scratch client: `shipped_limits()` refuses
         # to invent a number and says so.
-        shutil.copy(CLIENTS_DIR / "crucible.toml", cls.tmp_dir / "crucible.toml")
+        shutil.copy(CLIENTS_DIR / "crucible.toml", cls.clients_dir / "crucible.toml")
 
         # The bare verb's function definition must sit BEFORE `def main():`
         # in the file: the real client's trailing `if __name__ == "__main__":
@@ -1600,7 +1609,7 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
         patched = patched.replace(
             "    args = p.parse_args()", wiring + "    args = p.parse_args()", 1)
 
-        cls.scratch_script = cls.tmp_dir / "scratch-python-crucible.py"
+        cls.scratch_script = cls.clients_dir / "scratch-python-crucible.py"
         cls.scratch_script.write_text(patched)
 
         cls.fake_bin_dir = _build_fake_bin_dir()

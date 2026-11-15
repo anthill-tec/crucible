@@ -424,7 +424,9 @@ class DriftGuardCatchesReintroducedDuplicateOnScratchFilesTest(unittest.TestCase
 
     def test_reintroducing_a_duplicate_on_two_scratch_client_copies_is_flagged(self):
         with tempfile.TemporaryDirectory(prefix="cr054-s3-drift-guard-proof-") as tmp:
-            tmp_path = Path(tmp)
+            # The copies sit under the scratch install's `clients/`.
+            tmp_path = Path(tmp) / "clients"
+            tmp_path.mkdir()
             scratch_bun = tmp_path / "scratch-bun-crucible.py"
             scratch_rust = tmp_path / "scratch-rust-crucible.py"
             scratch_bun.write_text(
