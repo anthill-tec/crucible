@@ -60,7 +60,13 @@ state. The client suite breaks it three ways.
 - **No test process loads the root `.env`** (pre-review F5). Bun loads `<cwd>/.env` into `process.env` by default
   (measured on bun 1.4.4: `--no-env-file`, or `env = false` in a `bunfig.toml`, turns it off). The bun suite runs with
   `.env` loading off, and every board a python test spawns (`bun run src/server.ts`) runs with it off too. How the
-  operator's own board starts is not changed.
+  operator's own board starts is not changed. **Ruled at RED 962 (2026-11-16):** the switch is `env = false` at the
+  top of `bunfig.toml` (the only one a bare `bun test` reads), plus `--no-env-file` on every test-spawned server. The
+  dev board's start is behaviourally unchanged: `src/` reads only `CRUCIBLE_DB`, `XDG_DATA_HOME` and `HOME` from the
+  environment, and the root `.env` holds none of them (measured). Because direnv's `.envrc` exports the root `.env`
+  into the operator's shell, both suites also drop the inherited `.env` registry variables (`CRUCIBLE_PROJECT_KEY`,
+  `CRUCIBLE_PROJECT_NAME`, `WORKFLOW_ORCHESTRATOR`, `SANDESH_PROJECT`, `SANDESH_ADDRESS`, `PROJECT_TOKEN`,
+  `PROJECT_STACKS`, `KNOWLEDGE_CATEGORY`) when they load: the bun preload and `tests/client/__init__.py`.
 - **A test declares its board.** With CR-CRU-259 and no url in the test install, a test that reaches a board without
   declaring one gets the refusal: it fails loudly instead of leaking. Declarations reuse the existing spellings,
   `declare_and_require_board` (python, `test_client_fleet_envelope_census.py`) and `declareClientBoard` (bun,
