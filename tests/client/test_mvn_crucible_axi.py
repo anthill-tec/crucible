@@ -88,11 +88,13 @@ from tests.client.test_cr054_fleet_inventory import (
     _defined_function_names,
     _single_verb_registrar_delegator,
 )
+from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "clients" / "mvn-crucible.py"
-AXI_MODULE_PATH = REPO_ROOT / "clients" / "_crucible_axi.py"
-TOON_PATH = REPO_ROOT / "clients" / "toon.py"
+SCRIPT_PATH = client_script("mvn-crucible.py")
+SCRIPT_PATH_SOURCE = CLIENT_SOURCE_DIR / "mvn-crucible.py"
+AXI_MODULE_PATH = client_script("_crucible_axi.py")
+TOON_PATH = client_script("toon.py")
 
 PASS_SUREFIRE_XML = (
     '<?xml version="1.0"?>'
@@ -409,7 +411,7 @@ class _BaseMvnAxiTest(unittest.TestCase):
 
 class MvnCrucibleWiredToSharedAxiModuleTest(_BaseMvnAxiTest):
     def test_source_references_the_shared_axi_module(self):
-        source = SCRIPT_PATH.read_text()
+        source = SCRIPT_PATH_SOURCE.read_text()
         self.assertIn(
             "_crucible_axi", source,
             "mvn-crucible.py must import from the shared clients/_crucible_axi.py "
@@ -1140,7 +1142,7 @@ class MvnCrucibleCycleBindingTest(_BaseMvnAxiTest):
         return reports_dir
 
     def test_source_never_reads_workflow_cycle_id_env_var(self):
-        occurrences = SCRIPT_PATH.read_text().count("WORKFLOW_CYCLE_ID")
+        occurrences = SCRIPT_PATH_SOURCE.read_text().count("WORKFLOW_CYCLE_ID")
         self.assertEqual(
             occurrences, 0,
             f"mvn-crucible.py must not reference WORKFLOW_CYCLE_ID anywhere "
@@ -1152,7 +1154,7 @@ class MvnCrucibleCycleBindingTest(_BaseMvnAxiTest):
         """CR-CRU-056 §S3/§S3c AC: `resolve_attach_cycle`/
         `resolve_active_cycle_id` must be gone from every client
         (grep-sweep-asserted)."""
-        text = SCRIPT_PATH.read_text()
+        text = SCRIPT_PATH_SOURCE.read_text()
         for banned in ("resolve_attach_cycle", "resolve_active_cycle_id"):
             self.assertNotIn(
                 banned, text,
@@ -1727,14 +1729,14 @@ class MvnCrucibleQueueFileRegistrationTest(unittest.TestCase):
         """AC1's delegator and AC6's DRY half in one: a body longer than the
         single `return _axi().cmd_queue_file(...)` means the parse or the POST
         leaked back into a client."""
-        counts = _defined_function_names(SCRIPT_PATH)
+        counts = _defined_function_names(SCRIPT_PATH_SOURCE)
         self.assertEqual(
             counts.get("cmd_queue_file", 0), 1,
             f"{SCRIPT_PATH.name} must define `cmd_queue_file` exactly once "
             f"(§S1 fleet parity; a duplicate def would silently make the "
             f"SECOND one win at import time); defined "
             f"{counts.get('cmd_queue_file', 0)}x")
-        node = next(n for n in ast.walk(ast.parse(SCRIPT_PATH.read_text()))
+        node = next(n for n in ast.walk(ast.parse(SCRIPT_PATH_SOURCE.read_text()))
                     if isinstance(n, ast.FunctionDef)
                     and n.name == "cmd_queue_file")
         body = [stmt for stmt in node.body
@@ -1760,7 +1762,7 @@ class MvnCrucibleQueueFileRegistrationTest(unittest.TestCase):
 
     def test_the_client_registers_queue_file_through_the_shared_registrar(self):
         delegator = _single_verb_registrar_delegator(
-            SCRIPT_PATH, "add_queue_file_verb")
+            SCRIPT_PATH_SOURCE, "add_queue_file_verb")
         self.assertEqual(
             delegator, "cmd_queue_file",
             f"{SCRIPT_PATH.name} must register the verb by handing its OWN "
@@ -1773,7 +1775,7 @@ class MvnCrucibleQueueFileRegistrationTest(unittest.TestCase):
         verb, which forks the flag surface the shared registrar exists to keep
         identical. After §S1 no client spells it — that one included."""
         self.assertNotIn(
-            "queue-file", _add_parser_verb_names(SCRIPT_PATH),
+            "queue-file", _add_parser_verb_names(SCRIPT_PATH_SOURCE),
             f"the `queue-file` subparser is built ONCE, by "
             f"`_crucible_axi.add_queue_file_verb`; {SCRIPT_PATH.name} spells "
             f"its own")

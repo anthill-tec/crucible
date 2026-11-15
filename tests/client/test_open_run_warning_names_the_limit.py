@@ -65,9 +65,10 @@ import itertools
 import re
 import unittest
 from pathlib import Path
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BUN_CLIENT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
+BUN_CLIENT_PATH = client_script("bun-crucible.py")
 RETIRED_ENV_DECLARATION = REPO_ROOT / "tests" / "helpers" / "server-limits-fixture.ts"
 
 #: The environment variables CR-CRU-131 RETIRES as limit overrides.

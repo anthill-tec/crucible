@@ -164,9 +164,10 @@ import unittest
 import urllib.parse
 from pathlib import Path
 from unittest import mock
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TESTS_CLIENT_DIR = Path(__file__).resolve().parent
 MODALITY_PATH = TESTS_CLIENT_DIR / "test_client_tier_run_modality.py"
@@ -908,7 +909,7 @@ class EachSuiteIngestsThroughItsOwnStacksClientTest(_GateFixtureCase):
 
 _CLIENT_SUFFIX = "-crucible.py"
 FLEET = tuple(sorted(p.name[: -len(_CLIENT_SUFFIX)]
-                     for p in CLIENTS_DIR.glob("*" + _CLIENT_SUFFIX)))
+                     for p in CLIENT_SOURCE_DIR.glob("*" + _CLIENT_SUFFIX)))
 
 GATE_ENTRY = "cmd_pre_merge_gate"
 

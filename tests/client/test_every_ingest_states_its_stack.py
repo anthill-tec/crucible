@@ -45,9 +45,10 @@ from tests.client.test_client_fleet_envelope_census import (
     install_project_limits,
     write_go_module,
 )
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_PATH = CLIENTS_DIR / "_crucible_axi.py"
 
 RUN_START = "/api/v2/runs/start"
@@ -306,7 +307,7 @@ class EveryPostIngestCallStatesTheClientsOwnStackTest(unittest.TestCase):
 
     def assert_client_states_its_stack_everywhere(self, client):
         self.assert_census_reads_the_synthetic_client()
-        source = (CLIENTS_DIR / f"{client}-crucible.py").read_text()
+        source = (CLIENT_SOURCE_DIR / f"{client}-crucible.py").read_text()
         found = _post_ingest_calls(source)
         self.assertTrue(
             found,

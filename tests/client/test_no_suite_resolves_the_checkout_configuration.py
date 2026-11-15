@@ -96,9 +96,10 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = CLIENT_SOURCE_DIR
 CONFIG_NAME = "crucible.toml"
 
 #: The developer's own operator file -- the one that must never decide a

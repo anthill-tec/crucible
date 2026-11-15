@@ -69,9 +69,10 @@ import unittest
 from pathlib import Path
 from typing import NamedTuple
 from unittest import mock
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 CLIENT_KEYS = ("bun", "python", "mvn", "rust", "arduino", "go")
 # The verbs every client's parser must enumerate. go reads no report already
 # on disk (so no `auto-ingest`); it declares its tiers by build tag, so it
@@ -404,7 +405,7 @@ SHARED_STREAM_CLOSE = "close_stream"
 # `post_ingest` is therefore that verb's ingest call. The functions are read
 # off the module rather than named here: what the module calls them is its
 # own choice. A checkout without the module has none.
-LINT_MODULE_PATH = CLIENTS_DIR / "_crucible_lint.py"
+LINT_MODULE_PATH = CLIENT_SOURCE_DIR / "_crucible_lint.py"
 SHARED_LINT = "<the shared lint post>"
 
 
@@ -676,7 +677,7 @@ def _client_handlers(client):
 
 @functools.cache
 def _client_source(client):
-    return (CLIENTS_DIR / f"{client}-crucible.py").read_text()
+    return (CLIENT_SOURCE_DIR / f"{client}-crucible.py").read_text()
 
 
 # ── the census over the five real clients ──────────────────────────────────

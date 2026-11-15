@@ -123,10 +123,11 @@ from tests.client.live_run_harness import get_answering_health
 from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
     declare_and_require_board,
 )
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
-AXI_PATH = REPO_ROOT / "clients" / "_crucible_axi.py"
+CLIENT_PATH = client_script("bun-crucible.py")
+AXI_PATH = client_script("_crucible_axi.py")
 MANIFEST_PATH = REPO_ROOT / "package.json"
 PLAYWRIGHT_CONFIG_PATH = REPO_ROOT / "playwright.config.ts"
 

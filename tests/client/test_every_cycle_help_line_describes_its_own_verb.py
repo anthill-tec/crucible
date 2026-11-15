@@ -68,9 +68,10 @@ from tests.client.test_client_fleet_envelope_census import (
 from tests.client.test_every_verb_that_files_a_run_is_refused_while_a_cycle_is_active import (
     _build_recording_bin_dir,
 )
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SHARED_MODULE = REPO_ROOT / "clients" / "_crucible_axi.py"
+SHARED_MODULE = client_script("_crucible_axi.py")
 
 AGENT = "cycle-help-census-agent"
 CYCLE = 7

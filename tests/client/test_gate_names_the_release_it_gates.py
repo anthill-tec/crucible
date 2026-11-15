@@ -54,9 +54,10 @@ from unittest import mock
 from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
     declare_and_require_board,
 )
+from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 
 CLIENT_FILES = {
     "bun": CLIENTS_DIR / "bun-crucible.py",

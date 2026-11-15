@@ -100,9 +100,10 @@ from tests.client.test_client_fleet_envelope_census import (
     _UNREACHABLE_CRUCIBLE_URL,
     declare_and_require_board,
 )
+from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 
 CLIENT_FILES = {
     "arduino": CLIENTS_DIR / "arduino-crucible.py",

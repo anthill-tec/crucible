@@ -70,11 +70,13 @@ import unittest
 import unittest.mock
 import urllib.error
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-AXI_MODULE_PATH = REPO_ROOT / "clients" / "_crucible_axi.py"
-BUN_SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
-TOON_PATH = REPO_ROOT / "clients" / "toon.py"
+AXI_MODULE_PATH = client_script("_crucible_axi.py")
+BUN_SCRIPT_PATH = client_script("bun-crucible.py")
+BUN_SCRIPT_PATH_SOURCE = CLIENT_SOURCE_DIR / "bun-crucible.py"
+TOON_PATH = client_script("toon.py")
 
 
 def _load_axi_module():
@@ -285,7 +287,7 @@ class SharedAxiCycleResolverRetiredTest(unittest.TestCase):
         call, or dotted access) on non-comment lines -- a `# CR-CRU-056 ...`
         explanatory comment naming the retired functions for historical
         context is documentation, not a live reference, and stays legal."""
-        clients_dir = REPO_ROOT / "clients"
+        clients_dir = CLIENT_SOURCE_DIR
         offenders = []
         for py_file in sorted(clients_dir.glob("*.py")):
             for lineno, line in enumerate(py_file.read_text().splitlines(), start=1):
@@ -367,7 +369,7 @@ class FleetIngestEnvelopeEchoesServerCycleTest(unittest.TestCase):
     def test_every_client_feeds_the_server_echo_into_its_ingest_envelope_context(self):
         missing = []
         for name in self.CLIENTS:
-            source = (REPO_ROOT / "clients" / name).read_text()
+            source = (CLIENT_SOURCE_DIR / name).read_text()
             if "cycle_id=_axi().echoed_cycle_id(resp)" not in source:
                 missing.append(name)
         self.assertEqual(
@@ -529,7 +531,7 @@ class FleetGatedRunOwnsOnlyWhatItCreatedTest(unittest.TestCase):
     def test_every_client_routes_its_gated_cleanup_through_the_ownership_gate(self):
         missing = []
         for name in self.CLIENTS:
-            source = (REPO_ROOT / "clients" / name).read_text()
+            source = (CLIENT_SOURCE_DIR / name).read_text()
             if ("_open_gate_identity" not in source
                     or "_close_gate_identity" not in source):
                 missing.append(name)
@@ -545,7 +547,7 @@ class FleetGatedRunOwnsOnlyWhatItCreatedTest(unittest.TestCase):
         stray direct call in a `finally` is the exact defect this fixes."""
         offenders = []
         for name in self.CLIENTS:
-            source = (REPO_ROOT / "clients" / name).read_text()
+            source = (CLIENT_SOURCE_DIR / name).read_text()
             in_close_gate = False
             for lineno, line in enumerate(source.splitlines(), start=1):
                 stripped = line.strip()
@@ -566,7 +568,7 @@ class FleetGatedRunOwnsOnlyWhatItCreatedTest(unittest.TestCase):
     def test_every_client_exposes_cycle_on_its_gated_verbs(self):
         missing = []
         for name in self.CLIENTS:
-            source = (REPO_ROOT / "clients" / name).read_text()
+            source = (CLIENT_SOURCE_DIR / name).read_text()
             if "_add_gate_cycle_arg" not in source:
                 missing.append(name)
         self.assertEqual(
@@ -581,7 +583,7 @@ class BunCrucibleImportsSharedAxiModuleTest(unittest.TestCase):
     behavior-preserving (byte-identical envelopes)."""
 
     def test_bun_crucible_source_references_the_shared_axi_module(self):
-        source = BUN_SCRIPT_PATH.read_text()
+        source = BUN_SCRIPT_PATH_SOURCE.read_text()
         self.assertIn(
             "_crucible_axi", source,
             "bun-crucible.py must import from the new shared "
@@ -676,7 +678,7 @@ class SharedAxiNoTitleWarningTest(unittest.TestCase):
                           "not a different CR")
 
 
-STATUS_CONTRACT_PATH = REPO_ROOT / "clients" / "STATUS-CONTRACT.md"
+STATUS_CONTRACT_PATH = CLIENT_SOURCE_DIR / "STATUS-CONTRACT.md"
 
 
 class StatusContractDocTest(unittest.TestCase):
@@ -1315,7 +1317,7 @@ class SharedQueueFileImplementationLandsOnceTest(unittest.TestCase):
         cycle that exists to remove an exception."""
         offenders = {}
         for name in self.CLIENTS:
-            tree = ast.parse((REPO_ROOT / "clients" / name).read_text())
+            tree = ast.parse((CLIENT_SOURCE_DIR / name).read_text())
             copies = sorted({
                 node.name for node in ast.walk(tree)
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
@@ -1857,7 +1859,7 @@ class CmdStatusOpenPlansOnlyContractTest(unittest.TestCase):
         # gains a `limit-configuration` warning. Bind the project dir the verb
         # is handed, as every client's boot path does, and give it the shipped
         # declarations, so the project's own file is the one that decides.
-        shutil.copyfile(AXI_MODULE_PATH.parent / "crucible.toml",
+        shutil.copyfile(CLIENT_SOURCE_DIR / "crucible.toml",
                         os.path.join(self.tmpdir, "crucible.toml"))
         self.axi.bind_project_dir(self.tmpdir)
         self.addCleanup(self.axi.bind_project_dir, None)

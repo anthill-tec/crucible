@@ -73,9 +73,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 
 
 def _load_module(path, name):

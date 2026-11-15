@@ -58,9 +58,10 @@ from unittest import mock
 
 from tests.client.live_run_harness import get_answering_health
 from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "clients" / "mvn-crucible.py"
+SCRIPT_PATH = client_script("mvn-crucible.py")
 
 
 def _junit_suite(name, tests, failures, testcase_prefix):
@@ -396,7 +397,7 @@ class PinnedPomReportsDirectoryFallbackTest(_BaseMvnIsolationTest):
             f"payload={ingest_call[0][1]!r}")
         self.assertEqual(code, 1, "the board's one failure makes the run red")
 
-        toon = _load_module(REPO_ROOT / "clients" / "toon.py",
+        toon = _load_module(client_script("toon.py"),
                             "toon_for_mvn_pinned_pom_fallback")
         warnings = toon.decode(out)["axi"].get("warnings") or []
         overridden = [w for w in warnings
