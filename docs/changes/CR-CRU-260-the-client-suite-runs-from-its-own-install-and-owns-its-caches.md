@@ -36,8 +36,8 @@ state. The client suite breaks it three ways.
   `tests/client/__init__.py` mechanism (its run-shared directory and marker); the TypeScript one sits in
   `tests/helpers/` and is wired through `tests/helpers/isolated-store-preload.ts`. Because the client derives
   `_INSTALL_DIR` from `dirname(abspath(__file__))`, which does not resolve symlinks, and every client loads its
-  siblings by that same path, a client loaded or spawned from there reads only that file; no product code changes and
-  no environment seam is added (CR-CRU-131 stands). Pre-review checked: no `realpath` of a module path in `clients/`;
+  siblings by that same path, a client loaded or spawned from there reads only that file; no environment seam is
+  added (CR-CRU-131 stands). The one product change is AC11's. Pre-review checked: no `realpath` of a module path in `clients/`;
   coverage's `abs_file` resolves the link, so `source = ["crucible_axi","clients"]` still matches.
 - **Who owns the install** (pre-review F2). The process that creates it alone removes it, at exit (python `atexit`;
   bun `process.on("exit")`, which the preload's root `afterAll` makes fire). Child processes reuse it through the
@@ -136,6 +136,13 @@ In-suite ACs are proved by tests; **orchestrator checks** (marked) are proved by
 - [ ] **AC10 — the backstops.** Every client the helpers load or spawn has `_INSTALL_DIR` equal to the test install,
   never the repo root, including the `_crucible_axi` the orchestrator CLI vendors; a bun-spawned client's project is
   never the repo root; and a test-install client with no project board answers the `BoardUndeclared` envelope.
+
+- [ ] **AC11 — a symlinked install runs a project's tests.** `clients/subtest_runner.py`'s
+  `_restore_module_search_path` compares real paths on both sides, so a client reached through a symlinked `clients/`
+  (the test install, or an operator's linked install) still puts the working directory first on `sys.path` and the
+  project's own modules import. Pinned by a unit test with a symlinked runner path; `CHANGELOG.md` `## [0.4.0]` gains
+  a Fixed line. **Added 2026-11-15 (user ruling):** found by GREEN 961 (8 migrated tests failed on it,
+  `evt-1794774429496-173`); fixed in cycle 961.
 
 ## Cycles
 

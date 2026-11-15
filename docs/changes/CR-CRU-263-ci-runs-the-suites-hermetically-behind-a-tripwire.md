@@ -46,6 +46,11 @@ keeps that true after the release fix.
 - [ ] **AC3 — green.** A CI run on `release/0.4.0` passes `test-python` and `test-bun` hermetically with no tripwire
   line.
 - [ ] **AC4 — pins.** The workflow and `ci-toolchain-provisioning` pin tests describe the hermetic steps.
+- [ ] **AC5 — the workflow passes zizmor.** Every `uses:` in `.github/workflows/release.yml` is pinned to a full
+  commit SHA, with its version in a trailing comment; no job that builds or publishes a release artefact restores a
+  `setup-*` cache (zizmor `cache-poisoning`). A zizmor run over the workflow reports no `unpinned-uses` and no
+  `cache-poisoning` finding. **Added 2026-11-15 (user ruling):** the 40 pre-existing findings (30 unpinned, 10
+  cache-poisoning) found by pi-lens during CR-CRU-260; points re-scored at this CR's gap analysis.
 
 ## Non-goals
 
