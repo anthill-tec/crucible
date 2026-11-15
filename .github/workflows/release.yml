@@ -223,9 +223,14 @@ jobs:
       #     proofs run bun itself;
       #   - the repo's own `.venv` with the dev extra: the python runner,
       #     subtest and coverage proofs drive `.venv/bin/python`;
-      #   - cargo-nextest: the rust real-runner proofs;
+      #   - cargo-nextest and cargo-llvm-cov (with llvm-tools-preview): the
+      #     rust real-runner proofs, coverage runs included;
       #   - arduino-cli, named through ARDUINO_CLI: the arduino client's
-      #     `check` and `lint` drive it.
+      #     `check` and `lint` drive it;
+      #   - maven's local repository, warmed: the surefire fixture runs
+      #     OFFLINE (its `.mvn/maven.config` says `-o`), so every plugin and
+      #     provider it uses must already be there (measured on run
+      #     43668348319: maven-clean-plugin had not been downloaded).
       - uses: oven-sh/setup-bun@v2
         with:
           # CR-CRU-137 §S2 -- declared once, at the head of this file
@@ -240,7 +245,16 @@ jobs:
           uv pip install --python .venv/bin/python -e '.[dev]'
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          tool: cargo-nextest,cargo-llvm-cov
+      - name: llvm-tools-preview (cargo-llvm-cov reads its profiles with it)
+        run: rustup component add llvm-tools-preview
+      - name: Maven's local repository, warmed for the offline fixture
+        run: |
+          warm="$RUNNER_TEMP/surefire-warm"
+          cp -r tests/fixtures/surefire-live-project "$warm"
+          rm -rf "$warm/.mvn"
+          mvn -B -q -f "$warm/pom.xml" clean test \
+            -Dmaven.test.failure.ignore=true
       # A pinned release archive, not an action: arduino/setup-arduino-cli's
       # newest major (v2) still declares node20 (CR-CRU-137 §S5).
       - name: arduino-cli 1.5.1, named for the arduino client
