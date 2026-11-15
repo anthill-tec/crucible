@@ -393,6 +393,9 @@ Releases before 0.3.0 are described only on GitHub Releases.
   each test ingest as `runnerExit`. When it is non-zero and the report records no failure, the
   board adds one failing case, suite `runner`, case `exit <n>`. A verb exits non-zero whenever its
   runner did or its run has a failure, and each bun test file that fails to load is a failing case.
+- **A python run through a symlinked install imports the project's own modules.** When the
+  install's `clients` directory is a symlink, the python runner still puts the working directory
+  first on the module search path, so a project's tests import its own modules (CR-CRU-260).
 - **A rust project outside git takes no gate lock.** The rust gate lock is no longer placed in the
   parent directory of a project outside git, where every such project shared it. Such a run goes
   on unlocked and says so on stderr.
