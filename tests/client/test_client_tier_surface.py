@@ -106,10 +106,13 @@ from pathlib import Path
 from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
     declare_and_require_board,
 )
-from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
+from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = TEST_INSTALL_CLIENTS
+# The SOURCE paths: this module and its importers (test_cr128_flag_help_census)
+# read and label them repo-relative. A spawn or a load goes through
+# `client_script`, the test install.
+CLIENTS_DIR = CLIENT_SOURCE_DIR
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TYPES_TS_PATH = REPO_ROOT / "src" / "types.ts"
 
@@ -194,7 +197,7 @@ def _drive(client, argv):
     drive can reach (argparse prints and exits before any verb body runs)."""
     env = os.environ.copy()
     return subprocess.run(
-        [sys.executable, str(CLIENT_FILES[client])] + list(argv),
+        [sys.executable, str(client_script(CLIENT_FILES[client].name))] + list(argv),
         cwd=_PROJECT_DIR, env=env, capture_output=True, text=True, timeout=60)
 
 
@@ -373,7 +376,7 @@ class TierRegistrarSingleLocusTest(unittest.TestCase):
     case, so this asserts the plural spelling. See ESCALATION 1."""
 
     def test_the_shared_module_exports_the_tier_registrar(self):
-        axi = _load_module_by_path(AXI_MODULE_PATH, "cr111_axi_under_test")
+        axi = _load_module_by_path(client_script(AXI_MODULE_PATH.name), "cr111_axi_under_test")
         registrar = getattr(axi, TIER_REGISTRAR, None)
         self.assertTrue(
             callable(registrar),
