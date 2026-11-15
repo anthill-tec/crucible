@@ -56,7 +56,8 @@ AXI = load_client("_crucible_axi.py")
 RUN_CORE = load_client("_crucible_axi.py")
 TOON = load_toon()
 
-#: The project the composing core reads its configuration from: a readable,
+#: The project both cores read their configuration from (the gate passes on
+#: the warnings of the core that writes each run's envelope): a readable,
 #: empty `crucible.toml` of its own. Without it the core falls through to the
 #: checkout's root `crucible.toml`, which is the operator's git-ignored file:
 #: where it is absent (a fresh CI checkout), every gate here adds a
@@ -68,10 +69,12 @@ def setUpModule():
     with open(os.path.join(_CONFIG_DIR, "crucible.toml"), "w", encoding="utf-8"):
         pass
     AXI.bind_project_dir(_CONFIG_DIR)
+    RUN_CORE.bind_project_dir(_CONFIG_DIR)
 
 
 def tearDownModule():
     AXI.bind_project_dir(None)
+    RUN_CORE.bind_project_dir(None)
     shutil.rmtree(_CONFIG_DIR, ignore_errors=True)
 
 

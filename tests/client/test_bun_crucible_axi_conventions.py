@@ -88,7 +88,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 from unittest import mock
+
+from tests.client.live_run_harness import get_answering_health
 
 # CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
 # this client register, and through what?", reused rather than re-derived.
@@ -738,7 +741,10 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
     def test_test_verb_help_is_present_and_nonempty(self):
         os.environ["WORKFLOW_CYCLE_ID"] = "77"
         fake_bun = self._write_fake_bun()
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}):
+        # The board's health is answered here: an ingest verb reads it first,
+        # and no test of this file may reach a real board.
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
+                mock.patch.object(self.module, "_get", side_effect=get_answering_health()):
             code, out, err = _run_main(self.module, [
                 "test", "--bun", fake_bun, "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir, "--reports", "reports",
@@ -756,7 +762,8 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
     def test_regression_verb_help_is_present_and_nonempty(self):
         os.environ["WORKFLOW_CYCLE_ID"] = "77"
         fake_bun = self._write_fake_bun()
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}):
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
+                mock.patch.object(self.module, "_get", side_effect=get_answering_health()):
             code, out, err = _run_main(self.module, [
                 "regression", "--bun", fake_bun, "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir, "--reports", "reports",
@@ -778,7 +785,8 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
         with open(os.path.join(reports_dir, "junit.xml"), "w") as f:
             f.write(_HELP_COVERAGE_PASS_JUNIT_XML)
 
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}):
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
+                mock.patch.object(self.module, "_get", side_effect=get_answering_health()):
             code, out, err = _run_main(self.module, [
                 "auto-ingest", "--agent", "CR-HELP-auto",
                 "--project-dir", self.tmpdir, "--package-dir", self.tmpdir,
@@ -985,15 +993,17 @@ class BunCrucibleQueueFileRegistrationTest(unittest.TestCase):
             body[0], ast.Return,
             f"the delegator's one statement must RETURN the shared verb's "
             f"exit code; got {ast.dump(body[0])!r}")
+        returned = cast(ast.Return, body[0]).value
         self.assertIsInstance(
-            body[0].value, ast.Call,
+            returned, ast.Call,
             f"the delegator must return a CALL into the shared module; "
             f"got {ast.dump(body[0])!r}")
+        called = cast(ast.Call, returned).func
         self.assertEqual(
-            getattr(body[0].value.func, "attr", None), "cmd_queue_file",
+            getattr(called, "attr", None), "cmd_queue_file",
             f"the delegator must call the SHARED "
             f"`_crucible_axi.cmd_queue_file`, never a local copy; "
-            f"got {ast.dump(body[0].value.func)!r}")
+            f"got {ast.dump(called)!r}")
 
     def test_the_client_registers_queue_file_through_the_shared_registrar(self):
         delegator = _single_verb_registrar_delegator(
