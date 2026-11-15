@@ -7,11 +7,12 @@ through one of the four retired environment variables.
 `$CRUCIBLE_BASE` (§S2, retired here) are not read by anything any more. A
 fixture that still EXPORTS one to point a client or a server somewhere is a
 fixture steering through a channel the product no longer has: it does not
-fail, it silently stops steering, and the drive lands on the SHIPPED default
--- `http://localhost:3849` for a client, port 3849 for a server -- which on
-the two-instance workstation this CR serves is the PRODUCTION board. That is
-the precise accident §S2 exists to make impossible, and a suite is not exempt
-from it.
+fail, it silently stops steering, and the drive lands somewhere it did not
+aim -- a client on whatever board its install declares (for a client run out
+of this checkout, the operator's own) or on a refusal when none is declared,
+a server on its packaged port 3849 -- which on the two-instance workstation
+this CR serves is a LIVE board. That is the precise accident a declared board
+exists to make impossible, and a suite is not exempt from it.
 
 A fixture that READS one and supplies its own fallback is the same fixture
 with the accident already committed: `process.env.CRUCIBLE_URL ??
@@ -165,9 +166,9 @@ _TS_MATCHER = re.compile(r"expect\(|/\^|\.test\(|toMatch|assert")
 #: `const base = process.env.CRUCIBLE_URL ?? "http://localhost:3849"` and then
 #: `fetch(base)` is steering by one of them just as surely as a suite that
 #: exports it. Worse, in fact: the export at least lands where the fixture
-#: aimed, while a READ of a name nothing sets any more lands on the FALLBACK --
-#: the shipped default, which on a two-instance workstation is the PRODUCTION
-#: board. Either production answers and the suite asserts against the wrong
+#: aimed, while a READ of a name nothing sets any more lands on the FALLBACK
+#: the suite itself spells -- in the classic shape the packaged port, which on
+#: a two-instance workstation is the PRODUCTION board. Either production answers and the suite asserts against the wrong
 #: board, or nothing answers and the suite passes VACUOUSLY.
 #:
 #: So the trigger is a retired name being read WITH a fallback or an assertion
@@ -571,11 +572,11 @@ class NoTestSteersAClientOrAServerByARetiredVariableTest(unittest.TestCase):
             offenders, [],
             f"{len(offenders)} site(s) under tests/ still steer a client or a "
             f"server through a RETIRED variable. Nothing sets these any more, "
-            f"so each drive silently lands on the shipped default -- port "
-            f"3849 / http://localhost:3849, the production board on a "
-            f"two-instance machine -- whether it was aimed by an export that "
-            f"no longer arrives or by a read whose own fallback spells that "
-            f"default out. Declare `[client] url` in the fixture's project "
+            f"so each drive silently lands where it did not aim -- the "
+            f"install's board, a refusal, or the packaged port 3849 (the "
+            f"production board on a two-instance machine) -- whether it was "
+            f"aimed by an export that no longer arrives or by a read whose own "
+            f"fallback spells a board out. Declare `[client] url` in the fixture's project "
             f"root, or `[server] port` in its store dir, and resolve it "
             f"through the product's own chain instead:\n{report}")
 
@@ -639,7 +640,7 @@ class NoTestSteersAClientOrAServerByARetiredVariableTest(unittest.TestCase):
 
         A deadness proof is exempt because its EXPORT is its subject. That is
         not a reason to make it the one place in the tree where a client may be
-        pointed at the shipped default by a READ of a dead name, and the two
+        pointed at a fallback board by a READ of a dead name, and the two
         rot-guards above cannot notice if it becomes one: they ask only that
         the file still sets a retired variable and still says "retired", and a
         file that had grown such a read would still do both. An exemption wider
@@ -663,7 +664,7 @@ class NoTestSteersAClientOrAServerByARetiredVariableTest(unittest.TestCase):
             [(2, "CRUCIBLE_URL", "read with a `??` fallback")],
             f"inside {relative} the exemption must excuse the export it is "
             f"granted for and keep reporting a read that resolves a board "
-            f"through a dead name -- that read lands on the shipped default "
+            f"through a dead name -- that read lands on the fallback it spells "
             f"there exactly as it would in any other file")
 
         ordinary = "tests/an-ordinary-suite.test.ts"

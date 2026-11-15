@@ -62,11 +62,14 @@ import time
 import unittest
 from pathlib import Path
 
-from tests.client.live_run_harness import RecordingBoard, write_fake_cargo
+from tests.client.live_run_harness import (
+    RecordingBoard,
+    project_toml_declaring,
+    write_fake_cargo,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUST_SCRIPT = REPO_ROOT / "clients" / "rust-crucible.py"
-SHIPPED_TOML = REPO_ROOT / "clients" / "crucible.toml"
 
 AGENT = "rust-run-lifecycle-fixture"
 PROJECT_KEY = "test-key-rust-run-lifecycle"
@@ -98,14 +101,8 @@ def _is_heartbeat_message(path, body, message):
 def _install_project(project_dir, board_url):
     with open(os.path.join(project_dir, ".env"), "w") as f:
         f.write(f"CRUCIBLE_PROJECT_KEY={PROJECT_KEY}\n")
-    toml_text = SHIPPED_TOML.read_text()
-    assert 'url = "http://localhost:3849"' in toml_text, (
-        "fixture assumption broken: clients/crucible.toml no longer ships "
-        "the default [client] url this fixture patches")
-    toml_text = toml_text.replace('url = "http://localhost:3849"',
-                                   f'url = "{board_url}"')
     with open(os.path.join(project_dir, "crucible.toml"), "w") as f:
-        f.write(toml_text)
+        f.write(project_toml_declaring(board_url))
 
 
 def _scrubbed_env(fake_bin_dir):

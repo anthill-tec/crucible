@@ -12,24 +12,22 @@ a misdirected run is legible in its own output, at the moment it happens.
 
 Two halves, and the second is the one that keeps the first honest:
 
-  NAMED when the resolved board is not the distribution's own declaration --
-  `context.board`, beside `projectKey`.
+  NAMED when the resolved board is not the machine's own -- the install's
+  declared `url` -- as `context.board`, beside `projectKey`.
 
-  ABSENT when it IS that declaration. `axi_context` omits absent keys rather
+  ABSENT when it IS that board. `axi_context` omits absent keys rather
   than emitting empty ones, and a key present on every exit says nothing: an
   operator scanning output for "which board?" would have to read the value on
   every line to find the one line that differs. The signal is the exception,
   so it is emitted only as one.
 
-"Not the default" is decided against `shipped_board()` -- the `[client] url`
-the distribution's own package data declares -- rather than against a literal.
-That is the same bytes the resolver falls back to, and the same bytes a reader
-meets in the file they edit, so the document and the behaviour cannot disagree.
-That holds for an install whose own `crucible.toml` declares no `url`; an
-install that declares one is the machine's own board, and the comparison is
-made with it instead. So the unit class loads the shared module from a scratch
-fleet with NO install file, rather than from the checkout, whose install file
-is an operator's own and may name any board.
+"Not the machine's own" is decided against the install's declared `url`,
+never against a shipped address: a client with no board declared refuses, so
+the distribution declares none to compare with. When the install declares
+none, a project-declared board is always named. So the unit class loads the
+shared module from a scratch fleet whose install file it writes itself,
+rather than from the checkout, whose install file is an operator's own and
+may name any board.
 
 ── Tiers ──────────────────────────────────────────────────────────────────
 
@@ -39,15 +37,13 @@ as subprocesses against live recording boards.
 
 ── Safety ─────────────────────────────────────────────────────────────────
 
-No test here contacts the shipped default. That matters on this machine
-specifically: the shipped declaration is the address a PRODUCTION install
-listens on, and the "board is the shipped default" half would otherwise have
-to post at it to prove anything. Instead the integration class stands up a
-SCRATCH FLEET -- the five clients plus the shared module and its package data,
-copied into a temp root -- and declares one of its OWN recording boards as that
-fleet's shipped value. The distribution's default is then a port this fixture
-owns, the omission is proven through the REAL resolution path, and nothing is
-addressed to a port this suite does not listen on.
+No test here contacts the dev board or a production install. The
+integration class stands up a SCRATCH FLEET -- the clients plus the shared
+module and its package data, copied into a temp root -- and declares one of its
+OWN recording boards as that fleet's install board. The machine's own board is
+then a port this fixture owns, the omission is proven through the REAL
+resolution path, and nothing is addressed to a port this suite does not listen
+on.
 
 Every board is bound on port 0 and closed in `finally`; every temp tree is
 removed in `finally`; every drive passes the shared INTERLOCK, which asks the
@@ -89,6 +85,10 @@ from tests.client.test_a_clients_board_is_its_projects_configuration import (
     drive,
 )
 
+#: In-process addresses only: building a context makes no request.
+INSTALL_BOARD = "http://127.0.0.1:47201"
+SHIPPED_STAND_IN = "http://127.0.0.1:47202"
+
 #: The envelope key this criterion is about. Spelled ONCE so the unit class and
 #: the integration class cannot drift into asserting two different names.
 BOARD_KEY = "board"
@@ -116,14 +116,18 @@ class TheContextNamesANonDefaultBoardTest(unittest.TestCase):
     """
 
     def setUp(self):
-        # A scratch fleet with no install file: the comparison under test is
-        # with the shipped declaration, which is what an install that declares
-        # no `url` falls back to. The checkout's own install file is operator
-        # state and is not what this class is about.
+        # A scratch fleet whose install file this class writes: the comparison
+        # under test is with the install's declared `url`, the machine's own
+        # board. Its shipped data declares a stand-in, so a comparison still
+        # made with the shipped data would be caught. The checkout's own
+        # install file is operator state and is not what this class is about.
         self.fleet_root = Path(tempfile.mkdtemp(prefix="envelope-board-fleet-"))
         _scripts, shipped_config, install_config = _scratch_fleet(self.fleet_root)
         self.assertFalse(Path(install_config).exists(),
                          "fixture precondition: the scratch install has no file")
+        declare_board(shipped_config, SHIPPED_STAND_IN)
+        self.install_config = Path(install_config)
+        declare_board(self.install_config, INSTALL_BOARD)
         self.axi = _load_module(Path(shipped_config).parent / AXI_MODULE_PATH.name,
                                 "envelope_board_unit")
         self.project_dir = Path(tempfile.mkdtemp(prefix="envelope-board-"))
@@ -145,38 +149,49 @@ class TheContextNamesANonDefaultBoardTest(unittest.TestCase):
         with _blank_workflow_env():
             return self.axi.axi_context("probe-project-key", agent_id="probe-agent")
 
-    def test_a_board_that_is_not_the_shipped_declaration_is_named_in_the_context(self):
+    def test_a_board_that_is_not_the_installs_is_named_in_the_context(self):
         # Unreachable on purpose: building a context makes no request, so a
         # board that could not answer one proves the naming is resolution and
         # not an echo of something a server said.
-        self.assertNotEqual(UNREACHABLE_BOARD, self.axi.shipped_board())
+        self.assertNotEqual(UNREACHABLE_BOARD, INSTALL_BOARD)
         context = self._context(UNREACHABLE_BOARD)
 
         self.assertIn(
             BOARD_KEY, context,
             f"the context names no board: {context!r}. A verb resolving a "
-            f"board other than the distribution's own declaration "
-            f"({self.axi.shipped_board()}) must say which one, or a run that "
-            f"landed somewhere unexpected is legible only on the board that "
-            f"recorded it")
+            f"board other than the install's declared one ({INSTALL_BOARD}) "
+            f"must say which one, or a run that landed somewhere unexpected "
+            f"is legible only on the board that recorded it")
         self.assertEqual(UNREACHABLE_BOARD, context[BOARD_KEY])
         # Beside `projectKey`, not instead of it -- the context's existing
         # contents are untouched by the addition.
         self.assertEqual("probe-project-key", context["projectKey"])
         self.assertEqual("probe-agent", context["agentId"])
 
-    def test_the_shipped_declaration_itself_is_omitted_rather_than_named(self):
-        shipped = self.axi.shipped_board()
-        context = self._context(shipped)
+    def test_the_installs_own_board_is_omitted_rather_than_named(self):
+        context = self._context(INSTALL_BOARD)
 
         self.assertNotIn(
             BOARD_KEY, context,
             f"the context names {context.get(BOARD_KEY)!r}, which IS the "
-            f"distribution's own declaration. A key emitted on every exit "
-            f"carries no signal: the whole value of naming the target is that "
-            f"an unexpected one stands out, so the default is omitted the way "
-            f"every other absent key in this context is")
+            f"install's declared board, the machine's own. A key emitted on "
+            f"every exit carries no signal: the whole value of naming the "
+            f"target is that an unexpected one stands out, so the machine's "
+            f"own is omitted the way every other absent key in this context is")
         self.assertEqual("probe-project-key", context["projectKey"])
+
+    def test_the_shipped_datas_board_is_named_when_the_install_declares_none(self):
+        """With no install `url` there is no machine's own board, so a
+        project-declared board is always named -- even the value the
+        distribution's data file declares. Fails today: the comparison falls
+        back to the shipped declaration and omits it."""
+        self.install_config.unlink()
+        context = self._context(SHIPPED_STAND_IN)
+
+        self.assertEqual(
+            SHIPPED_STAND_IN, context.get(BOARD_KEY),
+            f"the install declares no board, so the project's is named; got "
+            f"{context!r}")
 
     def test_the_named_board_follows_the_project_the_verb_was_given(self):
         # Point of use, never bound at import: a second project in one process
@@ -202,17 +217,17 @@ _FLEET_DRIVES = None
 
 
 def _fleet_drives():
-    """One drive per client per case, against a scratch fleet whose SHIPPED
-    declaration is a board this fixture owns.
+    """One drive per client per case, against a scratch fleet whose INSTALL
+    declares a board this fixture owns.
 
     Two cases:
 
-    `declared` -- the project names a board that is not the fleet's shipped
-                  value. The envelope must name it.
-    `default`  -- the project names exactly the fleet's shipped value. The
-                  envelope must omit it, and the run must still land there,
-                  so the omission is "this is the default" rather than "the
-                  board was never resolved".
+    `declared` -- the project names a board that is not the install's. The
+                  envelope must name it.
+    `default`  -- the project names exactly the install's board, the
+                  machine's own. The envelope must omit it, and the run must
+                  still land there, so the omission is "this is the machine's
+                  own board" rather than "the board was never resolved".
 
     Built once and cached at module scope, the way the census and the C2 board
     suite build theirs: ten subprocess dispatches are the cost of the evidence,
@@ -228,11 +243,11 @@ def _fleet_drives():
     cases = {"declared": {}, "default": {}}
     try:
         scripts, shipped_config, install_config = _scratch_fleet(root)
-        # The scratch fleet's package data declares a port THIS fixture is
-        # listening on, so "the shipped default" is reachable and provable
-        # without a packet addressed to the production install.
-        declare_board(shipped_config, shipped_to.url)
+        # The scratch fleet's install declares a port THIS fixture is
+        # listening on, so "the machine's own board" is reachable and provable
+        # without a packet addressed to the dev board or a production install.
         shutil.copyfile(shipped_config, install_config)
+        declare_board(install_config, shipped_to.url)
         axi_path = Path(shipped_config).parent / "_crucible_axi.py"
         for client, script_path in scripts.items():
             project_dir = _make_project_dir(client)
@@ -324,8 +339,8 @@ class EveryClientsEnvelopeNamesTheBoardItPostedToTest(BoardInterlockCase):
                 context = self._envelope(client, record)
                 self.assertNotIn(
                     BOARD_KEY, context,
-                    f"{client} `{VERB}` resolved the fleet's own shipped "
-                    f"declaration and still named it. A key on every exit is "
+                    f"{client} `{VERB}` resolved the install's own declared "
+                    f"board and still named it. A key on every exit is "
                     f"noise an operator has to read past to find the one exit "
                     f"that went somewhere else")
                 # …and the omission is not silence about a failure: the run

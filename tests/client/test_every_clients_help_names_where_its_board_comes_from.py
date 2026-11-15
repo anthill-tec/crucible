@@ -1,13 +1,12 @@
 """Every client's help names where the board it posts to comes from.
 
 The board a client posts to is `[client] url` in `crucible.toml`, resolved from
-the project's file, then the install's, then the shipped one -- and the FIRST
-file that DECLARES a non-empty `[client] url` wins. A file without one (no
-`[client]` table, no `url`, an empty or non-string one, or a file that does not
-parse) is passed over for the next, and the shipped address is the last
-resort. No `--help` may still say that a project file without the key uses the
-shipped address: that was the first-file-that-parses rule, which the chain no
-longer follows for the board.
+the project's file, then the install's -- and the FIRST file that DECLARES a
+non-empty `[client] url` wins. A file without one (no `[client]` table, no
+`url`, an empty or non-string one, or a file that does not parse) is passed
+over for the next, and a client with no board declared REFUSES: there is no
+shipped last resort. No `--help` may still describe one, nor say that a
+project file without the key uses the shipped address.
 
 What this file pins:
 
@@ -15,9 +14,9 @@ What this file pins:
     For EACH of the five clients, the top-level `--help` -- produced by running
     the real client script as a subprocess, the way the fleet census drives it
     (`drive_verb` in `test_client_fleet_envelope_census.py`) -- carries, in its
-    DESCRIPTION, the `[client] url` key, the project -> install -> shipped
-    order and the fall-through rule, and none of them states the retired
-    rule. And all of them carry it from ONE text held
+    DESCRIPTION, the `[client] url` key, the project -> install order, the
+    fall-through rule and the refusal, and none of them states a retired rule
+    or a shipped last resort. And all of them carry it from ONE text held
     by the shared client module (`clients/_crucible_axi.py`), never five hand
     copies.
 
@@ -26,12 +25,13 @@ What this file pins:
     driven for real: once against a port nothing listens on (a refused
     connection) and once against a listener that accepts and never answers (a
     read-phase timeout). Both failure messages name `[client] url` and the
-    resolution order, and both still name the address they tried.
+    resolution order, name no shipped layer, and both still name the address
+    they tried.
 
 Wording is pinned only as far as the requirement fixes it: the literal key
-`[client] url`, the three layers in their precedence order, and the words that
+`[client] url`, the two layers in their precedence order, and the words that
 state the fall-through rule (the FIRST file DECLARING a NON-EMPTY url wins, a
-file WITHOUT one is PASSED OVER, the shipped address is the LAST RESORT).
+file WITHOUT one is PASSED OVER, a client with no board declared REFUSES).
 Whitespace is normalised on both sides because two clients let argparse
 re-wrap their description.
 """
@@ -59,14 +59,21 @@ AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 #: writes it in `crucible.toml`.
 CLIENT_URL_KEY = "[client] url"
 
-#: The three layers of the resolution chain, in precedence order.
-RESOLUTION_ORDER = ("project", "install", "shipped")
+#: The two layers of the resolution chain, in precedence order.
+RESOLUTION_ORDER = ("project", "install")
 
 #: The words that state the fall-through rule: the FIRST file DECLARING a
-#: NON-EMPTY url wins, a file WITHOUT one is PASSED OVER, and the shipped
-#: address is the LAST RESORT.
+#: NON-EMPTY url wins, a file WITHOUT one is PASSED OVER, and a client with no
+#: board declared REFUSES.
 FALL_THROUGH_TERMS = ("first", "declar", "non-empty", "without",
-                      "passed over", "last resort")
+                      "passed over", "refus")
+
+#: The ways a text describes a shipped board as the chain's last resort. No
+#: help and no transport message may still say any of them. (A bare
+#: "shipped" is not one: bun's help rightly names its shipped reporters.)
+SHIPPED_BOARD_WORDING = re.compile(
+    r"last\s+resort|shipped\s+(?:one|default|declaration|address|board|value|url)",
+    re.IGNORECASE)
 
 #: The retired rule's words: under the first-file-that-parses rule a project
 #: file without the key USES THE SHIPPED ADDRESS. No help may still say so.
@@ -203,7 +210,7 @@ class EveryClientsTopLevelHelpNamesTheBoardConfigurationTest(unittest.TestCase):
             f"the top-level --help description must name `{CLIENT_URL_KEY}`, "
             f"the key the board is read from; missing in: {offenders!r}")
 
-    def test_every_clients_top_level_help_names_project_then_install_then_shipped(self):
+    def test_every_clients_top_level_help_names_project_then_install(self):
         offenders = {}
         for client_key in CLIENT_FILES:
             description = self.description_of(client_key)
@@ -214,7 +221,20 @@ class EveryClientsTopLevelHelpNamesTheBoardConfigurationTest(unittest.TestCase):
             offenders, {},
             "the top-level --help description must name the board's key and "
             "its resolution order -- the project's crucible.toml, then the "
-            f"install's, then the shipped one; it does not in: {offenders!r}")
+            f"install's; it does not in: {offenders!r}")
+
+    def test_no_clients_top_level_help_describes_a_shipped_last_resort_board(self):
+        """Fails today: every help calls the shipped address the last
+        resort."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            found = SHIPPED_BOARD_WORDING.search(self.description_of(client_key))
+            if found:
+                offenders[client_key] = found.group(0)
+        self.assertEqual(
+            offenders, {},
+            "a client with no board declared refuses, so no top-level --help "
+            f"may still describe a shipped last-resort board: {offenders!r}")
 
     def test_every_clients_top_level_help_states_the_fall_through_rule(self):
         offenders = {}
@@ -228,8 +248,8 @@ class EveryClientsTopLevelHelpNamesTheBoardConfigurationTest(unittest.TestCase):
             offenders, {},
             "the top-level --help description must state that the first "
             f"file declaring a non-empty `{CLIENT_URL_KEY}` wins, that a file "
-            "without one is passed over, and that the shipped address is the "
-            f"last resort; it does not in: {offenders!r}")
+            "without one is passed over, and that a client with no board "
+            f"declared refuses; it does not in: {offenders!r}")
 
     def test_no_clients_top_level_help_says_a_file_without_the_key_uses_the_shipped_address(self):
         offenders = {}
@@ -328,13 +348,17 @@ class TheTransportsFailureMessagesNameTheBoardConfigurationTest(unittest.TestCas
             f"the connection-failure message must name `{CLIENT_URL_KEY}`, "
             f"the key the address was read from; got {error!r}")
 
-    def test_a_refused_connection_message_names_project_then_install_then_shipped(self):
+    def test_a_refused_connection_message_names_project_then_install_and_no_shipped_board(self):
         error = self.refused_connection_error()
         self.assertTrue(
             CLIENT_URL_KEY in error and names_layers_in_order(error),
             "the connection-failure message must name the key and the order "
-            "it resolves in -- project, then install, then shipped; "
-            f"got {error!r}")
+            f"it resolves in -- project, then install; got {error!r}")
+        self.assertIsNone(
+            SHIPPED_BOARD_WORDING.search(error),
+            f"the message may name no shipped board layer; got {error!r}")
+        self.assertNotIn("shipped", error.lower(),
+                         f"the chain has no shipped layer; got {error!r}")
 
     def test_a_timed_out_request_message_names_the_client_url_key(self):
         error = self.timed_out_error()
@@ -343,12 +367,14 @@ class TheTransportsFailureMessagesNameTheBoardConfigurationTest(unittest.TestCas
             f"the timeout message must name `{CLIENT_URL_KEY}`, the key the "
             f"address was read from; got {error!r}")
 
-    def test_a_timed_out_request_message_names_project_then_install_then_shipped(self):
+    def test_a_timed_out_request_message_names_project_then_install_and_no_shipped_board(self):
         error = self.timed_out_error()
         self.assertTrue(
             CLIENT_URL_KEY in error and names_layers_in_order(error),
             "the timeout message must name the key and the order it resolves "
-            f"in -- project, then install, then shipped; got {error!r}")
+            f"in -- project, then install; got {error!r}")
+        self.assertNotIn("shipped", error.lower(),
+                         f"the chain has no shipped layer; got {error!r}")
 
 
 if __name__ == "__main__":

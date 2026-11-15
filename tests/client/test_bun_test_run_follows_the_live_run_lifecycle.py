@@ -74,11 +74,14 @@ import time
 import unittest
 from pathlib import Path
 
-from tests.client.live_run_harness import HEALTH_PATHS, board_health
+from tests.client.live_run_harness import (
+    HEALTH_PATHS,
+    board_health,
+    project_toml_declaring,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUN_SCRIPT = REPO_ROOT / "clients" / "bun-crucible.py"
-SHIPPED_TOML = REPO_ROOT / "clients" / "crucible.toml"
 
 AGENT = "bun-run-lifecycle-fixture"
 # The run's ingest: bun sends its runner's reports to the board's run route,
@@ -258,14 +261,8 @@ def _is_heartbeat_message(path, body, message):
 def _install_project(project_dir, board_url):
     with open(os.path.join(project_dir, ".env"), "w") as f:
         f.write(f"CRUCIBLE_PROJECT_KEY={PROJECT_KEY}\n")
-    toml_text = SHIPPED_TOML.read_text()
-    assert 'url = "http://localhost:3849"' in toml_text, (
-        "fixture assumption broken: clients/crucible.toml no longer ships "
-        "the default [client] url this fixture patches")
-    toml_text = toml_text.replace('url = "http://localhost:3849"',
-                                  f'url = "{board_url}"')
     with open(os.path.join(project_dir, "crucible.toml"), "w") as f:
-        f.write(toml_text)
+        f.write(project_toml_declaring(board_url))
 
 
 def _write_fake_bun(project_dir):

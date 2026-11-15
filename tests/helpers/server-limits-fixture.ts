@@ -113,7 +113,7 @@ export const BOOTSTRAP_ENV: readonly string[] = [
  * teaches a mechanism that must not exist. The connection retirement is the
  * opposite: the code that stopped reading these SAYS SO where it used to read
  * them (`resolveListener` and `startServer` in `src/server.ts`; the
- * `CLIENT_TABLE` comment, `shipped_board` and `resolve_base_url` in
+ * `CLIENT_TABLE` comment and `resolve_base_url` in
  * `clients/_crucible_axi.py`), because a reader who arrives at the resolver
  * holding an export in their hand has to be told why it does nothing. Feeding
  * these four to that scan would convict CR-CRU-139's own lineage prose and

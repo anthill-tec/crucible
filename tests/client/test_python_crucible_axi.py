@@ -42,8 +42,10 @@ its own toolchain (its unittest runner's stream / py_compile).
 Module-loading + HTTP-mocking convention copied verbatim from the sibling
 bun test harnesses (`test_bun_crucible_auto_attach.py`,
 `test_bun_crucible_gate_axi.py`): load by file path via `importlib`, mock
-the module's `_post`/`_get`/`_patch` HTTP transport seam so the live
-Crucible server on :3849 is NEVER touched.
+the module's `_post`/`_get`/`_patch` HTTP transport seam so no live board is
+ever touched. The project fixture declares its own board, an unreachable
+loopback address, so a path the mocks do not cover fails fast against it and
+never falls through to whatever board the install declares.
 
 Invocation:
     python3 -m pytest tests/client/test_python_crucible_axi.py -q
@@ -69,7 +71,11 @@ from unittest import mock
 # installed project has; the fleet census owns that helper (one fixture shape
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
 from tests.client.live_run_harness import StreamingPost, get_answering_health
-from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client.test_client_fleet_envelope_census import (
+    _UNREACHABLE_CRUCIBLE_URL,
+    declare_and_require_board,
+    install_project_limits,
+)
 
 # CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
 # this client register, and through what?", reused rather than re-derived.
@@ -322,6 +328,8 @@ class _BasePythonAxiTest(unittest.TestCase):
         with open(os.path.join(self.tmpdir, ".env"), "w") as f:
             f.write(f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
         install_project_limits(self.tmpdir)
+        declare_and_require_board(self.tmpdir, _UNREACHABLE_CRUCIBLE_URL,
+                                  "python-crucible.py")
         self._saved_env = {k: os.environ.get(k) for k in self.ENV_KEYS}
         for k in self.ENV_KEYS:
             os.environ.pop(k, None)

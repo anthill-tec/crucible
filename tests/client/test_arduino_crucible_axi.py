@@ -49,8 +49,10 @@ technique already used against every client in this fleet's test suite).
 
 Module-loading + HTTP-mocking convention copied verbatim from the sibling
 python/rust/mvn test harnesses: load by file path via `importlib`, mock the
-module's `_post`/`_get`/`_patch` HTTP transport seam so the live Crucible
-server on :3849 is NEVER touched.
+module's `_post`/`_get`/`_patch` HTTP transport seam so no live board is ever
+touched. The project fixture declares its own board, an unreachable loopback
+address, so a path the mocks do not cover fails fast against it and never
+falls through to whatever board the install declares.
 
 Invocation:
     python3 -m pytest tests/client/test_arduino_crucible_axi.py -q
@@ -75,7 +77,11 @@ from unittest import mock
 # CR-CRU-131 §S1b — the project fixture carries the `crucible.toml` an
 # installed project has; the fleet census owns that helper (one fixture shape
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
-from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client.test_client_fleet_envelope_census import (
+    _UNREACHABLE_CRUCIBLE_URL,
+    declare_and_require_board,
+    install_project_limits,
+)
 from tests.client.live_run_harness import get_answering_health
 
 # CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
@@ -370,6 +376,8 @@ class _BaseArduinoAxiTest(unittest.TestCase):
             f.write(f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
             f.write(f"CRUCIBLE_PROJECT_NAME={self.PROJECT_NAME}\n")
         install_project_limits(self.tmpdir)
+        declare_and_require_board(self.tmpdir, _UNREACHABLE_CRUCIBLE_URL,
+                                  "arduino-crucible.py")
         self._saved_env = {k: os.environ.get(k) for k in self.ENV_KEYS}
         for k in self.ENV_KEYS:
             os.environ.pop(k, None)

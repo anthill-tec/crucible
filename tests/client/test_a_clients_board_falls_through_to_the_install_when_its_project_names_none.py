@@ -1,20 +1,21 @@
 """A client finds its board in the install when its project names none.
 
 The board a client posts to is `[client] url`, read from a chain of
-`crucible.toml` files: the bound project directory's, then the install's, then
-the distribution's own shipped declaration. The chain is resolved BY TABLE for
-the board: the first file that DECLARES a non-empty string `url` wins, and a
-file that is absent, does not parse, has no `[client]` table, or whose `url`
-is missing, empty, whitespace or not a string is PASSED OVER. Only when neither
-file declares one is the shipped address answered -- and nothing raises.
+`crucible.toml` files: the bound project directory's, then the install's. The
+chain is resolved BY TABLE for the board: the first file that DECLARES a
+non-empty string `url` wins, and a file that is absent, does not parse, has no
+`[client]` table, or whose `url` is missing, empty, whitespace or not a string
+is PASSED OVER. When neither file declares one there is no last resort: the
+resolver refuses, and the distribution's own data file is never read for a
+board even when it declares one.
 
 The limits keep their own rule: the first file that parses decides them,
 whether or not it holds a `[limits]` table. A project file that names no board
 falls through for the board and still shadows the install for the limits.
 
 `context.board` keys off the machine's own board: an envelope names the
-resolved board only when it differs from the install's declared `url`, or --
-when the install declares none -- from the shipped one.
+resolved board only when it differs from the install's declared `url`; when
+the install declares none, a project-declared board is always named.
 
 ── How each half is proven ──────────────────────────────────────────────────
 
@@ -23,8 +24,9 @@ when the install declares none -- from the shipped one.
 shared module is loaded from a SCRATCH FLEET (`_scratch_fleet`), a copy of
 `clients/` under a temp root, so the module's own location makes that temp root
 its INSTALL dir and `<root>/clients/crucible.toml` its shipped data. Every
-layer of the chain is therefore a temp file this suite writes; no socket is
-opened.
+file is therefore a temp file this suite writes; no socket is opened. The
+scratch shipped data declares a stand-in board, so a resolver that still read
+it would answer that stand-in and be caught.
 
 `AVerbFromAProjectThatNamesNoBoardPostsToTheInstallsBoardTest` drives the real
 `status` verb of every client as a subprocess from such a scratch fleet, with
@@ -34,9 +36,9 @@ resolve, and a drive is refused unless the answer is one of those two boards.
 
 ── Safety ───────────────────────────────────────────────────────────────────
 
-No layer names the dev board or the production install. The one test that
-leaves the shipped declaration untouched asks the module in process which
-address it would answer, and makes no request.
+No layer names the dev board or the production install. The class that
+leaves the shipped data file as the distribution ships it asks the module in
+process, and makes no request.
 """
 
 import os
@@ -57,7 +59,6 @@ from tests.client.test_a_clients_board_is_its_projects_configuration import (
 )
 from tests.client.test_client_fleet_envelope_census import (
     CLIENT_FILES,
-    SHIPPED_DEFAULT_BOARD,
     BoardInterlockCase,
     _build_fake_bin_dir,
     _load_module,
@@ -160,6 +161,19 @@ class _ScratchChainCase(unittest.TestCase):
         finally:
             self.axi.bind_project_dir(None)
 
+    def outcome(self):
+        """`"refused"` when the resolver refuses with the no-board hard stop
+        (a direct `Exception` subclass, never an `OSError` or `ValueError`),
+        else what it answered or raised."""
+        try:
+            return self.resolve()
+        except AssertionError:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- the refusal's type is GREEN's to name
+            if isinstance(exc, (OSError, ValueError)) or type(exc).__bases__ != (Exception,):
+                return f"raised {exc!r}"
+            return "refused"
+
     def context(self, project_key="probe-project-key"):
         self.axi.bind_project_dir(str(self.project_dir))
         try:
@@ -171,8 +185,8 @@ class _ScratchChainCase(unittest.TestCase):
 
 class TheBoardChainPassesOverAFileThatNamesNoBoardTest(_ScratchChainCase):
     """The board resolves from the first file that DECLARES a non-empty
-    string `[client] url`: the project's, then the install's, then the shipped
-    declaration. In process, over no socket."""
+    string `[client] url`: the project's, then the install's. In process, over
+    no socket."""
 
     def test_a_project_file_declaring_only_a_gate_skip_resolves_the_installs_board(self):
         """Every Model B project's file: it parses and names no board, so it
@@ -241,10 +255,11 @@ class TheBoardChainPassesOverAFileThatNamesNoBoardTest(_ScratchChainCase):
         self.write_project(GATE_ONLY + f'\n[client]\nurl = " {PROJECT_BOARD} "\n')
         self.assertEqual(self.resolve(), PROJECT_BOARD)
 
-    def test_an_install_file_that_names_no_usable_url_is_passed_over_for_the_shipped(self):
-        """A regression pin: neither file declares a usable `url`, so the
-        shipped declaration is answered, and nothing raises -- for every shape
-        the install's own file can take."""
+    def test_an_install_file_that_names_no_usable_url_leaves_no_board_and_refuses(self):
+        """Neither file declares a usable `url`, so the resolver refuses --
+        for every shape the install's own file can take -- and never answers
+        the shipped data's board. Fails today: the shipped declaration is the
+        last resort and is answered."""
         self.write_project(GATE_ONLY)
         install_shapes = {
             "limits only": _install_text(limit_value=INSTALL_LIMIT_VALUE),
@@ -257,15 +272,16 @@ class TheBoardChainPassesOverAFileThatNamesNoBoardTest(_ScratchChainCase):
         answers = {}
         for case, text in install_shapes.items():
             self.write_install(text)
-            answers[case] = self.resolve()
+            answers[case] = self.outcome()
         self.install_config.unlink()
-        answers["no install file"] = self.resolve()
-        wrong = {case: got for case, got in answers.items() if got != SHIPPED_STAND_IN}
+        answers["no install file"] = self.outcome()
+        wrong = {case: got for case, got in answers.items() if got != "refused"}
         self.assertEqual(
             wrong, {},
-            f"with neither file declaring a usable `url` the shipped "
-            f"declaration {SHIPPED_STAND_IN!r} is the last resort; these "
-            f"resolved elsewhere: {wrong!r}")
+            f"with neither file declaring a usable `url` the resolver refuses "
+            f"(a direct Exception subclass, never an OSError or ValueError) "
+            f"instead of answering the shipped data's {SHIPPED_STAND_IN!r}; "
+            f"these did not: {wrong!r}")
 
     def test_the_board_is_reread_at_the_point_of_use_after_the_install_changes(self):
         """Never cached: an edit to the install's file is the next answer.
@@ -315,25 +331,39 @@ class TheBoardChainPassesOverAFileThatNamesNoBoardTest(_ScratchChainCase):
             "keep the first file that parses -- the project's")
 
 
-class TheShippedAddressIsTheLastResortTest(_ScratchChainCase):
-    """With neither file declaring a board, the distribution's own shipped
-    address is answered. The scratch copy keeps the real shipped declaration;
-    the module is asked in process and nothing is sent anywhere."""
+class TheDistributionShipsNoLastResortBoardTest(_ScratchChainCase):
+    """With neither file declaring a board, nothing is answered. The scratch
+    copy keeps the distribution's own data file as it ships; the module is
+    asked in process and nothing is sent anywhere."""
 
     SHIPPED = None
 
-    def test_with_neither_file_declaring_a_url_the_shipped_address_is_answered(self):
-        """A regression pin for the last resort, never raising."""
+    def test_with_neither_file_declaring_a_url_the_resolver_refuses(self):
+        """Fails today: the shipped address is the last resort and is
+        answered."""
         self.write_install(_install_text(limit_value=INSTALL_LIMIT_VALUE))
         self.write_project(GATE_ONLY)
-        self.assertEqual(self.axi.shipped_board(), SHIPPED_DEFAULT_BOARD)
-        self.assertEqual(self.resolve(), SHIPPED_DEFAULT_BOARD)
+        self.assertEqual(self.outcome(), "refused")
+
+    def test_the_shared_module_offers_no_shipped_board(self):
+        """Fails today: `shipped_board` is the last resort's reader."""
+        self.assertFalse(hasattr(self.axi, "shipped_board"))
+
+    def test_with_no_board_declared_the_context_omits_the_board_and_does_not_raise(self):
+        """A pin: the refusal's own envelope is built with this context, so
+        building it never raises, and it names no board."""
+        self.write_install(_install_text(limit_value=INSTALL_LIMIT_VALUE))
+        self.write_project(GATE_ONLY)
+        context = self.context()
+        self.assertNotIn("board", context)
+        self.assertEqual(context.get("projectKey"), "probe-project-key")
 
 
 class TheContextNamesTheBoardOnlyWhenItIsNotTheMachinesOwnTest(_ScratchChainCase):
     """`context.board` is named only when the resolved board differs from the
-    install's declared `url` -- or from the shipped one when the install
-    declares none. In process, `axi_context` over no socket."""
+    install's declared `url`; when the install declares none, a
+    project-declared board is always named. In process, `axi_context` over no
+    socket."""
 
     def test_a_verb_resolving_the_installs_url_through_its_project_names_no_board(self):
         """The project declares the install's own board. Fails today: the
@@ -384,23 +414,24 @@ class TheContextNamesTheBoardOnlyWhenItIsNotTheMachinesOwnTest(_ScratchChainCase
         self.write_project(f'[client]\nurl = "{OTHER_BOARD}"\n')
         self.assertEqual(self.context().get("board"), OTHER_BOARD)
 
-    def test_with_no_install_url_the_shipped_declaration_is_what_is_omitted(self):
-        """A regression pin: with no `url` in the install's file, the rule
-        compares with the shipped declaration, as before -- the shipped board
-        is omitted and any other is named."""
+    def test_with_no_install_url_every_project_declared_board_is_named(self):
+        """With no `url` in the install's file there is no machine's own board
+        to omit, so the project's board is named -- the shipped data's value
+        included. Fails today: the shipped declaration is omitted."""
         self.write_install(_install_text(limit_value=INSTALL_LIMIT_VALUE))
         self.write_project(f'[client]\nurl = "{SHIPPED_STAND_IN}"\n')
-        self.assertNotIn("board", self.context())
+        self.assertEqual(self.context().get("board"), SHIPPED_STAND_IN)
 
         self.write_project(f'[client]\nurl = "{OTHER_BOARD}"\n')
         self.assertEqual(self.context().get("board"), OTHER_BOARD)
 
     def test_an_install_url_that_is_not_usable_counts_as_none_for_the_context(self):
-        """A regression pin: an install whose `url` is empty declares none, so
-        the comparison falls back to the shipped declaration."""
+        """An install whose `url` is empty declares none, so the project's
+        board is named -- even the shipped data's value. Fails today: the
+        comparison falls back to the shipped declaration and omits it."""
         self.write_install('[client]\nurl = ""\n')
         self.write_project(f'[client]\nurl = "{SHIPPED_STAND_IN}"\n')
-        self.assertNotIn("board", self.context())
+        self.assertEqual(self.context().get("board"), SHIPPED_STAND_IN)
 
         self.write_project(f'[client]\nurl = "{OTHER_BOARD}"\n')
         self.assertEqual(self.context().get("board"), OTHER_BOARD)

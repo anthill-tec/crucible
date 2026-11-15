@@ -27,6 +27,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 import urllib.parse
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -861,18 +862,37 @@ def heartbeat_index(posts, message):
                        and isinstance(b, dict) and b.get("message") == message)
 
 
+#: A live `[client]` table, from its header line to the next live table
+#: header line or the end of the file. Comments and array values carry
+#: brackets, so the end is a whole header LINE, never the first `[`.
+_LIVE_CLIENT_TABLE = re.compile(
+    r"(?ms)^[ \t]*\[[ \t]*client[ \t]*\][ \t]*(?:#[^\n]*)?$"
+    r".*?(?=^[ \t]*\[\[?[ \t]*[A-Za-z0-9_.\-]+[ \t]*\]\]?[ \t]*(?:#[^\n]*)?$|\Z)")
+
+
+def project_toml_declaring(board_url):
+    """The project `crucible.toml` a live-run fixture writes: the shipped
+    file's limits and tables, with the project's OWN `[client]` table naming
+    `board_url`. Any `[client]` table the shipped file carries is dropped
+    first, so the text is right whether or not the distribution ships one, and
+    the result is read back: a fixture whose project declares no board would
+    fall through to whatever the install declares."""
+    shipped = _LIVE_CLIENT_TABLE.sub("", SHIPPED_TOML.read_text()).rstrip("\n")
+    text = f'{shipped}\n\n[client]\nurl = "{board_url}"\n'
+    declared = tomllib.loads(text).get("client", {}).get("url")
+    assert declared == board_url, (
+        f"fixture broken: the project file declares {declared!r}, not "
+        f"{board_url!r}")
+    return text
+
+
 def install_project(project_dir, board_url, project_key, project_name=None):
     with open(os.path.join(project_dir, ".env"), "w") as f:
         f.write(f"CRUCIBLE_PROJECT_KEY={project_key}\n")
         if project_name:
             f.write(f"CRUCIBLE_PROJECT_NAME={project_name}\n")
-    toml_text = SHIPPED_TOML.read_text()
-    assert 'url = "http://localhost:3849"' in toml_text, (
-        "fixture assumption broken: clients/crucible.toml no longer ships "
-        "the default [client] url this fixture patches")
     with open(os.path.join(project_dir, "crucible.toml"), "w") as f:
-        f.write(toml_text.replace('url = "http://localhost:3849"',
-                                  f'url = "{board_url}"'))
+        f.write(project_toml_declaring(board_url))
 
 
 def scrubbed_env(path_prefix=None, **extra):

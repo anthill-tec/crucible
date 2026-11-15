@@ -655,12 +655,13 @@ def build_argv(verb_name, subparser, project_dir):
 # THE INTERLOCK IS A SAFETY DEVICE, NOT CEREMONY -- read this before removing
 # it. A suite that used to aim `$CRUCIBLE_URL` at its own stub board and simply
 # drops the export does not fail: it silently stops steering, and the drive
-# resolves the SHIPPED default, `http://localhost:3849`. On the two-instance
-# workstation this CR serves that address belongs to the PRODUCTION install,
-# and the verbs these suites drive (`register`, `unregister`, a gate seal) are
-# WRITES -- so the failure mode is not a red test, it is somebody else's board
-# carrying this suite's rows. CR-CRU-139 C1 met the same hazard on the server
-# side and discovered it by BINDING the port. `would_resolve` cannot: it asks
+# resolves whatever board the INSTALL declares -- for a client run out of this
+# checkout, the operator's own root `crucible.toml` -- or, with none declared
+# anywhere, refuses. On the two-instance workstation this CR serves the
+# install's board is a live one, and the verbs these suites drive (`register`,
+# `unregister`, a gate seal) are WRITES -- so the failure mode is not a red
+# test, it is somebody else's board carrying this suite's rows. The server
+# side met the same hazard and discovered it by BINDING the port. `would_resolve` cannot: it asks
 # the shared module IN PROCESS, over no socket, which board it WOULD resolve
 # for a given project directory, and a fixture that spawns only when the answer
 # is its own board can never address a packet anywhere else.
@@ -670,9 +671,10 @@ def build_argv(verb_name, subparser, project_dir):
 #: second way, which is how one resolver becomes two.
 BOARD_RESOLVER = "resolve_base_url"
 
-#: The board the fleet has always defaulted to, and therefore what a drive
-#: lands on when nothing declares one. Named so a refusal can say what it
-#: avoided rather than only that it refused.
+#: The server's packaged port as a client address. No client falls back to it
+#: any more -- a client with no board declared refuses -- but a production
+#: install listens there, so a suite may still name it as an address a drive
+#: must never resolve.
 SHIPPED_DEFAULT_BOARD = "http://localhost:3849"
 
 #: The `[client]` table from its header LINE to the next real TOML table-header
@@ -721,17 +723,16 @@ def would_resolve(axi_path, project_dir, expected):
     fleet's copy when driving one, since the install and package-data layers
     are derived from that module's own location -- bound to the same project
     directory, in process and over no socket. `ok` is False, with a reason a
-    failure message can print, for every case that would post somewhere else,
-    including the one that matters most: no resolver at all, and therefore the
-    shipped default.
+    failure message can print, for every case that would post somewhere else
+    or refuse: no resolver at all, a resolver that raises (no board declared),
+    or one that answers another board than the declared one.
     """
     module = _load_module(axi_path, "census_board_interlock")
     resolver = getattr(module, BOARD_RESOLVER, None)
     if not callable(resolver):
         return False, (f"{Path(axi_path).parent.name}/_crucible_axi.py exports "
-                       f"no callable `{BOARD_RESOLVER}()`, so the fleet still "
-                       f"resolves its module constant "
-                       f"({SHIPPED_DEFAULT_BOARD})")
+                       f"no callable `{BOARD_RESOLVER}()`, so the fleet does "
+                       f"not resolve its board from configuration")
     module.bind_project_dir(str(project_dir))
     try:
         actual = resolver()
@@ -770,8 +771,9 @@ def declare_and_require_board(project_dir, board, label="a client"):
     if not resolves:
         raise RuntimeError(
             f"refusing to drive {label}: {reason}. A drive that does not "
-            f"resolve its own declared board lands on {SHIPPED_DEFAULT_BOARD} "
-            f"instead, which on this machine is the PRODUCTION install.")
+            f"resolve its own declared board lands on whatever board the "
+            f"install declares instead -- for a client run out of this "
+            f"checkout, the operator's own -- or refuses.")
     return board
 
 
@@ -790,10 +792,10 @@ class BoardInterlockCase(unittest.TestCase):
             self.fail(
                 f"{label} was NOT DRIVEN: the interlock refused to spawn a "
                 f"client that would post somewhere this fixture is not "
-                f"listening — {record['blocked']}. Until the board is resolved "
-                f"from configuration, a drive lands on "
-                f"{SHIPPED_DEFAULT_BOARD}, which on this machine is the "
-                f"PRODUCTION install, and these verbs are writes.")
+                f"listening — {record['blocked']}. A drive that does not "
+                f"resolve its own declared board lands on the install's "
+                f"board -- for a client run out of this checkout, the "
+                f"operator's own -- and these verbs are writes.")
         return record
 
 
@@ -809,8 +811,8 @@ def drive_verb(script_path, argv, project_dir, fake_bin_dir, timeout=20,
     is retired. The declaration is written into the temp project root every
     drive owns, and the INTERLOCK below refuses to spawn unless the shared
     module really resolves it -- a drive that merely stopped steering would
-    otherwise land on the shipped default, which on this machine is the
-    production board.
+    otherwise land on the install's board, which for a client run out of this
+    checkout is the operator's own.
 
     `extra_env` (CR-CRU-092 §S6) overrides the drive's environment. The default
     unreachable board can only ever exercise a verb's READ-FAILURE path, which

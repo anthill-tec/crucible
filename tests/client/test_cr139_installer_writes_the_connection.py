@@ -92,6 +92,7 @@ What CI runs (and what must list these ids):
 import contextlib
 import difflib
 import importlib
+import importlib.util
 import io
 import json
 import os
@@ -689,6 +690,39 @@ class TheInstallWritesTheResolvedConnectionIntoTheFilesItLaysDownTest(
             "it would post to %r (%s). One resolved value, written twice, is "
             "the whole point of letting the installer set it"
             % (listener, self.server_config, url, self.install_config))
+
+    def test_the_installed_client_resolves_the_written_url_for_a_project_that_declares_none(self):
+        """A client with no board declared refuses, so the board an install
+        leaves behind is the one its clients use. The INSTALLED shared module,
+        loaded in process from the target, with a project whose own
+        `crucible.toml` declares no `url`, resolves exactly the url the install
+        wrote -- never a shipped address. A pin."""
+        self.declare_range(width=2)
+
+        self.install_once()
+
+        url = self.written_url()
+        installed_axi = os.path.join(
+            self.target_dir, self.install.FLEET_DIRNAME, "_crucible_axi.py")
+        spec = importlib.util.spec_from_file_location(
+            f"installed_no_board_axi_{id(self)}", installed_axi)
+        assert spec is not None and spec.loader is not None
+        axi = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(axi)
+        project_dir = os.path.join(self.root, "project-naming-no-board")
+        os.makedirs(project_dir)
+        with open(os.path.join(project_dir, CONFIG_NAME), "w", encoding="utf-8") as fh:
+            fh.write('[gate]\nskip = ["pr"]\n')
+        axi.bind_project_dir(project_dir)
+        try:
+            resolved = axi.resolve_base_url()
+        finally:
+            axi.bind_project_dir(None)
+        self.assertEqual(
+            url, resolved,
+            f"the installed client resolves the `[{CLIENT_TABLE}] {URL_KEY}` "
+            f"the install wrote ({self.install_config}) for a project that "
+            f"declares none; it resolved {resolved!r}")
 
     def test_the_chosen_port_lies_inside_the_range_that_file_itself_declares(self):
         """AC: the chosen port lies inside the declared range -- asserted
