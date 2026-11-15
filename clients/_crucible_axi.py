@@ -1901,6 +1901,9 @@ def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
     try:
         if not agent_id or not project_key:
             return []
+        # With an agent the run reaches the board, so with none declared it
+        # refuses here, before its runner spawns, however it is attributed.
+        resolve_base_url()
         # `--cycle` supplied, or an explicit `context.cycleId`: the run WILL be
         # attributed, so there is nothing to warn about and nothing to ask.
         if cycle_id is not None:
@@ -1945,8 +1948,11 @@ def refuse_unattributed_run(get, project_key, agent_id, cycle_id=None,
     first step, or the cleanup and docker bring-up a run makes before its
     runner. Raises `UnattributedRunRefused` on the same verdict; prints and
     returns nothing otherwise, so the verb's own pre-flight still owns the
-    `no-cycle` warning. A release run is never refused."""
+    `no-cycle` warning. A release run is never refused as unattributed, but
+    with an agent it still refuses when no board is declared."""
     if release:
+        if agent_id and project_key:
+            resolve_base_url()
         return
     preflight_cycle_warnings(get, project_key, agent_id, cycle_id=cycle_id,
                              context=context, stream=io.StringIO())

@@ -1122,8 +1122,9 @@ class NoBoardNoFiguresTest(_ArduinoProject, unittest.TestCase):
 # re-recorded lower and that module's is added. The verb that creates a
 # project grows that module, and the core by its help steps. The board's
 # resolution moves out of the core into its own module, so the core's budget
-# is re-recorded lower and that module's is added.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9056, "_crucible_run.py": 1974,
+# is re-recorded lower and that module's is added. The pre-flight's refusal
+# of an attributed run with no board declared grows the core.
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9062, "_crucible_run.py": 1974,
                               "_crucible_release.py": 266,
                               "_crucible_project.py": 521,
                               "_crucible_lint.py": 399,
