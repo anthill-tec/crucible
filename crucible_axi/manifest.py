@@ -554,6 +554,12 @@ def run_manifest_stage(target_dir: str, force: bool = False,
     under `notFilled`, a fill makes the stage `converged: False`, and a filled
     file is re-recorded only when its bytes before the fill were the ones the
     install record holds for it. Anything else is the operator's.
+
+    Whatever the plan, the install file is judged as the stage LEAVES it: one
+    that declares no non-empty `[client] url` (no listener, a refused fill, an
+    empty value, a file that does not parse) is named, by its absolute path
+    and the key, under `boardUndeclared`, because a client with no board
+    declared refuses rather than guess one.
     """
     listener = (server_config or {}).get("listener")
     authored: dict = {}
@@ -599,7 +605,24 @@ def run_manifest_stage(target_dir: str, force: bool = False,
         result["filled"] = fills.filled
     if fills.not_filled:
         result["notFilled"] = fills.not_filled
+    if not _declares_board(client_config):
+        result["boardUndeclared"] = {
+            "path": os.path.abspath(client_config),
+            "key": fill_key_label(CLIENT_TABLE, CLIENT_URL_KEY)}
     return result
+
+
+def _declares_board(path: str) -> bool:
+    """Whether the install file at `path`, as the stage leaves it, declares a
+    non-empty string `[client] url`. A file that is missing, unreadable or
+    does not parse declares none: a client resolving through it would find no
+    board, so the stage says so (`boardUndeclared`)."""
+    try:
+        _ok, _present, url = _declared(_parsed(Path(path).read_bytes()),
+                                       CLIENT_TABLE, CLIENT_URL_KEY)
+    except (OSError, ValueError):
+        return False
+    return isinstance(url, str) and bool(url)
 
 
 def _server_config_step(server_config: dict, listener: dict | None,

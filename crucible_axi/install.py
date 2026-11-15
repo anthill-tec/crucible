@@ -1565,6 +1565,13 @@ def run_install(target_dir, stage_runners=None, force=False,
             entries = result.get(field)
             if entries:
                 stage[field] = [dict(entry) for entry in entries]
+        # The install file the `[manifest]` stage left declaring no board
+        # (`{path, key}`, the path ABSOLUTE for the same reason): a client
+        # with no board declared refuses, so the operator is told where to
+        # declare one.
+        board_undeclared = result.get("boardUndeclared")
+        if board_undeclared:
+            stage["boardUndeclared"] = dict(board_undeclared)
         # A RESTART is disclosed (CR-CRU-071 AC9): it drops every live SSE
         # subscriber, so an operator watching an upgrade must see that it
         # happened on purpose rather than infer it from a broken stream.
