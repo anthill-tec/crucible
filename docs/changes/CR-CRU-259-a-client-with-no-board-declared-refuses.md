@@ -32,7 +32,7 @@ only because they tolerate a board that does not answer.
   `shipped_board()` and the shipped data file's `[client] url` are removed; the file keeps a commented `[client]`
   section saying the installer writes the url and how to declare one. The limits chain keeps its shipped last resort
   (that is the limits' data, not the board's).
-- **The refusal.** **PROPOSED (gap analysis F1, awaiting the user's ruling):** a typed hard stop, a direct
+- **The refusal.** **Ruled (user, 2026-11-15):** a typed hard stop, a direct
   `Exception` subclass (never `OSError` or `ValueError`, which `remove_agent_silent`, `_declared_board` and
   `run_verb`'s generic clause catch), carrying its own `help`, converted by `run_verb` the way `DeclarationRefused`
   is. The pre-review showed the alternative (the transport answering `{ok: false, error}` like an unreachable board)
@@ -58,7 +58,7 @@ only because they tolerate a board that does not answer.
 - **The installer says when it leaves no board.** When the `[manifest]` stage ends with the client's
   `<target>/crucible.toml` declaring no `[client] url` (no listener: no local server, or an upgrade of an install
   whose file never had one), the stage row carries a warning naming that file and the `[client] url` key, and the
-  envelope's `help` names declaring it. **PROPOSED (pre-review F4, awaiting the user's ruling).**
+  envelope's `help` names declaring it. **Ruled (user, 2026-11-15).**
 - **Help and docs say what is true.** `BOARD_SOURCE`, `BOARD_CONFIGURATION_HELP`, the six clients' help and module
   docstrings drop "the shipped address is the last resort" and say a client with no board declared refuses.
   `docs/RUNBOOK.md`'s board section ("The board — `[client]`", including the `context.board` rule) says the same; the
@@ -73,7 +73,7 @@ only because they tolerate a board that does not answer.
   resolution (`resolve_base_url`, `_declared_board`, `_machine_board`, `BOARD_SOURCE`, `BOARD_CONFIGURATION_HELP`, the
   refusal type and its emitter) moves into a sibling shared module loaded by path, as CR-CRU-221 split
   `_crucible_run.py`, with `SHARED_MODULE_LINE_BUDGETS` updated in its three copies and the installer's fleet list
-  shipping it. **PROPOSED (pre-review F10, awaiting the user's ruling).**
+  shipping it. **Ruled (user, 2026-11-15).**
 - **The tests' own boards.** `install_project` in `tests/client/live_run_harness.py` and its four copies in the
   lifecycle modules (arduino, bun, mvn, rust) write the project's own `[client]` table instead of replacing the
   shipped url line. A test that asserts the refusal does it in-process with `_INSTALL_DIR` patched to a scratch
@@ -111,7 +111,7 @@ only because they tolerate a board that does not answer.
 - [ ] **AC8 — refused before the work.** With no board declared, `lint --agent` and `pre-merge-gate --agent` refuse
   before spawning a linter, runner or compile (proved with a recording runner seam), and the gate records no outcome.
 - [ ] **AC9 — the installer warns.** An install whose client file ends with no `[client] url` names the file and the
-  key in its `[manifest]` row and its `help` (if the user rules the warning in).
+  key in its `[manifest]` row and its `help`.
 - [ ] **AC10 — the record and the budget.** `CHANGELOG.md`'s `## [0.4.0]` carries the Changed line; CR-CRU-252's spec
   carries the amendment note; the shared-module line budgets pass.
 
