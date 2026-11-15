@@ -1954,7 +1954,7 @@ def main():
     _axi().add_plan_file_cycle_kind_arg(pf)
     pf.add_argument(
         "--cycles",
-        help='Legacy comma-split form, REFUSED for filing (§S4a): a filed '
+        help='Legacy comma-split form, REFUSED for filing: a filed '
              'cycle declares its kind, so repeat --cycle with its own '
              '--cycle-kind instead.')
     pf.add_argument("--wave", help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
