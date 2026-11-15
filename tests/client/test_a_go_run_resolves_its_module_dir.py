@@ -26,17 +26,24 @@ Invocation:
 """
 
 import os
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
 from tests.client.go_client_harness import (
+    GO_CLIENT,
     GoProject,
     diagnostics,
     envelope,
     go_toolchain_gap,
     said,
 )
-from tests.client.live_run_harness import new_scratch
+from tests.client.live_run_harness import CLIENTS, new_scratch
+from tests.client.test_client_fleet_envelope_census import (
+    declare_board,
+    would_resolve,
+)
 
 API = {"example.com/api"}
 WORKER = {"example.com/worker", "example.com/worker/sub"}
@@ -194,12 +201,33 @@ class AModuleThatCannotBeFoundIsRefusedTest(_ModuleDir):
         result = p.drive(cwd=p.dir)
         self.assert_refused(p, result, "[go] module_dir = worker/sub holds no go.mod")
 
+    def install_declaring(self, board_url):
+        """A go client of this test's own: the core fleet copied into
+        `<install>/clients/`, inside a parent this test owns, and the install's
+        `crucible.toml` declaring `board_url`. Answers the copied client."""
+        install = Path(tempfile.mkdtemp(prefix="go-install-"))
+        self.addCleanup(shutil.rmtree, install, ignore_errors=True)
+        clients = install / "clients"
+        clients.mkdir()
+        fleet = (sorted(CLIENTS.glob("_crucible_*.py"))
+                 + [GO_CLIENT, CLIENTS / "toon.py", CLIENTS / "crucible.toml"])
+        for source in fleet:
+            shutil.copyfile(source, clients / source.name)
+        declare_board(install / "crucible.toml", board_url)
+        return clients / GO_CLIENT.name
+
     def test_a_crucible_toml_that_does_not_parse_declares_nothing(self):
         p = self.project()
         p.declare_module_dir("api")
         with open(os.path.join(p.dir, "crucible.toml"), "a", encoding="utf-8") as fh:
             fh.write("\nthis line = is not [ toml\n")
-        result = p.drive(cwd=p.dir)
+        # The project file no longer parses, so it declares no board either:
+        # the board comes from the install, which here is this test's own.
+        client = self.install_declaring(p.board.url)
+        resolves, reason = would_resolve(client.parent / "_crucible_axi.py",
+                                         p.dir, p.board.url)
+        self.assertTrue(resolves, f"the test's own install declares the board: {reason}")
+        result = p.drive(cwd=p.dir, client=client)
         self.assert_refused(p, result, "an unparseable crucible.toml naming api")
 
 

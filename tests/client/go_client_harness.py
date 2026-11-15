@@ -309,9 +309,11 @@ class GoProject:
         return env
 
     def drive(self, *argv, cwd=None, agent=AGENT, timeout=TIMEOUT, verb="test",
-              **extra):
-        """Run the client's `verb` (default `test`) with `argv`."""
-        cmd = [sys.executable, str(GO_CLIENT), verb, *argv]
+              client=None, **extra):
+        """Run the client's `verb` (default `test`) with `argv`. `client` is
+        the go client to spawn: the checkout's unless a test hands it a copy
+        laid out in an install of its own."""
+        cmd = [sys.executable, str(client or GO_CLIENT), verb, *argv]
         if agent:
             cmd += ["--agent", agent]
         cmd += ["--project-dir", self.dir]
