@@ -28,6 +28,7 @@ root, so the checkout's own `crucible.toml` is never read.
 """
 
 import contextlib
+import importlib.util
 import io
 import os
 import pwd
@@ -79,6 +80,20 @@ EMPTY_URL_INSTALL_FILE = (
     b"[client]\n"
     b'url = ""\n'
 )
+
+#: A file whose `[client] url` is present but only whitespace. The client
+#: strips the url it reads, so it finds no board here and refuses.
+WHITESPACE_URL_INSTALL_FILE = (
+    b"[limits.truncate_field_chars]\n"
+    b"value = 400\n"
+    b"\n"
+    b"[client]\n"
+    b'url = "   "\n'
+)
+
+#: The client's shared module in this checkout, loaded in process only to ask
+#: whether IT finds a board in a file; its install dir is always patched.
+CLIENT_CORE = Path(__file__).resolve().parents[2] / "clients" / "_crucible_axi.py"
 
 #: A file in which `client` is a string, not a table, so the fill refuses it.
 CLIENT_NOT_A_TABLE_FILE = b'client = "not a table"\n'
@@ -275,6 +290,48 @@ class TheManifestStageWarnsWhenTheClientFileEndsWithNoBoardTest(_NoBoardCase):
             EMPTY_URL_INSTALL_FILE, Path(self.client_file).read_bytes(),
             "fixture sanity: a present key, even an empty one, is the "
             "operator's and is never filled")
+        self.assert_warns(result)
+
+    def assert_the_client_refuses_the_file(self):
+        """The client, reading the stage's file as its install's with no
+        project bound, finds no board and refuses: the case the warning is
+        for."""
+        spec = importlib.util.spec_from_file_location(
+            f"installer_no_board_client_{id(self)}", CLIENT_CORE)
+        assert spec is not None and spec.loader is not None
+        core: Any = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(core)
+        core.bind_project_dir(None)
+        with (mock.patch.object(core, "_INSTALL_DIR", self.target),
+              self.assertRaises(core.BoardUndeclared,
+                                msg="fixture sanity: the client finds no "
+                                    "board in a whitespace-only url")):
+            core.resolve_base_url()
+
+    def test_a_whitespace_only_url_declares_no_board_and_warns_with_no_local_server(self):
+        """The client refuses a whitespace-only url, so the stage warns as it
+        does for an empty one."""
+        self.place_client_file(WHITESPACE_URL_INSTALL_FILE)
+
+        result = self.run_stage(self.plan_without_server())
+
+        self.assertEqual(WHITESPACE_URL_INSTALL_FILE,
+                         Path(self.client_file).read_bytes())
+        self.assert_the_client_refuses_the_file()
+        self.assert_warns(result)
+
+    def test_a_whitespace_only_url_is_left_alone_by_the_fill_and_still_warns(self):
+        """A present key is the operator's and is never filled, so a
+        whitespace-only url stays, and the client still refuses it."""
+        self.place_client_file(WHITESPACE_URL_INSTALL_FILE)
+
+        result = self.run_stage(self.plan_with_listener())
+
+        self.assertEqual(
+            WHITESPACE_URL_INSTALL_FILE, Path(self.client_file).read_bytes(),
+            "fixture sanity: a present key is the operator's and is never "
+            "filled")
+        self.assert_the_client_refuses_the_file()
         self.assert_warns(result)
 
 

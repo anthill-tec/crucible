@@ -97,12 +97,14 @@ def _project(root):
 
 def _resolves_none(clients, project):
     """None when the scratch fleet's shared module resolves NO board for
-    `project`, asked in process; else the reason no drive may be made."""
+    `project`, asked in process; else the reason no drive may be made. Only
+    the module's own no-board refusal counts as resolving none: any other
+    exception escapes, so a broken resolver never passes for the refusal."""
     axi = _load_module(clients / "_crucible_axi.py", f"no_board_interlock_{id(clients)}")
     axi.bind_project_dir(str(project))
     try:
         resolved = axi.resolve_base_url()
-    except Exception:  # noqa: BLE001 -- resolving nothing is the precondition
+    except axi.BoardUndeclared:
         return None
     finally:
         axi.bind_project_dir(None)
@@ -190,19 +192,23 @@ class AVerbThatSendsNothingRunsWithNoBoardDeclaredTest(unittest.TestCase):
                              f"with no board declared the envelope names none: {context!r}")
 
     def test_test_without_an_agent_runs_the_suite_and_emits_one_envelope_with_no_board(self):
-        """Fails today: the closing bracket builds the ops, which resolve the
-        shipped address, and the scratch fleet's shipped data names none."""
+        """`test` without `--agent` sends nothing, so it resolves no board:
+        the suite runs and the run ends as its work decides."""
         self.assert_runs_as_today("test")
+        result = self.run_of("test")
+        self.assertIn("Ran 1 test", result.stderr,
+                      f"the probe test ran: {self.summary(result)}")
 
     def test_lint_without_an_agent_runs_the_declared_linter_with_no_board(self):
-        """Fails today: `lint` builds the ops, resolving a board, before it
-        runs the linter."""
+        """`lint` without `--agent` sends nothing, so it resolves no board:
+        the declared linter runs and its envelope names no board."""
         axi = self.assert_one_clean_envelope("lint", "lint")
         self.assertEqual(axi.get("exit"), 0, f"the declared linter ran clean: {axi!r}")
 
     def test_pre_merge_gate_without_an_agent_runs_and_ends_in_one_envelope_with_no_board(self):
-        """Fails today: the gate's outcome tail builds the ops after the
-        suite ran, outside the conversion, and the run ends in a traceback."""
+        """`pre-merge-gate` without `--agent` sends nothing, so neither its
+        run nor its outcome tail resolves a board, and it ends with no
+        traceback."""
         self.assert_runs_as_today("pre-merge-gate")
 
     def test_help_prints_usage_with_no_board_declared(self):

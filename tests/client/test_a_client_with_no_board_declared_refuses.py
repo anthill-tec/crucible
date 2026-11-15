@@ -328,8 +328,8 @@ class AStatusWithNoBoardDeclaredRefusesBeforeAnyRequestTest(_ScratchDirsCase):
                           install_dir or self.install_dir)
 
     def test_every_client_names_an_unparseable_project_file_then_an_install_naming_no_board(self):
-        """Fails today: the shipped address is answered, so a request is sent
-        and the envelope is the transport's connection failure."""
+        """A file that does not parse and an install naming no board leave
+        no board: the refusal names both, and no request is sent."""
         self.project_config.write_text(UNPARSEABLE, encoding="utf-8")
         self.install_config.write_text(GATE_ONLY, encoding="utf-8")
         for client in CLIENT_FILES:
@@ -339,7 +339,8 @@ class AStatusWithNoBoardDeclaredRefusesBeforeAnyRequestTest(_ScratchDirsCase):
                     [(self.project_config, DOES_NOT_PARSE), (self.install_config, NO_URL)])
 
     def test_every_client_names_an_absent_project_file_then_an_install_whose_client_table_has_no_url(self):
-        """Fails today: the shipped address is answered and requested."""
+        """An absent project file and a `[client]` table with no url leave no
+        board: the refusal names both, and no request is sent."""
         self.install_config.write_text(NO_URL_TABLE, encoding="utf-8")
         self.assertFalse(self.project_config.exists())
         for client in CLIENT_FILES:
@@ -349,7 +350,8 @@ class AStatusWithNoBoardDeclaredRefusesBeforeAnyRequestTest(_ScratchDirsCase):
                     [(self.project_config, ABSENT), (self.install_config, NO_URL)])
 
     def test_every_client_names_a_project_file_naming_no_board_then_an_absent_install_file(self):
-        """Fails today: the shipped address is answered and requested."""
+        """A project file naming no board and an absent install file leave no
+        board: the refusal names both, and no request is sent."""
         self.project_config.write_text(GATE_ONLY, encoding="utf-8")
         self.assertFalse(self.install_config.exists())
         for client in CLIENT_FILES:
@@ -359,8 +361,8 @@ class AStatusWithNoBoardDeclaredRefusesBeforeAnyRequestTest(_ScratchDirsCase):
                     [(self.project_config, NO_URL), (self.install_config, ABSENT)])
 
     def test_a_client_run_inside_its_own_install_names_the_one_file_once(self):
-        """The project dir IS the install dir, so the chain is one file.
-        Fails today: the shipped address is answered and requested."""
+        """The project dir IS the install dir, so the chain is one file, and
+        the refusal names it once."""
         self.project_config.write_text(GATE_ONLY, encoding="utf-8")
         for client in CLIENT_FILES:
             with self.subTest(client=client):
@@ -385,7 +387,7 @@ class TheCoreRefusesWithNoProjectBoundTest(_ScratchDirsCase):
         return raised_by(self, self.axi.resolve_base_url)
 
     def test_the_refusal_names_only_the_absent_install_file(self):
-        """Fails today: the shipped address is answered."""
+        """With no project bound, the chain is the install's file alone."""
         exc = self.refusal()
         message = str(exc)
         self.assertIn(shown(self.install_config), message)
@@ -394,7 +396,7 @@ class TheCoreRefusesWithNoProjectBoundTest(_ScratchDirsCase):
                          "no project is bound, so no project file is in the chain")
 
     def test_the_refusal_is_a_direct_exception_subclass_never_an_os_or_value_error(self):
-        """Fails today: nothing is raised. `OSError` and `ValueError` are what
+        """The refusal is never an `OSError` or a `ValueError`: those are what
         the courtesy catches and the generic conversion swallow."""
         self.install_config.write_text(EMPTY_URL, encoding="utf-8")
         exc = self.refusal()
@@ -403,8 +405,8 @@ class TheCoreRefusesWithNoProjectBoundTest(_ScratchDirsCase):
                          f"{type(exc).__name__} must subclass Exception directly")
 
     def test_run_verb_turns_the_refusal_into_one_failed_envelope_naming_both_fixes(self):
-        """Fails today: the resolver answers the shipped address, the verb
-        returns it, and no envelope is emitted."""
+        """`run_verb` converts the refusal into one `ok: false` envelope that
+        carries the refusal's own help, never the escaped-failure help."""
         self.install_config.write_text(NO_URL_TABLE, encoding="utf-8")
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -433,8 +435,7 @@ class TheCoreRefusesWithNoProjectBoundTest(_ScratchDirsCase):
 
     def test_a_project_declared_board_is_named_when_the_install_declares_none(self):
         """With no install url there is nothing for a project's board to be
-        the machine's own, so it is always named. Fails today: the comparison
-        is with the shipped address."""
+        the machine's own, so it is always named."""
         shipped = tomllib.loads(SHIPPED_CONFIG.read_text(encoding="utf-8")).get("client", {})
         declared = (shipped.get("url") if isinstance(shipped, dict) else None) or PROJECT_BOARD
         self.project_config.write_text(f'[client]\nurl = "{declared}"\n', encoding="utf-8")
@@ -483,7 +484,8 @@ class TheChainStillResolvesADeclaredBoardTest(_ScratchDirsCase):
                 self.assertEqual(self.resolve(), INSTALL_BOARD)
 
     def test_an_empty_install_url_under_a_project_naming_none_refuses(self):
-        """Fails today: the shipped address is answered."""
+        """An empty install url declares no board, so with a project naming
+        none the resolver refuses."""
         self.install_config.write_text(EMPTY_URL, encoding="utf-8")
         self.project_config.write_text(GATE_ONLY, encoding="utf-8")
         exc = raised_by(self, self.resolve)
@@ -523,20 +525,21 @@ class NoShippedBoardRemainsTest(unittest.TestCase):
     """The distribution declares no board and spells no packaged port."""
 
     def test_the_shipped_configuration_declares_no_client_url(self):
-        """Fails today: it declares the packaged port."""
+        """The shipped data names no board: the installer writes the
+        install's."""
         parsed = tomllib.loads(SHIPPED_CONFIG.read_text(encoding="utf-8"))
         table = parsed.get("client")
         url = table.get("url") if isinstance(table, dict) else None
         self.assertIsNone(url, f"{SHIPPED_CONFIG} declares `{CLIENT_URL_KEY} = {url!r}`")
 
     def test_the_shared_module_offers_no_shipped_board(self):
-        """Fails today: `shipped_board` exists."""
+        """The core offers no shipped board to fall back to."""
         axi = _load_module(AXI_PATH, "no_shipped_board")
         self.assertFalse(hasattr(axi, "shipped_board"),
                          "the core must no longer offer `shipped_board`")
 
     def test_no_client_code_or_string_literal_spells_the_packaged_port(self):
-        """Fails today: five client docstrings spell it. Comments are not
+        """No client spells the server's packaged port. Comments are not
         code or string literals and are not read here; every Python string
         literal (docstrings included) and every numeric literal is, and the
         reporters' and the schema's text outside `//` comment lines."""
@@ -600,8 +603,8 @@ class TheDocsDescribeNoShippedBoardTest(unittest.TestCase):
     """The two places an operator reads the board's rule."""
 
     def test_the_runbook_board_section_says_a_client_refuses_and_names_no_last_resort(self):
-        """Fails today: the section calls the shipped default the chain's last
-        resort and compares `context.board` with it."""
+        """The RUNBOOK's board section says a client with no board declared
+        refuses, and describes no shipped last resort."""
         section = _runbook_client_section(RUNBOOK.read_text(encoding="utf-8"))
         if section is None:
             self.fail(f"{RUNBOOK} keeps a section headed with `[client]`")
@@ -612,8 +615,8 @@ class TheDocsDescribeNoShippedBoardTest(unittest.TestCase):
                          f"the section says a client with no board declared refuses: {normal!r}")
 
     def test_the_shipped_client_comment_says_the_installer_writes_the_url_and_names_no_last_resort(self):
-        """Fails today: the comment calls the shipped data the last resort and
-        the shipped value the address the fleet always defaulted to."""
+        """The shipped `[client]` comment says the installer writes the url,
+        and describes no shipped last resort."""
         section = _board_section_of_shipped_config(SHIPPED_CONFIG.read_text(encoding="utf-8"))
         if section is None:
             self.fail(f"{SHIPPED_CONFIG} keeps a `[client]` section")
@@ -674,8 +677,8 @@ class ABoardReachingRunRefusesBeforeItSpawnsAnythingTest(_ScratchDirsCase):
         return [(self.project_config, NO_URL), (self.install_config, ABSENT)]
 
     def test_lint_with_an_agent_refuses_before_the_declared_linter_is_spawned_on_every_client(self):
-        """Fails today: the pre-flight swallows the unanswered board, the
-        linter is spawned, and its result is posted."""
+        """The pre-flight is the run's first board contact, so the refusal
+        comes before the linter is spawned and nothing is posted."""
         for client in CLIENT_FILES:
             with self.subTest(client=client):
                 drive = run_client(
@@ -688,19 +691,159 @@ class ABoardReachingRunRefusesBeforeItSpawnsAnythingTest(_ScratchDirsCase):
                 self.assert_board_refusal(drive, self.chain())
 
     def test_pre_merge_gate_with_an_agent_refuses_before_any_work_and_records_no_outcome(self):
-        """Fails today: the pre-flight swallows the unanswered board, the gate
-        spawns its compile/runner, and the outcome milestone is posted."""
+        """The gate's first board contact refuses, so no compile or runner is
+        spawned and no outcome milestone is posted."""
         for client in CLIENT_FILES:
             with self.subTest(client=client):
                 drive = run_client(
                     client,
                     ["pre-merge-gate", "--agent", AGENT, "--project-dir", str(self.project_dir)],
                     self.install_dir)
-                self.assertEqual(drive.spawns.work(), [],
-                                 f"no linter, runner or compile may be spawned: {drive.summary()}")
-                outcomes = [url for method, url in drive.transport.requests if method != "GET"]
-                self.assertEqual(outcomes, [], f"the gate records no outcome: {drive.summary()}")
-                self.assert_board_refusal(drive, self.chain())
+                self.assert_refused_before_any_work(drive)
+
+    # -- `--cycle` given: the run is attributed, and it still refuses first ----
+
+    def assert_refused_before_any_work(self, drive):
+        """No linter, runner, compile or docker spawned, no outcome posted,
+        and the board refusal naming the chain."""
+        self.assertEqual(drive.spawns.work(), [],
+                         f"no linter, runner, compile or docker may be spawned: {drive.summary()}")
+        outcomes = [url for method, url in drive.transport.requests if method != "GET"]
+        self.assertEqual(outcomes, [], f"no outcome may be recorded: {drive.summary()}")
+        self.assert_board_refusal(drive, self.chain())
+
+    def test_lint_with_an_agent_and_a_cycle_refuses_before_the_declared_linter_is_spawned_on_every_client(self):
+        """A `--cycle` attributes the run, so the pre-flight has no binding to
+        ask about; it is still the run's first board contact, and with no
+        board declared it refuses there, before the linter is spawned."""
+        for client in CLIENT_FILES:
+            with self.subTest(client=client):
+                drive = run_client(
+                    client,
+                    ["lint", "--agent", AGENT, "--cycle", "1",
+                     "--project-dir", str(self.project_dir)],
+                    self.install_dir)
+                linted = [argv for argv in drive.spawns.argvs
+                          if any(LINTER_MARKER in part for part in argv)]
+                self.assertEqual(linted, [], f"the linter must not be spawned: {drive.summary()}")
+                self.assert_refused_before_any_work(drive)
+
+    def test_pre_merge_gate_with_an_agent_and_a_cycle_refuses_before_any_work_and_records_no_outcome(self):
+        """A `--cycle` attributes the gate; with no board declared it still
+        refuses before its compile, linter or runner, and records nothing."""
+        for client in CLIENT_FILES:
+            with self.subTest(client=client):
+                drive = run_client(
+                    client,
+                    ["pre-merge-gate", "--agent", AGENT, "--cycle", "1",
+                     "--project-dir", str(self.project_dir)],
+                    self.install_dir)
+                self.assert_refused_before_any_work(drive)
+
+    def test_mvn_compile_with_an_agent_and_a_cycle_refuses_before_maven_is_spawned(self):
+        """`compile --agent` files its build output, so its pre-flight is its
+        first board contact; with `--cycle` and no board declared it refuses
+        before maven is spawned."""
+        drive = run_client(
+            "mvn",
+            ["compile", "--agent", AGENT, "--cycle", "1", "--project-dir", str(self.project_dir)],
+            self.install_dir)
+        maven = [argv for argv in drive.spawns.argvs
+                 if argv and os.path.basename(argv[0]) in ("mvn", "mvnw")]
+        self.assertEqual(maven, [], f"maven must not be spawned: {drive.summary()}")
+        self.assert_refused_before_any_work(drive)
+
+    def test_mvn_e2e_with_docker_an_agent_and_a_cycle_refuses_before_docker_is_spawned(self):
+        """`e2e --with-docker --agent` refuses an unattributable run before it
+        touches docker; with `--cycle` and no board declared it refuses at the
+        same point, so neither docker nor maven is spawned."""
+        drive = run_client(
+            "mvn",
+            ["e2e", "--with-docker", "--agent", AGENT, "--cycle", "1",
+             "--project-dir", str(self.project_dir)],
+            self.install_dir)
+        docker = [argv for argv in drive.spawns.argvs
+                  if argv and os.path.basename(argv[0]) == "docker"]
+        self.assertEqual(docker, [], f"docker must not be spawned: {drive.summary()}")
+        self.assert_refused_before_any_work(drive)
+
+
+class RecordingGet:
+    """A fake of a client's `_get`: records every path asked and answers as
+    a board that refused the read, so a refusal can only come from the
+    resolver, never from this answer."""
+
+    def __init__(self):
+        self.paths = []
+
+    def __call__(self, path, *args, **kwargs):
+        self.paths.append(path)
+        return {"ok": False, "error": "the recording get answers nothing"}
+
+
+class ThePreflightRefusesBeforeItAsksTheBoardTest(_ScratchDirsCase):
+    """The shared pre-flight every board-reaching run makes before it spawns
+    anything. With an agent it is the run's first board contact, so with no
+    board declared it refuses there, before it asks the board anything, even
+    when `--cycle` or a context `cycleId` already attributes the run. A run
+    with no agent reaches no board, and the pre-flight stays quiet."""
+
+    #: The two ways a run arrives attributed to a cycle.
+    ATTRIBUTED = {
+        "--cycle": {"cycle_id": 1},
+        "context cycleId": {"context": {"cycleId": 1}},
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.axi = _load_module(AXI_PATH, "preflight")
+        self.axi.bind_project_dir(None)
+        patch = mock.patch.object(self.axi, "_INSTALL_DIR", str(self.install_dir))
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.assertFalse(self.install_config.exists())
+
+    def preflight(self, get, agent_id, **attribution):
+        return self.axi.preflight_cycle_warnings(get, PROJECT_KEY, agent_id,
+                                                 stream=io.StringIO(), **attribution)
+
+    def refuse(self, get, agent_id, **attribution):
+        return self.axi.refuse_unattributed_run(get, PROJECT_KEY, agent_id, **attribution)
+
+    def assert_refuses_before_asking(self, call):
+        for form, attribution in self.ATTRIBUTED.items():
+            with self.subTest(attributed_by=form):
+                get = RecordingGet()
+                with self.assertRaises(self.axi.BoardUndeclared) as caught:
+                    call(get, AGENT, **attribution)
+                self.assertEqual(get.paths, [],
+                                 "the refusal comes before the board is asked anything")
+                self.assertIn(shown(self.install_config), str(caught.exception))
+                self.assertRegex(str(caught.exception), REASON_PATTERNS[ABSENT])
+
+    def test_the_preflight_with_an_agent_and_an_attributed_run_refuses_before_asking_the_board(self):
+        self.assert_refuses_before_asking(self.preflight)
+
+    def test_refuse_unattributed_run_with_an_agent_and_an_attributed_run_refuses_before_asking_the_board(self):
+        self.assert_refuses_before_asking(self.refuse)
+
+    def test_with_no_agent_the_preflight_and_its_refusal_half_stay_quiet_and_ask_nothing(self):
+        """A run with no agent sends nothing, so it resolves no board."""
+        for form, attribution in {"unattributed": {}, **self.ATTRIBUTED}.items():
+            with self.subTest(attributed_by=form):
+                get = RecordingGet()
+                self.assertEqual(self.preflight(get, None, **attribution), [])
+                self.assertIsNone(self.refuse(get, None, **attribution))
+                self.assertEqual(get.paths, [], "no agent, nothing asked")
+
+    def test_with_a_board_declared_an_attributed_run_passes_the_preflight_with_no_warning(self):
+        """The refusal is for no board declared, never for an attributed run."""
+        self.install_config.write_text(f'[client]\nurl = "{INSTALL_BOARD}"\n', encoding="utf-8")
+        for form, attribution in self.ATTRIBUTED.items():
+            with self.subTest(attributed_by=form):
+                get = RecordingGet()
+                self.assertEqual(self.preflight(get, AGENT, **attribution), [])
+                self.assertIsNone(self.refuse(get, AGENT, **attribution))
 
 
 if __name__ == "__main__":
