@@ -65,8 +65,10 @@ RELEASE_MODULE = CLIENTS / "_crucible_release.py"
 PROJECT_MODULE = CLIENTS / "_crucible_project.py"
 # The shared lint runner, loaded by the core the same way.
 LINT_MODULE = CLIENTS / "_crucible_lint.py"
+# The board module, loaded by the core the same way.
+BOARD_MODULE = CLIENTS / "_crucible_board.py"
 SHARED_MODULES = (CORE_MODULE, RUN_MODULE, RELEASE_MODULE, PROJECT_MODULE,
-                  LINT_MODULE)
+                  LINT_MODULE, BOARD_MODULE)
 CLIENT_FILES = ("bun-crucible.py", "python-crucible.py", "mvn-crucible.py",
                 "rust-crucible.py", "arduino-crucible.py")
 

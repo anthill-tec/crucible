@@ -1,29 +1,29 @@
 """The board's fall-through is written where an operator reads it.
 
 A client takes `[client] url` from the first `crucible.toml` that declares a
-non-empty one -- the project's, then the install's -- and falls back to the
-shipped declaration last. A file without one is passed over. And an envelope
-names `context.board` only when the resolved board differs from the install's
-declared `url`, or from the shipped one when the install declares none.
+non-empty one -- the project's, then the install's. A file without one is
+passed over, and with no file declaring one the client refuses: there is no
+shipped last resort. An envelope names `context.board` only when the resolved
+board differs from the install's declared `url` (always, when the install
+declares none).
 
 Two files carry that to an operator, and both are read here as files:
 
-- the shipped `clients/crucible.toml`: the prose inside its `[client]` table
-  states the fall-through, in the sentence the change gives it, and no longer
-  says the install's file is not read;
-- `docs/RUNBOOK.md`: its `[client]` section names the three steps in order and
-  says a file without a `url` is passed over, and every paragraph naming
-  `context.board` keys the rule off the install's declared board.
+- the shipped `clients/crucible.toml`: its board section -- a commented
+  `[client]` table, since the file declares no board -- states the
+  fall-through, in the sentence the change gives it, and no longer says the
+  install's file is not read;
+- `docs/RUNBOOK.md`: its `[client]` section names the two steps in order, says
+  a file without a `url` is passed over and a client with none refuses, and
+  every paragraph naming `context.board` keys the rule off the install's
+  declared board with no shipped one.
 """
 
 import re
 import unittest
 from pathlib import Path
 
-from tests.client.test_a_clients_board_is_its_projects_configuration import (
-    CONFIG_NAME,
-    _table_prose,
-)
+from tests.client.test_a_clients_board_is_its_projects_configuration import CONFIG_NAME
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_CONFIG = REPO_ROOT / "clients" / CONFIG_NAME
@@ -37,8 +37,8 @@ FALL_THROUGH_SENTENCE = (
 #: The sentence it replaces, which states the old first-file-wins rule.
 RETIRED_SENTENCE = "the install's is not read"
 
-#: The three steps of the chain, in precedence order.
-CHAIN_STEPS = ("project", "install", "shipped")
+#: The two steps of the chain, in precedence order, then the refusal.
+CHAIN_STEPS = ("project", "install", "refus")
 
 #: The words a RUNBOOK may use for a file being skipped for the next one.
 PASS_OVER_WORDS = ("passed over", "falls through", "fall through")
@@ -57,6 +57,27 @@ def names_in_order(text, words):
         if position < 0:
             return False
     return True
+
+
+def commented_client_section(text):
+    """The shipped file's board section: from the `# ──` banner that precedes
+    its `[client]` header (live or commented out) to the next live table
+    header, or the end of the file. None when no `[client]` header is found."""
+    lines = text.split("\n")
+    header = next((i for i, line in enumerate(lines)
+                   if re.match(r"^\s*#?\s*\[client\]\s*(#.*)?$", line)), None)
+    if header is None:
+        return None
+    start = header
+    for i in range(header - 1, -1, -1):
+        if lines[i].lstrip().startswith("# ──"):
+            start = i
+            break
+        if re.match(r"^\s*\[", lines[i]):
+            break
+    end = next((i for i in range(header + 1, len(lines))
+                if re.match(r"^\s*\[[^\]]+\]\s*(#.*)?$", lines[i])), len(lines))
+    return "\n".join(re.sub(r"^\s*#\s?", "", line) for line in lines[start:end])
 
 
 def runbook_client_section(text):
@@ -78,11 +99,14 @@ def paragraphs_naming(text, needle):
 
 
 class TheShippedClientCommentStatesTheFallThroughTest(unittest.TestCase):
-    """The `[client]` table of the shipped `clients/crucible.toml`."""
+    """The board section of the shipped `clients/crucible.toml`, whose
+    `[client]` table is commented out."""
 
     def setUp(self):
-        self.prose = normalise(
-            _table_prose(SHIPPED_CONFIG.read_text(encoding="utf-8"), "client"))
+        section = commented_client_section(SHIPPED_CONFIG.read_text(encoding="utf-8"))
+        self.assertIsNotNone(
+            section, f"{SHIPPED_CONFIG} must keep a (commented) `[client]` section")
+        self.prose = normalise(section)
 
     def test_the_client_comment_says_a_project_file_naming_no_url_is_passed_over(self):
         """Fails today: the comment says the project file still wins."""
@@ -109,14 +133,17 @@ class TheRunbookDescribesTheChainAndTheContextBoardRuleTest(unittest.TestCase):
         self.assertIsNotNone(
             self.section, f"{RUNBOOK} must keep a section headed with `[client]`")
 
-    def test_the_client_section_names_project_then_install_then_shipped(self):
-        """Fails today: the section never names the install's file."""
+    def test_the_client_section_names_project_then_install_then_the_refusal(self):
+        """The chain's two steps in order, then the refusal; no shipped step."""
         section = normalise(self.section)
         self.assertTrue(
             names_in_order(section, CHAIN_STEPS),
-            f"the RUNBOOK's `[client]` section must name the chain's three "
-            f"steps in order -- the project's file, then the install's, then "
-            f"the shipped one; it reads {section!r}")
+            f"the RUNBOOK's `[client]` section must name the chain's two "
+            f"steps in order -- the project's file, then the install's -- and "
+            f"then say a client with neither refuses; it reads {section!r}")
+        self.assertNotIn(
+            "then the shipped", section.lower(),
+            f"the chain has no shipped step; it reads {section!r}")
 
     def test_the_client_section_says_a_file_without_a_url_is_passed_over(self):
         """Fails today: the section says nothing of a file being skipped."""
@@ -128,19 +155,18 @@ class TheRunbookDescribesTheChainAndTheContextBoardRuleTest(unittest.TestCase):
             f"{PASS_OVER_WORDS!r}); it reads {section!r}")
 
     def test_every_context_board_paragraph_keys_off_the_installs_declared_board(self):
-        """Fails today: the one paragraph naming `context.board` compares the
-        board with the shipped one only."""
+        """Each paragraph naming `context.board` compares the board with the
+        install's declared `url` and names no shipped one."""
         paragraphs = paragraphs_naming(self.text, "context.board")
         self.assertNotEqual(paragraphs, [],
                             f"{RUNBOOK} must still describe `context.board`")
         offenders = [p for p in paragraphs
-                     if "install" not in p.lower() or "shipped" not in p.lower()]
+                     if "install" not in p.lower() or "shipped" in p.lower()]
         self.assertEqual(
             offenders, [],
             "every RUNBOOK paragraph naming `context.board` must say it is "
             "named when the board differs from the install's declared `url`, "
-            "or from the shipped one when the install declares none; these "
-            f"do not: {offenders!r}")
+            f"and name no shipped board; these do not: {offenders!r}")
 
 
 if __name__ == "__main__":

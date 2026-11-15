@@ -456,10 +456,14 @@ def install_project_limits(project_dir):
     The SHIPPED declarations are copied verbatim: no `value` anywhere, so every
     limit resolves to its `recommended` exactly as it does for an operator who
     has installed and not yet edited.
+
+    The shipped file declares no board, so the project declares its OWN: the
+    unreachable loopback board. Without it a client would fall through to the
+    install's file -- in a checkout, the operator's own root `crucible.toml`.
     """
     shutil.copyfile(CLIENTS_DIR / "crucible.toml",
                     Path(project_dir) / "crucible.toml")
-    return Path(project_dir) / "crucible.toml"
+    return declare_board(Path(project_dir) / "crucible.toml", _UNREACHABLE_CRUCIBLE_URL)
 
 
 def declare_census_lint(config_path):
@@ -1565,6 +1569,9 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
         # And so is the shared lint runner.
         shutil.copy(CLIENTS_DIR / "_crucible_lint.py",
                     cls.tmp_dir / "_crucible_lint.py")
+        # And so is the board module.
+        shutil.copy(CLIENTS_DIR / "_crucible_board.py",
+                    cls.tmp_dir / "_crucible_board.py")
         shutil.copy(TOON_PATH, cls.tmp_dir / "toon.py")
         # CR-CRU-131 §S1c — the limit declarations travel as PACKAGE DATA beside
         # `_crucible_axi.py`, so a copy of the module without them is a broken

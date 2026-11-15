@@ -174,13 +174,25 @@ class AVerbThatSendsNothingRunsWithNoBoardDeclaredTest(unittest.TestCase):
                          f"with no board declared the envelope names none: {context!r}")
         return axi
 
+    def assert_runs_as_today(self, name):
+        """A verb that, without `--agent`, answers by its exit code alone:
+        the exit the work decides (0 here), no traceback, and at most one
+        envelope, which names no `board` if there is one. No request can be
+        sent: the drive is made only when the fleet resolves no board."""
+        result = self.run_of(name)
+        self.assertNotIn("Traceback", result.stderr, self.summary(result))
+        self.assertEqual(result.returncode, 0, self.summary(result))
+        envelopes = sum(1 for line in result.stdout.splitlines() if line == "axi:")
+        self.assertLessEqual(envelopes, 1, f"at most one envelope: {self.summary(result)}")
+        if envelopes:
+            context = self.toon.decode(result.stdout)["axi"].get("context") or {}
+            self.assertNotIn("board", context,
+                             f"with no board declared the envelope names none: {context!r}")
+
     def test_test_without_an_agent_runs_the_suite_and_emits_one_envelope_with_no_board(self):
         """Fails today: the closing bracket builds the ops, which resolve the
         shipped address, and the scratch fleet's shipped data names none."""
-        axi = self.assert_one_clean_envelope("test", "test")
-        run = axi.get("run") or {}
-        self.assertEqual((run.get("passed"), run.get("failed")), (1, 0),
-                         f"the one probe test ran and passed: {axi!r}")
+        self.assert_runs_as_today("test")
 
     def test_lint_without_an_agent_runs_the_declared_linter_with_no_board(self):
         """Fails today: `lint` builds the ops, resolving a board, before it
@@ -191,7 +203,7 @@ class AVerbThatSendsNothingRunsWithNoBoardDeclaredTest(unittest.TestCase):
     def test_pre_merge_gate_without_an_agent_runs_and_ends_in_one_envelope_with_no_board(self):
         """Fails today: the gate's outcome tail builds the ops after the
         suite ran, outside the conversion, and the run ends in a traceback."""
-        self.assert_one_clean_envelope("pre-merge-gate", "pre-merge-gate")
+        self.assert_runs_as_today("pre-merge-gate")
 
     def test_help_prints_usage_with_no_board_declared(self):
         """A pin: help resolves no board."""

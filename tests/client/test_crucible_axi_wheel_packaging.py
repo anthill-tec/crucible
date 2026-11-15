@@ -71,6 +71,7 @@ EXPECTED_CLIENT_PAYLOAD = (
     "crucible_axi/clients/_crucible_release.py",
     "crucible_axi/clients/_crucible_project.py",
     "crucible_axi/clients/_crucible_lint.py",
+    "crucible_axi/clients/_crucible_board.py",
     "crucible_axi/clients/toon.py",
     "crucible_axi/clients/STATUS-CONTRACT.md",
     "crucible_axi/clients/arduino-crucible.py",

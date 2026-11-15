@@ -70,9 +70,11 @@ RELEASE_MODULE_PATH = CLIENTS_DIR / "_crucible_release.py"
 PROJECT_MODULE_PATH = CLIENTS_DIR / "_crucible_project.py"
 # The shared lint runner, loaded by path the same way.
 LINT_MODULE_PATH = CLIENTS_DIR / "_crucible_lint.py"
+# The board module, loaded by path the same way.
+BOARD_MODULE_PATH = CLIENTS_DIR / "_crucible_board.py"
 SHARED_MODULE_NAMES = (AXI_MODULE_PATH.name, RUN_MODULE_PATH.name,
                        RELEASE_MODULE_PATH.name, PROJECT_MODULE_PATH.name,
-                       LINT_MODULE_PATH.name)
+                       LINT_MODULE_PATH.name, BOARD_MODULE_PATH.name)
 
 CLIENT_FILES = {
     "bun": CLIENTS_DIR / "bun-crucible.py",

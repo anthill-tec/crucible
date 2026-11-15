@@ -111,6 +111,8 @@ EXPECTED_FLEET_FILES = frozenset({
     # The shared lint runner every client's `lint` verb is built on, loaded
     # the same way and as eagerly.
     "_crucible_lint.py",
+    # The board a client posts to, loaded the same way and as eagerly.
+    "_crucible_board.py",
     "toon.py",
     "STATUS-CONTRACT.md",
     # CR-CRU-138 §S4 -- the distribution's own limit declarations. They are

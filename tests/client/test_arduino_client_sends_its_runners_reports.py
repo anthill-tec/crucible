@@ -1120,11 +1120,14 @@ class NoBoardNoFiguresTest(_ArduinoProject, unittest.TestCase):
 # core's budget is re-recorded and the module's is added. A project's own
 # verbs move out of the core into their own module, so the core's budget is
 # re-recorded lower and that module's is added. The verb that creates a
-# project grows that module, and the core by its help steps.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9119, "_crucible_run.py": 1974,
+# project grows that module, and the core by its help steps. The board's
+# resolution moves out of the core into its own module, so the core's budget
+# is re-recorded lower and that module's is added.
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9056, "_crucible_run.py": 1974,
                               "_crucible_release.py": 266,
                               "_crucible_project.py": 521,
-                              "_crucible_lint.py": 399}
+                              "_crucible_lint.py": 399,
+                              "_crucible_board.py": 179}
 
 # Names the arduino client's move to the shared ingest retires: its own
 # parsers and its own figures' emitter from the client, and the client-figure

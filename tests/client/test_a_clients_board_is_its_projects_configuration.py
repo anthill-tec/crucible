@@ -145,7 +145,6 @@ from pathlib import Path
 
 from tests.client.test_client_fleet_envelope_census import (
     BOARD_RESOLVER,
-    SHIPPED_DEFAULT_BOARD,
     CLIENT_FILES,
     BoardInterlockCase,
     _build_fake_bin_dir,
@@ -154,7 +153,6 @@ from tests.client.test_client_fleet_envelope_census import (
     _make_project_dir,
     classify_envelope,
     declare_board,
-    declared_board,
     would_resolve,
 )
 from tests.client.test_no_test_steers_a_client_by_a_retired_variable import (
@@ -431,8 +429,8 @@ def _scratch_fleet(root):
     clients = Path(root) / "clients"
     clients.mkdir(parents=True)
     for name in ("_crucible_axi.py", "_crucible_run.py", "_crucible_release.py",
-                 "_crucible_project.py", "_crucible_lint.py", "toon.py",
-                 CONFIG_NAME):
+                 "_crucible_project.py", "_crucible_lint.py",
+                 "_crucible_board.py", "toon.py", CONFIG_NAME):
         shutil.copyfile(CLIENTS_DIR / name, clients / name)
     scripts = {}
     for client, script_path in CLIENT_FILES.items():
@@ -452,8 +450,8 @@ def _chain_drives():
     The legs are driven in precedence order against ONE scratch install, and
     each leg REMOVES the layer above it -- which is the chain's own rule seen
     from the outside: the install dir is what a project with no file of its own
-    falls through to, and the package data is what an install with no operator
-    file falls through to (`_read_project_config`, clients/_crucible_axi.py).
+    falls through to. The chain has two layers: with neither declaring a board
+    the client refuses (`resolve_base_url`, clients/_crucible_board.py).
     """
     global _CHAIN_DRIVES
     if _CHAIN_DRIVES is not None:
@@ -461,11 +459,10 @@ def _chain_drives():
     fake_bin_dir = _build_fake_bin_dir()
     root = Path(tempfile.mkdtemp(prefix="cr139-c2-install-"))
     boards = {layer: _RecordingBoard(layer)
-              for layer in ("project", "install", "shipped")}
+              for layer in ("project", "install")}
     legs = {}
     try:
-        scripts, shipped_config, install_config = _scratch_fleet(root)
-        declare_board(shipped_config, boards["shipped"].url)
+        scripts, _shipped_config, install_config = _scratch_fleet(root)
         shutil.copyfile(CLIENTS_DIR / CONFIG_NAME, install_config)
         declare_board(install_config, boards["install"].url)
         for client, script_path in scripts.items():
@@ -479,17 +476,6 @@ def _chain_drives():
                 config.unlink()
                 legs[(client, "install")] = _one_leg(
                     script_path, project_dir, fake_bin_dir, boards, "install")
-            finally:
-                shutil.rmtree(project_dir, ignore_errors=True)
-        # Neither the project NOR the operator's install file exists -> the
-        # distribution's own package data is the last resort.
-        install_config.unlink()
-        for client, script_path in scripts.items():
-            project_dir = _make_project_dir(client)
-            try:
-                (Path(project_dir) / CONFIG_NAME).unlink()
-                legs[(client, "shipped")] = _one_leg(
-                    script_path, project_dir, fake_bin_dir, boards, "shipped")
             finally:
                 shutil.rmtree(project_dir, ignore_errors=True)
     finally:
@@ -619,8 +605,9 @@ class AProjectDeclaresTheBoardEveryClientPostsToTest(BoardInterlockCase):
 
 
 class TheChainIsProjectThenInstallThenShippedTest(BoardInterlockCase):
-    """Criterion 2 -- project dir beats install dir beats shipped default, by
-    the chain CR-CRU-138 §S1 already built, proven one live board per layer.
+    """Criterion 2 -- project dir beats install dir, by the chain CR-CRU-138
+    §S1 already built, proven one live board per layer. There is no shipped
+    layer: with neither declaring a board the client refuses.
     """
 
     @classmethod
@@ -630,8 +617,8 @@ class TheChainIsProjectThenInstallThenShippedTest(BoardInterlockCase):
     def test_each_layer_of_the_chain_is_a_different_live_board(self):
         urls = self.chain["urls"]
         self.assertEqual(
-            len(set(urls.values())), 3,
-            f"the three layers must be distinguishable boards: {urls!r}")
+            len(set(urls.values())), 2,
+            f"the two layers must be distinguishable boards: {urls!r}")
 
     def test_the_projects_own_declaration_wins_over_the_install_and_the_shipped(self):
         for client in sorted(CLIENT_FILES):
@@ -644,16 +631,6 @@ class TheChainIsProjectThenInstallThenShippedTest(BoardInterlockCase):
         for client in sorted(CLIENT_FILES):
             with self.subTest(client=client):
                 self._assert_leg(client, "install")
-
-    def test_with_no_operator_file_anywhere_the_shipped_declaration_resolves(self):
-        """The last resort is a DATA FILE in the distribution rather than a
-        number in a resolver (CR-CRU-131 §S1c), so this leg is driven by
-        rewriting the declaration in the scratch install's own package data —
-        never by letting a client resolve the real shipped board, whose address
-        belongs to this machine's production instance."""
-        for client in sorted(CLIENT_FILES):
-            with self.subTest(client=client):
-                self._assert_leg(client, "shipped")
 
     def _assert_leg(self, client, layer):
         record = self.driven(f"{client}-crucible.py register [{layer} layer]",
@@ -670,67 +647,6 @@ class TheChainIsProjectThenInstallThenShippedTest(BoardInterlockCase):
             others, {},
             f"{client}-crucible.py register resolved the {layer} layer but "
             f"also reached another layer's board: {others!r}")
-
-    def test_the_shipped_declaration_is_the_board_the_fleet_has_always_defaulted_to(self):
-        """§S2 -- the shipped `[client] url` IS the historical default, so an
-        install with no operator file posts exactly where it did before. A file
-        assertion, on purpose: resolving the real default would mean opening a
-        socket to the production board."""
-        shipped = CLIENTS_DIR / CONFIG_NAME
-        self.assertEqual(
-            declared_board(shipped), SHIPPED_DEFAULT_BOARD,
-            f"{shipped} must declare `[client] url = \"{SHIPPED_DEFAULT_BOARD}\"` "
-            f"— the value every client's deleted module constant defaulted to")
-
-    def test_the_shipped_declaration_is_documented_the_way_the_limits_are(self):
-        """The file an operator EDITS has to say what the setting is for, in
-        the shape the rest of the file already uses.
-
-        "The way the limits are" is a measurable thing rather than a
-        sentiment: every limits table carries a `description` SENTENCE and the
-        shipped value that sentence is about, and the file's own header block
-        shows the operator the exact line they would write (`value = 40`). So
-        the bar is read off the limits in the SAME file -- CR-CRU-134's
-        derivation rule -- and not retyped here: prose of at least that
-        substance, naming the setting it documents, and showing the edit.
-
-        Counting `#` characters would pass for a one-word comment, or for an
-        actively misleading one, which is why it is not what this asserts.
-        """
-        path = CLIENTS_DIR / CONFIG_NAME
-        text = path.read_text(encoding="utf-8")
-        prose = _table_prose(text, CLIENT_TABLE)
-        descriptions = [
-            table["description"]
-            for table in _tables(path).get(LIMITS_TABLE, {}).values()
-            if isinstance(table, dict)
-            and isinstance(table.get("description"), str)]
-        self.assertNotEqual(
-            descriptions, [],
-            f"fixture sanity: {path} must carry the limits whose documented "
-            f"shape this assertion derives its bar from")
-        bar = min(len(sentence.split()) for sentence in descriptions)
-
-        self.assertGreaterEqual(
-            len(prose.split()), bar,
-            f"the `[{CLIENT_TABLE}]` table in {path} is documented in "
-            f"{len(prose.split())} words while the least-documented limit in "
-            f"the same file spends {bar} on its `description`. An operator "
-            f"reading this file is owed the same sentence for the board they "
-            f"post to as for a truncation width; got {prose!r}")
-        self.assertIn(
-            URL_KEY, prose,
-            f"the prose above `{URL_KEY} = ...` must NAME the setting it "
-            f"documents -- a paragraph that never says which key it is about "
-            f"cannot be matched to one by a reader editing the file; got "
-            f"{prose!r}")
-        self.assertRegex(
-            prose, rf"{URL_KEY}\s*=\s*\"https?://",
-            f"the limits are documented with the EDIT an operator would make "
-            f"(`value = 40`, in this file's own header), and `[{CLIENT_TABLE}]` "
-            f"owes the same: the literal line to write to point this checkout "
-            f"at another board. Prose that only describes the possibility "
-            f"leaves the reader guessing the syntax; got {prose!r}")
 
 
 class TheRetiredUrlVariablesAreDeadTest(BoardInterlockCase):

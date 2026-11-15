@@ -954,14 +954,13 @@ describe("CR-CRU-139 §S4 — the connection figures are READ from the shipped f
     const md = text(RUNBOOK);
     const host = tomlField(SHIPPED_DATA[0], "server", "host");
     const port = tomlField(SHIPPED_DATA[0], "server", "port");
-    const board = tomlField(SHIPPED_DATA[1], "client", "url");
+    // The shipped clients file declares no board since CR-CRU-259; test_a_client_with_no_board_declared_refuses pins that.
 
     // CR-CRU-134's rule, applied to the connection: the figure a reader meets
     // in the document and the figure the code falls back to are one datum, so
     // the document is checked against the FILE and this test spells neither.
     expect(md).toContain(host);
     expect(md).toContain(port);
-    expect(md).toContain(board);
 
     // The half that carries the weight: EVERY connection value the document
     // SHOWS an operator — a `[server] port` to copy, a `[client] url` to copy —

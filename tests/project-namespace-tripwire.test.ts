@@ -3045,10 +3045,21 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // its 512 floor, so the directional half holds. The three `develop` floors
 // stay at 512/378/601, unchanged. The close-out re-record after the branch's
 // last content edit still stands.
+// UPDATED 2026-11-15 when the client's last-resort board was removed and the
+// board's resolution moved out of the core into `clients/_crucible_board.py`.
+// ONE head moves: `clients` 815 -> 813 (-2), measured with this file's own
+// machinery.
+//
+//   clients -2: the two CR-CRU-139 citations of `clients/_crucible_axi.py`,
+//   leaving with the code they explained -- the old `resolve_base_url`
+//   docstring and the comment on the core's `[client]` table constants.
+//
+// A NET LOSS of two, and stated as one. `clients` (813) stays above its 601
+// floor, so the directional half holds. The `develop` floors are unchanged.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 880 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 538 },
-  clients: { exts: [".py"], develop: 601, head: 815 },
+  clients: { exts: [".py"], develop: 601, head: 813 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
