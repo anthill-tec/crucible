@@ -77,7 +77,9 @@ import ast
 import email.message
 import importlib.util
 import json
+import shutil
 import sys
+import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
@@ -86,7 +88,9 @@ from unittest import mock
 #: CR-CRU-139 §S2 -- the shared module's ONE name for the board resolution the
 #: five deleted constants collapsed into, imported rather than re-spelled.
 from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+    _UNREACHABLE_CRUCIBLE_URL,
     BOARD_RESOLVER,
+    declare_and_require_board,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -120,6 +124,27 @@ def _load_client_module(client):
         CLIENT_FILES[client], f"cr054_http_core_{client}_under_test")
 
 
+def _declared_project(test):
+    """A project dir `test` owns, whose `crucible.toml` declares the board a
+    request resolves. Never contacted: every request here goes through a
+    patched `urlopen`. Removed when the test ends."""
+    project = tempfile.mkdtemp(prefix="cr054-http-core-project-")
+    test.addCleanup(shutil.rmtree, project, ignore_errors=True)
+    declare_and_require_board(project, _UNREACHABLE_CRUCIBLE_URL,
+                              "a client's _request")
+    return project
+
+
+def _load_bound_client_module(client, test, project):
+    """`client`'s module, its core bound to `project` -- the project a verb
+    works in, whose `crucible.toml` the board is resolved from."""
+    module = _load_client_module(client)
+    axi = module._axi()
+    axi.bind_project_dir(project)
+    test.addCleanup(axi.bind_project_dir, None)
+    return module
+
+
 def _function_source_segment(path, name):
     """AST-extract the exact source text of a top-level `def <name>` in
     `path` (ast.parse, not grep/eyeball -- mirrors
@@ -145,7 +170,7 @@ def _clients_with_marker_in_function(name, marker):
     return offenders
 
 
-def _resolved_base_url():
+def _resolved_base_url(project):
     """The base URL a client's `_request` must send to, read back dynamically
     -- from the ONE place the fleet now spells it.
 
@@ -161,6 +186,8 @@ def _resolved_base_url():
     assertion below: whatever the fleet resolves, that is where the request
     goes. Only the place it is read from moved, which is exactly §S1b's
     "still read back, and still overridable, from one place instead of five".
+
+    Resolved for `project`, the project the client under test is bound to.
     """
     axi = _load_module_by_path(AXI_MODULE_PATH, "cr054_axi_base_url")
     resolver = getattr(axi, BOARD_RESOLVER, None)
@@ -168,7 +195,11 @@ def _resolved_base_url():
         f"clients/_crucible_axi.py must export `{BOARD_RESOLVER}()` -- "
         f"§S2 replaced the five per-client base-URL constants with one shared "
         f"resolver, and this suite reads the value back from it")
-    return resolver()
+    axi.bind_project_dir(project)
+    try:
+        return resolver()
+    finally:
+        axi.bind_project_dir(None)
 
 
 def _fake_response(body_bytes):
@@ -219,10 +250,11 @@ class HttpCoreSingleLocusOfTruthTest(unittest.TestCase):
 
         # Structural condition satisfied (post-GREEN) -- now prove the
         # client's own _request still performs a correct request end-to-end.
+        project = _declared_project(self)
         for client in CLIENTS:
             with self.subTest(client=client):
-                module = _load_client_module(client)
-                base_url = _resolved_base_url()
+                module = _load_bound_client_module(client, self, project)
+                base_url = _resolved_base_url(project)
                 fake = _fake_response(b'{"ok": true, "agent": "A1"}')
                 with mock.patch("urllib.request.urlopen",
                                  return_value=fake) as urlopen_mock:
@@ -380,10 +412,14 @@ class RequestToleratesEmptyResponseBodyDriftCorrectionTest(unittest.TestCase):
             f"{client}-crucible.py must return {{'ok': True}} for an empty "
             f"response body (§S2b corrected behaviour), got {result!r}")
 
+    def _module(self, client):
+        """`client`'s module, bound to a project that declares its board."""
+        return _load_bound_client_module(client, self, _declared_project(self))
+
     def test_empty_response_body_via_request_directly(self):
         for client in CLIENTS:
             with self.subTest(client=client):
-                module = _load_client_module(client)
+                module = self._module(client)
                 self._assert_tolerant(
                     client,
                     lambda m=module: m._request(
@@ -392,7 +428,7 @@ class RequestToleratesEmptyResponseBodyDriftCorrectionTest(unittest.TestCase):
     def test_empty_response_body_via_post(self):
         for client in CLIENTS:
             with self.subTest(client=client):
-                module = _load_client_module(client)
+                module = self._module(client)
                 self._assert_tolerant(
                     client,
                     lambda m=module: m._post(
@@ -401,7 +437,7 @@ class RequestToleratesEmptyResponseBodyDriftCorrectionTest(unittest.TestCase):
     def test_empty_response_body_via_get(self):
         for client in CLIENTS:
             with self.subTest(client=client):
-                module = _load_client_module(client)
+                module = self._module(client)
                 self._assert_tolerant(
                     client,
                     lambda m=module: m._get("/api/v2/projects/k/plans"))
@@ -409,7 +445,7 @@ class RequestToleratesEmptyResponseBodyDriftCorrectionTest(unittest.TestCase):
     def test_empty_response_body_via_patch(self):
         for client in CLIENTS:
             with self.subTest(client=client):
-                module = _load_client_module(client)
+                module = self._module(client)
                 self._assert_tolerant(
                     client,
                     lambda m=module: m._patch(

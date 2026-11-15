@@ -35,6 +35,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.test_client_fleet_envelope_census import (
+    _UNREACHABLE_CRUCIBLE_URL,
+    declare_and_require_board,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "python-crucible.py"
 CLIENTS_DIR = REPO_ROOT / "clients"
@@ -112,6 +117,10 @@ class _BaseAgentIdentityTest(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="python-crucible-agent-identity-")
         with open(os.path.join(self.tmpdir, ".env"), "w") as f:
             f.write(f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
+        # A verb resolves its board from the project it works in: declare
+        # one. `_post` is patched, so it is never contacted.
+        declare_and_require_board(self.tmpdir, _UNREACHABLE_CRUCIBLE_URL,
+                                  "python-crucible.py")
         self._saved_env = {k: os.environ.get(k) for k in self.ENV_KEYS}
         for k in self.ENV_KEYS:
             os.environ.pop(k, None)

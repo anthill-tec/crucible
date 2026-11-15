@@ -747,6 +747,10 @@ class DeclaredBunTestTargetsKeepWorkingTest(_DeclaredTargetCase):
                                                 dir=self.tmpdir))
                 (project / ".env").write_text(
                     f"CRUCIBLE_PROJECT_KEY={PROJECT_KEY}\n")
+                # This project is the one the drive works in, so it declares
+                # the board too -- the fixture's own is a different dir.
+                declare_and_require_board(project, _UNREACHABLE_CRUCIBLE_URL,
+                                          "bun-crucible.py")
                 # Declared with NO report-path entry — the state every one of
                 # these targets is in today, which §S2 says must keep meaning
                 # the FLAG contract.

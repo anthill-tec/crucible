@@ -97,6 +97,10 @@ from pathlib import Path
 from unittest import mock
 
 from tests.client.live_run_harness import get_answering_health
+from tests.client.test_client_fleet_envelope_census import (
+    _UNREACHABLE_CRUCIBLE_URL,
+    declare_and_require_board,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
@@ -178,6 +182,10 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
         self.project_dir = self.tmpdir
         with open(os.path.join(self.project_dir, ".env"), "w") as f:
             f.write("CRUCIBLE_PROJECT_KEY=test-key-123\n")
+        # The run resolves its board from the project it works in: declare
+        # one there. The transport is patched, so it is never contacted.
+        declare_and_require_board(self.project_dir, _UNREACHABLE_CRUCIBLE_URL,
+                                  "bun-crucible.py")
 
         self.fake_bun = os.path.join(self.tmpdir, "fake_bun.py")
         with open(self.fake_bun, "w") as f:

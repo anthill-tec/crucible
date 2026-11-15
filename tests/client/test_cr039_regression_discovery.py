@@ -56,6 +56,10 @@ from pathlib import Path
 from unittest import mock
 
 from tests.client.live_run_harness import StreamingPost, get_answering_health
+from tests.client.test_client_fleet_envelope_census import (
+    _UNREACHABLE_CRUCIBLE_URL,
+    declare_and_require_board,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "python-crucible.py"
@@ -140,6 +144,10 @@ class RegressionZeroDiscoveryEmitsDefinitiveNoTestsDiscoveredErrorTest(unittest.
         self.project_dir = tempfile.mkdtemp(prefix="cr039-s2-project-")
         with open(os.path.join(self.project_dir, ".env"), "w") as f:
             f.write(f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
+        # The run resolves its board from the project it works in: declare
+        # one. The transport is patched, so it is never contacted.
+        declare_and_require_board(self.project_dir, _UNREACHABLE_CRUCIBLE_URL,
+                                  "python-crucible.py")
         # A REAL, existing, but completely empty directory -- discover finds
         # nothing here, exactly the "start_dir/pattern matching nothing" case
         # the CR specifies, as opposed to a genuine import/syntax failure.

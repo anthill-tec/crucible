@@ -96,6 +96,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client.test_client_fleet_envelope_census import (
+    _UNREACHABLE_CRUCIBLE_URL,
+    declare_and_require_board,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 
@@ -337,6 +342,10 @@ class NextEnvelopeCarriesTheCanonicalFlagTest(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="cycle-flag-help-")
         with open(os.path.join(self.tmpdir, ".env"), "w") as f:
             f.write(f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
+        # `next` names the board it read when a read fails: declare one in
+        # the project it works in. `_get` is patched, so it is never contacted.
+        declare_and_require_board(self.tmpdir, _UNREACHABLE_CRUCIBLE_URL,
+                                  "bun-crucible.py")
         self._saved_env = {k: os.environ.get(k) for k in self.ENV_KEYS}
         for k in self.ENV_KEYS:
             os.environ.pop(k, None)

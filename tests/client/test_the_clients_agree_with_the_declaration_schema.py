@@ -67,6 +67,10 @@ from tests.client.declaration_schema_harness import (
     write_targets_toml,
     write_toml,
 )
+from tests.client.test_client_fleet_envelope_census import (
+    _UNREACHABLE_CRUCIBLE_URL,
+    declare_and_require_board,
+)
 
 # What a `[targets]` reader's own check answers for an entry it skips: rust
 # reports no refusal (the run goes on undeclared), arduino and maven report the
@@ -499,6 +503,15 @@ class TheBoardListedCodecsAreCheckedAgainstHealthTest(_AgreementCase):
 
     def test_a_health_listing_the_sample_codec_passes_and_one_omitting_it_refuses(self):
         bun = client("bun")
+        # The refusal names the board it read the health from: bind a project
+        # this test owns, declaring one. The client is loaded once for the
+        # whole process, so the binding it had is restored afterwards.
+        project = new_project(self)
+        declare_and_require_board(project, _UNREACHABLE_CRUCIBLE_URL,
+                                  "bun-crucible.py")
+        axi = bun._axi()
+        self.addCleanup(axi.bind_project_dir, axi._PROJECT_DIR)
+        axi.bind_project_dir(project)
         listed = self.board_listed_fields()
         self.assertEqual(sorted(listed), [("console", "codecs.view"),
                                           ("stream.codec", "codecs.stream")])

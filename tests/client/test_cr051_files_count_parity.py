@@ -67,6 +67,10 @@ from pathlib import Path
 from unittest import mock
 
 from tests.client.live_run_harness import get_answering_health
+from tests.client.test_client_fleet_envelope_census import (
+    _UNREACHABLE_CRUCIBLE_URL,
+    declare_and_require_board,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
@@ -167,6 +171,10 @@ class PythonFilesCountParityTest(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="cr051-c1-python-")
         _write(os.path.join(self.tmpdir, ".env"),
                f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
+        # The ingest resolves its board from the project it works in: declare
+        # one. The transport is patched, so it is never contacted.
+        declare_and_require_board(self.tmpdir, _UNREACHABLE_CRUCIBLE_URL,
+                                  "python-crucible.py")
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
@@ -255,6 +263,10 @@ class MvnFilesCountParityTest(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="cr051-c1-mvn-")
         _write(os.path.join(self.tmpdir, ".env"),
                f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
+        # The ingest resolves its board from the project it works in: declare
+        # one. The transport is patched, so it is never contacted.
+        declare_and_require_board(self.tmpdir, _UNREACHABLE_CRUCIBLE_URL,
+                                  "mvn-crucible.py")
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)

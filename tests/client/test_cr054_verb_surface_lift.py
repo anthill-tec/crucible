@@ -171,6 +171,11 @@ import importlib.util
 from pathlib import Path
 from unittest import mock
 
+from tests.client.test_client_fleet_envelope_census import (
+    _UNREACHABLE_CRUCIBLE_URL,
+    declare_and_require_board,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
@@ -266,6 +271,10 @@ class _ProjectDirFixture:
         with open(os.path.join(tmpdir, ".env"), "w") as f:
             f.write(f"CRUCIBLE_PROJECT_KEY={self._PROJECT_KEY}\n")
             f.write("CRUCIBLE_PROJECT_NAME=cr054-c4-project\n")
+        # A verb resolves its board from the project it works in: declare
+        # one. Every transport here is mocked, so it is never contacted.
+        declare_and_require_board(tmpdir, _UNREACHABLE_CRUCIBLE_URL,
+                                  "a lifted verb")
         return tmpdir
 
 

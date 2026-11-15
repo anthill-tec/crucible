@@ -924,6 +924,11 @@ class MvnCrucibleStatusHookSafeTest(_BaseMvnAxiTest):
         fake_response = mock.MagicMock()
         fake_response.read.return_value = json.dumps({"ok": True, "plans": []}).encode()
 
+        # The fetch resolves its board from the project the verb works in:
+        # bind the fixture's own, whose crucible.toml declares it.
+        axi = self.module._axi()
+        axi.bind_project_dir(self.tmpdir)
+        self.addCleanup(axi.bind_project_dir, None)
         with mock.patch("urllib.request.urlopen", return_value=fake_response) as urlopen_mock:
             result = self.module._get(self.module._plans_path(self.tmpdir))
 

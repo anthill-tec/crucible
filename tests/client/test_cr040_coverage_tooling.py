@@ -50,6 +50,10 @@ from tests.client.live_run_harness import (
     StreamingPost,
     get_answering_health,
 )
+from tests.client.test_client_fleet_envelope_census import (
+    _UNREACHABLE_CRUCIBLE_URL,
+    declare_and_require_board,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "python-crucible.py"
@@ -225,6 +229,9 @@ class CoverageRunEnvTest(unittest.TestCase):
             # is mocked so nothing posts anywhere real.
             with open(os.path.join(tmp, ".env"), "w") as f:
                 f.write("CRUCIBLE_PROJECT_KEY=cr040-env-probe-key\n")
+            # The run resolves its board from the project it works in.
+            declare_and_require_board(tmp, _UNREACHABLE_CRUCIBLE_URL,
+                                      "python-crucible.py")
             args = argparse.Namespace(
                 project_dir=tmp,
                 python=sys.executable,
@@ -289,6 +296,9 @@ class CoverageRunEnvTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, ".env"), "w") as f:
                 f.write("CRUCIBLE_PROJECT_KEY=cr040-env-probe-key\n")
+            # The run resolves its board from the project it works in.
+            declare_and_require_board(tmp, _UNREACHABLE_CRUCIBLE_URL,
+                                      "python-crucible.py")
             args = argparse.Namespace(
                 project_dir=tmp, python=sys.executable, reports="reports",
                 coverage=True, cov_source="crucible_axi,clients",

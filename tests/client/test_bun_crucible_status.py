@@ -72,7 +72,11 @@ from unittest import mock
 # CR-CRU-131 §S1b — the project fixture carries the `crucible.toml` an
 # installed project has; the fleet census owns that helper (one fixture shape
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
-from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client.test_client_fleet_envelope_census import (
+    _UNREACHABLE_CRUCIBLE_URL,
+    declare_and_require_board,
+    install_project_limits,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
@@ -473,6 +477,14 @@ class StatusQueueTableTest(_BaseStatusTest):
         fake_response = mock.MagicMock()
         fake_response.read.return_value = json.dumps({"ok": True, "plans": []}).encode()
 
+        # The fetch resolves its board from the project the verb works in:
+        # declare one in the fixture's own crucible.toml and bind it. The
+        # transport is patched, so the declared address is never contacted.
+        declare_and_require_board(self.tmpdir, _UNREACHABLE_CRUCIBLE_URL,
+                                  "bun-crucible.py")
+        axi = self.module._axi()
+        axi.bind_project_dir(self.tmpdir)
+        self.addCleanup(axi.bind_project_dir, None)
         with mock.patch("urllib.request.urlopen", return_value=fake_response) as urlopen_mock:
             result = self.module._get(self.module._plans_path(self.tmpdir))
 
