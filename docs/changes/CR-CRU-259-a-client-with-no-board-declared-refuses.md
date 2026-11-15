@@ -107,7 +107,9 @@ only because they tolerate a board that does not answer.
   `server-limits-fixture.ts`, `project-namespace-tripwire.test.ts`). Orchestrator check, not a test: a hermetic run
   of the five modules under the census tripwire records no connection.
 - [ ] **AC7 — no board, no contact.** With no board declared anywhere, `test`, `lint` and `pre-merge-gate` without
-  `--agent`, and `--help`, succeed as today with one envelope each, no `board` in it, and no traceback.
+  `--agent`, and `--help`, succeed as today, with no traceback and no board contacted. A verb that emits an envelope today emits
+  one, with no `board` in it. `test` and `pre-merge-gate` without `--agent` emit none today, and still emit none (amended at
+  GREEN 956).
 - [ ] **AC8 — refused before the work.** With no board declared, `lint --agent` and `pre-merge-gate --agent` refuse
   before spawning a linter, runner or compile (proved with a recording runner seam), and the gate records no outcome.
 - [ ] **AC9 — the installer warns.** An install whose client file ends with no `[client] url` names the file and the
