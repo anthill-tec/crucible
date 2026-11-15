@@ -64,6 +64,16 @@ state. The client suite breaks it three ways.
 - [ ] **AC5 — CI.** `release.yml` has no `~/.m2` warm-up and runs the provisioning script before `test-python`; the
   `ci-toolchain-provisioning` pins are updated.
 - [ ] **AC6 — torn down.** After a suite run, no temporary install directory the helper created is left behind.
+- [ ] **AC7 — every board is declared.** The no-root-toml dependency census (an isolated network namespace with the
+  board tripwire) shows no `BoardUndeclared` failure and no tripwire hit. At CR-CRU-259's close, that census
+  (`870f6905`) counted 127 such failures in about 27 modules: `test_cr054_http_core_lift`, `test_cr017_client_lifecycle`,
+  `test_cr054_verb_surface_lift`, `test_bun_crucible_lifecycle`, `test_bun_crucible_agent_report_isolation`,
+  `test_bun_crucible_auto_attach`, `test_plan_file_wave_refusal`, `test_cr051_files_count_parity`,
+  `test_declared_target_report_mechanism`, `test_bun_crucible_axi_conventions`, the five
+  `test_*_crucible_agent_identity_required`, the five census modules' module-level cases, and others
+  (`test-reports/work/dep-census-py.out`). Each now declares the board it reaches, or asserts the refusal.
+  **Added 2026-11-15 (user ruling):** CR-CRU-259 and CR-CRU-260 are pushed together, and that CI run must be green
+  before CR-CRU-261's close-out.
 
 ## Non-goals
 
