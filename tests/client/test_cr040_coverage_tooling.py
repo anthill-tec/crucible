@@ -54,9 +54,10 @@ from tests.client.test_client_fleet_envelope_census import (
     _UNREACHABLE_CRUCIBLE_URL,
     declare_and_require_board,
 )
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "clients" / "python-crucible.py"
+SCRIPT_PATH = client_script("python-crucible.py")
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 
 

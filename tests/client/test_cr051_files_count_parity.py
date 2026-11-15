@@ -71,9 +71,10 @@ from tests.client.test_client_fleet_envelope_census import (
     _UNREACHABLE_CRUCIBLE_URL,
     declare_and_require_board,
 )
+from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 
 PYTHON_SCRIPT = CLIENTS_DIR / "python-crucible.py"
 MVN_SCRIPT = CLIENTS_DIR / "mvn-crucible.py"

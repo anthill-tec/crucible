@@ -170,9 +170,10 @@ from tests.client.go_client_harness import envelope as go_envelope
 from tests.client.go_client_harness import flag_value as go_flag_value
 from tests.client.go_client_harness import said as go_said
 from tests.client.go_client_harness import terminal_events as go_terminal_events
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 MODALITY_PATH = Path(__file__).resolve().parent / "test_client_tier_run_modality.py"
 
 
@@ -219,7 +220,7 @@ _JUNIT_SUITES_ONE_PASS = _MODALITY._JUNIT_SUITES_ONE_PASS
 # join the fleet and this suite would keep passing while never driving it. The
 # fleet is what `clients/` contains.
 _CLIENT_SUFFIX = "-crucible.py"
-CLIENT_FILES = tuple(sorted(p.name for p in CLIENTS_DIR.glob("*" + _CLIENT_SUFFIX)))
+CLIENT_FILES = tuple(sorted(p.name for p in CLIENT_SOURCE_DIR.glob("*" + _CLIENT_SUFFIX)))
 FLEET = tuple(name[: -len(_CLIENT_SUFFIX)] for name in CLIENT_FILES)
 
 # §S6's table, transcribed ONCE: the cell each stack is asserted on. Every one

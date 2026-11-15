@@ -105,9 +105,10 @@ import sys
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 DECLARATION_PATH = Path(__file__).resolve().parent / "test_client_tier_declaration_detection.py"
 
 # AC16's "BEFORE", as a named and dated FACT rather than a branch that moves:
@@ -516,7 +517,7 @@ class MigratedVerbFlagRetentionTest(unittest.TestCase):
         migrated = set(_migrated_tier_verbs())
         here_now = {(client, verb)
                     for client in sorted(p.name[: -len("-crucible.py")]
-                                         for p in CLIENTS_DIR.glob("*-crucible.py"))
+                                         for p in CLIENT_SOURCE_DIR.glob("*-crucible.py"))
                     for verb in sorted(set(_verb_parsers(client))
                                        & TIER_VOCABULARY)}
         self.assertTrue(

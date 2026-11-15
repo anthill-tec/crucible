@@ -106,9 +106,10 @@ from pathlib import Path
 from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
     declare_and_require_board,
 )
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TYPES_TS_PATH = REPO_ROOT / "src" / "types.ts"
 
@@ -517,7 +518,7 @@ class TierVocabularyMirrorDriftGuardTest(unittest.TestCase):
         union = _tier_union_from_types_ts()
         self.assertIsNotNone(union, "`Tier` must parse out of src/types.ts")
 
-        mirrors = _tier_mirrors(AXI_MODULE_PATH)
+        mirrors = _tier_mirrors(CLIENT_SOURCE_DIR / "_crucible_axi.py")
         self.assertEqual(
             len(mirrors), 1,
             f"the tier vocabulary must live in exactly ONE "
@@ -581,7 +582,7 @@ class RetiredTierFlagTest(unittest.TestCase):
     def _scan_clients(self, spellings):
         hits = {}
         scanned = 0
-        for path in sorted(CLIENTS_DIR.rglob("*")):
+        for path in sorted(CLIENT_SOURCE_DIR.rglob("*")):
             if not path.is_file():
                 continue
             try:

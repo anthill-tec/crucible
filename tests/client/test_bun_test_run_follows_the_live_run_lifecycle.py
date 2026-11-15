@@ -79,9 +79,10 @@ from tests.client.live_run_harness import (
     board_health,
     project_toml_declaring,
 )
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BUN_SCRIPT = REPO_ROOT / "clients" / "bun-crucible.py"
+BUN_SCRIPT = client_script("bun-crucible.py")
 
 AGENT = "bun-run-lifecycle-fixture"
 # The run's ingest: bun sends its runner's reports to the board's run route,

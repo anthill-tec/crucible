@@ -58,11 +58,13 @@ from pathlib import Path
 from unittest import mock
 
 from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 TOON_PATH = CLIENTS_DIR / "toon.py"
 SHARED_PATH = CLIENTS_DIR / "_crucible_axi.py"
+SHARED_PATH_SOURCE = CLIENT_SOURCE_DIR / "_crucible_axi.py"
 
 CLIENT_FILES = {
     "python": CLIENTS_DIR / "python-crucible.py",
@@ -257,7 +259,7 @@ class PointsFlagLandsOnceTest(unittest.TestCase):
     (`_crucible_axi.py`), never re-implemented per client."""
 
     def test_points_flag_is_registered_exactly_once_in_the_shared_module(self):
-        source = SHARED_PATH.read_text()
+        source = SHARED_PATH_SOURCE.read_text()
         occurrences = source.count('"--points"')
         self.assertEqual(
             occurrences, 1,

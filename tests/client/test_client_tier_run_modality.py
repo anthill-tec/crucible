@@ -230,9 +230,10 @@ from tests.client.go_client_harness import (
     terminal_events,
 )
 from tests.client.live_run_harness import get_answering_health
+from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 HARNESS_PATH = Path(__file__).resolve().parent / "test_client_tier_stamping.py"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TOON_PATH = CLIENTS_DIR / "toon.py"

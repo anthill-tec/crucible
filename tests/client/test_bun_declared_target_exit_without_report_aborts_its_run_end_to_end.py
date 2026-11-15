@@ -43,9 +43,10 @@ import urllib.request
 from pathlib import Path
 
 from tests.client.live_run_harness import install_project
+from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 BUN_CLIENT_PATH = CLIENTS_DIR / "bun-crucible.py"
 
 ENV_KEYS = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID",

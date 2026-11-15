@@ -84,11 +84,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.client import cr098_next_oracle
+from tests.client import (
+    CLIENT_SOURCE_DIR,
+    TEST_INSTALL_CLIENTS,
+    cr098_next_oracle,
+)
 from tests.client.fake_nextest import private_fake_prelude
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 TOON_PATH = CLIENTS_DIR / "toon.py"
 
 CLIENT_FILES = {
@@ -461,7 +465,7 @@ def install_project_limits(project_dir):
     unreachable loopback board. Without it a client would fall through to the
     install's file -- in a checkout, the operator's own root `crucible.toml`.
     """
-    shutil.copyfile(CLIENTS_DIR / "crucible.toml",
+    shutil.copyfile(CLIENT_SOURCE_DIR / "crucible.toml",
                     Path(project_dir) / "crucible.toml")
     return declare_board(Path(project_dir) / "crucible.toml", _UNREACHABLE_CRUCIBLE_URL)
 
@@ -1493,7 +1497,7 @@ class SyntheticSourceEnvelopeDetectorProofTest(unittest.TestCase):
         cls.clients_dir.mkdir()
         cls.script_path = cls.clients_dir / "synthetic-crucible.py"
         cls.script_path.write_text(_SYNTHETIC_CLIENT_SOURCE)
-        shutil.copy(TOON_PATH, cls.clients_dir / "toon.py")
+        shutil.copy(CLIENT_SOURCE_DIR / "toon.py", cls.clients_dir / "toon.py")
         cls.toon_module = _load_toon_module()
         cls.fake_bin_dir = _build_fake_bin_dir()
         cls.project_dir = Path(tempfile.mkdtemp(prefix="cr058-s4-synthetic-project-"))
@@ -1551,7 +1555,7 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.original_python_source = CLIENT_FILES["python"].read_text()
+        cls.original_python_source = (CLIENT_SOURCE_DIR / "python-crucible.py").read_text()
         assert cls.original_python_source.count("def main():") == 1, (
             "python-crucible.py's main() shape changed -- update this "
             "proof's insertion point")
@@ -1565,28 +1569,28 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
         cls.tmp_dir = Path(tempfile.mkdtemp(prefix="cr058-s4-real-copy-"))
         cls.clients_dir = cls.tmp_dir / "clients"
         cls.clients_dir.mkdir()
-        shutil.copy(CLIENTS_DIR / "_crucible_axi.py", cls.clients_dir / "_crucible_axi.py")
+        shutil.copy(CLIENT_SOURCE_DIR / "_crucible_axi.py", cls.clients_dir / "_crucible_axi.py")
         # The shared module loads its run pipeline by path from its own
         # directory, so the run module travels with it.
-        shutil.copy(CLIENTS_DIR / "_crucible_run.py", cls.clients_dir / "_crucible_run.py")
+        shutil.copy(CLIENT_SOURCE_DIR / "_crucible_run.py", cls.clients_dir / "_crucible_run.py")
         # The release-notes module is loaded the same way, and travels too.
-        shutil.copy(CLIENTS_DIR / "_crucible_release.py",
+        shutil.copy(CLIENT_SOURCE_DIR / "_crucible_release.py",
                     cls.clients_dir / "_crucible_release.py")
         # And so is a project's own verbs' module.
-        shutil.copy(CLIENTS_DIR / "_crucible_project.py",
+        shutil.copy(CLIENT_SOURCE_DIR / "_crucible_project.py",
                     cls.clients_dir / "_crucible_project.py")
         # And so is the shared lint runner.
-        shutil.copy(CLIENTS_DIR / "_crucible_lint.py",
+        shutil.copy(CLIENT_SOURCE_DIR / "_crucible_lint.py",
                     cls.clients_dir / "_crucible_lint.py")
         # And so is the board module.
-        shutil.copy(CLIENTS_DIR / "_crucible_board.py",
+        shutil.copy(CLIENT_SOURCE_DIR / "_crucible_board.py",
                     cls.clients_dir / "_crucible_board.py")
-        shutil.copy(TOON_PATH, cls.clients_dir / "toon.py")
+        shutil.copy(CLIENT_SOURCE_DIR / "toon.py", cls.clients_dir / "toon.py")
         # CR-CRU-131 §S1c — the limit declarations travel as PACKAGE DATA beside
         # `_crucible_axi.py`, so a copy of the module without them is a broken
         # distribution rather than a scratch client: `shipped_limits()` refuses
         # to invent a number and says so.
-        shutil.copy(CLIENTS_DIR / "crucible.toml", cls.clients_dir / "crucible.toml")
+        shutil.copy(CLIENT_SOURCE_DIR / "crucible.toml", cls.clients_dir / "crucible.toml")
 
         # The bare verb's function definition must sit BEFORE `def main():`
         # in the file: the real client's trailing `if __name__ == "__main__":
@@ -1626,10 +1630,10 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
 
     def test_real_clients_directory_was_never_modified(self):
         self.assertNotIn(
-            "cr058-scratch-bare-verb", CLIENT_FILES["python"].read_text(),
+            "cr058-scratch-bare-verb", (CLIENT_SOURCE_DIR / "python-crucible.py").read_text(),
             "this proof must never mutate clients/python-crucible.py itself")
         self.assertEqual(
-            CLIENT_FILES["python"].read_text(), self.original_python_source,
+            (CLIENT_SOURCE_DIR / "python-crucible.py").read_text(), self.original_python_source,
             "clients/python-crucible.py must be byte-identical before and "
             "after this proof -- only the scratch tmpdir copy is patched")
 

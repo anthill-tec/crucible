@@ -60,10 +60,11 @@ from tests.client.test_client_fleet_envelope_census import (
     _UNREACHABLE_CRUCIBLE_URL,
     declare_and_require_board,
 )
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "clients" / "python-crucible.py"
-TOON_PATH = REPO_ROOT / "clients" / "toon.py"
+SCRIPT_PATH = client_script("python-crucible.py")
+TOON_PATH = client_script("toon.py")
 
 
 def _load_module(path, name):

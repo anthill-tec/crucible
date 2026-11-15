@@ -46,6 +46,7 @@ import re
 import tomllib
 import unittest
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
@@ -72,7 +73,7 @@ PEP723_BLOCK_RE = re.compile(
 
 
 def _client_path(name):
-    return REPO_ROOT / "clients" / name
+    return CLIENT_SOURCE_DIR / name
 
 
 def _read_client_text(name):

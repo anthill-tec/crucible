@@ -85,10 +85,12 @@ import unittest
 import importlib.util
 from pathlib import Path
 from unittest import mock
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
+AXI_MODULE_PATH_SOURCE = CLIENT_SOURCE_DIR / "_crucible_axi.py"
 
 CLIENT_FILES = {
     "bun": CLIENTS_DIR / "bun-crucible.py",
@@ -174,7 +176,7 @@ class RunContextEnvGitLiftTest(unittest.TestCase):
             f"the following clients still carry _run_context's REAL "
             f"subprocess/git logic in their own source instead of delegating "
             f"to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             self.MARKER, axi_source,
             "clients/_crucible_axi.py must own the real subprocess.run git "
@@ -243,7 +245,7 @@ class PlansPathUrlTemplateLiftTest(unittest.TestCase):
             f"the following clients still carry _plans_path's REAL URL "
             f"template in their own source instead of delegating to "
             f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             self.MARKER, axi_source,
             "clients/_crucible_axi.py must own the real plans-path URL "
@@ -277,7 +279,7 @@ class OpenPlansFilterLiftTest(unittest.TestCase):
             f"the following clients still carry _open_plans's REAL "
             f"open-status filter in their own source instead of delegating "
             f"to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             self.MARKER, axi_source,
             "clients/_crucible_axi.py must own the real open-status filter "
@@ -336,7 +338,7 @@ class ResolvePlanOrEmitOrchestrationLiftTest(unittest.TestCase):
             f"the following clients still carry _resolve_plan_or_emit's REAL "
             f"ambiguous/none message-building in their own source instead of "
             f"delegating to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH.read_text()
+        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
         self.assertIn(
             self.MARKER, axi_source,
             "clients/_crucible_axi.py must own the real ambiguous-plan "

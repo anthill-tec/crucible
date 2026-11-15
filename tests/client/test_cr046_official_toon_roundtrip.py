@@ -73,10 +73,11 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-AXI_MODULE_PATH = REPO_ROOT / "clients" / "_crucible_axi.py"
-TOON_PATH = REPO_ROOT / "clients" / "toon.py"
+AXI_MODULE_PATH = client_script("_crucible_axi.py")
+TOON_PATH = client_script("toon.py")
 
 
 def _load_axi_module():

@@ -148,9 +148,10 @@ import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = CLIENT_SOURCE_DIR
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 BUN_CLIENT_PATH = CLIENTS_DIR / "bun-crucible.py"
 #: The fleet's OWN TOON decoder, so an envelope a real run emitted is read the
