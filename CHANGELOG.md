@@ -15,12 +15,15 @@ Releases before 0.3.0 are described only on GitHub Releases.
 - **Re-run `crucible-axi install` after upgrading.** It fills two settings an older install never wrote,
   and never overwrites a value already set:
   - the install's `crucible.toml` gains `[client] url`, built from the port the board already listens on,
-    so the clients reach the board through configuration rather than the shipped default;
+    so the clients reach the board through configuration. A client whose project and install name no
+    board refuses rather than posting anywhere;
   - the server's own settings file gains `[server] port`, the port that server already boots on (no
     new port is probed).
 
   The install output lists each file it `filled`, and each it left alone under `notFilled` with the
-  reason.
+  reason. An install with no local server has no port to build the url from: declare
+  `[client] url = "http://<host>:<port>"` in its `crucible.toml`. The install output warns under
+  `boardUndeclared`, naming the file and the key, whenever it leaves no board declared.
 - **The rust gate's lint step is renamed.** A stack file or script that reads the rust
   `pre-merge-gate` envelope now sees `stage: "lint"` instead of `"clippy"`, and the warning
   `lint-gate-abort` instead of `clippy-gate-abort`. `--skip-clippy` still works, as an alias of
@@ -304,12 +307,11 @@ Releases before 0.3.0 are described only on GitHub Releases.
   as before.
 - **A client finds its board in the install when its project names none.** A client takes
   `[client] url` from the first `crucible.toml` that declares a non-empty one: the project's, then
-  the install's. A file without one, or one that does not parse, is passed over, and the shipped
-  `http://localhost:3849` is the last resort. Before this, a project file without `[client]` sent
-  every verb to the shipped address and the install's file was never read. The limits and
-  `[gate] skip` keep the first file that parses. An envelope names `context.board` only when the
-  board differs from the install's declared `url`, or from the shipped one when the install declares
-  none.
+  the install's. A file without one, or one that does not parse, is passed over, and when neither
+  declares one the client refuses. Before this, a project file without `[client]` sent every verb to
+  the server's packaged port and the install's file was never read. The limits and `[gate] skip`
+  keep the first file that parses. An envelope names `context.board` only when the board differs
+  from the install's declared `url`, or always when the install declares none.
 - **A re-install fills in the connection an older install never wrote, keeping the live port.** An
   existing server `crucible.toml` with no `[server] port` gains the port its server boots on today,
   the template's own `port`, with no probe. An existing install `crucible.toml` with no `[client] url`
