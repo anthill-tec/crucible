@@ -50,9 +50,10 @@ import ast
 import textwrap
 import unittest
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS = REPO_ROOT / "clients"
+CLIENTS = CLIENT_SOURCE_DIR
 
 EXEMPT = ("junit_testcase_count", "junit_non_skipped_count",
           "_raw_report_result_count")

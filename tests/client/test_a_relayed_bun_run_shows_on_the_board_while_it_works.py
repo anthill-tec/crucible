@@ -41,9 +41,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.client.live_run_harness import scrubbed_env
 from tests.client.real_board import RealBoard
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BUN_SCRIPT = REPO_ROOT / "clients" / "bun-crucible.py"
+BUN_SCRIPT = client_script("bun-crucible.py")
 
 RELAYED_AGENT = "bun-console-live-agent"
 PLAIN_AGENT = "bun-console-unrelayed-agent"

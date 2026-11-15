@@ -37,10 +37,11 @@ from tests.client.live_run_harness import (  # noqa: E402
     load_toon,
     scrubbed_env,
 )
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REAL_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
-CLIENT_PATH = REPO_ROOT / "clients" / "python-crucible.py"
+CLIENT_PATH = client_script("python-crucible.py")
 
 AGENT = "coverage-config-fixture-agent"
 PROJECT_KEY = "coverage-config-fixture-key"

@@ -40,9 +40,10 @@ from tests.client.test_client_fleet_envelope_census import (
     _load_module,
     _load_toon_module,
 )
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = CLIENT_SOURCE_DIR
 CONFIG_NAME = "crucible.toml"
 PROJECT_KEY = "8d6b1e3c-2f4a-4b7e-9c11-0a2b3c4d5e70"
 

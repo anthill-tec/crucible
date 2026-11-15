@@ -34,9 +34,10 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from tests.client import TEST_INSTALL_CLIENTS
 
 TESTS_CLIENT_DIR = Path(__file__).resolve().parent
-CLIENTS = TESTS_CLIENT_DIR.parents[1] / "clients"
+CLIENTS = TEST_INSTALL_CLIENTS
 GATE_HARNESS_PATH = TESTS_CLIENT_DIR / "test_gate_multi_suite_coverage.py"
 
 RELEASE = "0.4.0"

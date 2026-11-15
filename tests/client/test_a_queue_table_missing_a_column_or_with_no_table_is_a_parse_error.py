@@ -40,9 +40,10 @@ import tempfile
 import unittest
 from argparse import Namespace
 from pathlib import Path
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-AXI_PATH = REPO_ROOT / "clients" / "_crucible_axi.py"
+AXI_PATH = client_script("_crucible_axi.py")
 
 
 def _load_axi(cache_key):

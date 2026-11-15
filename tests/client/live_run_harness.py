@@ -31,10 +31,11 @@ import tomllib
 import urllib.parse
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS = REPO_ROOT / "clients"
-SHIPPED_TOML = CLIENTS / "crucible.toml"
+CLIENTS = TEST_INSTALL_CLIENTS
+SHIPPED_TOML = CLIENT_SOURCE_DIR / "crucible.toml"
 
 ENV_KEYS_TO_SCRUB = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID",
                      "WORKFLOW_CYCLE", "PY_CRUCIBLE_PYTHON", "REPORTS_DIR",

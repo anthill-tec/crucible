@@ -59,9 +59,10 @@ from tests.client.test_client_fleet_envelope_census import (
     declare_board,
     install_project_limits,
 )
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 TOON_PATH = CLIENTS_DIR / "toon.py"
 PROJECT_MODULE_PATH = CLIENTS_DIR / "_crucible_project.py"
 
@@ -445,7 +446,7 @@ class ScratchFleet:
         _refuse_production_board(self.fleet_board_url)
         self.root = Path(tempfile.mkdtemp(prefix="project-create-fleet-"))
         self.clients = self.root / "clients"
-        shutil.copytree(CLIENTS_DIR, self.clients,
+        shutil.copytree(CLIENT_SOURCE_DIR, self.clients,
                         ignore=shutil.ignore_patterns("__pycache__"))
         shipped = self.clients / "crucible.toml"
         shipped.write_text(_CLIENT_TABLE.sub("", shipped.read_text(encoding="utf-8")),

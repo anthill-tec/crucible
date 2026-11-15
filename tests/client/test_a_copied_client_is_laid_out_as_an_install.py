@@ -30,10 +30,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.client import CLIENT_SOURCE_DIR
 from tests.client import test_client_fleet_envelope_census as census
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = CLIENT_SOURCE_DIR
 TESTS_DIR = REPO_ROOT / "tests"
 THIS_MODULE = Path(__file__).resolve()
 CONFIG_NAME = "crucible.toml"

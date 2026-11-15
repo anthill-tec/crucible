@@ -39,12 +39,13 @@ import urllib.request
 from pathlib import Path
 
 from tests.client.live_run_harness import install_project, scrubbed_env
-from tests.client.real_board import REPO_ROOT, RealBoard, _require_http_scheme
+from tests.client.real_board import RealBoard, _require_http_scheme
 from tests.client.test_client_fleet_envelope_census import (
     declare_and_require_board,
 )
+from tests.client import TEST_INSTALL_CLIENTS
 
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 TOON_PATH = CLIENTS_DIR / "toon.py"
 RELEASE_MODULE = CLIENTS_DIR / "_crucible_release.py"
 CORE_MODULE = CLIENTS_DIR / "_crucible_axi.py"

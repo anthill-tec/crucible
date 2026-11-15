@@ -158,10 +158,11 @@ from tests.client.test_client_fleet_envelope_census import (
 from tests.client.test_no_test_steers_a_client_by_a_retired_variable import (
     RETIRED_VARIABLES,
 )
+from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
-AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
+CLIENTS_DIR = CLIENT_SOURCE_DIR
+AXI_MODULE_PATH = client_script("_crucible_axi.py")
 CONFIG_NAME = "crucible.toml"
 
 #: The table §S2 adds to the fleet's shipped declarations, its one key, and the
@@ -706,7 +707,7 @@ class TheRetiredUrlVariablesAreDeadTest(BoardInterlockCase):
         every `os.environ` read shape."""
         retired = ("CRUCIBLE_URL", "CRUCIBLE_BASE")
         offenders = {}
-        for path in sorted(list(CLIENT_FILES.values()) + [AXI_MODULE_PATH]):
+        for path in sorted(list(CLIENT_FILES.values()) + [CLIENT_SOURCE_DIR / "_crucible_axi.py"]):
             tree = ast.parse(path.read_text(encoding="utf-8"),
                              filename=str(path))
             for node in ast.walk(tree):

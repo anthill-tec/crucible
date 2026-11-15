@@ -76,9 +76,10 @@ from tests.client.live_run_harness import (
     load_client,
     scrubbed_env,
 )
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BUN_SCRIPT = REPO_ROOT / "clients" / "bun-crucible.py"
+BUN_SCRIPT = client_script("bun-crucible.py")
 
 AGENT = "bun-console-relay-agent"
 PROJECT_KEY = "bun-console-relay-key"

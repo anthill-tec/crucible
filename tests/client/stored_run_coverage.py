@@ -34,7 +34,6 @@ import os
 import shutil
 import tempfile
 import urllib.parse
-from pathlib import Path
 from unittest import mock
 
 from tests.client.kept_coverage_answer import (
@@ -59,8 +58,9 @@ from tests.client.test_runs_and_run_read_a_projects_stored_runs_back import (
     _load_module,
     _run_main,
 )
+from tests.client import TEST_INSTALL_CLIENTS
 
-CLIENTS_DIR = Path(__file__).resolve().parents[2] / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 
 #: Every client that has the `run` verb.
 RUN_VERB_CLIENTS = {stack: CLIENTS_DIR / f"{stack}-crucible.py"

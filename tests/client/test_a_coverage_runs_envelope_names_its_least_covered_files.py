@@ -51,9 +51,10 @@ from tests.client.kept_coverage_answer import (
     stated_block,
 )
 from tests.client.live_run_harness import load_client
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS = REPO_ROOT / "clients"
+CLIENTS = CLIENT_SOURCE_DIR
 
 EMITTER = "emit_run_axi"
 

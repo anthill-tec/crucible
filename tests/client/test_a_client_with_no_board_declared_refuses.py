@@ -50,12 +50,13 @@ import unittest
 import urllib.error
 from pathlib import Path
 from unittest import mock
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TOON_PATH = CLIENTS_DIR / "toon.py"
-SHIPPED_CONFIG = CLIENTS_DIR / "crucible.toml"
+SHIPPED_CONFIG = CLIENT_SOURCE_DIR / "crucible.toml"
 RUNBOOK = REPO_ROOT / "docs" / "RUNBOOK.md"
 CONFIG_NAME = "crucible.toml"
 
@@ -544,7 +545,7 @@ class NoShippedBoardRemainsTest(unittest.TestCase):
         literal (docstrings included) and every numeric literal is, and the
         reporters' and the schema's text outside `//` comment lines."""
         offenders = []
-        for path in sorted(CLIENTS_DIR.rglob("*.py")):
+        for path in sorted(CLIENT_SOURCE_DIR.rglob("*.py")):
             if "__pycache__" in path.parts:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -553,7 +554,7 @@ class NoShippedBoardRemainsTest(unittest.TestCase):
                         (isinstance(node.value, str) and PACKAGED_PORT in node.value)
                         or (isinstance(node.value, int) and str(node.value) == PACKAGED_PORT)):
                     offenders.append(f"{path.relative_to(REPO_ROOT)} line {node.lineno}")
-        for path in sorted(itertools.chain(CLIENTS_DIR.rglob("*.ts"), CLIENTS_DIR.rglob("*.json"))):
+        for path in sorted(itertools.chain(CLIENT_SOURCE_DIR.rglob("*.ts"), CLIENT_SOURCE_DIR.rglob("*.json"))):
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 if PACKAGED_PORT in line and not line.lstrip().startswith(("//", "*", "/*")):
                     offenders.append(f"{path.relative_to(REPO_ROOT)} line {number}")
