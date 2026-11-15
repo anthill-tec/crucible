@@ -614,15 +614,16 @@ def run_manifest_stage(target_dir: str, force: bool = False,
 
 def _declares_board(path: str) -> bool:
     """Whether the install file at `path`, as the stage leaves it, declares a
-    non-empty string `[client] url`. A file that is missing, unreadable or
-    does not parse declares none: a client resolving through it would find no
-    board, so the stage says so (`boardUndeclared`)."""
+    non-empty string `[client] url`, judged stripped as the client judges it
+    (a whitespace-only url declares none). A file that is missing, unreadable
+    or does not parse declares none: a client resolving through it would find
+    no board, so the stage says so (`boardUndeclared`)."""
     try:
         _ok, _present, url = _declared(_parsed(Path(path).read_bytes()),
                                        CLIENT_TABLE, CLIENT_URL_KEY)
     except (OSError, ValueError):
         return False
-    return isinstance(url, str) and bool(url)
+    return isinstance(url, str) and bool(url.strip())
 
 
 def _server_config_step(server_config: dict, listener: dict | None,
