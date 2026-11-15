@@ -62,10 +62,11 @@ from tests.client.test_every_clients_help_names_where_its_board_comes_from impor
     _top_level_helps,
     normalise,
 )
+from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SHIPPED_TOML = REPO_ROOT / "clients" / "crucible.toml"
-AXI_MODULE_PATH = REPO_ROOT / "clients" / "_crucible_axi.py"
+SHIPPED_TOML = CLIENT_SOURCE_DIR / "crucible.toml"
+AXI_MODULE_PATH = client_script("_crucible_axi.py")
 PRD = REPO_ROOT / "docs" / "research" / "PRD-crucible-v2.md"
 RUNBOOK = REPO_ROOT / "docs" / "RUNBOOK.md"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"

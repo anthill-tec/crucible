@@ -98,10 +98,11 @@ import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TOON_PATH = REPO_ROOT / "clients" / "toon.py"
-SOURCE_CLIENTS_DIR = REPO_ROOT / "clients"
+TOON_PATH = client_script("toon.py")
+SOURCE_CLIENTS_DIR = CLIENT_SOURCE_DIR
 
 CONFIG_NAME = "crucible.toml"
 FLEET_DIRNAME = "clients"

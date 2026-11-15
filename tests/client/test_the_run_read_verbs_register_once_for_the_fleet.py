@@ -26,9 +26,10 @@ import ast
 import textwrap
 import unittest
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = CLIENT_SOURCE_DIR
 AXI_PATH = CLIENTS_DIR / "_crucible_axi.py"
 CLIENT_KEYS = ("bun", "python", "mvn", "rust", "arduino", "go")
 

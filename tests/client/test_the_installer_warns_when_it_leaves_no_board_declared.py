@@ -40,6 +40,7 @@ from typing import Any
 from unittest import mock
 
 from crucible_axi import cli, install, manifest
+from tests.client import client_script
 
 CONFIG_NAME = "crucible.toml"
 URL_KEY_LABEL = "[client] url"
@@ -93,7 +94,7 @@ WHITESPACE_URL_INSTALL_FILE = (
 
 #: The client's shared module in this checkout, loaded in process only to ask
 #: whether IT finds a board in a file; its install dir is always patched.
-CLIENT_CORE = Path(__file__).resolve().parents[2] / "clients" / "_crucible_axi.py"
+CLIENT_CORE = client_script("_crucible_axi.py")
 
 #: A file in which `client` is a string, not a table, so the fill refuses it.
 CLIENT_NOT_A_TABLE_FILE = b'client = "not a table"\n'

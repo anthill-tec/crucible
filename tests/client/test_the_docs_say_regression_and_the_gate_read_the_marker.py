@@ -33,12 +33,13 @@ import unittest
 from pathlib import Path
 
 from tests.client.changelog_section import changelog_entries, changelog_section
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 DN = REPO_ROOT / "docs" / "research" / "DN-crucible-live-test-progress.md"
-BUN_CLIENT = REPO_ROOT / "clients" / "bun-crucible.py"
-SCHEMA = REPO_ROOT / "clients" / "crucible-declaration.schema.json"
+BUN_CLIENT = CLIENT_SOURCE_DIR / "bun-crucible.py"
+SCHEMA = CLIENT_SOURCE_DIR / "crucible-declaration.schema.json"
 # The tests rewritten when the gate began reading the marker.
 REWRITTEN_TESTS = tuple(REPO_ROOT / "tests" / "client" / name for name in (
     "test_the_bun_gate_runs_every_declared_frameworks_suite.py",

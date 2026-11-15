@@ -29,11 +29,12 @@ from pathlib import Path
 import tomllib
 
 from tests.client.changelog_section import changelog_entries
+from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SHIPPED_TOML = REPO_ROOT / "clients" / "crucible.toml"
+SHIPPED_TOML = CLIENT_SOURCE_DIR / "crucible.toml"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
-RUST_CLIENT = REPO_ROOT / "clients" / "rust-crucible.py"
+RUST_CLIENT = client_script("rust-crucible.py")
 
 TABLE = "[targets.<profile>]"
 RUST_ENTRY = (r'framework\s*=\s*"nextest"', r'codec\s*=\s*"nextest"', r'path\s*=\s*"stdout"')

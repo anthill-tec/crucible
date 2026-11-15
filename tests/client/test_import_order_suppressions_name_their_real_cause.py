@@ -22,6 +22,7 @@ import ast
 import re
 import unittest
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -37,6 +38,14 @@ SUPPRESSION_SITES = (
 PI_LENS_IGNORE = re.compile(r"(?:\/\/|#)\s*pi-lens-ignore:\s*(.+)")
 PI_LENS_REASON_SEPARATOR = re.compile(r"(?:\s+--\s+|\s+\u2014\s+|:\s+)")
 NOQA_I001 = re.compile(r"#\s*noqa:\s*[A-Z0-9, ]*\bI001\b")
+
+
+def _site_path(site_relative):
+    """A tracked file of the checkout; its client source through the one
+    constant the suite reads it by."""
+    if site_relative.startswith("clients/"):
+        return CLIENT_SOURCE_DIR / site_relative.removeprefix("clients/")
+    return REPO_ROOT / site_relative
 
 # What the reason must name: pi-lens's ruff configuration having no target
 # version, and the stdlib module it misfiles.
@@ -92,7 +101,7 @@ class _SuppressionSiteChecks(unittest.TestCase):
     site = ""
 
     def _load(self):
-        source = (REPO_ROOT / self.site).read_text(encoding="utf-8")
+        source = _site_path(self.site).read_text(encoding="utf-8")
         return source, source.splitlines()
 
     def _the_suppression(self):
@@ -190,7 +199,7 @@ class SuppressionReaderTest(unittest.TestCase):
 
     def test_every_site_is_a_tracked_python_file(self):
         for site in SUPPRESSION_SITES:
-            self.assertTrue((REPO_ROOT / site).is_file(), site)
+            self.assertTrue(_site_path(site).is_file(), site)
 
 
 if __name__ == "__main__":

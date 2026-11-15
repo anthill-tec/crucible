@@ -21,6 +21,7 @@ import unittest
 from pathlib import Path
 
 from tests.client.test_cr090_cli_install_integration import _CliInstallCase
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LINT_MODULE = "_crucible_lint.py"
@@ -42,7 +43,7 @@ class TheLintModuleIsLaidDownWithTheFleetTest(_CliInstallCase):
     def test_a_sandboxed_install_lays_the_lint_module_down_byte_identical(self):
         stdout = self.install_in_the_sandbox()
         landed = Path(self.clients_dir()) / LINT_MODULE
-        source = REPO_ROOT / "clients" / LINT_MODULE
+        source = CLIENT_SOURCE_DIR / LINT_MODULE
         self.assertTrue(landed.is_file(),
                         f"the install laid no {LINT_MODULE} down at {landed}; "
                         f"envelope:\n{stdout}")

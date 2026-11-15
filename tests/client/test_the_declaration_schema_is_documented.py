@@ -26,13 +26,14 @@ import unittest
 from pathlib import Path
 
 from tests.client.changelog_section import changelog_entries
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 README = REPO_ROOT / "README.md"
 RUNBOOK = REPO_ROOT / "docs" / "RUNBOOK.md"
 SCHEMA_NAME = "crucible-declaration.schema.json"
-SHIPPED_SCHEMA = REPO_ROOT / "clients" / SCHEMA_NAME
+SHIPPED_SCHEMA = CLIENT_SOURCE_DIR / SCHEMA_NAME
 INSTALLED_PATH = re.compile(r"(?:<target-dir>|~/\.crucible)/clients/" + re.escape(SCHEMA_NAME))
 # The schema's `version` before the bun gate exempted the entry marked
 # `"test": true` (read from `develop`'s `clients/crucible-declaration.schema.json`

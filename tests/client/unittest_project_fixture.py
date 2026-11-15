@@ -21,10 +21,11 @@ import unittest
 from pathlib import Path
 
 from tests.client.live_run_harness import new_scratch, scrubbed_env
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "unittest-project"
-RUNNER = REPO_ROOT / "clients" / "subtest_runner.py"
+RUNNER = client_script("subtest_runner.py")
 EXPECTED_PATH = FIXTURE / "expected.json"
 
 # The interpreter running this suite: the repo's `.venv` one, the runner's own.

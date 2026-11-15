@@ -48,10 +48,11 @@ from typing import Any, NamedTuple
 from unittest import mock
 
 from tests.client.live_run_harness import load_client
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS_DIR = REPO_ROOT / "tests"
-RUN_MODULE = REPO_ROOT / "clients" / "_crucible_run.py"
+RUN_MODULE = CLIENT_SOURCE_DIR / "_crucible_run.py"
 MANIFEST_MODULE = REPO_ROOT / "crucible_axi" / "manifest.py"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 
@@ -67,6 +68,14 @@ PROJECT_RULE_SET = ["E4", "E7", "E9", "F"]
 
 #: What the project's own linter is run over.
 LINTED_TREES = ("clients", "crucible_axi", "tests")
+
+
+def _top_level_dir(top_level_name):
+    """A top-level tree of the checkout; its client source through the one
+    constant the suite reads it by."""
+    if top_level_name == "clients":
+        return CLIENT_SOURCE_DIR
+    return REPO_ROOT / top_level_name
 
 #: The shipped port window: a development workstation's boards listen in it.
 WINDOW_LOW = 3800
@@ -913,7 +922,7 @@ class TheProjectDeclaresItsOwnRuffRuleSetTest(unittest.TestCase):
 
     def test_ruff_on_the_projects_own_rule_set_finds_nothing_in_the_python_trees(self):
         for tree in LINTED_TREES:
-            self.assertTrue((REPO_ROOT / tree).is_dir(), f"{tree} exists")
+            self.assertTrue(_top_level_dir(tree).is_dir(), f"{tree} exists")
         completed = run_ruff(*LINTED_TREES)
         findings = ruff_findings(self, completed)
         self.assertEqual(

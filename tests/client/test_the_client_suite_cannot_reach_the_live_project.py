@@ -24,9 +24,10 @@ import itertools
 import os
 import unittest
 from pathlib import Path
+from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 
 #: The six client-steering variables, one per stack, and the client each steers.
 STACK_VARIABLES = {

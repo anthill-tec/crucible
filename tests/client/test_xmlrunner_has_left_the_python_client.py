@@ -20,12 +20,13 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.client.live_run_harness import load_client
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS = REPO_ROOT / "clients"
+CLIENTS = TEST_INSTALL_CLIENTS
 PACKAGE = REPO_ROOT / "crucible_axi"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 PRD = REPO_ROOT / "docs" / "research" / "PRD-crucible-v2.md"
@@ -57,7 +58,7 @@ def xmlrunner_mentions(text):
 
 
 def shipped_text_files():
-    for root in (CLIENTS, PACKAGE):
+    for root in (CLIENT_SOURCE_DIR, PACKAGE):
         for path in sorted(root.rglob("*")):
             if "__pycache__" in path.parts or not path.is_file():
                 continue
@@ -189,8 +190,8 @@ class TheClientsHelpAndWarningsDropXmlrunnerTest(unittest.TestCase):
         self.assertEqual([w["code"] for w in watch.warnings()], ["subtests-uncounted"])
 
     def test_the_runner_and_the_client_name_no_fallback_signal(self):
-        runner = (CLIENTS / "subtest_runner.py").read_text(encoding="utf-8")
-        client = (CLIENTS / "python-crucible.py").read_text(encoding="utf-8")
+        runner = (CLIENT_SOURCE_DIR / "subtest_runner.py").read_text(encoding="utf-8")
+        client = (CLIENT_SOURCE_DIR / "python-crucible.py").read_text(encoding="utf-8")
         self.assertFalse("FALLBACK_SIGNAL" in runner,
                          "subtest_runner.py still defines its fallback signal")
         self.assertFalse("_FALLBACK_SIGNAL_LINE" in client,

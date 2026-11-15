@@ -36,12 +36,13 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests.client import CLIENT_SOURCE_DIR
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.client.live_run_harness import load_client
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUN_MODULE_PATH = REPO_ROOT / "clients" / "_crucible_run.py"
+RUN_MODULE_PATH = CLIENT_SOURCE_DIR / "_crucible_run.py"
 
 AXI = load_client("_crucible_axi.py")
 RUN = AXI._RUN

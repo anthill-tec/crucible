@@ -54,9 +54,10 @@ from pathlib import Path
 from unittest import mock
 
 from tests.client.live_run_harness import get_answering_health, load_client
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS = REPO_ROOT / "clients"
+CLIENTS = CLIENT_SOURCE_DIR
 CORE_MODULE = CLIENTS / "_crucible_axi.py"
 RUN_MODULE = CLIENTS / "_crucible_run.py"
 # The release-notes verb's module, loaded by the core the same way.

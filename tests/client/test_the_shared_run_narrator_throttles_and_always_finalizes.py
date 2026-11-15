@@ -73,9 +73,10 @@ post ever having crossed the throttle).
 import importlib.util
 import unittest
 from pathlib import Path
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-AXI_MODULE_PATH = REPO_ROOT / "clients" / "_crucible_axi.py"
+AXI_MODULE_PATH = client_script("_crucible_axi.py")
 
 
 def _load_axi_module():

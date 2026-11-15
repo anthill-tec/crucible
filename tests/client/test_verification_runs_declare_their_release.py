@@ -106,9 +106,10 @@ from tests.client.test_cr017_client_lifecycle import (
     _Cr094PreflightBase,
     _FakeCrucible,
 )
+from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS = REPO_ROOT / "clients"
+CLIENTS = TEST_INSTALL_CLIENTS
 
 RELEASE = "0.4.0"
 UNDECLARED_RELEASE = "0.9.9"

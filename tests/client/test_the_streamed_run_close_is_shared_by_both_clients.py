@@ -53,9 +53,9 @@ pinned below; the parameters are the proposal GREEN may refine.
 import ast
 import textwrap
 import unittest
-from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR
 
-CLIENTS = Path(__file__).resolve().parents[2] / "clients"
+CLIENTS = CLIENT_SOURCE_DIR
 SHARED_RUN_MODULE = CLIENTS / "_crucible_run.py"
 PYTHON_CLIENT = CLIENTS / "python-crucible.py"
 BUN_CLIENT = CLIENTS / "bun-crucible.py"

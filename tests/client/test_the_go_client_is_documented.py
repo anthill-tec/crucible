@@ -36,6 +36,7 @@ from tests.client.test_the_declaration_schema_is_documented import (
     _stack_declaration_sections,
     _stack_parts,
 )
+from tests.client import CLIENT_SOURCE_DIR, client_script
 
 GO_CLIENT = "go-crucible.py"
 VERSION_STATED = re.compile(r'(?i)(?:\bversion`?\W{0,4}|"version":\s*)(\d+)\b')
@@ -191,7 +192,7 @@ class ThePrdCarriesTheGoCoverageAmendmentTest(unittest.TestCase):
 # (`_go_blocks`), so a doc may word it as it likes.
 
 DN = RUNBOOK.parent / "research" / "DN-testing-tiers-in-crucible-projects.md"
-GO_HELP_CLIENT = RUNBOOK.parent.parent / "clients" / GO_CLIENT
+GO_HELP_CLIENT = client_script(GO_CLIENT)
 TIER_VERBS = ("unit", "module", "integration", "e2e", "bdd")
 
 
@@ -380,7 +381,7 @@ class TheGoDocstringNamesItsTiersTest(_NamesGosTiersAsAWhole, unittest.TestCase)
 class NothingInTheGoClientSaysGoDeclaresNoTierTest(unittest.TestCase):
 
     def test_the_client_source_says_nothing_of_the_kind(self):
-        text = GO_HELP_CLIENT.read_text(encoding="utf-8")
+        text = (CLIENT_SOURCE_DIR / GO_CLIENT).read_text(encoding="utf-8")
         self.assertEqual(_says_go_declares_no_tier(text), [])
 
 

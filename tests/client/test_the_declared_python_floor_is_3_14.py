@@ -29,6 +29,7 @@ import tokenize
 import tomllib
 import unittest
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
@@ -41,6 +42,14 @@ EXPECTED_PYTHON_CLASSIFIERS = [
 ]
 
 SCANNED_ROOTS = ("clients", "crucible_axi", "tests")
+
+
+def _top_level_dir(top_level_name):
+    """A top-level tree of the checkout; its client source through the one
+    constant the suite reads it by."""
+    if top_level_name == "clients":
+        return CLIENT_SOURCE_DIR
+    return REPO_ROOT / top_level_name
 SCANNED_SUFFIXES = (".py", ".ts", ".toml")
 SKIPPED_DIRS = {"__pycache__", "node_modules", ".venv"}
 
@@ -160,7 +169,7 @@ def stale_floor_claims(source, suffix):
 
 def _scanned_files():
     for root in SCANNED_ROOTS:
-        for path in sorted((REPO_ROOT / root).rglob("*")):
+        for path in sorted(_top_level_dir(root).rglob("*")):
             if not path.is_file() or path.suffix not in SCANNED_SUFFIXES:
                 continue
             if SKIPPED_DIRS.intersection(path.relative_to(REPO_ROOT).parts):

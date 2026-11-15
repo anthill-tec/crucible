@@ -44,13 +44,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 SCHEMA_NAME = "crucible-declaration.schema.json"
-PACKAGED_SCHEMA = REPO_ROOT / "clients" / SCHEMA_NAME
+PACKAGED_SCHEMA = CLIENT_SOURCE_DIR / SCHEMA_NAME
 MANIFEST_KEY = "declaration_schema"
 STAGE_FAILED_CODE = "stage-failed"
 

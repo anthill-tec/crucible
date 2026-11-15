@@ -28,10 +28,11 @@ from pathlib import Path
 import tomllib
 
 from tests.client.changelog_section import changelog_entries
+from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MVN_CLIENT = REPO_ROOT / "clients" / "mvn-crucible.py"
-SHIPPED_TOML = REPO_ROOT / "clients" / "crucible.toml"
+MVN_CLIENT = client_script("mvn-crucible.py")
+SHIPPED_TOML = CLIENT_SOURCE_DIR / "crucible.toml"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 DN = REPO_ROOT / "docs" / "research" / "DN-crucible-live-test-progress.md"
 

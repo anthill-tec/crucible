@@ -24,9 +24,10 @@ import sys
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GO_CLIENT = REPO_ROOT / "clients" / "go-crucible.py"
+GO_CLIENT = client_script("go-crucible.py")
 DECLARED = ("unit", "module", "integration", "e2e", "bdd")
 SIX = DECLARED + ("regression",)
 #: The flags every go tier verb carries.
