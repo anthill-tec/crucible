@@ -34,10 +34,7 @@ Invocation:
 import argparse
 import contextlib
 import io
-import os
-import shutil
 import sys
-import tempfile
 import unittest
 
 from tests.client.kept_coverage_answer import (
@@ -55,27 +52,11 @@ AXI = load_client("_crucible_axi.py")
 # leaves nothing behind in the core that composes the gate.
 RUN_CORE = load_client("_crucible_axi.py")
 TOON = load_toon()
-
-#: The project both cores read their configuration from (the gate passes on
-#: the warnings of the core that writes each run's envelope): a readable,
-#: empty `crucible.toml` of its own. Without it the core falls through to the
-#: checkout's root `crucible.toml`, which is the operator's git-ignored file:
-#: where it is absent (a fresh CI checkout), every gate here adds a
-#: `limit-configuration` warning these envelopes do not expect.
-_CONFIG_DIR = tempfile.mkdtemp(prefix="composed-gate-config-")
-
-
-def setUpModule():
-    with open(os.path.join(_CONFIG_DIR, "crucible.toml"), "w", encoding="utf-8"):
-        pass
-    AXI.bind_project_dir(_CONFIG_DIR)
-    RUN_CORE.bind_project_dir(_CONFIG_DIR)
-
-
-def tearDownModule():
-    AXI.bind_project_dir(None)
-    RUN_CORE.bind_project_dir(None)
-    shutil.rmtree(_CONFIG_DIR, ignore_errors=True)
+# Both cores load from the suite's test install, whose own `crucible.toml`
+# declares nothing: they read their configuration from it, never from the
+# checkout's root file, so the gate's envelopes carry no `limit-configuration`
+# warning (the gate passes on the warnings of the core writing each run's
+# envelope).
 
 
 GATE = "pre-merge-gate"
