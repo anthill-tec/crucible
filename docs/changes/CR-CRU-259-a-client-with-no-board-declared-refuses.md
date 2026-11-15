@@ -1,6 +1,6 @@
 # CR-CRU-259 — a client with no board declared refuses
 
-**Status:** PENDING · filed 2026-11-15 (release fix: found by the 0.4.0 leak census; user rulings 2026-11-15: the
+**Status:** COMPLETED — 2026-11-15 (on release/0.4.0) · filed 2026-11-15 (release fix: found by the 0.4.0 leak census; user rulings 2026-11-15: the
 client's 3849 fallback goes, and the fix is a release-fix CR committed on `release/0.4.0`) · Pre-review: ran — the
 gap analysis needed user rulings; it changes the clients and `crucible.toml` contract other projects consume
 **Type:** fix
@@ -82,23 +82,23 @@ only because they tolerate a board that does not answer.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — refusal.** In-process, with `_INSTALL_DIR` patched to a scratch directory and a bound project, when no
+- [x] **AC1 — refusal.** In-process, with `_INSTALL_DIR` patched to a scratch directory and a bound project, when no
   file declares a url, each client's `status` returns non-zero with the refusal envelope: the error names every file
   in the chain with why it was passed over (absent / no url / does not parse), `help` names the installer and the
   `[client] url` key, and the recording fake transport saw no call. Covers the deduplicated chain (project dir = the
   install dir) and an unbound project dir.
-- [ ] **AC2 — the chain still resolves.** A project file's url wins over the install's; an install file's url is used
+- [x] **AC2 — the chain still resolves.** A project file's url wins over the install's; an install file's url is used
   when the project declares none; a file that does not parse or declares an empty url is passed over. Includes
   `project-create` on a project that declares a board and an install that declares none.
-- [ ] **AC3 — no shipped board.** `clients/crucible.toml` declares no `[client] url`; `shipped_board` no longer exists;
+- [x] **AC3 — no shipped board.** `clients/crucible.toml` declares no `[client] url`; `shipped_board` no longer exists;
   no client code or string literal spells `3849`.
-- [ ] **AC4 — install still writes the board.** With the existing installer seam (a patched
+- [x] **AC4 — install still writes the board.** With the existing installer seam (a patched
   `_provisioned_server_config_source` whose template declares an ephemeral port range, never 3800–3899, throwaway
   HOME/XDG/BUN_INSTALL, `--no-service`), a fresh install writes `[client] url`, and `<target>/clients/_crucible_axi.py`
   loaded in-process with a project that declares no url resolves exactly that url.
-- [ ] **AC5 — help and docs.** No client help, RUNBOOK sentence or `clients/crucible.toml` comment describes a shipped
+- [x] **AC5 — help and docs.** No client help, RUNBOOK sentence or `clients/crucible.toml` comment describes a shipped
   last-resort board; each client's top-level help says a client with no board declared refuses.
-- [ ] **AC6 — the census modules.** The five modules the census caught, `install_project` and its four copies declare
+- [x] **AC6 — the census modules.** The five modules the census caught, `install_project` and its four copies declare
   their own board (a fake) or assert the refusal in-process; the tests that pinned the last resort or its literal are
   updated (`test_a_clients_board_falls_through_to_the_install_when_its_project_names_none`,
   `test_the_envelope_names_the_board_it_posted_to`, `test_client_fleet_envelope_census`,
@@ -106,15 +106,15 @@ only because they tolerate a board that does not answer.
   `test_an_installed_deployment_resolves_its_configuration`, `project_create_harness`, `tests/helpers/client-board.ts`,
   `server-limits-fixture.ts`, `project-namespace-tripwire.test.ts`). Orchestrator check, not a test: a hermetic run
   of the five modules under the census tripwire records no connection.
-- [ ] **AC7 — no board, no contact.** With no board declared anywhere, `test`, `lint` and `pre-merge-gate` without
+- [x] **AC7 — no board, no contact.** With no board declared anywhere, `test`, `lint` and `pre-merge-gate` without
   `--agent`, and `--help`, succeed as today, with no traceback and no board contacted. A verb that emits an envelope today emits
   one, with no `board` in it. `test` and `pre-merge-gate` without `--agent` emit none today, and still emit none (amended at
   GREEN 956).
-- [ ] **AC8 — refused before the work.** With no board declared, `lint --agent` and `pre-merge-gate --agent` refuse
+- [x] **AC8 — refused before the work.** With no board declared, `lint --agent` and `pre-merge-gate --agent` refuse
   before spawning a linter, runner or compile (proved with a recording runner seam), and the gate records no outcome.
-- [ ] **AC9 — the installer warns.** An install whose client file ends with no `[client] url` names the file and the
+- [x] **AC9 — the installer warns.** An install whose client file ends with no `[client] url` names the file and the
   key in its `[manifest]` row and its `help`.
-- [ ] **AC10 — the record and the budget.** `CHANGELOG.md`'s `## [0.4.0]` carries the Changed line; CR-CRU-252's spec
+- [x] **AC10 — the record and the budget.** `CHANGELOG.md`'s `## [0.4.0]` carries the Changed line; CR-CRU-252's spec
   carries the amendment note; the shared-module line budgets pass.
 
 ## Non-goals

@@ -188,7 +188,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-254](CR-CRU-254-each-stacks-lint-runs-through-its-client.md) | each stack's lint runs through its client, and the gate runs it after check | feature | COMPLETED | 199, 253 | 13 (0.4.0) |
 | [CR-CRU-256](CR-CRU-256-a-filed-lint-run-is-named-in-its-envelopes-events.md) | a filed lint run is named in its envelope's events | fix | COMPLETED | 254 | 8 (0.4.0) |
 | [CR-CRU-257](CR-CRU-257-the-doc-tests-read-the-changelog-section-being-written.md) | the doc tests read the changelog section being written | fix | COMPLETED | — | 8 (0.4.0) |
-| [CR-CRU-259](CR-CRU-259-a-client-with-no-board-declared-refuses.md) | a client with no board declared refuses | fix | PENDING | — | 8 (0.4.0) |
+| [CR-CRU-259](CR-CRU-259-a-client-with-no-board-declared-refuses.md) | a client with no board declared refuses | fix | COMPLETED | — | 8 (0.4.0) |
 | [CR-CRU-260](CR-CRU-260-the-client-suite-runs-from-its-own-install-and-owns-its-caches.md) | the client suite runs from its own install and owns its caches | fix | PENDING | 259 | 8 (0.4.0) |
 | [CR-CRU-261](CR-CRU-261-the-suites-declare-their-tiers-by-directory.md) | the suites declare their tiers by directory | fix | PENDING | 260 | 8 (0.4.0) |
 | [CR-CRU-262](CR-CRU-262-a-live-board-is-kept-for-feature-level-tests.md) | a live board is kept for feature-level tests | fix | PENDING | 261 | 8 (0.4.0) |
