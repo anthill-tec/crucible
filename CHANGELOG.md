@@ -272,6 +272,12 @@ Releases before 0.3.0 are described only on GitHub Releases.
 
 ### Changed
 
+- **A client with no board declared refuses.** A client whose project and install `crucible.toml`
+  name no `[client] url` now refuses every verb that must reach the board, with one envelope naming
+  each file and why it was passed over, instead of posting to the server's packaged port. The
+  shipped `clients/crucible.toml` declares no board; the installer writes the install's. An install
+  with no local server, or an upgraded one whose file never named a board, must declare
+  `[client] url = "http://<host>:<port>"`. A verb that sends nothing still runs.
 - **The `junit` readings follow the framework.** pytest's grouping by classname applies to a run of
   framework `pytest` whose report holds one suite named `pytest`, and bun's console reading to a run
   of framework `bun-test`, whatever the run's stack. A close that states no framework reads under the

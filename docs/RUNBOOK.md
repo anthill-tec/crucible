@@ -730,26 +730,34 @@ crucible-axi serve
 
 ### The board — `[client]`, in the project's own file
 
-Where the clients post is `[client] url`, read from a chain of three steps:
-the `crucible.toml` of the project directory they run in (beside the `.env`
-they already read), then the install's `crucible.toml`, then the shipped one.
-The first file that declares a non-empty `url` wins. A file with no `url` — no
-`[client]` table, a missing, empty or non-string `url`, or a file that does not
-parse — is passed over for the next, so a project file that declares only
-`[gate] skip` reaches the board its install names:
+Where the clients post is `[client] url`, read from a chain of two steps: the
+`crucible.toml` of the project directory they run in (beside the `.env` they
+already read), then the install's `crucible.toml`. The first file that declares
+a non-empty `url` wins. A file with no `url` — no `[client]` table, a missing,
+empty or non-string `url`, or a file that does not parse — is passed over for
+the next, so a project file that declares only `[gate] skip` reaches the board
+its install names. The installer writes the install's, naming the board it set
+up, for example:
 
 ```toml
 [client]
-url = "http://localhost:3849"
+url = "http://127.0.0.1:3850"
 ```
 
-That is the shipped default, the chain's last resort. The value is re-read at
-the point of use, so an edit takes effect on the next verb with nothing
-restarted and nothing exported — and a verb that resolves a board other than
-the machine's own names it as `context.board` in its own envelope: the board is
-named when it differs from the install's declared `url`, or from the shipped
-one when the install declares none. A run that landed somewhere unexpected is
-legible in the output of the command that sent it.
+When neither file declares one, a client refuses every verb that must reach
+the board: one `ok: false` envelope naming each file and why it was passed
+over, and nothing sent. A verb that sends nothing (`--help`, or a run that files
+nothing on the board) still runs. To fix it, re-run the
+installer, or declare `[client] url` in the project's own `crucible.toml`. An
+install with no local server, or an upgraded one whose file never named a
+board, must declare it.
+
+The value is re-read at the point of use, so an edit takes effect on the next
+verb with nothing restarted and nothing exported — and a verb that resolves a
+board other than the machine's own names it as `context.board` in its own
+envelope: the board is named when it differs from the install's declared
+`url`, and always when the install declares none. A run that landed somewhere
+unexpected is legible in the output of the command that sent it.
 
 ### A development board beside a production one
 

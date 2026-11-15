@@ -36,6 +36,8 @@ CR-CRU-138 (the server's operator file, laid down by `[manifest]`); CR-CRU-131 (
   rule, unchanged.
 - **The shipped address stays, documented.** `clients/crucible.toml` keeps `[client] url = "http://localhost:3849"`
   as the chain's last resort. Every place that describes the chain names all three steps.
+  *Amended by CR-CRU-259 (0.4.0):* the shipped address is gone. The chain has two steps, and a client with no board
+  declared refuses; the shipped file declares no `[client] url`.
 - **A re-install fills in what is missing and never overwrites.**
   - An existing install `crucible.toml` with no `[client] url` gets the install's resolved board URL.
   - An existing server file with no `[server] port` gets a port.
@@ -225,5 +227,6 @@ This step is not part of the code and has no AC.
 
 - The server's shipped `[server] port = 3849` and its resolution (user ruling).
 - A client with no board anywhere refusing to run. The shipped address stays its last resort (user ruling).
+  *Amended by CR-CRU-259 (0.4.0):* a client with no board declared now refuses; there is no last resort.
 - A checkout's clients reading the machine's install instead of the checkout's own `crucible.toml`.
 - Rewriting an operator's set `url` or `port`, even when it names a board that is down.
