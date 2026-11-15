@@ -86,6 +86,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.client import TEST_INSTALL_CLIENTS
 from tests.client.live_run_harness import (
     INGEST_PATHS,
     START,
@@ -106,7 +107,6 @@ from tests.client.test_cr017_client_lifecycle import (
     _Cr094PreflightBase,
     _FakeCrucible,
 )
-from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS = TEST_INSTALL_CLIENTS
@@ -266,6 +266,7 @@ class ReleaseFlagRidesRunStartAndIngestTest(unittest.TestCase):
             start_idx = first_index(posts, lambda p, b: p == START)
             self.assertIsNotNone(
                 start_idx, f"{client} {verb}: must POST {START}; got paths={paths!r}")
+            assert start_idx is not None  # narrowed for the type checker
             start_body = posts[start_idx][1] or {}
             self.assertEqual(
                 start_body.get("release"), RELEASE,
@@ -276,6 +277,7 @@ class ReleaseFlagRidesRunStartAndIngestTest(unittest.TestCase):
             self.assertIsNotNone(
                 ingest_idx, f"{client} {verb}: the run must still ingest; "
                 f"got paths={paths!r}")
+            assert ingest_idx is not None  # narrowed for the type checker
             ingest_body = posts[ingest_idx][1] or {}
             self.assertEqual(
                 ingest_body.get("release"), RELEASE,
