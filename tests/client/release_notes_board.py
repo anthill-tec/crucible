@@ -39,7 +39,7 @@ import urllib.request
 from pathlib import Path
 
 from tests.client.live_run_harness import install_project, scrubbed_env
-from tests.client.real_board import RealBoard, _require_http_scheme
+from tests.client.real_board import REPO_ROOT, RealBoard, _require_http_scheme  # noqa: F401 -- REPO_ROOT is re-exported to the release-notes modules
 from tests.client.test_client_fleet_envelope_census import (
     declare_and_require_board,
 )
