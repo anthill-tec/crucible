@@ -84,29 +84,23 @@ SERVER_LIMITS = ("run_abandon_ms", "project_inactive_ms", "retention",
                  "ingest_body_bytes", "raw_output_chars")
 
 
-def _resolve_build_interpreter():
-    """The first interpreter on this machine that can `import build`, or None.
+# What `python -m build --wheel --no-isolation` needs in the suite's OWN
+# interpreter: the frontend and the backend `pyproject.toml` names, all from
+# the `dev` extra. LIFTED from tests/client/test_crucible_axi_wheel_packaging.py.
+BUILD_MODULES = ("build", "hatchling", "hatch_vcs")
 
-    LIFTED from tests/client/test_crucible_axi_wheel_packaging.py, which proved
-    it: the project venv deliberately carries only the test/coverage toolchain,
-    so the release tooling usually lives on the system interpreter."""
-    candidates = [sys.executable,
-                  shutil.which("python3"),
-                  shutil.which("python"),
-                  str(Path(sys.base_prefix) / "bin" / "python3")]
-    seen = set()
-    for candidate in candidates:
-        if not candidate or candidate in seen:
-            continue
-        seen.add(candidate)
-        try:
-            probe = subprocess.run([candidate, "-c", "import build"],
-                                   capture_output=True, timeout=60)
-        except (OSError, subprocess.SubprocessError):
-            continue
-        if probe.returncode == 0:
-            return candidate
-    return None
+
+def _build_modules_gap():
+    """None when the suite's interpreter can import every `BUILD_MODULES`
+    entry, else the failure naming the missing ones and the `dev` extra.
+    An in-process probe: no interpreter is spawned."""
+    missing = [name for name in BUILD_MODULES if importlib.util.find_spec(name) is None]
+    if not missing:
+        return None
+    return (f"the suite's interpreter ({sys.executable}) cannot import "
+            f"{', '.join(missing)}; the wheel is built offline with it "
+            "(`--no-isolation`). Remedy: install the `dev` extra, "
+            "`uv pip install --python .venv/bin/python -e '.[dev]'`.")
 
 
 class _StagedWheelCase(unittest.TestCase):
@@ -120,17 +114,15 @@ class _StagedWheelCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        interpreter = _resolve_build_interpreter()
-        if interpreter is None:
+        gap = _build_modules_gap()
+        if gap is not None:
             # Fail fast rather than skip -- a silent skip is how the packaging
             # defect CR-CRU-042 guards stayed invisible.
-            raise RuntimeError(
-                "no interpreter on this machine can `import build`; the "
-                "packaging contract cannot be verified. Remedy: "
-                "`python3 -m pip install --upgrade build`.")
+            raise RuntimeError(f"the packaging contract cannot be verified: {gap}")
         cls.tmp_dir = tempfile.mkdtemp(prefix="crucible-axi-limits-packaging-")
         cls.build_result = subprocess.run(
-            [interpreter, "-m", "build", "--wheel", "--outdir", cls.tmp_dir],
+            [sys.executable, "-m", "build", "--wheel", "--no-isolation",
+             "--outdir", cls.tmp_dir],
             cwd=str(REPO_ROOT), capture_output=True, text=True,
             timeout=BUILD_TIMEOUT_SECONDS)
         wheels = sorted(Path(cls.tmp_dir).glob("*.whl"))

@@ -60,6 +60,7 @@ Fallback:
     python3 tests/client/test_cr046_uv_env_gate.py
 """
 
+import importlib.util
 import os
 import re
 import shutil
@@ -90,29 +91,38 @@ PEP723_BLOCK_RE = re.compile(
 )
 
 
-def _resolve_build_interpreter():
-    """Return the first interpreter on this machine that can `import
-    build`, or None. Duplicated from test_crucible_axi_wheel_packaging.py's
-    helper of the same name (kept local rather than cross-imported, so this
-    file's `python3 tests/client/test_cr046_uv_env_gate.py` fallback
-    invocation does not depend on `tests` being importable as a package)."""
-    candidates = [sys.executable,
-                  shutil.which("python3"),
-                  shutil.which("python"),
-                  str(Path(sys.base_prefix) / "bin" / "python3")]
-    seen = set()
-    for candidate in candidates:
-        if not candidate or candidate in seen:
-            continue
-        seen.add(candidate)
-        try:
-            probe = subprocess.run([candidate, "-c", "import build"],
-                                   capture_output=True, timeout=60)
-        except (OSError, subprocess.SubprocessError):
-            continue
-        if probe.returncode == 0:
-            return candidate
-    return None
+# The suite's own uv cache, kept between runs under the git-ignored
+# `<repo>/.cache/test-suite/`: every `uv` child uses it, never the operator's.
+SUITE_UV_CACHE = REPO_ROOT / ".cache" / "test-suite" / "uv"
+
+# What `python -m build --wheel --no-isolation` needs in the suite's OWN
+# interpreter: the frontend and the backend `pyproject.toml` names, all from
+# the `dev` extra. Duplicated in test_crucible_axi_wheel_packaging.py (kept
+# local rather than cross-imported, so this file's
+# `python3 tests/client/test_cr046_uv_env_gate.py` fallback invocation does
+# not depend on `tests` being importable as a package).
+BUILD_MODULES = ("build", "hatchling", "hatch_vcs")
+
+
+def _build_modules_gap():
+    """None when the suite's interpreter can import every `BUILD_MODULES`
+    entry, else the failure naming the missing ones and the `dev` extra.
+    An in-process probe: no interpreter is spawned."""
+    missing = [name for name in BUILD_MODULES if importlib.util.find_spec(name) is None]
+    if not missing:
+        return None
+    return (f"the suite's interpreter ({sys.executable}) cannot import "
+            f"{', '.join(missing)}; the wheel is built offline with it "
+            "(`--no-isolation`). Remedy: install the `dev` extra, "
+            "`uv pip install --python .venv/bin/python -e '.[dev]'`.")
+
+
+def _uv_env():
+    """The environment every `uv` child runs in: ours, with the suite's own
+    uv cache."""
+    env = dict(os.environ)
+    env["UV_CACHE_DIR"] = str(SUITE_UV_CACHE)
+    return env
 
 
 def _sanitized_env():
@@ -121,8 +131,9 @@ def _sanitized_env():
     modules onto `sys.path`) and `VIRTUAL_ENV` (would make `uv run` reuse an
     ambient venv's site-packages instead of building its own isolated
     resolution) so the gate reflects a machine with only `crucible-axi` +
-    uv installed, not this test process's own tooling."""
-    env = dict(os.environ)
+    uv installed, not this test process's own tooling. `uv` resolves into the
+    suite's own cache."""
+    env = _uv_env()
     env.pop("PYTHONPATH", None)
     env.pop("VIRTUAL_ENV", None)
     return env
@@ -170,17 +181,15 @@ class Cr046UvEnvironmentGateTest(unittest.TestCase):
                 "verified without it (uv is a hard prerequisite of the "
                 "install chain per CR-CRU-046 §S3). Remedy: install uv.")
 
-        interpreter = _resolve_build_interpreter()
-        if interpreter is None:
-            raise RuntimeError(
-                "no interpreter on this machine can `import build`; the "
-                "§S3 gate needs a real wheel to install. Remedy: "
-                "`python3 -m pip install --upgrade build`.")
+        gap = _build_modules_gap()
+        if gap is not None:
+            raise RuntimeError(f"the §S3 gate needs a real wheel to install: {gap}")
 
         cls.tmp_root = tempfile.mkdtemp(prefix="cr046-uv-env-gate-")
         dist_dir = os.path.join(cls.tmp_root, "dist")
         cls.build_result = subprocess.run(
-            [interpreter, "-m", "build", "--wheel", "--outdir", dist_dir],
+            [sys.executable, "-m", "build", "--wheel", "--no-isolation",
+             "--outdir", dist_dir],
             cwd=str(REPO_ROOT), capture_output=True, text=True,
             timeout=BUILD_TIMEOUT_SECONDS)
 
@@ -192,8 +201,8 @@ class Cr046UvEnvironmentGateTest(unittest.TestCase):
 
         venv_dir = os.path.join(cls.tmp_root, "scratch-venv")
         cls.venv_result = subprocess.run(
-            [UV_BINARY, "venv", venv_dir], capture_output=True, text=True,
-            timeout=UV_TIMEOUT_SECONDS)
+            [UV_BINARY, "venv", venv_dir], env=_uv_env(), capture_output=True,
+            text=True, timeout=UV_TIMEOUT_SECONDS)
         cls.venv_python = os.path.join(venv_dir, "bin", "python")
         if cls.venv_result.returncode != 0:
             return
@@ -201,7 +210,7 @@ class Cr046UvEnvironmentGateTest(unittest.TestCase):
         cls.install_result = subprocess.run(
             [UV_BINARY, "pip", "install", "--python", cls.venv_python,
              str(cls.wheel_path)],
-            capture_output=True, text=True, timeout=UV_TIMEOUT_SECONDS)
+            env=_uv_env(), capture_output=True, text=True, timeout=UV_TIMEOUT_SECONDS)
         if cls.install_result.returncode == 0:
             cls.installed_clients_dir = cls._resolve_installed_clients_dir()
 
