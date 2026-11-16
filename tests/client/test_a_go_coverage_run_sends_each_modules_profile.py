@@ -259,8 +259,10 @@ class GoflagsCarriesCoverpkgTest(_CoverageDrive):
         self.p = GoProject(self, fixture=FIXTURE)
         _decoding_board(self.p)
         self.p.board.script_run(passed=CALC_LISTED)
+        # The project's GOFLAGS replaces the harness's whole value, so it keeps
+        # the suite's `-modcacherw` beside the `-coverpkg` it adds.
         self.result = self.p.drive("--coverage", "--module-dir", "calc",
-                                   GOFLAGS="-coverpkg=./...")
+                                   GOFLAGS="-modcacherw -coverpkg=./...")
         self.where = diagnostics(self.result)
 
     def test_the_go_test_call_inherits_coverpkg_so_its_profile_repeats_blocks(self):
