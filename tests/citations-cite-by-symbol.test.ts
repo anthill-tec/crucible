@@ -1258,6 +1258,9 @@ function listAllRepoFiles(): string[] {
     ".git",
     "__pycache__",
     ".venv",
+    // The suite's own regenerable toolchain caches (CR-CRU-260): the uv cache
+    // there unpacks a second copy of every client file.
+    ".cache",
     "coverage",
     "test-reports",
     ".features-gen",

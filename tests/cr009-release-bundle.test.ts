@@ -1119,10 +1119,11 @@ function normalizeNeeds062(needs?: string | string[]): string[] {
 
 // Exact commands, verbatim from the CR's own §S1/§S2/§S3 text and measured
 // against the real repo (package.json's "test"/"test:e2e" scripts, and the
-// gap-analysis-measured `python3 -m unittest discover -s tests/client -t .`
-// invocation — 683/683 with no server).
+// gap-analysis-measured `-m unittest discover -s tests/client -t .`
+// invocation — 683/683 with no server). Since CR-CRU-260 AC5 the suite runs
+// on `.venv/bin/python`, the interpreter that carries the dev extra.
 const BUN_SUITE_CMD = "bun test";
-const PY_SUITE_CMD = "python3 -m unittest discover -s tests/client -t .";
+const PY_SUITE_CMD = ".venv/bin/python -m unittest discover -s tests/client -t .";
 const E2E_SUITE_CMD = "bun run test:e2e";
 
 describe("§S1/§S2/§S3 release.yml declares bun/python/e2e test jobs", () => {
@@ -1133,7 +1134,7 @@ describe("§S1/§S2/§S3 release.yml declares bun/python/e2e test jobs", () => {
     expect(matches.length).toBe(1);
   });
 
-  test("exactly one job runs the Python suite (`python3 -m unittest discover -s tests/client -t .`)", () => {
+  test("exactly one job runs the Python suite (`.venv/bin/python -m unittest discover -s tests/client -t .`)", () => {
     const jobs = parseReleaseWorkflowJobs062();
     const matches = findJobsRunning062(jobs, PY_SUITE_CMD);
     expect(matches.length).toBe(1);
