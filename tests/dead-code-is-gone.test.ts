@@ -16,6 +16,7 @@
 // diagnostics to the 17 (file, symbol) pairs is the robust one — it is
 // exactly the signal GREEN has to silence, with no guessing about form.
 import { describe, expect, test } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -31,19 +32,19 @@ function readJson(relPath: string): Record<string, unknown> {
 
 describe("§S1 production code nothing calls (AC2)", () => {
   test("_fleet_context has no definition left in clients/bun-crucible.py", () => {
-    const src = readSource("clients/bun-crucible.py");
+    const src = readFileSync(join(CLIENT_SOURCE_DIR, "bun-crucible.py"), "utf8");
     expect(src).not.toMatch(/^def _fleet_context\(/m);
   });
 
   test("_disk_precheck has no definition left in clients/rust-crucible.py", () => {
-    const src = readSource("clients/rust-crucible.py");
+    const src = readFileSync(join(CLIENT_SOURCE_DIR, "rust-crucible.py"), "utf8");
     expect(src).not.toMatch(/^def _disk_precheck\(/m);
   });
 });
 
 describe("§S1 item 3 stays (AC3 pin)", () => {
   test("project_config_path is still defined in the shared client module", () => {
-    const src = readSource("clients/_crucible_axi.py");
+    const src = readFileSync(join(CLIENT_SOURCE_DIR, "_crucible_axi.py"), "utf8");
     expect(src).toMatch(/^def project_config_path\(/m);
   });
 });

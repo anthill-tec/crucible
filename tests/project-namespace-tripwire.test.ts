@@ -42,8 +42,9 @@
 // surface can be judged, so this file spawns all five clients and reads what
 // they actually PRINT — 159 (client, verb) surfaces, root help included.
 import { describe, expect, test } from "bun:test";
+import { clientScript, CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   balancedEnd,
   extractCitableText,
@@ -497,7 +498,7 @@ interface HelpSurface {
 function collectHelpSurfaces(): HelpSurface[] {
   const run = (client: string, args: string[]): { text: string; exitCode: number } => {
     const proc = Bun.spawnSync({
-      cmd: ["python3", join(REPO_ROOT, "clients", client), ...args],
+      cmd: ["python3", clientScript(client), ...args],
       cwd: REPO_ROOT,
       // COLUMNS pins argparse's wrap width so the surface is deterministic
       // across terminals and CI.
@@ -924,7 +925,7 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
   // SHARED with tests/docs-retired-mirror-references.test.ts, whose contract
   // rests on the same function, and a change there is not this cycle's to make.
   test("no CR literal sits at a live-code position in any client", () => {
-    const files = listFiles("clients", [".py"]);
+    const files = listFiles(relative(REPO_ROOT, CLIENT_SOURCE_DIR), [".py"]);
     // Non-vacuity: the five clients plus the shared module and the TOON
     // codec. A walker that silently returned nothing would pass otherwise.
     expect(files.length).toBeGreaterThanOrEqual(CLIENTS.length + 2);

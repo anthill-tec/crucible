@@ -53,6 +53,7 @@
 // live data/crucible.db and port 3849 are NEVER touched, so no test here can
 // re-author wave 5 (§S3).
 import { describe, test, expect, afterEach } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -183,7 +184,7 @@ interface HeldRow {
   release?: string;
 }
 
-const CLIENTS_DIR = join(import.meta.dir, "..", "clients");
+const CLIENTS_DIR = CLIENT_SOURCE_DIR;
 
 // ───────────────────────────────────────────────────────────────────────────
 

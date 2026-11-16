@@ -24,6 +24,7 @@
 // a scripted fake, and environment VALUES are never printed — the child's
 // environment is compared by key name or as a true/false equality only.
 import { describe, expect, test } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import * as runner from "../scripts/webkit-docker-runner.ts";
@@ -39,7 +40,9 @@ import {
 } from "../scripts/webkit-docker-runner.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
-const CLIENT_SCRIPT_ABSOLUTE = join(REPO_ROOT, "clients", "bun-crucible.py");
+// What the pass under test spawns: the checkout's client, named through the
+// test install helper's client source constant (CR-CRU-260).
+const CLIENT_SCRIPT_ABSOLUTE = join(CLIENT_SOURCE_DIR, "bun-crucible.py");
 const CLIENT_SCRIPT_RELATIVE = "clients/bun-crucible.py";
 const FAKE_CONTAINER_ID = "cafebabe1234";
 

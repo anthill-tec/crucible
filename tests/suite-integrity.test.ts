@@ -50,6 +50,7 @@
 // prior-run artifact read at all, no run can fail because of how the previous
 // command was invoked. The primary guarantee needs no run history.
 import { describe, expect, test } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -58,7 +59,7 @@ import { startServer } from "../src/server.ts";
 import { declareClientBoard } from "./helpers/client-board.ts";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SCRIPT_PATH = path.join(REPO_ROOT, "clients", "bun-crucible.py");
+const SCRIPT_PATH = clientScript("bun-crucible.py");
 
 // Every `.test.ts` file under `dir`, recursively. Used on the scratch fixture
 // tree in block 3 — never on this repo's own `tests/` — to establish what was

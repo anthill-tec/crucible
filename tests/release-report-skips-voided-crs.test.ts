@@ -31,6 +31,7 @@
 // db, never the operator's board or database, and is stopped by its own handle.
 // No real git, no remote, no push.
 import { afterEach, describe, expect, test } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -345,7 +346,7 @@ describe("the release ceremony's provenance report does not count VOID or SUPERS
       `# Changelog\n\n## [${VERSION}] - 2026-10-21\n\n### Fixed\n\n- The release this world finishes.\n`,
     );
     writeFileSync(join(root, ".env"), `CRUCIBLE_PROJECT_KEY=${projectKey}\n`);
-    symlinkSync(join(REPO_ROOT, "clients"), join(root, "clients"));
+    symlinkSync(CLIENT_SOURCE_DIR, join(root, "clients"));
     writeFileSync(join(bin, "git"), GIT_STUB);
     chmodSync(join(bin, "git"), 0o755);
     writeFileSync(join(bin, "curl"), `#!/bin/sh\nprintf 'curl %s\\n' "$*" >> "$RSH_LOG"\nexit 7\n`);

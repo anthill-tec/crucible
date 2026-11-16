@@ -71,6 +71,7 @@
 // (register, unregister, junit ingest, parsed ingest) must move to v2 with
 // NO exception, and every test below pins v1 as NEVER hit.
 import { afterEach, describe, expect, test } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -79,8 +80,8 @@ import { hints } from "../src/hints.ts";
 import { decode } from "@toon-format/toon";
 import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
-const RUST_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "rust-crucible.py");
-const MVN_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "mvn-crucible.py");
+const RUST_SCRIPT_PATH = clientScript("rust-crucible.py");
+const MVN_SCRIPT_PATH = clientScript("mvn-crucible.py");
 
 // A well-formed UUID the board has never been asked to hold — the exact
 // shape of key a mistyped or invented `.env` carries. Every client reads

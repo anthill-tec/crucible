@@ -80,8 +80,9 @@
 // never touched, `data/crucible.toml` is never read or written, and nothing
 // here talks to the running board.
 import { afterEach, describe, expect, test } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { RETENTION_DISPOSABLE_KINDS, SCHEMA_VERSION, Store } from "../src/store.ts";
 import { retentionDisclosure } from "../src/server.ts";
 import { SERVER_LIMIT_NAMES } from "../src/limits.ts";
@@ -97,7 +98,7 @@ import { REPO_ROOT, listFiles } from "./helpers/source-scan.ts";
 afterEach(restoreServerLimitsFixture);
 
 const RUNBOOK = "docs/RUNBOOK.md";
-const CLIENT_MODULE = "clients/_crucible_axi.py";
+const CLIENT_MODULE = join(CLIENT_SOURCE_DIR, "_crucible_axi.py");
 
 /**
  * The two shipped declaration files, as PATHS — the only two things this file
@@ -107,7 +108,9 @@ const CLIENT_MODULE = "clients/_crucible_axi.py";
  * below proves the pair is complete by comparing the names they declare with
  * the two resolvers' own name lists.
  */
-const SHIPPED_DATA = ["src/crucible.toml", "clients/crucible.toml"] as const;
+// The client file is labelled as the RUNBOOK cites it, and located through
+// the test install helper's client source constant (CR-CRU-260).
+const SHIPPED_DATA = ["src/crucible.toml", relative(REPO_ROOT, join(CLIENT_SOURCE_DIR, "crucible.toml"))] as const;
 
 const FIGURES = ["recommended", "min", "max"] as const;
 type Figure = (typeof FIGURES)[number];
@@ -181,7 +184,7 @@ function declaredLimits(): Declared[] {
  * this CR family has already been bitten by.
  */
 function clientLimitNames(): string[] {
-  const match = /CLIENT_LIMIT_NAMES\s*=\s*\(([^)]*)\)/.exec(text(CLIENT_MODULE));
+  const match = /CLIENT_LIMIT_NAMES\s*=\s*\(([^)]*)\)/.exec(readFileSync(CLIENT_MODULE, "utf8"));
   if (match === null) {
     throw new Error(
       `CR-CRU-131 §S1b: ${CLIENT_MODULE} no longer declares CLIENT_LIMIT_NAMES. It is the single ` +

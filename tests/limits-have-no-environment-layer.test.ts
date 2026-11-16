@@ -54,6 +54,7 @@
 // config path resolves beside it; no database is opened there, `data/crucible.db`
 // is never touched, and nothing here talks to the running board.
 import { afterEach, describe, expect, test } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { Store } from "../src/store.ts";
@@ -359,7 +360,8 @@ describe("CR-CRU-131 §S1b — the uncapped-retention disclosure names the FILE 
 // retired. An operator who learned one from the source has to be able to find
 // out it is gone.
 
-const SHIPPED_TREES = ["src", "clients", "public", "bin"];
+// The client tree is read through the test install helper's constant (CR-CRU-260).
+const SHIPPED_TREES = ["src", relative(REPO_ROOT, CLIENT_SOURCE_DIR), "public", "bin"];
 const SCANNED_EXTS = [".ts", ".js", ".mjs", ".py", ".html", ".css"];
 
 interface Hit {

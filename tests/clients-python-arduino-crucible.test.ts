@@ -81,6 +81,7 @@
 // arduino's register (with `--role` given, matching today's real call
 // sites) hits the v2 endpoint.
 import { afterEach, describe, expect, test } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -89,8 +90,8 @@ import { hints } from "../src/hints.ts";
 import { decode } from "@toon-format/toon";
 import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
-const PYTHON_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "python-crucible.py");
-const ARDUINO_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "arduino-crucible.py");
+const PYTHON_SCRIPT_PATH = clientScript("python-crucible.py");
+const ARDUINO_SCRIPT_PATH = clientScript("arduino-crucible.py");
 
 // A well-formed UUID the board has never been asked to hold — the exact
 // shape of key a mistyped or invented `.env` carries. Every client reads

@@ -27,6 +27,7 @@
 // instead of leaving the repo. Deleting it would take this oracle with it.
 import { decode } from "@toon-format/toon";
 import { describe, test, expect, afterEach } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -72,7 +73,7 @@ describe("TOON conformance — official library decode of a real CLIENT envelope
   // outer describe.
 
   describe("client-emit oracle — a real client envelope decodes via the official library (§S4, client→agent direction)", () => {
-    const CLIENT_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "bun-crucible.py");
+    const CLIENT_SCRIPT_PATH = clientScript("bun-crucible.py");
     const scratchDirs: string[] = [];
 
     afterEach(() => {

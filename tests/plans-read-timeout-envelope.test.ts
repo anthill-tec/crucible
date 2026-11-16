@@ -23,12 +23,13 @@
 // The stall server is GET-stalling by construction, so no real board is touched
 // and nothing is written anywhere.
 import { describe, test, expect, afterEach } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
-const CLIENT = join(import.meta.dir, "..", "clients", "python-crucible.py");
+const CLIENT = clientScript("python-crucible.py");
 
 /** The client's own hook-safe read bound (`_get(path, timeout=10)`). */
 const clientReadTimeoutMs = 10_000;

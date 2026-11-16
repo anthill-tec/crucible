@@ -9,6 +9,7 @@
 // process per environment. Its reporter list is fixed at import time, so one
 // process cannot show both branches.
 import { describe, expect, test } from "bun:test";
+import { TEST_INSTALL_CLIENTS } from "./helpers/test-install.ts";
 import { join, resolve } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -16,7 +17,8 @@ const REPORTERS_VAR = "CRUCIBLE_REPORTERS";
 const JUNIT_VAR = "PLAYWRIGHT_JUNIT_OUTPUT_NAME";
 const JSON_VAR = "PLAYWRIGHT_JSON_OUTPUT_NAME";
 const REPORTER_FILE = "playwright-crucible.ts";
-const REPORTERS_DIR = join(REPO_ROOT, "clients", "reporters");
+// A reporter Playwright LOADS is reached through the test install (CR-CRU-260).
+const REPORTERS_DIR = join(TEST_INSTALL_CLIENTS, "reporters");
 const FIXTURE_PROJECT = join(REPO_ROOT, "tests", "fixtures", "playwright-bdd-project");
 const FIXTURE_JUNIT_VAR = "FIXTURE_JUNIT_PATH";
 const FIXTURE_JSON_VAR = "FIXTURE_JSON_PATH";

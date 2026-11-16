@@ -34,8 +34,9 @@
 //   WORKFLOW_CYCLE_ID sweep instead. Flagging this rather than silently
 //   picking a side.
 import { describe, expect, test } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
@@ -45,7 +46,8 @@ function readText(relPath: string): string {
 
 const PRD_PATH = join("docs", "research", "PRD-crucible-v2.md");
 const RUNBOOK_PATH = join("docs", "RUNBOOK.md");
-const STATUS_CONTRACT_PATH = join("clients", "STATUS-CONTRACT.md");
+// Client source is read through the test install helper's constant (CR-CRU-260).
+const STATUS_CONTRACT_PATH = relative(REPO_ROOT, join(CLIENT_SOURCE_DIR, "STATUS-CONTRACT.md"));
 
 // Slices out the "Run timeline" bullet's cycle/attach sub-paragraph (from the
 // "RED→GREEN transition marker" locked-round callout down to, but excluding,

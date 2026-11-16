@@ -28,6 +28,7 @@
 //     the shim's `/api/agents/remove` — the swap to
 //     `/api/v2/agents/unregister {silent:true}` has not happened yet.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -713,11 +714,11 @@ describe("Manager UI — allowRunDeletion edit-in-place toggle (§S4)", () => {
 // proxy technique; the proxy here ALSO captures the parsed JSON body so the
 // exact {silent:true} argv can be pinned, not just the URL.)
 // ─────────────────────────────────────────────────────────────────────────
-const SCRIPT_PATH = join(import.meta.dir, "..", "clients", "bun-crucible.py");
-const RUST_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "rust-crucible.py");
-const MVN_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "mvn-crucible.py");
-const PYTHON_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "python-crucible.py");
-const ARDUINO_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "arduino-crucible.py");
+const SCRIPT_PATH = clientScript("bun-crucible.py");
+const RUST_SCRIPT_PATH = clientScript("rust-crucible.py");
+const MVN_SCRIPT_PATH = clientScript("mvn-crucible.py");
+const PYTHON_SCRIPT_PATH = clientScript("python-crucible.py");
+const ARDUINO_SCRIPT_PATH = clientScript("arduino-crucible.py");
 
 interface RunResult {
   code: number;

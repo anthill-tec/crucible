@@ -40,13 +40,14 @@
 // Every server here is booted on an OS-assigned port against an mkdtempSync
 // scratch db. The live data/crucible.db and port 3849 are never touched.
 import { describe, test, expect, afterEach } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
 import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
-const PYTHON_CLIENT = join(import.meta.dir, "..", "clients", "python-crucible.py");
+const PYTHON_CLIENT = clientScript("python-crucible.py");
 
 interface QueueEntryWire {
   cr: string;

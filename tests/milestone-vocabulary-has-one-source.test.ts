@@ -68,9 +68,10 @@
 // never opened and port 3849 is never touched. Every other case reads source
 // files off disk and writes nothing.
 import { describe, test, expect, afterEach } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
 
 const ORCH = "cru130-c3-one-source";
@@ -85,14 +86,18 @@ const READING_SITES = [
   "src/server.ts",
   "bin/crucible-server.mjs",
   "public/app.js",
-  "clients/_crucible_axi.py",
-  "clients/_crucible_run.py",
-  "clients/_crucible_lint.py",
-  "clients/arduino-crucible.py",
-  "clients/bun-crucible.py",
-  "clients/mvn-crucible.py",
-  "clients/python-crucible.py",
-  "clients/rust-crucible.py",
+  // The clients, located through the test install helper's client source
+  // constant (CR-CRU-260) and labelled repo-relative.
+  ...[
+    "_crucible_axi.py",
+    "_crucible_run.py",
+    "_crucible_lint.py",
+    "arduino-crucible.py",
+    "bun-crucible.py",
+    "mvn-crucible.py",
+    "python-crucible.py",
+    "rust-crucible.py",
+  ].map((name) => relative(process.cwd(), join(CLIENT_SOURCE_DIR, name))),
 ] as const;
 
 /** An enumeration is three distinct names inside one window of source. */

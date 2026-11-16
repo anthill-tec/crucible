@@ -64,6 +64,7 @@
 // is opened, `data/crucible.db` is never touched, `data/crucible.toml` is
 // never read or written, and nothing talks to the running board.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import {
   existsSync,
   mkdtempSync,
@@ -87,10 +88,13 @@ import { listFiles, REPO_ROOT } from "./helpers/source-scan.ts";
 // fourth retirement cannot land on one stack only). Two hand-maintained name
 // lists in two languages is the second copy this CR family has already been
 // bitten by twice.
-const CLIENT_MODULE = "clients/_crucible_axi.py";
+const CLIENT_MODULE = join(CLIENT_SOURCE_DIR, "_crucible_axi.py");
+/** The client tree, repo-relative, located through the test install
+ *  helper's client source constant (CR-CRU-260). */
+const CLIENT_TREE = relative(REPO_ROOT, CLIENT_SOURCE_DIR);
 
 function clientLimitNames(): string[] {
-  const text = readFileSync(join(REPO_ROOT, CLIENT_MODULE), "utf8");
+  const text = readFileSync(CLIENT_MODULE, "utf8");
   const match = /CLIENT_LIMIT_NAMES\s*=\s*\(([^)]*)\)/.exec(text);
   if (match === null) {
     throw new Error(
@@ -127,7 +131,7 @@ const DECLARED_LIMITS = [...SERVER_LIMIT_NAMES, ...clientLimitNames()];
 // two things. (It is also what keeps this scan from needing a SEVENTH walker
 // of two grammars — the discipline tests/helpers/source-scan.ts's own header
 // states.)
-const SCANNED_TREES = ["src", "clients"];
+const SCANNED_TREES = ["src", CLIENT_TREE];
 const SCANNED_EXTS = [".ts", ".js", ".mjs", ".py"];
 const DOC_WINDOW = 200;
 
@@ -194,7 +198,7 @@ function namesDeclaredIn(text: string, names: readonly string[]): string[] {
 const CANDIDATE_DATA_FILES = [
   "crucible.toml",
   "src/crucible.toml",
-  "clients/crucible.toml",
+  join(CLIENT_TREE, "crucible.toml"),
   "crucible_axi/crucible.toml",
   "crucible_axi/clients/crucible.toml",
 ];

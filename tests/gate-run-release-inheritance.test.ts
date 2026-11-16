@@ -17,6 +17,7 @@
 // every assertion below fails against production as it stands, because
 // nothing inherits anything yet.
 import { describe, test, expect, afterEach } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -183,7 +184,7 @@ describe("a run's snapshots keep the run's release", () => {
   // under tests/client/ use, with its state directory written into the
   // script rather than handed over in the environment.
   describe("end to end — one real client drives gate-run then gate-respond on the same run, against a live board", () => {
-    const CLIENT = join(import.meta.dir, "..", "clients", "bun-crucible.py");
+    const CLIENT = clientScript("bun-crucible.py");
     const RUN_ID = "e2e-release-run-0001";
     const RELEASE = "0.4.0";
     const CALLER = "release-e2e-caller";

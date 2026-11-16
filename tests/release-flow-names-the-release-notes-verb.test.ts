@@ -22,6 +22,7 @@
 // mark and no acceptance-criterion number; and neither does the shared module
 // the verb lives in, nor this file.
 import { describe, expect, test } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -245,7 +246,10 @@ function forkPoint(): string {
   return best.base;
 }
 
-const CLASSIFIED_TREES = ["clients", "src", "scripts"];
+// The client tree, named through the test install helper's client source
+// constant: this file reads client source, it never builds its own path.
+const CLIENT_TREE = path.relative(REPO_ROOT, CLIENT_SOURCE_DIR);
+const CLASSIFIED_TREES = [CLIENT_TREE, "src", "scripts"];
 
 /**
  * The working tree's diff under the classified trees since the fork point, in
@@ -294,7 +298,7 @@ describe("what the branch adds under clients, src and scripts cites no change re
   });
 
   test("the release-notes module and this file carry no change-request id, section mark or acceptance-criterion number", () => {
-    const files = ["clients/_crucible_release.py", "tests/release-flow-names-the-release-notes-verb.test.ts"];
+    const files = [path.join(CLIENT_TREE, "_crucible_release.py"), "tests/release-flow-names-the-release-notes-verb.test.ts"];
     const carrying = files.filter((file) => {
       expect(existsSync(path.join(REPO_ROOT, file)), `${file} exists`).toBe(true);
       return citationsIn(read(file)).length > 0;

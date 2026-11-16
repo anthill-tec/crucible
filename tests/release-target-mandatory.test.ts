@@ -32,6 +32,7 @@
 // their own half. So that ONE test drives the real client binary against the
 // real route and reads the stored integer back — the whole path, once.
 import { describe, test, expect, afterEach } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,7 +44,7 @@ import { roadmapHints } from "../src/hints.ts";
 import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
-const CLIENT_PATH = join(REPO_ROOT, "clients", "bun-crucible.py");
+const CLIENT_PATH = clientScript("bun-crucible.py");
 
 const ORCH = "orchestrator-1";
 

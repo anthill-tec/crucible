@@ -89,6 +89,7 @@
 // message it carries is its OWN — never the ABSENCE of a message, which was
 // only ever an artifact of one bun's line ordering.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -97,7 +98,7 @@ import { hints } from "../src/hints.ts";
 import { decode } from "@toon-format/toon";
 import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
-const SCRIPT_PATH = join(import.meta.dir, "..", "clients", "bun-crucible.py");
+const SCRIPT_PATH = clientScript("bun-crucible.py");
 
 // A well-formed UUID the board has never been asked to hold — the exact
 // shape of key a mistyped or invented `.env` carries. Every client reads

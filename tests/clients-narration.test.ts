@@ -85,6 +85,7 @@
 // something to tail live, and the run spans long enough to cross the
 // throttle's time bound at least once.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -92,8 +93,8 @@ import { type ViewCodec, viewCodecs } from "../src/codecs/index.ts";
 import { startServer } from "../src/server.ts";
 import { declareClientBoard, projectDirFromArgs } from "./helpers/client-board.ts";
 
-const BUN_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "bun-crucible.py");
-const MVN_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "mvn-crucible.py");
+const BUN_SCRIPT_PATH = clientScript("bun-crucible.py");
+const MVN_SCRIPT_PATH = clientScript("mvn-crucible.py");
 
 /**
  * The bun narration tests below are about an UNRELAYED run (CR-CRU-201 §S5,

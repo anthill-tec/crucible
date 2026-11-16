@@ -25,16 +25,15 @@
 // C2), which established this repo's convention for pinning prose doc
 // contracts with real content assertions rather than a structural comment.
 import { describe, expect, test } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const REPO_ROOT = join(import.meta.dir, "..");
+const STATUS_CONTRACT_PATH = join(CLIENT_SOURCE_DIR, "STATUS-CONTRACT.md");
 
-function readText(relPath: string): string {
-  return readFileSync(join(REPO_ROOT, relPath), "utf8");
+function readText(file: string): string {
+  return readFileSync(file, "utf8");
 }
-
-const STATUS_CONTRACT_PATH = join("clients", "STATUS-CONTRACT.md");
 
 describe("§S0 STATUS-CONTRACT.md — role is declared via --role, agentId is free-form (CR-CRU-059 rename)", () => {
   test("states role comes from --role and is never inferred from the agentId's shape", () => {

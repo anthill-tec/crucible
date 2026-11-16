@@ -40,6 +40,7 @@
 // The fixture's `setup` project fails on purpose and `after-setup` depends on
 // it, so its two scenarios never run.
 import { afterAll, describe, expect, test } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import {
   cpSync,
   existsSync,
@@ -59,7 +60,7 @@ import type { ServerHandle } from "../src/server.ts";
 import { declareClientBoard } from "./helpers/client-board.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
-const CLIENT = join(REPO_ROOT, "clients", "bun-crucible.py");
+const CLIENT = clientScript("bun-crucible.py");
 const FIXTURE = join(REPO_ROOT, "tests", "fixtures", "playwright-bdd-project");
 const REPO_NODE_MODULES = join(REPO_ROOT, "node_modules");
 const AGENT = "playwright-bdd-fixture-drive";

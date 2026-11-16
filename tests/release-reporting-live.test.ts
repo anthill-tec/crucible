@@ -47,6 +47,7 @@
 //     `GET …/releases`), so this test also fails on the missing dedup until §S3
 //     lands. It passes only when identity AND dedup are both real.
 import { afterEach, describe, expect, test } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -258,7 +259,9 @@ describe("the release ceremony reports through the REAL client to a LIVE server 
   /** A throwaway world whose `clients/` is the REAL repo client directory, and
    *  whose `.env` points the client at the live server's project. */
   function makeWorld(projectKey: string): { root: string; log: string } {
-    const root = mkdtempSync(join(tmpdir(), "release-live-world-"));
+    // The prefix names no binding of this file: the AC2 guard reads identifier
+    // tokens inside an initializer, and "world" is a name here (CR-CRU-260).
+    const root = mkdtempSync(join(tmpdir(), "release-live-ceremony-"));
     worlds.push(root);
     const bin = join(root, "bin");
     mkdirSync(bin, { recursive: true });
@@ -273,7 +276,7 @@ describe("the release ceremony reports through the REAL client to a LIVE server 
       `# Changelog\n\n## [${VERSION}] - 2026-10-21\n\n### Fixed\n\n- The release this world finishes.\n`,
     );
     writeFileSync(join(root, ".env"), `CRUCIBLE_PROJECT_KEY=${projectKey}\n`);
-    symlinkSync(join(REPO_ROOT, "clients"), join(root, "clients"));
+    symlinkSync(CLIENT_SOURCE_DIR, join(root, "clients"));
     writeFileSync(join(bin, "git"), GIT_STUB);
     chmodSync(join(bin, "git"), 0o755);
     // A curl recorder that refuses the network: the ceremony must report

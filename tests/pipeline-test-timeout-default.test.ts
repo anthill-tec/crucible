@@ -37,6 +37,7 @@
 // an explicit per-test budget) and cr009's `NPM_PACK_TIMEOUT_MS = 60_000`,
 // which §S1 requires to survive this CR untouched.
 import { describe, expect, test } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -175,7 +176,7 @@ let cachedProbe: ClientProbe | undefined;
 function probeClient(): ClientProbe {
   if (cachedProbe !== undefined) return cachedProbe;
   const child = Bun.spawnSync({
-    cmd: ["python3", "-c", CLIENT_PROBE, join(REPO_ROOT, CLIENT_REL)],
+    cmd: ["python3", "-c", CLIENT_PROBE, clientScript("bun-crucible.py")],
     cwd: REPO_ROOT,
     env: { ...process.env },
     stdout: "pipe",

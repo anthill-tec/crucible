@@ -39,8 +39,9 @@
 // ── Safety ─────────────────────────────────────────────────────────────────
 // Every store here is ":memory:". The live `data/crucible.db` is never opened.
 import { describe, test, expect, afterEach } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { Store, defaultRetention } from "../src/store.ts";
 import { parseCompile } from "../src/codecs/compile.ts";
 import * as storeModule from "../src/store.ts";
@@ -715,7 +716,11 @@ describe("CR-CRU-129 §S2 — retention reaches only the disposable kinds", () =
 
 /** Where the limits are DECLARED: one data file per enforcing process, which
  *  is what the ownership split means in packaging terms. */
-const DECLARATION_FILES = ["src/crucible.toml", "clients/crucible.toml"] as const;
+/** The client tree, located through the test install helper's client source
+ *  constant (CR-CRU-260), repo-relative like every other path here. */
+const CLIENT_TREE = relative(process.cwd(), CLIENT_SOURCE_DIR);
+
+const DECLARATION_FILES = ["src/crucible.toml", join(CLIENT_TREE, "crucible.toml")] as const;
 
 /** Anything this scan opens: a function, in one of the two trees, scoped BY
  *  NAME so a rename fails loudly instead of quietly leaving the walker with
@@ -781,7 +786,7 @@ const VALIDATOR_SITES: readonly ValidatorSite[] = [
     plant: "t.min",
   },
   {
-    file: "clients/_crucible_axi.py",
+    file: join(CLIENT_TREE, "_crucible_axi.py"),
     fn: "_effective_limit",
     language: "py",
     reads: [
@@ -793,7 +798,7 @@ const VALIDATOR_SITES: readonly ValidatorSite[] = [
     plant: `declaration["recommended"]`,
   },
   {
-    file: "clients/_crucible_axi.py",
+    file: join(CLIENT_TREE, "_crucible_axi.py"),
     fn: "_declared_limit",
     language: "py",
     reads: [`table.get("description")`, `("recommended", "min", "max", "value")`],
@@ -833,21 +838,21 @@ const RESOLUTION_SITES: Record<string, ResolutionSite> = {
     seam: "configuredRetention()",
   },
   truncate_field_chars: {
-    file: "clients/_crucible_axi.py",
+    file: join(CLIENT_TREE, "_crucible_axi.py"),
     fn: "truncate_field",
     language: "py",
     callee: "resolve_limit",
     seam: `resolve_limit("truncate_field_chars")`,
   },
   error_detail_chars: {
-    file: "clients/_crucible_axi.py",
+    file: join(CLIENT_TREE, "_crucible_axi.py"),
     fn: "no_report_warning",
     language: "py",
     callee: "resolve_limit",
     seam: `resolve_limit("error_detail_chars")`,
   },
   roadmap_list_rows: {
-    file: "clients/_crucible_axi.py",
+    file: join(CLIENT_TREE, "_crucible_axi.py"),
     fn: "truncate_rows",
     language: "py",
     callee: "resolve_limit",

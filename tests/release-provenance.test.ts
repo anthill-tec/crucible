@@ -68,6 +68,7 @@
 // Pre-existing coverage that must keep passing: tests/releases.test.ts AC4-a
 // (releases with NO `releasedAt` stay newest-INGEST-first).
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { CLIENT_SOURCE_DIR } from "./helpers/test-install.ts";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -276,7 +277,7 @@ function buildFixtureRepo(): { repo: string; mergeShas: Map<string, string> } {
 
   // The ceremony's world, alongside the history.
   writeFileSync(join(repo, "package.json"), `{\n  "name": "crucible",\n  "version": "0.1.2"\n}\n`);
-  symlinkSync(join(REPO_ROOT, "clients"), join(repo, "clients"));
+  symlinkSync(CLIENT_SOURCE_DIR, join(repo, "clients"));
   return { repo, mergeShas };
 }
 
@@ -1029,7 +1030,7 @@ function buildAncestryRepo(namedSubjects: boolean): {
   );
 
   writeFileSync(join(repo, "package.json"), `{\n  "name": "crucible",\n  "version": "0.1.2"\n}\n`);
-  symlinkSync(join(REPO_ROOT, "clients"), join(repo, "clients"));
+  symlinkSync(CLIENT_SOURCE_DIR, join(repo, "clients"));
   return { repo, mergeShas };
 }
 

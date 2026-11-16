@@ -56,6 +56,7 @@
 // that has nothing to do with this CR.
 //
 import { afterAll, describe, expect, test } from "bun:test";
+import { clientScript } from "./helpers/test-install.ts";
 import {
   existsSync,
   mkdtempSync,
@@ -75,7 +76,7 @@ import { parseFeatureFile } from "./helpers/gherkin-scenarios.ts";
 import type { DeclaredScenario } from "./helpers/gherkin-scenarios.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
-const CLIENT = join(REPO_ROOT, "clients", "bun-crucible.py");
+const CLIENT = clientScript("bun-crucible.py");
 const FEATURES_DIR = join(REPO_ROOT, "tests", "e2e", "features");
 const STEPS_DIR = join(REPO_ROOT, "tests", "e2e", "steps");
 /** The phone feature `chromium-mobile` and `webkit-iphone` BOTH collect
