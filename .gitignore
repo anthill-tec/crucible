@@ -55,3 +55,8 @@ uv.lock
 # input). Only that project's target/ is ignored: the target/ dirs under
 # tests/fixtures/reports/mvn/ hold hand-written report fixtures, tracked.
 tests/fixtures/surefire-live-project/target/
+# CR-CRU-260 — the test suite's own toolchain caches (maven repository, go
+# build and module caches, uv cache), filled by
+# scripts/provision-test-caches.sh and kept between runs. Machine-local and
+# regenerable; the operator's ~/.m2, ~/go and ~/.cache are never used.
+.cache/
