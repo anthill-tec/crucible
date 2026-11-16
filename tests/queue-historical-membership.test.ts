@@ -53,28 +53,17 @@
 // `CR-118H-*` shape, which belongs to no project. The live data/crucible.db
 // and port 3849 are never WRITTEN by anything in this file.
 //
-// The derivability census is the one exception the AC names, and it is a READ:
-// "all 62 are derivable" is a claim about THIS board, and asserting it against
-// a fixture would make it a claim about the fixture. It reads the live board
-// the sibling suite's way — the project named by the repo root's `.env`,
-// reached at the board this checkout DECLARES — over GET only, and STATES its reason and
-// returns when the board cannot be read, because off this workstation `.env`
-// is gitignored and the store it serves is never committed.
-//
-// WHICH board is not a literal and not an exported variable: it is what the
-// fleet's own resolver answers for this checkout (`[client] url`, CR-CRU-139
-// §S2), asked through `declaredClientBoard`. A checkout that declares nothing
-// SKIPS rather than falling through to the shipped default, because a census
-// aimed at a board this project does not own measures somebody else's rows.
+// CR-CRU-260 (AC9, user ruling 2026-11-15): the derivability census that READ
+// the operator's development board — the project named by the repo root's
+// `.env`, at the board the root `crucible.toml` declares — is removed. A test
+// never reads operator state; the derivation it measured is pinned on the
+// synthetic boards above and below.
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
 import type { QueueEntryInput } from "../src/store.ts";
-import { declaredClientBoard } from "./helpers/client-board.ts";
-
-const REPO_ROOT = join(import.meta.dir, "..");
 
 // ── wire shapes this suite PINS ────────────────────────────────────────────
 
@@ -152,80 +141,8 @@ const RELEASE_REQUIRED = "`release` is required — the release this cr targets"
 const SHIPPED_COMMIT = "0f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f";
 const ALSO_SHIPPED_COMMIT = "0e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e";
 
-// ── the live board, read for the derivability census ───────────────────────
-
-/** How long a live-board READ may take before it counts as "no board", and
- *  how long the census TEST may take. Generous against a measured ~2.3s read:
- *  the number being defended is a board fact and a slow answer is still an
- *  answer; only silence is a skip. */
-const LIVE_BOARD_READ_BUDGET = 20_000;
-const CENSUS_TEST_BUDGET = 45_000;
-
-function liveProjectKey(): { key: string } | { skip: string } {
-  try {
-    const env = readFileSync(join(REPO_ROOT, ".env"), "utf8");
-    const key = /^CRUCIBLE_PROJECT_KEY=(.+)$/m.exec(env)?.[1]?.trim() ?? "";
-    if (key === "") return { skip: "the repo root's .env declares no CRUCIBLE_PROJECT_KEY" };
-    return { key };
-  } catch (failure) {
-    const said = failure instanceof Error ? failure.message : String(failure);
-    return { skip: `the repo root has no readable .env to name the live project (${said})` };
-  }
-}
-
-/**
- * The live board's queue AND its recorded releases, or the reason neither
- * could be read. GET ONLY — nothing in this file writes to the live board.
- */
-async function liveBoard(): Promise<
-  { entries: QueueEntryWire[]; releases: ReleaseWire[]; at: string } | { skip: string }
-> {
-  const named = liveProjectKey();
-  if ("skip" in named) return named;
-  const board = declaredClientBoard();
-  if ("skip" in board) return board;
-  const base = board.url;
-  try {
-    // BOUNDED, for the sibling suite's reason: an unbounded read turns a busy
-    // board into a test TIMEOUT, which reads as a failed invariant rather than
-    // as a board that did not answer. An abort lands in the same STATED skip.
-    const signal = AbortSignal.timeout(LIVE_BOARD_READ_BUDGET);
-    const [queue, releases] = await Promise.all([
-      fetch(`${base}/api/v2/projects/${named.key}/queue`, { signal }),
-      fetch(`${base}/api/v2/projects/${named.key}/releases`, { signal }),
-    ]);
-    if (!queue.ok) throw new Error(`queue answered HTTP ${queue.status}`);
-    if (!releases.ok) throw new Error(`releases answered HTTP ${releases.status}`);
-    const queueBody = (await queue.json()) as { entries?: QueueEntryWire[] };
-    const releaseBody = (await releases.json()) as { releases?: ReleaseWire[] };
-    return { entries: queueBody.entries ?? [], releases: releaseBody.releases ?? [], at: base };
-  } catch (failure) {
-    const said = failure instanceof Error ? failure.message : String(failure);
-    return { skip: `no live board answered at ${base} (${said}), and its store is never committed` };
-  }
-}
-
 function releaseLess(entry: QueueEntryWire): boolean {
   return entry.release === undefined || entry.release === null || entry.release === "";
-}
-
-/** LANDED work: history, whose provenance lives on a release record's `crs`
- *  set rather than on the queue row. */
-function landed(entry: QueueEntryWire): boolean {
-  return entry.status === "COMPLETED" || entry.status === "COMPLETED_UNTRACKED";
-}
-
-/** `recordedReleaseClaiming`'s rule, applied to whatever release records were
- *  read: the FIRST recorded release whose own `crs` names the cr. Written here
- *  as the census's own derivation so the census measures the RULE against the
- *  board rather than re-asking the server the question under test. */
-function claimingLabels(releases: ReleaseWire[]): Map<string, string> {
-  const claiming = new Map<string, string>();
-  for (const release of releases) {
-    const label = release.version ?? "an unlabelled release";
-    for (const cr of release.crs ?? []) if (!claiming.has(cr)) claiming.set(cr, label);
-  }
-  return claiming;
 }
 
 // ── the synthetic board's rows ─────────────────────────────────────────────
@@ -753,53 +670,5 @@ describe("CR-CRU-118 §S3a — historical membership is a derivation, not a plan
       expect([200, 202]).toContain(restoredWithout.status);
       expect(await entries(key)).toHaveLength(table.length - 1);
     },
-  );
-
-  // ══ the migration's precondition, censused against the live board ════════
-
-  test(
-    "every landed release-less row on the LIVE board is derivable — the backfill's precondition " +
-      "is a measured fact, not an assumption",
-    async () => {
-      const board = await liveBoard();
-      if ("skip" in board) {
-        console.log(`[CR-CRU-118] §S3a derivability census NOT RUN: ${board.skip}`);
-        return;
-      }
-      // Non-vacuity: a census over an empty read would pass for the wrong
-      // reason, and "all of them are derivable" is only a fact about a board
-      // that HAS them.
-      expect(
-        board.entries.length,
-        `the live board at ${board.at} answered with no queue entries at all — a census over an ` +
-          `empty read measures nothing`,
-      ).toBeGreaterThan(0);
-      const backlog = board.entries.filter((entry) => releaseLess(entry) && landed(entry));
-      expect(
-        backlog.length,
-        `the live board at ${board.at} holds no landed release-less rows — the migration §S3a ` +
-          `exists for has nothing to migrate, which is not the measured state (62 on 2026-09-10)`,
-      ).toBeGreaterThan(0);
-
-      const claiming = claimingLabels(board.releases);
-      const orphans = backlog.filter((entry) => !claiming.has(entry.cr));
-      expect(
-        orphans.map((entry) => entry.cr),
-        `${orphans.length} of ${backlog.length} landed release-less rows on the board at ` +
-          `${board.at} are named by NO recorded release, so §S3a's door cannot reach them and ` +
-          `the backfill would leave the mandate unclosable for those ids`,
-      ).toEqual([]);
-      // …and the labels they derive from are labels a caller can DECLARE: a
-      // claim by a release recorded without one is not a plannable answer.
-      const unlabelled = backlog.filter(
-        (entry) => claiming.get(entry.cr) === "an unlabelled release",
-      );
-      expect(
-        unlabelled.map((entry) => entry.cr),
-        `these landed rows are claimed only by a release recorded with NO label, so no ` +
-          `cr-plan --release <label> can name it`,
-      ).toEqual([]);
-    },
-    CENSUS_TEST_BUDGET,
   );
 });

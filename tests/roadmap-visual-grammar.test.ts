@@ -49,6 +49,14 @@
 //   • nothing on the roadmap animates, so AC24's IN_PROGRESS node never changes
 //     across frames;
 //   • the three zones carry no `data-zone` identity, so AC25 cannot name them.
+//
+// CR-CRU-260 (AC9, user ruling 2026-11-15): the two LIVE corroborations —
+// CR-CRU-102 AC4's wave box and spine, CR-CRU-103 AC3a's delivered card — read
+// the operator's development board (the repo root's `.env` project at the
+// board the root `crucible.toml` declares) and are removed. A test never reads
+// operator state. Their criteria stay asserted on the synthetic boards this
+// file authors (`/fixture-bare-deps`, `/fixture-real-surface`,
+// `/fixture-delivered`).
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { chromium } from "@playwright/test";
@@ -60,7 +68,6 @@ import { fileURLToPath } from "node:url";
 import type { Server } from "bun";
 import type { Browser, Page } from "@playwright/test";
 import * as AppLogic from "../public/app-logic.mjs";
-import { declaredClientBoard } from "./helpers/client-board.ts";
 
 // ── CR-CRU-109 §S1/AC8 — the DISPLAY CAP, read from its ONE definition ─────
 //
@@ -82,13 +89,6 @@ const capOf = (): number => {
   ).toBe("number");
   return value as number;
 };
-
-// The ONE dead-CR rule as the browser holds it (`public/app-logic.mjs`'s
-// `isDeadCr`, the state-based mirror of `src/types.ts`'s): a row is dead when
-// its `lifecycle.state` is VOID or SUPERSEDED, never merely because a
-// `lifecycle` key is present. The ambient tests/app-logic.d.ts predates the
-// export, so the module is cast to it here.
-const isDeadCr = (AppLogic as unknown as { isDeadCr: (entry: unknown) => boolean }).isDeadCr;
 
 /** The annotation a row declaring `declaredCount` dependencies renders, as a
  *  SHAPE, for a board whose ids abbreviate to numeric tails: at most the
@@ -559,9 +559,9 @@ const REAL_SURFACE_W = 991;
  *  and the cap pays ` +2` back. The assertions are `<=` bounds, so the move
  *  changes no verdict — it changes what a reader reproduces.
  *
- *  Wave `5` and the four-dependency row are the live board's own shape,
- *  deliberately, so the synthetic readings and the live corroboration are
- *  measurements of the same case. AC29/AC8 — `CR-B-*` is INVENTED, the
+ *  Wave `5` and the four-dependency row are the shape the live board had when
+ *  CR-CRU-102 measured it (its live corroboration was removed by CR-CRU-260:
+ *  no test reads the operator's board). AC29/AC8 — `CR-B-*` is INVENTED, the
  *  namespace CR-CRU-102 C1's own suite established for the abbreviating case,
  *  and it names no CR of this project. */
 const BARE_DEPS: readonly string[] = ["CR-B-014", "CR-B-091", "CR-B-092", "CR-B-095"];
@@ -915,8 +915,7 @@ let singleFixtureUrl = "";
 let artifactUrl = "";
 // CR-CRU-096 C6 — AC20d's real surface.
 let realSurfaceFixtureUrl = "";
-// CR-CRU-102 C2 — AC4's two four-dependency measurement boards, and the LIVE
-// board they are corroborated against.
+// CR-CRU-102 C2 — AC4's two four-dependency measurement boards.
 let bareDepsZones = "";
 let bareDepsFixtureUrl = "";
 let stackedDepsZones = "";
@@ -924,30 +923,9 @@ let stackedDepsFixtureUrl = "";
 // CR-CRU-085 §S2/AC5 — the laned board the lane grid's geometry is read off.
 let lanedZones = "";
 let lanedFixtureUrl = "";
-let liveDepsZones = "";
-let liveDepsFixtureUrl = "";
-/** The live board's own four-dependency CR, read out of the live board rather
- *  than named here: which row it is decays as the backlog moves, and AC29 is
- *  why nothing in this file may depend on today's answer. */
-let liveDepsCr = "";
-/** How many dependencies THAT row declares, captured beside it: CR-CRU-109
- *  §S1's remainder is a COUNT, so the shape the annotation must take is a
- *  function of the live row's own declaration and cannot be pinned here. */
-let liveDepsDeclared = 0;
-/** WHY the live corroboration did not run, in words. Exactly one of this and
- *  `liveDepsZones` is set: the third state — neither captured nor explained —
- *  is what the corroboration test refuses, so a `beforeAll` that silently
- *  skipped the read cannot read as a pass. */
-let liveDepsSkip = "";
-// CR-CRU-103 C1 — §S1's delivered-card board, and the LIVE board it is
-// corroborated against (AC3a).
+// CR-CRU-103 C1 — §S1's delivered-card board.
 let deliveredZones = "";
 let deliveredFixtureUrl = "";
-let liveDeliveredZones = "";
-let liveDeliveredFixtureUrl = "";
-/** WHY AC3a's live corroboration did not run, in words — the same
- *  exactly-one-of-two contract `liveDepsSkip` carries above. */
-let liveDeliveredSkip = "";
 /** A SECOND page, at §S6's own 1600px viewport. A second page rather than a
  *  `setViewportSize` on the shared one: the 38 landed assertions are measured
  *  at 1440×1000 and a viewport this suite forgot to put back would silently
@@ -1006,165 +984,6 @@ const pageEl = (): Page => {
   return page;
 };
 
-/**
- * CR-CRU-102 AC4's CORROBORATION — the LIVE board captured, or the reason it
- * could not be, in words. Sets `liveDepsZones` and `liveDepsCr` and returns
- * `""`, or sets neither and returns the reason.
- *
- * WHY IT IS ONLY A CORROBORATION. AC4's text names "the live board's widest
- * real row (four dependencies)", and a criterion resting on that would hold
- * only while our own backlog carries such a row — CR-CRU-096's AC29 forbids
- * exactly that, and the row in question is a CR that will ship. So the
- * criterion is asserted on the synthetic board above and this reads the real
- * thing so the two can be compared. It never builds a stand-in: a board this
- * function authored would corroborate nothing.
- *
- * The project is named the way every client names it — the repo root's `.env`
- * — and reached at the board this checkout DECLARES, asked of the fleet's own
- * resolver (`[client] url`, CR-CRU-139 §S2). Off this workstation none of that
- * is present: `.env` is ignored (`.gitignore:8`), the board declaration is
- * untracked (`.gitignore:10`) and the store it serves is never committed, so
- * a STATED skip is the ordinary case and the reading is a bonus wherever it
- * can be taken. An undeclared board skips rather than falling through to the
- * shipped default, which on a machine carrying a production install is the
- * production board.
- */
-async function captureLiveDeps(): Promise<string> {
-  let key = "";
-  try {
-    const env = readFileSync(path.join(REPO_ROOT, ".env"), "utf8");
-    key = /^CRUCIBLE_PROJECT_KEY=(.+)$/m.exec(env)?.[1]?.trim() ?? "";
-  } catch (failure) {
-    const said = failure instanceof Error ? failure.message : String(failure);
-    return (
-      `the repo root has no readable .env to name the live project (${said}), so there ` +
-      `is no live board to read`
-    );
-  }
-  if (key === "") {
-    return (
-      "the repo root's .env declares no CRUCIBLE_PROJECT_KEY, so the live board cannot " +
-      "be identified"
-    );
-  }
-  const board = declaredClientBoard();
-  if ("skip" in board) return board.skip;
-  const base = board.url;
-  const payload = async (route: string): Promise<Record<string, unknown>> => {
-    const answer = await fetch(`${base}/api/v2/projects/${key}/${route}`);
-    if (!answer.ok) throw new Error(`${route} answered HTTP ${answer.status}`);
-    return (await answer.json()) as Record<string, unknown>;
-  };
-  let queue: QueueFixture[] = [];
-  let proposals: ProposalFixture[] = [];
-  let releases: ReleaseFixture[] = [];
-  try {
-    queue = ((await payload("queue")).entries ?? []) as QueueFixture[];
-    proposals = ((await payload("release-proposals")).proposals ?? []) as ProposalFixture[];
-    releases = ((await payload("releases")).releases ?? []) as ReleaseFixture[];
-  } catch (failure) {
-    const said = failure instanceof Error ? failure.message : String(failure);
-    return (
-      `no live board answered at ${base} (${said}), and the store it would have served ` +
-      `is never committed`
-    );
-  }
-  if (proposals.length === 0) {
-    return (
-      `the live board at ${base} has no PROPOSED release, so zone 2 draws a delivered ` +
-      `summary and no wave box to measure`
-    );
-  }
-  // The widest row the board can DRAW an annotation on, by `roadmapActionable`'s
-  // own rule (`public/app-logic.mjs`): PENDING, and not dead under `isDeadCr`.
-  const actionable = queue.filter(
-    (entry) => entry.status === "PENDING" && !isDeadCr(entry),
-  );
-  const widest = actionable.reduce<QueueFixture | null>(
-    (best, entry) =>
-      best === null || entry.dependsOn.length > best.dependsOn.length ? entry : best,
-    null,
-  );
-  const declared = widest === null ? 0 : widest.dependsOn.length;
-  if (widest === null || declared < 4) {
-    return (
-      `the live board's widest schedulable row declares ${declared} dependencies, not ` +
-      `the four the design's figure is stated against — which is AC29's point, and why ` +
-      `the criterion itself is asserted on a board this file authors`
-    );
-  }
-  liveDepsCr = widest.cr;
-  liveDepsDeclared = declared;
-  liveDepsZones = await captureZones({ releases, proposals, queue });
-  return "";
-}
-
-/**
- * CR-CRU-103 AC3a's CORROBORATION — the delivered card as the board this
- * project actually runs draws it, or the reason it could not be read.
- *
- * WHY IT IS ONLY A CORROBORATION, and why the criteria are asserted on a
- * fixture: gap analysis drove the live board in this same Chromium and found
- * NO `.app-flow-delivered` element at all, because the focused release is the
- * 0.2.0 PROPOSAL and a proposal draws wave boxes instead. CR-CRU-096's AC29
- * governs — a criterion that only holds while our own board has a given focus
- * is not a criterion.
- *
- * So this reads the live board's OWN releases and queue with the proposal list
- * WITHHELD, which is the one change that makes `releaseStripFocusIndex` fall
- * through to the newest shipped tag (`shippedZones` above makes exactly the
- * same one). Every fact the card then states — its count, its waves, its date,
- * its packages — is the live store's own; only WHICH release is focused is
- * this function's doing, and it is stated here rather than implied.
- */
-async function captureLiveDelivered(): Promise<string> {
-  let key = "";
-  try {
-    const env = readFileSync(path.join(REPO_ROOT, ".env"), "utf8");
-    key = /^CRUCIBLE_PROJECT_KEY=(.+)$/m.exec(env)?.[1]?.trim() ?? "";
-  } catch (failure) {
-    const said = failure instanceof Error ? failure.message : String(failure);
-    return (
-      `the repo root has no readable .env to name the live project (${said}), so there ` +
-      `is no live board to read`
-    );
-  }
-  if (key === "") {
-    return (
-      "the repo root's .env declares no CRUCIBLE_PROJECT_KEY, so the live board cannot " +
-      "be identified"
-    );
-  }
-  const board = declaredClientBoard();
-  if ("skip" in board) return board.skip;
-  const base = board.url;
-  let queue: QueueFixture[] = [];
-  let releases: ReleaseFixture[] = [];
-  try {
-    const read = async (route: string): Promise<Record<string, unknown>> => {
-      const answer = await fetch(`${base}/api/v2/projects/${key}/${route}`);
-      if (!answer.ok) throw new Error(`${route} answered HTTP ${answer.status}`);
-      return (await answer.json()) as Record<string, unknown>;
-    };
-    queue = ((await read("queue")).entries ?? []) as QueueFixture[];
-    releases = ((await read("releases")).releases ?? []) as ReleaseFixture[];
-  } catch (failure) {
-    const said = failure instanceof Error ? failure.message : String(failure);
-    return (
-      `no live board answered at ${base} (${said}), and the store it would have served ` +
-      `is never committed`
-    );
-  }
-  if (releases.length === 0) {
-    return (
-      `the live board at ${base} records no shipped release, so it has no delivered ` +
-      `summary to corroborate`
-    );
-  }
-  liveDeliveredZones = await captureZones({ releases, queue, proposals: [] });
-  return "";
-}
-
 beforeAll(async () => {
   populatedZones = await captureZones();
   emptyZones = await captureZones({ releases: [], proposals: [], queue: [] });
@@ -1189,12 +1008,6 @@ beforeAll(async () => {
     queue: STACKED_DEPS_QUEUE,
   });
   lanedZones = await captureZones({ proposals: LANED_PROPOSALS, queue: LANED_QUEUE });
-  // CR-CRU-102 AC4's CORROBORATION — the board this project actually runs,
-  // read from the live server through the same three payloads `captureZones`
-  // scripts, so what Chromium measures is the production render of production
-  // data and not a re-statement of it. Sets EITHER `liveDepsZones` or
-  // `liveDepsSkip`, never neither.
-  liveDepsSkip = await captureLiveDeps();
   // No proposal at all, so `releaseStripFocusIndex` falls through to the last
   // gate — the newest SHIPPED tag. That is the only way to reach §S7's
   // delivered path, and with it AC23's `shipped` word and AC24's shipped axis.
@@ -1206,9 +1019,6 @@ beforeAll(async () => {
     proposals: [],
     queue: DELIVERED_QUEUE,
   });
-  // AC3a's CORROBORATION. Sets EITHER `liveDeliveredZones` or
-  // `liveDeliveredSkip`, never neither.
-  liveDeliveredSkip = await captureLiveDelivered();
 
   // AC26's BASELINE. "Byte-identical before and after this CR" is a claim
   // about two renders, so the before-state is rendered too: the shell as of
@@ -1304,9 +1114,8 @@ beforeAll(async () => {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
-      // CR-CRU-102 AC4 — the four-dependency measurement board and the LIVE
-      // board beside it, both at the 1130px surface the design's own figures
-      // are stated against.
+      // CR-CRU-102 AC4 — the four-dependency measurement board, at the 1130px
+      // surface the design's own figures are stated against.
       if (pathname === "/fixture-bare-deps") {
         return new Response(fixtureDocument(bareDepsZones, SURFACE_W), {
           headers: { "content-type": "text/html; charset=utf-8" },
@@ -1326,11 +1135,6 @@ beforeAll(async () => {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
-      if (pathname === "/fixture-live-deps") {
-        return new Response(fixtureDocument(liveDepsZones, SURFACE_W), {
-          headers: { "content-type": "text/html; charset=utf-8" },
-        });
-      }
       if (pathname === "/fixture-height-loose") {
         return new Response(fixtureDocument(heightLooseZones, SURFACE_W), {
           headers: { "content-type": "text/html; charset=utf-8" },
@@ -1341,16 +1145,10 @@ beforeAll(async () => {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
-      // CR-CRU-103 §S1/AC3a — the delivered card's board and the LIVE board
-      // beside it, both at the 1130px surface the design's figures are
-      // stated against.
+      // CR-CRU-103 §S1/AC3a — the delivered card's board, at the 1130px
+      // surface the design's figures are stated against.
       if (pathname === "/fixture-delivered") {
         return new Response(fixtureDocument(deliveredZones, SURFACE_W), {
-          headers: { "content-type": "text/html; charset=utf-8" },
-        });
-      }
-      if (pathname === "/fixture-live-delivered") {
-        return new Response(fixtureDocument(liveDeliveredZones, SURFACE_W), {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
@@ -1398,9 +1196,7 @@ beforeAll(async () => {
   bareDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-bare-deps`;
   stackedDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-stacked-deps`;
   lanedFixtureUrl = `http://127.0.0.1:${server.port}/fixture-laned`;
-  liveDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-live-deps`;
   deliveredFixtureUrl = `http://127.0.0.1:${server.port}/fixture-delivered`;
-  liveDeliveredFixtureUrl = `http://127.0.0.1:${server.port}/fixture-live-delivered`;
 
   browser = await chromium.launch();
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -3258,172 +3054,6 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
     expect(yOverlap(boxes[0]!, boxes[1]!)).toBeGreaterThan(0);
     // …and the surface stays intact: nothing overflows it to achieve the fit.
     expect(reported.scrollWidth - reported.clientWidth).toBeLessThanOrEqual(0.5);
-  });
-
-  // AC4's CORROBORATION — the readings on the board this project actually
-  // runs, which is where the 452.7px the CR quotes was measured. It
-  // corroborates and never carries the criterion: the store is not committed
-  // (`git ls-files data/` is empty) and the four-dependency row is a CR that
-  // will ship, so a criterion resting on it would decay. When either is
-  // missing this states WHY, in the shape CR-CRU-100 AC5 established for a
-  // reading that cannot be taken here.
-  //
-  // ── CR-CRU-103 AC7, a RULED AMENDMENT (user, 2026-09-04) ────────────────
-  //
-  // This half no longer asserts `DESIGN_SPINE_W`. It REPORTS the spine it
-  // measures and asserts the data-independent invariant instead: the spine
-  // FITS the surface the app reports. The `~600px` criterion is untouched
-  // where it belongs — on the SYNTHETIC four-dependency board above, whose
-  // composition this file authors and whose reading is the criterion.
-  //
-  // WHY, and it is not a tolerance being widened to admit a result.
-  // `DESIGN_SPINE_W` is the artifact's figure for a FIXED COMPOSITION: one
-  // wave box holding the scheduled top with merged work collapsed. The LIVE
-  // spine is whatever the drawn rows happen to make it, and nothing in this
-  // repository controls that. The wave-box reading below SURVIVES for exactly
-  // the reason this one cannot: the `deps \d+(?:, \d+){3}` guard above pins
-  // the row's composition before the box is measured, so `BUDGET.wave` is
-  // still read against the case it is stated against. No guard can pin how
-  // many rows the focused release draws.
-  //
-  // MEASURED, and this is the whole argument. The assertion SKIPPED at
-  // CR-CRU-102's merge — the four-dependency row sat outside the drawn top,
-  // so the `!live.drawn` path took it. Closing that CR shifted the drawn rows,
-  // the assertion went live, and it failed at 621.1px, reading 625.1px by the
-  // time CR-CRU-103 was in flight. Asserting a fixed-composition figure
-  // against data this repository does not control is the CR-CRU-096 `AC29`
-  // decay CR-CRU-102's own comment predicted, arriving in under a day.
-  //
-  // THE MECHANISM, CORRECTED (VERIFY, 2026-09-04) — and the correction
-  // REVERSES what this comment itself used to teach. It taught that
-  // CR-CRU-103's terminal change SUBTRACTS from the spine and brings it back
-  // toward the criterion, and charged the 621.1 → 625.1px move to board
-  // drift. Both were wrong, and wrong in the OPPOSITE direction: the change
-  // ADDS, and the move was never drift — it was this CR's own stylesheet.
-  // The retracted figures are quoted in CR-CRU-103's AC7, which records the
-  // correction; they are not repeated here, because a permanent comment
-  // teaches whatever it states.
-  //
-  // VERIFY established it by controlled A/B rather than argument — only
-  // `public/styles.css` swapped, the live store held still: 621.1px of spine
-  // on develop's stylesheet, 625.1px on this branch's, and reverting ONLY the
-  // `.app-flow-terminal` geometry on top of HEAD returns exactly 621.1px.
-  // The cause is that develop's terminals were CONTENT-sized, so the two
-  // words gave two different boxes: `Start` rendered 56×22 and `End` only
-  // 44×22 — 100px for the pair. Squaring both to 52×52 makes 104px, so this
-  // CR ADDS 4px to the spine. No correct implementation of it could have
-  // closed the gap, because closing the gap was never what it does.
-  //
-  // The SYNTHETIC board above moves identically, 575.9px → 579.9px, cutting
-  // its headroom against the `600px` criterion from 24.1px to 20.1px — the
-  // criterion still holds there, which is why it stays asserted there and
-  // this half only reports.
-  //
-  // The amendment's CONCLUSION is unchanged and strengthened by all of this:
-  // the live spine exceeds ~600px BEFORE and AFTER this CR, by more after.
-  // What was wrong was the mechanism, never the ruling.
-  //
-  // Do NOT "restore" the stricter assertion. It was not lost; it was ruled
-  // out of this half, and CR-CRU-102's spec is history and stays unedited —
-  // the amendment is recorded in CR-CRU-103's AC7 and here, beside the code
-  // it governs.
-  test("AC4 — the LIVE board corroborates the wave box and REPORTS its spine, or says why it cannot", async () => {
-    if (liveDepsSkip !== "") {
-      // NOT RUN, and reported as a pass — with the reason in the run's own
-      // output, never a silent green line.
-      console.log(`[cr102] AC4 live corroboration NOT RUN: ${liveDepsSkip}`);
-      return;
-    }
-    expect(
-      liveDepsZones,
-      "the live board was neither captured nor explained — beforeAll set no zones and named " +
-        "no reason, so this test would have passed without corroborating anything",
-    ).not.toBe("");
-
-    await openWide(liveDepsFixtureUrl);
-    // Keyed on the row `beforeAll` FOUND, never on a row named here, and read
-    // together with the box that CONTAINS it — the live release may span any
-    // number of waves, and the reading AC4 asks for is the box carrying the
-    // four-dependency row.
-    const rowSelector = `[data-testid="roadmap-node"][data-cr="${liveDepsCr}"]`;
-    const live = await readWide<{ drawn: boolean; annotation: string; boxWidth: number }>(
-      `(() => {
-         const row = document.querySelector(${JSON.stringify(rowSelector)});
-         if (row === null) return { drawn: false, annotation: "", boxWidth: 0 };
-         const slot = row.querySelector('[data-testid="roadmap-node-annotation"]');
-         const box = row.closest('[data-testid="roadmap-wave"]');
-         return {
-           drawn: true,
-           annotation: slot === null ? "" : (slot.textContent || "").replace(/\\s+/g, " ").trim(),
-           boxWidth: box === null ? 0 : box.getBoundingClientRect().width,
-         };
-       })()`,
-    );
-    if (!live.drawn) {
-      // The row EXISTS in the live queue — `beforeAll` found it there — but the
-      // §S5 trim does not draw it, which is a fact about today's board and not
-      // about the product. Stated, and the criterion stays asserted above.
-      console.log(
-        `[cr102] AC4 live corroboration NOT RUN: the live board's four-dependency row ` +
-          `${liveDepsCr} is not among the rows the focused release draws, so its wave box ` +
-          `is not the box the design's figure is stated against`,
-      );
-      return;
-    }
-
-    // Drawn — so the annotation MUST be the bare form. This half is product
-    // behaviour, not board shape, and it fails rather than explains itself.
-    const declared = live.annotation.slice(live.annotation.indexOf("deps "));
-    expect(
-      declared,
-      `the live board draws ${liveDepsCr} annotated ${JSON.stringify(live.annotation)}, which ` +
-        `is not its ${liveDepsDeclared} declared dependencies in the CAPPED bare form ` +
-        `(CR-CRU-109 §S1 — the first ${capOf()} bare ids and then the count of the rest) — the ` +
-        `box measured below would be the full-id width this CR removes`,
-    ).toMatch(cappedBareShape(liveDepsDeclared));
-
-    const pieces = await boxesOf('[data-zone="2"] > *');
-    const spine =
-      Math.max(...pieces.map((piece) => piece.right)) - Math.min(...pieces.map((piece) => piece.x));
-    expect(
-      live.boxWidth,
-      `the LIVE wave box carrying ${liveDepsCr} measures ${round1(live.boxWidth)}px against ` +
-        `the design's ~${BUDGET.wave}px, annotated ${JSON.stringify(declared)}; the CR ` +
-        `recorded 452.7px for the same row while it rendered full ids`,
-    ).toBeLessThanOrEqual(BUDGET.wave);
-
-    // The SURFACE the app reports, read off the app the way AC20d reads it
-    // rather than off `SURFACE_W` — the invariant is "it fits what it is
-    // given", and the constant is not what the element reports.
-    const reported = await readWide<{ scrollWidth: number; clientWidth: number }>(
-      `(() => {
-         const flow = document.querySelector('[data-zone="2"]');
-         return { scrollWidth: flow.scrollWidth, clientWidth: flow.clientWidth };
-       })()`,
-    );
-
-    // REPORTED, always, whatever the verdict: the figure is the point of a
-    // corroboration, and AC7 asks for it in the run's own output.
-    console.log(
-      `[cr102/cr103 AC7] the LIVE spine measures ${round1(spine)}px on a ` +
-        `${round1(reported.clientWidth)}px reported surface (headroom ` +
-        `${round1(reported.clientWidth - spine)}px), with ${pieces.length} pieces and the ` +
-        `${liveDepsCr} wave box at ${round1(live.boxWidth)}px — the design's ` +
-        `~${DESIGN_SPINE_W}px is the SYNTHETIC board's criterion and is asserted there, ` +
-        `never here`,
-    );
-
-    // The invariant that does NOT depend on data we do not control.
-    expect(
-      spine,
-      `the LIVE spine measures ${round1(spine)}px and does not fit the ` +
-        `${round1(reported.clientWidth)}px surface the app reports`,
-    ).toBeLessThanOrEqual(reported.clientWidth + 0.5);
-    expect(
-      reported.scrollWidth - reported.clientWidth,
-      `the live board overflows its own surface by ` +
-        `${round1(reported.scrollWidth - reported.clientWidth)}px`,
-    ).toBeLessThanOrEqual(0.5);
   });
 
   // AC20d — the budget at the REAL surface. AC20's 1130px is a CONTROLLED
@@ -5542,77 +5172,6 @@ describe("CR-CRU-103 §S2/AC4 — the spine's terminals are the design's CIRCLES
           `not round`,
       ).toBe(true);
     }
-  });
-});
-
-describe("CR-CRU-103 AC3a — the LIVE board corroborates the card, or says why it cannot", () => {
-  test("AC3a — the same readings on the board this project actually runs", async () => {
-    if (liveDeliveredSkip !== "") {
-      // NOT RUN, and reported as a pass — with the reason in the run's own
-      // output, never a silent green line.
-      console.log(`[cr103] AC3a live corroboration NOT RUN: ${liveDeliveredSkip}`);
-      return;
-    }
-    expect(
-      liveDeliveredZones,
-      "the live board was neither captured nor explained — beforeAll set no zones and named " +
-        "no reason, so this test would have passed without corroborating anything",
-    ).not.toBe("");
-
-    const figures = await design();
-    await openWide(liveDeliveredFixtureUrl);
-    const cards = await boxesOf(DELIVERED_CARD);
-    if (cards.length !== 1) {
-      console.log(
-        `[cr103] AC3a live corroboration NOT RUN: the live board draws ${cards.length} ` +
-          `delivered summaries, so there is no card of its own to measure`,
-      );
-      return;
-    }
-    const card = cards[0]!;
-    const headline = one(
-      await boxesOf(`${DELIVERED_CARD} ${DELIVERED_HEADLINE}`),
-      "the live delivered headline",
-    );
-    const terminals = await boxesOf(FLOW_TERMINALS);
-    const mono = await tokenFamily("--mono");
-
-    // The CHROME and the TYPE, which are product facts and hold whatever the
-    // live store happens to record. The width CEILING is deliberately NOT
-    // asserted here: the live release's own packages are its own, so its card
-    // is not the same content as the design's, and the figure is REPORTED
-    // instead of bounded against a card drawn for other facts.
-    expect(
-      card.borderTopWidth,
-      `the LIVE delivered card renders a ${round1(card.borderTopWidth)}px border against the ` +
-        `design's ${round1(figures.card.borderTopWidth)}px`,
-    ).toBe(figures.card.borderTopWidth);
-    expect(round1(card.radius)).toBe(round1(figures.card.radius));
-    expect(
-      card.width,
-      `the LIVE delivered card measures ${round1(card.width)}px against the design's ` +
-        `${round1(figures.card.minWidth)}px floor`,
-    ).toBeGreaterThanOrEqual(figures.card.minWidth);
-    expect(
-      headline.fontSize,
-      `the LIVE headline ${JSON.stringify(headline.text)} renders at ${headline.fontSize}px ` +
-        `against the design's ${figures.big.fontSize}px`,
-    ).toBe(figures.big.fontSize);
-    expect(headline.fontFamily).toBe(mono);
-    expect(terminals.length).toBe(2);
-    for (const terminal of terminals) {
-      expect(
-        Math.abs(terminal.width - terminal.height) <= 0.5,
-        `the LIVE ${JSON.stringify(terminal.text)} terminal measures ` +
-          `${round1(terminal.width)}x${round1(terminal.height)}, which is not square`,
-      ).toBe(true);
-    }
-    console.log(
-      `[cr103] AC3a live corroboration: card ${round1(card.width)}px, border ` +
-        `${round1(card.borderTopWidth)}px, radius ${round1(card.radius)}px, headline ` +
-        `${headline.fontSize}px, terminals ${round1(terminals[0]!.width)}x` +
-        `${round1(terminals[0]!.height)} — measured on ${JSON.stringify(headline.text)}`,
-    );
   });
 });
 

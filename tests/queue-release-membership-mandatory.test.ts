@@ -64,17 +64,12 @@
 // which carries no project's namespace). The live data/crucible.db and port
 // 3849 are never WRITTEN by anything in this file.
 //
-// The census is the one exception the AC names, and it is a READ: a board
-// invariant asserted against a synthetic board would be an invariant about a
-// fixture. It reads the live board the way tests/roadmap-visual-grammar.ts
-// does — the project named by the repo root's `.env`, reached at the board
-// this checkout DECLARES (`[client] url`, asked of the fleet's own resolver
-// through `declaredClientBoard`; CR-CRU-139 §S2 retired the exported channel
-// and the module constant this line used to cite) — over
-// GET only, and STATES its reason and returns when the board cannot be read,
-// because off this workstation `.env` is gitignored and the store it serves is
-// never committed. Every census failure message names WHAT IT MEASURED, so a
-// drifting board reports a number and a list of ids rather than a bare false.
+// CR-CRU-260 (AC9, user ruling 2026-11-15): the §S1 census legs that READ the
+// operator's development board — the project named by the repo root's `.env`,
+// at the board the root `crucible.toml` declares — are removed, with the dated
+// board snapshot they measured against. A test never reads operator state.
+// The two-field rule (status AND lifecycle) stays pinned on the synthetic
+// boards below, where the bulk route's warning reports the inherited set.
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -87,7 +82,6 @@ import { startServer, type ServerHandle } from "../src/server.ts";
 import { WAVE_SEQ_STRIDE, waveSeqBase } from "../src/store.ts";
 import type { QueueEntryInput } from "../src/store.ts";
 import type { QueueLifecycle } from "../src/types.ts";
-import { declaredClientBoard } from "./helpers/client-board.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
@@ -208,111 +202,8 @@ function queueWarningCodeUnion(): string[] {
   return [...declaration[1]!.matchAll(/"([^"]+)"/g)].map((match) => match[1]!);
 }
 
-// ── the dated board snapshot §S1's census is measured against ───────────────
-//
-// THE ONE NAMED, DATED CONSTANT in this file that holds real project CR ids,
-// and the only place they may appear (the namespace tripwire's AC5 mechanism —
-// registered in `EXEMPT_CONSTANTS` in tests/project-namespace-tripwire.test.ts
-// with its reason). Every assertion below reads the ids FROM here; none spells
-// one inline.
-//
-// A CEILING, NOT A TARGET, exactly like `PRE_CR_ASSERTION_RESIDUE`: the
-// allowlist may SHRINK freely and may never GROW. A name leaves it when that CR
-// is migrated into a release; a FIFTH release-less live entry appearing fails
-// the census in the cycle that introduced it. That is the invariant with teeth
-// — "no NEW membership-less CR" — and it is why the census PASSES on arrival,
-// which it must: migrating these four into 0.3.0 is a DATA step deferred past
-// 0.2.0 by user ruling, so an absolute census would be red from close-out until
-// that migration ran.
-//
-// Measured 2026-09-10 against the live board (115 entries, 67 release-less: 62
-// landed, 5 not).
-const RELEASE_LESS_BOARD_SNAPSHOT_2026_09_10 = {
-  /** Release-less AND live by both fields. The shrinking allowlist. */
-  allowlist: ["CR-CRU-015", "CR-CRU-018", "CR-CRU-022", "CR-CRU-098"],
-  /**
-   * Release-less and NOT landed, yet absent from the allowlist — excluded by
-   * DISPOSITION, not by migration. Its VOID lifecycle was re-recorded
-   * 2026-09-10 (user-ruled). Its derived `status` still reads PENDING, because
-   * `deriveQueueStatus` answers from plans and knows nothing of a disposition:
-   * this row IS the reason the census reads two fields.
-   */
-  disposed: { cr: "CR-CRU-082", status: "PENDING", lifecycleState: "VOID" },
-} as const;
-
-// ── the census rule, written ONCE and applied to whatever board is read ─────
-
 function releaseLess(entry: QueueEntryWire): boolean {
   return entry.release === undefined || entry.release === null || entry.release === "";
-}
-
-/** The `status` half of the census — LANDED work is history, and its
- *  provenance lives on a release record's own `crs` set rather than on the
- *  queue row. On its own this half is WRONG (it counts a voided CR as live);
- *  it is named separately so the census test can measure the difference. */
-function notLandedByStatus(entry: QueueEntryWire): boolean {
-  return entry.status !== "COMPLETED" && entry.status !== "COMPLETED_UNTRACKED";
-}
-
-/** The `lifecycle` half — an independent, STORED axis. */
-function notDisposed(entry: QueueEntryWire): boolean {
-  const state = entry.lifecycle?.state;
-  return state !== "VOID" && state !== "SUPERSEDED";
-}
-
-/** LIVE, as §S1 defines it: BOTH halves, never one. */
-function live(entry: QueueEntryWire): boolean {
-  return notLandedByStatus(entry) && notDisposed(entry);
-}
-
-/** How long a live-board READ may take before it counts as "no board", and how
- *  long a census TEST may take. Both are generous against a measured ~2.3s
- *  read, because the number being defended is a board invariant and a slow
- *  answer is still an answer; only silence is a skip. */
-const LIVE_BOARD_READ_BUDGET = 20_000;
-const CENSUS_TEST_BUDGET = 45_000;
-
-/**
- * The live board's queue, or the reason it could not be read.
- *
- * GET ONLY. Nothing in this file writes to the live board, and the project is
- * named the way every client names it rather than by a literal in a test.
- */
-async function liveBoardQueue(): Promise<{ entries: QueueEntryWire[]; at: string } | { skip: string }> {
-  let key = "";
-  try {
-    const env = readFileSync(join(REPO_ROOT, ".env"), "utf8");
-    key = /^CRUCIBLE_PROJECT_KEY=(.+)$/m.exec(env)?.[1]?.trim() ?? "";
-  } catch (failure) {
-    const said = failure instanceof Error ? failure.message : String(failure);
-    return { skip: `the repo root has no readable .env to name the live project (${said})` };
-  }
-  if (key === "") {
-    return { skip: "the repo root's .env declares no CRUCIBLE_PROJECT_KEY" };
-  }
-  // WHICH board: what this checkout declares, never a literal and never an
-  // exported variable. Undeclared SKIPS rather than falling through to the
-  // shipped default, which on this workstation is a production install.
-  const board = declaredClientBoard();
-  if ("skip" in board) return board;
-  const base = board.url;
-  try {
-    // BOUNDED. The live board is a real server doing real work — measured
-    // 2026-09-10 at ~2.3s for this read while a sibling suite was spawning the
-    // client fleet — so an unbounded read turns a busy board into a test
-    // TIMEOUT, which reads as a failed invariant rather than as a board that
-    // did not answer. An abort lands in the same STATED skip as a refused
-    // connection, because both mean the same thing: nothing was censused.
-    const answer = await fetch(`${base}/api/v2/projects/${key}/queue`, {
-      signal: AbortSignal.timeout(LIVE_BOARD_READ_BUDGET),
-    });
-    if (!answer.ok) throw new Error(`queue answered HTTP ${answer.status}`);
-    const body = (await answer.json()) as { entries?: QueueEntryWire[] };
-    return { entries: body.entries ?? [], at: base };
-  } catch (failure) {
-    const said = failure instanceof Error ? failure.message : String(failure);
-    return { skip: `no live board answered at ${base} (${said}), and its store is never committed` };
-  }
 }
 
 // ── the synthetic board's rows ─────────────────────────────────────────────
@@ -673,99 +564,6 @@ describe("CR-CRU-118 — every live CR names a release", () => {
         expect(refused.body.help).toEqual(unproposedHelp(UNKNOWN_LABEL));
         expect(JSON.stringify(await entries(key))).toBe(JSON.stringify(before));
       },
-    );
-  });
-
-  // ══ §S1 — the board invariant, as a dated census with a shrinking ceiling ═
-
-  describe("§S1 — the board invariant, censused against the live board", () => {
-    test(
-      "no LIVE queue entry lacks a release except the four the dated allowlist names, and the " +
-        "allowlist may only SHRINK",
-      async () => {
-        const board = await liveBoardQueue();
-        if ("skip" in board) {
-          console.log(`[CR-CRU-118] §S1 census NOT RUN: ${board.skip}`);
-          return;
-        }
-        // Non-vacuity: a census over an empty read would pass for the wrong
-        // reason, and an empty read is exactly what a wrong project key gives.
-        expect(
-          board.entries.length,
-          `the live board at ${board.at} served an EMPTY queue, so nothing was censused`,
-        ).toBeGreaterThan(0);
-
-        const allowlist = RELEASE_LESS_BOARD_SNAPSHOT_2026_09_10.allowlist;
-        const measured = board.entries.filter((entry) => releaseLess(entry) && live(entry));
-        const measuredCrs = measured.map((entry) => entry.cr).sort();
-        const unlisted = measuredCrs.filter((cr) => !allowlist.includes(cr as never));
-
-        // THE CEILING. A name may leave the allowlist by being migrated; a name
-        // may never JOIN it. `unlisted` is the set of live release-less entries
-        // the snapshot does not sanction — a fifth one is a new membership-less
-        // CR, and it fails here, in the cycle that introduced it.
-        expect(
-          unlisted,
-          `the live board at ${board.at} holds ${measuredCrs.length} live release-less ` +
-            `entries (${measuredCrs.join(", ") || "none"}), and ${unlisted.length} of them are ` +
-            `outside the dated allowlist of ${allowlist.length}: ${unlisted.join(", ")}`,
-        ).toEqual([]);
-        // The ceiling as a NUMBER too, so a same-named-but-doubled row cannot
-        // slip through the set comparison.
-        expect(
-          measuredCrs.length,
-          `the live board at ${board.at} holds ${measuredCrs.length} live release-less ` +
-            `entries against a ceiling of ${allowlist.length}`,
-        ).toBeLessThanOrEqual(allowlist.length);
-      },
-      CENSUS_TEST_BUDGET,
-    );
-
-    test(
-      "the census reads BOTH fields: the disposed CR is release-less and NOT landed by status, " +
-        "so a status-only census counts it live — its LIFECYCLE is what excludes it",
-      async () => {
-        const board = await liveBoardQueue();
-        if ("skip" in board) {
-          console.log(`[CR-CRU-118] §S1 two-field census NOT RUN: ${board.skip}`);
-          return;
-        }
-        const disposed = RELEASE_LESS_BOARD_SNAPSHOT_2026_09_10.disposed;
-        const row = board.entries.find((entry) => entry.cr === disposed.cr);
-        expect(
-          row,
-          `the live board at ${board.at} no longer holds ${disposed.cr}, which the ` +
-            `2026-09-10 snapshot recorded as the row that makes the two fields disagree`,
-        ).toBeDefined();
-
-        // The three facts that make it the two-field rule's witness.
-        expect(releaseLess(row!)).toBe(true);
-        expect(row!.status).toBe(disposed.status);
-        expect(row!.lifecycle?.state).toBe(disposed.lifecycleState);
-
-        // A status-only census WOULD count it — stated as a measurement, not
-        // as a claim about the code.
-        const byStatusOnly = board.entries
-          .filter((entry) => releaseLess(entry) && notLandedByStatus(entry))
-          .map((entry) => entry.cr);
-        const byBothFields = board.entries
-          .filter((entry) => releaseLess(entry) && live(entry))
-          .map((entry) => entry.cr);
-        expect(
-          byStatusOnly,
-          `a status-only census of the live board at ${board.at} reports ` +
-            `${byStatusOnly.length} release-less entries (${byStatusOnly.join(", ")})`,
-        ).toContain(disposed.cr);
-        expect(
-          byBothFields,
-          `the two-field census of the live board at ${board.at} reports ` +
-            `${byBothFields.length} release-less entries (${byBothFields.join(", ")})`,
-        ).not.toContain(disposed.cr);
-        // The difference is exactly one row, and it is that row: a census that
-        // read one field would report one MORE than the allowlist sanctions.
-        expect(byStatusOnly.length - byBothFields.length).toBe(1);
-      },
-      CENSUS_TEST_BUDGET,
     );
   });
 
