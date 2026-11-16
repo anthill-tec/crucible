@@ -208,12 +208,6 @@ jobs:
       # python to run `-m coverage`.
       - name: Install the project with its dev extra (pyproject.toml is the declaration)
         run: python3 -m pip install --upgrade '.[dev]'
-      # CR-CRU-063 §S2 — tests/client/test_crucible_axi_wheel_packaging.py:121
-      # raises ``RuntimeError: no interpreter on this machine can `import
-      # build``` — the same package the `build` job already installs; that
-      # asymmetry is the bug.
-      - name: Install build (wheel-packaging suite imports it)
-        run: python3 -m pip install --upgrade build
       # Measured on the 0.4.0 rehearsal (run 43653899622): 147 of this suite's
       # tests drive the REAL toolchains they prove, and this job had none of
       # them, so it has failed since 2026-10-28. The job that runs a tier owns
@@ -227,10 +221,11 @@ jobs:
       #     rust real-runner proofs, coverage runs included;
       #   - arduino-cli, named through ARDUINO_CLI: the arduino client's
       #     `check` and `lint` drive it;
-      #   - maven's local repository, warmed: the surefire fixture runs
-      #     OFFLINE (its `.mvn/maven.config` says `-o`), so every plugin and
-      #     provider it uses must already be there (measured on run
-      #     43668348319: maven-clean-plugin had not been downloaded).
+      #   - the suite's own caches, filled by scripts/provision-test-caches.sh
+      #     (CR-CRU-260): the surefire fixture runs OFFLINE on the suite's
+      #     `.cache/test-suite/m2` (its `.mvn/maven.config` says `-o`), never
+      #     on the runner's own maven repository. The suite itself runs with
+      #     `.venv/bin/python`, whose dev extra carries `build`.
       - uses: oven-sh/setup-bun@v2
         with:
           # CR-CRU-137 §S2 -- declared once, at the head of this file
@@ -248,13 +243,6 @@ jobs:
           tool: cargo-nextest,cargo-llvm-cov
       - name: llvm-tools-preview (cargo-llvm-cov reads its profiles with it)
         run: rustup component add llvm-tools-preview
-      - name: Maven's local repository, warmed for the offline fixture
-        run: |
-          warm="$RUNNER_TEMP/surefire-warm"
-          cp -r tests/fixtures/surefire-live-project "$warm"
-          rm -rf "$warm/.mvn"
-          mvn -B -q -f "$warm/pom.xml" clean test \
-            -Dmaven.test.failure.ignore=true
       # A pinned release archive, not an action: arduino/setup-arduino-cli's
       # newest major (v2) still declares node20 (CR-CRU-137 §S5).
       - name: arduino-cli 1.5.1, named for the arduino client
@@ -266,8 +254,10 @@ jobs:
           curl -fsSL "https://downloads.arduino.cc/arduino-cli/$ARCHIVE" \
             | tar xz -C "$dir" arduino-cli
           echo "ARDUINO_CLI=$dir/arduino-cli" >> "$GITHUB_ENV"
+      - name: The suite's own test caches (the one step that needs the network)
+        run: scripts/provision-test-caches.sh
       - name: Python client suite (no server required)
-        run: python3 -m unittest discover -s tests/client -t .
+        run: .venv/bin/python -m unittest discover -s tests/client -t .
 
   # CR-CRU-062 §S3 — the Playwright/BDD end-to-end suite.
   # 🚨 CRUCIBLE_DB is declared HERE explicitly, per CR-CRU-052: isolation is
