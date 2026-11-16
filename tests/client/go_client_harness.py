@@ -51,6 +51,15 @@ TIMEOUT = 180
 GO_FLOOR = (1, 24)
 STREAM_CODEC = "go-test"
 
+# The suite's own go caches, kept between runs under the git-ignored
+# `<repo>/.cache/test-suite/` (filled by `scripts/provision-test-caches.sh`).
+# Every `go` child runs on these, never on the operator's `~/.cache/go-build`
+# or `~/go`; `-modcacherw` keeps the module cache removable.
+SUITE_CACHE_ROOT = REPO_ROOT / ".cache" / "test-suite"
+SUITE_GO_ENV = {"GOCACHE": str(SUITE_CACHE_ROOT / "go-build"),
+                "GOMODCACHE": str(SUITE_CACHE_ROOT / "go-mod"),
+                "GOFLAGS": "-modcacherw"}
+
 # The fixture module's design, read off its test files by the spec's rules:
 # the listed `Test*`/`Fuzz*`/`Example*` names (BenchmarkHello is not counted,
 # ExampleNoOutput has no `// Output:` and is not listed), and the cases its
@@ -108,8 +117,8 @@ def go_toolchain_gap(need_bun=False):
     go = shutil.which("go")
     if go is None:
         return "; ".join(missing + ["go 1.24 or later on PATH"])
-    ran = subprocess.run([go, "version"], capture_output=True, text=True,
-                         check=False, timeout=30)
+    ran = subprocess.run([go, "version"], env=toolchain_env(), capture_output=True,
+                         text=True, check=False, timeout=30)
     version = _version_tuple(ran.stdout)
     if version is None or version < GO_FLOOR:
         missing.append(f"go 1.24 or later (found: {ran.stdout.strip()[:80] or 'none'})")
@@ -118,11 +127,12 @@ def go_toolchain_gap(need_bun=False):
 
 def toolchain_env(**extra):
     """The environment a real `go` runs in for these tests: the local
-    toolchain only, no workspace file, no inherited flags."""
+    toolchain only, no workspace file, no inherited flags, and the suite's
+    own build and module caches (`SUITE_GO_ENV`), never the operator's."""
     env = scrubbed_env()
     for key in _SCRUBBED:
         env.pop(key, None)
-    env.update({"GOTOOLCHAIN": "local", "GOWORK": "off", "GOFLAGS": ""})
+    env.update({"GOTOOLCHAIN": "local", "GOWORK": "off", **SUITE_GO_ENV})
     env.update({k: str(v) for k, v in extra.items()})
     return env
 
