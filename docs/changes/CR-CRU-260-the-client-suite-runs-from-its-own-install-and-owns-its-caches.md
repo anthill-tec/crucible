@@ -1,6 +1,6 @@
 # CR-CRU-260 — the client suite runs from its own install and owns its caches
 
-**Status:** PENDING · filed 2026-11-15 (release fix: found by the 0.4.0 leak census and CI run 43668348319; user
+**Status:** COMPLETED — 2026-11-16 (on release/0.4.0; AC7's joint CI run with CR-CRU-259 is pending the user's push) · filed 2026-11-15 (release fix: found by the 0.4.0 leak census and CI run 43668348319; user
 rulings 2026-11-15: a test-only install rather than a client setting, and a suite-owned maven repository kept between
 runs)
 **Type:** fix
@@ -102,27 +102,27 @@ In-suite ACs are proved by tests; **orchestrator checks** (marked) are proved by
 (an isolated network namespace, no root toml, the board tripwire, the audit hook) and recorded in the close-out
 (pre-review F1). The census audit hook gains an `open` event for AC1.
 
-- [ ] **AC1 — no operator config** (orchestrator check). A full run of both suites in a clean clone with an operator
+- [x] **AC1 — no operator config** (orchestrator check). A full run of both suites in a clean clone with an operator
   `crucible.toml` and `.env` at its root, whose `[client] url`, limits, `[lint]` and `[run]` differ from the defaults,
   gives the same pass/fail per test as without them; and the audit census records no open of `<repo>/crucible.toml`
   or `<repo>/.env`. **In-suite backstop (AC10).**
-- [ ] **AC2 — one path.** No test module, helper or fixture outside the two harness helpers builds a path to the
+- [x] **AC2 — one path.** No test module, helper or fixture outside the two harness helpers builds a path to the
   checkout's `clients/` (a guard test over `tests/`, python and TypeScript). "Builds a path" means: a `clients` path
   segment joined to a base derived from the repo (`__file__`, `import.meta.dir` or `import.meta.url`, `REPO_ROOT` and
   its aliases), or a relative `clients/…` used as a spawn argument, an import path or a file read. Exempt: comments,
   docstrings, assertion and message text, and paths under a temp base. The guard is proved on one planted module per
   spelling, in both languages (pre-review F6).
-- [ ] **AC3 — maven.** With `HOME` pointing at an empty directory, the maven live-run tests pass from a provisioned
+- [x] **AC3 — maven.** With `HOME` pointing at an empty directory, the maven live-run tests pass from a provisioned
   suite repo; pointed at a fresh empty directory (a test-only parameter, never the real suite repo), or at one whose
   stamp does not match, they fail naming the provisioning script. The no-network half is an orchestrator check.
-- [ ] **AC4 — wheels.** The three wheel modules build with `sys.executable` and `--no-isolation`; with a module missing
+- [x] **AC4 — wheels.** The three wheel modules build with `sys.executable` and `--no-isolation`; with a module missing
   they fail naming the `dev` extra. With no network they pass (orchestrator check).
-- [ ] **AC5 — CI.** `release.yml` has no `~/.m2` warm-up and no separate build install; `test-python` runs the
+- [x] **AC5 — CI.** `release.yml` has no `~/.m2` warm-up and no separate build install; `test-python` runs the
   provisioning script and then the suite with `.venv/bin/python`; the `ci-toolchain-provisioning` pins are updated.
-- [ ] **AC6 — torn down.** A child process that imports the helper and exits leaves no install behind; a child killed
+- [x] **AC6 — torn down.** A child process that imports the helper and exits leaves no install behind; a child killed
   before exit leaves one that the next creation sweeps; a reusing child never removes its parent's. Proved in both
   languages, the bun one also with `CRUCIBLE_TEST_TMPROOT_DISABLE=1` (the shape of `run-scoped-temp-root.test.ts`).
-- [ ] **AC7 — every board is declared** (orchestrator check). The census shows no `BoardUndeclared` failure and no
+- [x] **AC7 — every board is declared** (orchestrator check). The census shows no `BoardUndeclared` failure and no
   tripwire hit, for both suites. At CR-CRU-259's close, that census (`870f6905`) counted 127 such failures in about 27
   python modules: `test_cr054_http_core_lift`, `test_cr017_client_lifecycle`, `test_cr054_verb_surface_lift`,
   `test_bun_crucible_lifecycle`, `test_bun_crucible_agent_report_isolation`, `test_bun_crucible_auto_attach`,
@@ -131,19 +131,19 @@ In-suite ACs are proved by tests; **orchestrator checks** (marked) are proved by
   module-level cases, and others (`test-reports/work/dep-census-py.out`). Each now declares the board it reaches, or
   asserts the refusal. **Added 2026-11-15 (user ruling):** CR-CRU-259 and CR-CRU-260 are pushed together, and that CI
   run must be green before CR-CRU-261's close-out.
-- [ ] **AC8 — copies are installs.** No test copies a client module anywhere but under a `clients/` directory of its own
+- [x] **AC8 — copies are installs.** No test copies a client module anywhere but under a `clients/` directory of its own
   temp install, inside a parent the test owns. With a `crucible.toml` planted in that parent, a flat copy reads it and
   the `<install>/clients/` copy does not; the census scratch copies pass.
-- [ ] **AC9 — no operator board, no root `.env`.** No test resolves a board from the repo root, and
+- [x] **AC9 — no operator board, no root `.env`.** No test resolves a board from the repo root, and
   `declaredClientBoard` takes its directory explicitly (a guard over `tests/`). No bun test process and no
   test-spawned board carries a variable the test did not set from a `.env`: a guard asserts `CRUCIBLE_PROJECT_KEY` is
   absent from the bun suite's own `process.env` and from a test-spawned server's, with a planted `.env` in the
   working directory.
-- [ ] **AC10 — the backstops.** Every client the helpers load or spawn has `_INSTALL_DIR` equal to the test install,
+- [x] **AC10 — the backstops.** Every client the helpers load or spawn has `_INSTALL_DIR` equal to the test install,
   never the repo root, including the `_crucible_axi` the orchestrator CLI vendors; a bun-spawned client's project is
   never the repo root; and a test-install client with no project board answers the `BoardUndeclared` envelope.
 
-- [ ] **AC11 — a symlinked install runs a project's tests.** `clients/subtest_runner.py`'s
+- [x] **AC11 — a symlinked install runs a project's tests.** `clients/subtest_runner.py`'s
   `_restore_module_search_path` compares real paths on both sides, so a client reached through a symlinked `clients/`
   (the test install, or an operator's linked install) still puts the working directory first on `sys.path` and the
   project's own modules import. Pinned by a unit test with a symlinked runner path; `CHANGELOG.md` `## [0.4.0]` gains
