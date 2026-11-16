@@ -1,7 +1,9 @@
 """A declared maven run shows its REAL surefire console live on a REAL board.
 
 The real `clients/mvn-crucible.py`, real maven (`mvn`, offline through the
-fixture's `.mvn/maven.config`), real surefire 3.5.4 and JUnit Jupiter, and a
+copy's `.mvn/maven.config`, on the suite's own repository
+`<repo>/.cache/test-suite/m2` that `scripts/provision-test-caches.sh` fills,
+with `HOME` an empty directory the module owns), real surefire 3.5.4 and JUnit Jupiter, and a
 real board (`bun run src/server.ts` on a free port with a throwaway store,
 behind a loopback proxy that records every request with its time). The maven
 project is the fixture committed at `tests/fixtures/surefire-live-project`:
@@ -39,7 +41,9 @@ What is asserted:
   - maven's console still reaches the terminal (the client's stderr).
 
 A missing `mvn`, `java` or `bun` FAILS every test here, naming what is
-missing; nothing is skipped.
+missing; so does a suite repository whose `provision.stamp` does not match
+the fixture's `pom.xml` and this maven, naming the provisioning script, and
+no board is started. Nothing is skipped.
 
 Invocation:
     .venv/bin/python clients/python-crucible.py test \
@@ -47,6 +51,7 @@ Invocation:
 """
 
 import glob
+import hashlib
 import http.server
 import json
 import os
@@ -72,6 +77,13 @@ from tests.client.real_board import RealBoard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "surefire-live-project"
+#: The suite's own maven repository, git-ignored and kept between runs; filled
+#: by `PROVISION_SCRIPT`, never the operator's `~/.m2`. Read at call time.
+SUITE_MAVEN_REPO = REPO_ROOT / ".cache" / "test-suite" / "m2"
+PROVISION_SCRIPT = "scripts/provision-test-caches.sh"
+#: The stamp `PROVISION_SCRIPT` writes into the suite repository: the sha256
+#: of the fixture's `pom.xml` and the maven version that filled it.
+STAMP_NAME = "provision.stamp"
 MVN_CLIENT = CLIENTS / "mvn-crucible.py"
 TOON = load_toon()
 RUN_TIMEOUT = 600
@@ -102,6 +114,59 @@ def _toolchain_gap():
         ("bun", "the real board is `bun run src/server.ts`"))
         if shutil.which(tool) is None]
     return "; ".join(missing) or None
+
+
+def maven_env(home, base=None):
+    """The environment every maven child runs in: `base` (ours by default)
+    with `HOME` (and maven's `user.home`) pointed at `home`, an empty
+    directory the module owns, so no operator `~/.m2/settings.xml` or
+    `~/.mavenrc` is read."""
+    env = dict(os.environ if base is None else base)
+    env["HOME"] = str(home)
+    env["MAVEN_OPTS"] = f"-Duser.home={home}"
+    return env
+
+
+def maven_version():
+    """The version `mvn --version` reports on its first line
+    (`Apache Maven 3.9.9 (…)` answers `3.9.9`), or None when it reports
+    none."""
+    with tempfile.TemporaryDirectory(prefix="crucible-maven-home-") as home:
+        ran = subprocess.run([shutil.which("mvn") or "mvn", "--version"],
+                             env=maven_env(home), capture_output=True, text=True,
+                             check=False, timeout=120)
+    found = re.search(r"Apache Maven ([0-9][0-9A-Za-z.-]*)", ran.stdout or "")
+    return found.group(1) if found else None
+
+
+def _stamp(maven):
+    """The stamp text a repository provisioned for the fixture's `pom.xml`
+    by maven `maven` carries."""
+    pom = hashlib.sha256((FIXTURE / "pom.xml").read_bytes()).hexdigest()
+    return f"pom-sha256={pom}\nmaven={maven}\n"
+
+
+def maven_repo_gap(repo, maven):
+    """None when `repo`'s stamp says it was provisioned for the fixture's
+    `pom.xml` by maven `maven`; else what is wrong, naming the provisioning
+    script. Reads only: writes and creates nothing."""
+    stamp = Path(repo) / STAMP_NAME
+    remedy = f"run `{PROVISION_SCRIPT}` to provision it (network needed once)"
+    if not stamp.is_file():
+        return f"the suite's maven repository {repo} is not provisioned; {remedy}"
+    if stamp.read_text(encoding="utf-8").split() != _stamp(maven).split():
+        return (f"the suite's maven repository {repo} was provisioned for another "
+                f"pom.xml or maven than this one (maven {maven}); {remedy}")
+    return None
+
+
+def copy_fixture(dest, maven_repo):
+    """Copy the fixture to `dest`; the copy's `.mvn/maven.config` runs maven
+    offline on `maven_repo`. The committed fixture's own file stays `-o`."""
+    shutil.copytree(FIXTURE, dest)
+    config = Path(dest) / ".mvn" / "maven.config"
+    config.write_text(f"-o\n-Dmaven.repo.local={maven_repo}\n", encoding="utf-8")
+    return str(dest)
 
 
 class _RecordingProxy:
@@ -288,11 +353,17 @@ def setUpModule():
     if gap:
         _MODULE["gap"] = f"the real surefire console tests need: {gap}"
         return
+    gap = maven_repo_gap(SUITE_MAVEN_REPO, maven_version())
+    if gap:
+        _MODULE["gap"] = f"the real surefire console tests need: {gap}"
+        return
     began = time.time()
     scratch = tempfile.mkdtemp(prefix="crucible-surefire-live-", dir="/tmp")
     _MODULE["scratch"] = scratch
     project = os.path.join(scratch, "project")
-    shutil.copytree(FIXTURE, project)
+    copy_fixture(project, SUITE_MAVEN_REPO)
+    home = os.path.join(scratch, "home")
+    os.makedirs(home)
     board = RealBoard(shutil.which("bun"), "real-surefire-live-runs")
     _MODULE["board"] = board
     proxy = _RecordingProxy(board.base)
@@ -300,7 +371,7 @@ def setUpModule():
     install_project(project, proxy.url, board.key, board.name)
     with open(os.path.join(project, "crucible.toml"), "a", encoding="utf-8") as handle:
         handle.write(f"\n[targets.unit]\n{DECLARED_ENTRY}")
-    env = scrubbed_env(None)
+    env = maven_env(home, scrubbed_env(None))
     for key in _SCRUBBED:
         env.pop(key, None)
     run = _drive(project, env, proxy, board, os.path.join(scratch, "marks"))
