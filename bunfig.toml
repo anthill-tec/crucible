@@ -1,3 +1,11 @@
+# CR-CRU-260 (AC9) — no test process loads the repo root's `.env`. Bun loads
+# `<cwd>/.env` into `process.env` by default, and the root `.env` names the
+# operator's LIVE project; a bare `bun test` reads only this file, so the
+# switch lives here, at the top level. `src/` reads no `.env` key (measured),
+# so the operator's own board start is behaviourally unchanged. Test-spawned
+# boards also pass `--no-env-file`.
+env = false
+
 # CR-CRU-047 §S1 — no test-discovery exclusions. `tests/archive/` (the retired
 # v1 shim suites) is DELETED, not excluded, so every `.test.ts` on disk is a
 # file `bun test` runs. Do not reintroduce `[test] pathIgnorePatterns` for the
