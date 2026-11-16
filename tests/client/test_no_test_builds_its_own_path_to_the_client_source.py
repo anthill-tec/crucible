@@ -14,7 +14,9 @@ reads the operator's root `crucible.toml`.
   and its aliases (any name bound to a repo-derived value, or a conventional
   repo-root name the module does not bind), or `parents[n]`. The joins
   looked at: `/`, `os.path.join`, `Path(base, ...)`, `.joinpath`, an
-  f-string, and `str(base) + "/..."`;
+  f-string, `str(base) + "/..."`, `"%s/..." % base`, `"{}/...".format(base)`,
+  and `"/".join([base, ...])` or `os.sep.join([base, ...])`. A `*starred`
+  argument is spread into the elements it names;
 - a relative `clients/...` used as a spawn argument (`subprocess.*`,
   `os.exec*`/`spawn*`, `asyncio.create_subprocess_exec`), an import path
   (`spec_from_file_location`, `SourceFileLoader`, `runpy.run_path`,
@@ -23,7 +25,8 @@ reads the operator's root `crucible.toml`.
 
 Exempt: comments and docstrings (the scan reads the syntax tree), assertion
 and message text (an f-string or string concatenation inside an `assert`
-message, a `raise`, or an `assert*`/`fail`/`print` call), and paths under a
+message, a `raise`, or an `assert*`/`fail`/`print` call, and there a `%`, a
+`.format` or a `.join` too), and paths under a
 temp base (a base not derived from the repo is never a repo path). The
 `tests.client` package itself is the one module allowed to build the path.
 
@@ -37,6 +40,7 @@ repo-relative path the expression names, so `<repo>/crucible_axi/clients`
 import ast
 import itertools
 import os
+import string
 import unittest
 from collections import defaultdict
 from pathlib import Path
@@ -62,6 +66,10 @@ _MAX_LITERALS = 64
 _PATH_TYPES = frozenset({"pathlib.Path", "pathlib.PurePath", "pathlib.PosixPath",
                          "pathlib.PurePosixPath", "Path", "PurePath"})
 _JOINS = frozenset({"os.path.join", "posixpath.join"})
+#: Separators whose `.join` of a list builds a path.
+_SEPARATORS = frozenset({"os.sep", "os.path.sep", "posixpath.sep"})
+#: The `%` conversions a path base is formatted with.
+_PERCENT_FIELDS = ("%s", "%r")
 _DIRNAMES = frozenset({"os.path.dirname", "posixpath.dirname"})
 _IDENTITIES = frozenset({"str", "os.fspath", "os.path.abspath", "os.path.realpath",
                          "os.path.normpath", "os.path.expanduser"})
@@ -285,19 +293,30 @@ class _ClientsPathScanner:
                     return UNKNOWN if self.unplaceable(node.value.value) else None
                 return _up(base, index + 1 if isinstance(index, int) else None)
             return None
+        formatted = self.formatted_base(node)
+        if formatted is not None:
+            base = self.path_of(formatted[0], seen)
+            if base is None:
+                return None
+            suffixes = _suffixes({formatted[1]})
+            return _apply(base, suffixes[:1]) if len(suffixes) == 1 else UNKNOWN
+        separated = self.separator_joined(node)
+        if separated:
+            return self.joined(self.path_of(separated[0], seen), separated[1:], seen)
         if isinstance(node, ast.Call):
             name = self.canonical(node.func)
+            arguments = self.spread(node.args)
             if name in _IDENTITIES and node.args:
                 return self.path_of(node.args[0], seen)
             if name in _DIRNAMES and node.args:
                 return _up(self.path_of(node.args[0], seen), 1)
-            if (name in _JOINS or name in _PATH_TYPES) and node.args:
-                return self.joined(self.path_of(node.args[0], seen), node.args[1:], seen)
+            if (name in _JOINS or name in _PATH_TYPES) and arguments:
+                return self.joined(self.path_of(arguments[0], seen), arguments[1:], seen)
             if isinstance(node.func, ast.Attribute):
                 if node.func.attr in ("resolve", "absolute", "expanduser"):
                     return self.path_of(node.func.value, seen)
                 if node.func.attr == "joinpath":
-                    return self.joined(self.path_of(node.func.value, seen), node.args, seen)
+                    return self.joined(self.path_of(node.func.value, seen), arguments, seen)
             return None
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
             return self.joined(self.path_of(node.left, seen), [node.right], seen)
@@ -314,6 +333,66 @@ class _ClientsPathScanner:
             suffixes = _suffixes(texts or ())
             return _apply(base, suffixes[:1]) if len(suffixes) == 1 else UNKNOWN
         return None
+
+    def formatted_base(self, node):
+        """`(the value formatted first, the text right after it)` for a `%` or
+        `str.format` string whose text starts with that value, else None."""
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            texts = self.literals(node.left)
+            if len(texts) != 1:
+                return None
+            text = next(iter(texts))
+            values = node.right.elts if isinstance(node.right, ast.Tuple) else [node.right]
+            if text[:2] not in _PERCENT_FIELDS or not values:
+                return None
+            return values[0], text[2:].split("%", 1)[0]
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr == "format":
+            texts = self.literals(node.func.value)
+            if len(texts) != 1:
+                return None
+            try:
+                fields = list(string.Formatter().parse(next(iter(texts))))
+            except ValueError:
+                return None
+            if not fields or fields[0][0] or fields[0][1] is None:
+                return None
+            field = fields[0][1]
+            if field.isdigit() or field == "":
+                index = int(field or 0)
+                value = node.args[index] if index < len(node.args) else None
+            else:
+                value = next((k.value for k in node.keywords if k.arg == field), None)
+            if value is None or isinstance(value, ast.Starred):
+                return None
+            return value, fields[1][0] if len(fields) > 1 else ""
+        return None
+
+    def separator_joined(self, node):
+        """The elements a `"/".join([...])` or `os.sep.join([...])` joins, else
+        an empty list."""
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "join" and len(node.args) == 1):
+            return []
+        separator = node.func.value
+        if self.canonical(separator) not in _SEPARATORS \
+                and self.literals(separator) != frozenset({"/"}):
+            return []
+        return self.elements(node.args[0])
+
+    def spread(self, arguments):
+        """`arguments` with each `*starred` one spread into the elements it
+        names; stops at a starred one it cannot spread."""
+        out = []
+        for argument in arguments:
+            if isinstance(argument, ast.Starred):
+                elements = self.elements(argument.value)
+                if not elements:
+                    break
+                out.extend(elements)
+            else:
+                out.append(argument)
+        return out
 
     def unplaceable(self, node):
         """A value the module never binds: a parameter, or an attribute of
@@ -452,7 +531,10 @@ class _ClientsPathScanner:
                 if is_message:
                     for argument in [*node.args, *(k.value for k in node.keywords)]:
                         for inner in ast.walk(argument):
-                            if isinstance(inner, (ast.JoinedStr, ast.BinOp)):
+                            if isinstance(inner, (ast.JoinedStr, ast.BinOp)) or (
+                                    isinstance(inner, ast.Call)
+                                    and isinstance(inner.func, ast.Attribute)
+                                    and inner.func.attr in ("format", "join")):
                                 mark(inner)
         return marked
 
@@ -481,6 +563,17 @@ class _ClientsPathScanner:
         return choices
 
     def _join_build(self, node, messages):
+        formatted = self.formatted_base(node)
+        if formatted is not None:
+            if id(node) in messages:
+                return False
+            suffixes = _suffixes({formatted[1]})
+            return bool(suffixes) and self._enters_clients(formatted[0], [suffixes])
+        separated = self.separator_joined(node)
+        if separated:
+            if id(node) in messages:
+                return False
+            return self._enters_clients(separated[0], self._segment_choices(separated[1:]))
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
             return self._enters_clients(node.left, self._segment_choices([node.right]))
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
@@ -499,11 +592,12 @@ class _ClientsPathScanner:
             return bool(suffixes) and self._enters_clients(node.values[0].value, [suffixes])
         if isinstance(node, ast.Call):
             name = self.canonical(node.func)
-            if (name in _JOINS or name in _PATH_TYPES) and len(node.args) > 1:
-                return self._enters_clients(node.args[0], self._segment_choices(node.args[1:]))
+            arguments = self.spread(node.args)
+            if (name in _JOINS or name in _PATH_TYPES) and len(arguments) > 1:
+                return self._enters_clients(arguments[0], self._segment_choices(arguments[1:]))
             if isinstance(node.func, ast.Attribute) and node.func.attr == "joinpath" \
-                    and node.args:
-                return self._enters_clients(node.func.value, self._segment_choices(node.args))
+                    and arguments:
+                return self._enters_clients(node.func.value, self._segment_choices(arguments))
         return False
 
     def _relative_clients_in(self, node):
@@ -620,6 +714,18 @@ PLANTED_BUILDS = {
         _ROOT_PREAMBLE + 'SCRIPT = f"{REPO_ROOT}/clients/rust-crucible.py"\n',
     "str of the repo root concatenated":
         _ROOT_PREAMBLE + 'SCRIPT = str(REPO_ROOT) + "/clients/mvn-crucible.py"\n',
+    "a percent format on the repo root":
+        _ROOT_PREAMBLE + 'CLIENTS = "%s/clients" % REPO_ROOT\n',
+    "str.format on the repo root":
+        _ROOT_PREAMBLE + 'CLIENTS = "{}/clients".format(REPO_ROOT)\n',
+    "a slash join of the repo root and clients":
+        _ROOT_PREAMBLE + 'CLIENTS = "/".join([REPO_ROOT, "clients"])\n',
+    "os.sep.join of the repo root and clients":
+        _ROOT_PREAMBLE + 'CLIENTS = os.sep.join([str(REPO_ROOT), "clients"])\n',
+    "joinpath of starred parts naming clients":
+        _ROOT_PREAMBLE
+        + 'PARTS = ("clients", "python-crucible.py")\n'
+        "SCRIPT = REPO_ROOT.joinpath(*PARTS)\n",
     "a repo root under a name of the module's own":
         "from pathlib import Path\n"
         "TOP = Path(__file__).resolve().parents[2]\n"
@@ -696,6 +802,16 @@ PLANTED_CORRECT_USES = {
         'f"{REPO_ROOT}/clients must hold the core")\n'
         '        assert text, f"see {REPO_ROOT}/clients"\n'
         '        raise AssertionError(str(REPO_ROOT) + "/clients is missing")\n',
+    "format, percent and join in message text or under a temp base":
+        "import os\nimport tempfile\nimport unittest\nfrom pathlib import Path\n"
+        "REPO_ROOT = Path(__file__).resolve().parents[2]\n"
+        'SCRATCH = "%s/clients" % tempfile.mkdtemp()\n'
+        'OTHER = "/".join([tempfile.gettempdir(), "clients"])\n'
+        "class T(unittest.TestCase):\n"
+        "    def test_x(self):\n"
+        '        self.fail("{}/clients".format(REPO_ROOT))\n'
+        '        self.fail("%s/clients" % REPO_ROOT)\n'
+        '        print(os.sep.join([str(REPO_ROOT), "clients"]))\n',
     "relative client paths kept as data":
         'OUTSIDE = ("clients/python-crucible.py", "src/server.ts")\n'
         "def classify(path):\n"
