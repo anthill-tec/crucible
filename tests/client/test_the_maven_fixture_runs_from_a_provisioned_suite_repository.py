@@ -279,7 +279,7 @@ class TheProvisioningScriptTest(unittest.TestCase):
         self.assertTrue(any("tests/fixtures/surefire-live-project" in line for line in code),
                         "the script provisions from the committed fixture")
         lifecycle = [line for line in code
-                     if re.search(r"\bmvn\b", line)
+                     if re.search(r"\bmvn\b", line, re.IGNORECASE)
                      and re.search(r"(^|\s)(test|verify|package|install)(\s|$|;|\))", line)]
         self.assertTrue(lifecycle,
                         "maven runs a lifecycle phase (test/verify/package/install) on the "
@@ -296,7 +296,8 @@ class TheProvisioningScriptTest(unittest.TestCase):
         code = self.code_lines()
         stamp_at = next((i for i, line in enumerate(code) if STAMP_NAME in line), None)
         maven_at = next((i for i, line in enumerate(code)
-                         if re.search(r"\bmvn\b", line) and "--version" not in line
+                         if re.search(r"\bmvn\b", line, re.IGNORECASE)
+                         and "--version" not in line
                          and "-v" not in line.split()), None)
         if stamp_at is None or maven_at is None:
             self.fail(f"the script names the stamp ({stamp_at}) and runs maven ({maven_at})")
