@@ -8,7 +8,7 @@ collected by:
 
 * this repo's python runs: `python-crucible.py`'s unittest discovery (start dir
   `tests` or `tests/client`, pattern `test_*.py`) and CI's python job
-  (`python3 -m unittest discover -s tests/client -t .`, pattern `test*.py`).
+  (`.venv/bin/python -m unittest discover -s tests/client -t .`, pattern `test*.py`).
   unittest descends only into packages and collects only files matching its
   pattern;
 * this repo's bun runs: a bare `bun test` (CI, `test:regression`) and the
@@ -203,9 +203,10 @@ class ThePytestFixtureStaysOutOfThisReposPythonRunsTest(_FixtureCase):
     def test_ci_runs_the_tests_client_unittest_discovery(self):
         # CI's python step is the discovery the probes above prove; another
         # start dir or a pattern argument there would be a different collection.
+        # A step is selected by its discovery, whatever interpreter runs it.
         steps = [line.strip() for line in CI_WORKFLOW.read_text().splitlines()
-                 if line.strip().startswith("run: python3 -m unittest")]
-        self.assertEqual(steps, ["run: python3 -m unittest discover -s tests/client -t ."],
+                 if line.strip().startswith("run:") and "-m unittest discover" in line]
+        self.assertEqual(steps, ["run: .venv/bin/python -m unittest discover -s tests/client -t ."],
                          f"CI's python test steps: {steps!r}")
 
 
