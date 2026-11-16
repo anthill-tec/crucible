@@ -16,12 +16,20 @@
  * not a red test but somebody else's board carrying this suite's rows. So the
  * declaration is READ BACK through the real shared resolver, in the same
  * process the client will load it with, before the spawn.
+ *
+ * CR-CRU-260 — the resolver is loaded from the TEST INSTALL
+ * (`tests/helpers/test-install.ts`), so a directory that declares no board
+ * falls through to the test install's empty `crucible.toml` and refuses,
+ * never to the operator's root one.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { clientScript } from "./test-install.ts";
 
 const REPO_ROOT = resolve(dirname(new URL(import.meta.url).pathname), "..", "..");
-const AXI_MODULE = join(REPO_ROOT, "clients", "_crucible_axi.py");
+
+/** The shared resolver module every probe here loads: the test install's. */
+export const RESOLVER_MODULE = clientScript("_crucible_axi.py");
 const CONFIG_NAME = "crucible.toml";
 
 /** The server's packaged port. No client falls back to it any more, but a
@@ -47,7 +55,7 @@ function requireResolves(dir: string, url: string): void {
   const key = `${dir}\u0000${url}`;
   if (proven.has(key)) return;
   const probe = Bun.spawnSync({
-    cmd: ["python3", "-c", RESOLVER_PROBE, AXI_MODULE, dir],
+    cmd: ["python3", "-c", RESOLVER_PROBE, RESOLVER_MODULE, dir],
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -94,9 +102,10 @@ const declared = new Map<string, DeclaredBoard>();
 export type DeclaredBoard = { url: string } | { skip: string };
 
 /**
- * The board THIS checkout declares, asked of the fleet's OWN resolver — the
- * same question, through the same module, that a client started here would
- * ask — or the reason there is none to read.
+ * The board `dir` declares, asked of the fleet's OWN resolver — the same
+ * question, through the same module, that a client started there would ask —
+ * or the reason there is none to read. `dir` is always named: the repo root's
+ * board is the operator's, and no test reads it (CR-CRU-260 AC9).
  *
  * For suites that READ a live board rather than drive a client at one. With
  * nothing declared the resolver REFUSES — a client with no board declared has
@@ -105,12 +114,12 @@ export type DeclaredBoard = { url: string } | { skip: string };
  * nobody named. A board declared at the server's packaged port is skipped too:
  * a production install listens there, and a census never reads production.
  */
-export function declaredClientBoard(dir: string = REPO_ROOT): DeclaredBoard {
+export function declaredClientBoard(dir: string): DeclaredBoard {
   const key = resolve(dir);
   const already = declared.get(key);
   if (already !== undefined) return already;
   const probe = Bun.spawnSync({
-    cmd: ["python3", "-c", RESOLVER_PROBE, AXI_MODULE, key],
+    cmd: ["python3", "-c", RESOLVER_PROBE, RESOLVER_MODULE, key],
     stdout: "pipe",
     stderr: "pipe",
   });
