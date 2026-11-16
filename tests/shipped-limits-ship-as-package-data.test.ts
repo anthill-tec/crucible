@@ -194,9 +194,9 @@ function namesDeclaredIn(text: string, names: readonly string[]): string[] {
 // The data files a READER reads, in the checkout. `data/crucible.toml` is
 // deliberately NOT among them: it is this board's live operator state, it is
 // what caps the running :3849 instance, and a test has no business reading it
-// (§S1c's own isolation rule).
+// (§S1c's own isolation rule). Nor is the repo root's `crucible.toml`: it is
+// the git-ignored operator config, never shipped data (CR-CRU-260).
 const CANDIDATE_DATA_FILES = [
-  "crucible.toml",
   "src/crucible.toml",
   join(CLIENT_TREE, "crucible.toml"),
   "crucible_axi/crucible.toml",
