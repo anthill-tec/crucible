@@ -49,10 +49,9 @@ The build writes into a `tempfile` directory and is asserted to leave no
 Invocation:
     python3 -m pytest tests/client/test_crucible_axi_wheel_packaging.py -q
 Fallback:
-    python3 tests/client/test_crucible_axi_wheel_packaging.py
+    .venv/bin/python -m unittest tests.client.test_crucible_axi_wheel_packaging
 """
 
-import importlib.util
 import shutil
 import subprocess
 import sys
@@ -61,6 +60,8 @@ import unittest
 import zipfile
 from collections import Counter
 from pathlib import Path
+
+from tests.client.wheel_build_modules import build_modules_gap
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -86,25 +87,6 @@ EXPECTED_CLIENT_PAYLOAD = (
 BUILD_TIMEOUT_SECONDS = 600
 
 
-# What `python -m build --wheel --no-isolation` needs in the suite's OWN
-# interpreter: the frontend and the backend `pyproject.toml` names, all from
-# the `dev` extra. No isolated build environment downloads the backend.
-BUILD_MODULES = ("build", "hatchling", "hatch_vcs")
-
-
-def _build_modules_gap():
-    """None when the suite's interpreter can import every `BUILD_MODULES`
-    entry, else the failure naming the missing ones and the `dev` extra.
-    An in-process probe: no interpreter is spawned."""
-    missing = [name for name in BUILD_MODULES if importlib.util.find_spec(name) is None]
-    if not missing:
-        return None
-    return (f"the suite's interpreter ({sys.executable}) cannot import "
-            f"{', '.join(missing)}; the wheel is built offline with it "
-            "(`--no-isolation`). Remedy: install the `dev` extra, "
-            "`uv pip install --python .venv/bin/python -e '.[dev]'`.")
-
-
 class CrucibleAxiWheelPackagingTest(unittest.TestCase):
     """Builds the wheel ONCE for the whole class and asserts its payload."""
 
@@ -115,7 +97,7 @@ class CrucibleAxiWheelPackagingTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        gap = _build_modules_gap()
+        gap = build_modules_gap()
         if gap is not None:
             # Fail fast with a definitive, actionable error rather than
             # skipping -- a silent skip is exactly how the packaging defect

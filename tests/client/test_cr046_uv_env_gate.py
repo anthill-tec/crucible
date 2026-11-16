@@ -57,10 +57,9 @@ site-packages).
 Invocation:
     python3 -m pytest tests/client/test_cr046_uv_env_gate.py -q
 Fallback:
-    python3 tests/client/test_cr046_uv_env_gate.py
+    .venv/bin/python -m unittest tests.client.test_cr046_uv_env_gate
 """
 
-import importlib.util
 import os
 import re
 import shutil
@@ -70,6 +69,8 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+
+from tests.client.wheel_build_modules import build_modules_gap
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -94,27 +95,6 @@ PEP723_BLOCK_RE = re.compile(
 # The suite's own uv cache, kept between runs under the git-ignored
 # `<repo>/.cache/test-suite/`: every `uv` child uses it, never the operator's.
 SUITE_UV_CACHE = REPO_ROOT / ".cache" / "test-suite" / "uv"
-
-# What `python -m build --wheel --no-isolation` needs in the suite's OWN
-# interpreter: the frontend and the backend `pyproject.toml` names, all from
-# the `dev` extra. Duplicated in test_crucible_axi_wheel_packaging.py (kept
-# local rather than cross-imported, so this file's
-# `python3 tests/client/test_cr046_uv_env_gate.py` fallback invocation does
-# not depend on `tests` being importable as a package).
-BUILD_MODULES = ("build", "hatchling", "hatch_vcs")
-
-
-def _build_modules_gap():
-    """None when the suite's interpreter can import every `BUILD_MODULES`
-    entry, else the failure naming the missing ones and the `dev` extra.
-    An in-process probe: no interpreter is spawned."""
-    missing = [name for name in BUILD_MODULES if importlib.util.find_spec(name) is None]
-    if not missing:
-        return None
-    return (f"the suite's interpreter ({sys.executable}) cannot import "
-            f"{', '.join(missing)}; the wheel is built offline with it "
-            "(`--no-isolation`). Remedy: install the `dev` extra, "
-            "`uv pip install --python .venv/bin/python -e '.[dev]'`.")
 
 
 def _uv_env():
@@ -181,7 +161,7 @@ class Cr046UvEnvironmentGateTest(unittest.TestCase):
                 "verified without it (uv is a hard prerequisite of the "
                 "install chain per CR-CRU-046 §S3). Remedy: install uv.")
 
-        gap = _build_modules_gap()
+        gap = build_modules_gap()
         if gap is not None:
             raise RuntimeError(f"the §S3 gate needs a real wheel to install: {gap}")
 

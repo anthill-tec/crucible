@@ -51,7 +51,7 @@ never opened.
 Invocation:
     python3 -m pytest tests/client/test_shipped_limits_ship_as_package_data.py -q
 Fallback:
-    python3 tests/client/test_shipped_limits_ship_as_package_data.py
+    .venv/bin/python -m unittest tests.client.test_shipped_limits_ship_as_package_data
 """
 
 import importlib.util
@@ -65,6 +65,8 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+
+from tests.client.wheel_build_modules import build_modules_gap
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENT_MODULE_NAME = "_crucible_axi.py"
@@ -84,25 +86,6 @@ SERVER_LIMITS = ("run_abandon_ms", "project_inactive_ms", "retention",
                  "ingest_body_bytes", "raw_output_chars")
 
 
-# What `python -m build --wheel --no-isolation` needs in the suite's OWN
-# interpreter: the frontend and the backend `pyproject.toml` names, all from
-# the `dev` extra. LIFTED from tests/client/test_crucible_axi_wheel_packaging.py.
-BUILD_MODULES = ("build", "hatchling", "hatch_vcs")
-
-
-def _build_modules_gap():
-    """None when the suite's interpreter can import every `BUILD_MODULES`
-    entry, else the failure naming the missing ones and the `dev` extra.
-    An in-process probe: no interpreter is spawned."""
-    missing = [name for name in BUILD_MODULES if importlib.util.find_spec(name) is None]
-    if not missing:
-        return None
-    return (f"the suite's interpreter ({sys.executable}) cannot import "
-            f"{', '.join(missing)}; the wheel is built offline with it "
-            "(`--no-isolation`). Remedy: install the `dev` extra, "
-            "`uv pip install --python .venv/bin/python -e '.[dev]'`.")
-
-
 class _StagedWheelCase(unittest.TestCase):
     """Builds the `crucible-axi` wheel ONCE for the whole class and unpacks it
     into a scratch STAGE. Every test drives the stage, never the checkout."""
@@ -114,7 +97,7 @@ class _StagedWheelCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        gap = _build_modules_gap()
+        gap = build_modules_gap()
         if gap is not None:
             # Fail fast rather than skip -- a silent skip is how the packaging
             # defect CR-CRU-042 guards stayed invisible.
