@@ -250,22 +250,42 @@ describe("CR-CRU-063 §S2 — the Python job installs the toolchain its suites d
     ).toBe(false);
   });
 
-  test("test-python installs `build` — guards test_crucible_axi_wheel_packaging.py setUpClass `no interpreter on this machine can `import build``", () => {
+  // MIGRATED by CR-CRU-260 AC5. This test used to require a step installing
+  // `build` (CR-CRU-063 §S2). CR-CRU-260 removes that separate "Install build"
+  // step: the wheel modules build with `sys.executable`, which is the suite's
+  // `.venv/bin/python`, and that interpreter carries the `dev` extra, which
+  // declares `build`. So `build` still reaches the wheel-packaging suite, through
+  // the declaration rather than a second install of it.
+  test("test-python reaches `build` through the .venv's `dev` extra, with no separate `build` install step — guards test_crucible_axi_wheel_packaging.py's `import build`", () => {
     const { parsed } = readReleaseWorkflow();
     const steps = stepsOf(parsed, "test-python");
 
-    const installers = steps.filter(
-      (step) => typeof step.run === "string" && installsToken(step.run, "build"),
+    const venvDevInstalls = steps.filter(
+      (step) => installsDevExtra(step) && (step.run ?? "").includes(".venv/bin/python"),
     );
     expect(
-      installers.length,
-      "release.yml job 'test-python' has no step installing `build`. " +
-        "tests/client/test_crucible_axi_wheel_packaging.py's setUpClass raises " +
-        "``RuntimeError: no interpreter on this machine can `import build`… " +
-        "Remedy: `python3 -m pip install --upgrade build``` — the same package " +
-        "the `build` job already installs; that asymmetry is the bug (§S2).\n" +
+      venvDevInstalls.length,
+      "release.yml job 'test-python' installs no `dev` extra into `.venv/bin/python`, the " +
+        "interpreter the suite runs with and the wheel modules build with.\n" +
         `test-python steps:\n${stepInventory(steps)}`,
-    ).toBeGreaterThan(0);
+    ).toBe(1);
+
+    const pyproject = readFileSync(join(REPO_ROOT, "pyproject.toml"), "utf8");
+    const devExtra = /^dev\s*=\s*\[([^\]]*)\]/m.exec(pyproject)?.[1] ?? "";
+    expect(
+      /["']build(?:[<>=!~;\s"']|$)/.test(devExtra),
+      "pyproject.toml's `dev` extra does not declare `build`, so the .venv would not carry it",
+    ).toBe(true);
+
+    const separate = steps
+      .filter((step) => typeof step.run === "string" && installsToken(step.run, "build"))
+      .map(describeStep);
+    expect(
+      separate,
+      "release.yml job 'test-python' still has a separate step installing `build` (CR-CRU-260 " +
+        "AC5: the separate build install goes; `build` comes from the `.venv`'s `dev` extra).\n" +
+        `test-python steps:\n${stepInventory(steps)}`,
+    ).toEqual([]);
   });
 });
 
@@ -1039,5 +1059,169 @@ describe("CR-CRU-018 \u00a7S1 AC13/AC14 \u2014 both CI jobs provision WebKit, no
         "or in a comment \u2014 any other occurrence could make the two positive " +
         "assertions above pass for the wrong reason.",
     ).toEqual([]);
+  });
+});
+
+// ── CR-CRU-260 AC5 — CI provisions the suite's own caches, never `~/.m2` ────
+//
+// Spec: docs/changes/CR-CRU-260-the-client-suite-runs-from-its-own-install-and-owns-its-caches.md
+//   "CI. `ffdea8df`'s `~/.m2` warm-up step is removed; `test-python` runs the
+//    provisioning script, then the suite with `.venv/bin/python` (the
+//    interpreter that carries `.[dev]`); the separate "Install build" step goes.
+//    Its `cargo-llvm-cov` and `llvm-tools-preview` installs stay."
+//   AC5: "`release.yml` has no `~/.m2` warm-up and no separate build install;
+//    `test-python` runs the provisioning script and then the suite with
+//    `.venv/bin/python`."
+//
+// The suite owns its maven repository (`.cache/test-suite/m2`), and
+// `scripts/provision-test-caches.sh` fills it. A CI step that warms the
+// operator-style `~/.m2` would cover a leak with provisioning, which the
+// cardinal test rule forbids. The separate-build-install half is pinned by the
+// migrated `build` test in the CR-CRU-063 §S2 block above.
+//
+// Measured at RED (release.yml at cd55bd3f): the job has a step named
+// "Maven's local repository, warmed for the offline fixture" that runs
+// `mvn … clean test`; no step runs the provisioning script; the suite step is
+// `python3 -m unittest discover -s tests/client -t .`; and the job's comment
+// block lists "maven's local repository, warmed". The cargo-llvm-cov and
+// llvm-tools-preview pins are born green: they are the rails the edit must
+// keep.
+
+const PROVISIONING_SCRIPT = "scripts/provision-test-caches.sh";
+
+/** A `run:` line that executes the provisioning script, directly or through
+ *  `bash`/`sh`, with or without a leading `./`. A mention inside an `echo` or
+ *  a comment is not a run. */
+function runsProvisioningScript(step: WorkflowStep): boolean {
+  const run = step.run;
+  if (typeof run !== "string") return false;
+  return run
+    .split("\n")
+    .some((line) => /^\s*(?:(?:bash|sh)\s+)?(?:\.\/)?scripts\/provision-test-caches\.sh(?:\s|$)/.test(line));
+}
+
+/** The step that runs the python client suite: a `-m unittest` over
+ *  `tests/client`. */
+function isPythonSuiteStep(step: WorkflowStep): boolean {
+  const run = step.run;
+  return typeof run === "string" && /-m\s+unittest\b[^\n]*\btests\/client\b/.test(run);
+}
+
+/** A step that warms a maven repository: it runs `mvn` itself, or names
+ *  `.m2` anywhere (a `run:`, a cache `path:`, an env value). */
+function warmsMaven(step: WorkflowStep): boolean {
+  const run = typeof step.run === "string" ? step.run : "";
+  if (/(?:^|[\s;&|(])mvn(?:\s|$)/m.test(run)) return true;
+  return JSON.stringify(step).includes(".m2");
+}
+
+/** The raw text of one job: the comment block directly above its key, and
+ *  every line of its body down to the next line at job indentation. */
+function rawJobText(raw: string, jobName: string): string[] {
+  const lines = raw.split("\n");
+  const key = lines.findIndex((line) => line === `  ${jobName}:`);
+  expect(key, `release.yml has no '  ${jobName}:' job key`).toBeGreaterThanOrEqual(0);
+  let head = key;
+  while (head > 0 && /^ {2}#/.test(lines[head - 1] ?? "")) head--;
+  let end = key + 1;
+  while (end < lines.length && !/^ {0,2}\S/.test(lines[end] ?? "")) end++;
+  return lines.slice(head, end);
+}
+
+describe("CR-CRU-260 AC5 — test-python provisions the suite's own caches, then runs the suite with .venv/bin/python", () => {
+  test("test-python has no maven warm-up step — no step runs `mvn` or names `.m2`", () => {
+    const { parsed } = readReleaseWorkflow();
+    const steps = stepsOf(parsed, "test-python");
+
+    const warmers = steps.filter(warmsMaven).map((step) => step.name ?? describeStep(step));
+    expect(
+      warmers,
+      "release.yml job 'test-python' still warms a maven repository (CR-CRU-260 AC5: the " +
+        "`~/.m2` warm-up step is removed; the suite's own `.cache/test-suite/m2` is filled by " +
+        `${PROVISIONING_SCRIPT}).\ntest-python steps:\n${stepInventory(steps)}`,
+    ).toEqual([]);
+  });
+
+  test("test-python runs scripts/provision-test-caches.sh exactly once, before the python client suite step", () => {
+    const { parsed } = readReleaseWorkflow();
+    const steps = stepsOf(parsed, "test-python");
+
+    const suite = steps.flatMap((step, index) => (isPythonSuiteStep(step) ? [index] : []));
+    expect(
+      suite.length,
+      `release.yml job 'test-python' must run the python client suite in exactly one step.\n` +
+        `test-python steps:\n${stepInventory(steps)}`,
+    ).toBe(1);
+
+    const provisioning = steps.flatMap((step, index) => (runsProvisioningScript(step) ? [index] : []));
+    expect(
+      provisioning.length,
+      `release.yml job 'test-python' does not run ${PROVISIONING_SCRIPT} in exactly one step ` +
+        "(CR-CRU-260 AC5: test-python runs the provisioning script, then the suite).\n" +
+        `test-python steps:\n${stepInventory(steps)}`,
+    ).toBe(1);
+    expect(
+      provisioning[0] as number,
+      `${PROVISIONING_SCRIPT} must run BEFORE the suite step, or the maven tests meet an ` +
+        "unprovisioned suite repository and fail naming the script.",
+    ).toBeLessThan(suite[0] as number);
+  });
+
+  test("the python client suite step runs with .venv/bin/python, the interpreter that carries the dev extra", () => {
+    const { parsed } = readReleaseWorkflow();
+    const steps = stepsOf(parsed, "test-python");
+
+    const suiteRuns = steps.filter(isPythonSuiteStep).map((step) => (step.run ?? "").trim());
+    expect(suiteRuns.length, `test-python steps:\n${stepInventory(steps)}`).toBe(1);
+
+    const interpreter = /(\S+)\s+-m\s+unittest\b/.exec(suiteRuns[0] ?? "")?.[1];
+    expect(
+      interpreter,
+      "release.yml job 'test-python' runs the suite with an interpreter other than " +
+        "`.venv/bin/python` (CR-CRU-260 AC5: the suite runs with the interpreter that carries " +
+        `\`.[dev]\`). Suite step: ${suiteRuns[0] ?? "<none>"}`,
+    ).toBe(".venv/bin/python");
+  });
+
+  test("test-python's comment block no longer describes a warmed maven repository or ~/.m2", () => {
+    const { raw } = readReleaseWorkflow();
+    const comments = rawJobText(raw, "test-python").filter((line) => /^\s*#/.test(line));
+    expect(comments.length, "the test-python job carries no comment lines at all").toBeGreaterThan(0);
+
+    const stale = comments.filter((line) =>
+      /\bwarm(?:ed|ing|s|-up)?\b|~\/\.m2|\$\{?HOME\}?\/\.m2/i.test(line),
+    );
+    expect(
+      stale.map((line) => line.trim()),
+      "the test-python job's comments still describe a warmed `~/.m2`; the suite now owns its " +
+        `maven repository (.cache/test-suite/m2), filled by ${PROVISIONING_SCRIPT}.`,
+    ).toEqual([]);
+  });
+
+  test("test-python keeps its cargo-llvm-cov and llvm-tools-preview installs — toolchains, not operator state", () => {
+    const { parsed } = readReleaseWorkflow();
+    const steps = stepsOf(parsed, "test-python");
+
+    const llvmCov = steps.filter(
+      (step) =>
+        (typeof step.uses === "string" &&
+          /^taiki-e\/install-action@/.test(step.uses) &&
+          String(step.with?.tool ?? "").split(",").map((t) => t.trim()).includes("cargo-llvm-cov")) ||
+        (typeof step.run === "string" && /\bcargo\s+install\b[^\n]*\bcargo-llvm-cov\b/.test(step.run)),
+    );
+    expect(
+      llvmCov.length,
+      `release.yml job 'test-python' no longer installs cargo-llvm-cov (the spec keeps it).\n` +
+        `test-python steps:\n${stepInventory(steps)}`,
+    ).toBe(1);
+
+    const llvmTools = steps.filter(
+      (step) => typeof step.run === "string" && /\brustup\s+component\s+add\b[^\n]*\bllvm-tools-preview\b/.test(step.run),
+    );
+    expect(
+      llvmTools.length,
+      `release.yml job 'test-python' no longer adds llvm-tools-preview (the spec keeps it).\n` +
+        `test-python steps:\n${stepInventory(steps)}`,
+    ).toBe(1);
   });
 });

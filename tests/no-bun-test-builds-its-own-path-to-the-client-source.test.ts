@@ -605,6 +605,20 @@ const PLANTED_CORRECT_USES: Record<string, string[]> = {
     "  expect(existsSync(join(root, intruder))).toBe(false);",
     "}",
   ],
+  // CR-CRU-260 cycle 963 (GREEN 962's finding 2): the words INSIDE a string
+  // literal are text, never identifiers. A temp-dir prefix that happens to
+  // spell a repo-root name, or a name this module binds to the repo, does
+  // not make the temp dir a repo base.
+  "a temp-dir prefix that spells REPO_ROOT, its clients read": [
+    'const root = mkdtempSync(join(tmpdir(), "REPO_ROOT-clients-"));',
+    'const text = readFileSync(join(root, "clients", "bun-crucible.py"), "utf8");',
+  ],
+  "a temp-dir prefix that spells a repo-bound name, its clients listed": [
+    'const world = resolve(import.meta.dir, "..");',
+    'const root = mkdtempSync(join(tmpdir(), "release-live-world-"));',
+    'const clients = join(root, "clients");',
+    "const names = readdirSync(clients);",
+  ],
 };
 
 describe("no bun test builds its own path to the client source — the guard, on planted modules", () => {
