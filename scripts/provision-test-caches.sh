@@ -1,5 +1,5 @@
 #!/bin/sh
-# Provision the test suite's own toolchain caches (CR-CRU-260), the one step
+# Provision the test suite's own toolchain caches, the one step
 # that needs the network. Run it once, and again whenever it says the cache is
 # stale; the tests themselves run offline and never fill a cache.
 #
