@@ -249,6 +249,9 @@ class ClientsPathScanner {
     }
   }
 
+  /** `expr` is LIVE code (string contents blanked, `this.live`): a word inside
+   *  a string literal is not an identifier, so a temp-dir prefix spelling
+   *  `REPO_ROOT` never reads as a repo base. */
   private isRepoBase(expr: string): boolean {
     if (new RegExp(REPO_BASE_TOKENS).test(expr)) return true;
     for (const token of expr.match(/[A-Za-z_$][\w$]*/g) ?? []) if (this.repoNames.has(token)) return true;
@@ -289,8 +292,9 @@ class ClientsPathScanner {
     for (let pass = 0; pass < 3; pass++) {
       for (const b of bindings) {
         const hasClients = this.stringsIn(b.start, b.end).some((s) => components(s.value).includes("clients"));
-        if (!hasClients && this.isRepoBase(b.init)) this.repoNames.add(b.name);
-        else if (!this.isRepoBase(b.init) && this.initIsRelative(b.init, b.start, b.end)) this.relNames.add(b.name);
+        const live = this.live.slice(b.start, b.end);
+        if (!hasClients && this.isRepoBase(live)) this.repoNames.add(b.name);
+        else if (!this.isRepoBase(live) && this.initIsRelative(b.init, b.start, b.end)) this.relNames.add(b.name);
       }
     }
   }
@@ -361,7 +365,7 @@ class ClientsPathScanner {
       const last = segments.pop() ?? "";
       if (call.callee.startsWith(".") || !JOIN_SEGMENTS.has(last) || !PATH_MODULES.has(segments.join("."))) continue;
       const [base, ...rest] = call.args;
-      if (base === undefined || !this.isRepoBase(this.arg(base))) continue;
+      if (base === undefined || !this.isRepoBase(this.live.slice(base[0], base[1]))) continue;
       const parts: string[] = [];
       for (const range of rest) {
         const arg = this.arg(range);
@@ -394,7 +398,7 @@ class ClientsPathScanner {
       if (!/^\/(?:\.\.\/)*clients(?:\/|$)/.test(s.value)) continue;
       if (this.text[s.start] === "}") {
         const hole = this.code.lastIndexOf("${", s.start);
-        if (hole >= 0 && this.isRepoBase(this.code.slice(hole + 2, s.start))) {
+        if (hole >= 0 && this.isRepoBase(this.live.slice(hole + 2, s.start))) {
           this.flag(s.start, "`${<repo base>}/clients…`");
         }
         continue;
