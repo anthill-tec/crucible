@@ -60,7 +60,7 @@ class RealBoard:
         Path(self.tmpdir, "crucible.toml").write_text(
             f'[server]\nhost = "127.0.0.1"\nport = {port}\n', encoding="utf-8")
         self.proc = subprocess.Popen(
-            [bun, "run", "src/server.ts"], cwd=str(REPO_ROOT),
+            [bun, "run", "--no-env-file", "src/server.ts"], cwd=str(REPO_ROOT),
             env={**os.environ,
                  "CRUCIBLE_DB": os.path.join(self.tmpdir, "crucible.db")},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

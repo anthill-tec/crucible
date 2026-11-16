@@ -107,7 +107,7 @@ class CycleGateFilesEverySuiteUnderTheCycleTest(_GATE._GateFixtureCase):
         cls.base = f"http://127.0.0.1:{port}"
         _declare_listener(cls._store_dir, port)
         cls._proc = subprocess.Popen(
-            [_REAL_BUN, "run", "src/server.ts"], cwd=str(REPO_ROOT),
+            [_REAL_BUN, "run", "--no-env-file", "src/server.ts"], cwd=str(REPO_ROOT),
             env={**os.environ,
                  "CRUCIBLE_DB": os.path.join(cls._store_dir, "crucible.db")},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

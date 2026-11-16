@@ -83,6 +83,23 @@ ISOLATION_DIR = _isolation_dir()
 for _variable in PROJECT_DIR_VARIABLES:
     os.environ[_variable] = ISOLATION_DIR
 
+#: The root `.env`'s registry variables (CR-CRU-260 AC9). direnv exports the
+#: root `.env` into the operator's shell, so they arrive by inheritance; the
+#: suite drops them at import. Kept in step with the bun preload
+#: (`tests/helpers/isolated-store-preload.ts`).
+ENV_REGISTRY_VARIABLES = (
+    "CRUCIBLE_PROJECT_KEY",
+    "CRUCIBLE_PROJECT_NAME",
+    "WORKFLOW_ORCHESTRATOR",
+    "SANDESH_PROJECT",
+    "SANDESH_ADDRESS",
+    "PROJECT_TOKEN",
+    "PROJECT_STACKS",
+    "KNOWLEDGE_CATEGORY",
+)
+for _variable in ENV_REGISTRY_VARIABLES:
+    os.environ.pop(_variable, None)
+
 #: The checkout's client source: for READING client source or COPYING it into
 #: a test's own install -- never for loading or spawning a client.
 CLIENT_SOURCE_DIR = Path(__file__).resolve().parents[2] / "clients"

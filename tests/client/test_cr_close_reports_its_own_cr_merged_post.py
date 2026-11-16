@@ -193,7 +193,7 @@ class CrCloseReportsItsOwnCrMergedPostTest(unittest.TestCase):
         cls.base = f"http://127.0.0.1:{port}"
         _declare_listener(cls._tmpdir, port)
         cls._proc = subprocess.Popen(
-            [bun, "run", "src/server.ts"], cwd=str(REPO_ROOT),
+            [bun, "run", "--no-env-file", "src/server.ts"], cwd=str(REPO_ROOT),
             env={**os.environ, "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:

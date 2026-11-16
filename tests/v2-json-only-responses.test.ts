@@ -559,7 +559,7 @@ describe("the v2 response gate answers JSON, always (CR-CRU-132 §S1)", () => {
           '[server]\nhost = "127.0.0.1"\nport = 0\n',
         );
         const proc = Bun.spawn({
-          cmd: ["bun", "run", "src/server.ts"],
+          cmd: ["bun", "run", "--no-env-file", "src/server.ts"],
           cwd: staged,
           env: {
             ...process.env,
