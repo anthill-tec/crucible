@@ -4,7 +4,7 @@
 # $HOME.
 #
 # THE SUITE THIS EXISTS FOR
-#   tests/client/test_an_installed_deployment_resolves_its_configuration.py
+#   tests/client/integration/test_an_installed_deployment_resolves_its_configuration.py
 # is the one that installs and THEN resolves, so it drives the real installer
 # end to end. Every other suite under tests/client/ is wrapped too, because
 # discovery runs the directory and any of them may grow an install-driving

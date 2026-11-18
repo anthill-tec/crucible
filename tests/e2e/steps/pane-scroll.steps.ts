@@ -44,7 +44,7 @@ Step("no pane scrolls horizontally", async ({ page, world }) => {
 // second line would roughly double that box height; 26px is a generous
 // single-line ceiling that still catches a wrap. Belt-and-braces: also
 // assert no embedded newline in its text (mirrors
-// tests/cycle-timers.test.ts's "ONE unbroken text node" pin).
+// tests/integration/cycle-timers.test.ts's "ONE unbroken text node" pin).
 Step("the cycle-timer badge renders as a single unbroken line", async ({ page }) => {
   const badge = page.getByTestId("cycle-timer");
   await expect(badge).toBeVisible();

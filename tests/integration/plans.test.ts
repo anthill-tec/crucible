@@ -1,0 +1,1594 @@
+// CR-CRU-011 §S0 — cycle-plan API (server, additive): file/append plans,
+// cycle transitions across kinds, plan close + commitBoundary, run linkage
+// tolerance, query filters, SSE change notification, and non-interference
+// with run-event rollups. C1 is server-only — no UI/lens assertions here.
+// Drives the REAL production server (startServer), same harness pattern as
+// tests/integration/v2-core.test.ts. (History: this line also cited
+// tests/shim-ingest-events.test.ts — archived by CR-CRU-008's shim-retirement
+// sweep, then deleted outright with tests/archive by CR-CRU-047.)
+import { describe, test, expect, afterEach } from "bun:test";
+import { startServer } from "../../src/server.ts";
+
+interface ErrResponse {
+  ok: false;
+  error: string;
+  [key: string]: unknown;
+}
+
+interface CyclePayload {
+  id: number;
+  label: string;
+  kind: string;
+  status: string;
+}
+
+interface PlanFileResponse {
+  planId: number | string;
+  cr: string;
+  status: string;
+  cycles: CyclePayload[];
+  [key: string]: unknown;
+}
+
+interface PlanRecord {
+  planId: number | string;
+  cr: string;
+  status: string;
+  track?: string;
+  cycles: CyclePayload[];
+  merge?: { commit: string };
+  commitBoundary?: {
+    mergeCommit: string;
+    branch?: string;
+    firstRunCommit?: string;
+    lastRunCommit?: string;
+    closedAt: number;
+  };
+  [key: string]: unknown;
+}
+
+interface PlansListResponse {
+  ok: true;
+  plans: PlanRecord[];
+}
+
+interface RunIngestResponse {
+  ok: true;
+  changed: boolean;
+  event: string;
+  [key: string]: unknown;
+}
+
+interface EventBrief {
+  id: string;
+  projectKey: string;
+  [key: string]: unknown;
+}
+
+interface EventsListResponse {
+  ok: true;
+  events: EventBrief[];
+}
+
+describe("cycle-plan API (CR-CRU-011 §S0)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+  });
+
+  // CR-CRU-056 §S2b fixture-repair (C3): every mutating v2 WORKFLOW verb this
+  // file exercises (plan-file, cycle-add, cycle transitions, plan close/
+  // backfill, and run ingest) now refuses an unregistered caller (409) —
+  // these are functional coverage tests, not the §S2b auth suite itself, so
+  // they must model a CORRECTLY-registered caller rather than assert on the
+  // refusal. `withFixtureAgent` merges a live-registered `agentId` into any
+  // JSON body that doesn't already declare one (a body that already sets its
+  // own agentId — e.g. parsedRunBody — passes through untouched).
+  function withFixtureAgent(body: unknown): unknown {
+    if (body !== null && typeof body === "object" && !Array.isArray(body) && !("agentId" in (body as Record<string, unknown>))) {
+      return { ...(body as Record<string, unknown>), agentId: "fixture-orch" };
+    }
+    return body;
+  }
+
+  async function postJson(path: string, body: unknown): Promise<Response> {
+    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(withFixtureAgent(body)),
+    });
+  }
+
+  async function patchJson(path: string, body: unknown): Promise<Response> {
+    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(withFixtureAgent(body)),
+    });
+  }
+
+  async function getJson(path: string): Promise<Response> {
+    return fetch(`http://localhost:${handle!.server.port}${path}`);
+  }
+
+  async function registerOrchestrator(key: string, agentId: string): Promise<void> {
+    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
+    });
+    expect(res.status).toBe(200);
+  }
+
+  async function createProject(): Promise<string> {
+    const res = await postJson("/api/v2/projects", { name: `plans-${crypto.randomUUID()}` });
+    const body = (await res.json()) as { ok: true; project: { key: string } };
+    await registerOrchestrator(body.project.key, "fixture-orch");
+    return body.project.key;
+  }
+
+  function plansPath(key: string, suffix = ""): string {
+    return `/api/v2/projects/${key}/plans${suffix}`;
+  }
+
+  async function bodyText(res: Response): Promise<string> {
+    return JSON.stringify(await res.json());
+  }
+
+  function parsedRunBody(overrides: {
+    context?: Record<string, unknown>;
+    summary?: Record<string, unknown>;
+  }) {
+    return {
+      agentId: "fixture-orch",
+      summary: {
+        total: 5,
+        passed: 5,
+        failed: 0,
+        pending: 0,
+        duration_ms: 100,
+        ...overrides.summary,
+      },
+      tree: [
+        {
+          name: "s",
+          status: "pass",
+          children: [{ name: "t1", status: "pass", duration_ms: 50 }],
+        },
+      ],
+      ...(overrides.context !== undefined ? { context: overrides.context } : {}),
+    };
+  }
+
+  // ── §S0 — file + append ─────────────────────────────────────────────────
+  describe("POST /api/v2/projects/<key>/plans — file a plan", () => {
+    test("201 with two distinct numeric cycle ids, pending statuses, plan open", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await postJson(plansPath(key), {
+        cr: "CR-X-1",
+        cycles: [{ label: "a" }, { label: "b" }],
+      });
+
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as PlanFileResponse;
+      expect(body.cr).toBe("CR-X-1");
+      expect(body.status).toBe("open");
+      expect(body.cycles.length).toBe(2);
+      expect(typeof body.cycles[0]!.id).toBe("number");
+      expect(typeof body.cycles[1]!.id).toBe("number");
+      expect(body.cycles[0]!.id).not.toBe(body.cycles[1]!.id);
+      expect(body.cycles[0]!.status).toBe("pending");
+      expect(body.cycles[1]!.status).toBe("pending");
+    });
+
+    test("second POST for the same open cr → 400 naming cr", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const first = await postJson(plansPath(key), { cr: "CR-X-1", cycles: [{ label: "a" }] });
+      expect(first.status).toBe(201);
+
+      const second = await postJson(plansPath(key), { cr: "CR-X-1", cycles: [{ label: "b" }] });
+      expect(second.status).toBe(400);
+      const text = await bodyText(second);
+      expect(text).toMatch(/\bcr\b/i);
+    });
+
+    test("appending a FIX cycle to an open plan whose VERIFY cycle is done returns a new unique id (CR-CRU-165 \u00a7S1/AC1 \u2014 appending requires kind:fix after a done VERIFY)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-X-2",
+        cycles: [{ label: "a" }, { label: "b", kind: "verify" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+      const existingIds = new Set(plan.cycles.map((c) => c.id));
+      const firstId = plan.cycles[0]!.id;
+      const verifyId = plan.cycles[1]!.id;
+      expect((await patchJson(plansPath(key, `/${plan.planId}/cycles/${firstId}`), { status: "active" })).status).toBe(200);
+      expect((await patchJson(plansPath(key, `/${plan.planId}/cycles/${firstId}`), { status: "done" })).status).toBe(200);
+      expect((await patchJson(plansPath(key, `/${plan.planId}/cycles/${verifyId}`), { status: "active" })).status).toBe(200);
+      expect((await patchJson(plansPath(key, `/${plan.planId}/cycles/${verifyId}`), { status: "done" })).status).toBe(200);
+
+      const appended = await postJson(plansPath(key, `/${plan.planId}/cycles`), { label: "c", kind: "fix" });
+      expect([200, 201]).toContain(appended.status);
+      const appendedBody = (await appended.json()) as { id: number; [key: string]: unknown };
+      expect(typeof appendedBody.id).toBe("number");
+      expect(existingIds.has(appendedBody.id)).toBe(false);
+    });
+  });
+
+  // ── §S0 — cycle transitions ──────────────────────────────────────────────
+  describe("PATCH .../plans/<planId>/cycles/<id> — transitions", () => {
+    async function fileSingleCycle(key: string, cr: string, kind?: string) {
+      const res = await postJson(plansPath(key), {
+        cr,
+        cycles: [{ label: "solo", ...(kind !== undefined ? { kind } : {}) }],
+      });
+      const body = (await res.json()) as PlanFileResponse;
+      return { planId: body.planId, cycleId: body.cycles[0]!.id };
+    }
+
+    async function getCycleStatus(key: string, cr: string): Promise<string> {
+      const res = await getJson(plansPath(key, `?cr=${encodeURIComponent(cr)}`));
+      const body = (await res.json()) as PlansListResponse;
+      const plan = body.plans.find((p) => p.cr === cr);
+      return plan!.cycles[0]!.status;
+    }
+
+    test("pending -> active -> done succeeds", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const { planId, cycleId } = await fileSingleCycle(key, "CR-T-1");
+
+      const toActive = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        status: "active",
+      });
+      expect(toActive.status).toBe(200);
+      expect(await getCycleStatus(key, "CR-T-1")).toBe("active");
+
+      const toDone = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        status: "done",
+      });
+      expect(toDone.status).toBe(200);
+      expect(await getCycleStatus(key, "CR-T-1")).toBe("done");
+    });
+
+    test("pending -> done (skipping active) -> 400 naming both states", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const { planId, cycleId } = await fileSingleCycle(key, "CR-T-2");
+
+      const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        status: "done",
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/pending/i);
+      expect(text).toMatch(/done/i);
+    });
+
+    test("pending -> skipped succeeds — the one legal shortcut (orchestrator cancels an unnecessary cycle without activating it)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-T-3",
+        cycles: [{ label: "solo" }, { label: "keeps the plan unskipped" }],
+      });
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      const planId = filedBody.planId;
+      const cycleId = filedBody.cycles[0]!.id;
+
+      const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        status: "skipped",
+        reason: "the spec no longer needs this cycle",
+        cause: "spec-design",
+        specRef: "CR-CRU-165 \u00a7S2",
+      });
+      expect(res.status).toBe(200);
+      expect(await getCycleStatus(key, "CR-T-3")).toBe("skipped");
+    });
+
+    test("pending -> failed (skipping active) -> 400 naming both states — the boundary of the one shortcut", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const { planId, cycleId } = await fileSingleCycle(key, "CR-T-3b");
+
+      const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        status: "failed",
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/pending/i);
+      expect(text).toMatch(/failed/i);
+    });
+
+    test("active -> skipped is now REFUSED (400) — CR-CRU-165 R2 drops this transition; an active cycle ends only done|failed", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const { planId, cycleId } = await fileSingleCycle(key, "CR-T-4");
+      await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), { status: "active" });
+
+      const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        status: "skipped",
+      });
+      expect(res.status).toBe(400);
+      expect(await getCycleStatus(key, "CR-T-4")).toBe("active");
+    });
+
+    test("active -> failed succeeds", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const { planId, cycleId } = await fileSingleCycle(key, "CR-T-5");
+      await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), { status: "active" });
+
+      const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        status: "failed",
+      });
+      expect(res.status).toBe(200);
+      expect(await getCycleStatus(key, "CR-T-5")).toBe("failed");
+    });
+
+    test("a GREEN run ingest linked via context.cycleId does NOT change cycle status", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const { planId, cycleId } = await fileSingleCycle(key, "CR-T-6");
+      await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), { status: "active" });
+      expect(await getCycleStatus(key, "CR-T-6")).toBe("active");
+
+      const ingest = await postJson("/api/v2/runs/parsed", {
+        projectKey: key,
+        ...parsedRunBody({ context: { cycleId } }),
+      });
+      expect(ingest.status).toBe(200);
+
+      // GREEN ingest alone must NOT auto-close the cycle — only the
+      // orchestrator's explicit PATCH does.
+      expect(await getCycleStatus(key, "CR-T-6")).toBe("active");
+    });
+  });
+
+  // ── §S0 — kinds ───────────────────────────────────────────────────────────
+  describe("cycle kinds", () => {
+    for (const kind of ["red-green", "verify", "fix"] as const) {
+      test(`kind:"${kind}" — pending -> active -> done succeeds identically`, async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        const filed = await postJson(plansPath(key), {
+          cr: `CR-K-${kind}`,
+          cycles: [{ label: "solo", kind }],
+        });
+        const plan = (await filed.json()) as PlanFileResponse;
+        expect(plan.cycles[0]!.kind).toBe(kind);
+        const cycleId = plan.cycles[0]!.id;
+
+        const toActive = await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), {
+          status: "active",
+        });
+        expect(toActive.status).toBe(200);
+
+        const toDone = await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), {
+          status: "done",
+        });
+        expect(toDone.status).toBe(200);
+
+        const listed = await getJson(plansPath(key, `?cr=${encodeURIComponent(`CR-K-${kind}`)}`));
+        const listedBody = (await listed.json()) as PlansListResponse;
+        expect(listedBody.plans[0]!.cycles[0]!.status).toBe("done");
+      });
+    }
+
+    test("omitted kind defaults to red-green", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-K-default",
+        cycles: [{ label: "solo" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+      expect(plan.cycles[0]!.kind).toBe("red-green");
+    });
+
+    test('kind:"deploy" -> 400 naming kind', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const res = await postJson(plansPath(key), {
+        cr: "CR-K-bad",
+        cycles: [{ label: "solo", kind: "deploy" }],
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/kind/i);
+    });
+  });
+
+  // ── §S0 — plan close ─────────────────────────────────────────────────────
+  describe("PATCH .../plans/<planId> — close", () => {
+    test("closing with a non-terminal cycle -> 400 listing its id", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-C-1",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+      const cycleId = plan.cycles[0]!.id; // stays "pending" — non-terminal
+
+      const res = await patchJson(plansPath(key, `/${plan.planId}`), {
+        status: "closed",
+        merge: { commit: "abc1234" },
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toContain(String(cycleId));
+    });
+
+    test("closing after all cycles are terminal succeeds and GET shows closed + merge commit", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-C-2",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+      const cycleId = plan.cycles[0]!.id;
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "active" });
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "done" });
+
+      const closeRes = await patchJson(plansPath(key, `/${plan.planId}`), {
+        status: "closed",
+        merge: { commit: "abc1234" },
+      });
+      expect(closeRes.status).toBe(200);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-C-2"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const closedPlan = listedBody.plans.find((p) => p.cr === "CR-C-2")!;
+      expect(closedPlan.status).toBe("closed");
+      expect(JSON.stringify(closedPlan)).toContain("abc1234");
+    });
+  });
+
+  // ── §S0 — commitBoundary ──────────────────────────────────────────────────
+  describe("commitBoundary (closed plans)", () => {
+    test("closed plan with linked runs carrying context.git derives full commitBoundary", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-B-1",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+      const cycleId = plan.cycles[0]!.id;
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "active" });
+
+      await postJson("/api/v2/runs/parsed", {
+        projectKey: key,
+        ...parsedRunBody({
+          context: { cycleId, git: { branch: "feat/x", commit: "c1a2b3c" } },
+          summary: { failed: 2, passed: 3, total: 5 },
+        }),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await postJson("/api/v2/runs/parsed", {
+        projectKey: key,
+        ...parsedRunBody({
+          context: { cycleId, git: { branch: "feat/x", commit: "d4e5f6a" } },
+        }),
+      });
+
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "done" });
+      const closeRes = await patchJson(plansPath(key, `/${plan.planId}`), {
+        status: "closed",
+        merge: { commit: "abc1234" },
+      });
+      expect(closeRes.status).toBe(200);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-B-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const closedPlan = listedBody.plans.find((p) => p.cr === "CR-B-1")!;
+      const boundary = closedPlan.commitBoundary!;
+      expect(boundary.mergeCommit).toBe("abc1234");
+      expect(boundary.branch).toBe("feat/x");
+      expect(boundary.firstRunCommit).toBe("c1a2b3c");
+      expect(boundary.lastRunCommit).toBe("d4e5f6a");
+      expect(typeof boundary.closedAt).toBe("number");
+    });
+
+    test("closed plan with NO linked git context returns ONLY mergeCommit + closedAt (absent, not null)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-B-2",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+      const cycleId = plan.cycles[0]!.id;
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "active" });
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "done" });
+
+      const closeRes = await patchJson(plansPath(key, `/${plan.planId}`), {
+        status: "closed",
+        merge: { commit: "def5678" },
+      });
+      expect(closeRes.status).toBe(200);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-B-2"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const closedPlan = listedBody.plans.find((p) => p.cr === "CR-B-2")!;
+      const boundary = closedPlan.commitBoundary!;
+      expect(boundary.mergeCommit).toBe("def5678");
+      expect(typeof boundary.closedAt).toBe("number");
+      expect(Object.keys(boundary).sort()).toEqual(["closedAt", "mergeCommit"]);
+    });
+  });
+
+  // ── §S7 — run linkage: an unknown cycleId is REFUSED (400) ──────────────────
+  // CR-CRU-024 §S7 supersedes CR-011 §S0's tolerance — Crucible is the source of truth
+  describe("run linkage — unknown cycleId refused (§S7)", () => {
+    test("a run ingested with a context.cycleId that resolves to no cycle in the project → 400 (ok:false + help), no event stored", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      // File a plan so the project HAS real cycles — the ingested cycleId (999999)
+      // still matches none of them, so §S7 refuses the ingest (never stored on trust).
+      await postJson(plansPath(key), { cr: "CR-T-LINK", cycles: [{ label: "a" }, { label: "b" }] });
+
+      const before = await getJson(`/api/v2/events?project=${key}`);
+      const beforeBody = (await before.json()) as EventsListResponse;
+      const beforeCount = beforeBody.events.length;
+
+      const res = await postJson("/api/v2/runs/parsed", {
+        projectKey: key,
+        ...parsedRunBody({ context: { cycleId: 999999 } }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as ErrResponse;
+      expect(body.ok).toBe(false);
+      expect(Array.isArray(body.help)).toBe(true);
+      expect((body.help as string[]).length).toBeGreaterThan(0);
+
+      // No event stored — the events count is unchanged after the refused ingest.
+      const listed = await getJson(`/api/v2/events?project=${key}`);
+      const listedBody = (await listed.json()) as EventsListResponse;
+      expect(listedBody.events.length).toBe(beforeCount);
+    });
+
+    test("a planless project's parsed ingest carries NO plan/cycle linkage — the pre-CR-011 payload, additively extended (regression guard)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await postJson("/api/v2/runs/parsed", {
+        projectKey: key,
+        ...parsedRunBody({}),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as RunIngestResponse;
+      // WHAT THIS GUARDS (CR-CRU-011 §S0): a project with no plan gets no
+      // LINKAGE — CR-011's machinery may not invent a cycle, a plan or a span
+      // for a project that declared none.
+      //
+      // It used to be written as EXACT equality with a typed key list, and
+      // that pin has now been wrong twice for reasons that have nothing to do
+      // with linkage: CR-CRU-057 §S1 added `role` (the caller's declared role,
+      // echoed bound or not), and CR-CRU-140 §S1 made `help` unconditional on
+      // every evidence-returning reply (the reply that hands back `event: <id>`
+      // must also say how to read it back). Re-typing the list a third time
+      // only defers the next false RED to the next additive key — the pin was
+      // measuring the response's whole shape, which is not this test's subject
+      // and is covered by the routes' own suites.
+      //
+      // So the bound is CLOSED the CR-CRU-143 §S1 way instead — the floor must
+      // be there, and the keys that would MEAN linkage must not — rather than
+      // by exact equality with a hand-kept enumeration.
+      const keys = Object.keys(body);
+      // FLOOR — the payload a parsed ingest owes every caller, plan or no plan.
+      for (const owed of ["ok", "changed", "event", "run", "verdict"]) {
+        expect(keys).toContain(owed);
+      }
+      // `help` is part of the contract now (CR-CRU-140 §S1/AC2), not a
+      // tolerated extra: an evidence-returning reply always says how to read
+      // the evidence back, so its ABSENCE is the failure worth catching here.
+      expect(Array.isArray(body.help)).toBe(true);
+      // CEILING — and no key that speaks of a plan, a cycle or an attached
+      // context may appear, because there is no plan to link to. This is the
+      // regression the guard exists for, and it stays true however many
+      // linkage-free keys the evidence contract grows later.
+      expect(keys.filter((k) => /plan|cycle|context/i.test(k))).toEqual([]);
+      expect(body.ok).toBe(true);
+      expect(body.changed).toBe(true);
+    });
+  });
+
+  // ── §S0 — query filters ─────────────────────────────────────────────────
+  describe("GET .../plans — query filters", () => {
+    test("no filter returns all plans; ?cr= and ?track= filter; track carried verbatim, absent otherwise", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      await postJson(plansPath(key), { cr: "CR-Q-1", cycles: [{ label: "a" }] });
+      await postJson(plansPath(key), { cr: "CR-Q-2", track: "track-2", cycles: [{ label: "a" }] });
+
+      const all = await getJson(plansPath(key));
+      const allBody = (await all.json()) as PlansListResponse;
+      expect(allBody.plans.length).toBe(2);
+
+      const byCr = await getJson(plansPath(key, "?cr=CR-Q-1"));
+      const byCrBody = (await byCr.json()) as PlansListResponse;
+      expect(byCrBody.plans.length).toBe(1);
+      expect(byCrBody.plans[0]!.cr).toBe("CR-Q-1");
+
+      const byTrack = await getJson(plansPath(key, "?track=track-2"));
+      const byTrackBody = (await byTrack.json()) as PlansListResponse;
+      expect(byTrackBody.plans.length).toBe(1);
+      expect(byTrackBody.plans[0]!.cr).toBe("CR-Q-2");
+
+      const planQ1 = allBody.plans.find((p) => p.cr === "CR-Q-1")!;
+      const planQ2 = allBody.plans.find((p) => p.cr === "CR-Q-2")!;
+      expect("track" in planQ1).toBe(false);
+      expect(planQ2.track).toBe("track-2");
+    });
+  });
+
+  // ── §S0 — SSE change notification ──────────────────────────────────────────
+  describe("plan mutations emit a store change event", () => {
+    test("filing, transitioning, and closing a plan each fire store.onChange for the project", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const calls: Array<[string, string | undefined]> = [];
+      const unsubscribe = handle.store.onChange((kind, projectKey) => {
+        calls.push([kind, projectKey]);
+      });
+
+      const filed = await postJson(plansPath(key), { cr: "CR-S-1", cycles: [{ label: "a" }] });
+      const plan = (await filed.json()) as PlanFileResponse;
+      expect(calls.some(([, pk]) => pk === key)).toBe(true);
+
+      calls.length = 0;
+      const cycleId = plan.cycles[0]!.id;
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "active" });
+      expect(calls.some(([, pk]) => pk === key)).toBe(true);
+
+      calls.length = 0;
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "done" });
+      expect(calls.some(([, pk]) => pk === key)).toBe(true);
+
+      calls.length = 0;
+      await patchJson(plansPath(key, `/${plan.planId}`), {
+        status: "closed",
+        merge: { commit: "abc1234" },
+      });
+      expect(calls.some(([, pk]) => pk === key)).toBe(true);
+
+      unsubscribe();
+    });
+  });
+
+  // ── §S6.11 (CR-CRU-021) — optional plan title, captured at filing ────────
+  // The CR ROOT element in the Workflow active view renders `<cr> · <title>`
+  // when the plan carries one (heat-highlighted id, title captured at plan
+  // filing via this additive optional `title` field), and the id-only root
+  // when it doesn't (graceful degradation, §S6.11). RED phase: expected to
+  // fail against CURRENT production — POST /plans has no `title` handling at
+  // all (src/v2.ts handlePlanFile ~512, no `title` in the V2Body interface,
+  // no `title` column in src/store.ts filePlan) — title is silently dropped
+  // today, never 400s on a bad type, and never appears in GET.
+  describe("POST /api/v2/projects/<key>/plans — optional title (§S6.11)", () => {
+    test('a string title is stored and returned VERBATIM on the POST response and on GET /plans', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-TITLE-1",
+        title: "Runtime checkpoint persistence",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      expect(filedBody.title).toBe("Runtime checkpoint persistence");
+
+      const listed = await getJson(plansPath(key, "?cr=CR-TITLE-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const plan = listedBody.plans.find((p) => p.cr === "CR-TITLE-1")!;
+      expect(plan.title).toBe("Runtime checkpoint persistence");
+    });
+
+    test("omitting title entirely files the plan with NO title field on the POST response or on GET (absent, not null — graceful degradation, §S6.11 id-only root)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-TITLE-2",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      expect("title" in filedBody).toBe(false);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-TITLE-2"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const plan = listedBody.plans.find((p) => p.cr === "CR-TITLE-2")!;
+      expect("title" in plan).toBe(false);
+    });
+
+    test("a non-string title -> 400 naming the title field", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await postJson(plansPath(key), {
+        cr: "CR-TITLE-3",
+        title: 12345,
+        cycles: [{ label: "a" }],
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/\btitle\b/i);
+    });
+
+    test("an empty-object title -> 400 naming the title field (not silently coerced to string)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await postJson(plansPath(key), {
+        cr: "CR-TITLE-4",
+        title: { nested: true },
+        cycles: [{ label: "a" }],
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/\btitle\b/i);
+    });
+  });
+
+  // ── §S6 RE-BASELINE (CR-CRU-021, cycle 19, user 2026-07-17) — optional plan
+  // orchestrator identity, mirroring the §S6.11 `title` pattern ────────────
+  // "The root also carries the ORCHESTRATOR IDENTITY (user re-baseline
+  // 2026-07-17 — replaces the removed per-row `by <orchestrator>`
+  // narration): rendered `<cr> · <title> — <orchestrator>` via an additive
+  // optional `orchestrator` field on `POST /plans` (stored, returned by GET)
+  // AND accepted by PATCH on an OPEN plan (one-field backfill so the
+  // executing plan can be stamped); absent → segment omitted."
+  //
+  // RED phase: expected to fail against CURRENT production — `Plan` has no
+  // `orchestrator` field at all (src/types.ts's `Plan` interface only carries
+  // `title`; `RunContext.orchestrator` is an unrelated, pre-existing field on
+  // RUN EVENTS, not plans), `handlePlanFile` (src/v2.ts ~514) never reads
+  // `body.orchestrator`, and `handlePlanClose` (src/v2.ts ~621, the sole
+  // PATCH …/plans/<planId> handler) unconditionally 400s any body whose
+  // `status` isn't literally `"closed"` — so an orchestrator-only PATCH body
+  // (no `status`) 400s today for the WRONG reason (missing status), not
+  // because the plan is open/closed.
+  describe("POST /api/v2/projects/<key>/plans — optional orchestrator (§S6 re-baseline, cycle 19)", () => {
+    test("a string orchestrator is stored and returned VERBATIM on the POST response and on GET /plans", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-ORCH-1",
+        orchestrator: "vidushi",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      expect(filedBody.orchestrator).toBe("vidushi");
+
+      const listed = await getJson(plansPath(key, "?cr=CR-ORCH-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const plan = listedBody.plans.find((p) => p.cr === "CR-ORCH-1")!;
+      expect(plan.orchestrator).toBe("vidushi");
+    });
+
+    test("omitting orchestrator entirely files the plan with NO orchestrator field on the POST response or on GET (absent, not null — graceful degradation)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-ORCH-2",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      expect("orchestrator" in filedBody).toBe(false);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-ORCH-2"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const plan = listedBody.plans.find((p) => p.cr === "CR-ORCH-2")!;
+      expect("orchestrator" in plan).toBe(false);
+    });
+
+    test("a non-string orchestrator -> 400 naming the orchestrator field", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await postJson(plansPath(key), {
+        cr: "CR-ORCH-3",
+        orchestrator: 12345,
+        cycles: [{ label: "a" }],
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/\borchestrator\b/i);
+    });
+
+    test("an empty-object orchestrator -> 400 naming the orchestrator field (not silently coerced to string)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await postJson(plansPath(key), {
+        cr: "CR-ORCH-4",
+        orchestrator: { nested: true },
+        cycles: [{ label: "a" }],
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/\borchestrator\b/i);
+    });
+  });
+
+  describe("PATCH .../plans/<planId> — optional orchestrator one-field backfill (§S6 re-baseline, cycle 19)", () => {
+    test('PATCH {orchestrator} on an OPEN plan (no "status", no "merge") stores it as a one-field backfill, visible on a subsequent GET, and the plan STAYS open', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-ORCH-PATCH-1",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const plan = (await filed.json()) as PlanFileResponse;
+      expect("orchestrator" in plan).toBe(false); // sanity: unstamped at filing
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), {
+        orchestrator: "vidushi",
+      });
+      expect(patched.status).toBe(200);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-ORCH-PATCH-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const stamped = listedBody.plans.find((p) => p.cr === "CR-ORCH-PATCH-1")!;
+      expect(stamped.orchestrator).toBe("vidushi");
+      expect(stamped.status).toBe("open");
+    });
+
+    test("a non-string orchestrator on PATCH -> 400 naming the orchestrator field, plan left unstamped", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-ORCH-PATCH-2",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), {
+        orchestrator: 999,
+      });
+      expect(patched.status).toBe(400);
+      const text = await bodyText(patched);
+      expect(text).toMatch(/\borchestrator\b/i);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-ORCH-PATCH-2"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const unstamped = listedBody.plans.find((p) => p.cr === "CR-ORCH-PATCH-2")!;
+      expect("orchestrator" in unstamped).toBe(false);
+    });
+
+    test("PATCH {orchestrator} on a CLOSED plan -> 400 (the one-field backfill applies to an executing/open plan only)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-ORCH-PATCH-3",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+      const cycleId = plan.cycles[0]!.id;
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "active" });
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "done" });
+      const closeRes = await patchJson(plansPath(key, `/${plan.planId}`), {
+        status: "closed",
+        merge: { commit: "abc9999" },
+      });
+      expect(closeRes.status).toBe(200);
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), {
+        orchestrator: "vidushi",
+      });
+      expect(patched.status).toBe(400);
+    });
+  });
+
+  // ── RED addendum (cycle 13, gap 3) — POST /plans `wave` coercion ─────────
+  // `handlePlanFile` (src/v2.ts) currently accepts ONLY strings for `wave`
+  // (`typeof body.wave === "string" ? body.wave : undefined`) — a numeric
+  // wave (e.g. the orchestrator's real plan 4, filed with `wave: 4`) is
+  // silently coerced to `undefined` and stored NULL, with no 400 at all.
+  // The lens sorts wave labels with the string-label model
+  // (`numericLabelCompare`, public/app-logic.mjs) — a numeric wave must
+  // coerce to its string form on entry to match that model, exactly the
+  // way an already-string wave is accepted unchanged; anything else
+  // (an object) 400s naming the field, mirroring the §S6.11 `title` pattern.
+  describe("POST /api/v2/projects/<key>/plans — wave coercion (RED addendum, cycle 13, gap 3)", () => {
+    test('a numeric wave (4) is stored and returned as the STRING "4" on the POST response and on GET', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-NUM-1",
+        wave: 4,
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      expect(filedBody.wave).toBe("4");
+      expect(typeof filedBody.wave).toBe("string");
+
+      const listed = await getJson(plansPath(key, "?cr=CR-WAVE-NUM-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const plan = listedBody.plans.find((p) => p.cr === "CR-WAVE-NUM-1")!;
+      expect(plan.wave).toBe("4");
+      expect(typeof plan.wave).toBe("string");
+    });
+
+    test('a string wave ("4") is stored and returned UNCHANGED', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-STR-1",
+        wave: "4",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      expect(filedBody.wave).toBe("4");
+
+      const listed = await getJson(plansPath(key, "?cr=CR-WAVE-STR-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const plan = listedBody.plans.find((p) => p.cr === "CR-WAVE-STR-1")!;
+      expect(plan.wave).toBe("4");
+    });
+
+    test("a non-string-non-number wave (an object) -> 400 naming the wave field", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await postJson(plansPath(key), {
+        cr: "CR-WAVE-BAD-1",
+        wave: { nested: true },
+        cycles: [{ label: "a" }],
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/\bwave\b/i);
+    });
+  });
+
+  // ── CR-CRU-031 §S1 — `wave` one-field backfill on the plan PATCH ─────────
+  // Extends PATCH …/plans/<planId> (`handlePlanClose`) so a body carrying
+  // `wave` with NO `status` stamps the plan's wave — allowed on OPEN **and**
+  // CLOSED plans (unlike the existing `orchestrator` one-field backfill just
+  // above, which 400s a closed plan — a merged plan's wave is exactly what
+  // needs correcting, per the CR-021 History mis-grouping this CR fixes).
+  // `wave` coerces number -> its decimal string exactly as the POST /plans
+  // path already does (RED addendum cycle 13, gap 3, tested above); unknown
+  // planId -> 404; a non-string/non-number wave (an object) -> 400 naming
+  // the field; rollups/events untouched.
+  //
+  // RED phase: expected to fail against CURRENT production —
+  // `handlePlanClose` (src/v2.ts ~765) only recognizes `body.orchestrator` in
+  // the one-field-backfill branch, so a `{wave:...}`-only body (no `status`)
+  // falls through to the `body.status !== "closed"` check and 400s for the
+  // WRONG reason ("status must be \"closed\" to close a plan" — never
+  // mentions "wave", never distinguishes open/closed, never 404s an unknown
+  // plan on this path), and `store.ts` has no wave-backfill method at all.
+  describe("PATCH .../plans/<planId> — wave one-field backfill (CR-CRU-031 §S1)", () => {
+    test('PATCH {wave:"4"} (no status) on an OPEN plan stores it as a one-field backfill, visible on GET, plan STAYS open', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-PATCH-1",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const plan = (await filed.json()) as PlanFileResponse;
+      expect("wave" in plan).toBe(false); // sanity: filed without a wave
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), { wave: "4" });
+      expect(patched.status).toBe(200);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const stamped = listedBody.plans.find((p) => p.cr === "CR-WAVE-PATCH-1")!;
+      expect(stamped.wave).toBe("4");
+      expect(stamped.status).toBe("open");
+    });
+
+    test("PATCH {wave} (no status) on a CLOSED plan ALSO succeeds and its wave updates — the point of this CR, contrasting with the orchestrator backfill which 400s a closed plan", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-PATCH-CLOSED-1",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+      const cycleId = plan.cycles[0]!.id;
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "active" });
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "done" });
+      const closeRes = await patchJson(plansPath(key, `/${plan.planId}`), {
+        status: "closed",
+        merge: { commit: "closedwave1" },
+      });
+      expect(closeRes.status).toBe(200);
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), { wave: "4" });
+      expect(patched.status).toBe(200);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-CLOSED-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const stamped = listedBody.plans.find((p) => p.cr === "CR-WAVE-PATCH-CLOSED-1")!;
+      expect(stamped.wave).toBe("4");
+      expect(stamped.status).toBe("closed");
+    });
+
+    test('a numeric wave on PATCH coerces to its decimal STRING, matching the POST /plans coercion, on both an OPEN and a CLOSED plan', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      // OPEN
+      const filedOpen = await postJson(plansPath(key), {
+        cr: "CR-WAVE-PATCH-NUM-OPEN",
+        cycles: [{ label: "a" }],
+      });
+      const planOpen = (await filedOpen.json()) as PlanFileResponse;
+      const patchedOpen = await patchJson(plansPath(key, `/${planOpen.planId}`), { wave: 4 });
+      expect(patchedOpen.status).toBe(200);
+      const listedOpen = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-NUM-OPEN"));
+      const listedOpenBody = (await listedOpen.json()) as PlansListResponse;
+      const stampedOpen = listedOpenBody.plans.find((p) => p.cr === "CR-WAVE-PATCH-NUM-OPEN")!;
+      expect(stampedOpen.wave).toBe("4");
+      expect(typeof stampedOpen.wave).toBe("string");
+
+      // CLOSED
+      const filedClosed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-PATCH-NUM-CLOSED",
+        cycles: [{ label: "a" }],
+      });
+      const planClosed = (await filedClosed.json()) as PlanFileResponse;
+      const cycleId = planClosed.cycles[0]!.id;
+      await patchJson(plansPath(key, `/${planClosed.planId}/cycles/${cycleId}`), { status: "active" });
+      await patchJson(plansPath(key, `/${planClosed.planId}/cycles/${cycleId}`), { status: "done" });
+      await patchJson(plansPath(key, `/${planClosed.planId}`), {
+        status: "closed",
+        merge: { commit: "closedwavenum1" },
+      });
+      const patchedClosed = await patchJson(plansPath(key, `/${planClosed.planId}`), { wave: 7 });
+      expect(patchedClosed.status).toBe(200);
+      const listedClosed = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-NUM-CLOSED"));
+      const listedClosedBody = (await listedClosed.json()) as PlansListResponse;
+      const stampedClosed = listedClosedBody.plans.find((p) => p.cr === "CR-WAVE-PATCH-NUM-CLOSED")!;
+      expect(stampedClosed.wave).toBe("7");
+      expect(typeof stampedClosed.wave).toBe("string");
+    });
+
+    test("an unknown planId -> 404", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await patchJson(plansPath(key, "/999999"), { wave: "4" });
+      expect(res.status).toBe(404);
+    });
+
+    test("a non-string-non-number wave (an object) on PATCH -> 400 naming the wave field, plan left unstamped", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-PATCH-BAD-1",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), { wave: { nested: true } });
+      expect(patched.status).toBe(400);
+      const text = await bodyText(patched);
+      expect(text).toMatch(/\bwave\b/i);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-BAD-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const unstamped = listedBody.plans.find((p) => p.cr === "CR-WAVE-PATCH-BAD-1")!;
+      expect("wave" in unstamped).toBe(false);
+    });
+
+    test("wave backfill on a closed plan adds NO events, changes NO events-list count, and leaves commitBoundary untouched (rollups/events untouched)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-PATCH-ROLLUP-1",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+      const cycleId = plan.cycles[0]!.id;
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "active" });
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "done" });
+      await patchJson(plansPath(key, `/${plan.planId}`), {
+        status: "closed",
+        merge: { commit: "rollupwave1" },
+      });
+
+      const before = await getJson(`/api/v2/events?project=${key}`);
+      const beforeBody = (await before.json()) as EventsListResponse;
+      // CR-CRU-056 §S2b fixture-repair: createProject() now registers the
+      // fixture orchestrator, which itself journals ONE lifecycle event
+      // (CR-CRU-011 §S1) — the baseline is that registration event, not
+      // zero; the point of this test (rollups/events untouched by wave
+      // backfill) is the UNCHANGED count across the backfill, asserted below.
+      const baselineCount = beforeBody.events.length;
+
+      const listedBefore = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-ROLLUP-1"));
+      const listedBeforeBody = (await listedBefore.json()) as PlansListResponse;
+      const boundaryBefore = listedBeforeBody.plans.find(
+        (p) => p.cr === "CR-WAVE-PATCH-ROLLUP-1",
+      )!.commitBoundary!;
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), { wave: "9" });
+      expect(patched.status).toBe(200);
+
+      const after = await getJson(`/api/v2/events?project=${key}`);
+      const afterBody = (await after.json()) as EventsListResponse;
+      expect(afterBody.events.length).toBe(baselineCount);
+
+      const listedAfter = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-ROLLUP-1"));
+      const listedAfterBody = (await listedAfter.json()) as PlansListResponse;
+      const afterPlan = listedAfterBody.plans.find((p) => p.cr === "CR-WAVE-PATCH-ROLLUP-1")!;
+      expect(afterPlan.wave).toBe("9");
+      expect(afterPlan.commitBoundary).toEqual(boundaryBefore);
+    });
+  });
+
+  // ── §S0 — plans are not run events ────────────────────────────────────────
+  describe("plans do not affect run-event surfaces", () => {
+    test("filing, transitioning, and closing a plan add NO events and change NO events-list count", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const before = await getJson(`/api/v2/events?project=${key}`);
+      const beforeBody = (await before.json()) as EventsListResponse;
+      // CR-CRU-056 §S2b fixture-repair: createProject() now registers the
+      // fixture orchestrator, which itself journals ONE lifecycle event
+      // (CR-CRU-011 §S1) — the baseline is that registration event, not
+      // zero; the point of this test (plans add no run-events) is the
+      // UNCHANGED count across plan filing/transition/close, asserted below.
+      const baselineCount = beforeBody.events.length;
+
+      const filed = await postJson(plansPath(key), { cr: "CR-N-1", cycles: [{ label: "a" }] });
+      const plan = (await filed.json()) as PlanFileResponse;
+      const cycleId = plan.cycles[0]!.id;
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "active" });
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "done" });
+      await patchJson(plansPath(key, `/${plan.planId}`), {
+        status: "closed",
+        merge: { commit: "abc1234" },
+      });
+
+      const after = await getJson(`/api/v2/events?project=${key}`);
+      const afterBody = (await after.json()) as EventsListResponse;
+      expect(afterBody.events.length).toBe(baselineCount);
+    });
+  });
+
+  // ── CR-CRU-121 §S1 — filing a plan registers its release ─────────────────
+  //
+  // docs/changes/CR-CRU-121-filing-a-plan-should-register-its-release.md:
+  // `plan-file` gains an OPTIONAL `release`. Given one, `wave` and `title`
+  // become required and the route performs the SAME queue write `cr-plan`
+  // performs — `declareMembership`, then `refuseDependencyCycle`, then the
+  // existing `waveScopeRefusal` (CR-CRU-116, unchanged position) — with the
+  // queue upsert and the plan file landing in ONE transaction, so a refusal
+  // from EITHER half leaves NEITHER behind. `release` ABSENT is byte-identical
+  // to today: no queue read beyond the wave scope, no queue write, no new
+  // response keys.
+  //
+  // Every refusal below is asserted as PARITY with `cr-plan`'s own answer for
+  // the identical input, driven live on the same board rather than compared to
+  // a copied string. The criteria say "the exact shape `cr-plan` returns", and
+  // a literal pinned here would go on agreeing with itself after `cr-plan`'s
+  // own wording moved — which is the divergence this CR exists to prevent. The
+  // one sentence each refusal MUST read is asserted alongside, so a parity
+  // that converged on the WRONG answer (both routes 500ing, say) still fails.
+  describe("CR-CRU-121 §S1 — plan-file composes cr-plan's queue write", () => {
+    /** CR-CRU-118 §S4 — a release proposal declares the date it aims at.
+     *  Nothing here is ABOUT that date; the fixtures need a live proposal to
+     *  exist at all, so one plausible target serves all of them. */
+    const FIXTURE_TARGET_AT = 1_788_220_800; // 2026-09-01T00:00:00Z
+    const RELEASE = "0.2.0";
+    /** A label no proposal and no recorded release holds. */
+    const UNPROPOSED = "9.9.9";
+
+    type Wire = Record<string, unknown>;
+
+    async function propose(key: string, label: string): Promise<void> {
+      const res = await postJson(`/api/v2/projects/${key}/release-proposals`, {
+        label,
+        targetAt: FIXTURE_TARGET_AT,
+      });
+      expect(res.status).toBe(200);
+    }
+
+    /** The queue as the BOARD holds it — every criterion below reads the row
+     *  back through this route rather than trusting a POST's own echo. */
+    async function queueEntries(key: string): Promise<Wire[]> {
+      const res = await getJson(`/api/v2/projects/${key}/queue`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: true; entries: Wire[] };
+      return body.entries;
+    }
+
+    async function planFile(key: string, body: Wire): Promise<{ status: number; body: Wire }> {
+      const res = await postJson(plansPath(key), body);
+      return { status: res.status, body: (await res.json()) as Wire };
+    }
+
+    /** `cr-plan` itself — the verb whose answers plan-file must reproduce. */
+    async function crPlan(key: string, body: Wire): Promise<{ status: number; body: Wire }> {
+      const res = await postJson(`/api/v2/projects/${key}/queue/plan`, body);
+      return { status: res.status, body: (await res.json()) as Wire };
+    }
+
+    async function plansFor(key: string, cr: string): Promise<PlanRecord[]> {
+      const res = await getJson(plansPath(key, `?cr=${encodeURIComponent(cr)}`));
+      const body = (await res.json()) as PlansListResponse;
+      return body.plans.filter((plan) => plan.cr === cr);
+    }
+
+    /** The comparable part of a refusal: the status, the sentence, and the
+     *  `help[]` that makes it actionable. */
+    function refusalShape(answer: { status: number; body: Wire }): Wire {
+      return { status: answer.status, error: answer.body.error, help: answer.body.help };
+    }
+
+    test(
+      "AC1 a plan filed with release + wave + title registers the cr in the QUEUE — read back off " +
+        "GET …/queue carrying the posted release, wave and title, linked to the plan just filed",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        const filed = await planFile(key, {
+          cr: "CR-121-REG",
+          title: "filing a plan registers its release",
+          wave: "6",
+          release: RELEASE,
+          cycles: [{ label: "red-green" }],
+        });
+
+        expect(filed.status).toBe(201);
+        expect(filed.body.cr).toBe("CR-121-REG");
+        expect(filed.body.status).toBe("open");
+        expect((filed.body.cycles as CyclePayload[]).map((c) => c.label)).toEqual(["red-green"]);
+
+        const entries = await queueEntries(key);
+        // BOUND: one CR was declared, so exactly one row exists — a route that
+        // registered the cr twice, or registered a neighbour too, fails here
+        // rather than passing a find().
+        expect(entries.length).toBe(1);
+        const entry = entries[0]!;
+        expect(entry.cr).toBe("CR-121-REG");
+        expect(entry.release).toBe(RELEASE);
+        expect(entry.wave).toBe("6");
+        expect(entry.title).toBe("filing a plan registers its release");
+        // The row is THIS plan's cr, not a second registration that merely
+        // looks like it: the queue's derived link names the plan just filed,
+        // and its derived status is the in-flight one an open plan confers.
+        expect(entry.planId).toBe(filed.body.planId as number);
+        expect(entry.status).toBe("IN_PROGRESS");
+      },
+    );
+
+    test(
+      "AC2 the same call answers with `converged` and `entry` beside the plan fields, in cr-plan's " +
+        "own shape — the entry IS the queue row the board now holds",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        const filed = await planFile(key, {
+          cr: "CR-121-UNION",
+          title: "the union of both routes' fields",
+          wave: "6",
+          release: RELEASE,
+          cycles: [{ label: "red-green" }],
+        });
+        expect(filed.status).toBe(201);
+
+        // `converged` is cr-plan's word for "this call wrote nothing new"
+        // (§S7): a first registration CHANGED the board, so it is false.
+        expect(filed.body.converged).toBe(false);
+        const [entry] = await queueEntries(key);
+        expect(filed.body.entry).toEqual(entry);
+
+        // BOUND — the plan half of the response is untouched by the addition.
+        expect(typeof filed.body.planId).toBe("number");
+        expect(filed.body.cr).toBe("CR-121-UNION");
+        expect(filed.body.status).toBe("open");
+        expect(filed.body.wave).toBe("6");
+        expect((filed.body.cycles as CyclePayload[])[0]!.status).toBe("pending");
+      },
+    );
+
+    test(
+      "AC3 `release` present and `wave` absent: refused 400 in the sentence cr-plan answers for the " +
+        "same absence, and NEITHER the queue NOR the plan is written",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        const refused = await planFile(key, {
+          cr: "CR-121-NOWAVE",
+          title: "a release without a wave is not a roadmap declaration",
+          release: RELEASE,
+          cycles: [{ label: "red-green" }],
+        });
+
+        expect(refused.status).toBe(400);
+        expect(refused.body.error).toBe("`wave` is required — the wave within the release");
+        // PARITY, driven live: the same absence, answered by `cr-plan` itself.
+        expect(refusalShape(refused)).toEqual(
+          refusalShape(
+            await crPlan(key, {
+              cr: "CR-121-NOWAVE",
+              title: "a release without a wave is not a roadmap declaration",
+              release: RELEASE,
+            }),
+          ),
+        );
+
+        expect(await queueEntries(key)).toEqual([]);
+        expect(await plansFor(key, "CR-121-NOWAVE")).toEqual([]);
+      },
+    );
+
+    test(
+      "AC3 `release` present and `title` absent: refused 400 in the sentence cr-plan answers for the " +
+        "same absence, and NEITHER the queue NOR the plan is written",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        const refused = await planFile(key, {
+          cr: "CR-121-NOTITLE",
+          wave: "6",
+          release: RELEASE,
+          cycles: [{ label: "red-green" }],
+        });
+
+        expect(refused.status).toBe(400);
+        expect(refused.body.error).toBe("`title` is required — the CR's brief");
+        expect(refusalShape(refused)).toEqual(
+          refusalShape(await crPlan(key, { cr: "CR-121-NOTITLE", wave: "6", release: RELEASE })),
+        );
+
+        expect(await queueEntries(key)).toEqual([]);
+        expect(await plansFor(key, "CR-121-NOTITLE")).toEqual([]);
+      },
+    );
+
+    test(
+      "AC4 a `release` naming no live proposal and claimed by no recorded release: refused in the " +
+        "EXACT declareMembership shape cr-plan returns for the identical input, nothing written",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        // Deliberately NOT proposed — and no release records this cr either.
+
+        const refused = await planFile(key, {
+          cr: "CR-121-UNPROPOSED",
+          title: "a label the board does not hold",
+          wave: "6",
+          release: UNPROPOSED,
+          cycles: [{ label: "red-green" }],
+        });
+
+        expect(refused.status).toBe(404);
+        expect(refused.body.error).toBe(
+          `release ${UNPROPOSED} has no live proposal — it is not a plannable target`,
+        );
+        // Including `help[]`: the refusal's whole value is that it names the
+        // move that fixes it, and cr-plan's is the one this route must reuse.
+        expect(refusalShape(refused)).toEqual(
+          refusalShape(
+            await crPlan(key, {
+              cr: "CR-121-UNPROPOSED",
+              title: "a label the board does not hold",
+              wave: "6",
+              release: UNPROPOSED,
+            }),
+          ),
+        );
+
+        expect(await queueEntries(key)).toEqual([]);
+        expect(await plansFor(key, "CR-121-UNPROPOSED")).toEqual([]);
+      },
+    );
+
+    test(
+      "AC5 a cr whose registration would close a dependency ring: refused in the EXACT " +
+        "refuseDependencyCycle shape cr-plan returns, the queue untouched and no plan filed",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        // The ring, through the MIGRATION door — the documented escape hatch
+        // that accepts one (CR-CRU-104 AC7). The per-CR verbs refuse it.
+        const ring = await postJson(`/api/v2/projects/${key}/queue`, {
+          entries: [
+            { cr: "CR-121-X", wave: "5", release: RELEASE, dependsOn: ["CR-121-Y"] },
+            { cr: "CR-121-Y", wave: "5", release: RELEASE, dependsOn: ["CR-121-X"] },
+          ],
+        });
+        expect([200, 202]).toContain(ring.status);
+        const before = await queueEntries(key);
+        expect(before.map((entry) => entry.cr)).toEqual(["CR-121-X", "CR-121-Y"]);
+
+        const refused = await planFile(key, {
+          cr: "CR-121-X",
+          title: "re-plan a ring member",
+          wave: "5",
+          release: RELEASE,
+          cycles: [{ label: "red-green" }],
+        });
+
+        expect(refused.status).toBe(409);
+        expect(refused.body.error).toBe(
+          "dependency cycle refused: CR-121-X → CR-121-Y → CR-121-X — nothing was written",
+        );
+        expect(refusalShape(refused)).toEqual(
+          refusalShape(
+            await crPlan(key, {
+              cr: "CR-121-X",
+              title: "re-plan a ring member",
+              wave: "5",
+              release: RELEASE,
+            }),
+          ),
+        );
+
+        // "nothing was written" measured, not quoted: every row byte-identical
+        // and no plan opened for the cr the request named.
+        expect(await queueEntries(key)).toEqual(before);
+        expect(await plansFor(key, "CR-121-X")).toEqual([]);
+      },
+    );
+
+    test(
+      "AC6 REGRESSION PIN — `release` ABSENT files exactly as it does today: the CR-CRU-117/118/119/" +
+        "120 fixture shape (cr, title, cycles, wave), no queue write, and no queue keys on the reply",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+
+        const filed = await planFile(key, {
+          cr: "CR-121-NORELEASE",
+          title: "a CR born mid-release",
+          cycles: [{ label: "red-green" }],
+          wave: "6",
+        });
+
+        expect(filed.status).toBe(201);
+        expect(filed.body.cr).toBe("CR-121-NORELEASE");
+        expect(filed.body.status).toBe("open");
+        expect(filed.body.title).toBe("a CR born mid-release");
+        expect(filed.body.wave).toBe("6");
+        expect((filed.body.cycles as CyclePayload[]).map((c) => c.label)).toEqual(["red-green"]);
+        // The three keys that arrive ONLY with a release: ABSENT, never null
+        // and never an empty object — a caller that reads `entry` as "the row
+        // I registered" must not be handed one nobody registered.
+        expect("release" in filed.body).toBe(false);
+        expect("converged" in filed.body).toBe(false);
+        expect("entry" in filed.body).toBe(false);
+        // And NOTHING reached the queue: a plan declaring no release makes no
+        // roadmap claim — D4's "a CR can be born mid-release", the non-goal
+        // this CR explicitly preserves.
+        expect(await queueEntries(key)).toEqual([]);
+        // The plan itself is filed and readable, exactly as before.
+        const plans = await plansFor(key, "CR-121-NORELEASE");
+        expect(plans.length).toBe(1);
+        expect(plans[0]!.status).toBe("open");
+        expect(plans[0]!.wave).toBe("6");
+      },
+    );
+
+    test(
+      "AC7 ATOMICITY — a cr that already has an OPEN plan is refused by the plan half AFTER every " +
+        "queue-side check passed, and the queue write that half would have made is NOT left behind",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        // A neighbour registration, so "the queue is unchanged" is a
+        // comparison against a real board rather than empty-equals-empty.
+        const neighbour = await crPlan(key, {
+          cr: "CR-121-NEIGHBOUR",
+          release: RELEASE,
+          wave: "6",
+          title: "already on the roadmap",
+        });
+        expect(neighbour.status).toBe(200);
+
+        const first = await planFile(key, {
+          cr: "CR-121-DUP",
+          title: "the plan that is already open",
+          wave: "6",
+          cycles: [{ label: "red-green" }],
+        });
+        expect(first.status).toBe(201);
+
+        const before = await queueEntries(key);
+
+        // Valid release, valid wave, valid title, no ring, no wave conflict —
+        // every queue-side check passes, and only `filePlan` refuses.
+        const refused = await planFile(key, {
+          cr: "CR-121-DUP",
+          title: "the second plan for the same cr",
+          wave: "6",
+          release: RELEASE,
+          cycles: [{ label: "verify" }],
+        });
+
+        expect(refused.status).toBe(400);
+        expect(refused.body.error).toBe("an open plan already exists for cr: CR-121-DUP");
+
+        const after = await queueEntries(key);
+        expect(after).toEqual(before);
+        expect(after.some((entry) => entry.cr === "CR-121-DUP")).toBe(false);
+        // …and no second plan crept in beside the refusal.
+        expect((await plansFor(key, "CR-121-DUP")).length).toBe(1);
+      },
+    );
+
+    test(
+      "§S3 REGRESSION PIN — `cr-plan` still registers a cr that has NO open plan (the historical-" +
+        "backfill shape): the queue row lands, and the standalone verb opens no execution cycle",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const key = await createProject();
+        await propose(key, RELEASE);
+
+        const declared = await crPlan(key, {
+          cr: "CR-121-BACKFILL",
+          release: RELEASE,
+          wave: "6",
+          title: "a shipped CR given its history back",
+        });
+
+        expect(declared.status).toBe(200);
+        expect(declared.body.ok).toBe(true);
+        expect(declared.body.converged).toBe(false);
+
+        const entries = await queueEntries(key);
+        expect(entries.length).toBe(1);
+        expect(entries[0]!.cr).toBe("CR-121-BACKFILL");
+        expect(entries[0]!.release).toBe(RELEASE);
+        expect(entries[0]!.wave).toBe("6");
+        expect(entries[0]!.title).toBe("a shipped CR given its history back");
+        // NOT in progress and linked to no plan: queue-only registration is
+        // the whole point of the verb §S3 leaves alone.
+        expect(entries[0]!.status).toBe("PENDING");
+        expect(entries[0]!.planId).toBeUndefined();
+        expect(await plansFor(key, "CR-121-BACKFILL")).toEqual([]);
+      },
+    );
+  });
+});

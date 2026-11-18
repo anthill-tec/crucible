@@ -160,7 +160,7 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
   # one, per CR-CRU-022's own gap-analysis coupling note and its \u00a7S5 AC block's
   # last bullet. RED phase, re-confirmed in this pass: `grep -a` over `public/`
   # for `roadmap-progress` / `analytics-pane` / `burndown-chart` returns ZERO
-  # hits (same baseline tests/cr022-analytics-ui.test.ts's header records), so
+  # hits (same baseline tests/integration/cr022-analytics-ui.test.ts's header records), so
   # every assertion below currently has no code path producing it \u2014 the
   # release band, the pane and its chart do not exist at any viewport yet, let
   # alone a phone-specific collapse of them.

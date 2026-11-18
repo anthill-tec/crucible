@@ -1,12 +1,12 @@
 // CR-CRU-018 §S1 AC13/AC14 (DN "WebKit provisioning — the two paths") — pure
 // decision logic for the webkit-iphone local-launch guard, split out so
-// tests/webkit-docker-local-guard.test.ts can assert it directly (no
+// tests/unit/webkit-docker-local-guard.test.ts can assert it directly (no
 // Playwright, no browser, no worker) — see
 // tests/e2e/steps/webkit-docker-preflight.steps.ts for the one caller.
 
 /** The ONE command a developer runs for a local WebKit pass — package.json's
  *  own script name (asserted directly against package.json by
- *  tests/webkit-docker-local-guard.test.ts, so this literal and that
+ *  tests/unit/webkit-docker-local-guard.test.ts, so this literal and that
  *  declaration cannot drift apart unnoticed). */
 export const WEBKIT_DOCKER_NPM_SCRIPT = "bun run webkit:docker";
 
@@ -29,7 +29,7 @@ export function webkitDockerMode(wsEndpoint: string | undefined): boolean {
 /** Whether this run HAS a WebKit engine at all: CI's native install, or the
  *  local Docker Playwright Server. The ONE predicate that gates the
  *  webkit-iphone project in playwright.config.ts AND tells
- *  tests/e2e-suite-reaches-the-board.test.ts whether the phone scenarios run
+ *  tests/integration/e2e-suite-reaches-the-board.test.ts whether the phone scenarios run
  *  on a second engine, so the two cannot disagree. */
 export function webkitEngineAvailable(input: WebkitEngineInput): boolean {
   return input.isCI || webkitDockerMode(input.wsEndpoint);

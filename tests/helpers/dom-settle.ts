@@ -42,7 +42,7 @@
 // THE STOPPING RULE IS DELIBERATELY UNCHANGED — the loop still yields the event
 // loop a FIXED number of times, because a cleverer rule was measured WRONG.
 // A first version here returned as soon as the document reported no mutations
-// across two consecutive yields; `tests/roadmap-selection-durability.test.ts`
+// across two consecutive yields; `tests/integration/roadmap-selection-durability.test.ts`
 // then failed AC33 with `gateVersions()` == `[]` against `["0.1.0"]`, because a
 // mount QUIETS while its release fetch is still in flight — the DOM is idle,
 // the render is not finished, and "no mutations yet" is indistinguishable from

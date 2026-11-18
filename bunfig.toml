@@ -10,7 +10,7 @@ env = false
 # v1 shim suites) is DELETED, not excluded, so every `.test.ts` on disk is a
 # file `bun test` runs. Do not reintroduce `[test] pathIgnorePatterns` for the
 # tests/ tree: a permanently-excluded directory makes the suite size
-# unreconcilable. Guarded by tests/suite-integrity.test.ts.
+# unreconcilable. Guarded by tests/integration/suite-integrity.test.ts.
 
 # CR-CRU-131 §S1c — the test process DECLARES its own store, outside the
 # checkout, before any suite loads. `resolveStore` rule 3 adopts an

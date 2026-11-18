@@ -46,7 +46,7 @@ from tests.client.live_run_harness import (
     load_toon,
     scrubbed_env,
 )
-from tests.client.test_a_bun_run_relays_its_console_to_the_board import ConsoleBoard
+from tests.client.integration.test_a_bun_run_relays_its_console_to_the_board import ConsoleBoard
 
 TOON = load_toon()
 BUN_CLIENT = CLIENTS / "bun-crucible.py"

@@ -1,7 +1,7 @@
 // CR-CRU-018 §S1 AC13/AC14 (DN "WebKit provisioning — the two paths") — the
 // pure, unit-testable pieces of the LOCAL WebKit-via-Docker path. Split out
 // from scripts/webkit-docker-server.ts (the CLI entry that actually shells to
-// `docker`) so tests/webkit-docker-local-guard.test.ts can assert the exact
+// `docker`) so tests/unit/webkit-docker-local-guard.test.ts can assert the exact
 // image tag, port and container shape without a Docker daemon, mirroring the
 // existing scripts/test-targets.ts (pure lib) + scripts/run-test-target.ts
 // (CLI entry) split.
@@ -111,7 +111,7 @@ export function runServerWsEndpoint(port: number = RUN_SERVER_PORT): string {
 }
 
 /** The exact `docker run` argv this script spawns — a pure function so
- *  tests/webkit-docker-local-guard.test.ts can assert its shape (the pinned
+ *  tests/unit/webkit-docker-local-guard.test.ts can assert its shape (the pinned
  *  image, the published port, the exact `run-server` command) without a
  *  Docker daemon. `--rm` so a crashed run leaves nothing behind for the NEXT
  *  one to collide with; `--init` so `run-server`'s child browser processes

@@ -29,7 +29,7 @@
 //     the plain regression gate was reporting). `bunfig.toml`'s
 //     `pathIgnorePatterns` is NOT an available fix: CR-CRU-047 §S1 forbids a
 //     permanently-excluded `tests/` directory, and
-//     `tests/suite-integrity.test.ts` (out of this agent's scope) asserts
+//     `tests/integration/suite-integrity.test.ts` (out of this agent's scope) asserts
 //     `bunfig.toml` carries no such key at all. Renamed instead — to
 //     `ephemeral.contract.ts` / `non-ephemeral.contract.ts` — since neither
 //     substring matches bun's discovery rule, so plain `bun test` no longer

@@ -11,7 +11,7 @@
 // MEMBERSHIP IS DERIVED, NEVER LISTED. A hand-maintained manifest drifts the
 // moment someone adds a test, and a file missing from every target would be a
 // test nothing runs — the same hazard `bunfig.toml`'s no-`pathIgnorePatterns`
-// rule (CR-CRU-047 §S1, guarded by tests/suite-integrity.test.ts) exists to
+// rule (CR-CRU-047 §S1, guarded by tests/integration/suite-integrity.test.ts) exists to
 // prevent, one level up. So a file is INTEGRATION iff its source names one of
 // the markers below, and `unit` is the COMPLEMENT — every file on disk is in
 // exactly one target by construction, and a new browser test is integration on
@@ -33,7 +33,7 @@ export const REPO_ROOT = path.dirname(import.meta.dir);
  *  Every entry was measured in the 2026-09-08 census, not guessed. */
 export const INTEGRATION_MARKERS = [
   // Launches real Chromium through Playwright — the only such file today
-  // (tests/roadmap-visual-grammar.test.ts, 90 tests, 13.5s).
+  // (tests/integration/roadmap-visual-grammar.test.ts, 90 tests, 13.5s).
   "chromium.launch",
   // Spawns real processes: the client fleet's `--help` surfaces and the
   // narration/provenance suites (20 files, 99s).
@@ -43,7 +43,7 @@ export const INTEGRATION_MARKERS = [
   "Bun.serve",
   // Boots the REAL production server in-process and talks to it over HTTP —
   // `startServer` from src/server.ts. Missing this marker left
-  // tests/v2-stream-paging.test.ts (9 tests, 15.1s of SSE deadline reads) in
+  // tests/integration/v2-stream-paging.test.ts (9 tests, 15.1s of SSE deadline reads) in
   // the fast target, which is how it was found.
   "startServer",
   // Corroborates against the LIVE board, which must be running (12 files).
@@ -62,7 +62,7 @@ export type TargetName = "unit" | "integration";
 //
 // A SECOND DIMENSION, added after measuring the first one wrong: waiting on
 // REAL TIME. The marker list alone put `unit` at 1440 tests in 257s, because
-// tests/cycle-timers.test.ts spawns nothing, serves nothing and launches
+// tests/integration/cycle-timers.test.ts spawns nothing, serves nothing and launches
 // nothing — it just sleeps through five ~11s production timers. A test that
 // observes the app's own clock (a 5s poll tick, a 10s badge cadence) is
 // behavioural by nature: its subject IS elapsed time. So a file declaring any
@@ -70,7 +70,7 @@ export type TargetName = "unit" | "integration";
 // no process, no server, no live board AND no waiting".
 // `[^,)]*` was greedy here and BACKTRACKED into the number: for `sleep(6_000)`
 // it consumed `6_00` and captured `0`, so a six-second sleep read as zero and
-// tests/workspace-rail-collapse.test.ts (12.7s of real waiting) classified as
+// tests/integration/workspace-rail-collapse.test.ts (12.7s of real waiting) classified as
 // unit. The first argument may now contain no parens or commas, and the delay
 // must be the WHOLE final literal.
 const REAL_WAIT = /(?:setTimeout|setInterval|Bun\.sleep|sleep)\s*\(\s*(?:[^,()]*,\s*)?([\d_]+)\s*\)/g;

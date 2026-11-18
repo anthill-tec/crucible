@@ -11,7 +11,7 @@
 // `roadmap-card-id`/`-status`/`-wave`/`-deps`) do not exist in production
 // today (`grep` returns zero occurrences in public/app.js) — GREEN names
 // these hooks to satisfy this file, following the same "RED defines the
-// testid GREEN must render" precedent tests/cycle-run-navigation.test.ts's
+// testid GREEN must render" precedent tests/integration/cycle-run-navigation.test.ts's
 // own header states for `cycle-to-runs`.
 import { expect } from "@playwright/test";
 import { Step } from "./world.ts";
@@ -477,7 +477,7 @@ Step("velocity appears on the project band foot strip", async ({ page }) => {
   const foot = page.getByTestId("project-band-foot");
   await expect(foot).toBeVisible();
   const text = (await foot.innerText()).toLowerCase();
-  // The exact wording tests/cr022-analytics-ui.test.ts's Velocity-card unit
+  // The exact wording tests/integration/cr022-analytics-ui.test.ts's Velocity-card unit
   // test already pins for the Project band (CR-CRU-161 \u00a7S3: \"N pts / day\",
   // the release's per-day rate, not the project's weekly one) \u2014 matched here
   // rather than a bare non-empty check, so a foot strip that renders SOME

@@ -13,7 +13,7 @@ Feature: the BDD section renders an ingested run's Gherkin
   The project is seeded as `frontend` deliberately — `workspaceTabs`
   (public/app-logic.mjs) disables the BDD tab on every other project type, so
   a default-typed fixture could never reach this surface. That gate is asserted
-  from the other side in tests/bdd-section.test.ts.
+  from the other side in tests/integration/bdd-section.test.ts.
 
   # MIGRATED (CR-CRU-145 \u00a7S4, orchestrator ruling at C3 GREEN): the BDD tab is
   # now an index, so this scenario opens the run FROM that index and asserts the

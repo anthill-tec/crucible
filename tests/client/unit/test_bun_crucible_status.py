@@ -1,0 +1,522 @@
+"""CR-CRU-030 §S6 (cycle 83, C1 slice 2) -- the net-new `status` (alias
+`plans`) READ client verb.
+
+Contract pinned verbatim from
+docs/changes/CR-CRU-030-fleet-toon-axi-compliance.md:
+
+  §S6 -- "Add a READ verb to the shared client verb set (all five clients) --
+  `status` (alias `plans`), no `--agent` -- that GETs the plans and returns a
+  §S1 TOON-AXI envelope: the queue as a `plans[]` table (`cr`, `wave`,
+  `status`, active-cycle id/label, `mergeCommit`) plus a `lastRunCr`
+  convenience field (the plan with the latest `closedAt`). Read-only."
+
+  Dispatch note: "Full `--fields`/`count` AXI-CLI polish is a later slice --
+  this slice pins the core status verb + the empty-state." -- so this file
+  does NOT assert a `count` field (§S12, out of scope here); it pins the core
+  `plans[]` table + the last-closed-CR convenience field + the explicit
+  (never-empty-stdout) empty-queue case.
+
+  CR-CRU-094 §S4 (AC7) RENAME: the quoted §S6 prose above is CR-CRU-030's,
+  left VERBATIM because that CR is shipped and is not edited by this one. The
+  field it calls `lastRunCr` is now emitted as `lastClosedCr` -- the name
+  states the fact computed (the `cr` of the plan with the latest `closedAt`,
+  i.e. the last CR to close/merge) instead of reading as "the CR of the most
+  recent run", which is not what it ever computed. The old key is a CLEAN
+  BREAK, not an alias: an envelope carrying BOTH keys fails AC7, following
+  the CR-CRU-059 §S0 precedent ("no dual-key handling, no deprecation path").
+
+  CR-CRU-030-C1-RED (cycle 83) alignment fix: the core-fields test below was
+  split so its `activeCycleLabel`/`mergeCommit` assertions run under
+  `--fields` (per the §S10 minimal-default contract: plain `status` returns
+  ONLY `cr,wave,status,activeCycleId`) -- keeping this file consistent with
+  test_bun_crucible_axi_conventions.py's `MinimalDefaultFieldsTest`, which
+  pins the same §S10 default/`--fields` split.
+
+Server response shape confirmed by reading src/v2.ts (`handlePlansList`) +
+src/types.ts (`Plan`) directly: `GET …/plans` -> `{ok:true, plans: Plan[]}`
+where each `Plan` carries `planId, cr, wave?, status, cycles: PlanCycle[],
+merge?: {commit}, closedAt?`. `PlanCycle` carries `id, label, kind, status`.
+The queue table's `mergeCommit` therefore derives from `plan.merge.commit`
+(present only on a closed plan that was closed with a commit); "active-cycle
+id/label" derives from scanning `plan.cycles` for `status === "active"`.
+
+RED phase: `clients/bun-crucible.py` today has NO `status`/`plans` subcommand
+at all -- confirmed by reading the argparse wiring in `main()`. Every
+invocation below fails at argparse's `parse_args()` with an "invalid choice"
+`SystemExit(2)` -- a real RED, not a typo.
+
+Module-loading + HTTP-mocking convention: copied verbatim from the sibling
+harnesses in this directory -- REPO_ROOT-relative load of
+`clients/bun-crucible.py`, real `argparse` dispatch via `module.main()` with
+`sys.argv` patched, and mocking the module's `_get` HTTP transport seam so the
+live server at :3849 is NEVER touched.
+
+Invocation:
+    python3 -m pytest tests/client/unit/test_bun_crucible_status.py -q
+Fallback:
+    python3 tests/client/unit/test_bun_crucible_status.py
+"""
+
+import contextlib
+import importlib.util
+import io
+import json
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+# CR-CRU-131 §S1b — the project fixture carries the `crucible.toml` an
+# installed project has; the fleet census owns that helper (one fixture shape
+# for the fleet), exactly as its bin-dir and drive helpers are shared.
+from tests.client.client_fleet_envelope_census_helpers import (
+    _UNREACHABLE_CRUCIBLE_URL,
+    declare_and_require_board,
+    install_project_limits,
+)
+from tests.client import client_script
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SCRIPT_PATH = client_script("bun-crucible.py")
+
+
+def _load_bun_crucible_module():
+    if not SCRIPT_PATH.exists():
+        raise unittest.SkipTest(f"bun-crucible.py not found at {SCRIPT_PATH}")
+    spec = importlib.util.spec_from_file_location("bun_crucible_under_test_status", SCRIPT_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _run_main(module, argv):
+    full_argv = ["bun-crucible.py"] + argv
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with mock.patch.object(sys, "argv", full_argv):
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            try:
+                module.main()
+                code = 0
+            except SystemExit as e:
+                if e.code is None:
+                    code = 0
+                elif isinstance(e.code, int):
+                    code = e.code
+                else:
+                    code = 1
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+def _plans_response(plans, *, last_closed_cr=None, filed=0):
+    """§S2/§S3 (the status open-plans change) — every `GET .../plans` response now carries the
+    two server-published, PROJECT-WIDE facts (`lastClosedCr`/`filed`)
+    alongside `plans`; `cmd_status` takes them from here verbatim, never
+    recomputing either from the rows it just received. Defaults keep every
+    call site that does not care about the two facts unchanged."""
+    return {"ok": True, "plans": plans,
+            "lastClosedCr": last_closed_cr, "filed": filed}
+
+
+class _BaseStatusTest(unittest.TestCase):
+    PROJECT_KEY = "test-key-status"
+    ENV_KEYS = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID", "WORKFLOW_CYCLE")
+
+    def setUp(self):
+        self.module = _load_bun_crucible_module()
+        self.toon = self.module._toon()
+        self.tmpdir = tempfile.mkdtemp(prefix="bun-crucible-status-")
+        with open(os.path.join(self.tmpdir, ".env"), "w") as f:
+            f.write(f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
+        install_project_limits(self.tmpdir)
+        self._saved_env = {k: os.environ.get(k) for k in self.ENV_KEYS}
+        for k in self.ENV_KEYS:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _decode_axi(self, stdout_text):
+        decoded = self.toon.decode(stdout_text)
+        self.assertIn("axi", decoded,
+                      f"stdout must decode to a TOON envelope with a top-level "
+                      f"'axi' key; got {decoded!r} from stdout={stdout_text!r}")
+        return decoded["axi"]
+
+    def _row_for_cr(self, rows, cr):
+        matches = [r for r in rows if r.get("cr") == cr]
+        self.assertEqual(len(matches), 1, f"expected exactly one row for cr={cr!r} in {rows!r}")
+        return matches[0]
+
+
+class StatusQueueTableTest(_BaseStatusTest):
+    PROJECT_KEY = "test-key-status-table"
+
+    def test_status_returns_queue_table_with_core_fields_per_plan(self):
+        plans = _plans_response([
+            {"planId": "plan-1", "cr": "CR-A", "wave": "3", "status": "open",
+             "cycles": [{"id": 10, "label": "c1", "kind": "red-green", "status": "pending"},
+                        {"id": 11, "label": "c2", "kind": "red-green", "status": "active"}]},
+            {"planId": "plan-2", "cr": "CR-B", "wave": "2", "status": "closed",
+             "cycles": [{"id": 20, "label": "c1", "kind": "red-green", "status": "done"}],
+             "merge": {"commit": "deadbee"}, "closedAt": 1000},
+        ])
+        with mock.patch.object(self.module, "_get", return_value=plans):
+            code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi = self._decode_axi(out)
+        self.assertEqual(axi.get("verb"), "status")
+        self.assertIs(axi.get("ok"), True)
+
+        rows = axi.get("plans")
+        self.assertIsInstance(rows, list)
+        self.assertEqual(len(rows), 2)
+
+        row_a = self._row_for_cr(rows, "CR-A")
+        self.assertEqual(str(row_a.get("wave")), "3")
+        self.assertEqual(row_a.get("status"), "open")
+        self.assertEqual(row_a.get("activeCycleId"), 11,
+                          f"activeCycleId must identify the plan's single ACTIVE cycle's id "
+                          f"as a flat scalar column (the TOON table subset cannot round-trip "
+                          f"a nested dict cell); got {row_a!r}")
+
+        row_b = self._row_for_cr(rows, "CR-B")
+        self.assertEqual(row_b.get("status"), "closed")
+        self.assertIsNone(row_b.get("activeCycleId"),
+                           "a CLOSED plan (all cycles terminal) must report activeCycleId "
+                           "as null, not fabricate one")
+
+    def test_status_fields_flag_adds_activecyclelabel_and_mergecommit(self):
+        """§S10: `activeCycleLabel`/`mergeCommit` are NOT part of the minimal
+        default 4-field row (`cr,wave,status,activeCycleId` -- asserted above
+        against plain `status`); they only surface when requested via
+        `--fields`. Split out of the old
+        test_status_returns_queue_table_with_core_fields_per_plan during the
+        CR-CRU-030-C1-RED alignment fix (cycle 83), which had asserted these
+        two fields against plain `status`, contradicting the §S10
+        minimal-default contract."""
+        plans = _plans_response([
+            {"planId": "plan-1", "cr": "CR-A", "wave": "3", "status": "open",
+             "cycles": [{"id": 10, "label": "c1", "kind": "red-green", "status": "pending"},
+                        {"id": 11, "label": "c2", "kind": "red-green", "status": "active"}]},
+            {"planId": "plan-2", "cr": "CR-B", "wave": "2", "status": "closed",
+             "cycles": [{"id": 20, "label": "c1", "kind": "red-green", "status": "done"}],
+             "merge": {"commit": "deadbee"}, "closedAt": 1000},
+        ])
+        with mock.patch.object(self.module, "_get", return_value=plans):
+            code, out, err = _run_main(
+                self.module,
+                ["status", "--fields", "activeCycleLabel,mergeCommit", "--project-dir", self.tmpdir],
+            )
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi = self._decode_axi(out)
+        rows = axi.get("plans")
+        self.assertIsInstance(rows, list)
+        self.assertEqual(len(rows), 2)
+
+        row_a = self._row_for_cr(rows, "CR-A")
+        self.assertEqual(row_a.get("activeCycleLabel"), "c2",
+                          f"activeCycleLabel must identify the plan's single ACTIVE cycle's "
+                          f"label as a flat scalar column; got {row_a!r}")
+        self.assertIsNone(row_a.get("mergeCommit"),
+                           "an OPEN plan (never closed) must not fabricate a mergeCommit, "
+                           "even under --fields")
+
+        row_b = self._row_for_cr(rows, "CR-B")
+        self.assertEqual(row_b.get("mergeCommit"), "deadbee")
+        self.assertIsNone(row_b.get("activeCycleLabel"),
+                           "a CLOSED plan (all cycles terminal) must report activeCycleLabel "
+                           "as null, not fabricate one")
+
+    def test_status_last_closed_cr_is_taken_from_the_response_not_derived_from_rows(self):
+        """§S2/§S3 (AC4/AC7) REWRITE of
+        `test_status_last_closed_cr_is_the_plan_with_latest_closedat`, which
+        built `lastClosedCr` by scanning the CLOSED plans the CLIENT itself
+        received (derive-from-rows) -- exactly the client-side computation
+        §S2 deletes. The value is now computed ONCE, on the SERVER, over
+        ALL the project's plans, and published as a top-level field on
+        EVERY `GET .../plans` response -- including the `status=open`
+        filtered read `cmd_status` now issues, whose `plans[]` therefore
+        carries no closed row at all. So the fixture below carries only the
+        OPEN plan in `plans[]`, while `lastClosedCr` rides the response
+        top-level, proving the client takes it from there rather than
+        deriving it from rows that could not possibly contain it."""
+        plans = _plans_response(
+            [{"planId": "plan-3", "cr": "CR-OPEN", "wave": "4", "status": "open",
+              "cycles": []}],
+            last_closed_cr="CR-NEW", filed=5)
+        with mock.patch.object(self.module, "_get", return_value=plans):
+            code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi = self._decode_axi(out)
+        self.assertEqual(
+            axi.get("lastClosedCr"), "CR-NEW",
+            "lastClosedCr must be TAKEN FROM THE RESPONSE verbatim -- the "
+            "fixture's plans[] (the status=open-filtered read) carries no "
+            "closed plan at all, so a client that still tried to DERIVE the "
+            "value from rows would find nothing and answer None")
+        self.assertEqual(
+            axi.get("filed"), 5,
+            "filed must likewise be taken from the response verbatim")
+        self.assertNotIn(
+            "lastRunCr", axi,
+            f"the old key must be ABSENT from the envelope -- an envelope "
+            f"carrying BOTH keys is the dual-key state the rename forbids; "
+            f"got {sorted(axi)!r}")
+
+    def test_status_no_closed_plans_last_closed_cr_is_explicit_null(self):
+        plans = _plans_response([
+            {"planId": "plan-1", "cr": "CR-OPEN", "wave": "1", "status": "open", "cycles": []},
+        ], last_closed_cr=None, filed=1)
+        with mock.patch.object(self.module, "_get", return_value=plans):
+            code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0)
+        axi = self._decode_axi(out)
+        self.assertIn(
+            "lastClosedCr", axi,
+            f"the key must be EXPLICITLY present and null (never dropped) so a "
+            f"reader can tell 'nothing has closed' from 'the client is older "
+            f"than the field'; got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("lastClosedCr"),
+                           "no closed plan exists yet -- lastClosedCr must be explicit "
+                           "null, never a fabricated guess")
+        self.assertEqual(axi.get("filed"), 1)
+        self.assertNotIn(
+            "lastRunCr", axi,
+            f"the old key must be ABSENT from the envelope -- an envelope "
+            f"carrying BOTH keys is the dual-key state the rename forbids; "
+            f"got {sorted(axi)!r}")
+
+    def test_status_never_filed_state_reports_filed_zero_and_plan_file_only_help(self):
+        """§S4/AC5 REWRITE of
+        `test_status_empty_queue_is_explicit_ok_true_not_error`: an empty
+        board is now ONE of TWO distinguishable states (never filed vs. none
+        open), told apart by `filed`. This fixture is the "never filed"
+        row of the §S4 table: `filed:0`, `lastClosedCr:null`, and a help[]
+        naming `plan-file` ONLY (no `next` -- there is nothing to advance)."""
+        with mock.patch.object(
+                self.module, "_get",
+                return_value=_plans_response([], last_closed_cr=None, filed=0)):
+            code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0, "an empty queue is NOT an error -- must exit 0")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertIn(
+            "lastClosedCr", axi,
+            f"an empty board must still carry the key as an explicit null; "
+            f"got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("lastClosedCr"))
+        self.assertEqual(
+            axi.get("filed"), 0,
+            "filed:0 is what makes this the 'never filed' state, distinct "
+            "from a board with closed/aborted history and zero open plans")
+        self.assertEqual(
+            axi.get("help"), ["plan-file --cr <cr> --cycle <label>"],
+            f"the 'never filed' help is plan-file ONLY; got {axi!r}")
+        self.assertNotIn(
+            "lastRunCr", axi,
+            f"the old key must be ABSENT from the empty-board envelope too; "
+            f"got {sorted(axi)!r}")
+        self.assertEqual(
+            axi.get("warnings"), [],
+            "the no-plan empty state must NOT carry the status-unavailable "
+            "warning -- it is a DIFFERENT definitive state than the "
+            "server-unreachable degrade")
+        combined = (out + err).lower()
+        self.assertIn("no plan", combined,
+                      f"an empty queue must carry a DEFINITIVE empty-state message "
+                      f"(never bare empty stdout); got stdout={out!r} stderr={err!r}")
+
+    def test_status_none_open_on_a_board_with_closed_history_names_next_then_plan_file(self):
+        """§S4/AC5 -- the OTHER empty-board state: a board that HAS
+        filed plans (`filed>0`) but none currently open. `lastClosedCr` is
+        still published (a real closed CR), and help[] names `next` THEN
+        `plan-file`, never `cycle-activate` (nothing to activate)."""
+        with mock.patch.object(
+                self.module, "_get",
+                return_value=_plans_response([], last_closed_cr="CR-DONE", filed=4)):
+            code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertEqual(
+            axi.get("filed"), 4,
+            "filed>0 tells 'none open' apart from 'never filed' even though "
+            "both report an empty plans[]")
+        self.assertEqual(axi.get("lastClosedCr"), "CR-DONE")
+        self.assertEqual(
+            axi.get("help"), ["next", "plan-file --cr <cr> --cycle <label>"],
+            f"'none open' help names next then plan-file, NOT "
+            f"cycle-activate; got {axi!r}")
+        self.assertEqual(axi.get("warnings"), [])
+
+    def test_status_none_open_aborted_only_board_last_closed_cr_stays_null(self):
+        """§S4/AC5 -- the aborted-only variant Model B asked for
+        (#1391): `filed>0` (the aborted plans still count) but
+        `lastClosedCr` is null (an aborted plan never has a `closedAt`)."""
+        with mock.patch.object(
+                self.module, "_get",
+                return_value=_plans_response([], last_closed_cr=None, filed=2)):
+            code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertEqual(axi.get("filed"), 2)
+        self.assertIsNone(
+            axi.get("lastClosedCr"),
+            "an aborted-only board must still report lastClosedCr null even "
+            "though filed>0 -- filed alone tells it apart from never-filed")
+        self.assertEqual(
+            axi.get("help"), ["next", "plan-file --cr <cr> --cycle <label>"])
+        self.assertEqual(axi.get("warnings"), [])
+
+    def test_status_reads_exactly_one_status_open_filtered_path(self):
+        """AC4 -- 'cmd_status issues exactly one read, GET .../plans?status=open'."""
+        with mock.patch.object(
+                self.module, "_get",
+                return_value=_plans_response([], last_closed_cr=None, filed=0)) as get_mock:
+            code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        self.assertEqual(
+            get_mock.call_count, 1,
+            f"cmd_status must issue EXACTLY one plans read; got "
+            f"{get_mock.call_args_list!r}")
+        called_path = get_mock.call_args.args[0] if get_mock.call_args.args \
+            else get_mock.call_args.kwargs.get("path")
+        self.assertTrue(
+            str(called_path).endswith("?status=open"),
+            f"the one read must carry the status=open filter (§S3); "
+            f"got path={called_path!r}")
+
+    def test_status_tolerant_when_plans_fetch_fails_emits_ok_true_status_unavailable_and_exits_zero(self):
+        """CR-CRU-035 §S1 RETARGET (was
+        `test_status_surfaces_get_failure_as_ok_false`, which pinned the OLD
+        ok:false/exit-1 command-error contract): `status` must be safe for a
+        session-start hook, so a plans-fetch failure (server unreachable) is
+        now a DEFINITIVE degraded data-state -- ok:true, a structured
+        `status-unavailable` warning, empty board, help[], exit 0 -- never a
+        command error."""
+        with mock.patch.object(self.module, "_get",
+                                return_value={"ok": False, "error": "connection failed"}):
+            code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
+
+        self.assertEqual(
+            code, 0,
+            f"a server-unreachable status must exit 0 (hook-safe), not the "
+            f"command-error path; stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertEqual(axi.get("verb"), "status")
+        self.assertIs(
+            axi.get("ok"), True,
+            "the unreachable degrade is a DEFINITIVE DATA state (AXI principle "
+            "5), not a command failure -- ok must be True")
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertIn("status-unavailable", codes,
+                      f"must carry a structured status-unavailable warning; got {axi!r}")
+        unavailable = next(w for w in axi.get("warnings", [])
+                            if w.get("code") == "status-unavailable")
+        self.assertTrue(unavailable.get("detail"),
+                         "the status-unavailable warning must carry a non-empty detail")
+        self.assertEqual(axi.get("plans"), [],
+                          "the unavailable state must report an EMPTY board, never "
+                          "fabricated/stale plan rows")
+        self.assertIn(
+            "lastClosedCr", axi,
+            f"the unavailable envelope must still carry the last-closed-CR key "
+            f"as an EXPLICIT null (never a dropped key); got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("lastClosedCr"))
+        # §S5/AC6 (the status open-plans change) -- the degrade adds ONE field: filed, also an
+        # explicit null (the board could not be read, so the number is
+        # unknown, not zero).
+        self.assertIn(
+            "filed", axi,
+            f"the unavailable envelope must carry `filed` as an explicit "
+            f"null too; got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("filed"))
+        self.assertNotIn(
+            "lastRunCr", axi,
+            f"the old key must be ABSENT from the envelope -- an envelope "
+            f"carrying BOTH keys is the dual-key state the rename forbids; "
+            f"got {sorted(axi)!r}")
+        help_steps = axi.get("help") or []
+        self.assertTrue(help_steps, "the unavailable envelope must carry a help[] "
+                                     "next-step hint (AXI principle 9)")
+        self.assertTrue(
+            any("server" in str(h).lower() or "crucible" in str(h).lower()
+                for h in help_steps),
+            f"the help[] hint must point at reaching/starting the Crucible "
+            f"server; got {help_steps!r}")
+
+    def test_status_plans_fetch_is_bounded_by_a_short_timeout(self):
+        """§S1 bounded fetch -- the underlying urlopen call must pass a short
+
+        `timeout=` so an unreachable/slow server can't hang a session-start
+        hook forever."""
+        fake_response = mock.MagicMock()
+        fake_response.read.return_value = json.dumps({"ok": True, "plans": []}).encode()
+
+        # The fetch resolves its board from the project the verb works in:
+        # declare one in the fixture's own crucible.toml and bind it. The
+        # transport is patched, so the declared address is never contacted.
+        declare_and_require_board(self.tmpdir, _UNREACHABLE_CRUCIBLE_URL,
+                                  "bun-crucible.py")
+        axi = self.module._axi()
+        axi.bind_project_dir(self.tmpdir)
+        self.addCleanup(axi.bind_project_dir, None)
+        with mock.patch("urllib.request.urlopen", return_value=fake_response) as urlopen_mock:
+            result = self.module._get(self.module._plans_path(self.tmpdir))
+
+        self.assertTrue(urlopen_mock.called,
+                         "the fetch must go through urllib.request.urlopen")
+        _args, kwargs = urlopen_mock.call_args
+        timeout = kwargs.get("timeout")
+        self.assertIsNotNone(
+            timeout,
+            "urlopen must be called WITH a timeout= kwarg (bounded fetch) -- an "
+            "unbounded call can hang a session-start hook forever")
+        self.assertIsInstance(timeout, (int, float))
+        self.assertGreater(timeout, 0)
+        self.assertLessEqual(timeout, 15,
+                              f"the fetch timeout must be SHORT (hook-safe), got {timeout}")
+        self.assertTrue(result.get("ok"))
+
+    def test_plans_alias_invokes_the_same_status_verb(self):
+        plans = _plans_response([
+            {"planId": "plan-1", "cr": "CR-A", "wave": "1", "status": "open", "cycles": []},
+        ])
+        with mock.patch.object(self.module, "_get", return_value=plans):
+            code, out, err = _run_main(self.module, ["plans", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0, f"the `plans` alias must dispatch identically to `status`; "
+                                  f"stdout={out!r} stderr={err!r}")
+        axi = self._decode_axi(out)
+        self.assertEqual(axi.get("verb"), "status",
+                          "an alias invocation must still report the canonical verb identity")
+        self.assertEqual(len(axi.get("plans", [])), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -15,7 +15,7 @@ part of it:
 A python check is named `Class.method` within its module under
 `tests/client/`. Every check of a listed module that reads the changelog is
 here, and nothing else is. The bun doc tests' classification is RECORDED in
-tests/doc-tests-find-their-features-across-the-next-release.test.ts.
+tests/integration/doc-tests-find-their-features-across-the-next-release.test.ts.
 """
 
 #: The python doc tests, under tests/client/: module -> the kinds of its checks.

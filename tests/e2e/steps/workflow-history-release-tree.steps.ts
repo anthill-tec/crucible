@@ -1,7 +1,7 @@
 // CR-CRU-173 §S1/AC1/AC2 (page half) — workflow-history-release-tree.feature
 // steps: the ship-milestone seed and the release-tree assertions
 // (`[data-testid="history-release"]`, the SAME RED-authored contract
-// tests/workflow-history-release-tree.test.ts documents at its own header).
+// tests/integration/workflow-history-release-tree.test.ts documents at its own header).
 // Plan filing/transitions/close, gate ingest, release-proposal and cr-plan
 // seeding all come from the EXISTING shared steps (gates.steps.ts,
 // workflow.steps.ts, roadmap-graph.steps.ts) — this file adds only what
@@ -116,7 +116,7 @@ Step("the release {string} row is open", async ({ page }, label: string) => {
 });
 
 // CR-CRU-177 \u00a7S2 (page half, cycle 642) \u2014 RED's own call on the exact
-// wording (not pinned verbatim by F22; tests/workflow-history-release-tree.test.ts
+// wording (not pinned verbatim by F22; tests/integration/workflow-history-release-tree.test.ts
 // documents the same choice at its own CR-CRU-177 describe block): the
 // release row's text holds `<n> CRs completed \u00b7 <p> pending`.
 Step(
