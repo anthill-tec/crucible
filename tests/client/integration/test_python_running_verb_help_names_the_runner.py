@@ -36,7 +36,7 @@ runner's declaration (`CheckAndAutoIngestTakeNoRunnerTest` in
 here.
 
 Invocation:
-    python3 -m unittest tests.client.unit.test_python_running_verb_help_names_the_runner -v
+    python3 -m unittest tests.client.integration.test_python_running_verb_help_names_the_runner -v
 """
 
 import importlib.util
@@ -44,7 +44,7 @@ import re
 import shutil
 import unittest
 
-from tests.client.unit.test_bun_client_printed_help_names_no_project import option_help
+from tests.client.integration.test_bun_client_printed_help_names_no_project import option_help
 from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     CLIENTS_DIR,
