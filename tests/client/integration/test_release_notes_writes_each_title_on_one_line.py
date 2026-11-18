@@ -3,11 +3,12 @@ tab, a run of spaces — is one space, so a title can never break the section
 (a newline followed by `## [...]` would otherwise open a second heading inside
 the draft).
 
-Driven through `python-crucible.py` (the one shared code path) against a real,
-throwaway board: three CRs landed in one shipped release, the middle one's
-landing plan titled with an embedded newline, a tab and a run of spaces (the
-board's plan route takes any string as a title, and the fixture checks it
-holds this one verbatim).
+Driven through `python-crucible.py` (the one shared code path) against a fake
+board (`release_notes_board`'s seeder): three CRs landed in one shipped
+release, the middle one's landing plan titled with an embedded newline, a tab
+and a run of spaces (the board's plan route takes any string as a title and
+lists it verbatim, held in bun by
+`closed-plans-read-carries-merge-and-title-verbatim.test.ts`).
 """
 
 import unittest
@@ -34,14 +35,6 @@ _BOARD = None
 _PROJECT = None
 
 
-def _closed_plans(project):
-    answer = rn.board_http(project.base,
-                           f"/api/v2/projects/{project.key}/plans?status=closed")
-    if not isinstance(answer, dict) or not answer.get("ok"):
-        raise RuntimeError(f"fixture: reading the closed plans failed: {answer!r}")
-    return answer.get("plans") or []
-
-
 def _seed(project):
     project.propose(LABEL)
     project.declare(FIRST, "first, as queued", LABEL)
@@ -54,7 +47,7 @@ def _seed(project):
     rn.require_strictly_later(project, WRAPPED, LAST)
     project.ship(LABEL, SHIPPED_AT, [FIRST, WRAPPED, LAST])
 
-    plans = {plan.get("cr"): plan for plan in _closed_plans(project)}
+    plans = {plan.get("cr"): plan for plan in project.closed_plans()}
     if plans.get(WRAPPED, {}).get("title") != WRAPPED_TITLE:
         raise RuntimeError(f"fixture: {WRAPPED}'s plan must hold its title "
                            f"verbatim; the board holds {plans.get(WRAPPED)!r}")
@@ -68,10 +61,6 @@ def _seed(project):
 def setUpModule():
     global _BOARD, _PROJECT
     _BOARD = rn.start_board("release-notes-one-line-title")
-    if _BOARD is None:
-        raise unittest.SkipTest(
-            "a plan's title is a property of the REAL store: without `bun` "
-            "there is no board to hold it")
     try:
         _PROJECT = rn.SeededProject(_BOARD, "release-notes-one-line-title")
         _seed(_PROJECT)

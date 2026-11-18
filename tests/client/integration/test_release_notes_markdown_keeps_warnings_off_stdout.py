@@ -28,10 +28,6 @@ _PROJECT_DIR = None
 def setUpModule():
     global _BOARD, _PROJECT_DIR
     _BOARD = rn.start_board("release-notes-warnings")
-    if _BOARD is None:
-        raise unittest.SkipTest(
-            "the shipped release is a property of the REAL store: without "
-            "`bun` there is no board to hold it")
     try:
         project = rn.SeededProject(_BOARD, "release-notes-warnings")
         project.propose(LABEL)

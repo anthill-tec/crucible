@@ -1,6 +1,6 @@
 """How `release-notes` dates its heading and orders and titles its lines,
-driven through `python-crucible.py` (the one shared code path) against a real,
-throwaway board — one project per scenario, so no scenario's CRs reach
+driven through `python-crucible.py` (the one shared code path) against a fake
+board (`release_notes_board`'s seeder) — one project per scenario, so no scenario's CRs reach
 another's release.
 
 The heading date:
@@ -116,10 +116,6 @@ def _seed_edges(project):
 def setUpModule():
     global _BOARD
     _BOARD = rn.start_board("release-notes-dates-orders-titles")
-    if _BOARD is None:
-        raise unittest.SkipTest(
-            "the releases are a property of the REAL store: without `bun` "
-            "there is no board to hold them")
     try:
         for name, seed in (("in-progress", _seed_in_progress),
                            ("unrecorded", _seed_unrecorded),

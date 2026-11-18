@@ -1,8 +1,8 @@
 """A `release-notes --format markdown` draft is a section `finish` accepts.
 
 The draft for an UNSHIPPED release — the one a human writes at release step 3,
-before `finish` records the ship — is taken from a real, throwaway board
-through `python-crucible.py` and committed as the newest section of a
+before `finish` records the ship — is taken from a fake board
+(`release_notes_board`'s seeder) through `python-crucible.py` and committed as the newest section of a
 `CHANGELOG.md` in a scratch git repository on `release/9.9.9`, as
 `tests/integration/release-notes-guard.test.ts` builds its worlds:
 
@@ -41,10 +41,6 @@ _PROJECT = None
 def setUpModule():
     global _BOARD, _PROJECT
     _BOARD = rn.start_board("release-notes-guard")
-    if _BOARD is None:
-        raise unittest.SkipTest(
-            "the unshipped release is a property of the REAL store: without "
-            "`bun` there is no board to hold it")
     try:
         project = rn.SeededProject(_BOARD, "release-notes-guard")
         project.propose(LABEL)

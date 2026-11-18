@@ -1,5 +1,6 @@
 """`release-notes` refuses what it cannot draft, and says what to do — under
-every `--format`, through `python-crucible.py` against a real, throwaway board.
+every `--format`, through `python-crucible.py` against a fake board
+(`release_notes_board`'s seeder).
 
 Each refusal is the `release-notes` envelope on stdout (the TOON envelope
 under the default format and under `markdown`, one JSON object under
@@ -14,7 +15,7 @@ under the default format and under `markdown`, one JSON object under
 - a read that fails — the history, the closed plans, or the queue when a
   completed CR needs its queue title: exit 1, naming that read and its error,
   with the help the failing board gave. A failed read is driven by a proxy in
-  front of the real board that answers that one read with an error; a failed
+  front of the fake board that answers that one read with an error; a failed
   queue read never falls back to bare ids.
 """
 
@@ -45,10 +46,6 @@ _PROJECT = None
 def setUpModule():
     global _BOARD, _PROJECT
     _BOARD = rn.start_board("release-notes-refusals")
-    if _BOARD is None:
-        raise unittest.SkipTest(
-            "the held and shipped labels are a property of the REAL store: "
-            "without `bun` there is no board to hold them")
     try:
         project = rn.SeededProject(_BOARD, "release-notes-refusals")
         project.propose(SHIPPED)

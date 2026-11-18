@@ -1,5 +1,5 @@
 """`release-notes` is read-only and reads only what it needs, proved through a
-capturing proxy in front of a real, throwaway board.
+capturing proxy in front of a fake board (`release_notes_board`'s seeder).
 
 The verb issues `GET`s only, and only these, in this order: the project's
 history, then its closed plans, then its queue — the queue only when a
@@ -43,10 +43,6 @@ def _seed(project, label, planned, unplanned):
 def setUpModule():
     global _BOARD
     _BOARD = rn.start_board("release-notes-reads")
-    if _BOARD is None:
-        raise unittest.SkipTest(
-            "the reads are made of a REAL store: without `bun` there is no "
-            "board to read")
     try:
         planned = rn.SeededProject(_BOARD, "release-notes-all-planned")
         _seed(planned, ALL_PLANNED, ("READ-PLANNED-1", "READ-PLANNED-2"), ())

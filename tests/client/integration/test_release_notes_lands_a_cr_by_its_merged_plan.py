@@ -2,11 +2,12 @@
 closed without a merge is not a landing: it moves neither the CR's line nor
 its title, and a CR whose only closed plan has no merge has no landing at all.
 
-Driven through `python-crucible.py` (the one shared code path) against a real,
-throwaway board, seeded through the board's own routes. The board's plan
-route takes `merge` as optional, so a plan closed without one is a state the
-board really holds; the fixture checks that it does, and that every CR here is
-one the shipped release's history row counts completed.
+Driven through `python-crucible.py` (the one shared code path) against a fake
+board (`release_notes_board`'s seeder). The board's plan route takes `merge`
+as optional, so a plan closed without one is a state the board really holds
+(held in bun by `closed-plans-read-carries-merge-and-title-verbatim.test.ts`);
+the fixture checks the seeding lists it so, and that every CR here is one the
+shipped release's history row counts completed.
 
 The closes, in this order, each strictly after the one before:
 
@@ -52,14 +53,6 @@ _BOARD = None
 _PROJECT = None
 
 
-def _closed_plans(project):
-    answer = rn.board_http(project.base,
-                           f"/api/v2/projects/{project.key}/plans?status=closed")
-    if not isinstance(answer, dict) or not answer.get("ok"):
-        raise RuntimeError(f"fixture: reading the closed plans failed: {answer!r}")
-    return answer.get("plans") or []
-
-
 def _seed(project):
     project.propose(LABEL)
     project.declare(ALPHA, "alpha, as queued", LABEL)
@@ -76,7 +69,7 @@ def _seed(project):
     ]
     project.ship(LABEL, SHIPPED_AT, [ALPHA, REPLANNED, UNLANDED, BRAVO])
 
-    plans = {plan.get("planId"): plan for plan in _closed_plans(project)}
+    plans = {plan.get("planId"): plan for plan in project.closed_plans()}
     if set(plans) != {plan_id for plan_id, _ in closes}:
         raise RuntimeError(f"fixture: five closed plans expected; the board "
                            f"holds {sorted(plans)!r}")
@@ -104,10 +97,6 @@ def _seed(project):
 def setUpModule():
     global _BOARD, _PROJECT
     _BOARD = rn.start_board("release-notes-merged-landing")
-    if _BOARD is None:
-        raise unittest.SkipTest(
-            "a plan's merge and close are a property of the REAL store: "
-            "without `bun` there is no board to hold them")
     try:
         _PROJECT = rn.SeededProject(_BOARD, "release-notes-merged-landing")
         _seed(_PROJECT)

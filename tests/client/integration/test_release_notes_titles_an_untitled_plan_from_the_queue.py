@@ -2,8 +2,8 @@
 in its landing place — even when every CR the release completed has a closed
 plan, so nothing else would send `release-notes` to the queue.
 
-Driven through `python-crucible.py` (the one shared code path) against a real,
-throwaway board: three CRs declared in one shipped release, each landed by a
+Driven through `python-crucible.py` (the one shared code path) against a fake
+board (`release_notes_board`'s seeder): three CRs declared in one shipped release, each landed by a
 closed plan, the middle one's plan filed with no title (the board's plan route
 takes `title` as optional, so this is a state the board really holds).
 
@@ -41,14 +41,6 @@ _BOARD = None
 _PROJECT = None
 
 
-def _closed_plans(project):
-    answer = rn.board_http(project.base,
-                           f"/api/v2/projects/{project.key}/plans?status=closed")
-    if not isinstance(answer, dict) or not answer.get("ok"):
-        raise RuntimeError(f"fixture: reading the closed plans failed: {answer!r}")
-    return answer.get("plans") or []
-
-
 def _seed(project):
     project.propose(LABEL)
     project.declare(FIRST, "first, as queued", LABEL)
@@ -61,7 +53,7 @@ def _seed(project):
     rn.require_strictly_later(project, MIDDLE, LAST)
     project.ship(LABEL, SHIPPED_AT, [FIRST, MIDDLE, LAST])
 
-    plans = {plan.get("cr"): plan for plan in _closed_plans(project)}
+    plans = {plan.get("cr"): plan for plan in project.closed_plans()}
     if set(plans) != {FIRST, MIDDLE, LAST}:
         raise RuntimeError(f"fixture: one closed plan per CR expected; got "
                            f"{sorted(plans)!r}")
@@ -82,10 +74,6 @@ def _seed(project):
 def setUpModule():
     global _BOARD, _PROJECT
     _BOARD = rn.start_board("release-notes-untitled-plan")
-    if _BOARD is None:
-        raise unittest.SkipTest(
-            "the plans and the queue are a property of the REAL store: "
-            "without `bun` there is no board to hold them")
     try:
         _PROJECT = rn.SeededProject(_BOARD, "release-notes-untitled-plan")
         _seed(_PROJECT)

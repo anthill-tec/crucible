@@ -1,7 +1,7 @@
 """`release-notes --release <label>` drafts a release's CHANGELOG section from
 the board, in each of the six clients.
 
-One real, throwaway board holds a SHIPPED release with three completed CRs,
+One fake board (`release_notes_board`'s seeder) holds a SHIPPED release with three completed CRs,
 declared in one order (alpha, bravo, charlie — the order the history row lists
 them) and landed in another (charlie, alpha, bravo). The release ships at
 23:30 UTC, so a heading dated in any timezone east of UTC would show the next
@@ -46,10 +46,6 @@ _PROJECT = None
 def setUpModule():
     global _BOARD, _PROJECT
     _BOARD = rn.start_board("release-notes-every-client")
-    if _BOARD is None:
-        raise unittest.SkipTest(
-            "the shipped release is a property of the REAL store: without "
-            "`bun` there is no board to hold it")
     try:
         project = rn.SeededProject(_BOARD, "release-notes-every-client")
         project.propose(LABEL)
