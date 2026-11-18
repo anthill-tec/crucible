@@ -12,19 +12,31 @@ whose three steps are the remedy (unregister, re-register unbound as
 ORCHESTRATOR, post the marker with `milestone`). A post that succeeds leaves
 the envelope as it is today.
 
-Driven against a REAL, ephemeral `bun run src/server.ts` board on a free port
-with a throwaway `mkdtemp` store (never :3850/:3849), the idiom
-`test_the_gate_records_its_outcome_and_a_red_gate_stops_the_close.py` uses.
-Every step of the scenario — register, the binding `pre-merge-gate --cycle`,
-`cycle-done`, `cr-close` and the remedy — is the REAL python client
-(`clients/python-crucible.py`) as an OS subprocess; only the plan filing and
-its cycle activation are seeded over the board's HTTP API.
+Every step — `cr-close` and the remedy — is the REAL python client
+(`clients/python-crucible.py`) as an OS subprocess, against a fake board
+(`RecordingBoard`, one per test) that answers as the real one does for the
+scenario: the CR's one open plan, its last cycle done; its `pre-merge-gate`
+history (a full gate, `pass` or `fail`, minted as the store mints milestones);
+the close PATCH; and the `cr-merged` post — refused 409 with the server's own
+stale-binding wording (`bound cycle <id> is in closed plan <CR> — ingest
+refused, run NOT stored`, src/v2.ts) for a poster still bound, or recorded
+(201, a minted event id) once it is not. What the client sent is read off the
+request log.
 
-The "board does not answer" case puts a small relaying double in front of the
-real board: it forwards every request unchanged until the board has answered
-the PATCH that closes the plan, then stops LISTENING before it relays that
-answer, so the client's very next request (the `cr-merged` post) meets a
-refused connection — the board is gone for exactly that one request.
+That the board really refuses a post from an agent still bound to the done
+cycle of a closed plan, stores no marker then, and records exactly one marker
+carrying the commit once the poster is unregistered and registered again
+unbound, is the server's half, held in bun by
+`tests/integration/milestone-routes-order-and-refuse-as-clients-read-them
+.test.ts`; that a close stores the merge commit (and an accepted failing
+gate's reason) by `plan-close-guard.test.ts` and
+`closed-plans-read-carries-merge-and-title-verbatim.test.ts`.
+
+The "board does not answer" case puts `real_board.RecordingProxy` in front of
+the fake: it forwards every request unchanged until the board has answered
+the PATCH that closes the plan, then stops LISTENING, so the client's very next
+request (the `cr-merged` post) meets a refused connection — the board is gone
+for exactly that one request.
 
 Fixture CR labels are synthetic and lowercase (`merge-post-<case>`).
 
@@ -34,21 +46,11 @@ the remedy's wording may fill them or name them; `register` must carry no
 `--cycle` either way.
 """
 
-import json
-import os
 import re
 import shlex
 import shutil
-import socket
-import subprocess
-import tempfile
-import threading
 import unittest
-import urllib.error
-import urllib.request
-from http.server import BaseHTTPRequestHandler
-from pathlib import Path
-from typing import Any, cast
+import uuid
 
 from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
@@ -58,21 +60,22 @@ from tests.client.client_fleet_envelope_census_helpers import (
     classify_envelope,
     drive_verb,
 )
+from tests.client.live_run_harness import (
+    MILESTONE_POSTED_STATUS,
+    MILESTONES_ANSWER,
+    RecordingBoard,
+    milestone_posted,
+)
+from tests.client.real_board import RecordingProxy
 from tests.client.the_gate_records_its_outcome_and_a_red_gate_stops_the_close_helpers import (
-    _PY_TEST_FAIL,
-    _PY_TEST_PASS,
-    _await_server,
-    _call,
-    _declare_listener,
-    _free_port,
     _git_commit_fixture,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 PYTHON_CLIENT = CLIENT_FILES["python"]
 
 NOT_RECORDED_CODE = "cr-merged-not-recorded"
 ACCEPT_REASON = "known flaky fixture accepted for the merge-post scenario"
+MILESTONES_PATH = "/api/v2/milestones"
 
 # A value slot in a remedy step: the concrete value, or a `<placeholder>`.
 _PLACEHOLDER = r"<[^<>\s]+>"
@@ -99,141 +102,25 @@ def _envelope_count(stdout_text):
     return len(re.findall(r"(?m)^axi:", stdout_text or ""))
 
 
-class _BoardThatStopsAnsweringAfterTheClose:
-    """A relaying double in front of the real board. Every request is
-    forwarded verbatim (method, path, body) and the board's answer relayed
-    back — until the board has answered a plan PATCH that closes the plan.
-    At that moment the double closes its listening socket BEFORE relaying the
-    answer, so nothing is listening when the client makes its next request:
-    that request is refused at connect, exactly as against a board that is
-    not running. The requests it relayed are recorded in `relayed`."""
-
-    def __init__(self, upstream):
-        self.upstream = upstream
-        self.relayed = []
-        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.listener.bind(("127.0.0.1", 0))
-        self.listener.listen(16)
-        self.port = self.listener.getsockname()[1]
-        self.url = f"http://127.0.0.1:{self.port}"
-        self.stopped = False
-        double = self
-
-        class _Relay(BaseHTTPRequestHandler):
-            def log_message(self, format, *args):  # noqa: A002 — the base signature
-                return
-
-            def _relay(self):
-                length = int(self.headers.get("Content-Length") or 0)
-                body = self.rfile.read(length) if length else None
-                double.relayed.append((self.command, self.path, body))
-                # pi-lens-ignore: S310 — the upstream is this suite's own scratch board
-                request = urllib.request.Request(  # noqa: S310
-                    double.upstream + self.path, data=body, method=self.command,
-                    headers={"content-type": "application/json"})
-                try:
-                    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-                        status, payload = response.status, response.read()
-                except urllib.error.HTTPError as exc:
-                    status, payload = exc.code, exc.read()
-                if (self.command == "PATCH" and "/plans/" in self.path
-                        and "/cycles/" not in self.path and status == 200
-                        and body and json.loads(body).get("status") == "closed"):
-                    double.stop_listening()
-                self.send_response(status)
-                self.send_header("content-type", "application/json")
-                self.send_header("content-length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-
-            do_GET = do_POST = do_PATCH = do_DELETE = do_PUT = _relay
-
-        self._handler = _Relay
-        self._thread = threading.Thread(target=self._serve, daemon=True)
-        self._thread.start()
-
-    def stop_listening(self):
-        if not self.stopped:
-            self.stopped = True
-            self.listener.close()
-
-    def _serve(self):
-        while True:
-            try:
-                conn, address = self.listener.accept()
-            except OSError:
-                return
-            try:
-                self._handler(conn, address, cast(Any, self))
-            except OSError:
-                pass
-            finally:
-                conn.close()
-
-    def close(self):
-        self.stop_listening()
-        self._thread.join(timeout=10)
-
-
 class CrCloseReportsItsOwnCrMergedPostTest(unittest.TestCase):
-    """One shared scratch board; every test builds its own project, plan and
-    project directory, so no test reads state another one wrote."""
+    """Every test builds its own fake board, project, plan and project
+    directory, so no test reads state another one wrote."""
 
     @classmethod
     def setUpClass(cls):
-        cls._tmpdir = tempfile.mkdtemp(prefix="cr-merged-post-e2e-")
-        cls._proc = None
-        bun = shutil.which("bun")
-        if bun is None:
-            raise unittest.SkipTest(
-                "a real cr-close round trip needs a real board to close the "
-                "plan and refuse the post: without `bun` there is no board.")
-        port = _free_port()
-        assert port not in (3850, 3849), f"the OS handed back a reserved port {port}"
-        cls.base = f"http://127.0.0.1:{port}"
-        _declare_listener(cls._tmpdir, port)
-        cls._proc = subprocess.Popen(
-            [bun, "run", "--no-env-file", "src/server.ts"], cwd=str(REPO_ROOT),
-            env={**os.environ, "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        try:
-            _await_server(cls.base, cls._proc)
-            cls.toon = _load_toon_module()
-            cls.bin_dir = _build_fake_bin_dir()
-        except BaseException:
-            cls._stop_server()
-            shutil.rmtree(cls._tmpdir, ignore_errors=True)
-            raise
+        cls.toon = _load_toon_module()
+        cls.bin_dir = _build_fake_bin_dir()
 
     @classmethod
     def tearDownClass(cls):
-        cls._stop_server()
-        shutil.rmtree(getattr(cls, "bin_dir", ""), ignore_errors=True)
-        shutil.rmtree(cls._tmpdir, ignore_errors=True)
-
-    @classmethod
-    def _stop_server(cls):
-        proc = cls._proc
-        if proc is None:
-            return
-        cls._proc = None
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        shutil.rmtree(cls.bin_dir, ignore_errors=True)
 
     def setUp(self):
-        self._scratch = []
-
-    def tearDown(self):
-        for d in self._scratch:
-            shutil.rmtree(d, ignore_errors=True)
+        self.board = RecordingBoard()
+        self.addCleanup(self.board.close)
+        self.base = self.board.url
 
     # ── board + client helpers ──────────────────────────────────────────────
-
-    def _http(self, path, payload=None, method=None):
-        return _call(self.base, path, payload, method)
 
     def _drive(self, scenario, argv, board=None, timeout=120):
         """One REAL python client invocation from the scenario's project dir."""
@@ -241,75 +128,71 @@ class CrCloseReportsItsOwnCrMergedPostTest(unittest.TestCase):
         return drive_verb(PYTHON_CLIENT, argv, scenario["project_dir"], self.bin_dir,
                           timeout=timeout, board=board or self.base)
 
-    def _plan(self, key, plan_id):
-        read = self._http(f"/api/v2/projects/{key}/plans")
-        self.assertTrue(read.get("ok"), f"plans read failed: {read!r}")
-        for plan in read.get("plans") or []:
-            if plan.get("planId") == plan_id:
-                return plan
-        raise AssertionError(f"plan {plan_id} not found in {read!r}")
+    def _closes(self, scenario):
+        """Every close the client sent: a PATCH of the plan itself."""
+        plan_path = f"/api/v2/projects/{scenario['key']}/plans/{scenario['plan_id']}"
+        return [b for p, b in self.board.posts() if p == plan_path]
 
-    def _cr_merged(self, key, cr):
-        read = self._http(f"/api/v2/projects/{key}/milestones?type=cr-merged")
-        self.assertTrue(read.get("ok"), f"milestones read failed: {read!r}")
-        return [m for m in read.get("milestones") or [] if m.get("label") == cr]
+    def _cr_merged_posts(self, scenario):
+        """Every `cr-merged` milestone the client posted for the CR."""
+        return [b for p, b in self.board.posts()
+                if p == MILESTONES_PATH and isinstance(b, dict)
+                and b.get("type") == "cr-merged" and b.get("label") == scenario["cr"]]
 
     def _scenario(self, case, gate_outcome="pass", orchestrator_runs_the_gate=True):
-        """A project with one plan whose only (hence last) cycle is active, a
-        REAL `pre-merge-gate --cycle` run over it and a REAL `cycle-done`.
+        """A project with one open plan whose only (hence last) cycle is done,
+        and a full `pre-merge-gate` result for its CR, as the board holds them
+        after a real `pre-merge-gate --cycle` run and a real `cycle-done`.
 
-        With `orchestrator_runs_the_gate`, the gate runs under the orchestrator's
-        own (pre-registered, unbound) id — the heartbeat binds it to the cycle
-        and, since the gate did not create the registration, leaves it bound.
-        Otherwise a separate gate agent runs it, which the gate creates and
-        removes, and the orchestrator stays unbound."""
+        With `orchestrator_runs_the_gate`, the gate ran under the orchestrator's
+        own id, which the gate's heartbeat left bound to the done cycle, so the
+        board refuses its `cr-merged` post as a stale binding. Otherwise a
+        separate gate agent ran it and the orchestrator stays unbound."""
         cr = f"merge-post-{case}"
-        project = self._http("/api/v2/projects", {"name": f"merge-post-{case}"})
-        self.assertTrue(project.get("ok"), f"project creation failed: {project!r}")
-        key = project["project"]["key"]
-
+        key = str(uuid.uuid4())
         project_dir = _make_project_dir("python")
-        self._scratch.append(project_dir)
+        self.addCleanup(shutil.rmtree, project_dir, True)
         (project_dir / ".env").write_text(f"CRUCIBLE_PROJECT_KEY={key}\n")
-        (project_dir / "tests" / "test_probe.py").unlink(missing_ok=True)
-        (project_dir / "tests" / "test_merge_post_fixture.py").write_text(
-            _PY_TEST_PASS if gate_outcome == "pass" else _PY_TEST_FAIL)
         sha = _git_commit_fixture(project_dir)
-
         orchestrator = f"merge-post-{case}-orchestrator"
-        scenario = {"cr": cr, "key": key, "project_dir": project_dir, "sha": sha,
-                    "agent": orchestrator}
-        reg = self._drive(scenario, ["register", "--agent", orchestrator,
-                                     "--role", "ORCHESTRATOR"])
-        self.assertEqual(reg.returncode, 0,
-                         f"orchestrator register failed: {reg.stdout!r} {reg.stderr!r}")
-
-        filed = self._http(f"/api/v2/projects/{key}/plans",
-                           {"cr": cr, "cycles": [{"label": "solo"}],
-                            "agentId": orchestrator})
-        self.assertTrue(filed.get("ok"), f"plan filing failed: {filed!r}")
-        plan_id, cycle_id = filed["planId"], filed["cycles"][0]["id"]
-        active = self._http(
-            f"/api/v2/projects/{key}/plans/{plan_id}/cycles/{cycle_id}",
-            {"status": "active", "agentId": orchestrator}, method="PATCH")
-        self.assertTrue(active.get("ok"), f"cycle activation failed: {active!r}")
-        scenario.update(plan_id=plan_id, cycle_id=cycle_id)
-
         gate_agent = orchestrator if orchestrator_runs_the_gate else f"merge-post-{case}-gate"
-        gate = self._drive(scenario, ["pre-merge-gate", "--agent", gate_agent,
-                                      "--cycle", str(cycle_id)], timeout=300)
-        gates = self._http(f"/api/v2/projects/{key}/milestones?type=pre-merge-gate")
-        mine = [m for m in gates.get("milestones") or [] if m.get("label") == cr]
-        self.assertEqual(
-            [m.get("outcome") for m in mine], [gate_outcome],
-            f"fixture: the gate must record exactly one {gate_outcome!r} result for "
-            f"{cr}; got {mine!r}; gate stdout={gate.stdout[-1500:]!r} "
-            f"stderr={gate.stderr[-1500:]!r}")
+        plan_id, cycle_id = 7, 70
+        scenario = {"cr": cr, "key": key, "project_dir": project_dir, "sha": sha,
+                    "agent": orchestrator, "plan_id": plan_id, "cycle_id": cycle_id,
+                    "bound": orchestrator_runs_the_gate}
 
-        done = self._drive(scenario, ["cycle-done", str(cycle_id), "--agent", orchestrator])
-        self.assertEqual(done.returncode, 0,
-                         f"cycle-done failed: {done.stdout!r} {done.stderr!r}")
+        self.board.answer(
+            "GET", f"/api/v2/projects/{key}/plans",
+            {"ok": True, "plans": [
+                {"planId": plan_id, "projectKey": key, "cr": cr, "status": "open",
+                 "cycles": [{"id": cycle_id, "label": "solo", "kind": "red-green",
+                             "status": "done"}]}],
+             "lastClosedCr": None, "filed": 1}, prefix=True)
+        counts = ({"passed": 2, "failed": 0} if gate_outcome == "pass"
+                  else {"passed": 1, "failed": 1})
+        gate = self.board.milestone_record(
+            key, gate_agent, "pre-merge-gate", cr, outcome=gate_outcome,
+            commit=sha, context={"cycleId": cycle_id, "cr": cr}, **counts)
+        self.board.answer(
+            "GET", f"/api/v2/projects/{key}/milestones?type=pre-merge-gate",
+            dict(MILESTONES_ANSWER, milestones=[gate], totalCount=1))
+        self._answer_the_marker_posts(scenario)
         return scenario
+
+    def _answer_the_marker_posts(self, scenario):
+        """The board's answer to a `cr-merged` post: a bound poster's first
+        post is refused as a stale binding; every other post is recorded."""
+        self.board.answer("POST", MILESTONES_PATH,
+                          milestone_posted(self.board.mint_event_id()),
+                          status=MILESTONE_POSTED_STATUS)
+        if scenario["bound"]:
+            self.board.answer(
+                "POST", MILESTONES_PATH,
+                {"ok": False,
+                 "error": (f"bound cycle {scenario['cycle_id']} is in closed plan "
+                           f"{scenario['cr']} — ingest refused, run NOT stored"),
+                 "help": [f"unregister --agent {scenario['agent']}"]},
+                status=409, times=1)
 
     def _cr_close(self, scenario, extra=(), board=None):
         result = self._drive(scenario, ["cr-close", "--agent", scenario["agent"],
@@ -320,6 +203,19 @@ class CrCloseReportsItsOwnCrMergedPostTest(unittest.TestCase):
         return result, axi or {}
 
     # ── shared assertions ───────────────────────────────────────────────────
+
+    def _assert_closed_with_the_commit(self, scenario, reason=None):
+        closes = self._closes(scenario)
+        self.assertEqual(len(closes), 1, f"the plan is closed once; got {closes!r}")
+        close = closes[0] or {}
+        self.assertEqual(close.get("status"), "closed",
+                         f"the close itself is sent; got {close!r}")
+        self.assertEqual((close.get("merge") or {}).get("commit"), scenario["sha"],
+                         f"the close carries the merge commit; got {close!r}")
+        if reason is not None:
+            self.assertEqual(
+                (close.get("merge") or {}).get("acceptedFailingGateReason"), reason,
+                f"the close carries the accepted gate's reason; got {close!r}")
 
     def _assert_reported_unrecorded(self, scenario, result, axi, board_error_fragments):
         out = f"stdout={result.stdout!r} stderr={result.stderr[-1500:]!r}"
@@ -375,21 +271,17 @@ class CrCloseReportsItsOwnCrMergedPostTest(unittest.TestCase):
         scenario = self._scenario("stale")
         result, axi = self._cr_close(scenario)
 
-        plan = self._plan(scenario["key"], scenario["plan_id"])
-        self.assertEqual(plan.get("status"), "closed",
-                         f"the close itself succeeds; got plan={plan!r}")
-        self.assertEqual((plan.get("merge") or {}).get("commit"), scenario["sha"],
-                         f"the plan's merge record carries the commit; got {plan!r}")
-        self.assertEqual(self._cr_merged(scenario["key"], scenario["cr"]), [],
-                         "the board refused the post, so no cr-merged marker exists")
+        self._assert_closed_with_the_commit(scenario)
+        self.assertEqual(len(self._cr_merged_posts(scenario)), 1,
+                         "the marker is posted once, refused, and not retried")
         self._assert_reported_unrecorded(scenario, result, axi,
                                          self._stale_binding_error(scenario))
 
     def test_running_the_reported_remedy_records_the_cr_merged_milestone(self):
         scenario = self._scenario("remedy")
         result, axi = self._cr_close(scenario)
-        self.assertEqual(self._cr_merged(scenario["key"], scenario["cr"]), [],
-                         "precondition: the refused post recorded no marker")
+        self.assertEqual(len(self._cr_merged_posts(scenario)), 1,
+                         "precondition: the refused post was the only one")
 
         help_steps = [str(h) for h in axi.get("help") or []]
         values = {"--agent": scenario["agent"], "--cr": scenario["cr"],
@@ -405,29 +297,39 @@ class CrCloseReportsItsOwnCrMergedPostTest(unittest.TestCase):
             commands.append([values[tokens[i - 1]] if re.fullmatch(_PLACEHOLDER, tok) else tok
                              for i, tok in enumerate(tokens)])
 
+        before = len(self.board.posts())
         for argv in commands:
             step = self._drive(scenario, argv)
             self.assertEqual(step.returncode, 0,
                              f"remedy step {argv!r} failed: {step.stdout!r} {step.stderr!r}")
 
-        merged = self._cr_merged(scenario["key"], scenario["cr"])
-        self.assertEqual(len(merged), 1,
-                         f"the remedy records exactly one cr-merged marker; got {merged!r}")
-        self.assertEqual(merged[0].get("commit"), scenario["sha"],
-                         f"the marker carries the merge commit; got {merged[0]!r}")
+        remedy = self.board.posts()[before:]
+        registered = [b for p, b in remedy if p == "/api/v2/agents/register"]
+        self.assertTrue(
+            registered and all(b.get("agentId") == scenario["agent"]
+                               and b.get("role") == "ORCHESTRATOR"
+                               and "cycleId" not in b for b in registered),
+            f"the remedy re-registers the agent unbound, as ORCHESTRATOR; got {registered!r}")
+        merged = self._cr_merged_posts(scenario)
+        self.assertEqual(len(merged), 2,
+                         f"the remedy posts the marker exactly once more; got {merged!r}")
+        self.assertEqual(merged[-1].get("commit"), scenario["sha"],
+                         f"the marker carries the merge commit; got {merged[-1]!r}")
+        self.assertLess(
+            [p for p, _ in remedy].index("/api/v2/agents/register"),
+            [p for p, _ in remedy].index(MILESTONES_PATH),
+            "the marker is posted after the unbound re-registration")
 
     def test_cr_close_over_an_accepted_failing_gate_reports_the_refused_post_the_same_way(self):
         scenario = self._scenario("accepted", gate_outcome="fail")
         result, axi = self._cr_close(scenario, extra=["--accept-failing-gate", ACCEPT_REASON])
 
-        plan = self._plan(scenario["key"], scenario["plan_id"])
-        self.assertEqual(plan.get("status"), "closed",
-                         f"the accepted close itself succeeds; got plan={plan!r}")
-        self.assertEqual(
-            (plan.get("merge") or {}).get("acceptedFailingGateReason"), ACCEPT_REASON,
-            f"the plan's merge record keeps the reason; got {plan!r}")
-        self.assertEqual(self._cr_merged(scenario["key"], scenario["cr"]), [],
-                         "the board refused the post, so no cr-merged marker exists")
+        self._assert_closed_with_the_commit(scenario, reason=ACCEPT_REASON)
+        merged = self._cr_merged_posts(scenario)
+        self.assertEqual(len(merged), 1,
+                         "the marker is posted once, refused, and not retried")
+        self.assertEqual(merged[0].get("acceptedFailingGateReason"), ACCEPT_REASON,
+                         f"the marker carries the accepted gate's reason; got {merged!r}")
         self._assert_reported_unrecorded(scenario, result, axi,
                                          self._stale_binding_error(scenario))
 
@@ -435,30 +337,35 @@ class CrCloseReportsItsOwnCrMergedPostTest(unittest.TestCase):
 
     def test_a_cr_merged_post_the_board_does_not_answer_is_reported_the_same_way(self):
         scenario = self._scenario("unanswered", orchestrator_runs_the_gate=False)
-        double = _BoardThatStopsAnsweringAfterTheClose(self.base)
-        try:
-            result, axi = self._cr_close(scenario, board=double.url)
-        finally:
-            double.close()
+        plan_path = f"/api/v2/projects/{scenario['key']}/plans/{scenario['plan_id']}"
+        proxy = RecordingProxy(self.base)
 
-        self.assertTrue(double.stopped,
-                        f"fixture: the close PATCH must have reached the board; "
-                        f"relayed={[(m, p) for m, p, _ in double.relayed]!r}")
+        def stop_after_the_close(method, path, status):
+            if method == "PATCH" and path == plan_path and status == 200:
+                proxy.stop_listening()
+
+        proxy.after = stop_after_the_close
+        try:
+            result, axi = self._cr_close(scenario, board=proxy.url)
+        finally:
+            proxy.close()
+
+        relayed = proxy.requests
+        self.assertIn(("PATCH", plan_path), relayed,
+                      f"fixture: the close PATCH must have reached the board; "
+                      f"relayed={relayed!r}")
         self.assertFalse(
-            any(m == "POST" and p.startswith("/api/v2/milestones")
-                for m, p, _ in double.relayed),
-            "fixture: the double must never have relayed the milestone post")
-        plan = self._plan(scenario["key"], scenario["plan_id"])
-        self.assertEqual(plan.get("status"), "closed",
-                         f"the close itself succeeds; got plan={plan!r}")
-        self.assertEqual(self._cr_merged(scenario["key"], scenario["cr"]), [],
-                         "no board answered the post, so no cr-merged marker exists")
+            any(m == "POST" and p.startswith(MILESTONES_PATH) for m, p in relayed),
+            "fixture: the proxy must never have relayed the milestone post")
+        self._assert_closed_with_the_commit(scenario)
+        self.assertEqual(self._cr_merged_posts(scenario), [],
+                         "no board answered the post, so none reached it")
         self._assert_reported_unrecorded(scenario, result, axi, ("connection failed",))
 
     # ── a clean binding posts the marker, as today ─────────────────────────
 
     def test_cr_close_after_a_clean_re_registration_is_ok_and_records_the_marker(self):
-        scenario = self._scenario("clean")
+        scenario = self._scenario("clean", orchestrator_runs_the_gate=False)
         for argv in (["unregister", "--agent", scenario["agent"]],
                      ["register", "--agent", scenario["agent"], "--role", "ORCHESTRATOR"]):
             step = self._drive(scenario, argv)
@@ -473,9 +380,10 @@ class CrCloseReportsItsOwnCrMergedPostTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, f"a clean close exits 0; {out}")
         self.assertEqual(axi.get("warnings"), [],
                          f"a clean close carries no warnings; {out}")
-        merged = self._cr_merged(scenario["key"], scenario["cr"])
+        self._assert_closed_with_the_commit(scenario)
+        merged = self._cr_merged_posts(scenario)
         self.assertEqual(len(merged), 1,
-                         f"a clean close records exactly one cr-merged marker; got {merged!r}")
+                         f"a clean close posts exactly one cr-merged marker; got {merged!r}")
         self.assertEqual(merged[0].get("commit"), scenario["sha"],
                          f"the marker carries the merge commit; got {merged[0]!r}")
 
