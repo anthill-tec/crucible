@@ -58,7 +58,8 @@ false assurance this script exists to remove.
 
 The suites' own L1+L2 sandboxing is independent of this script: running them
 directly with `python3 -m unittest discover -s tests/client -t .` is safe by
-design and is exactly what CI does.
+design and covers both tiers CI runs as two steps (tests/client/unit and
+tests/client/integration).
 MSG
   exit 127
 fi
