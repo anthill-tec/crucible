@@ -8,13 +8,16 @@ non-zero `runnerExit` over a run that records no failure, adds one failing
 case — suite `runner`, case `exit <n>` — before it stores the run.
 
 `RunnerExitOnARealBoardTest`
-    End to end against a REAL scratch board (`tests/client/real_board.py`):
-    a fake runner that exits 1 over a passing-only report (`test`,
-    `regression`) — the stored run carries the
-    `runner / exit 1` case, the envelope's `run` counts include it, and the
-    verb exits non-zero. A runner killed by SIGKILL files `exit 137`. A runner
-    exiting non-zero with no report exits non-zero. A clean runner over a
-    passing report is filed and exits exactly as before.
+    The client half, against a recording board answering in the server's
+    shapes: a fake runner that exits 1 over a passing-only report (`test`,
+    `regression`) — the one ingest carries the passing report and
+    `runnerExit: 1`, the envelope's `run` counts are the board's answer (the
+    runner case included), and the verb exits non-zero. A runner killed by
+    SIGKILL sends `runnerExit: 137`. A runner exiting non-zero with no report
+    exits non-zero. A clean runner over a passing report is filed and exits
+    exactly as before. The board's half — the `runner / exit N` case it adds
+    and counts — is held in bun by
+    `tests/integration/run-ingest-runner-exit.test.ts`.
 
 `RunnerExitReachesTheIngestTest`
     Against a recording board: what each route's ingest body CARRIES as
@@ -41,11 +44,12 @@ from pathlib import Path
 from tests.client.live_run_harness import (
     CLIENTS,
     RecordingBoard,
+    install_project,
+    junit_sent,
     load_toon,
     new_scratch,
     scrubbed_env,
 )
-from tests.client.real_board import RealBoard
 
 TOON = load_toon()
 BUN_CLIENT = CLIENTS / "bun-crucible.py"
@@ -149,73 +153,71 @@ class _FakeRunnerProject:
         return envelope or {}
 
 
-# ── End to end, against a real board ────────────────────────────────────────
-
-_BOARD: RealBoard | None = None
-
-
-def setUpModule():
-    global _BOARD
-    bun = shutil.which("bun")
-    if bun is None:
-        raise unittest.SkipTest(
-            "the board that adds the runner's case is a REAL server, and "
-            "without `bun` there is none to boot — a missing toolchain, not "
-            "a passing assertion")
-    _BOARD = RealBoard(bun, "bun-runner-exit-e2e")
-
-
-def tearDownModule():
-    global _BOARD
-    if _BOARD is not None:
-        _BOARD.close()
-        _BOARD = None
-
+# ── The client half of the runner case, against a recording board ──────────
 
 class RunnerExitOnARealBoardTest(_FakeRunnerProject, unittest.TestCase):
-    """The run the board stores, the envelope the client prints and the
-    client's exit, for a runner whose exit disagrees with its report."""
+    """The run the client sends, the envelope it prints and its exit, for a
+    runner whose exit disagrees with its report. The board answers the
+    ingest with the `run` block the server answers for that report and exit
+    (the runner case counted); the case itself is the server's, held in bun
+    by `tests/integration/run-ingest-runner-exit.test.ts`."""
+
+    PROJECT_KEY = "runner-exit-live-half-key"
 
     def setUp(self):
-        board = _BOARD
-        if board is None:
-            self.fail("the module's real board was never booted")
-        self.board = board
+        self.board = RecordingBoard()
         self.make_project(PLAIN_MANIFEST)
 
     def tearDown(self):
+        self.board.close()
         shutil.rmtree(self.project, ignore_errors=True)
 
     def drive_filed(self, verb, agent, **fake_env):
-        self.board.install(self.project)
+        install_project(self.project, self.board.url, self.PROJECT_KEY,
+                        "bun-runner-exit-e2e")
+        if fake_env.get("FAKE_EXIT", "0") != "0" or "FAKE_SIGNAL" in fake_env:
+            # The server's answer for a passing report and a non-zero exit:
+            # the report's one pass and the `runner / exit N` case it adds.
+            self.board.script_run(passed=1, failed=1)
+        else:
+            self.board.script_run(passed=1)
         return self.drive(verb, agent, **fake_env)
 
     def the_one_stored_run(self, agent, result):
-        events = self.board.test_events(agent)
+        bodies = [b for p, b in self.board.posts() if p == RAW_INGEST]
         self.assertEqual(
-            len(events), 1,
-            f"exactly one test run is filed for this agent; events={events!r} "
-            f"{_diagnostics(result)}")
-        return self.board.event(events[0]["id"])
+            len(bodies), 1,
+            f"exactly one test run is filed for this agent; "
+            f"posts={self.board.posts()!r} {_diagnostics(result)}")
+        body = bodies[0]
+        self.assertEqual(body.get("agentId"), agent,
+                         f"the run is filed under its agent; body agentId="
+                         f"{body.get('agentId')!r}")
+        return body
 
-    def runner_suites(self, event):
-        return [s for s in (event.get("tree") or []) if s.get("name") == "runner"]
+    def runner_suites(self, body):
+        return [s for s in ((junit_sent(body) or {}).get("tree") or [])
+                if s.get("name") == "runner"]
 
-    def assert_runner_case_filed(self, event, code, result):
-        runner = self.runner_suites(event)
-        self.assertEqual(
-            len(runner), 1,
-            f"the stored run holds exactly one `runner` suite; "
-            f"tree={event.get('tree')!r} {_diagnostics(result)}")
-        children = runner[0].get("children") or []
-        self.assertEqual(len(children), 1, f"runner suite={runner[0]!r}")
-        case = children[0]
-        self.assertEqual(case.get("name"), f"exit {code}", f"case={case!r}")
-        self.assertEqual(case.get("status"), "fail", f"case={case!r}")
-        self.assertEqual(
-            (case.get("failure") or {}).get("message"),
-            f"the runner exited {code} but its report records no failure",
-            f"case={case!r}")
+    def assert_report_sent(self, body, *, code, result):
+        """The ingest carries the runner's own report, passing only and with
+        no `runner` suite of its own, and the runner's exit as `runnerExit`
+        — what the board turns into the `runner / exit N` case."""
+        sent = junit_sent(body) or {}
+        self.assertTrue(sent, f"the ingest is a junit report; "
+                              f"body keys={sorted(body)!r} {_diagnostics(result)}")
+        self.assertEqual(self.runner_suites(body), [],
+                         f"the client adds no `runner` suite itself; "
+                         f"tree={sent.get('tree')!r}")
+        self.assert_counts(sent.get("summary") or {}, total=1, passed=1,
+                           failed=0, where="the report sent's")
+        self.assertEqual(body.get("runnerExit"), code,
+                         f"runnerExit={body.get('runnerExit')!r}")
+        self.assertIs(type(body.get("runnerExit")), int,
+                      "runnerExit is sent as an integer")
+
+    def assert_runner_case_filed(self, body, code, result):
+        self.assert_report_sent(body, code=code, result=result)
 
     def assert_counts(self, counts, *, total, passed, failed, where):
         self.assertEqual(
@@ -233,8 +235,6 @@ class RunnerExitOnARealBoardTest(_FakeRunnerProject, unittest.TestCase):
                             f"{_diagnostics(result)}")
         event = self.the_one_stored_run(agent, result)
         self.assert_runner_case_filed(event, 1, result)
-        self.assert_counts(event.get("summary") or {}, total=2, passed=1,
-                           failed=1, where="the stored run's")
         envelope = self.envelope_of(result)
         self.assert_counts(envelope.get("run") or {}, total=2, passed=1,
                            failed=1, where="the envelope's run")
@@ -247,8 +247,6 @@ class RunnerExitOnARealBoardTest(_FakeRunnerProject, unittest.TestCase):
                             f"{_diagnostics(result)}")
         event = self.the_one_stored_run(agent, result)
         self.assert_runner_case_filed(event, 1, result)
-        self.assert_counts(event.get("summary") or {}, total=2, passed=1,
-                           failed=1, where="the stored run's")
         envelope = self.envelope_of(result)
         self.assert_counts(envelope.get("run") or {}, total=2, passed=1,
                            failed=1, where="the envelope's run")
@@ -286,11 +284,7 @@ class RunnerExitOnARealBoardTest(_FakeRunnerProject, unittest.TestCase):
         result = self.drive_filed("test", agent, FAKE_EXIT="0")
         self.assertEqual(result.returncode, 0, _diagnostics(result))
         event = self.the_one_stored_run(agent, result)
-        self.assertEqual(self.runner_suites(event), [],
-                         f"a clean runner adds no `runner` suite; "
-                         f"tree={event.get('tree')!r}")
-        self.assert_counts(event.get("summary") or {}, total=1, passed=1,
-                           failed=0, where="the stored run's")
+        self.assert_report_sent(event, code=0, result=result)
         envelope = self.envelope_of(result)
         self.assert_counts(envelope.get("run") or {}, total=1, passed=1,
                            failed=0, where="the envelope's run")
