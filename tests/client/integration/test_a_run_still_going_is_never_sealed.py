@@ -2,7 +2,7 @@
 WAS POSTED (§S4).
 
 The release-gate change request's other half — the release a gate NAMES — is
-pinned by the sibling `test_gate_names_the_release_it_gates.py`, whose
+pinned by the sibling `test_gate_names_the_release_it_gates_without_a_board.py`, whose
 transport-seam harness this file reuses rather than re-invents: the payload is
 recorded where the client's `_post` hands it to the wire, because the whole
 question here is what the SERVER would have been told.
