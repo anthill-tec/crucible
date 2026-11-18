@@ -739,8 +739,9 @@ class Cr091RoadmapVerbInventoryTest(unittest.TestCase):
         """The 25 (verb x client) pairs AC13 counts, at the registration
         level: each client hands the shared registrar all five verb names,
         each mapped onto its OWN delegator. The LIVE argparse enumeration and
-        envelope conformance for the same 25 pairs lives in the sibling
-        `test_client_fleet_envelope_census.py` (AC19 names both harnesses)."""
+        envelope conformance for the same 25 pairs lives in the census module,
+        `tests/client/integration/test_client_fleet_envelope_census.py` (AC19
+        names both harnesses)."""
         offenders = {}
         for client, mapping in _ALL_CLIENT_ROADMAP_REGISTRATIONS.items():
             absent = [v for v in CR091_ROADMAP_VERBS if v not in mapping]
@@ -897,8 +898,9 @@ class Cr092NextVerbInventoryTest(unittest.TestCase):
     def test_every_client_wires_next_to_its_own_delegator(self):
         """The 5 (verb x client) pairs AC12 counts, at the registration level.
         The LIVE argparse enumeration and envelope conformance for the same 5
-        pairs lives in the sibling `test_client_fleet_envelope_census.py`
-        (AC15 names both harnesses)."""
+        pairs lives in the census module,
+        `tests/client/integration/test_client_fleet_envelope_census.py` (AC15
+        names both harnesses)."""
         offenders = {}
         for client, delegator in _ALL_CLIENT_NEXT_REGISTRATIONS.items():
             if delegator is None:
@@ -1024,7 +1026,8 @@ class Cr106CrDependsVerbInventoryTest(unittest.TestCase):
     def test_every_client_wires_cr_depends_to_its_own_delegator(self):
         """The 5 (verb x client) pairs, at the registration level. The LIVE
         argparse enumeration and envelope conformance for the same 5 pairs
-        lives in the sibling `test_client_fleet_envelope_census.py`."""
+        lives in the census module,
+        `tests/client/integration/test_client_fleet_envelope_census.py`."""
         offenders = {}
         for client, delegator in _ALL_CLIENT_DEPENDS_REGISTRATIONS.items():
             if delegator is None:
@@ -1080,9 +1083,9 @@ class Cr106CrDependsVerbInventoryTest(unittest.TestCase):
 # This section is the PRESENCE half of AC8, in the harness AC8 names ("asserted
 # by extending the two EXISTING harnesses ... rather than a parallel checker").
 # The ENVELOPE half -- what the five clients actually emit on the wire, and
-# what their live `--help` prints -- lives in the sibling
-# `test_client_fleet_envelope_census.py`, exactly as the CR-CRU-091/092
-# sections above split registration from conformance.
+# what their live `--help` prints -- lives in the census module,
+# `tests/client/integration/test_client_fleet_envelope_census.py`, exactly as
+# the CR-CRU-091/092 sections above split registration from conformance.
 #
 # What the field computes has never changed: the `cr` of the plan with the
 # latest `closedAt` -- the last CR to close/merge. Only the NAME moves, from
@@ -1557,7 +1560,8 @@ class Cr075QueueFileVerbInventoryTest(unittest.TestCase):
     def test_every_client_wires_queue_file_to_its_own_delegator(self):
         """The 5 (verb x client) pairs, at the registration level. The LIVE
         argparse enumeration and envelope conformance for the same 5 pairs
-        lives in the sibling `test_client_fleet_envelope_census.py`."""
+        lives in the census module,
+        `tests/client/integration/test_client_fleet_envelope_census.py`."""
         offenders = _queue_file_registration_offenders(CLIENT_FILES)
         self.assertEqual(
             offenders, {},
