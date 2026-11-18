@@ -5,7 +5,7 @@ standing guard, on this repo's CI now and as a client feature for every project 
 **Type:** fix
 **Points:** 3
 **Wave:** 8 (0.4.0)
-**Depends on:** CR-CRU-262
+**Depends on:** CR-CRU-262, CR-CRU-264
 **Labels:** ci, tests, release
 **Design reference:** `test-reports/work/rel040-test-gap-analysis.md` (§7); the census tools in
 `test-reports/work/leak-census/` (`board-tripwire.py`, `run-dep-census.sh`); todo #28 (the 0.5.0 client feature)
