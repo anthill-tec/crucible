@@ -7,8 +7,7 @@ import json
 import os
 import stat
 import subprocess
-import time
-import urllib.request
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from tests.client.client_fleet_envelope_census_helpers import _build_fake_bin_dir, fake_go_body
@@ -227,41 +226,39 @@ def _write_native_fixture(project_dir, outcome):
     (coverage_dir / "lcov.info").write_text(_LCOV_ONE)
 
 
-def _free_port():
-    import socket
-
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
-
-
-def _declare_listener(store_dir, port, host="127.0.0.1"):
-    Path(store_dir, "crucible.toml").write_text(
-        f'[server]\nhost = "{host}"\nport = {port}\n', encoding="utf-8")
-
-
-def _call(base, path, payload=None, method=None):
-    data = None if payload is None else json.dumps(payload).encode()
-    request = urllib.request.Request(
-        base + path, data=data, method=method or ("POST" if data is not None else "GET"),
-        headers={"content-type": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
-            return json.loads(response.read().decode())
-    except urllib.error.HTTPError as exc:
-        return json.loads(exc.read().decode())
-
-
-def _await_server(base, proc, timeout=60):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"scratch server exited early with {proc.returncode}")
+def _failing_tests_sent(bodies):
+    """The names of the tests what the client sent for a run reports
+    failing, each once: a JUnit case carrying a failure or an error, or a
+    streamed test whose end is a failure in the stream codec the fleet sends
+    (`crucible-events` `test-end` with `status: fail`, `go-test` `Action:
+    fail` on a test, libtest json under nextest `event: failed`). The stream
+    is read whole, its batches joined in the order they were sent. The count
+    the board decodes from it is the server's half."""
+    failing = []
+    stream = ""
+    for body in bodies:
+        data = body.get("data") if isinstance(body, dict) else None
+        if isinstance(data, str) and "from" in body:
+            stream += data
+            continue
+        for text in data if isinstance(data, list) else []:
+            if not isinstance(text, str) or not text.lstrip().startswith("<"):
+                continue
+            root = ET.fromstring(text)  # noqa: S314 - a report a test's own drive wrote
+            failing.extend(case.get("name") for case in root.iter("testcase")
+                           if case.find("failure") is not None
+                           or case.find("error") is not None)
+    for line in stream.splitlines():
         try:
-            with urllib.request.urlopen(base + "/api/v2/health", timeout=2):  # noqa: S310
-                return
-        except Exception:
-            time.sleep(0.2)
-    raise RuntimeError(f"scratch server never became reachable at {base}")
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("event") == "test-end" and event.get("status") == "fail":
+            failing.append(event.get("name"))
+        elif event.get("Action") == "fail" and event.get("Test"):
+            failing.append(event["Test"])
+        elif event.get("type") == "test" and event.get("event") == "failed":
+            failing.append(event.get("name"))
+    return list(dict.fromkeys(str(name) for name in failing))

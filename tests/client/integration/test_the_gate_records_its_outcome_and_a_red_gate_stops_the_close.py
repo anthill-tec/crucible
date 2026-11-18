@@ -9,16 +9,54 @@ refused") is the OTHER §S2 cycle (already landed —
 `tests/client/integration/test_an_unattributed_run_is_refused_while_a_cycle_is_active.py`)
 and is out of this file's scope.
 
-Driven against a REAL, ephemeral `bun run src/server.ts` board (never
-:3850/:3849), exactly the idiom
-`test_an_unattributed_run_is_refused_while_a_cycle_is_active.py` already
-established for this change. Each of the five clients' `pre-merge-gate`/`cr-close`
-is driven as a genuine OS subprocess, argv built from each client's OWN real
-argparse (`test_client_fleet_envelope_census.py`'s
-`enumerate_verbs`/`build_argv`), toolchains stubbed by small fake executables
-(cargo/mvn/bun) or by writing the native JUnit the fixture itself produces
-(arduino) or by real Python test files (python — `py_compile` + `xmlrunner`
-need no stub at all).
+Driven against a fake board (`RecordingBoard`, CR-CRU-262): one per
+`pre-merge-gate` drive and one per `cr-close` drive, each answering in the
+server's shapes. Each of the clients' `pre-merge-gate`/`cr-close` is driven as
+a genuine OS subprocess, argv built from each client's OWN real argparse
+(`test_client_fleet_envelope_census.py`'s `enumerate_verbs`/`build_argv`),
+toolchains stubbed by small fake executables (cargo/mvn/bun/go) or by writing
+the native JUnit the fixture itself produces (arduino) or by real Python test
+files (python — `py_compile` + `xmlrunner` need no stub at all).
+
+What each fake board holds, as the server would hold it:
+
+  * a gate's board: health stating `milestones.gate` (`src/server.ts`), the
+    project's plans so far (each one cycle, `done`), every ingest answered
+    `ok` with a minted event id and the counts the server decodes from the
+    fixture's suite (one passing test; or one passing and one failing), the
+    event read of each run serving its tree, and a recorded milestone
+    answered 201 with a minted id;
+  * a close's board: the project's four plans, and the CR's gate history —
+    the very `pre-merge-gate` milestones this client's gates POSTED, listed
+    as the store lists them (`milestone_record`, newest first).
+
+So the chain gate → close is still the client's own: the close judges the
+milestone its gate sent. What the server does with what it is sent — the
+counts and tree it decodes from a report, the milestone it stores and lists,
+the plan it closes, the reason it keeps and the History it serves — is the
+server's half, held in bun:
+
+  * `v2-runs-events.test.ts` "junit data w/ 1 failing case → 200 {ok:true,
+    changed:true, event:'evt-…', verdict starting 'RED'}" and "GET
+    /api/v2/events/:id → {ok:true, event} full detail (tree present)";
+  * `gate-milestone-scope-and-suites.test.ts` "a full gate's scope and two
+    suite entries read back unchanged through the milestone read, beside
+    today's verdict" (outcome, passed, failed, failingTests);
+    `evidence-route-is-discoverable.test.ts` "§S3 — a milestone filed by a
+    cycle-BOUND agent with NO explicit context is returned by the read its own
+    reply advertises" (the cycle on the record);
+  * `a-close-over-an-accepted-failing-gate-keeps-its-reason.test.ts` "stores
+    the reason as given, and the plans read serves it back under
+    merge.acceptedFailingGateReason beside the commit", "a cr-merged marker
+    posted with the reason reads back carrying it exactly; one posted without
+    carries no reason key" and "lists each close over an accepted failing gate
+    with its cr, planId, commit, reason and closedAt, oldest close first,
+    leaving out every other plan".
+
+What this file keeps is the client's half: what each client SENT (the
+report naming the failing test, the one milestone and its fields, the plan
+PATCH and its merge, the one `cr-merged`) read off the request log, and what
+it PRINTED and exited with.
 
 RED phase — TODAY, none of this exists:
   * `pre-merge-gate` never posts a `pre-merge-gate` milestone at all (grepped:
@@ -59,22 +97,19 @@ are assertable rather than vacuous, and states it here for the GREEN agent
     failingTests   = array of failing test identifiers, PRESENT only when
                      `failed > 0` (never an empty array on a pass) (NEW)
 
-  `cr-close`'s refusal/acceptance is asserted on OBSERVABLE STATE (the plan's
-  `status`/`merge` read back over HTTP, exit code, `ok`) and on substrings of
-  its own printed output (stdout TOON envelope + stderr legacy line combined)
-  for the "naming the run, its failed count and the failing tests" / "a help
-  entry naming pre-merge-gate" requirements — deliberately NOT pinned to an
-  exact new JSON field there, since the CLI's "naming" is itself prose, not a
-  wire contract.
+  `cr-close`'s refusal/acceptance is asserted on what it SENT (the plan
+  PATCH and its `merge`, read off the request log), exit code, `ok`, and on
+  substrings of its own printed output (stdout TOON envelope + stderr legacy
+  line combined) for the "naming the run, its failed count and the failing
+  tests" / "a help entry naming pre-merge-gate" requirements — deliberately
+  NOT pinned to an exact new JSON field there, since the CLI's "naming" is
+  itself prose, not a wire contract.
 
-  `cr-close --accept-failing-gate "<reason>"`: the plan's `merge` object
-  carries the reason under `acceptedFailingGateReason` (extending the
-  existing `merge: {commit}` shape — NEW key), the `cr-merged` milestone
-  carries it under the same key name (NEW), and `GET …/history`'s JSON (for
-  the release/workflow this CR belongs to) contains the reason STRING
-  somewhere in its structure — asserted by a whole-document substring search
-  rather than a pinned path, because exactly which `HistoryWorkflow`/
-  `HistoryRelease` field surfaces it is undecided.
+  `cr-close --accept-failing-gate "<reason>"`: the plan PATCH's `merge`
+  object carries the reason under `acceptedFailingGateReason` (extending the
+  existing `merge: {commit}` shape — NEW key), and the `cr-merged` milestone
+  carries it under the same key name (NEW). The History serving it
+  (`acceptedFailingGates`) is the server's half, cited above.
 
 No CR-shaped literal is used anywhere (fixture CRs are lowercase,
 `gate-fixture-<client>-<case>`, which cannot match `CR-[A-Z]+-[0-9]+`).
@@ -83,13 +118,9 @@ Invocation:
     python3 -m unittest tests.client.integration.test_the_gate_records_its_outcome_and_a_red_gate_stops_the_close -v
 """
 
-import json
-import os
 import shutil
-import subprocess
-import tempfile
+import time
 import unittest
-from pathlib import Path
 
 from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
@@ -102,75 +133,126 @@ from tests.client.client_fleet_envelope_census_helpers import (
     enumerate_verbs,
     fake_go_body,
 )
+from tests.client.live_run_harness import (
+    MILESTONE_POSTED_STATUS,
+    PLANS_ANSWER,
+    RecordingBoard,
+    milestone_posted,
+)
 from tests.client.the_gate_records_its_outcome_and_a_red_gate_stops_the_close_helpers import (
-    _await_server,
-    _call,
-    _declare_listener,
-    _fail_bin_dir_for,
-    FAILING_TEST_MARKER,
-    _free_port,
-    _git_commit_fixture,
-    _overwrite_fake_tool,
     _PY_TEST_FAIL,
     _PY_TEST_PASS,
     _SILENT_MAKE_BODY,
+    FAILING_TEST_MARKER,
+    PASSING_TEST_NAME,
+    _fail_bin_dir_for,
+    _failing_tests_sent,
+    _git_commit_fixture,
+    _overwrite_fake_tool,
     _write_native_fixture,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-
 CLIENT_KEYS = ("bun", "python", "rust", "mvn", "arduino", "go")
 
-
-# ── fake `bun`/`cargo`/`mvn` — a FAILING variant beside the census module's
-# PASSING ones, toggled by OVERWRITING the one relevant file in a copy of its
-# `_build_fake_bin_dir()` output (every other fake tool in that dir stays the
-# PASSING stock one — only the suite-producing step must fail). ──────────────
+GATE_TYPE = "pre-merge-gate"
+MILESTONES_PATH = "/api/v2/milestones"
+#: The run ingest routes, and the compile one (`RUN_INGEST_PATHS`,
+#: `COMPILE_INGEST_PATH`, clients/_crucible_axi.py).
+RUN_INGEST_PATHS = ("/api/v2/runs", "/api/v2/runs/parsed")
+COMPILE_INGEST_PATH = "/api/v2/runs/compile"
+#: How many ingests of one route a gate's board answers with an id of its own.
+IDS_PER_ROUTE = 8
+#: The gate drives: the case, and the outcome of the suite it runs.
+GATE_CASES = (("pass", "pass"), ("fail", "fail"), ("accept", "fail"))
+#: The counts the server decodes from each fixture's suite: the passing one
+#: runs one passing test; the failing one, that test and one failing beside it.
+BOARD_COUNTS = {"pass": {"total": 1, "passed": 1, "failed": 0},
+                "fail": {"total": 2, "passed": 1, "failed": 1}}
+#: The suite name of the tree the board serves for a fixture's run.
+FIXTURE_SUITE = "gate-fixture"
 
 
 # The passing fake `go`, cut to its first (passing) test.
 _ONE_PASSING_GO_BODY = fake_go_body("pass").replace(
     'TESTS = ["Test_alpha_behaviour_passes", "Test_gate_fixture_known_failure"]',
     'TESTS = ["Test_alpha_behaviour_passes"]')
-assert _ONE_PASSING_GO_BODY != fake_go_body("pass"), "the fake go's test list moved"
+_STOCK_PASSING_GO_BODY = fake_go_body("pass")
+assert _STOCK_PASSING_GO_BODY != _ONE_PASSING_GO_BODY, "the fake go's test list moved"
+
+
+def _run_event(project_key, event_id, outcome):
+    """A filed run as the event read serves it (`GET /api/v2/events/<id>`):
+    its counts and the tree the board decoded, a failing fixture's second
+    test failing."""
+    counts = BOARD_COUNTS[outcome]
+    leaves = [{"name": PASSING_TEST_NAME, "status": "pass"}]
+    if outcome == "fail":
+        leaves.append({"name": FAILING_TEST_MARKER, "status": "fail"})
+    return {"ok": True, "event": {
+        "id": event_id, "projectKey": project_key, "kind": "test",
+        "summary": dict(counts),
+        "tree": [{"name": FIXTURE_SUITE, "children": leaves}]}}
+
+
+def _gate_board(project_key, plans, outcome):
+    """A gate drive's board: health stating `milestones.gate`, the project's
+    plans so far, each ingest answered with a fresh minted event id (a run
+    ingest with the fixture's counts), each run's event read serving its
+    tree, and a recorded milestone answered 201. Returns the board and the
+    event ids it answers run ingests with."""
+    board = RecordingBoard()
+    run_event_ids = []
+    health = board.default_health()
+    health["milestones"] = {"gate": ["scope", "suites"]}
+    board.script_health(health)
+    board.answer("POST", MILESTONES_PATH, milestone_posted(board.mint_event_id()),
+                 status=MILESTONE_POSTED_STATUS)
+    board.answer("GET", f"/api/v2/projects/{project_key}/plans",
+                 {**PLANS_ANSWER, "plans": plans, "filed": len(plans)}, prefix=True)
+    for path in RUN_INGEST_PATHS + (COMPILE_INGEST_PATH,):
+        ids = [board.mint_event_id() for _ in range(IDS_PER_ROUTE)]
+        # The newest answer set is given first: set them last-to-first.
+        for event_id in reversed(ids):
+            body = {"ok": True, "changed": True, "event": event_id}
+            if path in RUN_INGEST_PATHS:
+                body["run"] = dict(BOARD_COUNTS[outcome])
+                board.answer("GET", f"/api/v2/events/{event_id}",
+                             _run_event(project_key, event_id, outcome))
+                run_event_ids.append(event_id)
+            board.answer("POST", path, body, times=1)
+    return board, run_event_ids
+
+
+def _milestones_sent(posts, mtype, cr_label):
+    """Every `mtype` milestone labelled `cr_label` among `posts`, as sent."""
+    return [b for p, b in posts
+            if p == MILESTONES_PATH and isinstance(b, dict)
+            and b.get("type") == mtype and b.get("label") == cr_label]
+
+
+def _run_bodies_sent(posts):
+    """Everything a drive sent on the run routes: each start, stream batch,
+    test list and ingest."""
+    return [b for p, b in posts if p.startswith("/api/v2/runs")]
 
 
 class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
-    """One shared live board; one project PER CLIENT, each carrying four
-    independent plans (`pass`, `fail`, `none`, `accept`) so no test method
-    mutates state another test method reads — every assertion below is
-    reachable regardless of which subset of this file's tests is run."""
+    """One project PER CLIENT, each carrying four independent plans (`pass`,
+    `fail`, `none`, `accept`); each gate drive and each close drive has a
+    fake board of its own, so no test method reads what another one did —
+    every assertion below is reachable regardless of which subset of this
+    file's tests is run."""
 
     @classmethod
     def setUpClass(cls):
-        cls._tmpdir = tempfile.mkdtemp(prefix="gate-milestone-e2e-")
-        cls._proc = None
         cls._scratch_dirs = []
-        bun = shutil.which("bun")
-        if bun is None:
-            raise unittest.SkipTest(
-                "a real pre-merge-gate / cr-close round trip needs a real "
-                "server to post and read milestones against: without `bun` "
-                "there is no board to boot. A missing toolchain, not a "
-                "passing assertion.")
-        port = _free_port()
-        assert port not in (3850, 3849), (
-            f"fixture sanity: the OS handed back a reserved port {port}")
-        cls.base = f"http://127.0.0.1:{port}"
-        _declare_listener(cls._tmpdir, port)
-        cls._proc = subprocess.Popen(
-            [bun, "run", "--no-env-file", "src/server.ts"], cwd=str(REPO_ROOT),
-            env={**os.environ, "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            _await_server(cls.base, cls._proc)
             cls.toon = _load_toon_module()
             cls.fixtures = {}
             for client_key in CLIENT_KEYS:
                 cls.fixtures[client_key] = cls._build_client_fixture(client_key)
         except BaseException:
             cls._cleanup_scratch()
-            cls._stop_server()
             raise
 
     @classmethod
@@ -182,24 +264,6 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls._cleanup_scratch()
-        cls._stop_server()
-        shutil.rmtree(cls._tmpdir, ignore_errors=True)
-
-    @classmethod
-    def _stop_server(cls):
-        proc = getattr(cls, "_proc", None)
-        if proc is None:
-            return
-        cls._proc = None
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-
-    @classmethod
-    def _http(cls, path, payload=None, method=None):
-        return _call(cls.base, path, payload, method)
 
     # ── per-client fixture construction ─────────────────────────────────────
 
@@ -215,36 +279,31 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
             (d / "tests" / "test_probe.py").unlink(missing_ok=True)
         return d
 
-    @classmethod
-    def _plan(cls, project_key, orchestrator, cr_label):
-        """File a one-cycle plan and transition that cycle straight to `done`
-        — `cr-close` refuses ANY plan carrying a non-terminal cycle (an
-        already-established, unrelated guard), unconditionally of gate state,
-        so every fixture plan here must already be past that guard before
-        this file's OWN gate-close assertions can be exercised cleanly."""
-        filed = cls._http(f"/api/v2/projects/{project_key}/plans",
-                          {"cr": cr_label, "cycles": [{"label": "solo"}],
-                           "agentId": orchestrator})
-        assert filed.get("ok"), f"plan-file failed for {cr_label!r}: {filed!r}"
-        plan_id, cycle_id = filed["planId"], filed["cycles"][0]["id"]
-        cycle_path = f"/api/v2/projects/{project_key}/plans/{plan_id}/cycles/{cycle_id}"
-        active = cls._http(cycle_path, {"status": "active", "agentId": orchestrator},
-                           method="PATCH")
-        assert active.get("ok"), f"cycle-activate failed for {cr_label!r}: {active!r}"
-        done = cls._http(cycle_path, {"status": "done", "agentId": orchestrator},
-                         method="PATCH")
-        assert done.get("ok"), f"cycle-done failed for {cr_label!r}: {done!r}"
+    @staticmethod
+    def _plan(fixture, cr_label):
+        """File one plan whose one cycle is already `done` — `cr-close`
+        refuses ANY plan carrying a non-terminal cycle (an already-established,
+        unrelated guard), unconditionally of gate state, so every fixture plan
+        here must already be past that guard before this file's OWN
+        gate-close assertions can be exercised cleanly."""
+        plans = fixture["plans"]
+        plan_id = len(plans) + 1
+        cycle_id = 700 + plan_id
+        plans.append({"planId": plan_id, "projectKey": fixture["key"], "cr": cr_label,
+                      "status": "open", "orchestrator": fixture["orchestrator"],
+                      "cycles": [{"id": cycle_id, "label": "solo",
+                                  "kind": "red-green", "status": "done"}]})
         return plan_id, cycle_id
 
     @classmethod
     def _drive_pre_merge_gate(cls, client_key, project_dir, agent_id, cycle_id,
-                              bin_dir, extra_argv=()):
+                              bin_dir, board_url, extra_argv=()):
         script_path = CLIENT_FILES[client_key]
         verbs = enumerate_verbs(client_key, script_path)
         argv = build_argv("pre-merge-gate", verbs["pre-merge-gate"], project_dir)
         argv = argv + ["--agent", agent_id, "--cycle", str(cycle_id)] + list(extra_argv)
         result = drive_verb(script_path, argv, project_dir, bin_dir, timeout=120,
-                            board=cls.base)
+                            board=board_url)
         emits, axi = classify_envelope(result.stdout, cls.toon)
         return result, emits, axi or {}
 
@@ -253,14 +312,10 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
         """One project for this client, carrying four plans (`pass`/`fail`/
         `none`/`accept`) and the driven `pre-merge-gate` result for each of
         the three that ran one (`none` never runs a gate at all — AC "A CR
-        with no recorded pre-merge-gate result")."""
-        project = cls._http("/api/v2/projects", {"name": f"gate-milestone-{client_key}"})
-        assert project.get("ok"), f"project creation failed: {project!r}"
-        key = project["project"]["key"]
-        orchestrator = f"gate-fixture-{client_key}-orchestrator"
-        reg = cls._http("/api/v2/agents/register",
-                        {"projectKey": key, "agentId": orchestrator, "role": "ORCHESTRATOR"})
-        assert reg.get("ok"), f"orchestrator registration failed: {reg!r}"
+        with no recorded pre-merge-gate result"), with what each gate sent."""
+        key = f"gate-milestone-{client_key}-key"
+        fixture = {"key": key, "orchestrator": f"gate-fixture-{client_key}-orchestrator",
+                   "plans": [], "cases": {}}
 
         pass_bin = _build_fake_bin_dir()
         if client_key == "arduino":
@@ -274,10 +329,9 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
         cls._scratch_dirs.append(fail_bin)
         extra = ["--skip-clippy", "--min-free-g", "1"] if client_key == "rust" else []
 
-        fixture = {"key": key, "orchestrator": orchestrator, "cases": {}}
-        for case, outcome in (("pass", "pass"), ("fail", "fail"), ("accept", "fail")):
+        for case, outcome in GATE_CASES:
             cr_label = f"gate-fixture-{client_key}-{case}"
-            plan_id, cycle_id = cls._plan(key, orchestrator, cr_label)
+            plan_id, cycle_id = cls._plan(fixture, cr_label)
             project_dir = cls._project_dir(client_key, key, f"{client_key}-{case}")
             if client_key == "python":
                 (project_dir / "tests" / "test_gate_fixture.py").write_text(
@@ -287,26 +341,24 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
             head_sha = _git_commit_fixture(project_dir)
             bin_dir = pass_bin if outcome == "pass" else fail_bin
             agent_id = f"gate-fixture-{client_key}-{case}-agent"
-            if client_key in ("python", "rust", "go"):
-                # The plan's cycle is done, so the client's own registration
-                # bound to it is refused, and a streamed run (python's
-                # unittest, rust's nextest) whose binding is refused or whose
-                # run cannot be opened files nothing: the gate's agent is
-                # registered unbound first, so its run opens.
-                reg = cls._http("/api/v2/agents/register",
-                                {"projectKey": key, "agentId": agent_id,
-                                 "role": "ORCHESTRATOR"})
-                assert reg.get("ok"), f"gate agent registration failed: {reg!r}"
-            result, emits, axi = cls._drive_pre_merge_gate(
-                client_key, project_dir, agent_id, cycle_id, bin_dir, extra)
+            board, run_event_ids = _gate_board(key, fixture["plans"], outcome)
+            try:
+                result, emits, axi = cls._drive_pre_merge_gate(
+                    client_key, project_dir, agent_id, cycle_id, bin_dir,
+                    board.url, extra)
+            finally:
+                board.close()
             fixture["cases"][case] = {
                 "cr": cr_label, "plan_id": plan_id, "cycle_id": cycle_id,
                 "project_dir": project_dir, "head_sha": head_sha,
                 "outcome": outcome, "result": result, "emits": emits, "axi": axi,
+                "posts": board.posts(),
+                "reads": [p for _t, m, p, _b in board.events if m == "GET"],
+                "run_event_ids": run_event_ids,
             }
         # The fourth plan: filed, but NO pre-merge-gate ever ran against it.
         none_cr = f"gate-fixture-{client_key}-none"
-        none_plan_id, none_cycle_id = cls._plan(key, orchestrator, none_cr)
+        none_plan_id, none_cycle_id = cls._plan(fixture, none_cr)
         fixture["cases"]["none"] = {
             "cr": none_cr, "plan_id": none_plan_id, "cycle_id": none_cycle_id,
         }
@@ -314,41 +366,71 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
 
     # ── read helpers ─────────────────────────────────────────────────────────
 
-    def _milestones(self, project_key, mtype):
-        read = self._http(f"/api/v2/projects/{project_key}/milestones?type={mtype}")
-        self.assertTrue(read.get("ok"), f"milestones read failed: {read!r}")
-        return read.get("milestones") or []
+    def _gate_posts(self, client_key):
+        """Every request this client's three gate drives sent, in drive order."""
+        cases = self.fixtures[client_key]["cases"]
+        return [post for case, _outcome in GATE_CASES for post in cases[case]["posts"]]
 
-    def _milestones_for_cr(self, project_key, mtype, cr_label):
-        return [m for m in self._milestones(project_key, mtype) if m.get("label") == cr_label]
+    def _gate_milestones_for_cr(self, client_key, cr_label):
+        """Every `pre-merge-gate` milestone labelled `cr_label` this client's
+        gates sent, across all three of its drives."""
+        return _milestones_sent(self._gate_posts(client_key), GATE_TYPE, cr_label)
 
-    def _plan_record(self, project_key, plan_id):
-        read = self._http(f"/api/v2/projects/{project_key}/plans")
-        self.assertTrue(read.get("ok"), f"plans read failed: {read!r}")
-        for plan in read.get("plans", []):
-            if plan.get("planId") == plan_id:
-                return plan
-        raise AssertionError(f"plan {plan_id} not found in {read!r}")
+    def _close_board(self, client_key):
+        """A close drive's board: the project's four plans, and the
+        `pre-merge-gate` milestones this client's gates sent, as the store
+        lists them — stamped a second apart in the order they were sent,
+        newest first."""
+        fixture = self.fixtures[client_key]
+        board = RecordingBoard()
+        self.addCleanup(board.close)
+        board.answer("POST", MILESTONES_PATH, milestone_posted(board.mint_event_id()),
+                     status=MILESTONE_POSTED_STATUS)
+        board.answer("GET", f"/api/v2/projects/{fixture['key']}/plans",
+                     {**PLANS_ANSWER, "plans": fixture["plans"],
+                      "filed": len(fixture["plans"])}, prefix=True)
+        start = int(time.time() * 1000)
+        sent = [b for p, b in self._gate_posts(client_key)
+                if p == MILESTONES_PATH and isinstance(b, dict)
+                and b.get("type") == GATE_TYPE]
+        records = []
+        for index, body in enumerate(sent):
+            fields = {k: v for k, v in body.items()
+                      if k not in ("projectKey", "agentId", "type", "label")}
+            records.append(board.milestone_record(
+                fixture["key"], body.get("agentId"), GATE_TYPE, body.get("label"),
+                at_ms=start + 1000 * index, **fields))
+        board.answer("GET", f"/api/v2/projects/{fixture['key']}/milestones?type={GATE_TYPE}",
+                     {"ok": True, "milestones": list(reversed(records)),
+                      "totalCount": len(records)})
+        return board
 
-    def _drive_cr_close(self, client_key, project_key, project_dir, agent_id, cr_label,
+    def _plan_record(self, board, project_key, plan_id):
+        """The plan as the close left it: `closed`, with the merge it sent,
+        when the client PATCHed it closed; `open` otherwise."""
+        closes = [b for p, b in board.posts()
+                  if p == f"/api/v2/projects/{project_key}/plans/{plan_id}"
+                  and isinstance(b, dict) and b.get("status") == "closed"]
+        self.assertLessEqual(len(closes), 1,
+                             f"the plan is closed at most once; got {closes!r}")
+        if not closes:
+            return {"planId": plan_id, "status": "open"}
+        return {"planId": plan_id, "status": "closed", "merge": closes[0].get("merge")}
+
+    def _drive_cr_close(self, client_key, project_dir, agent_id, cr_label,
                         commit="deadbeef0001", extra_argv=()):
-        # The plan PATCH `cr-close` issues requires a LIVE registered caller
-        # (refused 409 otherwise, before cr-close's own plan-resolution logic
-        # ever runs) -- unlike `pre-merge-gate`'s own gated bracket, `cr-close`
-        # opens no identity of its own.
-        reg = self._http("/api/v2/agents/register",
-                         {"projectKey": project_key, "agentId": agent_id,
-                          "role": "ORCHESTRATOR"})
-        self.assertTrue(reg.get("ok"), f"close-agent registration failed: {reg!r}")
+        board = self._close_board(client_key)
         script_path = CLIENT_FILES[client_key]
         verbs = enumerate_verbs(client_key, script_path)
         argv = build_argv("cr-close", verbs["cr-close"], project_dir)
         argv = argv + ["--agent", agent_id, "--commit", commit, "--cr", cr_label] + list(extra_argv)
-        result = drive_verb(script_path, argv, project_dir, _build_fake_bin_dir(),
-                            timeout=60, board=self.base)
+        bin_dir = _build_fake_bin_dir()
+        self.addCleanup(shutil.rmtree, bin_dir, True)
+        result = drive_verb(script_path, argv, project_dir, bin_dir,
+                            timeout=60, board=board.url)
         emits, axi = classify_envelope(result.stdout, self.toon)
         combined_text = (result.stdout or "") + "\n" + (result.stderr or "")
-        return result, emits, (axi or {}), combined_text
+        return result, emits, (axi or {}), combined_text, board
 
     # ── AC "The gate records its outcome" — a PASSING run ───────────────────
 
@@ -356,13 +438,16 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
         for client_key in CLIENT_KEYS:
             with self.subTest(client=client_key):
                 case = self.fixtures[client_key]["cases"]["pass"]
-                key = self.fixtures[client_key]["key"]
                 self.assertEqual(
                     case["result"].returncode, 0,
                     f"{client_key}: a PASSING fake suite must leave pre-merge-gate "
                     f"itself exiting 0; stdout={case['result'].stdout.strip()[:800]!r} "
                     f"stderr={case['result'].stderr.strip()[-2000:]!r}")
-                records = self._milestones_for_cr(key, "pre-merge-gate", case["cr"])
+                self.assertEqual(
+                    _failing_tests_sent(_run_bodies_sent(case["posts"])), [],
+                    f"{client_key}: the passing gate's suite reports no failing "
+                    f"test in what it sent; posts={case['posts']!r}")
+                records = self._gate_milestones_for_cr(client_key, case["cr"])
                 self.assertEqual(
                     len(records), 1,
                     f"{client_key}: a passing pre-merge-gate --cycle "
@@ -404,8 +489,13 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
         for client_key in CLIENT_KEYS:
             with self.subTest(client=client_key):
                 case = self.fixtures[client_key]["cases"]["fail"]
-                key = self.fixtures[client_key]["key"]
-                records = self._milestones_for_cr(key, "pre-merge-gate", case["cr"])
+                sent_failing = _failing_tests_sent(_run_bodies_sent(case["posts"]))
+                self.assertTrue(
+                    any(FAILING_TEST_MARKER in name for name in sent_failing),
+                    f"{client_key}: the failing gate's suite sent the REAL failing "
+                    f"test ({FAILING_TEST_MARKER!r}) as failing; sent "
+                    f"failing={sent_failing!r}")
+                records = self._gate_milestones_for_cr(client_key, case["cr"])
                 self.assertEqual(
                     len(records), 1,
                     f"{client_key}: a failing pre-merge-gate --cycle "
@@ -434,13 +524,21 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
                     record.get("failed"), 1,
                     f"{client_key}: the failing fixture ran exactly one failing "
                     f"test; got {record!r}")
+                read_back = [p for p in case["reads"]
+                             if p.split("?")[0] in {f"/api/v2/events/{i}"
+                                                    for i in case["run_event_ids"]}]
+                self.assertTrue(
+                    read_back,
+                    f"{client_key}: the gate names its failing tests from the "
+                    f"board's read of a run it filed (GET /api/v2/events/<id> "
+                    f"of an id its ingest was answered with); reads={case['reads']!r}")
                 failing_tests = record.get("failingTests")
                 self.assertIsInstance(
                     failing_tests, list,
                     f"{client_key}: a failing gate's milestone must carry a "
                     f"failingTests LIST; got {record!r}")
                 self.assertTrue(
-                    any(FAILING_TEST_MARKER in str(t) for t in failing_tests),
+                    any(FAILING_TEST_MARKER in str(t) for t in failing_tests or []),
                     f"{client_key}: failingTests must name the REAL failing "
                     f"test ({FAILING_TEST_MARKER!r}), not a placeholder; got "
                     f"failingTests={failing_tests!r}")
@@ -452,8 +550,8 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
             with self.subTest(client=client_key):
                 case = self.fixtures[client_key]["cases"]["fail"]
                 key = self.fixtures[client_key]["key"]
-                result, emits, axi, text = self._drive_cr_close(
-                    client_key, key, case["project_dir"],
+                result, emits, axi, text, board = self._drive_cr_close(
+                    client_key, case["project_dir"],
                     f"gate-fixture-{client_key}-fail-close-agent", case["cr"])
                 self.assertNotEqual(
                     result.returncode, 0,
@@ -461,7 +559,7 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
                     f"FAILED must exit non-zero; "
                     f"stdout={result.stdout.strip()[:800]!r} "
                     f"stderr={result.stderr.strip()[-2000:]!r}")
-                plan = self._plan_record(key, case["plan_id"])
+                plan = self._plan_record(board, key, case["plan_id"])
                 self.assertEqual(
                     plan.get("status"), "open",
                     f"{client_key}: a refused cr-close must close NOTHING — "
@@ -483,7 +581,7 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
                 none_case = self.fixtures[client_key]["cases"]["none"]
                 pass_case = self.fixtures[client_key]["cases"]["pass"]
                 key = self.fixtures[client_key]["key"]
-                records = self._milestones_for_cr(key, "pre-merge-gate", none_case["cr"])
+                records = self._gate_milestones_for_cr(client_key, none_case["cr"])
                 self.assertEqual(
                     records, [],
                     f"{client_key}: fixture sanity — {none_case['cr']!r} must "
@@ -491,8 +589,8 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
                 # Reuse the PASSING case's own project directory as the driving
                 # client's cwd — this plan's close is about `none_case`'s CR,
                 # resolved by `--cr`, and needs no toolchain of its own.
-                result, emits, axi, text = self._drive_cr_close(
-                    client_key, key, pass_case["project_dir"],
+                result, emits, axi, text, board = self._drive_cr_close(
+                    client_key, pass_case["project_dir"],
                     f"gate-fixture-{client_key}-none-close-agent", none_case["cr"])
                 self.assertNotEqual(
                     result.returncode, 0,
@@ -500,7 +598,7 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
                     f"pre-merge-gate result must exit non-zero; "
                     f"stdout={result.stdout.strip()[:800]!r} "
                     f"stderr={result.stderr.strip()[-2000:]!r}")
-                plan = self._plan_record(key, none_case["plan_id"])
+                plan = self._plan_record(board, key, none_case["plan_id"])
                 self.assertEqual(
                     plan.get("status"), "open",
                     f"{client_key}: closes nothing; got plan={plan!r}")
@@ -521,8 +619,8 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
                 case = self.fixtures[client_key]["cases"]["pass"]
                 key = self.fixtures[client_key]["key"]
                 commit = "c105ed00d001"
-                result, emits, axi, text = self._drive_cr_close(
-                    client_key, key, case["project_dir"],
+                result, emits, axi, text, board = self._drive_cr_close(
+                    client_key, case["project_dir"],
                     f"gate-fixture-{client_key}-pass-close-agent", case["cr"],
                     commit=commit)
                 self.assertEqual(
@@ -531,14 +629,14 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
                     f"PASSED must close exactly as it does today; "
                     f"stdout={result.stdout.strip()[:800]!r} "
                     f"stderr={result.stderr.strip()[-2000:]!r}")
-                plan = self._plan_record(key, case["plan_id"])
+                plan = self._plan_record(board, key, case["plan_id"])
                 self.assertEqual(
                     plan.get("status"), "closed",
                     f"{client_key}: got plan={plan!r}")
                 self.assertEqual(
                     (plan.get("merge") or {}).get("commit"), commit,
                     f"{client_key}: got plan={plan!r}")
-                merged = self._milestones_for_cr(key, "cr-merged", case["cr"])
+                merged = _milestones_sent(board.posts(), "cr-merged", case["cr"])
                 self.assertEqual(
                     len(merged), 1,
                     f"{client_key}: a successful close still posts exactly one "
@@ -553,8 +651,8 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
                 key = self.fixtures[client_key]["key"]
                 reason = f"accepted-known-flake-{client_key}-gate-fixture"
                 commit = "accceeed0002"
-                result, emits, axi, text = self._drive_cr_close(
-                    client_key, key, case["project_dir"],
+                result, emits, axi, text, board = self._drive_cr_close(
+                    client_key, case["project_dir"],
                     f"gate-fixture-{client_key}-accept-close-agent", case["cr"],
                     commit=commit, extra_argv=["--accept-failing-gate", reason])
                 self.assertEqual(
@@ -563,15 +661,16 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
                     f"whose last gate FAILED must still close it; "
                     f"stdout={result.stdout.strip()[:800]!r} "
                     f"stderr={result.stderr.strip()[-2000:]!r}")
-                plan = self._plan_record(key, case["plan_id"])
+                plan = self._plan_record(board, key, case["plan_id"])
                 self.assertEqual(
                     plan.get("status"), "closed",
                     f"{client_key}: got plan={plan!r}")
                 self.assertEqual(
-                    (plan.get("merge") or {}).get("acceptedFailingGateReason"), reason,
+                    plan.get("merge"),
+                    {"commit": commit, "acceptedFailingGateReason": reason},
                     f"{client_key}: the plan's merge record must carry the "
-                    f"EXACT reason the caller gave; got plan={plan!r}")
-                merged = self._milestones_for_cr(key, "cr-merged", case["cr"])
+                    f"commit and the EXACT reason the caller gave; got plan={plan!r}")
+                merged = _milestones_sent(board.posts(), "cr-merged", case["cr"])
                 self.assertEqual(
                     len(merged), 1,
                     f"{client_key}: got {merged!r}")
@@ -579,14 +678,11 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
                     merged[0].get("acceptedFailingGateReason"), reason,
                     f"{client_key}: the cr-merged milestone must carry the "
                     f"same reason; got {merged[0]!r}")
-                history = self._http(f"/api/v2/projects/{key}/history")
-                self.assertTrue(
-                    history.get("ok"), f"{client_key}: history read failed: {history!r}")
-                self.assertIn(
-                    reason, json.dumps(history),
-                    f"{client_key}: the project's History must carry the "
-                    f"accepted-failing-gate reason {reason!r} SOMEWHERE in its "
-                    f"structure; got history={history!r}")
+                # The History serving the reason (`acceptedFailingGates`) is the
+                # server's half: `a-close-over-an-accepted-failing-gate-keeps-
+                # its-reason.test.ts` "lists each close over an accepted failing
+                # gate with its cr, planId, commit, reason and closedAt, …",
+                # over the plan PATCH and its merge asserted above.
 
 
 if __name__ == "__main__":
