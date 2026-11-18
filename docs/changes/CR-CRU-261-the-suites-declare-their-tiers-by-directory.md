@@ -1,6 +1,6 @@
 # CR-CRU-261 — the suites declare their tiers by directory
 
-**Status:** PENDING · filed 2026-11-15 (release fix; user rulings 2026-11-15: tiers are declared by directory in each
+**Status:** COMPLETED — 2026-11-18 (on release/0.4.0; its CI run waits for the user's push) · filed 2026-11-15 (release fix; user rulings 2026-11-15: tiers are declared by directory in each
 stack's own idiom, run through the one tier switch set every client shares; unit = no process, no socket) · gap
 analysis 2026-11-18 (user rulings R1–R4) · spec pre-review 2026-11-18 (CHANGES, F1–F9 folded; user rulings on F2, F3,
 F4, F8)
@@ -122,20 +122,20 @@ own tiers that way.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — layout.** Every bun test file is under `tests/unit/` or `tests/integration/`; `tests/e2e/` holds no
+- [x] **AC1 — layout.** Every bun test file is under `tests/unit/` or `tests/integration/`; `tests/e2e/` holds no
   `*.test.ts`. Every python test module is under `tests/client/unit/` or `tests/client/integration/`, where
   `census261b-*-placement.csv` puts it. No `test_*.py` or `*.test.ts` remains directly under `tests/client/` or
   `tests/`. The two test-less modules and `tests/app-logic.d.ts` no longer exist.
-- [ ] **AC2 — unit means unit (orchestrator check).** The orchestrator runs the two unit directories ALONE under the
+- [x] **AC2 — unit means unit (orchestrator check).** The orchestrator runs the two unit directories ALONE under the
   same census (clean clone, isolated network namespace, no operator files) and records the result in
   `test-reports/work/`: no process start, no socket connect, bind, listen, serve or fetch, and no real wait (any timer
   or sleep above 0 ms). Any recorded event fails the AC, whether or not it can be charged to a file. VERIFY re-runs it.
   The standing in-suite guard is CR-CRU-263 AC6 (ruling on F2).
-- [ ] **AC3 — nothing lost (orchestrator check).** The union of the tier runs executes the same tests as the
+- [x] **AC3 — nothing lost (orchestrator check).** The union of the tier runs executes the same tests as the
   pre-move suite and passes, compared against baselines recorded before the move: python, the ids at `d199371b`
   (`census261b-py-tiers.csv`) modulo module path — the deleted modules held none; bun, the test names per file stem
   (`census261b-bun-junit.xml`).
-- [ ] **AC4 — python files under its tier.** Unit tests of `_python_suite_argv` (reached from bun's gate dispatch,
+- [x] **AC4 — python files under its tier.** Unit tests of `_python_suite_argv` (reached from bun's gate dispatch,
   `_dispatch_gate_suite`) prove the mapping, each with `--agent`, `--release` and `--cycle` forwarded when given:
   `tests/client/unit`, `tests/client/unit/`, `./tests/client/unit` → `unit`; `tests/client/integration` →
   `integration`; `…/module` → `module`; `…/bdd` → `bdd`; `…/e2e`, `…/regression`, `tests/client`, `.`,
@@ -145,22 +145,22 @@ own tiers that way.
   row and counts. The orchestrator checks that, discovered WITHOUT `-t`, each tier directory of this repo collects the
   same number of tests as its `test:client-<tier>` script, and its own gate over this repo is the "over this repo"
   evidence.
-- [ ] **AC5 — classifier gone.** `scripts/test-targets.ts` and all it exported (`INTEGRATION_MARKERS`,
+- [x] **AC5 — classifier gone.** `scripts/test-targets.ts` and all it exported (`INTEGRATION_MARKERS`,
   `classifyTestSource`, `declaresRealWait`, `enumerateTestFiles`, `partitionTestFiles`) no longer exist; no test pins
   them; `REPO_ROOT`'s three importers import it from its new home; the DN and the two test comments no longer describe
   the classifier as current.
-- [ ] **AC6 — scripts, runner and CI.** `package.json` declares `test:unit`, `test:integration`, `test:client-unit`,
+- [x] **AC6 — scripts, runner and CI.** `package.json` declares `test:unit`, `test:integration`, `test:client-unit`,
   `test:client-integration` by path, and no `test:client`. `scripts/run-test-target.ts` has no `client` target; its
   `unit` and `integration` run `bun test` over `./tests/<tier>` with the per-test budget read from `bun-crucible.py`
   (its pin in `pipeline-test-timeout-default.test.ts` updated). `release.yml`'s `test-bun` and `test-python` run the
   tier directories with the declared budget; the existing `ci-toolchain-provisioning` pins and the three fixture
   guards (`test_bun_vitest_fixture_…`, `test_playwright_bdd_fixture_…`, `test_pytest_fixture_…`) are refactored to
   the new steps and directories.
-- [ ] **AC7 — the core's guard.** The shared-module line budgets pass (re-recorded in their three copies if the core
+- [x] **AC7 — the core's guard.** The shared-module line budgets pass (re-recorded in their three copies if the core
   grows, within 9120; split only past it); every client's suite stays green.
-- [ ] **AC8 — citations hold.** `tests/citations-cite-by-symbol.test.ts` passes: no citation in its scope names a test
+- [x] **AC8 — citations hold.** `tests/citations-cite-by-symbol.test.ts` passes: no citation in its scope names a test
   path that no longer resolves.
-- [ ] **AC9 — a moved python module stands on its own (orchestrator check, no test).** On the moved tree, every
+- [x] **AC9 — a moved python module stands on its own (orchestrator check, no test).** On the moved tree, every
   module under `tests/client/unit/` and `tests/client/integration/` imports `tests.client`, and none inserts its own
   directory (or any `tests/client` path) into `sys.path`.
 
@@ -171,3 +171,14 @@ own tiers that way.
 - A top-level-directory option for the python client (the deferred defect in `docs/changes/README.md`).
 - Tiers for the other stacks' own projects and the agent `.md` definitions (after the release: todo #27, the Model B
   request #26).
+
+## Close-out (2026-11-18)
+
+- **Layout:** bun `tests/unit/` 88 files, `tests/integration/` 354; python `tests/client/unit/` 108 modules,
+  `tests/client/integration/` 260 (the two help-capturing modules moved to integration in the FIX cycle: AC2).
+- **AC2 (orchestrator census, clone at the FIX tip, isolated network, tripwire 0 hits):** python unit 1915 tests and
+  bun unit 1252 tests across 88 files recorded no process, socket or wait.
+- **AC3/AC4 (pre-merge gate, cycle 969):** 14732 passed, 0 failed; the gate dispatched `test:client-unit` and
+  `test:client-integration` through the python client's tier verbs and filed them as tier `unit` (3158 cases) and
+  tier `integration` (5868 cases); discovered without `-t`, each tier collects what its script collects.
+- **AC7:** `_crucible_axi.py` 9071 lines (budget re-recorded from 9062, within 9120).

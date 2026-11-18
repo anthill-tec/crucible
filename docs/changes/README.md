@@ -190,7 +190,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-257](CR-CRU-257-the-doc-tests-read-the-changelog-section-being-written.md) | the doc tests read the changelog section being written | fix | COMPLETED | — | 8 (0.4.0) |
 | [CR-CRU-259](CR-CRU-259-a-client-with-no-board-declared-refuses.md) | a client with no board declared refuses | fix | COMPLETED | — | 8 (0.4.0) |
 | [CR-CRU-260](CR-CRU-260-the-client-suite-runs-from-its-own-install-and-owns-its-caches.md) | the client suite runs from its own install and owns its caches | fix | COMPLETED | 259 | 8 (0.4.0) |
-| [CR-CRU-261](CR-CRU-261-the-suites-declare-their-tiers-by-directory.md) | the suites declare their tiers by directory | fix | PENDING | 260 | 8 (0.4.0) |
+| [CR-CRU-261](CR-CRU-261-the-suites-declare-their-tiers-by-directory.md) | the suites declare their tiers by directory | fix | COMPLETED | 260 | 8 (0.4.0) |
 | [CR-CRU-262](CR-CRU-262-a-live-board-is-kept-for-feature-level-tests.md) | a live board is kept for feature-level tests | fix | PENDING | 261 | 8 (0.4.0) |
 | [CR-CRU-263](CR-CRU-263-ci-runs-the-suites-hermetically-behind-a-tripwire.md) | CI runs the suites hermetically behind a tripwire | fix | PENDING | 262, 264 | 8 (0.4.0) |
 | [CR-CRU-264](CR-CRU-264-a-bun-route-test-reaches-the-board-in-process.md) | a bun route test reaches the board in process | fix | PENDING | 262 | 8 (0.4.0) |
