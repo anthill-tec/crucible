@@ -6808,11 +6808,11 @@ _SIBLING_CLIENT_RE = re.compile(
 # The INTERPRETER a stack's suite is driven by, for a declaration that spells
 # the suite out instead of naming that stack's client. Cycle 388 ruling 3: a
 # project's test script must stay runnable with no agent and no ingest, so this
-# repo declares `test:client` as `python3 -m unittest discover -s tests/client
-# -t .` — the FIRST TOKEN identifies the stack, the flags identify the paths,
-# and the GATE does the client dispatch itself. One entry per stack whose
-# declarations take that form; a head that is not here names no stack, and a
-# target that names no stack is the reading client's own.
+# repo declares `test:client-unit` and `test:client-integration` as `python3
+# -m unittest discover -s tests/client/<tier> -t .` — the FIRST TOKEN names
+# the stack, the flags the paths, and the GATE does the client dispatch. One
+# entry per stack whose declarations take that form; a head not here names no
+# stack, and a target that names no stack is the reading client's own.
 STACK_INTERPRETERS = {"python": ("python",)}
 
 
