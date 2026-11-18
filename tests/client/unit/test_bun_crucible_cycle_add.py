@@ -51,18 +51,16 @@ Fallback:
     python3 tests/client/unit/test_bun_crucible_cycle_add.py
 """
 
-import contextlib
 import copy
 import importlib.util
-import io
 import os
 import shutil
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 from tests.client import client_script
+from tests.client.bun_crucible_cycle_add_helpers import _plans_response, _run_main
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = client_script("bun-crucible.py")
@@ -78,33 +76,6 @@ def _load_bun_crucible_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def _run_main(module, argv):
-    """Invoke module.main() with sys.argv patched to `argv`. Returns
-    (exit_code, stdout, stderr). Only SystemExit is caught -- any OTHER
-    exception propagates so unittest reports it as an ERROR (still a valid
-    RED signal)."""
-    full_argv = ["bun-crucible.py"] + argv
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    with mock.patch.object(sys, "argv", full_argv):
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            try:
-                module.main()
-                code = 0
-            except SystemExit as e:
-                if e.code is None:
-                    code = 0
-                elif isinstance(e.code, int):
-                    code = e.code
-                else:
-                    code = 1
-    return code, stdout.getvalue(), stderr.getvalue()
-
-
-def _plans_response(plans):
-    return {"ok": True, "plans": plans}
 
 
 class _BaseCycleAddTest(unittest.TestCase):

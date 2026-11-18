@@ -37,7 +37,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.client.integration.test_an_unattributed_run_is_refused_while_a_cycle_is_active import (
+from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import (
     _await_server,
     _call,
     _declare_listener,

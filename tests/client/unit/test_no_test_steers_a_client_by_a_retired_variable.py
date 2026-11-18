@@ -97,14 +97,11 @@ from pathlib import Path
 # Imported so the suite's isolation in tests/client/__init__.py applies even when a run
 # imports this module top-level (the gate's discovery without -t).
 import tests.client  # noqa: F401
+from tests.client.no_test_steers_a_client_by_a_retired_variable_helpers import RETIRED_VARIABLES
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TESTS_DIR = REPO_ROOT / "tests"
 
-#: §S1 (C1) retired the first pair, §S2 (C2) the second. One list, because the
-#: hazard is identical: a channel nothing reads, still being aimed.
-RETIRED_VARIABLES = ("CRUCIBLE_PORT", "CRUCIBLE_HOST",
-                     "CRUCIBLE_URL", "CRUCIBLE_BASE")
 
 #: The two that STAY environment-resolved (§S3) -- named here so a reader of a
 #: failure can see the line this guard does NOT draw. They precede

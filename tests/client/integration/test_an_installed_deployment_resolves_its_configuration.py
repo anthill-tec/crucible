@@ -155,7 +155,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.client.integration.test_cr139_installer_writes_the_connection import (
+from tests.client.cr139_installer_writes_the_connection_helpers import (
     SHIPPED_RANGE_MAX,
     SHIPPED_RANGE_MIN,
     _claim_consecutive_ports,

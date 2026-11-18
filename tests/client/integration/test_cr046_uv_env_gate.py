@@ -71,8 +71,7 @@ import unittest
 from pathlib import Path
 
 from tests.client.wheel_build_modules import build_modules_gap
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
+from tests.client.cr046_uv_env_gate_helpers import REPO_ROOT, _sanitized_env, _uv_env
 
 UV_BINARY = shutil.which("uv")
 
@@ -90,33 +89,6 @@ CORRUPT_DEPENDENCY = "definitely-not-a-real-package-xyzzy>=99"
 PEP723_BLOCK_RE = re.compile(
     r"(?m)^# /// script\s*$\n((?:^#(?:| .*)$\n)*)^# ///\s*$", re.MULTILINE
 )
-
-
-# The suite's own uv cache, kept between runs under the git-ignored
-# `<repo>/.cache/test-suite/`: every `uv` child uses it, never the operator's.
-SUITE_UV_CACHE = REPO_ROOT / ".cache" / "test-suite" / "uv"
-
-
-def _uv_env():
-    """The environment every `uv` child runs in: ours, with the suite's own
-    uv cache."""
-    env = dict(os.environ)
-    env["UV_CACHE_DIR"] = str(SUITE_UV_CACHE)
-    return env
-
-
-def _sanitized_env():
-    """Environment for a `uv run` invocation that must resolve PURELY from
-    the script's own PEP 723 metadata: strip `PYTHONPATH` (would leak repo
-    modules onto `sys.path`) and `VIRTUAL_ENV` (would make `uv run` reuse an
-    ambient venv's site-packages instead of building its own isolated
-    resolution) so the gate reflects a machine with only `crucible-axi` +
-    uv installed, not this test process's own tooling. `uv` resolves into the
-    suite's own cache."""
-    env = _uv_env()
-    env.pop("PYTHONPATH", None)
-    env.pop("VIRTUAL_ENV", None)
-    return env
 
 
 def _parse_pep723_block(text):

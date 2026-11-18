@@ -27,7 +27,7 @@ import sys
 import unittest
 
 from tests.client.changelog_section import changelog_entries, changelog_section
-from tests.client.unit.test_the_declaration_schema_is_documented import (
+from tests.client.the_declaration_schema_is_documented_helpers import (
     CHANGELOG,
     README,
     RUNBOOK,

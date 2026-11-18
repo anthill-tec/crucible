@@ -39,9 +39,7 @@ from tests.client.live_run_harness import (
     scrubbed_env,
 )
 from tests.client.real_board import RealBoard
-from tests.client.integration.test_an_unattributed_run_is_refused_while_a_cycle_is_active import (
-    _call,
-)
+from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import _call
 
 TOON = load_toon()
 PYTHON_CLIENT = CLIENTS / "python-crucible.py"

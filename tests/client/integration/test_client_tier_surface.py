@@ -114,6 +114,7 @@ from tests.client.client_tier_surface_helpers import (  # noqa: E402
     AXI_MODULE_PATH,
     CLIENT_FILES,
     EXPECTED_CLIENT_COUNT,
+    TIER_VERBS,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -122,11 +123,6 @@ TYPES_TS_PATH = REPO_ROOT / "src" / "types.ts"
 
 CLIENTS = tuple(CLIENT_FILES)
 
-# The six, spelled as AC1 spells them. This literal is not the source of truth:
-# `TierVocabularyMirrorDriftGuardTest` below asserts it equals the `Tier` union
-# parsed out of `src/types.ts`, so a seventh server-side value makes THIS list
-# fail rather than quietly narrowing every assertion in the file.
-TIER_VERBS = ("unit", "module", "integration", "e2e", "regression", "bdd")
 TIER_VOCABULARY = frozenset(TIER_VERBS)
 
 # A name that is NOT a tier, for AC1's "a seventh name is `invalid choice`"

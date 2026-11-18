@@ -79,7 +79,7 @@ from tests.client.client_fleet_envelope_census_helpers import (
     _build_fake_bin_dir,
     write_go_module,
 )
-from tests.client.integration.test_python_client_sends_its_runners_reports import _FAKE_PYTHON
+from tests.client.python_client_sends_its_runners_reports_helpers import _FAKE_PYTHON
 
 GATE = "pre-merge-gate"
 

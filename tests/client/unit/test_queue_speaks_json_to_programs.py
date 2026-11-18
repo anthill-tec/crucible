@@ -51,7 +51,7 @@ import unittest
 from unittest import mock
 
 from tests.client.client_fleet_envelope_census_helpers import install_project_limits
-from tests.client.unit.test_cr054_fleet_inventory import CLIENT_FILES
+from tests.client.cr054_fleet_inventory_helpers import CLIENT_FILES
 
 # The env keys the fleet's `context` block reads -- cleared per test so an
 # ambient orchestrator session can never colour an envelope compared here.

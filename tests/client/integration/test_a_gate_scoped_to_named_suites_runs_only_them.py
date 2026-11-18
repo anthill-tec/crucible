@@ -40,7 +40,7 @@ from pathlib import Path
 
 from tests.client.live_run_harness import load_toon, new_scratch, scrubbed_env
 from tests.client.real_board import RealBoard
-from tests.client.integration.test_a_gate_milestone_carries_each_suite_result import (
+from tests.client.a_gate_milestone_carries_each_suite_result_helpers import (
     _FAKE_BUN,
     _FAKE_PYTHON,
     BUN_SUITE,
@@ -49,9 +49,7 @@ from tests.client.integration.test_a_gate_milestone_carries_each_suite_result im
     PYTHON_SUITE,
     _executable,
 )
-from tests.client.integration.test_an_unattributed_run_is_refused_while_a_cycle_is_active import (
-    _call,
-)
+from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import _call
 from tests.client.client_fleet_envelope_census_helpers import (
     _FAKE_TOOLS,
     CLIENT_FILES,
@@ -59,11 +57,11 @@ from tests.client.client_fleet_envelope_census_helpers import (
     drive_verb,
     enumerate_verbs,
 )
-from tests.client.integration.test_every_verb_that_files_a_run_is_refused_while_a_cycle_is_active import (
+from tests.client.every_verb_that_files_a_run_is_refused_while_a_cycle_is_active_helpers import (
     _LOG_SNIPPET,
     INVOCATION_LOG,
 )
-from tests.client.integration.test_the_gate_records_its_outcome_and_a_red_gate_stops_the_close import (
+from tests.client.the_gate_records_its_outcome_and_a_red_gate_stops_the_close_helpers import (
     _SILENT_MAKE_BODY,
     _write_native_fixture,
 )

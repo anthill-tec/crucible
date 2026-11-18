@@ -82,12 +82,9 @@ from unittest import mock
 from tests.client.client_fleet_envelope_census_helpers import (  # noqa: E402
     declare_and_require_board,
 )
-from tests.client.unit.test_bun_crucible_cycle_add import (
-    _BaseCycleAddTest,
-    _plans_response,
-    _run_main,
-)
-from tests.client.integration.test_plan_file_names_the_release_it_plans import (
+from tests.client.unit.test_bun_crucible_cycle_add import _BaseCycleAddTest
+from tests.client.bun_crucible_cycle_add_helpers import _plans_response, _run_main
+from tests.client.plan_file_names_the_release_it_plans_helpers import (
     AXI_MODULE,
     EXPECTED_CLIENT_COUNT,
     REPO_ROOT,

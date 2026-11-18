@@ -43,7 +43,7 @@ from tests.client.client_fleet_envelope_census_helpers import (
     _load_toon_module,
     classify_envelope,
 )
-from tests.client.unit.test_cr066_serve_and_target_dir import (
+from tests.client.cr066_serve_and_target_dir_helpers import (
     _import_fresh,
     _run_cli,
     tearDownModule,  # noqa: F401 -- purges the bound crucible_axi generation

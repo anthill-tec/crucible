@@ -100,11 +100,13 @@ from tests.client.integration.test_cycle_add_targets_the_plan_it_means import (
     _ScratchBoardTestBase,
 )
 from tests.client.integration.test_plan_file_names_the_release_it_plans import (
+    _PlanFileWireTestBase,
+)
+from tests.client.plan_file_names_the_release_it_plans_helpers import (
     AXI_MODULE,
     EXPECTED_CLIENT_COUNT,
     PLANS_PATH_SUFFIX,
     VERB,
-    _PlanFileWireTestBase,
     _drive_plan_file_help,
     _flags_declared_directly_on,
     _functions_handed_the_parser,
@@ -118,7 +120,7 @@ from tests.client.plan_file_names_the_release_it_plans_helpers import (
     _load_module_by_path,
     _run_main,
 )
-from tests.client.integration import test_plan_file_names_the_release_it_plans as _release_suite
+from tests.client import plan_file_names_the_release_it_plans_helpers as _release_suite
 
 # The flag this CR adds, and the two it must sit beside without disturbing.
 KIND_FLAG = "--cycle-kind"

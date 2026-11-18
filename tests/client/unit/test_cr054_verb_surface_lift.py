@@ -167,7 +167,6 @@ import sys
 import tempfile
 import shutil
 import unittest
-import importlib.util
 from pathlib import Path
 from unittest import mock
 
@@ -176,6 +175,7 @@ from tests.client.client_fleet_envelope_census_helpers import (
     declare_and_require_board,
 )
 from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
+from tests.client.cr054_verb_surface_lift_helpers import _load_module_by_path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLIENTS_DIR = TEST_INSTALL_CLIENTS
@@ -190,17 +190,6 @@ CLIENT_FILES = {
     "arduino": CLIENTS_DIR / "arduino-crucible.py",
 }
 CLIENTS = tuple(CLIENT_FILES)
-
-
-def _load_module_by_path(path, cache_key):
-    """Load a module by file path, mirroring the fleet's own `_axi()`/`_toon()`
-    loader pattern -- the same convention every existing client/shared-module
-    test in this directory uses."""
-    spec = importlib.util.spec_from_file_location(cache_key, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _load_client_module(client):
@@ -1831,7 +1820,6 @@ class MilestonePackagesFlagFleetParityTest(unittest.TestCase, _ProjectDirFixture
                     payload.get("packages"), _packages_payload(self.VERSION),
                     f"{client}-crucible.py's _post_milestone must relay a "
                     f"`packages` kwarg to the shared builder verbatim")
-
 
 
 if __name__ == "__main__":

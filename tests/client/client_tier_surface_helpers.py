@@ -5,7 +5,8 @@ that test module so a suite importing it does not import a test module
 Holds no `TestCase` and no test: the shared registrar's source path
 (`AXI_MODULE_PATH`), the fleet's client scripts (`CLIENT_FILES`) and the
 asserted client count (`EXPECTED_CLIENT_COUNT`). `test_client_tier_surface`
-imports them back, so the table still lives in one place.
+imports them back, so the table still lives in one place. The six tier verbs
+(`TIER_VERBS`) moved here too (CR-CRU-262): the fleet census imports them.
 """
 
 from tests.client import CLIENT_SOURCE_DIR
@@ -32,3 +33,9 @@ CLIENT_FILES = {
 # client fails -- that is the specific defect AC1 exists to prevent ("the
 # client exposes the verbs" is satisfiable by one client).
 EXPECTED_CLIENT_COUNT = 6
+
+# The six, spelled as AC1 spells them. This literal is not the source of truth:
+# `TierVocabularyMirrorDriftGuardTest` below asserts it equals the `Tier` union
+# parsed out of `src/types.ts`, so a seventh server-side value makes THIS list
+# fail rather than quietly narrowing every assertion in the file.
+TIER_VERBS = ("unit", "module", "integration", "e2e", "regression", "bdd")

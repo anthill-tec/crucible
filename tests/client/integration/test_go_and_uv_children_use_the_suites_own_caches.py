@@ -184,7 +184,7 @@ class UvGateChildrenUseTheSuiteCacheTest(_OperatorEnvironment):
         return _completed(argv)
 
     def test_the_uv_run_environment_points_uv_at_the_suite_cache(self):
-        gate = importlib.import_module("tests.client.integration.test_cr046_uv_env_gate")
+        gate = importlib.import_module("tests.client.cr046_uv_env_gate_helpers")
         env = gate._sanitized_env()
         self.assertEqual(env.get("UV_CACHE_DIR"), str(SUITE_UV_CACHE),
                          "`uv run` uses the suite's uv cache, not the operator's "

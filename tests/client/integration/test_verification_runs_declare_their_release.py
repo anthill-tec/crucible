@@ -105,11 +105,8 @@ from tests.client.client_fleet_envelope_census_helpers import (
     fake_go_body,
     write_go_module,
 )
-from tests.client.integration.test_cr017_client_lifecycle import (
-    MISSING_CYCLE_CODE,
-    _Cr094PreflightBase,
-    _FakeCrucible,
-)
+from tests.client.integration.test_cr017_client_lifecycle import _Cr094PreflightBase
+from tests.client.cr017_client_lifecycle_helpers import MISSING_CYCLE_CODE, _FakeCrucible
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLIENTS = TEST_INSTALL_CLIENTS

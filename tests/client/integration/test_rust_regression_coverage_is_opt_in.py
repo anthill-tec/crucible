@@ -78,9 +78,7 @@ from tests.client.live_run_harness import (
     new_scratch,
     scrubbed_env,
 )
-from tests.client.integration.test_regression_coverage_is_one_shared_opt_in_switch import (
-    ActiveCycleBoard,
-)
+from tests.client.regression_coverage_is_one_shared_opt_in_switch_helpers import ActiveCycleBoard
 
 TOON = load_toon()
 RUST_CLIENT = CLIENTS / "rust-crucible.py"

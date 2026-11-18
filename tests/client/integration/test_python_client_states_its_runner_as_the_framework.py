@@ -32,7 +32,7 @@ Invocation:
 import unittest
 from pathlib import Path
 
-from tests.client.integration.test_python_client_sends_its_runners_reports import (
+from tests.client.python_client_sends_its_runners_reports_helpers import (
     BOARD_COVERAGE,
     JUNIT_TEXT,
     RUNS,

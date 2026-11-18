@@ -48,12 +48,14 @@ from unittest import mock
 
 from tests.client.live_run_harness import load_toon
 from tests.client.integration.test_cr139_installer_writes_the_connection import (
+    _InstallerConnectionCase,
+)
+from tests.client.cr139_installer_writes_the_connection_helpers import (
     CLIENT_TABLE,
     LOOPBACK,
     PORT_KEY,
     SERVER_TABLE,
     URL_KEY,
-    _InstallerConnectionCase,
     _table,
 )
 

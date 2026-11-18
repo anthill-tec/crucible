@@ -44,7 +44,7 @@ import re
 import shutil
 import unittest
 
-from tests.client.integration.test_bun_client_printed_help_names_no_project import option_help
+from tests.client.bun_client_printed_help_names_no_project_helpers import option_help
 from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     CLIENTS_DIR,

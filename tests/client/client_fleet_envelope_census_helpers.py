@@ -765,3 +765,17 @@ def classify_envelope(stdout_text, toon_module):
     if not isinstance(axi, dict) or "verb" not in axi or "ok" not in axi:
         return False, None
     return True, axi
+
+
+# The queue table, in the `docs/changes/README.md` shape `parse_queue_table`
+# reads. The ids belong to NO project: this fixture drives a genuine POST, and
+# a real board's CR ids in it would be a claim about that board's queue. The
+# parser is namespace-agnostic by construction (it normalises a bare `001` to
+# THIS row's own prefix), which is exactly what the second row exercises.
+_QUEUE_TABLE_HEADER = ("| CR | Title | Wave | Depends on |\n"
+                       "|---|---|---|---|\n")
+
+_QUEUE_TABLE_ROWS = (
+    "| [QF-CENSUS-001](./QF-CENSUS-001.md) | first queued item | 5 | — |\n"
+    "| [QF-CENSUS-002](./QF-CENSUS-002.md) | second queued item | 6 | 001 |\n"
+)

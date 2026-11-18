@@ -54,7 +54,7 @@ from tests.client.client_fleet_envelope_census_helpers import (
     declare_and_require_board,
     install_project_limits,
 )
-from tests.client.unit.test_cr054_fleet_inventory import CLIENT_FILES
+from tests.client.cr054_fleet_inventory_helpers import CLIENT_FILES
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 

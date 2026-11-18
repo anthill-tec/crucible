@@ -47,7 +47,7 @@ from tests.client.client_fleet_envelope_census_helpers import (
     declare_board,
     install_project_limits,
 )
-from tests.client.integration.test_runs_and_run_read_a_projects_stored_runs_back import (
+from tests.client.runs_and_run_read_a_projects_stored_runs_back_helpers import (
     ENV_KEYS,
     EVENT_PATH_PREFIX,
     FULL_TEST_EVENT,

@@ -35,8 +35,11 @@ import os
 import unittest
 
 from tests.client.bun_targets_harness import AGENT, JUNIT_VAR
-from tests.client.integration.test_bun_regression_runs_the_marked_target import _load_bun_client
+from tests.client.bun_regression_runs_the_marked_target_helpers import _load_bun_client
 from tests.client.integration.test_the_bun_gate_runs_every_declared_frameworks_suite import (
+    _GateFrameworksCase,
+)
+from tests.client.the_bun_gate_runs_every_declared_frameworks_suite_helpers import (
     BUN_CLIENT_NAME,
     BUN_TEST_ENTRY,
     COVERAGE_NOT_MEASURED,
@@ -45,7 +48,6 @@ from tests.client.integration.test_the_bun_gate_runs_every_declared_frameworks_s
     VITEST_JUNIT_ENV_ENTRY,
     VITEST_JUNIT_FLAG_ENTRY,
     WHOLE_SUITE_LABEL,
-    _GateFrameworksCase,
 )
 
 TARGET_REFUSED = "target-refused"

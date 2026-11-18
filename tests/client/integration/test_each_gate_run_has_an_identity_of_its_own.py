@@ -26,11 +26,11 @@ import subprocess
 import sys
 import unittest
 
-from tests.client.unit.test_cr054_fleet_inventory import CLIENT_FILES
-from tests.client.integration.test_a_gate_posted_by_the_fleet_carries_its_run_and_release import (
+from tests.client.cr054_fleet_inventory_helpers import CLIENT_FILES
+from tests.client.a_gate_posted_by_the_fleet_carries_its_run_and_release_helpers import (
     _FAKE_NO_MISTAKES_BODY,
 )
-from tests.client.integration.test_a_gate_is_running_only_while_its_run_is_driven_or_held import (
+from tests.client.a_gate_is_running_only_while_its_run_is_driven_or_held_helpers import (
     GATE_DECISIONS_PATH,
     GATES_PATH,
     HEARTBEAT_PATH,

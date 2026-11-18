@@ -52,14 +52,8 @@ import time
 import unittest
 
 from tests.client.real_board import RealBoard
-from tests.client.integration.test_a_scoped_gate_refuses_what_it_cannot_run import (
-    TARGETS,
-    _declare,
-    _named,
-)
-from tests.client.integration.test_an_unattributed_run_is_refused_while_a_cycle_is_active import (
-    _call,
-)
+from tests.client.a_scoped_gate_refuses_what_it_cannot_run_helpers import TARGETS, _declare, _named
+from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import _call
 from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     _build_fake_bin_dir,

@@ -61,21 +61,22 @@ RED, and why each test below fails against the current tree (read, not guessed):
 """
 
 import contextlib
-import importlib
 import io
 import os
 import re
 import shutil
 import stat
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-from tests.client import install_clients_candidates
+from tests.client.cr066_serve_and_target_dir_helpers import (
+    _import_fresh,
+    _run_cli,
+    tearDownModule,  # noqa: F401 -- the module fixture unittest looks up by name
+)
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # The pin the fixtures force via `$CRUCIBLE_SERVER_VERSION`, so no test depends
 # on the source-checkout `__version__` sentinel (CR-CRU-041 §S6).
@@ -88,30 +89,6 @@ BUN_BIN_NAME = "bun"
 MANIFEST_FILENAME = "crucible-clients.json"
 
 BOOTSTRAP_NEEDLE = "bun.sh/install"
-
-
-def _ensure_repo_root_on_path():
-    root_str = str(REPO_ROOT)
-    if root_str not in sys.path:
-        sys.path.insert(0, root_str)
-
-
-def _import_fresh(*module_names):
-    """Import the named `crucible_axi` modules from the repo-root checkout,
-    purging the whole `crucible_axi` package first so each test gets an
-    independent import graph (and so `crucible_axi.cli` holds the same
-    `crucible_axi.install` module object the `mock.patch` targets resolve to).
-    Returns the imported modules in the order requested."""
-    _ensure_repo_root_on_path()
-    for mod in list(sys.modules):
-        if mod == "crucible_axi" or mod.startswith("crucible_axi."):
-            del sys.modules[mod]
-    modules = tuple(importlib.import_module(name) for name in module_names)
-    # CR-CRU-260: the core `crucible_axi.cli` vendors takes the test install;
-    # `tearDownModule` purges this generation, so the binding stays here.
-    manifest = importlib.import_module("crucible_axi.manifest")
-    manifest._CLIENTS_CANDIDATES = install_clients_candidates(manifest)
-    return modules
 
 
 def _argv(call):
@@ -191,20 +168,6 @@ def _patched_env(**overrides):
             else:
                 os.environ[key] = value
         yield
-
-
-def _run_cli(cli, argv):
-    """Drive `cli.main(argv)` with stdout/stderr captured. Returns
-    `(code, stdout, stderr)`; an argparse `SystemExit` is reported as its code
-    (so a missing subcommand surfaces as an assertion about the CONTRACT, not
-    as an opaque test error)."""
-    out, err = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        try:
-            code = cli.main(argv)
-        except SystemExit as exc:
-            code = 0 if exc.code is None else exc.code
-    return code, out.getvalue(), err.getvalue()
 
 
 class _ServeFixtureCase(unittest.TestCase):
@@ -757,14 +720,6 @@ class InstallUnwritableTargetFailsDefinitivelyTest(unittest.TestCase):
             f"the failure must identify the target directory as unwritable / "
             f"uncreatable -- not surface as a cryptic missing-file error about "
             f"{MANIFEST_FILENAME}; text={text!r}")
-
-
-def tearDownModule():
-    """Purge the `crucible_axi` generation bound to the test install, so no
-    later module imports it."""
-    for name in list(sys.modules):
-        if name == "crucible_axi" or name.startswith("crucible_axi."):
-            del sys.modules[name]
 
 
 if __name__ == "__main__":

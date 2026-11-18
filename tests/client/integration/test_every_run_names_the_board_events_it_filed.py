@@ -38,9 +38,7 @@ import sys
 import unittest
 
 from tests.client.real_board import RealBoard
-from tests.client.integration.test_an_unattributed_run_is_refused_while_a_cycle_is_active import (
-    _call,
-)
+from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import _call
 from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     _build_fake_bin_dir,
@@ -50,15 +48,15 @@ from tests.client.client_fleet_envelope_census_helpers import (
     classify_envelope,
     drive_verb,
 )
-from tests.client.integration.test_every_cycle_help_line_describes_its_own_verb import (
+from tests.client.every_cycle_help_line_describes_its_own_verb_helpers import (
     TIERS,
     _answer_go_tier_lists,
 )
-from tests.client.integration.test_every_verb_that_files_a_run_is_refused_while_a_cycle_is_active import (
+from tests.client.every_verb_that_files_a_run_is_refused_while_a_cycle_is_active_helpers import (
     _filing_verbs,
     _seed,
 )
-from tests.client.integration.test_the_gate_records_its_outcome_and_a_red_gate_stops_the_close import (
+from tests.client.the_gate_records_its_outcome_and_a_red_gate_stops_the_close_helpers import (
     _PY_TEST_FAIL,
     _PY_TEST_PASS,
     _SUREFIRE_FAIL_ONE_OF_TWO,

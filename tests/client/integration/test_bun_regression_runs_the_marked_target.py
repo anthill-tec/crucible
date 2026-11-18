@@ -29,13 +29,11 @@ the stand-in `bun` of `bun_targets_harness` recording every argv it is spawned
 with, against a stand-in board recording every POST.
 """
 
-import importlib.util
 import os
 import unittest
 
 from tests.client.bun_targets_harness import (
     AGENT,
-    BUN_CLIENT,
     CLOSE,
     COMPILE,
     JUNIT_VAR,
@@ -47,10 +45,11 @@ from tests.client.bun_targets_harness import (
     TargetsCase,
 )
 from tests.client.live_run_harness import START, STREAM_CODEC
-from tests.client.integration.test_every_clients_help_says_regression_coverage_is_opt_in import (
+from tests.client.every_clients_help_says_regression_coverage_is_opt_in_helpers import (
     _plain,
     _root_line,
 )
+from tests.client.bun_regression_runs_the_marked_target_helpers import _load_bun_client
 
 UNIT = "test:unit"
 VITEST = "test:vitest"
@@ -64,16 +63,6 @@ ENV_VITEST_ENTRY = {"framework": "vitest", "junit": ENV_JUNIT}
 def marked(entry: dict, marker: object = True) -> dict:
     """`entry` carrying the `test` marker `marker` (any JSON value)."""
     return {**entry, "test": marker}
-
-
-def _load_bun_client():
-    """The bun client loaded as a module, for its own `bun test` builder."""
-    spec = importlib.util.spec_from_file_location(
-        "bun_crucible_under_test_regression_marked_target", BUN_CLIENT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _codes(envelope):

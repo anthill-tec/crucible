@@ -39,10 +39,10 @@ from tests.client.kept_coverage_answer import (
     stated_block,
 )
 from tests.client.live_run_harness import RecordingBoard, load_client, load_toon
-from tests.client.integration.test_arduino_client_sends_its_runners_reports import _ArduinoProject
-from tests.client.integration.test_bun_client_sends_its_runners_reports import _BunProject
-from tests.client.integration.test_mvn_client_sends_its_runners_reports import _MavenProject
-from tests.client.integration.test_python_client_sends_its_runners_reports import _PythonProject
+from tests.client.arduino_client_sends_its_runners_reports_helpers import _ArduinoProject
+from tests.client.bun_client_sends_its_runners_reports_helpers import _BunProject
+from tests.client.mvn_client_sends_its_runners_reports_helpers import _MavenProject
+from tests.client.python_client_sends_its_runners_reports_helpers import _PythonProject
 
 TOON = load_toon()
 RUNS = "/api/v2/runs"

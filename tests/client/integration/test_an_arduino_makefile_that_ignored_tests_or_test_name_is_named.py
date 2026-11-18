@@ -51,7 +51,7 @@ from tests.client.live_run_harness import (
     RecordingBoard,
     install_project,
 )
-from tests.client.integration.test_an_arduino_run_narrowed_by_tests_and_name_reaches_make import (
+from tests.client.an_arduino_run_narrowed_by_tests_and_name_reaches_make_helpers import (
     CATALOGUE,
     RUNS_INGEST,
     _diagnostics,

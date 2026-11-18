@@ -103,7 +103,7 @@ from tests.client.client_fleet_envelope_census_helpers import (
     fake_go_body,
     write_go_module,
 )
-from tests.client.integration.test_cr017_client_lifecycle import MISSING_CYCLE_CODE
+from tests.client.cr017_client_lifecycle_helpers import MISSING_CYCLE_CODE
 
 AGENT = "cycle-binding-fixture"
 PROJECT_KEY = "test-key-cycle-binding"

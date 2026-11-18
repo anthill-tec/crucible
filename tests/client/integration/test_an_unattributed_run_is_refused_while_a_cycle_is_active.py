@@ -40,9 +40,6 @@ import subprocess
 import tempfile
 import time
 import unittest
-import urllib.error
-import urllib.request
-import json as _json
 from pathlib import Path
 
 from tests.client.client_fleet_envelope_census_helpers import (
@@ -55,6 +52,12 @@ from tests.client.client_fleet_envelope_census_helpers import (
     drive_verb,
     enumerate_verbs,
 )
+from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import (
+    _await_server,
+    _call,
+    _declare_listener,
+    _free_port,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -66,46 +69,6 @@ RELEASE_RUN_CODE = "release-run"
 CLIENT_VERB_PAIRS = sorted(
     (client_key, verb) for client_key in CLIENT_FILES for verb in ("test", "pre-merge-gate")
 )
-
-
-def _free_port():
-    import socket
-
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
-
-
-def _declare_listener(store_dir, port, host="127.0.0.1"):
-    Path(store_dir, "crucible.toml").write_text(
-        f'[server]\nhost = "{host}"\nport = {port}\n', encoding="utf-8")
-
-
-def _call(base, path, payload=None, method=None):
-    data = None if payload is None else _json.dumps(payload).encode()
-    request = urllib.request.Request(
-        base + path, data=data, method=method or ("POST" if data is not None else "GET"),
-        headers={"content-type": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
-            return _json.loads(response.read().decode())
-    except urllib.error.HTTPError as exc:
-        return _json.loads(exc.read().decode())
-
-
-def _await_server(base, proc, timeout=60):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"scratch server exited early with {proc.returncode}")
-        try:
-            with urllib.request.urlopen(base + "/api/v2/health", timeout=2):  # noqa: S310
-                return
-        except Exception:
-            time.sleep(0.2)
-    raise RuntimeError(f"scratch server never became reachable at {base}")
 
 
 class UnattributedRunRefusedWhileACycleIsActiveTest(unittest.TestCase):

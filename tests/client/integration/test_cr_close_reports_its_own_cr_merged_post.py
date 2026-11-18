@@ -58,7 +58,7 @@ from tests.client.client_fleet_envelope_census_helpers import (
     classify_envelope,
     drive_verb,
 )
-from tests.client.integration.test_the_gate_records_its_outcome_and_a_red_gate_stops_the_close import (
+from tests.client.the_gate_records_its_outcome_and_a_red_gate_stops_the_close_helpers import (
     _PY_TEST_FAIL,
     _PY_TEST_PASS,
     _await_server,

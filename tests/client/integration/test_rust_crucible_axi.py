@@ -83,7 +83,7 @@ from tests.client.fake_nextest import held_results, private_fake_prelude
 
 # CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
 # this client register, and through what?", reused rather than re-derived.
-from tests.client.unit.test_cr054_fleet_inventory import (
+from tests.client.cr054_fleet_inventory_helpers import (
     _add_parser_verb_names,
     _defined_function_names,
     _single_verb_registrar_delegator,

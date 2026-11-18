@@ -96,6 +96,10 @@ from tests.client.client_fleet_envelope_census_helpers import (
     _make_project_dir,
     _UNREACHABLE_CRUCIBLE_URL,
 )
+from tests.client.client_fleet_envelope_census_helpers import (
+    _QUEUE_TABLE_HEADER,
+    _QUEUE_TABLE_ROWS,
+)
 
 _SUREFIRE_JUNIT_ONE_PASS = (
     '<?xml version="1.0" encoding="utf-8"?>'
@@ -3006,18 +3010,6 @@ class Cr094LastClosedCrEnvelopeCensusTest(unittest.TestCase):
 
 CR075_QUEUE_FILE_VERB = "queue-file"
 
-# The queue table, in the `docs/changes/README.md` shape `parse_queue_table`
-# reads. The ids belong to NO project: this fixture drives a genuine POST, and
-# a real board's CR ids in it would be a claim about that board's queue. The
-# parser is namespace-agnostic by construction (it normalises a bare `001` to
-# THIS row's own prefix), which is exactly what the second row exercises.
-_QUEUE_TABLE_HEADER = ("| CR | Title | Wave | Depends on |\n"
-                       "|---|---|---|---|\n")
-
-_QUEUE_TABLE_ROWS = (
-    "| [QF-CENSUS-001](./QF-CENSUS-001.md) | first queued item | 5 | — |\n"
-    "| [QF-CENSUS-002](./QF-CENSUS-002.md) | second queued item | 6 | 001 |\n"
-)
 
 # A row whose column count differs from the header's — `parse_queue_table`
 # raises naming the CR, and nothing is POSTed.
@@ -3472,7 +3464,7 @@ class TheGoClientOffersTheTierVerbsTest(unittest.TestCase):
                 self.assertNotIn("Traceback", result.stderr, result.stderr[-600:])
 
     def test_the_go_clients_tier_named_verbs_are_all_six(self):
-        from tests.client.integration.test_client_tier_surface import TIER_VERBS
+        from tests.client.client_tier_surface_helpers import TIER_VERBS
         self.assertEqual(sorted(set(TIER_VERBS) & self.go_verbs), sorted(TIER_VERBS),
                          f"the go client's verbs: {sorted(self.go_verbs)!r}")
 

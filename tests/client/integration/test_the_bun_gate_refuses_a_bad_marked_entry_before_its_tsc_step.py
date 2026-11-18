@@ -27,13 +27,15 @@ import re
 import unittest
 
 from tests.client.bun_targets_harness import TABLE
-from tests.client.live_run_harness import STREAM_CODEC
 from tests.client.integration.test_the_bun_gate_runs_every_declared_frameworks_suite import (
+    _GateFrameworksCase,
+)
+from tests.client.live_run_harness import STREAM_CODEC
+from tests.client.the_bun_gate_runs_every_declared_frameworks_suite_helpers import (
     BUN_TEST_ENTRY,
     GATE,
     VITEST_JUNIT_ENV_ENTRY,
     VITEST_STREAM_ENTRY,
-    _GateFrameworksCase,
     assert_gate_refused_before_its_tsc_step,
     assert_gate_refused_with_tests_detail,
 )

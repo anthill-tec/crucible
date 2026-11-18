@@ -17,9 +17,7 @@ import threading
 from pathlib import Path
 
 from tests.client.client_fleet_envelope_census_helpers import CLIENT_FILES
-from tests.client.unit.test_no_test_steers_a_client_by_a_retired_variable import (
-    RETIRED_VARIABLES,
-)
+from tests.client.no_test_steers_a_client_by_a_retired_variable_helpers import RETIRED_VARIABLES
 from tests.client import CLIENT_SOURCE_DIR, client_script
 
 CLIENTS_DIR = CLIENT_SOURCE_DIR

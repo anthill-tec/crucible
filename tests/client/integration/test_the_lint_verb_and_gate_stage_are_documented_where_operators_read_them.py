@@ -58,7 +58,7 @@ from tests.client.client_fleet_envelope_census_helpers import (
     _make_project_dir,
     drive_verb,
 )
-from tests.client.integration.test_every_clients_help_names_where_its_board_comes_from import (
+from tests.client.every_clients_help_names_where_its_board_comes_from_helpers import (
     _top_level_helps,
     normalise,
 )

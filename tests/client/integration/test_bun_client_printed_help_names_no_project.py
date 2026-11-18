@@ -35,7 +35,6 @@ order); whitespace is normalised because argparse re-wraps help text.
 """
 
 import argparse
-import re
 import shutil
 import unittest
 
@@ -46,6 +45,7 @@ from tests.client.client_fleet_envelope_census_helpers import (
     drive_verb,
     enumerate_verbs,
 )
+from tests.client.bun_client_printed_help_names_no_project_helpers import normalise, option_help
 
 BUN_CLIENT = CLIENT_FILES["bun"]
 
@@ -75,32 +75,6 @@ FOREIGN_PROJECT_TERMS = ("integrations/pi", "sandesh", "send.test", "cr-san-")
 
 #: Ways the printed help may name the project root as the last step.
 PROJECT_ROOT_SPELLINGS = ("project root", "<project>")
-
-
-def normalise(text):
-    """Whitespace-insensitive help text: every run of whitespace is one space
-    and a hyphen argparse broke a line on is re-joined."""
-    collapsed = re.sub(r"\s+", " ", text or "")
-    return re.sub(r"-\s+", "-", collapsed).strip()
-
-
-def option_help(help_text, option):
-    """The printed help entry of `option` in an argparse help: from the line
-    that introduces it to the next line that introduces another option or a
-    section, normalised. Empty when the option is not printed."""
-    lines = help_text.splitlines()
-    start = None
-    for index, line in enumerate(lines):
-        stripped = line.lstrip()
-        if start is None:
-            if re.match(rf"{re.escape(option)}(\s|,|$)", stripped):
-                start = index
-            continue
-        if stripped.startswith("-") and line.startswith("  ") and not line.startswith(" " * 6):
-            return normalise("\n".join(lines[start:index]))
-        if line and not line.startswith(" "):
-            return normalise("\n".join(lines[start:index]))
-    return normalise("\n".join(lines[start:])) if start is not None else ""
 
 
 def _subparsers_of(parser):

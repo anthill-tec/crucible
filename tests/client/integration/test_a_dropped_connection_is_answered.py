@@ -49,13 +49,13 @@ from tests.client.live_run_harness import (
     write_fake_native,
     write_fake_python,
 )
-from tests.client.integration.test_gate_names_an_unfiled_suite_unreported_end_to_end import (
+from tests.client.gate_names_an_unfiled_suite_unreported_end_to_end_helpers import (
     _FAKE_BUN as GATE_FAKE_BUN,
 )
-from tests.client.integration.test_gate_names_an_unfiled_suite_unreported_end_to_end import (
+from tests.client.gate_names_an_unfiled_suite_unreported_end_to_end_helpers import (
     _FAKE_PYTHON as GATE_FAKE_PYTHON,
 )
-from tests.client.integration.test_gate_names_an_unfiled_suite_unreported_end_to_end import (
+from tests.client.gate_names_an_unfiled_suite_unreported_end_to_end_helpers import (
     _SCRUBBED as GATE_SCRUBBED,
 )
 

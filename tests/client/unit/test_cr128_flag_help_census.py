@@ -135,7 +135,7 @@ from tests.client.client_tier_surface_helpers import (  # noqa: E402
     CLIENT_FILES,
     EXPECTED_CLIENT_COUNT,
 )
-from tests.client.unit.test_cr054_verb_surface_lift import _load_module_by_path  # noqa: E402
+from tests.client.cr054_verb_surface_lift_helpers import _load_module_by_path  # noqa: E402
 from tests.client.client_fleet_envelope_census_helpers import enumerate_verbs  # noqa: E402
 
 TYPES_TS_PATH = REPO_ROOT / "src" / "types.ts"

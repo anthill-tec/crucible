@@ -51,7 +51,7 @@ import shutil
 import threading
 import unittest
 
-from tests.client.integration.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     _QUEUE_TABLE_HEADER,
     _QUEUE_TABLE_ROWS,
 )
