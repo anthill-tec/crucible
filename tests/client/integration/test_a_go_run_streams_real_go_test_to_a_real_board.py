@@ -1,5 +1,11 @@
 """A go run streams REAL `go test -json` to a REAL board, end to end.
 
+The feature this module keeps a live board for is the go test-json run
+lifecycle end to end: a run opened with its listed total, fed `go-test`
+batches and closed on the board. No fake can prove it, because what is
+asserted is the server's own `go-test` decoding (the subtest rule, the
+`incomplete` against the listed total) of what a real `go test -json` prints.
+
 The real `clients/go-crucible.py`, the real `go` on PATH (1.24 or later) and a
 real board (`bun run src/server.ts` on a free port with a throwaway store,
 `tests/client/real_board.py`), against Go modules copied from
