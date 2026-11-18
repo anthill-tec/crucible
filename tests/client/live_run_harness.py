@@ -464,7 +464,10 @@ class RecordingBoard:
 
         self._httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         self.url = f"http://127.0.0.1:{self._httpd.server_address[1]}"
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        # A short poll: `shutdown()` waits for the loop's next poll, so the
+        # stock half-second poll made every `close()` wait up to 0.5 s.
+        self._thread = threading.Thread(target=self._httpd.serve_forever,
+                                        kwargs={"poll_interval": 0.05}, daemon=True)
         self._thread.start()
 
     def close(self):
