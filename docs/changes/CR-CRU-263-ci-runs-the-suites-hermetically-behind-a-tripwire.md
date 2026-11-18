@@ -53,8 +53,8 @@ keeps that true after the release fix.
   cache-poisoning) found by pi-lens during CR-CRU-260; points re-scored at this CR's gap analysis.
 - [ ] **AC6 — the unit tiers stay unit.** CI runs the unit tiers (`tests/unit/`, `tests/client/unit/`, CR-CRU-261)
   under dependency hooks that fail the job on any process start, socket connect, bind, serve or fetch, or real wait
-  (any timer or sleep above 0 ms), naming the test file. A test of the hooks proves each kind fires and that a clean
-  unit file passes. **Added 2026-11-18 (user ruling, CR-CRU-261 pre-review F2):** CR-CRU-261 retires the only guard
+  (any timer or sleep above 0 ms), naming the test file. The CI run is the proof; no test is written of the hooks
+  (user ruling 2026-11-18: no tests that test the tests). **Added 2026-11-18 (user ruling, CR-CRU-261 pre-review F2):** CR-CRU-261 retires the only guard
   that pinned tier membership and checks AC2 once, as an orchestrator census; this AC is the standing guard. Points
   re-scored at this CR's gap analysis.
 
