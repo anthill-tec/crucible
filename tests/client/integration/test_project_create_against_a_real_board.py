@@ -1,6 +1,11 @@
 """`project-create` against a real, throwaway board: creating is open, and the
 token makes it idempotent.
 
+The feature: a project is created by its token, at most once. No fake can
+prove it: that a second create under the same token finds the stored project
+rather than adding one is the board's own storage uniqueness, which a
+scripted board would only answer as the test told it to.
+
 - On a fresh board with no agent registered anywhere, the create is accepted:
   the project appears under the token's key, and its metadata holds the token.
 - Two runs with the same token, under two names, leave exactly one project
@@ -9,8 +14,6 @@ token makes it idempotent.
 The board is `tests/client/real_board.py`'s (`bun run src/server.ts` over a
 temp store on a free port); the client runs as a subprocess from a scratch
 copy of the fleet that declares that board (`project_create_harness`).
-
-Fails today: no client has a `project-create` subcommand.
 """
 
 import shutil
