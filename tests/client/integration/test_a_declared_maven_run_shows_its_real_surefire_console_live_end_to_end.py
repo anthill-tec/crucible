@@ -1,5 +1,11 @@
 """A declared maven run shows its REAL surefire console live on a REAL board.
 
+The feature this module keeps a live board for is the maven surefire-console
+run lifecycle end to end: maven's console relayed to the open run under
+`surefire-console`, then the run closed from its JUnit. No fake can prove it,
+because what is asserted is the server's own decoding of that console into
+the open run's live view, and its stored record against its JUnit.
+
 The real `clients/mvn-crucible.py`, real maven (`mvn`, offline through the
 copy's `.mvn/maven.config`, on the suite's own repository
 `<repo>/.cache/test-suite/m2` that `scripts/provision-test-caches.sh` fills,
