@@ -104,7 +104,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { REPO_ROOT } from "../scripts/test-targets";
+import { REPO_ROOT } from "../scripts/repo-root";
 
 /** The pairing, in the order the child is made to run it. The wrapper that
  *  forces that order is GENERATED from these two constants, so the files it

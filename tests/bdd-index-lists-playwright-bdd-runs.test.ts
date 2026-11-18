@@ -5,9 +5,9 @@
 //
 // Three proofs:
 //   - `bddIndexRows` (public/app-logic.mjs) over event briefs, directly;
-//   - the brief type `CrucibleEventBrief` carries `framework` in both
-//     declaration mirrors (public/app-logic.d.mts and tests/app-logic.d.ts),
-//     read as source — the mirrors carry no runtime;
+//   - the brief type `CrucibleEventBrief` carries `framework` in the module's
+//     declaration (public/app-logic.d.mts), read as source — a declaration
+//     carries no runtime;
 //   - the BDD tab of the production shell, mounted against a real board
 //     (tests/helpers/served-app.ts) holding the runs as each path stores them:
 //     two streamed playwright-bdd runs, a JUnit run and a streamed run of
@@ -112,13 +112,9 @@ function briefInterfaceOf(relPath: string): string {
   return match[1]!;
 }
 
-describe("CrucibleEventBrief carries the run's framework in both declaration mirrors", () => {
+describe("CrucibleEventBrief carries the run's framework in the module's declaration", () => {
   test("public/app-logic.d.mts declares an optional string framework on the brief", () => {
     expect(briefInterfaceOf("public/app-logic.d.mts")).toMatch(/^\s*framework\?:\s*string;/m);
-  });
-
-  test("tests/app-logic.d.ts mirrors the same optional string framework", () => {
-    expect(briefInterfaceOf("tests/app-logic.d.ts")).toMatch(/^\s*framework\?:\s*string;/m);
   });
 });
 

@@ -66,8 +66,8 @@ function describeStep(step: WorkflowStep, index: number): string {
 describe("the step predicates read a workflow as the jobs run it", () => {
   test("a python, pip or bun-suite run step runs python; a bun install does not", () => {
     expect(runsPython({ run: "python -m pip install --upgrade build twine" })).toBe(true);
-    expect(runsPython({ run: "python3 -m unittest discover -s tests/client -t ." })).toBe(true);
-    expect(runsPython({ run: "bun test --timeout 30000" })).toBe(true);
+    expect(runsPython({ run: "python3 -m unittest discover -s tests/client/unit -t ." })).toBe(true);
+    expect(runsPython({ run: "bun test --timeout 30000 ./tests/unit" })).toBe(true);
     expect(runsPython({ run: "bun install --frozen-lockfile" })).toBe(false);
     expect(runsPython({ run: "bunx playwright install --with-deps chromium webkit" })).toBe(false);
     expect(runsPython({ uses: "actions/setup-python@v6" })).toBe(false);

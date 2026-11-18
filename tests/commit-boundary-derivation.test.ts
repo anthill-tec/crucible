@@ -6,8 +6,8 @@
 // DERIVATION itself — its cost and its exact output — and §S2 requires the
 // timed pin to run in-process against a `:memory:` store with no server and no
 // concurrent traffic, which is precisely what that suite cannot offer: a file
-// naming the server boot helper is INTEGRATION by scripts/test-targets.ts's
-// rule, and a timed assertion sharing a file with seven throwaway HTTP servers
+// that boots the server belongs in the integration tier's directory, and a
+// timed assertion sharing a file with seven throwaway HTTP servers
 // is the 2026-09-07 false latency alarm waiting to happen. So the Store-level
 // contract lives here (unit: no browser, no process, no server, no waiting),
 // the per-route surface lives in tests/commit-boundary-routes.test.ts, and

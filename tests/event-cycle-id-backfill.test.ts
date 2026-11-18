@@ -33,8 +33,8 @@
 //
 // ── Safety ──────────────────────────────────────────────────────────────────
 // Every store is an mkdtempSync scratch file; the live data/crucible.db is
-// NEVER opened, and no server is booted (unit tier by scripts/test-targets.ts:
-// no browser, no process, no listener, no waiting).
+// NEVER opened, and no server is booted (unit tier: no browser, no process,
+// no listener, no waiting).
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";

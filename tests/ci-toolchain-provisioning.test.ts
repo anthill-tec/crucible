@@ -1100,11 +1100,16 @@ function runsProvisioningScript(step: WorkflowStep): boolean {
     .some((line) => /^\s*(?:(?:bash|sh)\s+)?(?:\.\/)?scripts\/provision-test-caches\.sh(?:\s|$)/.test(line));
 }
 
-/** The step that runs the python client suite: a `-m unittest` over
- *  `tests/client`. */
+/** A step that runs the python client suite: a `-m unittest` over
+ *  `tests/client` or one of its tier directories. */
 function isPythonSuiteStep(step: WorkflowStep): boolean {
   const run = step.run;
   return typeof run === "string" && /-m\s+unittest\b[^\n]*\btests\/client\b/.test(run);
+}
+
+/** The `-s` start directory a python suite step's discovery names. */
+function discoveryStartDir(run: string): string | undefined {
+  return /\bdiscover\b[^\n]*?\s-s\s+(\S+)/.exec(run)?.[1];
 }
 
 /** A step that warms a maven repository: it runs `mvn` itself, or names
@@ -1142,16 +1147,25 @@ describe("CR-CRU-260 AC5 — test-python provisions the suite's own caches, then
     ).toEqual([]);
   });
 
-  test("test-python runs scripts/provision-test-caches.sh exactly once, before the python client suite step", () => {
+  test("test-python runs scripts/provision-test-caches.sh exactly once, before the python client suite's two tier steps — tests/client/unit, then tests/client/integration", () => {
     const { parsed } = readReleaseWorkflow();
     const steps = stepsOf(parsed, "test-python");
 
+    // The suite runs by tier DIRECTORY: exactly two steps, unit first, each
+    // discovering its own directory with the repo root as top level.
     const suite = steps.flatMap((step, index) => (isPythonSuiteStep(step) ? [index] : []));
+    const suiteRuns = suite.map((index) => (steps[index]?.run ?? "").trim());
     expect(
-      suite.length,
-      `release.yml job 'test-python' must run the python client suite in exactly one step.\n` +
+      suiteRuns.map(discoveryStartDir),
+      `release.yml job 'test-python' must run the python client suite as two tier steps, ` +
+        `\`discover -s tests/client/unit -t .\` then \`discover -s tests/client/integration -t .\`.\n` +
         `test-python steps:\n${stepInventory(steps)}`,
-    ).toBe(1);
+    ).toEqual(["tests/client/unit", "tests/client/integration"]);
+    for (const run of suiteRuns) {
+      expect(run, `a python client suite step must keep the repo root as top level: ${run}`).toMatch(
+        /\s-t\s+\.(?:\s|$)/,
+      );
+    }
 
     const provisioning = steps.flatMap((step, index) => (runsProvisioningScript(step) ? [index] : []));
     expect(
@@ -1167,20 +1181,22 @@ describe("CR-CRU-260 AC5 — test-python provisions the suite's own caches, then
     ).toBeLessThan(suite[0] as number);
   });
 
-  test("the python client suite step runs with .venv/bin/python, the interpreter that carries the dev extra", () => {
+  test("both python client suite steps run with .venv/bin/python, the interpreter that carries the dev extra", () => {
     const { parsed } = readReleaseWorkflow();
     const steps = stepsOf(parsed, "test-python");
 
     const suiteRuns = steps.filter(isPythonSuiteStep).map((step) => (step.run ?? "").trim());
-    expect(suiteRuns.length, `test-python steps:\n${stepInventory(steps)}`).toBe(1);
+    expect(suiteRuns.length, `test-python steps:\n${stepInventory(steps)}`).toBe(2);
 
-    const interpreter = /(\S+)\s+-m\s+unittest\b/.exec(suiteRuns[0] ?? "")?.[1];
-    expect(
-      interpreter,
-      "release.yml job 'test-python' runs the suite with an interpreter other than " +
-        "`.venv/bin/python` (CR-CRU-260 AC5: the suite runs with the interpreter that carries " +
-        `\`.[dev]\`). Suite step: ${suiteRuns[0] ?? "<none>"}`,
-    ).toBe(".venv/bin/python");
+    for (const run of suiteRuns) {
+      const interpreter = /(\S+)\s+-m\s+unittest\b/.exec(run)?.[1];
+      expect(
+        interpreter,
+        "release.yml job 'test-python' runs the suite with an interpreter other than " +
+          "`.venv/bin/python` (CR-CRU-260 AC5: the suite runs with the interpreter that carries " +
+          `\`.[dev]\`). Suite step: ${run}`,
+      ).toBe(".venv/bin/python");
+    }
   });
 
   test("test-python's comment block no longer describes a warmed maven repository or ~/.m2", () => {

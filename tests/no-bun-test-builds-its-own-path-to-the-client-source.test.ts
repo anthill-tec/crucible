@@ -74,8 +74,9 @@ const CONVENTIONAL_REPO_NAMES = [
 const REPO_BASE_TOKENS =
   "import\\.meta\\.(?:dirname|dir|url|path)\\b|__dirname\\b|__filename\\b|process\\.cwd\\(\\)";
 
-/** The spawning and reading calls, spelled so this file carries no tier
- *  marker of its own (`scripts/test-targets.ts` classifies by raw text). */
+/** The spawning and reading calls, spelled in pieces: written when a file's
+ *  tier was read off its raw text, kept as they are now that a file's tier is
+ *  the directory it sits in. */
 const SYNC = "Sync";
 const SPAWN_SEGMENTS = new Set(["spawn", `spawn${SYNC}`, "execFile", `execFile${SYNC}`, `exec${SYNC}`]);
 const SPAWN_CALLEES = new Set(["exec", ["Bun", "spawn"].join("."), ["Bun", `spawn${SYNC}`].join(".")]);

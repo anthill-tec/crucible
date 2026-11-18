@@ -113,6 +113,25 @@ function timeoutFlagValues(tokens: string[]): string[] {
   return values;
 }
 
+/** The path arguments of one `bun test` command — the tokens after `test`,
+ *  less every flag and the value `--timeout` carries. A tier run names its
+ *  tier DIRECTORY here (`./tests/<tier>`, the `./` making it a directory and
+ *  not a name filter); a whole-suite run names nothing. */
+function bunTestPathArgs(tokens: string[]): string[] {
+  const start = tokens.indexOf("test");
+  const rest = start === -1 ? tokens : tokens.slice(start + 1);
+  const paths: string[] = [];
+  for (let i = 0; i < rest.length; i += 1) {
+    const token = rest[i] as string;
+    if (token === "--timeout") {
+      i += 1;
+    } else if (!token.startsWith("-")) {
+      paths.push(token);
+    }
+  }
+  return paths;
+}
+
 // ── the client's command builder, DRIVEN (not read as text) ────────────────
 //
 // `_bun_test_cmd` is the contract under test, so the probe CALLS it — once for
@@ -210,25 +229,33 @@ function clientDeclaredTimeoutMs(): number {
   return timeoutMs;
 }
 
-/** The default per-test budget the WORKFLOW declares, read off the `test-bun`
- *  step's shell command. */
+/** The default per-test budget the WORKFLOW declares, read off every
+ *  `test-bun` step that runs `bun test` — one per tier directory. Each step
+ *  carries the flag exactly once and they all carry the SAME figure, so the
+ *  one returned is the workflow's, not one step's. */
 function workflowDeclaredTimeoutMs(): number {
   const { parsed } = readReleaseWorkflow();
   const invocations = bunTestInvocations(parsed);
-  expect(invocations.length, "release.yml's test-bun job runs no `bun test` step").toBe(1);
-  const invocation = invocations[0] as { label: string; run: string };
-  const values = timeoutFlagValues(invocation.run.trim().split(/\s+/));
+  expect(invocations.length, "release.yml's test-bun job runs no `bun test` step").toBeGreaterThan(0);
+  const figures = invocations.map((invocation) => {
+    const values = timeoutFlagValues(invocation.run.trim().split(/\s+/));
+    expect(
+      values.length,
+      `release.yml's '${invocation.label}' step carries ${String(values.length)} --timeout flags; ` +
+        `§S1 requires exactly one: ${invocation.run.trim()}`,
+    ).toBe(1);
+    const timeoutMs = Number(values[0]);
+    expect(
+      Number.isInteger(timeoutMs),
+      `release.yml declares --timeout ${String(values[0])}, which is not an integer ms figure`,
+    ).toBe(true);
+    return timeoutMs;
+  });
   expect(
-    values.length,
-    `release.yml's '${invocation.label}' step carries ${String(values.length)} --timeout flags; ` +
-      `§S1 requires exactly one: ${invocation.run.trim()}`,
+    new Set(figures).size,
+    `release.yml's test-bun steps disagree about the per-test budget: ${JSON.stringify(figures)}`,
   ).toBe(1);
-  const timeoutMs = Number(values[0]);
-  expect(
-    Number.isInteger(timeoutMs),
-    `release.yml declares --timeout ${String(values[0])}, which is not an integer ms figure`,
-  ).toBe(true);
-  return timeoutMs;
+  return figures[0] as number;
 }
 
 describe("§S1 the local gate's own invocations carry the project's default per-test budget", () => {
@@ -291,27 +318,30 @@ describe("§S1 the local gate's own invocations carry the project's default per-
 });
 
 describe("§S1 CI runs the suite on the same budget, and the two figures cannot drift apart", () => {
-  test("release.yml's test-bun job runs the suite exactly once, on `bun test --timeout 30000`", () => {
+  test("release.yml's test-bun job runs ./tests/unit then ./tests/integration, each on `bun test --timeout 30000`", () => {
     const { parsed } = readReleaseWorkflow();
     const invocations = bunTestInvocations(parsed);
 
-    // POSITIVE — the job runs the suite, and that one invocation carries the
-    // figure exactly once. Bound at one INVOCATION, not at one step NAME: a
-    // second, unflagged `bun test` step added later fails here instead of
-    // quietly running on bun's default, while merely RENAMING the step changes
-    // nothing about what CI runs and must not redden the suite. The label is
-    // evidence in the failure message, never the contract.
+    // POSITIVE — the job runs the suite by tier DIRECTORY: exactly two
+    // invocations, the unit directory first, then the integration directory.
+    // Bound at the INVOCATIONS, not at step NAMES: a third, unflagged
+    // `bun test` step added later fails here instead of quietly running on
+    // bun's default, while merely RENAMING a step changes nothing about what
+    // CI runs and must not redden the suite. The labels are evidence in the
+    // failure message, never the contract.
     expect(
-      invocations.length,
-      `release.yml's test-bun job runs ${String(invocations.length)} \`bun test\` steps; §S1 requires ` +
-        `exactly one: ${JSON.stringify(invocations.map((i) => i.label))}`,
-    ).toBe(1);
+      invocations.map((invocation) => bunTestPathArgs(invocation.run.trim().split(/\s+/))),
+      `release.yml's test-bun job runs ${String(invocations.length)} \`bun test\` steps: ` +
+        JSON.stringify(invocations.map((i) => `${i.label}: ${i.run.trim()}`)),
+    ).toEqual([["./tests/unit"], ["./tests/integration"]]);
 
-    const invocation = invocations[0] as { label: string; run: string };
-    expect(
-      timeoutFlagValues(invocation.run.trim().split(/\s+/)),
-      `release.yml's '${invocation.label}' step runs: ${invocation.run.trim()}`,
-    ).toEqual([String(REQUIRED_DEFAULT_TIMEOUT_MS)]);
+    // …and each of them carries the figure exactly once.
+    for (const invocation of invocations) {
+      expect(
+        timeoutFlagValues(invocation.run.trim().split(/\s+/)),
+        `release.yml's '${invocation.label}' step runs: ${invocation.run.trim()}`,
+      ).toEqual([String(REQUIRED_DEFAULT_TIMEOUT_MS)]);
+    }
   });
 
   test("the workflow's --timeout EQUALS the figure the client declares — derived from both files, retyped from neither", () => {
@@ -434,12 +464,13 @@ describe("§S1 the declared tier targets run on the same budget as the gate", ()
         `this path (\`bun run test:unit\`), so a tier run would silently use a different budget`,
     ).toBe(fromClient);
 
-    // NEGATIVE/bound — the budget is an ADDITION: the target still names the
-    // files it selected, or it would be green here while running nothing.
+    // POSITIVE/bound — the budget is an ADDITION: the target still names what
+    // it runs, and what it names is its tier DIRECTORY, `./tests/unit` — never
+    // a list of `.test.ts` files picked by classifying their source.
     expect(
-      bunTestCommandOf("unit").some((arg) => arg.endsWith(".test.ts")),
-      "the unit target spawned `bun test` with no test file arguments",
-    ).toBe(true);
+      bunTestPathArgs(bunTestCommandOf("unit")),
+      `the unit target spawned: bun ${bunTestCommandOf("unit").join(" ")}`,
+    ).toEqual(["./tests/unit"]);
   });
 
   test("`test:regression`'s whole-suite `bun test` carries it too, with no path argument", () => {
