@@ -25,14 +25,12 @@ default board.
 
 import contextlib
 import datetime
-import http.server as http_server
 import importlib.util
 import json
 import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -78,8 +76,6 @@ STUB_HELP = "stub-board-help: retry the read once the board answers"
 #: Environment keys a drive must never inherit from the developer's shell.
 _EXTRA_SCRUB = ("CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY", "CRUCIBLE_AGENT",
                 "WORKFLOW_RELEASE")
-
-_RESERVED_PORTS = (3850, 3849, 39877)
 
 
 # ── dates and the expected section ──────────────────────────────────────────
@@ -366,75 +362,15 @@ def stderr_lines(run):
     return [line for line in run.stderr.splitlines() if line.strip()]
 
 
-# ── the capturing proxy ─────────────────────────────────────────────────────
+# ── the recorded reads ────────────────────────────────────────────────────────
+#
+# A scenario's client is driven through `real_board.RecordingProxy` in front
+# of the board, which records every request `(method, path-with-query)` in
+# arrival order (`taken()`); `fail_read` is its `intercept` hook for a read
+# the stub answers instead of the board.
 
-class CapturingProxy:
-    """An HTTP proxy in front of a board: it records every request
-    `(method, path-with-query)` in arrival order and relays it, except a read
-    `fail_on` matches, which it answers 500 with the stub's own error and
-    help instead of reaching the board."""
-
-    def __init__(self, upstream, fail_on=None):
-        self.upstream = upstream
-        self.fail_on = fail_on
-        self.requests = []
-        self._lock = threading.Lock()
-        proxy = self
-
-        class Handler(http_server.BaseHTTPRequestHandler):
-            def _relay(self):
-                length = int(self.headers.get("Content-Length") or 0)
-                body = self.rfile.read(length) if length else None
-                with proxy._lock:
-                    proxy.requests.append((self.command, self.path))
-                if proxy.fail_on is not None and proxy.fail_on(self.command,
-                                                               self.path):
-                    status = 500
-                    payload = json.dumps({"ok": False, "error": STUB_ERROR,
-                                          "help": [STUB_HELP]}).encode()
-                else:
-                    request = urllib.request.Request(  # noqa: S310
-                        _require_http_scheme(proxy.upstream + self.path),
-                        data=body, method=self.command,
-                        headers={"content-type": "application/json"})
-                    try:
-                        with urllib.request.urlopen(request, timeout=20) as answer:  # noqa: S310
-                            status, payload = answer.status, answer.read()
-                    except urllib.error.HTTPError as exc:
-                        status, payload = exc.code, exc.read()
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-
-            do_GET = do_POST = do_PATCH = do_PUT = do_DELETE = _relay
-
-            def log_message(self, format, *args):  # noqa: A002 -- the base's own name
-                return None
-
-        for _ in range(20):
-            server = http_server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-            if server.server_address[1] not in _RESERVED_PORTS:
-                break
-            server.server_close()
-        else:
-            raise RuntimeError("no free proxy port outside the reserved ones")
-        self.server = server
-        self.base = f"http://127.0.0.1:{server.server_address[1]}"
-        self.thread = threading.Thread(target=server.serve_forever, daemon=True)
-        self.thread.start()
-
-    def taken(self):
-        """The requests recorded so far, and a fresh record from here on."""
-        with self._lock:
-            taken, self.requests = self.requests, []
-        return taken
-
-    def close(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=10)
+#: How long the proxy waits on the board's answer to one request.
+PROXY_TIMEOUT = 20
 
 
 def split_request(path):
@@ -462,8 +398,15 @@ def read_name(project_key, method, path):
 
 
 def fail_read(project_key, name):
-    """A `fail_on` predicate that fails exactly the read called `name`."""
-    return lambda method, path: read_name(project_key, method, path) == name
+    """A `RecordingProxy` `intercept` hook that fails exactly the read called
+    `name`: it answers 500 with the stub's own error and help instead of
+    reaching the board, and lets every other request through."""
+    def intercept(method, path, _body):
+        if read_name(project_key, method, path) != name:
+            return None
+        return 500, json.dumps({"ok": False, "error": STUB_ERROR,
+                                "help": [STUB_HELP]}).encode()
+    return intercept
 
 
 def write_refused_limit(project_dir):

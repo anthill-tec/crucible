@@ -20,6 +20,7 @@ takes `title` as optional, so this is a state the board really holds).
 import unittest
 
 from tests.client import release_notes_board as rn
+from tests.client.real_board import RecordingProxy
 
 LABEL = "6.0.0"
 SHIPPED_AT = rn.utc_epoch(2026, 5, 14, 16, 30)
@@ -148,7 +149,7 @@ class ReleaseNotesUntitledPlanReadsTheQueueTest(unittest.TestCase):
 
     def test_an_untitled_closed_plan_adds_the_queue_read_after_the_closed_plans(self):
         assert _PROJECT is not None
-        proxy = rn.CapturingProxy(_PROJECT.base)
+        proxy = RecordingProxy(_PROJECT.base, timeout=rn.PROXY_TIMEOUT)
         self.proxies.append(proxy)
         project_dir = _PROJECT.dir_through(proxy.base)
         calibration = rn.run_client("python", project_dir, verb="history")

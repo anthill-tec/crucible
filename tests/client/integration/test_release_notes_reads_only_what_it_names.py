@@ -17,6 +17,7 @@ client's own, not the proxy's.
 import unittest
 
 from tests.client import release_notes_board as rn
+from tests.client.real_board import RecordingProxy
 
 ALL_PLANNED = "1.1.0"
 ONE_UNPLANNED = "1.2.0"
@@ -73,7 +74,7 @@ class ReleaseNotesReadsOnlyWhatItNamesTest(unittest.TestCase):
 
     def through_proxy(self, name):
         project = _PROJECTS[name]
-        proxy = rn.CapturingProxy(project.base)
+        proxy = RecordingProxy(project.base, timeout=rn.PROXY_TIMEOUT)
         self.proxies.append(proxy)
         return project, proxy, project.dir_through(proxy.base)
 

@@ -25,6 +25,7 @@ takes its queue title and follows the landed ones.
 import unittest
 
 from tests.client import release_notes_board as rn
+from tests.client.real_board import RecordingProxy
 
 LABEL = "7.0.0"
 SHIPPED_AT = rn.utc_epoch(2026, 6, 9, 11, 15)
@@ -181,7 +182,7 @@ class ReleaseNotesReadsTheQueueForAnUnmergedCloseTest(unittest.TestCase):
 
     def test_a_cr_without_a_merged_plan_adds_the_queue_read_after_the_closed_plans(self):
         assert _PROJECT is not None
-        proxy = rn.CapturingProxy(_PROJECT.base)
+        proxy = RecordingProxy(_PROJECT.base, timeout=rn.PROXY_TIMEOUT)
         self.proxies.append(proxy)
         project_dir = _PROJECT.dir_through(proxy.base)
         calibration = rn.run_client("python", project_dir, verb="history")

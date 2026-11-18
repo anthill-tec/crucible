@@ -21,6 +21,7 @@ under the default format and under `markdown`, one JSON object under
 import unittest
 
 from tests.client import release_notes_board as rn
+from tests.client.real_board import RecordingProxy
 
 SHIPPED = "8.0.0"
 SHIPPED_AT = rn.utc_epoch(2026, 5, 20, 12, 0)
@@ -161,8 +162,9 @@ class ReleaseNotesRefusalTest(unittest.TestCase):
 
     def assert_failed_read(self, read):
         project = self.project()
-        proxy = rn.CapturingProxy(project.base,
-                                  fail_on=rn.fail_read(project.key, read))
+        proxy = RecordingProxy(project.base,
+                               intercept=rn.fail_read(project.key, read),
+                               timeout=rn.PROXY_TIMEOUT)
         try:
             project_dir = project.dir_through(proxy.base)
             for name, fmt, decode in FORMATS:

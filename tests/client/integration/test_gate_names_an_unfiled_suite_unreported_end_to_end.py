@@ -49,7 +49,6 @@ Invocation:
         --tests tests.client.integration.test_gate_names_an_unfiled_suite_unreported_end_to_end
 """
 
-import http.server
 import json
 import os
 import shutil
@@ -68,6 +67,7 @@ from pathlib import Path
 
 from tests.client.fake_nextest import private_fake_prelude
 from tests.client.live_run_harness import load_toon, scrubbed_env
+from tests.client.real_board import DROP, RecordingProxy
 from tests.client.client_fleet_envelope_census_helpers import declare_and_require_board
 from tests.client import TEST_INSTALL_CLIENTS
 
@@ -305,109 +305,52 @@ def _await_board(base, proc, timeout=60):
     raise RuntimeError(f"scratch board never became reachable at {base}")
 
 
-class _ProxyServer(http.server.ThreadingHTTPServer):
-    daemon_threads = True
-    block_on_close = False
+def _cut_proxy(upstream):
+    """A `RecordingProxy` to the real board that forwards every request, byte
+    for byte, until it is told to stop listening: at once (`CUT_NOW`), or once
+    armed (`CUT_AFTER_HEALTH`) at the run's filing: just before it answers
+    the next health read, or, when a `POST /api/v2/runs` comes first (a
+    streamed run's close, CR-CRU-224, which need read no health first), on
+    that POST, which it never forwards. Once it has stopped, its address
+    refuses every connection, as a board that has gone away does.
+    `forwarded_after_control` lists every path it forwarded once a control
+    path reached it."""
+    proxy = RecordingProxy(upstream, timeout=120)
+    proxy.forwarded_after_control = []
+    lock = threading.Lock()
+    state = {"controlled": False, "armed": False}
 
+    def intercept(method, path, _body):
+        if path == CUT_NOW:
+            with lock:
+                state["controlled"] = True
+            proxy.stop_listening()
+            return 200, b'{"ok":true}'
+        if path == CUT_AFTER_HEALTH:
+            with lock:
+                state["armed"] = True
+                state["controlled"] = True
+            return 200, b'{"ok":true}'
+        if method == "POST" and path.split("?")[0] == "/api/v2/runs":
+            with lock:
+                armed, state["armed"] = state["armed"], False
+            if armed:
+                proxy.stop_listening()
+                return DROP
+        with lock:
+            if state["controlled"]:
+                proxy.forwarded_after_control.append(path)
+        return None
 
-class BoardProxy:
-    """Forwards every request to the real board, byte for byte, until it is
-    told to stop listening: at once (`CUT_NOW`), or once armed
-    (`CUT_AFTER_HEALTH`) at the run's filing: just before it answers the
-    next health read, or, when a `POST /api/v2/runs` comes first (a streamed
-    run's close, CR-CRU-224, which need read no health first), on that POST,
-    which it never forwards. Once it has stopped, its address refuses every
-    connection, as a board that has gone away does. `forwarded_after_control`
-    lists every path it forwarded once a control path reached it."""
+    def after(method, path, _status):
+        if method == "GET" and path.split("?")[0] in HEALTH_PATHS:
+            with lock:
+                armed, state["armed"] = state["armed"], False
+            if armed:
+                proxy.stop_listening()
 
-    def __init__(self, upstream):
-        self.upstream = upstream
-        self.requests = []
-        self.forwarded_after_control = []
-        self._controlled = False
-        self._armed = False
-        self._lock = threading.Lock()
-        self._stopped = threading.Event()
-        proxy = self
-
-        class _Handler(http.server.BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.0"
-
-            def _relay(self):
-                length = int(self.headers.get("Content-Length") or 0)
-                body = self.rfile.read(length) if length else None
-                path = self.path
-                with proxy._lock:
-                    proxy.requests.append((self.command, path))
-                if path == CUT_NOW:
-                    with proxy._lock:
-                        proxy._controlled = True
-                    proxy.stop_listening()
-                    return self._answer(200, b'{"ok":true}')
-                if path == CUT_AFTER_HEALTH:
-                    with proxy._lock:
-                        proxy._armed = True
-                        proxy._controlled = True
-                    return self._answer(200, b'{"ok":true}')
-                if self.command == "POST" and path.split("?")[0] == "/api/v2/runs":
-                    with proxy._lock:
-                        armed, proxy._armed = proxy._armed, False
-                    if armed:
-                        proxy.stop_listening()
-                        self.close_connection = True
-                        return None
-                with proxy._lock:
-                    if proxy._controlled:
-                        proxy.forwarded_after_control.append(path)
-                status, payload = proxy.forward(self.command, path, body)
-                if self.command == "GET" and path.split("?")[0] in HEALTH_PATHS:
-                    with proxy._lock:
-                        armed, proxy._armed = proxy._armed, False
-                    if armed:
-                        proxy.stop_listening()
-                return self._answer(status, payload)
-
-            def _answer(self, status, payload):
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-
-            do_GET = do_POST = do_PATCH = do_PUT = do_DELETE = _relay
-
-            def log_message(self, format, *args):
-                pass
-
-        self._server = _ProxyServer(("127.0.0.1", 0), _Handler)
-        self.url = f"http://127.0.0.1:{self._server.server_address[1]}"
-        self._thread = threading.Thread(target=self._server.serve_forever,
-                                        daemon=True)
-        self._thread.start()
-
-    def forward(self, method, path, body):
-        request = urllib.request.Request(  # noqa: S310 - scheme checked
-            _require_http(self.upstream + path), data=body, method=method,
-            headers={"content-type": "application/json"})
-        try:
-            with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310
-                return response.status, response.read()
-        except urllib.error.HTTPError as exc:
-            return exc.code, exc.read()
-
-    def stop_listening(self):
-        """Close the listener: called from a handler thread, so the serving
-        loop (on its own thread) is stopped first and the socket closed after
-        it, before the handler answers the connection it already holds."""
-        if self._stopped.is_set():
-            return
-        self._stopped.set()
-        self._server.shutdown()
-        self._server.server_close()
-
-    def close(self):
-        self.stop_listening()
-        self._thread.join(timeout=5)
+    proxy.intercept, proxy.after = intercept, after
+    return proxy
 
 
 _BOARD = {}
@@ -482,7 +425,7 @@ def _write_executable(path, body):
 
 class _GateAgainstABoardThatGoesAway(unittest.TestCase):
     """A scratch project of its own on the module's board, reached through a
-    `BoardProxy`; both fake runners; and the gate's envelope. Defines no test
+    `_cut_proxy`; both fake runners; and the gate's envelope. Defines no test
     of its own."""
 
     def setUp(self):
@@ -493,7 +436,7 @@ class _GateAgainstABoardThatGoesAway(unittest.TestCase):
                         {"name": f"gate-unreported-{os.path.basename(self.scratch)}"})
         self.assertTrue(project.get("ok"), f"project creation failed: {project!r}")
         self.key = project["project"]["key"]
-        self.proxy = BoardProxy(self.base)
+        self.proxy = _cut_proxy(self.base)
         self.addCleanup(self.proxy.close)
         self.project = os.path.join(self.scratch, "project")
         os.makedirs(os.path.join(self.project, "tests"))

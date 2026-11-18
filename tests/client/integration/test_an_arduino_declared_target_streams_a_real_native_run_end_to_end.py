@@ -48,7 +48,6 @@ Invocation:
         --tests tests.client.integration.test_an_arduino_declared_target_streams_a_real_native_run_end_to_end
 """
 
-import http.server
 import json
 import os
 import re
@@ -60,8 +59,6 @@ import tempfile
 import threading
 import time
 import unittest
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from tests.client.live_run_harness import (
@@ -145,78 +142,6 @@ def _toolchain_gap():
         ("bun", "the real board is `bun run src/server.ts`"))
         if shutil.which(tool) is None]
     return "; ".join(missing) or None
-
-
-class _RecordingProxy:
-    """A loopback HTTP proxy to `upstream` that records every request the
-    client makes, its body, and the board's status and answer, with the time
-    the answer came back."""
-
-    def __init__(self, upstream):
-        self.records = []
-        self._lock = threading.Lock()
-        proxy = self
-
-        class _Handler(http.server.BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.0"
-
-            def _forward(self, method):
-                length = int(self.headers.get("Content-Length") or 0)
-                raw = self.rfile.read(length) if length else None
-                request = urllib.request.Request(  # noqa: S310 - loopback board
-                    upstream + self.path, data=raw, method=method,
-                    headers={"content-type": "application/json"})
-                try:
-                    with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
-                        status, answer = response.status, response.read()
-                except urllib.error.HTTPError as exc:
-                    status, answer = exc.code, exc.read()
-                try:
-                    body = json.loads(raw) if raw else None
-                except ValueError:
-                    body = None
-                try:
-                    decoded = json.loads(answer)
-                except ValueError:
-                    decoded = None
-                with proxy._lock:
-                    proxy.records.append({"at": time.time(), "method": method,
-                                          "path": self.path, "body": body,
-                                          "status": status, "answer": decoded})
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(answer)))
-                self.end_headers()
-                self.wfile.write(answer)
-
-            def do_GET(self):
-                self._forward("GET")
-
-            def do_POST(self):
-                self._forward("POST")
-
-            def do_PATCH(self):
-                self._forward("PATCH")
-
-            def log_message(self, format, *args):
-                pass
-
-        self._httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-        self.url = f"http://127.0.0.1:{self._httpd.server_address[1]}"
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
-        self._thread.start()
-
-    def count(self):
-        with self._lock:
-            return len(self.records)
-
-    def since(self, start):
-        with self._lock:
-            return list(self.records[start:])
-
-    def close(self):
-        self._httpd.shutdown()
-        self._httpd.server_close()
 
 
 class _Run:
@@ -377,9 +302,9 @@ def setUpModule():
     scratch = tempfile.mkdtemp(prefix="crucible-arduino-native-", dir="/tmp")
     _MODULE["scratch"] = scratch
     project, declarations = _build_project(scratch)
-    board = RealBoard(shutil.which("bun"), "real-arduino-native-runs")
+    board = RealBoard(shutil.which("bun"), "real-arduino-native-runs", proxy=True)
     _MODULE["board"] = board
-    proxy = _RecordingProxy(board.base)
+    proxy = board.proxy
     _MODULE["proxy"] = proxy
     install_project(project, proxy.url, board.key, board.name)
     with open(os.path.join(project, "crucible.toml"), "a", encoding="utf-8") as handle:
