@@ -6,7 +6,8 @@ collected by:
 
 * `bun test` from the repo root -- its step files are plain `*.ts`, its
   features `*.feature`, outside every pattern `bun test` discovers -- nor by the
-  `test:unit` / `test:integration` enumeration in `scripts/test-targets.ts`;
+  tier runs, which are declared by path (CI's `test-bun` runs `./tests/unit`
+  then `./tests/integration`, directories that do not hold the fixture);
 * this repo's own `playwright.config.ts` -- the features and steps its
   `defineBddConfig` declares match no fixture file, and the `testDir`
   Playwright discovers under (the generated output) does not hold the fixture.
@@ -19,6 +20,7 @@ Invocation:
 """
 
 import json
+import shlex
 import shutil
 import subprocess
 import unittest
@@ -28,14 +30,7 @@ from tests.client.live_run_harness import REPO_ROOT, new_scratch, scrubbed_env
 from tests.client.playwright_reporter_scratch import FIXTURE, FIXTURE_REL
 
 TIMEOUT = 120
-
-_TARGET_LISTING = (
-    'import { enumerateTestFiles, partitionTestFiles } from "./scripts/test-targets";\n'
-    "const all = await enumerateTestFiles();\n"
-    "const partition = await partitionTestFiles(all);\n"
-    "console.log(JSON.stringify({ all, unit: partition.unit, "
-    "integration: partition.integration }));\n"
-)
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 
 # This repo's Playwright config as Playwright loads it: its `testDir`, each
 # project's own `testDir`, and the playwright-bdd configs `defineBddConfig`
@@ -51,6 +46,24 @@ _CONFIG_LISTING = (
 
 def _fixture_files():
     return sorted(p.relative_to(FIXTURE).as_posix() for p in FIXTURE.rglob("*") if p.is_file())
+
+def _ci_bun_tier_paths():
+    """Each CI `bun test` step's path arguments, in step order: the tokens
+    after `bun test`, less the flags and the `--timeout` figure."""
+    steps = [line.strip() for line in CI_WORKFLOW.read_text().splitlines()
+             if line.strip().startswith("run: bun test")]
+    tiers = []
+    for step in steps:
+        paths, skip_value = [], False
+        for arg in shlex.split(step[len("run:"):])[2:]:
+            if skip_value:
+                skip_value = False
+            elif arg == "--timeout":
+                skip_value = True
+            elif not arg.startswith("-"):
+                paths.append(arg)
+        tiers.append(paths)
+    return tiers
 
 def _under(path, root):
     try:
@@ -109,15 +122,15 @@ class ThePlaywrightBddFixtureStaysOutOfThisReposSuitesTest(unittest.TestCase):
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
-    def test_the_unit_and_integration_targets_enumerate_no_fixture_file(self):
-        result = self.run_bun(["-e", _TARGET_LISTING], REPO_ROOT)
-        self.assertEqual(result.returncode, 0, f"stderr={result.stderr[-2000:]!r}")
-        listing = json.loads(result.stdout.strip().splitlines()[-1])
-        self.assertGreater(len(listing["all"]), 0, "the enumeration lists the suite")
-        for target in ("all", "unit", "integration"):
-            stray = [f for f in listing[target] if f.startswith(FIXTURE_REL)]
-            self.assertEqual(stray, [],
-                             f"the `{target}` listing collects a fixture file: {stray!r}")
+    def test_the_unit_and_integration_tier_directories_hold_no_fixture_file(self):
+        # The tiers are declared by path, so a tier run collects only the files
+        # under its directory, and the fixture lies under neither.
+        tiers = _ci_bun_tier_paths()
+        self.assertEqual(tiers, [["./tests/unit"], ["./tests/integration"]],
+                         f"CI's bun test steps must each run one tier directory: {tiers!r}")
+        for [directory] in tiers:
+            self.assertFalse(_under(FIXTURE, REPO_ROOT / directory),
+                             f"the tier directory {directory} holds the fixture {FIXTURE_REL}")
 
     def test_this_repos_playwright_config_generates_and_collects_no_fixture_file(self):
         result = self.run_bun(["-e", _CONFIG_LISTING], REPO_ROOT)

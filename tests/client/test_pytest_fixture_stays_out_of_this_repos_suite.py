@@ -7,12 +7,14 @@ own runs matches -- and it holds no `__init__.py`, so none of its files is
 collected by:
 
 * this repo's python runs: `python-crucible.py`'s unittest discovery (start dir
-  `tests` or `tests/client`, pattern `test_*.py`) and CI's python job
-  (`.venv/bin/python -m unittest discover -s tests/client -t .`, pattern `test*.py`).
-  unittest descends only into packages and collects only files matching its
-  pattern;
-* this repo's bun runs: a bare `bun test` (CI, `test:regression`) and the
-  `test:unit` / `test:integration` targets `scripts/test-targets.ts` enumerates.
+  `tests`, `tests/client` or a tier directory, pattern `test_*.py`), the
+  `test:client-unit` / `test:client-integration` scripts and CI's python job,
+  which run their tier directory (`.venv/bin/python -m unittest discover -s
+  tests/client/unit -t .`, then `-s tests/client/integration`, pattern
+  `test*.py`). unittest descends only into packages and collects only files
+  matching its pattern;
+* this repo's bun runs: a bare `bun test` (`test:regression`) and the tier
+  runs, declared by path: CI's `./tests/unit` then `./tests/integration`.
 
 Proved from the discovery itself, cheaply: each discovery is pointed at the
 fixture (or a scratch copy of it), with a control proving the probe would
@@ -33,6 +35,7 @@ import fnmatch
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -48,18 +51,16 @@ FIXTURE = REPO_ROOT / FIXTURE_REL
 TIMEOUT = 120
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
+PACKAGE_JSON = REPO_ROOT / "package.json"
+
+# This repo's python tier scripts, each discovering its own tier directory.
+PYTHON_TIER_SCRIPTS = {"test:client-unit": "tests/client/unit",
+                       "test:client-integration": "tests/client/integration"}
 
 # The patterns this repo's python runs discover with: the python client's
 # default, and unittest's own default (CI's `unittest discover` passes none).
 REPO_PYTHON_PATTERNS = ("test_*.py", "test*.py")
 
-_TARGET_LISTING = (
-    'import { enumerateTestFiles, partitionTestFiles } from "./scripts/test-targets";\n'
-    "const all = await enumerateTestFiles();\n"
-    "const partition = await partitionTestFiles(all);\n"
-    "console.log(JSON.stringify({ all, unit: partition.unit, "
-    "integration: partition.integration }));\n"
-)
 
 _UNITTEST_CONTROL = (
     "import unittest\n\n\n"
@@ -78,6 +79,46 @@ def _fixture_tree():
     """Every path under the fixture, `__pycache__` included: what a run left
     behind in the checkout is exactly what this must see."""
     return sorted(p.relative_to(FIXTURE).as_posix() for p in FIXTURE.rglob("*"))
+
+
+def _ci_python_discovery_steps():
+    """CI's python suite steps, selected by their discovery, whatever
+    interpreter runs them."""
+    return [line.strip() for line in CI_WORKFLOW.read_text().splitlines()
+            if line.strip().startswith("run:") and "-m unittest discover" in line]
+
+
+def _start_dir(command):
+    """The `-s` start directory a `unittest discover` command names, or None."""
+    args = shlex.split(command)
+    return args[args.index("-s") + 1] if "-s" in args[:-1] else None
+
+
+def _ci_bun_tier_paths():
+    """Each CI `bun test` step's path arguments, in step order: the tokens
+    after `bun test`, less the flags and the `--timeout` figure."""
+    steps = [line.strip() for line in CI_WORKFLOW.read_text().splitlines()
+             if line.strip().startswith("run: bun test")]
+    tiers = []
+    for step in steps:
+        paths, skip_value = [], False
+        for arg in shlex.split(step[len("run:"):])[2:]:
+            if skip_value:
+                skip_value = False
+            elif arg == "--timeout":
+                skip_value = True
+            elif not arg.startswith("-"):
+                paths.append(arg)
+        tiers.append(paths)
+    return tiers
+
+
+def _under(path, root):
+    try:
+        Path(path).resolve().relative_to(Path(root).resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def _declared_python_files():
@@ -195,19 +236,32 @@ class ThePytestFixtureStaysOutOfThisReposPythonRunsTest(_FixtureCase):
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
-    def test_the_fixture_lies_outside_ci_and_the_clients_tests_client_start_dir(self):
-        client_dir = (REPO_ROOT / "tests" / "client").resolve()
-        self.assertNotIn(client_dir, [FIXTURE.resolve(), *FIXTURE.resolve().parents],
-                         "the fixture must not live under tests/client")
+    def test_the_fixture_lies_outside_the_tier_scripts_ci_and_the_clients_start_dirs(self):
+        # The start dirs are read from where they are declared: the python
+        # tier scripts and CI's python steps. `tests/client` is the client's
+        # whole-suite (regression) start dir.
+        scripts = json.loads(PACKAGE_JSON.read_text()).get("scripts") or {}
+        declared = {name: _start_dir(scripts.get(name, "")) for name in PYTHON_TIER_SCRIPTS}
+        self.assertEqual(declared, PYTHON_TIER_SCRIPTS,
+                         f"the python tier scripts must each discover their tier directory: "
+                         f"{ {name: scripts.get(name) for name in PYTHON_TIER_SCRIPTS}!r}")
+        ci = [_start_dir(step[len("run:"):]) for step in _ci_python_discovery_steps()]
+        for start_dir in [*declared.values(), *ci, "tests/client"]:
+            with self.subTest(start_dir=start_dir):
+                self.assertIsNotNone(start_dir)
+                self.assertFalse(_under(FIXTURE, REPO_ROOT / start_dir),
+                                 f"the fixture must not live under {start_dir}")
 
-    def test_ci_runs_the_tests_client_unittest_discovery(self):
-        # CI's python step is the discovery the probes above prove; another
-        # start dir or a pattern argument there would be a different collection.
-        # A step is selected by its discovery, whatever interpreter runs it.
-        steps = [line.strip() for line in CI_WORKFLOW.read_text().splitlines()
-                 if line.strip().startswith("run:") and "-m unittest discover" in line]
-        self.assertEqual(steps, ["run: .venv/bin/python -m unittest discover -s tests/client -t ."],
-                         f"CI's python test steps: {steps!r}")
+    def test_ci_runs_the_unit_then_the_integration_tests_client_discovery(self):
+        # CI's python steps are the discovery the probes above prove, one per
+        # tier directory; another start dir or a pattern argument there would
+        # be a different collection.
+        steps = _ci_python_discovery_steps()
+        self.assertEqual(
+            steps,
+            ["run: .venv/bin/python -m unittest discover -s tests/client/unit -t .",
+             "run: .venv/bin/python -m unittest discover -s tests/client/integration -t ."],
+            f"CI's python test steps: {steps!r}")
 
 
 class ThePytestFixtureStaysOutOfThisReposBunSuiteTest(_FixtureCase):
@@ -233,15 +287,15 @@ class ThePytestFixtureStaysOutOfThisReposBunSuiteTest(_FixtureCase):
         self.assertNotIn("Ran ", output, f"output={output[-2000:]!r}")
         self.assertNotEqual(result.returncode, 0, f"output={output[-2000:]!r}")
 
-    def test_the_unit_and_integration_targets_enumerate_no_fixture_file(self):
-        result = self.run_bun(["-e", _TARGET_LISTING], REPO_ROOT)
-        self.assertEqual(result.returncode, 0, f"stderr={result.stderr[-2000:]!r}")
-        listing = json.loads(result.stdout.strip().splitlines()[-1])
-        self.assertGreater(len(listing["all"]), 0, "the enumeration lists the suite")
-        for target in ("all", "unit", "integration"):
-            stray = [f for f in listing[target] if f.startswith(FIXTURE_REL)]
-            self.assertEqual(stray, [],
-                             f"the `{target}` listing collects a fixture file: {stray!r}")
+    def test_the_unit_and_integration_tier_directories_hold_no_fixture_file(self):
+        # The tiers are declared by path, so a tier run collects only the files
+        # under its directory, and the fixture lies under neither.
+        tiers = _ci_bun_tier_paths()
+        self.assertEqual(tiers, [["./tests/unit"], ["./tests/integration"]],
+                         f"CI's bun test steps must each run one tier directory: {tiers!r}")
+        for [directory] in tiers:
+            self.assertFalse(_under(FIXTURE, REPO_ROOT / directory),
+                             f"the tier directory {directory} holds the fixture {FIXTURE_REL}")
 
 
 class PytestIsInTheDevExtrasTest(unittest.TestCase):

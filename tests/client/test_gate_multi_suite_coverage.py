@@ -55,8 +55,8 @@ colour means nothing:
 THE FIXTURE PROJECT, and why it is shaped the way it is. One throwaway project
 per test declaring THREE targets at this repo's own declaration surface — the
 `package.json` script table, which is where CR-CRU-111 §S6 put bun's declared
-tier targets and where this repo's `test:unit` / `test:client` / `test:e2e`
-already live:
+tier targets and where this repo's `test:unit` / `test:client-unit` /
+`test:e2e` live:
 
   `test:unit`    a bun-owned suite (`bun test tests/unit`), 2 passing tests;
   `test:client`  a python-owned suite whose script body invokes

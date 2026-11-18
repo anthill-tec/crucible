@@ -793,9 +793,9 @@ class DeclaredBunTestTargetsKeepWorkingTest(_DeclaredTargetCase):
             f"grew a `crucible.targets` entry they do not need: {needless}")
 
     def test_a_declared_target_another_stack_owns_is_still_that_stacks_to_run(self):
-        """AC4's other half: `test:client` is a python suite living in bun's
-        script table (CR-CRU-112 §S1). The FLAG default must not quietly claim
-        it — the declaring STACK decides who runs it, and bun never appends
+        """AC4's other half: `test:client-unit` and `test:client-integration`
+        are python suites living in bun's script table (CR-CRU-112 §S1). The
+        FLAG default must not quietly claim them — the declaring STACK decides who runs it, and bun never appends
         `bun test` flags to somebody else's runner."""
         targets = _declared_test_targets()
         foreign = {name: body for name, body in targets.items()
