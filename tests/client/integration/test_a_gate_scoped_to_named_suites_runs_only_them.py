@@ -18,10 +18,18 @@ excluded declared target is never listed.
 `--suites` is declared once, in the shared module, so all five clients'
 `pre-merge-gate --help` list it with the same text.
 
-Driven against a REAL scratch board (`tests/client/real_board.py`): each
-client runs as an OS subprocess, every toolchain a small fake that records
-each invocation, so "step 0 ran" and "the whole suite did not run" are read
-off what was actually invoked, and "posted" is read off the board.
+Driven against a recording board (`RecordingBoard`) answering in the
+server's shapes — its health stating that it records a gate's scope and
+suites, its plans read holding each gate's cycle under its CR, a recorded
+milestone answered 201 with its event id: each client runs as an OS
+subprocess, every toolchain a small fake that records each invocation, so
+"step 0 ran" and "the whole suite did not run" are read off what was actually
+invoked, and "posted" and "filed" are read off the board's request log. The
+board's half — a gate milestone's scope and suites read back unchanged — is
+held in bun by `gate-milestone-scope-and-suites.test.ts` ("a green scoped gate
+with one passing suite reads back its scope and its single entry"), and a
+milestone a bound agent files with no context stamped with its cycle by
+`evidence-route-is-discoverable.test.ts`.
 
 Invocation:
     python3 -m unittest tests.client.integration.test_a_gate_scoped_to_named_suites_runs_only_them -v
@@ -38,8 +46,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.client.live_run_harness import load_toon, new_scratch, scrubbed_env
-from tests.client.real_board import RealBoard
 from tests.client.a_gate_milestone_carries_each_suite_result_helpers import (
     _FAKE_BUN,
     _FAKE_PYTHON,
@@ -49,7 +55,6 @@ from tests.client.a_gate_milestone_carries_each_suite_result_helpers import (
     PYTHON_SUITE,
     _executable,
 )
-from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import _call
 from tests.client.client_fleet_envelope_census_helpers import (
     _FAKE_TOOLS,
     CLIENT_FILES,
@@ -60,6 +65,19 @@ from tests.client.client_fleet_envelope_census_helpers import (
 from tests.client.every_verb_that_files_a_run_is_refused_while_a_cycle_is_active_helpers import (
     _LOG_SNIPPET,
     INVOCATION_LOG,
+)
+from tests.client.fake_nextest import held_results
+from tests.client.live_run_harness import (
+    MILESTONE_POSTED_STATUS,
+    PLANS_ANSWER,
+    RecordingBoard,
+    install_project,
+    junit_sent,
+    load_toon,
+    milestone_posted,
+    new_scratch,
+    scrubbed_env,
+    stream_sent,
 )
 from tests.client.the_gate_records_its_outcome_and_a_red_gate_stops_the_close_helpers import (
     _SILENT_MAKE_BODY,
@@ -104,17 +122,58 @@ def _transcript(result):
     return (f"exit={result.returncode} stdout={(result.stdout or '')[-2000:]!r} "
             f"stderr={(result.stderr or '')[-2500:]!r}")
 
+class GateBoard:
+    """The module's one recording board and the project it answers for, in
+    the server's shapes: health stating `milestones.gate` (scope and suites,
+    `src/server.ts`), every ingest answered with one passing test, a recorded
+    milestone answered 201 with a minted event id, and the plans read
+    holding every plan `file_plan` filed."""
+
+    def __init__(self, name):
+        self.recording = RecordingBoard()
+        self.url = self.recording.url
+        self.name = name
+        self.key = f"{name}-key"
+        self._plans = {}  # project key -> [plan]
+        self._cycle_seq = 0
+        health = self.recording.default_health()
+        health["milestones"] = {"gate": ["scope", "suites"]}
+        self.recording.script_health(health)
+        self.recording.script_run(passed=1)
+        self.recording.answer("POST", "/api/v2/milestones",
+                              milestone_posted(self.recording.mint_event_id()),
+                              status=MILESTONE_POSTED_STATUS)
+
+    def install(self, project_dir, key=None):
+        install_project(project_dir, self.url, key or self.key, self.name)
+
+    def file_plan(self, cr, status="done", key=None):
+        """One plan for `cr` with one cycle in `status`, held by the plans
+        read of project `key`; returns the cycle id."""
+        key = key or self.key
+        self._cycle_seq += 1
+        cycle_id = 900 + self._cycle_seq
+        plans = self._plans.setdefault(key, [])
+        plans.append({"planId": len(plans) + 1, "projectKey": key, "cr": cr,
+                      "status": "open", "orchestrator": f"{cr}-orchestrator",
+                      "cycles": [{"id": cycle_id, "label": "solo",
+                                  "kind": "red-green", "status": status}]})
+        self.recording.answer("GET", f"/api/v2/projects/{key}/plans",
+                              {**PLANS_ANSWER, "plans": plans,
+                               "filed": len(plans)}, prefix=True)
+        return cycle_id
+
+    def close(self):
+        self.recording.close()
+
+
 _BOARD = None
+
 
 def setUpModule():
     global _BOARD
-    bun = shutil.which("bun")
-    if bun is None:
-        raise unittest.SkipTest(
-            "a scoped gate's milestone is read back from a REAL board, and "
-            "without `bun` there is none to boot — a missing toolchain, not a "
-            "passing assertion")
-    _BOARD = RealBoard(bun, "scoped-gate-runs")
+    _BOARD = GateBoard("scoped-gate-runs")
+
 
 def tearDownModule():
     global _BOARD
@@ -122,45 +181,31 @@ def tearDownModule():
         _BOARD.close()
         _BOARD = None
 
+
 class _OnTheBoard(unittest.TestCase):
     """Plan filing and milestone/run reading against the module's board."""
 
     @classmethod
     def board(cls):
         if _BOARD is None:
-            raise AssertionError("the module's real board was never booted")
+            raise AssertionError("the module's board was never started")
         return _BOARD
 
     @classmethod
     def file_plan(cls, cr):
         """One plan, one cycle taken to done — the gate runs `--cycle <it>`,
         so its milestone carries this plan's CR as its label."""
-        board = cls.board()
-        orchestrator = f"{cr}-orchestrator"
-        reg = board.http("/api/v2/agents/register",
-                         {"projectKey": board.key, "agentId": orchestrator,
-                          "role": "ORCHESTRATOR"})
-        assert reg.get("ok"), f"orchestrator registration failed: {reg!r}"
-        filed = board.http(f"/api/v2/projects/{board.key}/plans",
-                           {"cr": cr, "cycles": [{"label": "solo"}],
-                            "agentId": orchestrator})
-        assert filed.get("ok"), f"plan-file failed: {filed!r}"
-        plan_id, cycle_id = filed["planId"], filed["cycles"][0]["id"]
-        path = f"/api/v2/projects/{board.key}/plans/{plan_id}/cycles/{cycle_id}"
-        for status in ("active", "done"):
-            moved = _call(board.base, path,
-                          {"status": status, "agentId": orchestrator},
-                          method="PATCH")
-            assert moved.get("ok"), f"cycle {status} failed: {moved!r}"
-        return cycle_id
+        return cls.board().file_plan(cr)
+
+    def gate_milestones(self):
+        """Every `pre-merge-gate` milestone posted to the board."""
+        return [b for p, b in self.board().recording.posts()
+                if p == "/api/v2/milestones" and isinstance(b, dict)
+                and b.get("type") == GATE_VERB]
 
     def gate_milestone(self, cr, result):
-        """The ONE `pre-merge-gate` milestone labelled `cr`."""
-        board = self.board()
-        read = board.http(
-            f"/api/v2/projects/{board.key}/milestones?type={GATE_VERB}")
-        self.assertTrue(read.get("ok"), f"milestones read failed: {read!r}")
-        mine = [m for m in read.get("milestones") or [] if m.get("label") == cr]
+        """The ONE `pre-merge-gate` milestone labelled `cr`, as posted."""
+        mine = [m for m in self.gate_milestones() if m.get("label") == cr]
         self.assertEqual(
             len(mine), 1,
             f"the gate posts exactly one `{GATE_VERB}` milestone for {cr!r}; "
@@ -168,9 +213,28 @@ class _OnTheBoard(unittest.TestCase):
         return mine[0] if mine else {}
 
     def runs_filed_by(self, agent):
-        """The test runs `agent` filed, read in full."""
-        board = self.board()
-        return [board.event(e["id"]) for e in board.test_events(agent)]
+        """The test runs `agent` filed, each read as the board's codec reads
+        what was sent: `{id, codec, summary, tree}`."""
+        recording = self.board().recording
+        runs = []
+        for path, body in recording.posts():
+            if (path not in ("/api/v2/runs", "/api/v2/runs/parsed")
+                    or not isinstance(body, dict) or body.get("agentId") != agent):
+                continue
+            codec, run_id = body.get("codec"), body.get("runId")
+            if codec == "junit":
+                decoded = junit_sent(body) or {}
+            elif codec == "nextest":
+                held = held_results(recording.held_stream(run_id) if run_id else "")
+                decoded = {"summary": {"total": sum(held.values()),
+                                       "passed": held["ok"],
+                                       "failed": held["failed"]}}
+            else:
+                decoded = stream_sent(recording, run_id) if run_id else {}
+            runs.append({"id": run_id, "codec": codec,
+                         "summary": decoded.get("summary"),
+                         "tree": decoded.get("tree")})
+        return runs
 
     def entry_targets(self, record):
         suites = record.get("suites")
@@ -221,15 +285,6 @@ class AScopedGateNamingOnlyTheDispatchedSuiteTest(_OnTheBoard):
         """One gate over the project under its own plan's cycle; returns the
         result and the bun invocations it made."""
         cycle_id = cls.file_plan(cr)
-        # The plan's cycle is done, so the clients' own registration bound to
-        # it is refused; a streamed python unittest run whose run cannot be
-        # opened files nothing (CR-CRU-224 section S3), so the gate's agent is
-        # registered unbound first and the dispatched suite's run opens.
-        board = cls.board()
-        reg = board.http("/api/v2/agents/register",
-                         {"projectKey": board.key, "agentId": agent,
-                          "role": "ORCHESTRATOR"})
-        assert reg.get("ok"), f"gate agent registration failed: {reg!r}"
         log = Path(cls.project, INVOCATION_LOG)
         log.unlink(missing_ok=True)
         env = scrubbed_env(None)
@@ -398,14 +453,6 @@ class _AScopedOwnStackGate(_OnTheBoard):
         _declare_own_stack_suites(cls.CLIENT, project_dir)
         cycle_id = cls.file_plan(cr)
         if cls.CLIENT == "rust":
-            # The plan's cycle is done, so the gate's own touch bound to it is
-            # refused, and a streamed nextest run whose binding is refused
-            # files nothing: the gate's agent is registered unbound first, so
-            # its run opens, as the bun gate's dispatched python suite's does.
-            reg = board.http("/api/v2/agents/register",
-                             {"projectKey": board.key, "agentId": agent,
-                              "role": "ORCHESTRATOR"})
-            assert reg.get("ok"), f"gate agent registration failed: {reg!r}"
             # The gate's lint stage runs the project's declared linter in
             # place of the clippy default: it is re-declared as a recording
             # `census-lint` in the bin dir, found on PATH, so its one
@@ -422,7 +469,7 @@ class _AScopedOwnStackGate(_OnTheBoard):
         argv = ([GATE_VERB, "--agent", agent, "--project-dir", str(project_dir),
                  "--cycle", str(cycle_id)] + list(cls.EXTRA) + list(extra))
         result = drive_verb(CLIENT_FILES[cls.CLIENT], argv, project_dir, bin_dir,
-                            timeout=TIMEOUT, board=board.base)
+                            timeout=TIMEOUT, board=board.url)
         drive = {"cr": cr, "agent": agent, "result": result,
                  "ran": _invocations(bin_dir)}
         shutil.rmtree(project_dir, ignore_errors=True)
@@ -544,25 +591,20 @@ class AScopedGateOfABoundAgentNeedsNoCycleFlagTest(_OnTheBoard):
     def setUpClass(cls):
         super().setUpClass()
         board = cls.board()
-        project = board.http("/api/v2/projects", {"name": cls.CR})
-        assert project.get("ok"), f"project creation failed: {project!r}"
-        cls.key = project["project"]["key"]
-        orchestrator = f"{cls.CR}-orchestrator"
-        reg = board.http("/api/v2/agents/register",
-                         {"projectKey": cls.key, "agentId": orchestrator,
-                          "role": "ORCHESTRATOR"})
-        assert reg.get("ok"), f"orchestrator registration failed: {reg!r}"
-        filed = board.http(f"/api/v2/projects/{cls.key}/plans",
-                           {"cr": cls.CR, "cycles": [{"label": "solo"}],
-                            "agentId": orchestrator})
-        assert filed.get("ok"), f"plan-file failed: {filed!r}"
-        plan_id, cls.cycle_id = filed["planId"], filed["cycles"][0]["id"]
-        moved = _call(board.base,
-                      f"/api/v2/projects/{cls.key}/plans/{plan_id}/cycles/"
-                      f"{cls.cycle_id}",
-                      {"status": "active", "agentId": orchestrator},
-                      method="PATCH")
-        assert moved.get("ok"), f"cycle active failed: {moved!r}"
+        # Its own project on the board, whose one plan's cycle is ACTIVE.
+        cls.key = f"{cls.CR}-key"
+        cls.cycle_id = board.file_plan(cls.CR, status="active", key=cls.key)
+        # The board as it stands once the registration below is accepted:
+        # the agent held, bound to that cycle (`Store.toAgent`'s
+        # `boundCycleId`); the binding itself is held in bun by
+        # `agent-cycle-binding.test.ts`.
+        board.recording.answer(
+            "GET", f"/api/v2/agents?project={cls.key}",
+            {"ok": True, "agents": [
+                {"agentId": cls.AGENT, "projectKey": cls.key,
+                 "status": "online", "message": "", "identity": {},
+                 "firstSeen": 1, "lastSeen": 1, "role": "VERIFY",
+                 "boundCycleId": cls.cycle_id}]})
         cls.project_dir = _make_project_dir(cls.CLIENT)
         cls.bin_dir = _recording_bin_dir(cls.CLIENT)
         (cls.project_dir / ".env").write_text(f"CRUCIBLE_PROJECT_KEY={cls.key}\n")
@@ -572,12 +614,12 @@ class AScopedGateOfABoundAgentNeedsNoCycleFlagTest(_OnTheBoard):
             CLIENT_FILES[cls.CLIENT],
             ["register", "--agent", cls.AGENT, "--role", "VERIFY",
              "--cycle", str(cls.cycle_id)] + project_flag,
-            cls.project_dir, cls.bin_dir, timeout=TIMEOUT, board=board.base)
+            cls.project_dir, cls.bin_dir, timeout=TIMEOUT, board=board.url)
         cls.result = drive_verb(
             CLIENT_FILES[cls.CLIENT],
             [GATE_VERB, "--agent", cls.AGENT, SUITES_FLAG, cls.TARGET]
             + project_flag,
-            cls.project_dir, cls.bin_dir, timeout=TIMEOUT, board=board.base)
+            cls.project_dir, cls.bin_dir, timeout=TIMEOUT, board=board.url)
 
     @classmethod
     def tearDownClass(cls):
@@ -589,6 +631,12 @@ class AScopedGateOfABoundAgentNeedsNoCycleFlagTest(_OnTheBoard):
         self.assertEqual(self.registered.returncode, 0,
                          f"the bound registration succeeded; "
                          f"{_transcript(self.registered)}")
+        bound = [b for p, b in self.board().recording.posts()
+                 if p == "/api/v2/agents/register" and isinstance(b, dict)
+                 and b.get("agentId") == self.AGENT
+                 and b.get("cycleId") == self.cycle_id]
+        self.assertTrue(bound, f"the registration binds {self.AGENT} to "
+                               f"cycle {self.cycle_id}")
 
     def test_the_scoped_gate_is_not_refused_and_passes(self):
         envelope = _gate_envelope(self.result.stdout) or {}
@@ -602,22 +650,23 @@ class AScopedGateOfABoundAgentNeedsNoCycleFlagTest(_OnTheBoard):
             f"the scoped gate ran and passed; {_transcript(self.result)}")
 
     def test_the_gate_posts_a_scoped_milestone_under_the_bound_cycle(self):
-        read = self.board().http(
-            f"/api/v2/projects/{self.key}/milestones?type={GATE_VERB}")
-        self.assertTrue(read.get("ok"), f"milestones read failed: {read!r}")
-        mine = [m for m in read.get("milestones") or []
-                if m.get("label") == self.CR]
+        mine = [m for m in self.gate_milestones()
+                if m.get("label") == self.CR and m.get("agentId") == self.AGENT]
         self.assertEqual(len(mine), 1,
                          f"the gate posts one `{GATE_VERB}` milestone under "
                          f"the bound cycle's CR; got {mine!r}; "
                          f"{_transcript(self.result)}")
         record = mine[0] if mine else {}
         self.assertEqual(
-            (record.get("outcome"), record.get("scope"),
-             (record.get("context") or {}).get("cycleId")),
-            ("pass", "scoped", self.cycle_id),
-            f"a passing scoped milestone under the cycle the agent is bound "
-            f"to; record={record!r}")
+            (record.get("outcome"), record.get("scope")), ("pass", "scoped"),
+            f"a passing scoped milestone; record={record!r}")
+        # Under the cycle the agent is bound to: the post names it in its
+        # context, or comes from the agent bound to it (the board stamps the
+        # binding's cycle on a milestone posted with no context).
+        context = record.get("context") or {}
+        self.assertIn(
+            context.get("cycleId"), (self.cycle_id, None),
+            f"the milestone names no other cycle; record={record!r}")
 
 # ── help: one shared declaration ────────────────────────────────────────────
 
