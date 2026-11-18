@@ -7,7 +7,6 @@ import json as _json
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 from tests.client.live_run_harness import INGEST_PATHS, PLANS_ANSWER, RecordingBoard
 
@@ -84,21 +83,6 @@ def unattributed_to(board, cycle_id):
     return missing
 
 
-def _free_port():
-    import socket
-
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
-
-
-def _declare_listener(store_dir, port, host="127.0.0.1"):
-    Path(store_dir, "crucible.toml").write_text(
-        f'[server]\nhost = "{host}"\nport = {port}\n', encoding="utf-8")
-
-
 def _call(base, path, payload=None, method=None):
     data = None if payload is None else _json.dumps(payload).encode()
     request = urllib.request.Request(
@@ -109,16 +93,3 @@ def _call(base, path, payload=None, method=None):
             return _json.loads(response.read().decode())
     except urllib.error.HTTPError as exc:
         return _json.loads(exc.read().decode())
-
-
-def _await_server(base, proc, timeout=60):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"scratch server exited early with {proc.returncode}")
-        try:
-            with urllib.request.urlopen(base + "/api/v2/health", timeout=2):  # noqa: S310
-                return
-        except Exception:
-            time.sleep(0.2)
-    raise RuntimeError(f"scratch server never became reachable at {base}")
