@@ -34,9 +34,11 @@ appends what it saw — whether each variable was present, and the value the
 test itself set — to a record file, and writes one combined JUnit report
 whose cases carry the file stem as `classname` and the test function as
 `name` (Unity's stylizer shape). The board is steered only by the scratch
-project's own `crucible.toml`: a REAL throwaway board where the stored run is
-read back, a recording stand-in where the requests are counted, and a
-stand-in that reports an active cycle for the refusals.
+project's own `crucible.toml`: a recording stand-in where the run filed is read
+off its request log (as the board's junit codec reads it) and the requests are
+counted, and a stand-in that reports an active cycle for the refusals. How the
+board stores a junit run it decodes is held in bun by
+`tests/integration/v2-runs-events.test.ts`.
 
 Invocation:
     python3 -m unittest tests.client.integration.test_an_arduino_run_narrowed_by_tests_and_name_reaches_make -v
@@ -45,7 +47,6 @@ Invocation:
 import http.server
 import json
 import re
-import shutil
 import threading
 import unittest
 
@@ -54,8 +55,8 @@ from tests.client.live_run_harness import (
     START,
     RecordingBoard,
     install_project,
+    junit_sent,
 )
-from tests.client.real_board import RealBoard
 from tests.client.an_arduino_run_narrowed_by_tests_and_name_reaches_make_helpers import (
     CATALOGUE,
     _diagnostics,
@@ -157,30 +158,6 @@ class ActiveCycleBoard:
         self._thread.join(timeout=5)
 
 
-_REAL_BOARD = None
-
-
-def _real_board():
-    """The module's one throwaway REAL board, booted on first use."""
-    global _REAL_BOARD
-    if _REAL_BOARD is None:
-        bun = shutil.which("bun")
-        if bun is None:
-            raise unittest.SkipTest(
-                "the run a narrowed run filed is read back from a REAL board, "
-                "and without `bun` there is none to boot — a missing "
-                "toolchain, not a passing assertion")
-        _REAL_BOARD = RealBoard(bun, "arduino-narrowed-run")
-    return _REAL_BOARD
-
-
-def tearDownModule():
-    global _REAL_BOARD
-    if _REAL_BOARD is not None:
-        _REAL_BOARD.close()
-        _REAL_BOARD = None
-
-
 def _tree_cases(tree):
     """`{suite name: sorted case names}` of a filed tree."""
     return {suite.get("name"): sorted(c.get("name") for c in
@@ -191,24 +168,33 @@ def _tree_cases(tree):
 # ── the flags reach `make`, and the run filed holds only their cases ───────
 
 class _NarrowedRunFiled(_NarrowingProject):
-    """`--tests` and `--name` reach `make` and narrow the run the REAL board
-    stores; without an own reports directory they reach `make` all the same."""
+    """`--tests` and `--name` reach `make` and narrow the run the client
+    files, read as the board's junit codec reads it; without an own reports
+    directory they reach `make` all the same."""
 
     def setUp(self):
         self.make_project()
 
-    def drive_filed(self, *extra, agent):
-        board = _real_board()
-        board.install(self.project)
+    def drive_filed(self, *extra, agent, passed):
+        """Drive a filed run, the board answering its ingest as the server
+        answers a run of `passed` passing cases."""
+        board = RecordingBoard()
+        self.addCleanup(board.close)  # type: ignore[attr-defined]
+        board.script_run(passed=passed)
+        install_project(self.project, board.url, "arduino-narrowed-run",
+                        "arduino-narrowed-run")
         return board, self.drive(self.VERB, *extra, agent=agent)
 
     def the_one_stored_run(self, board, agent, result):
-        events = board.test_events(agent)
+        """The one run the client filed for `agent`, read as the board's
+        junit codec decodes it (`{summary, tree}`)."""
+        bodies = [b for p, b in board.posts() if p == RUNS_INGEST
+                  and isinstance(b, dict) and b.get("agentId") == agent]
         self.assertEqual(  # type: ignore[attr-defined]
-            len(events), 1,
-            f"exactly one test run is filed for this agent; events={events!r} "
-            f"{_diagnostics(result)}")
-        return board.event(events[0]["id"]) if events else {}
+            len(bodies), 1,
+            f"exactly one test run is filed for this agent; "
+            f"posts={[p for p, _ in board.posts()]!r} {_diagnostics(result)}")
+        return (junit_sent(bodies[0]) or {}) if bodies else {}
 
     def drive_without_own_reports(self, *extra):
         board = RecordingBoard()
@@ -219,7 +205,8 @@ class _NarrowedRunFiled(_NarrowingProject):
 
     def test_tests_flag_reaches_make_and_the_filed_run_holds_only_those_files(self):
         agent = f"ard-narrow-{self.VERB}-tests-filed"
-        board, result = self.drive_filed("--tests", "test_a", "test_b", agent=agent)
+        board, result = self.drive_filed("--tests", "test_a", "test_b",
+                                         agent=agent, passed=4)
         record = self.the_one_make_run(result)
         self.assertEqual(  # type: ignore[attr-defined]
             (record.get("tests"), record.get("test_name_present")),
@@ -231,16 +218,17 @@ class _NarrowedRunFiled(_NarrowingProject):
         event = self.the_one_stored_run(board, agent, result)
         self.assertEqual(  # type: ignore[attr-defined]
             _tree_cases(event.get("tree")), ONLY_A_AND_B,
-            f"the stored run holds only test_a's and test_b's cases; "
+            f"the run filed holds only test_a's and test_b's cases; "
             f"tree={event.get('tree')!r}")
         summary = event.get("summary") or {}
         self.assertEqual(  # type: ignore[attr-defined]
             (summary.get("total"), summary.get("passed"), summary.get("failed")),
-            (4, 4, 0), f"stored summary={summary!r}")
+            (4, 4, 0), f"filed summary={summary!r}")
 
     def test_name_flag_reaches_make_and_the_filed_run_holds_only_matching_cases(self):
         agent = f"ard-narrow-{self.VERB}-name-filed"
-        board, result = self.drive_filed("--name", "stall,limit", agent=agent)
+        board, result = self.drive_filed("--name", "stall,limit", agent=agent,
+                                         passed=3)
         record = self.the_one_make_run(result)
         self.assertEqual(  # type: ignore[attr-defined]
             (record.get("test_name"), record.get("tests_present")),
@@ -252,12 +240,12 @@ class _NarrowedRunFiled(_NarrowingProject):
         event = self.the_one_stored_run(board, agent, result)
         self.assertEqual(  # type: ignore[attr-defined]
             _tree_cases(event.get("tree")), ONLY_STALL_OR_LIMIT,
-            f"the stored run holds only the cases whose name or file contains "
+            f"the run filed holds only the cases whose name or file contains "
             f"`stall` or `limit`; tree={event.get('tree')!r}")
         summary = event.get("summary") or {}
         self.assertEqual(  # type: ignore[attr-defined]
             (summary.get("total"), summary.get("passed"), summary.get("failed")),
-            (3, 3, 0), f"stored summary={summary!r}")
+            (3, 3, 0), f"filed summary={summary!r}")
 
     def test_tests_flag_reaches_make_without_an_own_reports_directory(self):
         board, result = self.drive_without_own_reports("--tests", "test_a", "test_b")
