@@ -124,13 +124,18 @@ declaration onto cargo would duplicate a split cargo already makes.
 
 ### Who classifies which file — the portability boundary
 
-- **The project classifies.** Membership follows what a file in THAT repo touches. Here: `chromium.launch`,
-  `Bun.spawn`/`spawnSync`, `Bun.serve`, `startServer`, `3849`, and any declared wait ≥ 1 s. Another
-  project's markers differ; a client shipping this list would be guessing another project's architecture.
-- **Classification is DERIVED, never listed.** A manifest drifts the moment someone adds a test, and a
-  file in no target is a test nothing runs.
-- **It errs toward the slower tier.** A marker named in a comment costs one file a slower bucket; a
-  browser test hiding in `unit` costs the fast target its meaning.
+- **The project classifies.** Membership follows what a file in THAT repo touches: a browser, a process,
+  a server, a live board, a real wait. Another project's dependencies differ; a client shipping a list of
+  them would be guessing another project's architecture.
+- **This repo declares its tiers by directory.** A test file's tier is the directory that holds it:
+  `tests/unit` and `tests/integration` for bun, `tests/client/unit` and `tests/client/integration` for
+  python. The tier scripts run each directory by path — `test:unit` and `test:integration` through
+  `scripts/run-test-target.ts` (`bun test --timeout <declared> ./tests/<tier>`), `test:client-unit` and
+  `test:client-integration` as `python3 -m unittest discover -s tests/client/<tier> -t .` — and CI's
+  `test-bun` and `test-python` jobs run the same directories. No source-text classifier decides
+  membership; placing a file is the declaration.
+- **A file takes the heavier tier of what it touches or imports.** A browser test filed under `unit`
+  costs the fast tier its meaning.
 
 ### The gate contract
 
@@ -152,8 +157,9 @@ gate cannot see is not gated, and "the gate was green" then means only "the part
 - **Additive, never exclusionary.** No project may gain a target by hiding files from discovery:
   `bunfig.toml` carries no `pathIgnorePatterns` (CR-CRU-047 §S1) and `tests/integration/suite-integrity.test.ts`
   asserts the key is absent.
-- **The partition is guarded** (`tests/test-targets.test.ts`) — every file belongs to exactly one
-  non-regression target, or targets reintroduce at script level the hazard bunfig prevents at config level.
+- **Every file is in exactly one tier by construction** — a test file sits in one tier directory, and
+  `regression` still runs the whole `bun test` and `discover -s tests/client -t .`, so no tier split can
+  hide a file from the gate the way an exclusion in bunfig would.
 
 ## Layer 3 — the agent: choosing the tier is a judgement
 
