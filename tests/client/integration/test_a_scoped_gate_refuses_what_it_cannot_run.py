@@ -26,10 +26,16 @@ call beyond the toolchain's version and `go list`.
 Each case drives the real client as an OS subprocess. Every toolchain is a
 fake that records its invocations, and every compile, typecheck and lint step
 is made to FAIL, so a gate that got as far as its first step would both leave
-an invocation behind and file a compile or lint result. The board is a REAL
-scratch board (`tests/client/real_board.py`), which states the capability, for
-every case but the capability one, which runs against a recording stand-in
-whose health answer states nothing.
+an invocation behind and file a compile or lint result. The board is a
+recording stand-in per drive (`RecordingBoard`) whose health states the
+capability as the server's does (`milestones.gate` naming `scope` and
+`suites`, `src/server.ts`), for every case but the capability one, whose
+stand-in's health states nothing; "nothing filed" and "no milestone posted"
+are read off its request log. The board's own answers the old live board gave
+here — an empty milestone set for a type never recorded, the events list, the
+cycle transitions — are held in bun by
+`milestone-records-are-queryable-by-type.test.ts`, `v2-runs-events.test.ts`
+and `cycle-add-fix-only.test.ts`.
 
 A rejection by argparse (an unrecognised `--suites`) also runs nothing, so
 every case asserts the TYPED refusal — the envelope and the cause it names —
@@ -44,9 +50,12 @@ import shutil
 import unittest
 from pathlib import Path
 
-from tests.client.live_run_harness import RecordingBoard
-from tests.client.real_board import RealBoard
-from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import _call
+from tests.client.a_scoped_gate_refuses_what_it_cannot_run_helpers import (
+    GATE_VERB,
+    TARGETS,
+    _declare,
+    _named,
+)
 from tests.client.client_fleet_envelope_census_helpers import (
     _UNREACHABLE_CRUCIBLE_URL,
     CLIENT_FILES,
@@ -60,12 +69,7 @@ from tests.client.every_verb_that_files_a_run_is_refused_while_a_cycle_is_active
     _build_recording_bin_dir,
     _invocations,
 )
-from tests.client.a_scoped_gate_refuses_what_it_cannot_run_helpers import (
-    _declare,
-    GATE_VERB,
-    _named,
-    TARGETS,
-)
+from tests.client.live_run_harness import RecordingBoard
 
 SUITES_FLAG = "--suites"
 TIMEOUT = 120
@@ -91,79 +95,53 @@ def _client_argv(client_key, project_dir, bin_dir):
         return ["--python", str(Path(bin_dir) / _PYTHON_WRAPPER)]
     return []
 
-_BOARD = None
+def _gate_capable_board():
+    """A recording board whose health states, as the server's does, that it
+    records a gate's scope and suites (`milestones.gate`, `src/server.ts`).
+    It holds no agent, so an agent is bound to no cycle on it."""
+    board = RecordingBoard()
+    health = board.default_health()
+    health["milestones"] = {"gate": ["scope", "suites"]}
+    board.script_health(health)
+    return board
 
-def setUpModule():
-    global _BOARD
-    bun = shutil.which("bun")
-    if bun is None:
-        raise unittest.SkipTest(
-            "nothing filed and no milestone posted are read back from a REAL "
-            "board, and without `bun` there is none to boot — a missing "
-            "toolchain, not a passing assertion")
-    _BOARD = RealBoard(bun, "scoped-gate-refusals")
-
-def tearDownModule():
-    global _BOARD
-    if _BOARD is not None:
-        _BOARD.close()
-        _BOARD = None
 
 class _AScopedGateRefusal(unittest.TestCase):
-    """The refusal cases for ONE client, each its own test. The client's
-    project on the real board carries one plan whose cycle is done (so no
-    cycle is ACTIVE, and the unattributed-run refusal cannot stand in for the
-    no-cycle one)."""
+    """The refusal cases for ONE client, each its own test, each drive
+    against its own board. `--cycle` names a cycle of the client's project
+    that is done on the board (so no cycle is ACTIVE, and the
+    unattributed-run refusal cannot stand in for the no-cycle one)."""
 
     CLIENT: str = ""
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        if _BOARD is None:
-            raise AssertionError("the module's real board was never booted")
-        cls.board = _BOARD
         cls.toon = _load_toon_module()
-        project = cls.board.http("/api/v2/projects",
-                                 {"name": f"scoped-gate-refusals-{cls.CLIENT}"})
-        assert project.get("ok"), f"project creation failed: {project!r}"
-        cls.key = project["project"]["key"]
-        orchestrator = f"scoped-refusal-{cls.CLIENT}-orchestrator"
-        reg = cls.board.http("/api/v2/agents/register",
-                             {"projectKey": cls.key, "agentId": orchestrator,
-                              "role": "ORCHESTRATOR"})
-        assert reg.get("ok"), f"orchestrator registration failed: {reg!r}"
-        filed = cls.board.http(f"/api/v2/projects/{cls.key}/plans",
-                               {"cr": f"scoped-refusal-{cls.CLIENT}-plan",
-                                "cycles": [{"label": "solo"}],
-                                "agentId": orchestrator})
-        assert filed.get("ok"), f"plan-file failed: {filed!r}"
-        plan_id, cls.cycle_id = filed["planId"], filed["cycles"][0]["id"]
-        path = f"/api/v2/projects/{cls.key}/plans/{plan_id}/cycles/{cls.cycle_id}"
-        for status in ("active", "done"):
-            moved = _call(cls.board.base, path,
-                          {"status": status, "agentId": orchestrator},
-                          method="PATCH")
-            assert moved.get("ok"), f"cycle {status} failed: {moved!r}"
+        cls.key = f"scoped-gate-refusals-{cls.CLIENT}-key"
+        cls.cycle_id = 63
 
     # ── drive + read ────────────────────────────────────────────────────────
 
     def _gate_milestones(self):
-        read = self.board.http(
-            f"/api/v2/projects/{self.key}/milestones?type={GATE_VERB}")
-        self.assertTrue(read.get("ok"), f"milestones read failed: {read!r}")
-        return read.get("milestones") or []
+        """Every `pre-merge-gate` milestone posted to the drive's board."""
+        return [b for p, b in self.board.posts()
+                if p == "/api/v2/milestones" and isinstance(b, dict)
+                and b.get("type") == GATE_VERB]
 
     def _filed_by(self, agent_id):
-        """Every event the agent filed beyond its identity's lifecycle: the
-        runs, compile and lint results a refusal must prevent."""
-        read = self.board.http(f"/api/v2/events?project={self.key}&limit=500")
-        self.assertTrue(read.get("ok"), f"events read failed: {read!r}")
-        return [e for e in (read.get("events") or [])
-                if e.get("agentId") == agent_id and e.get("kind") != "lifecycle"]
+        """Every run route the drive touched — opening, streaming or filing a
+        run, compile or lint result: what a refusal must prevent. The board
+        is the drive's own, so all of it is `agent_id`'s."""
+        del agent_id  # one board per drive
+        return [p for p, _b in self.board.posts() if p.startswith("/api/v2/runs")]
 
     def _drive(self, case, suites, *, cycle=True, release=None, board=None,
                key=None):
+        if board is None:
+            self.board = _gate_capable_board()
+            self.addCleanup(self.board.close)
+            board = self.board.url
         agent = f"scoped-refusal-{self.CLIENT}-{case}"
         bin_dir = _build_recording_bin_dir()
         self.addCleanup(shutil.rmtree, bin_dir, True)
@@ -182,7 +160,7 @@ class _AScopedGateRefusal(unittest.TestCase):
         if release:
             argv += ["--release", release]
         result = drive_verb(CLIENT_FILES[self.CLIENT], argv, project_dir, bin_dir,
-                            timeout=TIMEOUT, board=board or self.board.base)
+                            timeout=TIMEOUT, board=board)
         _emits, axi = classify_envelope(result.stdout, self.toon)
         return agent, result, axi or {}, _invocations(bin_dir)
 
@@ -244,7 +222,7 @@ class _AScopedGateRefusal(unittest.TestCase):
                          f"error+help={text!r}")
 
     def _refused(self, case, suites, **drive):
-        before = len(self._gate_milestones())
+        before = 0  # the drive's board is fresh: no milestone posted yet
         agent, result, axi, ran = self._drive(case, suites, **drive)
         text = self.assertTypedRefusal(result, axi)
         self.assertNothingRanOrFiled(agent, ran, before, result)
