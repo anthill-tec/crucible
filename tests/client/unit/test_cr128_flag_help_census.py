@@ -22,7 +22,7 @@ the source and require the census to name BOTH.
 
 Nothing here is a seventh walker's worth of new convention. `CLIENT_FILES`,
 `AXI_MODULE_PATH` and `EXPECTED_CLIENT_COUNT` come from
-`tests/client/integration/test_client_tier_surface.py`; `_load_module_by_path` comes from
+`tests/client/client_tier_surface_helpers.py`; `_load_module_by_path` comes from
 `tests/client/unit/test_cr054_verb_surface_lift.py`; the shrink-only dated exemption
 ceiling follows `PRE_CR_ASSERTION_RESIDUE` in
 `tests/integration/project-namespace-tripwire.test.ts`.
@@ -130,13 +130,13 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Reused, not rebuilt — §S2's own words. The fleet's client table and its
 # asserted client COUNT live in one place already.
-from tests.client.integration.test_client_tier_surface import (  # noqa: E402
+from tests.client.client_tier_surface_helpers import (  # noqa: E402
     AXI_MODULE_PATH,
     CLIENT_FILES,
     EXPECTED_CLIENT_COUNT,
 )
 from tests.client.unit.test_cr054_verb_surface_lift import _load_module_by_path  # noqa: E402
-from tests.client.integration.test_client_fleet_envelope_census import enumerate_verbs  # noqa: E402
+from tests.client.client_fleet_envelope_census_helpers import enumerate_verbs  # noqa: E402
 
 TYPES_TS_PATH = REPO_ROOT / "src" / "types.ts"
 V2_ROUTES_PATH = REPO_ROOT / "src" / "v2.ts"

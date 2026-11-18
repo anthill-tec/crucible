@@ -20,7 +20,7 @@ socket is touched.
 
 Invocation:
     .venv/bin/python clients/python-crucible.py test \
-        --tests tests.client.unit.test_go_and_uv_children_use_the_suites_own_caches
+        --tests tests.client.integration.test_go_and_uv_children_use_the_suites_own_caches
 """
 
 import importlib

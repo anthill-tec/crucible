@@ -32,7 +32,7 @@ The module's surface these tests pin (in the live maven module):
 
 Invocation:
     .venv/bin/python clients/python-crucible.py test \
-        --tests tests.client.unit.test_the_maven_fixture_runs_from_a_provisioned_suite_repository
+        --tests tests.client.integration.test_the_maven_fixture_runs_from_a_provisioned_suite_repository
 """
 
 import contextlib

@@ -107,33 +107,20 @@ from tests.client.client_fleet_envelope_census_helpers import (  # noqa: E402
     declare_and_require_board,
 )
 from tests.client import CLIENT_SOURCE_DIR, client_script
+# The fleet's client table (the SOURCE paths and the asserted client count)
+# lives in `client_tier_surface_helpers`, so a suite that reuses it imports no
+# test module. A spawn or a load goes through `client_script`, the test install.
+from tests.client.client_tier_surface_helpers import (  # noqa: E402
+    AXI_MODULE_PATH,
+    CLIENT_FILES,
+    EXPECTED_CLIENT_COUNT,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-# The SOURCE paths: this module and its importers (test_cr128_flag_help_census)
-# read and label them repo-relative. A spawn or a load goes through
-# `client_script`, the test install.
 CLIENTS_DIR = CLIENT_SOURCE_DIR
-AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TYPES_TS_PATH = REPO_ROOT / "src" / "types.ts"
 
-CLIENT_FILES = {
-    "bun": CLIENTS_DIR / "bun-crucible.py",
-    "rust": CLIENTS_DIR / "rust-crucible.py",
-    "mvn": CLIENTS_DIR / "mvn-crucible.py",
-    "python": CLIENTS_DIR / "python-crucible.py",
-    "arduino": CLIENTS_DIR / "arduino-crucible.py",
-    # go joined the fleet's tier surface when its tiers became declared by
-    # build tag: it registers the six through the same shared registrar.
-    "go": CLIENTS_DIR / "go-crucible.py",
-}
 CLIENTS = tuple(CLIENT_FILES)
-
-# AC1's own words: "Five assertions and the client count asserted" -- six since
-# go joined. The count is a CONSTANT here and is compared against the number of
-# clients each test actually DROVE, so a loop that silently shrank to one
-# client fails -- that is the specific defect AC1 exists to prevent ("the
-# client exposes the verbs" is satisfiable by one client).
-EXPECTED_CLIENT_COUNT = 6
 
 # The six, spelled as AC1 spells them. This literal is not the source of truth:
 # `TierVocabularyMirrorDriftGuardTest` below asserts it equals the `Tier` union

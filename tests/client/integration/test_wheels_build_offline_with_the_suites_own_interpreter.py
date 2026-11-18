@@ -21,7 +21,7 @@ remain the integration proof.
 
 Invocation:
     .venv/bin/python clients/python-crucible.py test \
-        --tests tests.client.unit.test_wheels_build_offline_with_the_suites_own_interpreter
+        --tests tests.client.integration.test_wheels_build_offline_with_the_suites_own_interpreter
 """
 
 import contextlib
