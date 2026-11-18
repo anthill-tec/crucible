@@ -26,8 +26,10 @@ plan-it-means.md):
   `kind`: `parseCycleInput` (`src/v2.ts`) reads `{label, kind?}`, validates against
   `CYCLE_KINDS` and defaults to `red-green` when omitted. So every verify and
   fix cycle ever filed through this verb is stored as `red-green`. NO server
-  change is needed or wanted — which is why the §S4 criteria are asserted by
-  reading the STORED plan back from a real board, not from a POST body alone.
+  change is needed or wanted. The §S4 criteria are asserted here on what the
+  real client sends to a fake board and relays from its answers; the STORED
+  plan read back is the server's half, held in bun
+  (`cycle-append-route-stores-and-refuses-kinds.test.ts`).
 
 RED, measured against the fleet today (2026-09-12): no client declares `--plan`
 or `--kind` anywhere (`argparse` answers `unrecognized arguments` and exits 2),
@@ -76,6 +78,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -89,13 +92,10 @@ from tests.client.plan_file_names_the_release_it_plans_helpers import (
     EXPECTED_CLIENT_COUNT,
     REPO_ROOT,
     _UNREACHABLE_CRUCIBLE_URL,
-    _await_server,
-    _declare_listener,
-    _free_port,
     _functions_handed_the_parser,
-    _http,
     _shared_functions_declaring,
 )
+from tests.client.live_run_harness import RecordingBoard
 from tests.client.plan_file_names_the_release_it_plans_helpers import (
     CLIENT_FILES,
     CLIENTS,
@@ -793,13 +793,23 @@ class CycleAddBodyWithoutAKindIsUnchangedTest(_BaseCycleAddTest):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# END TO END — against a real board, because §S4 is about what gets STORED
+# END TO END — the client against a fake board, the store's half in bun
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# A server built from this repo's own source, on a free port with a mkdtemp DB
-# — never the live instance, never the shared project. The scratch-board idiom
-# is the sibling suites' (`test_plan_file_names_the_release_it_plans.py`),
-# imported rather than re-invented.
+# The real `python-crucible.py`, a genuine subprocess, against a fake board
+# (`RecordingBoard`) that answers the plans read and each cycle append in the
+# server's own shapes (`handleCycleAppend`, src/v2.ts), its refusal of an
+# unknown kind included. What the client SENT is read off the request log.
+# What the STORE then holds — the appended cycle read back with its kind
+# beside the untouched filed one, an unknown kind refused 400 storing
+# nothing, the append landing on a re-filed open plan while its aborted
+# sibling keeps exactly its own cycle, a fix needing its verify done — is the
+# server's half, held in bun by
+# `tests/integration/cycle-append-route-stores-and-refuses-kinds.test.ts` and
+# `cycle-add-fix-only.test.ts`.
+
+#: The server's refusal of a kind `parseCycleInput` (src/v2.ts) does not know.
+_INVALID_KIND = "invalid kind: {kind} (expected red-green | verify | fix)"
 
 
 class _ScratchBoardTestBase(unittest.TestCase):
@@ -807,77 +817,27 @@ class _ScratchBoardTestBase(unittest.TestCase):
     ORCHESTRATOR = "cycle-add-target-e2e-orchestrator"
     WAVE = "6"
 
-    @classmethod
-    def setUpClass(cls):
-        cls._tmpdir = tempfile.mkdtemp(prefix="cycle-add-target-e2e-")
-        cls._proc = None
-        bun = shutil.which("bun")
-        if bun is None:
-            raise unittest.SkipTest(
-                "a stored cycle's kind is a property of the real store: "
-                "without `bun` there is no server to hold it. A missing "
-                "toolchain, not a passing assertion.")
-        port = _free_port()
-        cls.base = f"http://127.0.0.1:{port}"
-        _declare_listener(cls._tmpdir, port)
-        cls._proc = subprocess.Popen(
-            [bun, "run", "--no-env-file", "src/server.ts"], cwd=str(REPO_ROOT),
-            env={**os.environ,
-                 "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        try:
-            cls._boot()
-        except BaseException:
-            # A child spawned and then abandoned by a FAILING setUpClass is
-            # never torn down (`tearDownClass` does not run when `setUpClass`
-            # raises), and an orphaned server holds its port for as long as it
-            # lives. Kill it on the way out, whatever went wrong.
-            cls._stop_server()
-            raise
-
-    @classmethod
-    def _boot(cls):
-        _await_server(cls.base, cls._proc)
-
-        project = _http(cls.base, "/api/v2/projects",
-                        {"name": "cycle-add-target-e2e"})
-        cls.key = project["project"]["key"]
-        registered = _http(cls.base, "/api/v2/agents/register",
-                           {"projectKey": cls.key, "agentId": cls.ORCHESTRATOR,
-                            "role": "ORCHESTRATOR"})
-        assert registered.get("ok"), f"registration failed: {registered!r}"
-
-        cls.project_dir = os.path.join(cls._tmpdir, "project")
-        os.makedirs(cls.project_dir)
-        Path(cls.project_dir, ".env").write_text(
-            f"CRUCIBLE_PROJECT_KEY={cls.key}\n")
-        cls.toon = _load_module_by_path(CLIENTS_DIR / "toon.py",
-                                        "cycle_add_target_e2e_toon")
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._stop_server()
-        shutil.rmtree(cls._tmpdir, ignore_errors=True)
-
-    @classmethod
-    def _stop_server(cls):
-        """Stop the scratch server, from teardown OR from a setUpClass that
-        failed after spawning it. Idempotent, so both callers may run."""
-        proc = getattr(cls, "_proc", None)
-        if proc is None:
-            return
-        cls._proc = None
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="cycle-add-target-e2e-")
+        self.addCleanup(shutil.rmtree, self._tmpdir, True)
+        self.board = RecordingBoard()
+        self.addCleanup(self.board.close)
+        self.base = self.board.url
+        self.key = str(uuid.uuid4())
+        self.plans_path = f"/api/v2/projects/{self.key}/plans"
+        self._ids = iter(range(9001, 9100))
+        self.project_dir = os.path.join(self._tmpdir, "project")
+        os.makedirs(self.project_dir)
+        Path(self.project_dir, ".env").write_text(
+            f"CRUCIBLE_PROJECT_KEY={self.key}\n")
+        self.toon = _load_module_by_path(CLIENTS_DIR / "toon.py",
+                                         "cycle_add_target_e2e_toon")
 
     def _client(self, *argv):
-        # CR-CRU-139 §S2 — the scratch board is declared in the fixture's own
+        # CR-CRU-139 §S2 — the fake board is declared in the fixture's own
         # project file, and the interlock refuses the spawn unless the client
         # would really resolve it: these verbs WRITE, and a drive that merely
-        # stopped steering would write to the shipped default instead.
+        # stopped steering would write to another board instead.
         declare_and_require_board(self.project_dir, self.base,
                                   "python-crucible.py")
         env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
@@ -886,61 +846,71 @@ class _ScratchBoardTestBase(unittest.TestCase):
             cwd=str(REPO_ROOT), env=env, capture_output=True, text=True,
             timeout=120)
 
-    def _file_plan(self, cr, first_cycle="the first cycle"):
-        run = self._client(
-            "plan-file", "--cr", cr, "--title", f"{cr} under test",
-            # CR-CRU-127 §S5 — a filed cycle declares its kind; this fixture
-            # files the plan `cycle-add` then appends to, so it declares the
-            # red-green kind the first cycle is.
-            "--wave", self.WAVE, "--cycle", first_cycle,
-            "--cycle-kind", "red-green",
-            "--agent", self.ORCHESTRATOR, "--project-dir", self.project_dir)
-        self.assertEqual(
-            run.returncode, 0,
-            f"fixture: filing a plan for {cr} must succeed; "
-            f"stdout={run.stdout.strip()[:600]!r} "
-            f"stderr={run.stderr.strip()[:600]!r}")
-        return self._plan_for(cr)["planId"]
+    def _filed_plan(self, plan_id, cr, label, status="open"):
+        """A plan as `GET …/plans` lists it: its one filed red-green cycle."""
+        return {"planId": plan_id, "projectKey": self.key, "cr": cr,
+                "title": f"{cr} under test", "wave": self.WAVE,
+                "status": status,
+                "cycles": [{"id": plan_id * 10, "label": label,
+                            "kind": "red-green", "status": "pending"}]}
+
+    def _board_holds(self, *plans):
+        """Answer the plans read (every plan, whatever its status) with
+        `plans`, and the `filed`/`lastClosedCr` the server computes."""
+        self.board.answer("GET", self.plans_path,
+                          {"ok": True, "plans": list(plans),
+                           "lastClosedCr": None, "filed": len(plans)})
+
+    def _answer_append(self, plan_id, cr, label, kind):
+        """Answer the next append to `plan_id` as the server does: the new
+        cycle, the plan's cr, and — for a recorded change, any kind but
+        `fix` — the process-failure warning; an unknown kind is refused 400
+        with `parseCycleInput`'s own wording."""
+        path = f"{self.plans_path}/{plan_id}/cycles"
+        if kind not in CYCLE_KINDS:
+            self.board.answer("POST", path,
+                              {"ok": False,
+                               "error": _INVALID_KIND.format(kind=kind),
+                               "help": ["cycle-add <label> --kind red-green|verify|fix"]},
+                              status=400, times=1)
+            return
+        self.board.answer("POST", path,
+                          {"ok": True, "changed": True, "id": next(self._ids),
+                           "label": label, "kind": kind, "status": "pending",
+                           "cr": cr},
+                          times=1)
 
     def _cycle_add(self, label, *extra):
         return self._client(
             VERB, label, "--agent", self.ORCHESTRATOR,
             "--project-dir", self.project_dir, *extra)
 
-    def _plans(self):
-        body = _http(self.base, f"/api/v2/projects/{self.key}/plans")
-        self.assertIs(body.get("ok"), True, f"plans read failed: {body!r}")
-        return body.get("plans") or []
+    def _appends(self):
+        """Every cycle append the client posted, as `(planId, body)`, in
+        wire order."""
+        prefix = f"{self.plans_path}/"
+        return [(int(p[len(prefix):].split("/")[0]), b)
+                for p, b in self.board.posts()
+                if p.startswith(prefix) and p.endswith("/cycles")]
 
-    def _plan_for(self, cr, status="open"):
-        matches = [p for p in self._plans()
-                   if p.get("cr") == cr and p.get("status") == status]
-        self.assertEqual(
-            len(matches), 1,
-            f"fixture: exactly one {status} plan for {cr}; got {matches!r}")
-        return matches[0]
-
-    def _plan_by_id(self, plan_id):
-        matches = [p for p in self._plans() if p.get("planId") == plan_id]
-        self.assertEqual(len(matches), 1,
-                         f"plan {plan_id} must exist; got {matches!r}")
-        return matches[0]
-
-    @staticmethod
-    def _kinds_by_label(plan):
-        return {cycle.get("label"): cycle.get("kind")
-                for cycle in plan.get("cycles") or []}
+    def _writes_beside_appends(self):
+        """Every write to the project's plans that is not a cycle append."""
+        return [p for p, _ in self.board.posts()
+                if p.startswith(self.plans_path) and not p.endswith("/cycles")]
 
 
 class AddedCycleIsStoredWithTheKindItDeclaredTest(_ScratchBoardTestBase):
-    """§S4/AC1 + AC2 — read back from the STORE, never from the POST response:
-    a response echoing the kind proves the route parsed it, not that the board
-    now records the right kind of work."""
+    """§S4/AC1 + AC2 — the client sends the kind it was given, to the plan it
+    resolved, and relays the server's refusal of a kind the route does not
+    know. The read back from the STORE is the server's half (bun,
+    `cycle-append-route-stores-and-refuses-kinds.test.ts`)."""
 
     CR = "CR-124-E2E-KIND"
 
     def test_a_verify_cycle_reads_as_verify_when_the_plan_is_read_back(self):
-        plan_id = self._file_plan(self.CR, first_cycle="the red-green cycle")
+        plan_id = 41
+        self._board_holds(self._filed_plan(plan_id, self.CR, "the red-green cycle"))
+        self._answer_append(plan_id, self.CR, "the verify cycle", "verify")
 
         # CR-CRU-165 §S1 -- appending a VERIFY cycle to a filed plan is now
         # a recorded plan change (only a FIX append needs nothing more); this
@@ -957,24 +927,25 @@ class AddedCycleIsStoredWithTheKindItDeclaredTest(_ScratchBoardTestBase):
             f"stdout={run.stdout.strip()[:600]!r} "
             f"stderr={run.stderr.strip()[:600]!r}")
 
-        kinds = self._kinds_by_label(self._plan_by_id(plan_id))
+        appends = self._appends()
         self.assertEqual(
-            kinds.get("the verify cycle"), "verify",
-            f"the board's own record of what KIND of work ran is the whole "
-            f"point — every verify cycle filed through this verb so far reads "
-            f"red-green; got {kinds!r}")
+            [(planned, body.get("label"), body.get("kind"))
+             for planned, body in appends],
+            [(plan_id, "the verify cycle", "verify")],
+            f"exactly one cycle is appended, to the plan `--cr` resolved, "
+            f"carrying the KIND it was given — the board's record of what "
+            f"kind of work ran starts here; got {appends!r}")
         self.assertEqual(
-            kinds.get("the red-green cycle"), "red-green",
-            f"the plan's existing cycle is untouched; got {kinds!r}")
-        self.assertEqual(
-            len(kinds), 2,
-            f"exactly one cycle was appended; got {kinds!r}")
+            self._writes_beside_appends(), [],
+            "the plan's existing cycle is untouched: nothing else is written")
 
     def test_every_declared_kind_round_trips_and_an_unknown_one_is_refused(self):
-        plan_id = self._file_plan(f"{self.CR}-ROUNDTRIP",
-                                  first_cycle="the filed cycle")
+        plan_id = 42
+        cr = f"{self.CR}-ROUNDTRIP"
+        self._board_holds(self._filed_plan(plan_id, cr, "the filed cycle"))
 
         for kind in CYCLE_KINDS:
+            self._answer_append(plan_id, cr, f"appended {kind}", kind)
             extra = ()
             if kind != "fix":
                 # CR-CRU-165 §S1 -- every kind but `fix` is now a recorded
@@ -991,67 +962,21 @@ class AddedCycleIsStoredWithTheKindItDeclaredTest(_ScratchBoardTestBase):
                 f"`{KIND_FLAG} {kind}` is one of the route's own kinds and "
                 f"must be accepted; stdout={run.stdout.strip()[:600]!r} "
                 f"stderr={run.stderr.strip()[:600]!r}")
-            if kind == "verify":
-                # CR-CRU-165 §S1/AC1 -- a FIX append needs its plan's
-                # VERIFY cycle DONE (store.appendCycle's unrecorded-fix
-                # branch); complete the one just appended before the loop
-                # reaches `fix`, or that append would be refused on an
-                # unrelated ground (verify-not-done) this test does not mean
-                # to exercise.
-                decoded = self.toon.decode(run.stdout)
-                verify_cycle_id = decoded["axi"].get("id")
-                self.assertIsNotNone(
-                    verify_cycle_id,
-                    f"fixture sanity: the appended verify cycle's id must "
-                    f"ride the envelope; got {decoded!r}")
-                # Cycles activate in ascending order: complete every earlier
-                # pending cycle (activate, then done) before the verify one,
-                # checking each transition so the setup cannot fail silently.
-                earlier = []
-                for cycle in self._plan_by_id(plan_id).get("cycles") or []:
-                    if cycle.get("id") == verify_cycle_id:
-                        break
-                    if cycle.get("status") == "pending":
-                        earlier.append(cycle.get("id"))
-                for earlier_id in earlier:
-                    for step in ("cycle-activate", "cycle-done"):
-                        moved = self._client(
-                            step, str(earlier_id),
-                            "--agent", self.ORCHESTRATOR,
-                            "--project-dir", self.project_dir)
-                        self.assertEqual(
-                            moved.returncode, 0,
-                            f"fixture: {step} {earlier_id} (an earlier "
-                            f"pending cycle) must succeed; "
-                            f"stdout={moved.stdout.strip()[:600]!r} "
-                            f"stderr={moved.stderr.strip()[:600]!r}")
-                activated = self._client(
-                    "cycle-activate", str(verify_cycle_id),
-                    "--agent", self.ORCHESTRATOR,
-                    "--project-dir", self.project_dir)
-                self.assertEqual(
-                    activated.returncode, 0,
-                    f"fixture: activating the verify cycle must succeed; "
-                    f"stdout={activated.stdout.strip()[:600]!r} "
-                    f"stderr={activated.stderr.strip()[:600]!r}")
-                done = self._client(
-                    "cycle-done", str(verify_cycle_id),
-                    "--agent", self.ORCHESTRATOR,
-                    "--project-dir", self.project_dir)
-                self.assertEqual(
-                    done.returncode, 0,
-                    f"fixture: completing the verify cycle must succeed; "
-                    f"stdout={done.stdout.strip()[:600]!r} "
-                    f"stderr={done.stderr.strip()[:600]!r}")
+            decoded = self.toon.decode(run.stdout)
+            self.assertIsNotNone(
+                decoded["axi"].get("id"),
+                f"the appended cycle's id rides the envelope; got {decoded!r}")
 
-        kinds = self._kinds_by_label(self._plan_by_id(plan_id))
+        sent = {body.get("label"): body.get("kind")
+                for planned, body in self._appends() if planned == plan_id}
         self.assertEqual(
-            {label: kinds.get(label) for label in
+            {label: sent.get(label) for label in
              (f"appended {kind}" for kind in CYCLE_KINDS)},
             {f"appended {kind}": kind for kind in CYCLE_KINDS},
-            f"each declared kind must survive the round trip as ITSELF; got "
-            f"{kinds!r}")
+            f"each declared kind must be sent as ITSELF, to the named plan; "
+            f"got {self._appends()!r}")
 
+        self._answer_append(plan_id, cr, "appended smoke", "smoke")
         refused = self._cycle_add("appended smoke", PLAN_FLAG, str(plan_id),
                                   KIND_FLAG, "smoke",
                                   # carries the change record so it clears
@@ -1079,14 +1004,15 @@ class AddedCycleIsStoredWithTheKindItDeclaredTest(_ScratchBoardTestBase):
             f"stdout={refused.stdout.strip()[:600]!r} "
             f"stderr={refused.stderr.strip()[:600]!r}")
 
-        after = self._kinds_by_label(self._plan_by_id(plan_id))
-        self.assertNotIn(
-            "appended smoke", after,
-            f"a refused kind stores NOTHING; got {after!r}")
+        appends = self._appends()
         self.assertEqual(
-            len(after), 1 + len(CYCLE_KINDS),
-            f"the filed cycle plus exactly one per accepted kind; got "
-            f"{after!r}")
+            [body.get("kind") for _planned, body in appends],
+            [*CYCLE_KINDS, "smoke"],
+            f"one append per accepted kind, then the one the server refused "
+            f"— never retried, never sent as another kind; got {appends!r}")
+        self.assertEqual(
+            self._writes_beside_appends(), [],
+            "nothing but the appends is written")
 
 
 class PlanFlagAddsACycleToARecoveredCrTest(_ScratchBoardTestBase):
@@ -1097,28 +1023,15 @@ class PlanFlagAddsACycleToARecoveredCrTest(_ScratchBoardTestBase):
     CR = "CR-124-E2E-ABORTED-SIBLING"
 
     def test_the_named_plan_receives_the_cycle_despite_the_aborted_sibling(self):
-        aborted_id = self._file_plan(self.CR, first_cycle="the abandoned cycle")
-        # CR-CRU-165 §S2b -- an abort now requires a recorded reason,
-        # cause and spec reference too; this fixture's abort is not the
-        # subject under test (the subject is the later --plan escape), so it
-        # simply supplies them to keep succeeding under the new contract.
-        aborted = self._client(
-            "abort", "--cr", self.CR, "--user-approved",
-            "--reason", "a spec change invalidated the aborted sibling",
-            "--cause", "gap-analysis", "--spec-ref", "design note §S2b",
-            "--agent", self.ORCHESTRATOR, "--project-dir", self.project_dir)
-        self.assertEqual(
-            aborted.returncode, 0,
-            f"fixture: aborting the first plan must succeed; "
-            f"stdout={aborted.stdout.strip()[:600]!r} "
-            f"stderr={aborted.stderr.strip()[:600]!r}")
-        self.assertEqual(
-            self._plan_by_id(aborted_id).get("status"), "aborted",
-            "fixture: the first plan is the terminal sibling the live failure "
-            "tripped over")
-
-        live_id = self._file_plan(self.CR, first_cycle="the recovered cycle")
-        self.assertNotEqual(live_id, aborted_id, "fixture: a NEW plan")
+        # The board holds the CR's first plan ABORTED (the terminal sibling
+        # the live failure tripped over) and its re-filed plan open.
+        aborted_id, live_id = 51, 52
+        self._board_holds(
+            self._filed_plan(aborted_id, self.CR, "the abandoned cycle",
+                             status="aborted"),
+            self._filed_plan(live_id, self.CR, "the recovered cycle"))
+        self._answer_append(live_id, self.CR,
+                            "the cycle the client could not add", "verify")
 
         # CR-CRU-165 §S1 -- a VERIFY append is a recorded plan change too
         # now; this test's subject is the --plan escape from the ambiguity,
@@ -1136,19 +1049,19 @@ class PlanFlagAddsACycleToARecoveredCrTest(_ScratchBoardTestBase):
             f"{run.stdout.strip()[:600]!r} stderr="
             f"{run.stderr.strip()[:600]!r}")
 
-        live_kinds = self._kinds_by_label(self._plan_by_id(live_id))
+        appends = self._appends()
         self.assertEqual(
-            live_kinds.get("the cycle the client could not add"), "verify",
-            f"the cycle lands on the plan that was NAMED, with the kind it "
-            f"declared; got {live_kinds!r}")
+            [(planned, body.get("label"), body.get("kind"))
+             for planned, body in appends],
+            [(live_id, "the cycle the client could not add", "verify")],
+            f"the cycle is sent to the plan that was NAMED, with the kind it "
+            f"declared, and exactly once; got {appends!r}")
+        self.assertNotIn(
+            aborted_id, [planned for planned, _ in appends],
+            "the aborted sibling is settled history and is sent nothing")
         self.assertEqual(
-            len(live_kinds), 2,
-            f"the recovered plan's filed cycle plus exactly one append; got "
-            f"{live_kinds!r}")
-        self.assertEqual(
-            self._kinds_by_label(self._plan_by_id(aborted_id)),
-            {"the abandoned cycle": "red-green"},
-            "the aborted sibling is settled history and receives nothing")
+            self._writes_beside_appends(), [],
+            "nothing but the one append is written")
 
 
 if __name__ == "__main__":
