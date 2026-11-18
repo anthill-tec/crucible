@@ -7,12 +7,16 @@ proceeds and is stored under that cycle. With NO active cycle, today's soft
 `no-cycle` warning stands unchanged. A `--release` run is never refused by
 this check, active cycle or not.
 
-Driven against a REAL, ephemeral `bun run src/server.ts` board (never
-:3850/:3849) — the only way to have a genuine ACTIVE cycle for the pre-flight
-read to answer, which a canned/recording stub cannot fake — following the
-same real-server idiom every other end-to-end suite in this directory uses
-(`test_status_verb_shows_open_plans_end_to_end.py`,
-`test_bun_regression_declares_its_release_end_to_end.py`). Each of the five
+Driven against a recording board (`cycle_board`, a `RecordingBoard`) that
+answers the pre-flight reads in the server's shapes: the project's agent list
+holding the agent bound to no cycle, and its open plans carrying one ACTIVE
+cycle (or no plan at all, for the sibling project). What the client sent is
+read off the board's request log. The server's half — `boundCycleId` on the
+agent list (`agent-cycle-binding.test.ts`), `?status=open` answering exactly
+the open plan (`plans-status-filter.test.ts`), a run stored under the cycle
+its context or binding names (`ingest-binding-attach.test.ts`) and a release
+run stored under its release (`events-by-release.test.ts`) — is held in bun.
+Each of the five
 clients' `test`/`pre-merge-gate` verbs is driven as a genuine OS subprocess,
 argv built from each client's OWN real argparse
 (`test_client_fleet_envelope_census.py`'s `enumerate_verbs`/`build_argv`),
@@ -34,14 +38,15 @@ Invocation:
     python3 -m unittest tests.client.integration.test_an_unattributed_run_is_refused_while_a_cycle_is_active -v
 """
 
-import os
 import shutil
-import subprocess
-import tempfile
-import time
 import unittest
 from pathlib import Path
 
+from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import (
+    cycle_board,
+    filed,
+    unattributed_to,
+)
 from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     _build_fake_bin_dir,
@@ -51,12 +56,6 @@ from tests.client.client_fleet_envelope_census_helpers import (
     classify_envelope,
     drive_verb,
     enumerate_verbs,
-)
-from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import (
-    _await_server,
-    _call,
-    _declare_listener,
-    _free_port,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -73,124 +72,19 @@ CLIENT_VERB_PAIRS = sorted(
 
 class UnattributedRunRefusedWhileACycleIsActiveTest(unittest.TestCase):
     """AC — "An unattributed run is refused", read for all five clients
-    against one shared live board: a project carrying an ACTIVE cycle, and a
+    against a board per drive: a project carrying an ACTIVE cycle, and a
     sibling project carrying none."""
 
     ORCHESTRATOR = "cycle-refusal-fixture-orchestrator"
     RELEASE_LABEL = "4.4.4-cycle-refusal-fixture"
-    RELEASE_WAVE = "1"
     PLANTED_CR = "CR-T-CYCLE-REFUSAL-ACTIVE"
-    RELEASE_CR = "CR-T-CYCLE-REFUSAL-RELEASE"
+    active_key = "cycle-refusal-active-key"
+    no_active_key = "cycle-refusal-no-active-key"
+    active_cycle_id = 41
 
     @classmethod
     def setUpClass(cls):
-        cls._tmpdir = tempfile.mkdtemp(prefix="cycle-refusal-e2e-")
-        cls._proc = None
-        bun = shutil.which("bun")
-        if bun is None:
-            raise unittest.SkipTest(
-                "an ACTIVE cycle for the pre-flight read to answer is a "
-                "property of a REAL store: without `bun` there is no server "
-                "to carry one. A missing toolchain, not a passing assertion.")
-        port = _free_port()
-        assert port not in (3850, 3849, 39877), (
-            f"fixture sanity: the OS handed back a reserved port {port}")
-        cls.base = f"http://127.0.0.1:{port}"
-        _declare_listener(cls._tmpdir, port)
-        cls._proc = subprocess.Popen(
-            [bun, "run", "--no-env-file", "src/server.ts"], cwd=str(REPO_ROOT),
-            env={**os.environ, "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        try:
-            cls._boot()
-        except BaseException:
-            cls._stop_server()
-            raise
-
-    @classmethod
-    def _http(cls, path, payload=None, method=None):
-        return _call(cls.base, path, payload, method)
-
-    @classmethod
-    def _boot(cls):
-        _await_server(cls.base, cls._proc)
         cls.toon = _load_toon_module()
-
-        # `active_key` — one project carrying exactly ONE active cycle (plus
-        # a declared release, filed through a SECOND, still-pending cycle so
-        # it never contends for "the" active one), used by every case below
-        # that needs the project to HAVE an active cycle.
-        project = cls._http("/api/v2/projects", {"name": "cycle-refusal-active"})
-        assert project.get("ok"), f"project creation failed: {project!r}"
-        cls.active_key = project["project"]["key"]
-
-        reg = cls._http("/api/v2/agents/register",
-                        {"projectKey": cls.active_key, "agentId": cls.ORCHESTRATOR,
-                         "role": "ORCHESTRATOR"})
-        assert reg.get("ok"), f"orchestrator registration failed: {reg!r}"
-
-        filed = cls._http(f"/api/v2/projects/{cls.active_key}/plans",
-                          {"cr": cls.PLANTED_CR, "cycles": [{"label": "solo"}],
-                           "agentId": cls.ORCHESTRATOR})
-        assert filed.get("ok"), f"plan-file failed: {filed!r}"
-        plan_id = filed["planId"]
-        cycle_id = filed["cycles"][0]["id"]
-        activated = cls._http(
-            f"/api/v2/projects/{cls.active_key}/plans/{plan_id}/cycles/{cycle_id}",
-            {"status": "active", "agentId": cls.ORCHESTRATOR}, method="PATCH")
-        assert activated.get("ok"), f"cycle activation failed: {activated!r}"
-        cls.active_cycle_id = cycle_id
-
-        # §S1's own declaration rule ("a CR planned into it") — a release
-        # declared on the SAME project, via its own plan/cycle (left
-        # pending, never activated, so the project still carries exactly
-        # one active cycle: the one above).
-        proposed = cls._http(f"/api/v2/projects/{cls.active_key}/release-proposals",
-                             {"agentId": cls.ORCHESTRATOR, "label": cls.RELEASE_LABEL,
-                              "targetAt": int(time.time()) + 86400})
-        assert proposed.get("ok"), f"release proposal failed: {proposed!r}"
-        planned = cls._http(f"/api/v2/projects/{cls.active_key}/queue/plan",
-                            {"cr": cls.RELEASE_CR, "title": "release-run fixture CR",
-                             "release": cls.RELEASE_LABEL, "wave": cls.RELEASE_WAVE,
-                             "agentId": cls.ORCHESTRATOR})
-        assert planned.get("ok"), f"cr-plan under the release failed: {planned!r}"
-
-        # `no_active_key` — a sibling project with NO plan filed at all, so
-        # NO active cycle, for the "between CRs" regression pin.
-        no_active = cls._http("/api/v2/projects", {"name": "cycle-refusal-no-active"})
-        assert no_active.get("ok"), f"project creation failed: {no_active!r}"
-        cls.no_active_key = no_active["project"]["key"]
-
-        # Fixture sanity — the comparisons below are read against these, not
-        # hardcoded, but a silently-empty board would make every assertion
-        # below vacuous.
-        active_plans = cls._http(f"/api/v2/projects/{cls.active_key}/plans")
-        active_cycles = [c for p in active_plans.get("plans", []) for c in p.get("cycles", [])
-                         if c.get("status") == "active"]
-        assert len(active_cycles) == 1 and active_cycles[0]["id"] == cls.active_cycle_id, (
-            f"fixture sanity: expected exactly one active cycle "
-            f"({cls.active_cycle_id}) on {cls.active_key}; got {active_plans!r}")
-        no_active_plans = cls._http(f"/api/v2/projects/{cls.no_active_key}/plans")
-        assert no_active_plans.get("filed") == 0, (
-            f"fixture sanity: expected NO plans filed on {cls.no_active_key}; "
-            f"got {no_active_plans!r}")
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._stop_server()
-        shutil.rmtree(cls._tmpdir, ignore_errors=True)
-
-    @classmethod
-    def _stop_server(cls):
-        proc = getattr(cls, "_proc", None)
-        if proc is None:
-            return
-        cls._proc = None
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
 
     # ── drive + read helpers ────────────────────────────────────────────────
 
@@ -204,6 +98,14 @@ class UnattributedRunRefusedWhileACycleIsActiveTest(unittest.TestCase):
         return d
 
     def _drive(self, client_key, verb_name, agent_id, project_key, extra_argv=()):
+        """Drive one verb against its own board: `active_key`'s carries the
+        ACTIVE cycle, `no_active_key`'s no plan at all; both hold the agent
+        bound to no cycle. The board is kept as `self.board`."""
+        self.board = cycle_board(
+            project_key, agent_id,
+            self.active_cycle_id if project_key == self.active_key else None,
+            cr=self.PLANTED_CR, orchestrator=self.ORCHESTRATOR)
+        self.addCleanup(self.board.close)
         fake_bin_dir = _build_fake_bin_dir()
         self.addCleanup(shutil.rmtree, fake_bin_dir, True)
         project_dir = self._project_dir(client_key, project_key)
@@ -215,7 +117,7 @@ class UnattributedRunRefusedWhileACycleIsActiveTest(unittest.TestCase):
         argv = build_argv(verb_name, verbs[verb_name], project_dir)
         argv = argv + ["--agent", agent_id] + list(extra_argv)
         result = drive_verb(script_path, argv, project_dir, fake_bin_dir,
-                            timeout=90, board=self.base)
+                            timeout=90, board=self.board.url)
         emits, axi = classify_envelope(result.stdout, self.toon)
         # `axi` is None on a decode failure; every caller asserts `emits`
         # first (which fails loudly and stops the test right there), so an
@@ -224,15 +126,16 @@ class UnattributedRunRefusedWhileACycleIsActiveTest(unittest.TestCase):
         return result, emits, axi or {}
 
     def _events_for(self, project_key, agent_id):
-        """The RUN-RESULT events (`kind == "test"`) this agent filed — never
-        the opening heartbeat's own `kind: "lifecycle", action: "registered"`
-        touch, which is identity management, not the runner's evidence (a
-        refusal that opens the identity bracket before declining to spawn
-        the runner must still read back NO run-result event here)."""
-        read = self._http(f"/api/v2/events?project={project_key}")
-        self.assertTrue(read.get("ok"), f"events read failed: {read!r}")
-        return [e for e in (read.get("events") or [])
-               if e.get("agentId") == agent_id and e.get("kind") == "test"]
+        """The RUN RESULTS (`/api/v2/runs`, `/api/v2/runs/parsed`: the
+        server's `kind: "test"` events) this agent filed on the drive's
+        board — never the opening heartbeat's own registration, which is
+        identity management, not the runner's evidence (a refusal that opens
+        the identity bracket before declining to spawn the runner must still
+        file NO run result)."""
+        del project_key  # one board per drive, one project per board
+        return [b for p, b in filed(self.board)
+                if p in ("/api/v2/runs", "/api/v2/runs/parsed")
+                and isinstance(b, dict) and b.get("agentId") == agent_id]
 
     def _warnings_of(self, axi, code):
         return [w for w in (axi.get("warnings") or [])
@@ -333,11 +236,11 @@ class UnattributedRunRefusedWhileACycleIsActiveTest(unittest.TestCase):
                     f"{self.active_cycle_id} must file exactly one event "
                     f"for this agent; got events={events!r}")
                 self.assertEqual(
-                    (events[0].get("context") or {}).get("cycleId"),
-                    self.active_cycle_id,
-                    f"{client_key} {verb_name}: the stored event must carry "
-                    f"EXACTLY the cycle this run was bound to "
-                    f"({self.active_cycle_id}); got event={events[0]!r}")
+                    unattributed_to(self.board, self.active_cycle_id), [],
+                    f"{client_key} {verb_name}: the run must be filed "
+                    f"carrying EXACTLY the cycle it was bound to "
+                    f"({self.active_cycle_id}) — by its context or its "
+                    f"agent's binding; posts={self.board.posts()!r}")
 
     # ── GUARD 2 — no active cycle: today's soft warning stands ─────────────
 
