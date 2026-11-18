@@ -4062,7 +4062,7 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
       // route). `release` and `track` are the values the membership gate
       // VETTED and returned; a property one literal deeper than these would
       // store nothing under its name at all, which the AC11 half of
-      // tests/queue-accepted-field-guard.test.ts now fires on.
+      // tests/unit/queue-accepted-field-guard.test.ts now fires on.
       ...(release !== undefined ? { release } : {}),
       ...(track !== undefined ? { track } : {}),
       ...(lifecycle !== undefined ? { lifecycle } : {}),
@@ -4756,7 +4756,7 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   // a value that WAS declared and carries no label is a SHAPE complaint whose
   // remedy is the caller's own input — and whose help-less envelope is pinned
   // as parity with the bulk door's identical refusal
-  // (tests/queue-membership-one-rule.test.ts, CR-CRU-104 §S2/AC3).
+  // (tests/integration/queue-membership-one-rule.test.ts, CR-CRU-104 §S2/AC3).
   if (body.release === undefined || body.release === null) {
     return fail(400, RELEASE_REQUIRED, { help: roadmapHints.missingRelease });
   }

@@ -933,7 +933,7 @@ export type ChangeListener = (kind: ChangeKind, projectKey?: string) => void;
  *
  * EXPORTED on purpose: a private constant is a promise the store makes to
  * itself, and this one has to be checkable from outside
- * (tests/retention-disposable-kinds.test.ts). Adding a structural kind here is
+ * (tests/unit/retention-disposable-kinds.test.ts). Adding a structural kind here is
  * how this project lost every release it had ever shipped on 2026-09-13.
  */
 export const RETENTION_DISPOSABLE_KINDS: ReadonlySet<string> = new Set([
@@ -2314,7 +2314,7 @@ const GATE_ROWS = recordProjection("gates", "gate");
  * names this one). "Is it still a plannable plan?" and "does it carry a
  * delivered date?" are both true of it in those two senses. That is ambiguous
  * DATA, not an inconsistent model, and it is pinned in
- * `tests/release-before-and-after-delivery.test.ts` so it cannot invert in
+ * `tests/integration/release-before-and-after-delivery.test.ts` so it cannot invert in
  * silence.
  *
  * Retirement is deliberately NOT part of it: a superseded plan is neither a
@@ -6256,7 +6256,7 @@ export class Store {
     // "outstanding" for a target nobody aims at any more — two live plans for
     // one label, the very thing `retired_at` is stamped to prevent. Both
     // halves are pinned together in
-    // `tests/undelivered-release-is-the-plannable-target.test.ts` consumer 5:
+    // `tests/integration/undelivered-release-is-the-plannable-target.test.ts` consumer 5:
     // the dated read answers the live record alone, the unfiltered one answers
     // the predecessor too, still carrying the target it declared.
     if (dates !== undefined && Object.keys(dates).length > 0) {
@@ -7118,7 +7118,7 @@ export class Store {
   // consumes, under the existing "events" kind: §S0b renders plan state
   // (markers/spans) inline on the events timeline, so the events surface IS
   // the affected consumer surface. (A dedicated "plans" ChangeKind would
-  // widen the union pinned by tests/events.test.ts — deferred to a
+  // widen the union pinned by tests/integration/events.test.ts — deferred to a
   // sanctioned re-target if a later cycle needs kind-discriminated pushes.)
 
   /** Terminal cycle statuses — a plan closes only when every cycle is here. */

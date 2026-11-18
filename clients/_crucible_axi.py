@@ -6358,7 +6358,7 @@ def add_queue_file_verb(sub, func, *, parents=(), add_args=()):
 #
 # PROVENANCE: the server DECLARES this vocabulary as the `Tier` union in
 # `src/types.ts`, and that declaration is authoritative. The dict below is the
-# client side's ONLY copy of it: `tests/client/test_client_tier_surface.py`
+# client side's ONLY copy of it: `tests/client/integration/test_client_tier_surface.py`
 # parses that union out by SYMBOL and asserts the two are the same set, so a
 # seventh server-side value fails a test rather than quietly narrowing five
 # clients. Reading `src/types.ts` at client RUNTIME is not the requirement and

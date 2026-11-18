@@ -1,8 +1,8 @@
 // CR-CRU-006 §S3/§S4 — declarations for app-logic.mjs. Sibling .d.mts so the
 // test import (`../public/app-logic.mjs`) typechecks via module resolution:
-// public/ stays outside the tsconfig include set, and the ambient
-// `declare module` in tests/app-logic.d.ts is inert for relative specifiers
-// (TS ignores relative ambient module names). Mirrors that contract exactly.
+// public/ stays outside the tsconfig include set. It is the only declaration:
+// the ambient `declare module` mirror the tests once kept was inert for relative
+// specifiers (TS ignores relative ambient module names) and is retired.
 
 export interface CrucibleEventBrief {
   id: string;
