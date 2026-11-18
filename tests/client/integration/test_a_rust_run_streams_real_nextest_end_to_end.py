@@ -1,5 +1,11 @@
 """A rust run streams REAL nextest to a REAL board, end to end.
 
+The feature this module keeps a live board for is the rust/nextest run
+lifecycle end to end: the list, the `nextest` stream batches and the close of
+one run on the board. No fake can prove it, because what is asserted is the
+server's own `nextest` decoding, its open run's partial state and the stored
+record, compared with the same board's `junit` decoding of the same run.
+
 The real `clients/rust-crucible.py`, real cargo-nextest (0.9.130 or later),
 real cargo-llvm-cov and a real board (`bun run src/server.ts` on a free port
 with a throwaway store), against the scratch workspace committed at
