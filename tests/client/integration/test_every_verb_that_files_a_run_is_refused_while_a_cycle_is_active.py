@@ -10,35 +10,36 @@ rest of the fleet's filing verbs: `regression`, the tier verbs, `check`,
 `pre-merge-gate`'s own first step (the compile, typecheck or clippy step a
 gate runs before its suites).
 
-Each case drives the real client as an OS subprocess against a real,
-ephemeral `bun run src/server.ts` board (never :3850/:3849) carrying one
-active cycle. The agent is registered on that board bound to no cycle. Every
+Each case drives the real client as an OS subprocess against its own
+recording board (`cycle_board`, a `RecordingBoard`) answering the pre-flight
+reads in the server's shapes: the agent held bound to no cycle, and one open
+plan carrying an active cycle (or none). What the client sent is read off
+the board's request log; the server's half — the binding read, the open-plans
+filter and a result stored under the cycle its context or binding names — is
+held in bun (`agent-cycle-binding.test.ts`, `plans-status-filter.test.ts`,
+`ingest-binding-attach.test.ts`). Every
 fake toolchain records each invocation in its bin directory, and every
 compile, typecheck and lint step is made to FAIL, so a step that ran would
 file a compile or lint result. Three properties are read back:
 
   * refused: non-zero exit, an `ok:false` envelope whose `help[]` names
-    `--cycle <the active id>`, NO toolchain invocation, and NO event filed by
-    the agent;
+    `--cycle <the active id>`, NO toolchain invocation, and NOTHING posted to
+    a run route by the agent;
   * the control: the same failing drives on a project with NO active cycle
     DO file, so the fixture is one that would file;
   * `--cycle <id>`: every verb the refusal covers accepts the flag (a census
     over each client's own argparse), and a verb given it files its result
-    under that cycle.
+    carrying that cycle.
 """
 
-import os
 import shutil
-import subprocess
-import tempfile
 import unittest
-from pathlib import Path
 
 from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import (
-    _await_server,
-    _call,
-    _declare_listener,
-    _free_port,
+    cycle_board,
+    filed,
+    runs_touched,
+    unattributed_to,
 )
 from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
@@ -49,15 +50,13 @@ from tests.client.client_fleet_envelope_census_helpers import (
     drive_verb,
 )
 from tests.client.every_verb_that_files_a_run_is_refused_while_a_cycle_is_active_helpers import (
+    _PYTHON_WRAPPER,
+    TIERS,
     _build_recording_bin_dir,
     _filing_verbs,
     _invocations,
-    _PYTHON_WRAPPER,
     _seed,
-    TIERS,
 )
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
 
 REFUSED_CODE = "unattributed-run-refused"
 
@@ -108,94 +107,32 @@ class EveryRefusableVerbAcceptsCycleTest(unittest.TestCase):
 
 
 class EveryVerbThatFilesARunIsRefusedTest(unittest.TestCase):
-    """The AC "Every verb that files a run", for all five clients, against one
-    live board: a project with one ACTIVE cycle, and a sibling with none."""
+    """The AC "Every verb that files a run", for all five clients, against a
+    board per drive: a project with one ACTIVE cycle, and a sibling with
+    none."""
 
     ORCHESTRATOR = "every-verb-refusal-orchestrator"
     PLANTED_CR = "CR-T-EVERY-VERB-REFUSAL"
+    active_key = "every-verb-refusal-active-key"
+    no_active_key = "every-verb-refusal-no-active-key"
+    active_cycle_id = 52
 
     @classmethod
     def setUpClass(cls):
-        cls._tmpdir = tempfile.mkdtemp(prefix="every-verb-refusal-e2e-")
-        cls._proc = None
-        bun = shutil.which("bun")
-        if bun is None:
-            raise unittest.SkipTest(
-                "an ACTIVE cycle is a property of a REAL store: without `bun` "
-                "there is no server to carry one.")
-        port = _free_port()
-        assert port not in (3850, 3849), f"fixture sanity: reserved port {port}"
-        cls.base = f"http://127.0.0.1:{port}"
-        _declare_listener(cls._tmpdir, port)
-        cls._proc = subprocess.Popen(
-            [bun, "run", "--no-env-file", "src/server.ts"], cwd=str(REPO_ROOT),
-            env={**os.environ, "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        try:
-            cls._boot()
-        except BaseException:
-            cls._stop_server()
-            shutil.rmtree(cls._tmpdir, ignore_errors=True)
-            raise
-
-    @classmethod
-    def _http(cls, path, payload=None, method=None):
-        return _call(cls.base, path, payload, method)
-
-    @classmethod
-    def _boot(cls):
-        _await_server(cls.base, cls._proc)
         cls.toon = _load_toon_module()
-        project = cls._http("/api/v2/projects", {"name": "every-verb-refusal-active"})
-        assert project.get("ok"), f"project creation failed: {project!r}"
-        cls.active_key = project["project"]["key"]
-        reg = cls._http("/api/v2/agents/register",
-                        {"projectKey": cls.active_key, "agentId": cls.ORCHESTRATOR,
-                         "role": "ORCHESTRATOR"})
-        assert reg.get("ok"), f"orchestrator registration failed: {reg!r}"
-        filed = cls._http(f"/api/v2/projects/{cls.active_key}/plans",
-                          {"cr": cls.PLANTED_CR, "cycles": [{"label": "solo"}],
-                           "agentId": cls.ORCHESTRATOR})
-        assert filed.get("ok"), f"plan-file failed: {filed!r}"
-        cycle_id = filed["cycles"][0]["id"]
-        activated = cls._http(
-            f"/api/v2/projects/{cls.active_key}/plans/{filed['planId']}/cycles/{cycle_id}",
-            {"status": "active", "agentId": cls.ORCHESTRATOR}, method="PATCH")
-        assert activated.get("ok"), f"cycle activation failed: {activated!r}"
-        cls.active_cycle_id = cycle_id
-        no_active = cls._http("/api/v2/projects", {"name": "every-verb-refusal-no-active"})
-        assert no_active.get("ok"), f"project creation failed: {no_active!r}"
-        cls.no_active_key = no_active["project"]["key"]
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._stop_server()
-        shutil.rmtree(cls._tmpdir, ignore_errors=True)
-
-    @classmethod
-    def _stop_server(cls):
-        proc = getattr(cls, "_proc", None)
-        if proc is None:
-            return
-        cls._proc = None
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
 
     # ── drive + read helpers ────────────────────────────────────────────────
 
-    def _register_unbound(self, project_key, agent_id):
-        reg = self._http("/api/v2/agents/register",
-                         {"projectKey": project_key, "agentId": agent_id,
-                          "role": "report"})
-        self.assertTrue(reg.get("ok"), f"unbound registration failed: {reg!r}")
-        self.assertIsNone(
-            (reg.get("agent") or {}).get("boundCycleId"),
-            f"fixture sanity: {agent_id} must be bound to no cycle; got {reg!r}")
-
     def _drive(self, client_key, verb, agent_id, project_key, extra_argv=()):
+        """Drive one verb against its own board, holding the agent registered
+        bound to no cycle: `active_key`'s carries the ACTIVE cycle,
+        `no_active_key`'s no plan at all. The board is kept as
+        `self.board`."""
+        self.board = cycle_board(
+            project_key, agent_id,
+            self.active_cycle_id if project_key == self.active_key else None,
+            cr=self.PLANTED_CR, orchestrator=self.ORCHESTRATOR)
+        self.addCleanup(self.board.close)
         bin_dir = _build_recording_bin_dir()
         self.addCleanup(shutil.rmtree, bin_dir, True)
         project_dir = _make_project_dir(client_key)
@@ -205,7 +142,6 @@ class EveryVerbThatFilesARunIsRefusedTest(unittest.TestCase):
             env_lines.append("CRUCIBLE_PROJECT_NAME=every-verb-refusal-project\n")
         (project_dir / ".env").write_text("".join(env_lines))
         seeded = _seed(client_key, verb, project_dir)
-        self._register_unbound(project_key, agent_id)
         subparser = _filing_verbs(client_key)[verb]
         # The census argv without its trailing positionals (bun's tier
         # passthrough, which takes nothing here), and with this agent in place
@@ -217,18 +153,18 @@ class EveryVerbThatFilesARunIsRefusedTest(unittest.TestCase):
         argv = [verb] + seeded + list(extra_argv) + census
         result = drive_verb(
             CLIENT_FILES[client_key], argv, project_dir, bin_dir, timeout=120,
-            board=self.base,
+            board=self.board.url,
             extra_env={"PY_CRUCIBLE_PYTHON": str(bin_dir / _PYTHON_WRAPPER)})
         emits, axi = classify_envelope(result.stdout, self.toon)
         return result, emits, axi or {}, _invocations(bin_dir), subparser
 
     def _filed_by(self, project_key, agent_id):
-        """Every event the agent filed other than its identity's own lifecycle
-        touches: the runs, compile and lint results a refusal must prevent."""
-        read = self._http(f"/api/v2/events?project={project_key}")
-        self.assertTrue(read.get("ok"), f"events read failed: {read!r}")
-        return [e for e in (read.get("events") or [])
-                if e.get("agentId") == agent_id and e.get("kind") != "lifecycle"]
+        """Every run, compile and lint result the agent filed on the drive's
+        board — never its identity's own registration touches: what a
+        refusal must prevent."""
+        del project_key  # one board per drive, one project per board
+        return [b for _p, b in filed(self.board)
+                if isinstance(b, dict) and b.get("agentId") == agent_id]
 
     @staticmethod
     def _agent_id(prefix, client_key, verb):
@@ -276,11 +212,11 @@ class EveryVerbThatFilesARunIsRefusedTest(unittest.TestCase):
                         ran, [],
                         f"{client_key} {verb}: refused before anything is run "
                         f"— yet the toolchain was invoked: {ran!r}")
-                    filed = self._filed_by(self.active_key, agent_id)
+                    touched = runs_touched(self.board)
                     self.assertEqual(
-                        filed, [],
-                        f"{client_key} {verb}: a refused run files nothing; "
-                        f"got {filed!r}")
+                        touched, [],
+                        f"{client_key} {verb}: a refused run files nothing "
+                        f"and opens no run; got {touched!r}")
 
     # ── the control: the same failing steps DO file with no active cycle ──
 
@@ -318,17 +254,16 @@ class EveryVerbThatFilesARunIsRefusedTest(unittest.TestCase):
                         extra_argv=["--cycle", str(self.active_cycle_id)])
                     self.assertNotIn(REFUSED_CODE, result.stderr,
                                      self._transcript(result))
-                    filed = self._filed_by(self.active_key, agent_id)
+                    results = self._filed_by(self.active_key, agent_id)
                     self.assertTrue(
-                        filed, f"{client_key} {verb}: --cycle must still file; "
-                               f"{self._transcript(result)}")
-                    for event in filed:
-                        self.assertEqual(
-                            (event.get("context") or {}).get("cycleId"),
-                            self.active_cycle_id,
-                            f"{client_key} {verb}: filed with --cycle "
-                            f"{self.active_cycle_id}, so stored under it; "
-                            f"got {event!r}")
+                        results, f"{client_key} {verb}: --cycle must still file; "
+                                 f"{self._transcript(result)}")
+                    self.assertEqual(
+                        unattributed_to(self.board, self.active_cycle_id), [],
+                        f"{client_key} {verb}: filed with --cycle "
+                        f"{self.active_cycle_id}, so every result carries it "
+                        f"— by its context or its agent's binding; "
+                        f"posts={self.board.posts()!r}")
 
 
 if __name__ == "__main__":
