@@ -73,6 +73,31 @@ DEFAULT_RUN_BLOCK = {"total": 0, "passed": 0, "failed": 0}
 # The ways `RecordingBoard.drop_next` can break a connection it has read.
 DROP_SHAPES = ("close", "reset", "truncate", "truncate-error", "garble")
 
+# The answer shapes of the board's reads, as `src/v2.ts` returns them with
+# nothing held, for a test to hand to `RecordingBoard.answer` (filled in with
+# its own rows). The board answers none of them unscripted.
+# `handleProjectMilestones` -- `GET .../projects/<key>/milestones?type=`.
+MILESTONES_ANSWER = {"ok": True, "milestones": [], "totalCount": 0}
+# `handleEventsList` -- `GET /api/v2/events?project=` (newest first).
+EVENTS_ANSWER = {"ok": True, "events": [], "openRuns": []}
+# `handleQueueGet` -- `GET .../projects/<key>/queue`.
+QUEUE_ANSWER = {"ok": True, "entries": [], "tracks": []}
+# `handleProjectHistory` -- `GET .../projects/<key>/history`.
+HISTORY_ANSWER = {"ok": True, "releases": [], "acceptedFailingGates": []}
+# `handlePlansList` -- `GET .../projects/<key>/plans[?status=]`.
+PLANS_ANSWER = {"ok": True, "plans": [], "lastClosedCr": None, "filed": 0}
+# `handleProjectMetadataGet` -- `GET .../projects/<key>/metadata`.
+METADATA_ANSWER = {"ok": True, "metadata": {}}
+# `handleMilestones` -- `POST /api/v2/milestones`, a new record: 201 with
+# the event id the store minted (see `milestone_posted`).
+MILESTONE_POSTED_STATUS = 201
+
+
+def milestone_posted(event_id):
+    """`handleMilestones`' answer to a recorded milestone (`src/v2.ts`):
+    `{ok, changed, event}`, given with `MILESTONE_POSTED_STATUS`."""
+    return {"ok": True, "changed": True, "event": event_id}
+
 
 def _health_codecs(stream_codec=True, nextest_stream=True):
     """A copy of `HEALTH_CODECS`, without the stream codec when the board is
@@ -165,7 +190,12 @@ class RecordingBoard:
     is a 409 carrying `held`; a total past `stream_limit` (default
     `ingest_body_bytes`) is a 413 carrying `held`. `stream_codec=False` is a
     board whose health lists no `crucible-events`; `stream_route=False` is a
-    board with no stream route at all (every batch a 404)."""
+    board with no stream route at all (every batch a 404).
+
+    A test sets the answer to any request by method and path (`answer`),
+    refusals included, from the server's own shapes (`MILESTONES_ANSWER` and
+    its siblings above); ids and timestamps it lists are minted as the store
+    mints them (`mint_event_id`, `milestone_record`)."""
 
     def __init__(self, ingest_body_bytes=DEFAULT_INGEST_BODY_BYTES,
                  stream_codec=True, stream_route=True, stream_limit=None,
@@ -240,6 +270,12 @@ class RecordingBoard:
         self._refused_binding = None
         self._active_cycle = None
         self._held_agents = set()
+        # Answers a test set for a method and path (`answer`): newest first,
+        # each `[method, path, prefix, status, body, remaining]`. None set by
+        # default, so every request keeps the answer described above.
+        self._answers = []
+        # The store's event-id sequence (`mint_event_id`).
+        self._event_seq = 0
         board = self
 
         class _Handler(http.server.BaseHTTPRequestHandler):
@@ -278,7 +314,10 @@ class RecordingBoard:
                     board.events.append((time.time(), "GET", self.path, None))
                     health = board._health_answer()
                     failure = board._health_failure
-                if self.path in HEALTH_PATHS:
+                scripted = board._scripted_answer(self.command, self.path)
+                if scripted is not None:
+                    self._reply_status(*scripted)
+                elif self.path in HEALTH_PATHS:
                     if failure is not None:
                         status, error = failure
                         self._reply_status(status, {"ok": False, "error": error})
@@ -334,6 +373,10 @@ class RecordingBoard:
                     return
                 if held:
                     board._hold_released.wait(timeout=30)
+                scripted = board._scripted_answer(self.command, self.path)
+                if scripted is not None:
+                    self._reply_status(*scripted)
+                    return
                 refused = board._caller_refusal(self.path, body)
                 if refused is not None:
                     self._reply_status(*refused)
@@ -739,6 +782,66 @@ class RecordingBoard:
 
     def run_ids_opened(self):
         return [f"run-live-{i}" for i in range(1, self._run_seq + 1)]
+
+    def answer(self, method, path, body, status=200, prefix=False, times=None):
+        """Answer `method` (`GET`, `POST`, `PATCH`) on `path` with `status`
+        and the JSON `body` (a copy, taken now) -- a refusal is a non-200
+        status and its `{ok: False, error}` body. `path` is the request path
+        with its query, matched exactly, or as a prefix when `prefix`. With
+        `times` the answer is given for the next `times` such requests only;
+        without, for every one. The answer set last wins; the request is
+        still recorded, and a request no answer matches keeps the board's own
+        answer."""
+        if times is not None and times < 1:
+            raise ValueError(f"times must be at least 1, not {times!r}")
+        copied = json.loads(json.dumps(body))
+        with self._lock:
+            self._answers.insert(0, [method.upper(), path, prefix, status,
+                                     copied, times])
+
+    def _scripted_answer(self, method, path):
+        """`(status, body)` of the answer set for this request, or None."""
+        with self._lock:
+            for entry in self._answers:
+                verb, wanted, prefix, status, body, remaining = entry
+                if verb != method:
+                    continue
+                if not (path.startswith(wanted) if prefix else path == wanted):
+                    continue
+                if remaining is not None:
+                    entry[5] = remaining - 1
+                    if entry[5] == 0:
+                        self._answers.remove(entry)
+                return status, json.loads(json.dumps(body))
+        return None
+
+    def mint_event_id(self, at_ms=None):
+        """An event id as the store mints one (`Store.nextEventId`,
+        src/store.ts): `evt-<ms>-<seq>`, `<ms>` the epoch milliseconds (now,
+        or `at_ms`) and `<seq>` this board's own sequence, one higher on every
+        call and never reset -- so ids minted within one millisecond differ
+        only by a sequence that grows past two digits (`-100` after `-59`)."""
+        at = int(time.time() * 1000) if at_ms is None else int(at_ms)
+        with self._lock:
+            self._event_seq += 1
+            seq = self._event_seq
+        return f"evt-{at}-{seq}"
+
+    def milestone_record(self, project_key, agent_id, milestone_type, label,
+                         at_ms=None, **fields):
+        """One milestone as `handleProjectMilestones` lists it (`Store.toEvent`
+        over a record `recordMilestoneEvent` wrote, src/store.ts): a minted
+        `id` and its millisecond `timestamp`, the posting project and agent,
+        `kind` `milestone`, `tier` `unit`, the `type` (`milestone_type`) and
+        `label`, and any
+        further `fields` (a gate's `outcome`, `scope`, `suites`, a `commit`)
+        as given. For a test to list in `MILESTONES_ANSWER`."""
+        at = int(time.time() * 1000) if at_ms is None else int(at_ms)
+        record = {"id": self.mint_event_id(at), "projectKey": project_key,
+                  "agentId": agent_id, "kind": "milestone", "tier": "unit",
+                  "timestamp": at, "type": milestone_type, "label": label}
+        record.update(json.loads(json.dumps(fields)))
+        return record
 
 
 def junit_sent(body):
