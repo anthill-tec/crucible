@@ -14,8 +14,9 @@
 #
 # CR-CRU-062 §S0-§S4 — CI runs the gates. Three test jobs carry the suites that
 # gate every CR locally:
-#   - test-bun        : `bun test`
-#   - test-python     : the client suite, server-free (`unittest discover`)
+#   - test-bun        : `bun test` over ./tests/unit, then ./tests/integration
+#   - test-python     : the client suite, server-free (`unittest discover`
+#                       over tests/client/unit, then tests/client/integration)
 #   - test-e2e        : Playwright/BDD, with CRUCIBLE_DB declared explicitly
 # §S5 adds one more job on the same unconditional cadence:
 #   - pack-server     : `npm pack --dry-run` on the npm server artifact
@@ -182,8 +183,12 @@ jobs:
       # flag is the only honoured channel, and CI does not shell through
       # `clients/bun-crucible.py` — so the figure is named in both places, and a
       # test reads BOTH and fails if they ever drift apart.
-      - name: Bun suite
-        run: bun test --timeout 30000
+      # The suite runs by tier DIRECTORY, unit first: `./tests/<tier>` (the
+      # `./` makes it a directory, not a name filter), each on the same budget.
+      - name: Bun suite — unit tier
+        run: bun test --timeout 30000 ./tests/unit
+      - name: Bun suite — integration tier
+        run: bun test --timeout 30000 ./tests/integration
 
   # CR-CRU-062 §S2 — the Python client suite. Measured server-free at gap
   # analysis (683/683 with CRUCIBLE_URL pointed at a dead port), so it needs
@@ -256,8 +261,12 @@ jobs:
           echo "ARDUINO_CLI=$dir/arduino-cli" >> "$GITHUB_ENV"
       - name: The suite's own test caches (the one step that needs the network)
         run: scripts/provision-test-caches.sh
-      - name: Python client suite (no server required)
-        run: .venv/bin/python -m unittest discover -s tests/client -t .
+      # The suite runs by tier DIRECTORY, unit first, each discovered with the
+      # repo root as top level.
+      - name: Python client suite — unit tier (no server required)
+        run: .venv/bin/python -m unittest discover -s tests/client/unit -t .
+      - name: Python client suite — integration tier (no server required)
+        run: .venv/bin/python -m unittest discover -s tests/client/integration -t .
 
   # CR-CRU-062 §S3 — the Playwright/BDD end-to-end suite.
   # 🚨 CRUCIBLE_DB is declared HERE explicitly, per CR-CRU-052: isolation is

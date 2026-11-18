@@ -2,9 +2,8 @@
 // pure, unit-testable pieces of the LOCAL WebKit-via-Docker path. Split out
 // from scripts/webkit-docker-server.ts (the CLI entry that actually shells to
 // `docker`) so tests/unit/webkit-docker-local-guard.test.ts can assert the exact
-// image tag, port and container shape without a Docker daemon, mirroring the
-// existing scripts/test-targets.ts (pure lib) + scripts/run-test-target.ts
-// (CLI entry) split.
+// image tag, port and container shape without a Docker daemon (pure lib + CLI
+// entry split).
 //
 // MEASURED 2026-09-23, against this exact host's Docker 29.8.1 (RED phase —
 // this cycle's own verification, container removed afterwards):
@@ -31,7 +30,7 @@
 import type { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { REPO_ROOT } from "./test-targets";
+import { REPO_ROOT } from "./repo-root";
 
 /** The container this script starts/stops — named so a stale one from a
  *  previous crashed run is unambiguously identifiable (`docker ps -a`). */
