@@ -6862,13 +6862,13 @@ def _python_suite_argv(tokens):
     runs that tier's verb, and any other directory runs `regression`.
 
     Nothing is invented: the flags that client takes are the discovery's own
-    (on that stack the declaration IS the invocation), so the gate reads the
-    declared paths and hands them to the client that can ingest them. `-t` has
-    no client flag and is dropped, and the python client passes none, so the
-    dispatched run has NO top-level directory: unittest takes the start
-    directory as the top level. None when the command declares no discovery
-    this gate can read, which the gate REPORTS against the suite rather than
-    skipping."""
+    (CR-CRU-111 ruling 1 — on that stack the declaration IS the invocation), so
+    the gate reads the declared paths and hands them to the client that can
+    ingest them. `-t` has no client flag and is dropped, and the python client
+    passes none, so the dispatched run has NO top-level directory: unittest
+    takes the start directory as the top level. None when the command declares
+    no discovery this gate can read, which the gate REPORTS against the suite
+    rather than skipping."""
     if "unittest" not in tokens:
         return None
     flags = {"-s": "--start-dir", "--start-dir": "--start-dir",
