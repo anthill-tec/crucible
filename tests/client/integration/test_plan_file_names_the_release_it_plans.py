@@ -1,48 +1,21 @@
-"""CR-CRU-121 §S2 (fleet half) — `plan-file` gains `--release`, in ALL FIVE
-clients, and the client count itself is asserted.
+"""CR-CRU-121 §S2 (fleet half) — `plan-file` with `--release` registers the CR
+on the board's queue, read back through a client.
 
-The route half lives in `tests/integration/plans.test.ts`: a `plan-file` carrying a
-`release` performs the same queue write `cr-plan` performs, atomically with
-the plan file. This file is the SURFACE half — an orchestrator on any stack
-must be able to declare that release when it opens the cycle plan, which is
-the whole failure CR-CRU-121 was born from (CR-CRU-120 ran a full RED phase
-off a plan whose CR was on no roadmap at all).
+The feature: a `plan-file` carrying a `release` performs the queue write
+`cr-plan` performs, atomically with the plan file, and the client's own
+`queue` verb then shows the CR registered. No fake can prove it: the
+registration is a side effect of the store's own plan-file transaction, seen
+only when the board's queue is read back, so a scripted board would only
+answer with the row the test wrote into it.
 
-What is asserted, and why in these three shapes:
-
-1. **The printed help, per client, as a real subprocess.** Five separate
-   facts, any one of which can be forgotten silently. The already-declared
-   `--cr` is the non-vacuity anchor: a `--help` drive that failed to run at
-   all would report the NEW flag missing for a harness reason and would look
-   identical to the defect under test.
-2. **The ONE declaration site, read from the AST.** The criterion is "added
-   at the ONE shared registrar call site — not five independent edits", so a
-   client that hand-rolls `pf.add_argument("--release", …)` in its own
-   `plan-file` block FAILS even when its printed help is perfect.
-3. **The wire, and then the whole round trip against a real board.** A flag
-   that parses and never reaches the POST body registers nothing; a POST body
-   the server accepts still proves nothing until the QUEUE is read back.
-
-RED, measured against the fleet today (2026-09-12): no client declares
-`--release` on `plan-file` — `argparse` answers `unrecognized arguments:
---release` and exits 2 — and `cmd_plan_file` builds its payload with no
-`release` key at all (`cmd_plan_file` in `clients/_crucible_axi.py`). The pass-side class
-below pins what the addition must NOT disturb, and passes today.
+The route half lives in `tests/integration/plans.test.ts`. The printed help,
+the one shared declaration site and the wire, which need no board, are
+`test_plan_file_names_the_release_it_plans_without_a_board`. The board here
+is `RealBoard` (`tests/client/real_board.py`): a server built from this
+repo's own source, on a free port with a mkdtemp DB — never the live
+instance, never the shared project.
 
 ESCALATION (recorded, not guessed — see this file's report):
-
-  E1. §S2 says the flag is "added via the ONE shared registrar line in
-      `clients/_crucible_axi.py` (the same architecture CR-CRU-118 §S5 used)".
-      `plan-file` HAS no shared registrar: all five clients hand-roll their
-      own `pf = sub.add_parser("plan-file", …)` block plus its flags
-      (arduino:1271, bun:2188, mvn:2176, python:1555, rust:2795). So the
-      criterion cannot be met by adding a line to something that exists — a
-      shared declaration site for `plan-file`'s arguments has to be CREATED
-      first. `SharedRegistrarDeclaresTheReleaseFlagTest` therefore asserts the
-      PROPERTY the criterion names (one shared declaration, reached by every
-      client, zero per-client declarations) rather than a line number in a
-      registrar that does not exist. The size estimate ("S") does not account
-      for that refactor.
 
   E2. §S2's end-to-end criterion says the registration is confirmed "via a
       follow-up `queue` call". The `queue` verb's row projection
@@ -59,7 +32,6 @@ Invocation:
     python3 -m unittest tests.client.integration.test_plan_file_names_the_release_it_plans
 """
 
-import copy
 import os
 import shutil
 import subprocess
@@ -67,50 +39,25 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
-from tests.client.client_fleet_envelope_census_helpers import (  # noqa: E402
+from tests.client.client_fleet_envelope_census_helpers import (
     declare_and_require_board,
 )
 from tests.client.plan_file_names_the_release_it_plans_helpers import (
     CLIENT_FILES,
-    CLIENTS,
     CLIENTS_DIR,
     ENV_KEYS,
-    _load_module_by_path,
-    _run_main,
-)
-from tests.client.plan_file_names_the_release_it_plans_helpers import (
-    _await_server,
-    AXI_MODULE,
-    _declare_listener,
-    _drive_plan_file_help,
-    EXPECTED_CLIENT_COUNT,
-    _flags_declared_directly_on,
-    _free_port,
-    _functions_handed_the_parser,
-    _http,
-    _plan_file_parser_names,
-    PLANS_PATH_SUFFIX,
     REPO_ROOT,
-    _shared_functions_declaring,
     VERB,
+    _http,
+    _load_module_by_path,
 )
-from tests.client.plan_file_names_the_release_it_plans_helpers import (
-    setUpModule,  # noqa: F401 -- the module fixture unittest looks up by name
-    tearDownModule,  # noqa: F401 -- the module fixture unittest looks up by name
-)
-
+from tests.client.real_board import RealBoard
 
 RELEASE_FLAG = "--release"
-# A flag every client declares on `plan-file` TODAY — the non-vacuity anchor.
-ANCHOR_FLAG = "--cr"
 
-
-# The label under test, and one no normaliser can leave alone by accident: a
-# pre-release suffix must arrive on the wire byte-for-byte.
+# The label under test.
 RELEASE_LABEL = "0.2.0"
-VERBATIM_LABEL = "9.9.9-rc.1"
 
 # CR-CRU-118 §S4 — a proposal declares the date it aims at. Nothing here is
 # ABOUT that date; the end-to-end needs a live proposal to exist at all.
@@ -118,284 +65,8 @@ FIXTURE_TARGET_AT = 1_788_220_800  # 2026-09-01T00:00:00Z
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# §S2 — the printed surface, in every client that ships the verb
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-def _release_help_block(help_stdout):
-    """The `--release` entry of a printed options section, with its
-    continuation lines, whitespace-normalised — the WORDING five clients must
-    share when one site declares the flag."""
-    lines = help_stdout.splitlines()
-    for index, line in enumerate(lines):
-        if line.strip().startswith(RELEASE_FLAG):
-            block = [line.strip()]
-            for following in lines[index + 1:]:
-                if not following.strip() or following.strip().startswith("-"):
-                    break
-                block.append(following.strip())
-            return " ".join(" ".join(block).split())
-    return ""
-
-
-class PlanFileDeclaresTheReleaseFlagInEveryClientTest(unittest.TestCase):
-    """§S2/AC1 — every client's `plan-file` LISTS `--release`, proven by driving
-    that client's own printed help as a real subprocess."""
-
-    def setUp(self):
-        self.surfaces = {client: _drive_plan_file_help(client) for client in CLIENTS}
-        # Non-vacuity FIRST — `--cr` is declared TODAY by every client, so its
-        # presence proves the help was really printed and read.
-        unprinted = {c: (r.returncode, r.stderr.strip()[:200])
-                     for c, r in self.surfaces.items() if ANCHOR_FLAG not in r.stdout}
-        self.assertEqual(
-            unprinted, {},
-            f"every client must print its own `{VERB} --help` carrying the "
-            f"already-declared {ANCHOR_FLAG}; these did not: {unprinted!r}")
-
-    def test_every_client_prints_the_release_flag_in_its_plan_file_help(self):
-        missing = sorted(c for c, r in self.surfaces.items()
-                         if RELEASE_FLAG not in r.stdout)
-        self.assertEqual(
-            missing, [],
-            f"an orchestrator on ANY stack must be able to name the release it "
-            f"is opening a cycle plan for — a plan filed for a cr that sits on "
-            f"no roadmap is the failure this flag exists to prevent; `{VERB}` "
-            f"declares no {RELEASE_FLAG} in: {missing!r}")
-
-        self.assertEqual(
-            len(self.surfaces), EXPECTED_CLIENT_COUNT,
-            f"the count of clients driven is itself asserted: drove "
-            f"{sorted(self.surfaces)!r}")
-
-    def test_the_release_flag_reads_identically_in_all_five_printed_helps(self):
-        """§S2/AC1's DRY half, measured on the SURFACE: one declaration site
-        cannot word itself five ways. Five independent edits drift — and the
-        drift is exactly what makes a fleet flag feel unreliable."""
-        wordings = {c: _release_help_block(r.stdout) for c, r in self.surfaces.items()}
-        self.assertEqual(
-            len(set(wordings.values())), 1,
-            f"`{VERB} {RELEASE_FLAG}` must read identically in every client — "
-            f"it is ONE declaration; got {wordings!r}")
-        self.assertNotEqual(
-            set(wordings.values()), {""},
-            f"the flag must actually be PRINTED, not identically absent: an "
-            f"empty block in all five is the RED state, not agreement; got "
-            f"{wordings!r}")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# §S2 — the ONE declaration site, read from the AST
-# ═══════════════════════════════════════════════════════════════════════════
-#
-# The readers are deliberately tiny and local: they answer "which variable is
-# this client's plan-file subparser, what flags does the client declare ON it,
-# and what does it hand that variable to?" — read from the parsed tree, so a
-# flag named in a docstring or a help string can never be mistaken for a
-# declaration.
-
-
-class SharedRegistrarDeclaresTheReleaseFlagTest(unittest.TestCase):
-    """§S2/AC1 — "added at the ONE shared registrar call site, not five
-    independent edits", as a property of the parsed source.
-
-    See ESCALATION E1 in this module's docstring: `plan-file` has no shared
-    registrar today, so the criterion is asserted as the PROPERTY it names —
-    zero per-client declarations of the flag, and every client's plan-file
-    subparser handed to a shared declaration site."""
-
-    def setUp(self):
-        self.parsers = {c: _plan_file_parser_names(p) for c, p in CLIENT_FILES.items()}
-        unfound = sorted(c for c, names in self.parsers.items() if not names)
-        self.assertEqual(
-            unfound, [],
-            f"fixture sanity: every client registers a `{VERB}` subparser and "
-            f"binds it to a name; could not find one in: {unfound!r}")
-
-    def test_no_client_declares_the_release_flag_in_its_own_plan_file_block(self):
-        offenders = {}
-        for client, path in CLIENT_FILES.items():
-            flags = _flags_declared_directly_on(path, self.parsers[client])
-            # Fixture sanity in the same read: the anchor IS declared per
-            # client today, so an empty set would mean the reader missed the
-            # block rather than that the client is clean.
-            self.assertIn(
-                ANCHOR_FLAG, flags,
-                f"fixture sanity: {path.name} declares {ANCHOR_FLAG} on its "
-                f"own `{VERB}` parser; the AST reader found {sorted(flags)!r}")
-            if RELEASE_FLAG in flags:
-                offenders[client] = sorted(flags)
-        self.assertEqual(
-            offenders, {},
-            f"{RELEASE_FLAG} must be declared ONCE, in a shared site — a "
-            f"client that hand-rolls it in its own `{VERB}` block is one of "
-            f"the five independent edits §S2 forbids; offenders: {offenders!r}")
-
-    def test_every_client_hands_its_plan_file_parser_to_the_shared_declaration(self):
-        declaring = _shared_functions_declaring(RELEASE_FLAG)
-        unreached = {}
-        for client, path in CLIENT_FILES.items():
-            handed = _functions_handed_the_parser(path, self.parsers[client])
-            if not (handed & declaring):
-                unreached[client] = sorted(handed)
-        self.assertEqual(
-            unreached, {},
-            f"every client must reach {RELEASE_FLAG} by handing its `{VERB}` "
-            f"subparser to a function DEFINED IN {AXI_MODULE.name} that "
-            f"declares the flag (directly, or through one client-local "
-            f"delegator — the fleet's own `_add_*_arg` idiom). Shared "
-            f"functions declaring it today: {sorted(declaring)!r}; clients "
-            f"that reach none of them: {unreached!r}")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# §S2 — the wire: the declared release reaches the POST body
-# ═══════════════════════════════════════════════════════════════════════════
-#
-# Recorded at the TRANSPORT seam (`_post`), never at the shared verb: the
-# payload is composed inside `cmd_plan_file`, so a recorder above it would
-# assert on the client's arguments rather than on the bytes the server gets.
-
-
-class _PlanFileWireTestBase(unittest.TestCase):
-
-    PROJECT_KEY = "plan-file-release-wire-key"
-    AGENT = "plan-file-release-wire-agent"
-    CR = "CR-121-WIRE"
-
-    def setUp(self):
-        self.module = _load_module_by_path(
-            CLIENT_FILES["python"], "plan_file_release_client_under_test")
-        self.tmpdir = tempfile.mkdtemp(prefix="plan-file-release-wire-")
-        (Path(self.tmpdir) / ".env").write_text(
-            f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
-        self._saved_env = {k: os.environ.get(k) for k in ENV_KEYS}
-        for k in ENV_KEYS:
-            os.environ.pop(k, None)
-
-    def tearDown(self):
-        for k, v in self._saved_env.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-
-    def drive(self, *extra):
-        """One client dispatch with the transport recorded → (code, stdout,
-        stderr, the payloads that reached the plans route)."""
-        posted = []
-
-        def fake_post(path, payload):
-            posted.append((path, copy.deepcopy(payload)))
-            return {"ok": True, "planId": 1, "cr": self.CR,
-                    "status": "open", "cycles": [{"label": "red-green", "id": 7}]}
-
-        # CR-CRU-127 §S4 — a filed cycle declares its kind, so the fixture
-        # call declares one. (The label happens to read `red-green` too; it is
-        # this suite's original fixture label, kept so the release assertions
-        # stay byte-comparable with what they pinned before.)
-        argv = [VERB, "--cr", self.CR, "--title", "the wire under test",
-                "--cycle", "red-green", "--cycle-kind", "red-green",
-                "--wave", "6", "--agent", self.AGENT,
-                "--project-dir", self.tmpdir] + list(extra)
-        with mock.patch.object(self.module, "_post", side_effect=fake_post):
-            code, out, err = _run_main(self.module, argv)
-        return code, out, err, [p for path, p in posted
-                                if path.endswith(PLANS_PATH_SUFFIX)]
-
-    def the_one_plan_file_payload(self, *extra):
-        """Drive and return the SINGLE payload that reached the plans route.
-        The count is asserted, not assumed: a verb that refused its flags posts
-        nothing, and a body read off an empty list would fail as an IndexError
-        naming neither the verb nor its refusal."""
-        code, _out, err, payloads = self.drive(*extra)
-        self.assertEqual(
-            len(payloads), 1,
-            f"exactly ONE plan-file POST must reach the plans route for "
-            f"{extra!r}; got {len(payloads)} (exit={code}, "
-            f"stderr={err.strip()[:400]!r})")
-        return payloads[0]
-
-
-class PlanFileCarriesTheDeclaredReleaseTest(_PlanFileWireTestBase):
-
-    def test_the_declared_release_rides_the_plan_file_body_as_its_own_field(self):
-        payload = self.the_one_plan_file_payload(RELEASE_FLAG, RELEASE_LABEL)
-
-        self.assertEqual(
-            payload.get("release"), RELEASE_LABEL,
-            f"the release must ride as the body's own top-level `release` — "
-            f"the field the route reads to perform cr-plan's queue write; got "
-            f"{payload!r}")
-        # BOUND — the flag ADDS a field; it re-homes none of the existing ones.
-        self.assertEqual(
-            (payload.get("cr"), payload.get("title"), payload.get("wave"),
-             payload.get("agentId"), payload.get("cycles")),
-            (self.CR, "the wire under test", "6", self.AGENT,
-             [{"label": "red-green", "kind": "red-green"}]),
-            f"every field plan-file already sends must arrive unchanged beside "
-            f"the new one; got {payload!r}")
-
-    def test_a_label_the_client_cannot_recognise_is_sent_verbatim(self):
-        payload = self.the_one_plan_file_payload(RELEASE_FLAG, VERBATIM_LABEL)
-
-        self.assertEqual(
-            payload.get("release"), VERBATIM_LABEL,
-            f"the label travels VERBATIM — the client never normalises a "
-            f"pre-release suffix, strips a prefix, or otherwise rewrites what "
-            f"the caller declared (§S9 puts no business rule in a client); got "
-            f"{payload.get('release')!r}")
-
-
-class TodaysPlanFileBodySurvivesTest(_PlanFileWireTestBase):
-    """The measurement behind the word "additive": every test here passes
-    BEFORE the `--release` flag exists and must pass after it.
-
-    CR-CRU-127 amends the BASELINE the word "additive" is measured against —
-    a filed cycle now carries its kind — so the body pinned below states that
-    contract. `--release`'s own additivity, which is what this class is for,
-    is unchanged and still asserted the same way."""
-
-    def test_without_a_release_the_body_carries_no_release_key_at_all(self):
-        payload = self.the_one_plan_file_payload()
-
-        self.assertNotIn(
-            "release", payload,
-            f"a plan filed without a release makes no roadmap claim: the key "
-            f"is ABSENT, never null and never empty — the route branches on "
-            f"its presence, and a fabricated value would register the CR into "
-            f"a release nobody declared; got {payload!r}")
-
-    def test_the_release_less_body_carries_only_the_cr_its_cycles_and_its_wave(self):
-        """Was `test_the_body_plan_file_sends_today_is_unchanged`. REWRITTEN by
-        CR-CRU-127 §S5 rather than deleted or re-pinned to whatever the code
-        now emits: the criterion it states — a client that names no release
-        sends a body carrying no release and nothing invented — is unchanged;
-        the body it is measured against gains the per-cycle `kind` the kind
-        mandate requires."""
-        payload = self.the_one_plan_file_payload()
-
-        self.assertEqual(
-            payload,
-            {"cr": self.CR, "agentId": self.AGENT,
-             "cycles": [{"label": "red-green", "kind": "red-green"}],
-             "title": "the wire under test",
-             "wave": "6", "orchestrator": self.AGENT},
-            f"the release-less body is composed of exactly the fields the "
-            f"caller declared — the backward-compatibility constraint this "
-            f"change makes explicit: a client that names no release must "
-            f"invent nothing; got {payload!r}")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # END TO END — a client files a plan, and the board shows the CR registered
 # ═══════════════════════════════════════════════════════════════════════════
-#
-# A server built from this repo's own source, on a free port with a mkdtemp DB
-# — never the live instance, never the shared project. The sibling suites'
-# idiom (`test_gate_names_the_release_it_gates.py`), taken rather than
-# re-invented.
 
 
 class PlanFileRegistersTheCrOnTheBoardTest(unittest.TestCase):
@@ -419,37 +90,28 @@ class PlanFileRegistersTheCrOnTheBoardTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._tmpdir = tempfile.mkdtemp(prefix="plan-file-release-e2e-")
-        cls._proc = None
+        cls._board = None
         bun = shutil.which("bun")
         if bun is None:
             raise unittest.SkipTest(
                 "the queue write is a property of the real store: without "
                 "`bun` there is no server to hold it. A missing toolchain, "
                 "not a passing assertion.")
-        port = _free_port()
-        cls.base = f"http://127.0.0.1:{port}"
-        _declare_listener(cls._tmpdir, port)
-        cls._proc = subprocess.Popen(
-            [bun, "run", "--no-env-file", "src/server.ts"], cwd=str(REPO_ROOT),
-            env={**os.environ,
-                 "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cls._board = RealBoard(bun, "plan-file-release-e2e")
+        cls.base = cls._board.base
+        cls.key = cls._board.key
         try:
             cls._boot()
         except BaseException:
-            # A child spawned and then abandoned by a FAILING setUpClass is
+            # A board booted and then abandoned by a FAILING setUpClass is
             # never torn down (`tearDownClass` does not run when `setUpClass`
             # raises), and an orphaned server holds its port for as long as it
-            # lives. Kill it on the way out, whatever went wrong.
+            # lives. Stop it on the way out, whatever went wrong.
             cls._stop_server()
             raise
 
     @classmethod
     def _boot(cls):
-        _await_server(cls.base, cls._proc)
-
-        project = _http(cls.base, "/api/v2/projects", {"name": "plan-file-release-e2e"})
-        cls.key = project["project"]["key"]
         registered = _http(cls.base, "/api/v2/agents/register",
                            {"projectKey": cls.key, "agentId": cls.ORCHESTRATOR,
                             "role": "ORCHESTRATOR"})
@@ -472,17 +134,13 @@ class PlanFileRegistersTheCrOnTheBoardTest(unittest.TestCase):
 
     @classmethod
     def _stop_server(cls):
-        """Stop the scratch server, from teardown OR from a setUpClass that
-        failed after spawning it. Idempotent, so both callers may run."""
-        proc = getattr(cls, "_proc", None)
-        if proc is None:
+        """Stop the scratch board, from teardown OR from a setUpClass that
+        failed after booting it. Idempotent, so both callers may run."""
+        board = getattr(cls, "_board", None)
+        if board is None:
             return
-        cls._proc = None
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        cls._board = None
+        board.close()
 
     def _client(self, *argv):
         # CR-CRU-139 §S2 — the scratch board is declared in the fixture's own

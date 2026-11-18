@@ -99,9 +99,6 @@ from unittest import mock
 from tests.client.integration.test_cycle_add_targets_the_plan_it_means import (
     _ScratchBoardTestBase,
 )
-from tests.client.integration.test_plan_file_names_the_release_it_plans import (
-    _PlanFileWireTestBase,
-)
 from tests.client.plan_file_names_the_release_it_plans_helpers import (
     AXI_MODULE,
     EXPECTED_CLIENT_COUNT,
@@ -112,6 +109,7 @@ from tests.client.plan_file_names_the_release_it_plans_helpers import (
     _functions_handed_the_parser,
     _http,
     _plan_file_parser_names,
+    _PlanFileWireTestBase,
     _shared_functions_declaring,
 )
 from tests.client.plan_file_names_the_release_it_plans_helpers import (

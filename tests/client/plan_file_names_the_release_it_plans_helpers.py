@@ -2,25 +2,29 @@
 out of that test module so a suite importing them does not import a test
 module (CR-CRU-261).
 
-Holds no `TestCase` and no test: the fleet's client scripts, the env keys a
-drive clears, a by-path module loader and the in-process `main()` driver.
+Holds no test: the fleet's client scripts, the env keys a drive clears, a
+by-path module loader, the in-process `main()` driver, and the wire-seam base
+`_PlanFileWireTestBase` (a `TestCase` with no test of its own) that
+`test_plan_file_names_the_release_it_plans_without_a_board` and
+`test_plan_file_declares_each_cycle_kind` build on.
 """
 
 import contextlib
+import copy
 import importlib.util
 import io
 import os
 import sys
+import unittest
 from unittest import mock
 
 from tests.client import TEST_INSTALL_CLIENTS
 import ast
 import json
 import shutil
-import socket
 import subprocess
 import tempfile
-import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from tests.client import CLIENT_SOURCE_DIR, client_script
@@ -236,28 +240,6 @@ def _shared_functions_declaring(flag):
     return declaring
 
 
-def _declare_listener(store_dir, port, host="127.0.0.1"):
-    """Declare the scratch server's listener where the server READS it
-    (CR-CRU-139 §S1a): the `crucible.toml` beside the database it is pointed
-    at, which is exactly where `serverConfigPath()` looks --
-    `dirname(store)/crucible.toml`.
-
-    `$CRUCIBLE_PORT` is RETIRED, so a spawner that still exported it would boot
-    SILENTLY on the shipped default 3849 -- the port a production install owns
-    -- instead of on the free port this fixture allocated.
-    """
-    Path(store_dir, "crucible.toml").write_text(
-        f'[server]\nhost = "{host}"\nport = {port}\n', encoding="utf-8")
-
-
-def _free_port():
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
-
-
 def _http(base, path, payload=None, method=None):
     """One JSON call against the scratch server. A non-2xx still carries the
     server's structured body, which IS the assertion subject for a refusal."""
@@ -272,14 +254,71 @@ def _http(base, path, payload=None, method=None):
         return json.loads(exc.read().decode())
 
 
-def _await_server(base, proc, timeout=60):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"server exited early with {proc.returncode}")
-        try:
-            with urllib.request.urlopen(base + "/api/v2/health", timeout=2):
-                return
-        except Exception:
-            time.sleep(0.2)
-    raise RuntimeError(f"server never became reachable at {base}")
+# ═══════════════════════════════════════════════════════════════════════════
+# §S2 — the wire: the declared release reaches the POST body
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Recorded at the TRANSPORT seam (`_post`), never at the shared verb: the
+# payload is composed inside `cmd_plan_file`, so a recorder above it would
+# assert on the client's arguments rather than on the bytes the server gets.
+
+
+class _PlanFileWireTestBase(unittest.TestCase):
+
+    PROJECT_KEY = "plan-file-release-wire-key"
+    AGENT = "plan-file-release-wire-agent"
+    CR = "CR-121-WIRE"
+
+    def setUp(self):
+        self.module = _load_module_by_path(
+            CLIENT_FILES["python"], "plan_file_release_client_under_test")
+        self.tmpdir = tempfile.mkdtemp(prefix="plan-file-release-wire-")
+        (Path(self.tmpdir) / ".env").write_text(
+            f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
+        self._saved_env = {k: os.environ.get(k) for k in ENV_KEYS}
+        for k in ENV_KEYS:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def drive(self, *extra):
+        """One client dispatch with the transport recorded → (code, stdout,
+        stderr, the payloads that reached the plans route)."""
+        posted = []
+
+        def fake_post(path, payload):
+            posted.append((path, copy.deepcopy(payload)))
+            return {"ok": True, "planId": 1, "cr": self.CR,
+                    "status": "open", "cycles": [{"label": "red-green", "id": 7}]}
+
+        # CR-CRU-127 §S4 — a filed cycle declares its kind, so the fixture
+        # call declares one. (The label happens to read `red-green` too; it is
+        # this suite's original fixture label, kept so the release assertions
+        # stay byte-comparable with what they pinned before.)
+        argv = [VERB, "--cr", self.CR, "--title", "the wire under test",
+                "--cycle", "red-green", "--cycle-kind", "red-green",
+                "--wave", "6", "--agent", self.AGENT,
+                "--project-dir", self.tmpdir] + list(extra)
+        with mock.patch.object(self.module, "_post", side_effect=fake_post):
+            code, out, err = _run_main(self.module, argv)
+        return code, out, err, [p for path, p in posted
+                                if path.endswith(PLANS_PATH_SUFFIX)]
+
+    def the_one_plan_file_payload(self, *extra):
+        """Drive and return the SINGLE payload that reached the plans route.
+        The count is asserted, not assumed: a verb that refused its flags posts
+        nothing, and a body read off an empty list would fail as an IndexError
+        naming neither the verb nor its refusal."""
+        code, _out, err, payloads = self.drive(*extra)
+        self.assertEqual(
+            len(payloads), 1,
+            f"exactly ONE plan-file POST must reach the plans route for "
+            f"{extra!r}; got {len(payloads)} (exit={code}, "
+            f"stderr={err.strip()[:400]!r})")
+        return payloads[0]
