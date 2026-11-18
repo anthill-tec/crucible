@@ -22,7 +22,7 @@ envelopes (CR-CRU-030). Two pinned implementations:
   honest.
 - **Clients (Python):** `clients/toon.py` — our spec-conformant port, validated
   against the official library by the CR-CRU-046 §S4 round-trip oracle
-  (`tests/toon-conformance.test.ts` + `tests/client/test_cr046_official_toon_roundtrip.py`).
+  (`tests/integration/toon-conformance.test.ts` + `tests/client/unit/test_cr046_official_toon_roundtrip.py`).
 
 ## Historical note
 

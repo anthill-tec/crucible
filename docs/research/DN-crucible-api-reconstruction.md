@@ -211,7 +211,7 @@ RED→GREEN→regression dog-food cycle of this repo executed end-to-end through
 the UPGRADED clients (`clients/*-crucible.py`) against a server with the v1
 routes removed — evidenced by the C7 full-suite run (819/819) ingested via
 `clients/bun-crucible.py` on `/api/v2/*` only, and by
-`tests/timeline-dogfood-linkage.test.ts`.
+`tests/integration/timeline-dogfood-linkage.test.ts`.
 
 Removed from `src/server.ts`: every legacy `/api/*` route handler catalogued
 in §2-§3 — `POST /api/ingest`, `/api/ingest/parsed`, `/api/ingest/compile`,

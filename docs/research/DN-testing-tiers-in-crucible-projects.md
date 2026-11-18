@@ -150,7 +150,7 @@ gate cannot see is not gated, and "the gate was green" then means only "the part
   `regression`, holds the untagged tests only. Each declared tier runs as a suite with its own row,
   under its tier, and the rows together make the union.
 - **Additive, never exclusionary.** No project may gain a target by hiding files from discovery:
-  `bunfig.toml` carries no `pathIgnorePatterns` (CR-CRU-047 §S1) and `tests/suite-integrity.test.ts`
+  `bunfig.toml` carries no `pathIgnorePatterns` (CR-CRU-047 §S1) and `tests/integration/suite-integrity.test.ts`
   asserts the key is absent.
 - **The partition is guarded** (`tests/test-targets.test.ts`) — every file belongs to exactly one
   non-regression target, or targets reintroduce at script level the hazard bunfig prevents at config level.

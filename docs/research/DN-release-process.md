@@ -25,7 +25,7 @@ Everything below was verified against the repo, not recalled.
 | Release driver with preflight guards | `scripts/release.sh` (`set-version` · `checkpoint` · `finish` · `status`) | present; `set-version` is housekeeping only since CR-CRU-061 §S2 (see 5.1) |
 | CI publish chain | `.github/workflows/release.yml` — `build` + the three suites → `create-release` → `publish-pypi` ∥ `publish-npm`, plus `publish-testpypi` (same gate) and `dry-run-npm` on dispatch | present |
 | Operational manual | `RELEASING.md` | present, comprehensive |
-| Composite lockstep | runtime pin: `crucible_axi.__version__` selects `@anthill-tec/crucible-server@<that version>`; `CRUCIBLE_SERVER_VERSION` is the only escape hatch | present, **10 tests** in `tests/client/test_crucible_axi_version_pin.py` |
+| Composite lockstep | runtime pin: `crucible_axi.__version__` selects `@anthill-tec/crucible-server@<that version>`; `CRUCIBLE_SERVER_VERSION` is the only escape hatch | present, **10 tests** in `tests/client/unit/test_crucible_axi_version_pin.py` |
 | no-mistakes → Crucible | `bun-crucible.py gate-run --intent … --agent … [--skip …]` (`--skip` shipped in CR-CRU-061 §S5, all five clients) proxies `axi run` and posts throttled interim snapshots then a final sealed gate event (CR-CRU-013) | present; `no-mistakes` is on PATH at `~/.local/bin/no-mistakes` |
 | GitHub repo | `anthill-tec/crucible`, default branch `develop`, **PRIVATE** | exists; `gh` authenticated as `antojk` |
 

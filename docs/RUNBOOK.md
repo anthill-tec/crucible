@@ -617,7 +617,7 @@ The python suites under `tests/client/` drive the **real** installer: it writes
 files, and two of its stages would otherwise run `bun add -g` and
 `systemctl --user enable --now`. The suite that exercises the whole install-then-
 resolve path is
-`tests/client/test_an_installed_deployment_resolves_its_configuration.py`.
+`tests/client/integration/test_an_installed_deployment_resolves_its_configuration.py`.
 
 They are safe to run directly, and safer still under `bwrap` — the script below
 passes `--dev-bind / /`, `--tmpfs "$HOME"`, a read-only re-exposure of bun,
