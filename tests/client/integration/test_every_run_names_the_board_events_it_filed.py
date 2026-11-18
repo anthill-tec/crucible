@@ -9,10 +9,20 @@ invocation filed, in filing order, and `[]` when it filed none.
 The verbs are the fleet's run-filing verbs exactly as the unattributed-run
 refusal suite enumerates them (`_filing_verbs`, read off each client's own
 argparse — no second list is kept here). Each is driven twice as a real OS
-subprocess against a REAL scratch board (`tests/client/real_board.py`): once
-over a passing fixture and once over a failing one (the gate-outcome suite's
-failing toolchains and fixtures, adopted by name). What the drive filed is
-read back from the board and compared with the envelope's `events`.
+subprocess against a fake board (`RecordingBoard`, one per drive): once over
+a passing fixture and once over a failing one (the gate-outcome suite's
+failing toolchains and fixtures, adopted by name). The fake answers every
+ingest the way the board does — `ok` with a store-shaped event id
+(`mint_event_id`), a fresh one for each ingest — and what the drive filed is
+read off its request log (each ingest and the id it was answered with) and
+compared with the envelope's `events`.
+
+That the board stores each ingest as an event, under its id, holding the
+counts and tree the client sent, is the server's half, held in bun by
+`v2-runs-events.test.ts` ("junit data w/ 1 failing case → 200 {…event:'evt-…'
+…}" and the newest-first events list). What this suite keeps is the client's
+half: the ids it names are the ids it was answered, and the run it names on a
+failing drive is the one it sent the failing test in.
 
 Three readings, and each guards the others against a vacuous pass:
 
@@ -33,12 +43,13 @@ Invocation:
     python3 -m unittest tests.client.integration.test_every_run_names_the_board_events_it_filed -v
 """
 
+import json
 import shutil
 import sys
 import unittest
+import uuid
+import xml.etree.ElementTree as ET
 
-from tests.client.real_board import RealBoard
-from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import _call
 from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     _build_fake_bin_dir,
@@ -56,6 +67,7 @@ from tests.client.every_verb_that_files_a_run_is_refused_while_a_cycle_is_active
     _filing_verbs,
     _seed,
 )
+from tests.client.live_run_harness import START, RecordingBoard
 from tests.client.the_gate_records_its_outcome_and_a_red_gate_stops_the_close_helpers import (
     _PY_TEST_FAIL,
     _PY_TEST_PASS,
@@ -73,26 +85,102 @@ ABORTED = "aborted"
 # The event kinds a client files beside a run: a compile or lint result.
 STEP_KINDS = ("compile",)
 TIMEOUT = 180
+PROJECT_NAME = "every-run-names-its-events"
 
-_BOARD = None
-_ACTIVE_CYCLE_PROJECT = None
-
-
-def setUpModule():
-    global _BOARD
-    bun = shutil.which("bun")
-    if bun is None:
-        raise unittest.SkipTest(
-            "the event ids an envelope must name are a REAL board's answers: "
-            "without `bun` there is no board to answer them")
-    _BOARD = RealBoard(bun, "every-run-names-its-events")
+#: The ingest routes, and the kind of event the board files for each
+#: (`RUN_INGEST_PATHS`/`COMPILE_INGEST_PATH`, clients/_crucible_axi.py).
+INGEST_KINDS = {"/api/v2/runs": RUN_KIND, "/api/v2/runs/parsed": RUN_KIND,
+                "/api/v2/runs/compile": "compile"}
+#: How many ingests of one route a drive's board answers with an id of its
+#: own; past that it answers the board's default (no id), which the census
+#: would report as an ingest the envelope cannot name.
+IDS_PER_ROUTE = 24
 
 
-def tearDownModule():
-    global _BOARD
-    if _BOARD is not None:
-        _BOARD.close()
-        _BOARD = None
+def _script_event_ids(board):
+    """Answer each ingest route's next `IDS_PER_ROUTE` posts, in order, each
+    with a fresh store-shaped event id; returns `{path: [id, ...]}` in the
+    order they are given out."""
+    ids = {}
+    for path, kind in INGEST_KINDS.items():
+        ids[path] = [board.mint_event_id() for _ in range(IDS_PER_ROUTE)]
+        # The newest answer set is given first: set them last-to-first.
+        for event_id in reversed(ids[path]):
+            body = {"ok": True, "changed": True, "event": event_id}
+            if kind == RUN_KIND:
+                body["run"] = {"total": 0, "passed": 0, "failed": 0}
+            board.answer("POST", path, body, times=1)
+    return ids
+
+
+def _filed_from_the_log(board, ids):
+    """Every ingest the drive posted, in filing order, as the event the
+    board answered it with: `{id, kind, status, tier, sent}`, `sent` being
+    everything the client sent for it (the ingest's body and, for a run it
+    opened, its start and every post of that run: its stream and its test
+    list), and `tier` the tier it was filed under (the ingest's, else its
+    start's)."""
+    posts = board.posts()
+    # The fake opens `run-live-<n>` for the n-th start it answers.
+    starts = {f"run-live-{n}": body for n, body in enumerate(
+        (b for p, b in posts if p == START), start=1)}
+    aborted = {p.split("/")[4] for p, _ in posts
+               if p.startswith("/api/v2/runs/") and p.endswith("/abort")}
+    given = {path: iter(values) for path, values in ids.items()}
+    filed = []
+    for path, body in posts:
+        if path not in INGEST_KINDS:
+            continue
+        body = body if isinstance(body, dict) else {}
+        run_id = body.get("runId")
+        start = starts.get(str(run_id)) or {}
+        sent = [start, body] + ([b for p, b in posts
+                                 if p.startswith(f"/api/v2/runs/{run_id}/")]
+                                if run_id else [])
+        filed.append({"id": next(given[path], None), "kind": INGEST_KINDS[path],
+                      "status": ABORTED if run_id in aborted else None,
+                      "tier": body.get("tier") or start.get("tier"),
+                      "sent": repr(sent),
+                      "failing": _failing_tests_sent(sent)})
+    return filed
+
+
+def _failing_tests_sent(bodies):
+    """The names of the tests what the client sent for a run reports
+    failing, each once: a JUnit case carrying a failure or an error, or a
+    streamed test whose end is a failure in the stream codec the fleet sends
+    (`crucible-events` `test-end` with `status: fail`, `go-test` `Action:
+    fail` on a test, libtest json under nextest `event: failed`). The stream
+    is read whole, its batches joined in the order they were sent. The count
+    the board decodes from it is the server's half."""
+    failing = []
+    stream = ""
+    for body in bodies:
+        data = body.get("data") if isinstance(body, dict) else None
+        if isinstance(data, str) and "from" in body:
+            stream += data
+            continue
+        for text in data if isinstance(data, list) else []:
+            if not isinstance(text, str) or not text.lstrip().startswith("<"):
+                continue
+            root = ET.fromstring(text)  # noqa: S314 - a report a test's own drive wrote
+            failing.extend(case.get("name") for case in root.iter("testcase")
+                           if case.find("failure") is not None
+                           or case.find("error") is not None)
+    for line in stream.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("event") == "test-end" and event.get("status") == "fail":
+            failing.append(event.get("name"))
+        elif event.get("Action") == "fail" and event.get("Test"):
+            failing.append(event["Test"])
+        elif event.get("type") == "test" and event.get("event") == "failed":
+            failing.append(event.get("name"))
+    return list(dict.fromkeys(str(name) for name in failing))
 
 
 def _accepts(subparser, flag):
@@ -143,20 +231,14 @@ class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
     """`events` on the envelope of every run-filing verb of all five clients,
     on a passing and on a failing drive."""
 
-    def _board(self):
-        if _BOARD is None:
-            self.fail("the module's real board was never booted")
-        return _BOARD
-
     # ── the drive ─────────────────────────────────────────────────────────
 
     def _project(self, client_key, verb, outcome, project_key):
-        board = self._board()
         project_dir = _make_project_dir(client_key)
         self.addCleanup(shutil.rmtree, project_dir, True)
         env_lines = [f"CRUCIBLE_PROJECT_KEY={project_key}\n"]
         if client_key == "arduino":
-            env_lines.append(f"CRUCIBLE_PROJECT_NAME={board.name}\n")
+            env_lines.append(f"CRUCIBLE_PROJECT_NAME={PROJECT_NAME}\n")
         (project_dir / ".env").write_text("".join(env_lines))
         extra = _seed(client_key, verb, project_dir)
         if client_key == "python":
@@ -183,61 +265,34 @@ class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, bin_dir, True)
         return bin_dir
 
-    def _register(self, agent_id, project_key):
-        board = self._board()
-        reg = board.http("/api/v2/agents/register",
-                         {"projectKey": project_key, "agentId": agent_id,
-                          "role": "report"})
-        self.assertTrue(reg.get("ok"), f"registration failed: {reg!r}")
-
-    def _project_with_an_active_cycle(self):
-        """A second project on the board, carrying one ACTIVE cycle: there a
-        run with no `--cycle` from an unbound agent is refused before its
-        runner starts, on every client, so the drive files nothing."""
-        global _ACTIVE_CYCLE_PROJECT
-        if _ACTIVE_CYCLE_PROJECT is not None:
-            return _ACTIVE_CYCLE_PROJECT
-        board = self._board()
-        project = board.http("/api/v2/projects", {"name": "events-active-cycle"})
-        self.assertTrue(project.get("ok"), f"project creation failed: {project!r}")
-        key = project["project"]["key"]
-        orchestrator = "events-active-cycle-orchestrator"
-        reg = board.http("/api/v2/agents/register",
-                         {"projectKey": key, "agentId": orchestrator,
-                          "role": "ORCHESTRATOR"})
-        self.assertTrue(reg.get("ok"), f"orchestrator registration failed: {reg!r}")
-        filed = board.http(f"/api/v2/projects/{key}/plans",
-                           {"cr": "events-active-cycle-plan",
-                            "cycles": [{"label": "solo"}],
-                            "agentId": orchestrator})
-        self.assertTrue(filed.get("ok"), f"plan-file failed: {filed!r}")
-        cycle_id = filed["cycles"][0]["id"]
-        active = _call(
-            board.base,
-            f"/api/v2/projects/{key}/plans/{filed['planId']}/cycles/{cycle_id}",
-            {"status": "active", "agentId": orchestrator}, method="PATCH")
-        self.assertTrue(active.get("ok"), f"cycle activation failed: {active!r}")
-        _ACTIVE_CYCLE_PROJECT = key
-        return key
-
-    def _filed_by(self, agent_id, project_key):
-        board = self._board()
-        read = board.http(f"/api/v2/events?project={project_key}&limit=500")
-        self.assertTrue(read.get("ok"), f"events read failed: {read!r}")
-        mine = [e for e in (read.get("events") or [])
-                if e.get("agentId") == agent_id
-                and e.get("kind") in (RUN_KIND,) + STEP_KINDS]
-        # The list answers newest first; filing order is oldest first.
-        mine.reverse()
-        return sorted(mine, key=lambda e: e.get("timestamp") or 0)
+    @staticmethod
+    def _script_the_project(board, project_key, agent_id, refused):
+        """The board's answers about the project the drive files under: the
+        agent registered (role `report`, bound to no cycle), and — for a
+        refused drive — one open plan whose cycle is ACTIVE, the state in
+        which a run with no `--cycle` from an unbound agent is refused before
+        its runner starts, on every client, so the drive files nothing."""
+        board.answer("GET", "/api/v2/agents?project=",
+                     {"ok": True, "agents": [
+                         {"agentId": agent_id, "projectKey": project_key,
+                          "role": "report", "status": "online"}]},
+                     prefix=True)
+        if refused:
+            board.answer(
+                "GET", f"/api/v2/projects/{project_key}/plans?status=open",
+                {"ok": True, "plans": [
+                    {"planId": 1, "projectKey": project_key,
+                     "cr": "events-active-cycle-plan", "status": "open",
+                     "cycles": [{"id": 1, "label": "solo", "kind": "red-green",
+                                 "status": "active"}]}],
+                 "lastClosedCr": None, "filed": 1})
 
     def drive(self, client_key, verb, outcome, *, refused=False):
         cache_key = (client_key, verb, outcome, refused)
         if cache_key in _DRIVES:
             return _DRIVES[cache_key]
         agent_id = f"events-{outcome}-{client_key}-{verb}" + ("-refused" if refused else "")
-        project_key = (self._project_with_an_active_cycle() if refused
-                       else self._board().key)
+        project_key = str(uuid.uuid4())
         project_dir, seeded = self._project(client_key, verb, outcome, project_key)
         bin_dir = self._bin_dir(client_key, outcome)
         if client_key == "go" and verb in TIERS:
@@ -255,14 +310,19 @@ class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
         if _accepts(subparser, "--min-free-g"):
             extra += ["--min-free-g", "1"]
         argv = [verb] + seeded + extra + census
-        self._register(agent_id, project_key)
-        result = drive_verb(
-            CLIENT_FILES[client_key], argv, project_dir, bin_dir,
-            timeout=TIMEOUT, board=self._board().base,
-            extra_env={"PY_CRUCIBLE_PYTHON": sys.executable})
+        board = RecordingBoard()
+        try:
+            self._script_the_project(board, project_key, agent_id, refused)
+            ids = _script_event_ids(board)
+            result = drive_verb(
+                CLIENT_FILES[client_key], argv, project_dir, bin_dir,
+                timeout=TIMEOUT, board=board.url,
+                extra_env={"PY_CRUCIBLE_PYTHON": sys.executable})
+            filed = _filed_from_the_log(board, ids)
+        finally:
+            board.close()
         emits, axi = classify_envelope(result.stdout, TOON)
-        drive = _Drive(result, emits, axi or {},
-                       self._filed_by(agent_id, project_key), argv)
+        drive = _Drive(result, emits, axi or {}, filed, argv)
         _DRIVES[cache_key] = drive
         return drive
 
@@ -322,13 +382,13 @@ class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
                     if len(runs) != 1:
                         continue
                     run = runs[0]
-                    stored = self._board().event(str(run["id"]))
                     expected_failed = 0 if outcome == "pass" else 1
                     self.assertEqual(
-                        (stored.get("summary") or {}).get("failed"),
-                        expected_failed,
-                        f"{client_key} test ({outcome}): the stored run carries "
-                        f"{expected_failed} failure(s); run={run!r}")
+                        len(run["failing"]), expected_failed,
+                        f"{client_key} test ({outcome}): the run the client "
+                        f"sent reports {expected_failed} failing test(s); "
+                        f"failing={run['failing']!r} "
+                        f"sent={run['sent'][-1500:]!r}")
                     self.assertEqual(
                         _ids(drive.events or []) if isinstance(drive.events, list)
                         else drive.events,
@@ -342,7 +402,6 @@ class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
         whose `go list` failed would file nothing and pass the census above
         on an empty `events`. Each go tier verb in the census files exactly
         one run, under its own tier, and names exactly that run."""
-        board = self._board()
         tiers = sorted(set(_filing_verbs("go")) & set(TIERS))
         self.assertTrue(tiers, "go files a run from at least one tier verb")
         for verb in tiers:
@@ -356,15 +415,14 @@ class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
                         f"exactly one run; {drive.transcript()}")
                     if len(runs) != 1:
                         continue
-                    stored = board.event(str(runs[0]["id"]))
                     self.assertEqual(
-                        stored.get("tier"), verb,
+                        runs[0]["tier"], verb,
                         f"go {verb} ({outcome}): the run is filed under its "
-                        f"verb's tier; stored={stored!r}")
+                        f"verb's tier; sent={runs[0]['sent'][-1500:]!r}")
                     self.assertEqual(
-                        (stored.get("summary") or {}).get("failed"),
-                        0 if outcome == "pass" else 1,
-                        f"go {verb} ({outcome}): stored={stored!r}")
+                        len(runs[0]["failing"]), 0 if outcome == "pass" else 1,
+                        f"go {verb} ({outcome}): failing={runs[0]['failing']!r} "
+                        f"sent={runs[0]['sent'][-1500:]!r}")
                     self.assertEqual(
                         _ids(drive.events or []), [str(runs[0]["id"])],
                         f"go {verb} ({outcome}): `events` names exactly the "
@@ -372,8 +430,8 @@ class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
 
     def test_a_failing_drive_names_the_failing_run_and_not_another(self):
         """The failing `test` drive's one named event is the run carrying the
-        real failing test, read back by its id."""
-        board = self._board()
+        real failing test: the ingest the board answered with that id is the
+        one the client sent the failing test in."""
         for client_key in sorted(CLIENT_FILES):
             with self.subTest(client=client_key):
                 drive = self.drive(client_key, "test", "fail")
@@ -386,11 +444,17 @@ class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
                     continue
                 self.assertEqual(len(events), 1,
                                  f"{client_key}: events={events!r}")
-                stored = board.event(str(events[0]))
+                named = [e for e in drive.filed if str(e["id"]) == str(events[0])]
+                self.assertEqual(len(named), 1,
+                                 f"{client_key}: the named event is one the "
+                                 f"board answered; {drive.transcript()}")
+                if len(named) != 1:
+                    continue
                 self.assertIn(
-                    FAILING_TEST_MARKER, repr(stored.get("tree")),
+                    FAILING_TEST_MARKER, repr(named[0]["failing"]),
                     f"{client_key}: the named event is the failing run; "
-                    f"stored={stored!r}")
+                    f"failing={named[0]['failing']!r} "
+                    f"sent={named[0]['sent'][-1500:]!r}")
 
     def test_a_verb_that_filed_nothing_states_an_empty_events_list(self):
         """`test` with no `--cycle`, from an unbound agent, while the project
