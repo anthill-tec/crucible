@@ -23,12 +23,19 @@ The verdict, read from the CR's `pre-merge-gate` milestones in time order:
     gate result, not of "the last pre-merge-gate".
 
 Every case drives the REAL client's `cr-close` as an OS subprocess against a
-REAL scratch board (`tests/client/real_board.py`), steered only by the
-project's own `crucible.toml` `[client] url` (`drive_verb`). The gate history
-is seeded by posting `pre-merge-gate` milestones to the board directly, as a
-registered caller, in time order — each post waits until the host clock has
-passed the previous milestone's stored timestamp, and every history is checked
-to have strictly increasing timestamps before the close is driven.
+recording board (`RecordingBoard`), steered only by the project's own
+`crucible.toml` `[client] url` (`drive_verb`). The board answers in the
+server's shapes: the CR's open plan (its cycle done), and the CR's gate
+history as `GET …/milestones?type=pre-merge-gate` lists it — newest first,
+each record a minted `evt-<ms>-<seq>` id and a strictly later millisecond
+timestamp (`milestone_record`) — so the client's own oldest-first re-sort is
+exercised. What the close did (the plan PATCH, the `cr-merged` post) is read
+off the board's request log. The board's half — how milestones are listed
+(newest first, stamped, a same-ms tie and a sequence past two digits) and a
+gate's scope and suites read back unchanged — is held in bun by
+`milestone-routes-order-and-refuse-as-clients-read-them.test.ts` and
+`gate-milestone-scope-and-suites.test.ts`; a plan closed with a merge commit
+carrying it by `closed-plans-read-carries-merge-and-title-verbatim.test.ts`.
 
 `cr-close`'s verdict is one shared function (`gate_close_verdict`,
 clients/_crucible_axi.py), but the call path is proved per client: the
@@ -51,9 +58,11 @@ import shutil
 import time
 import unittest
 
-from tests.client.real_board import RealBoard
-from tests.client.a_scoped_gate_refuses_what_it_cannot_run_helpers import TARGETS, _declare, _named
-from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import _call
+from tests.client.a_scoped_gate_refuses_what_it_cannot_run_helpers import (
+    TARGETS,
+    _declare,
+    _named,
+)
 from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     _build_fake_bin_dir,
@@ -63,6 +72,12 @@ from tests.client.client_fleet_envelope_census_helpers import (
     classify_envelope,
     drive_verb,
     enumerate_verbs,
+)
+from tests.client.live_run_harness import (
+    MILESTONE_POSTED_STATUS,
+    PLANS_ANSWER,
+    RecordingBoard,
+    milestone_posted,
 )
 
 GATE_TYPE = "pre-merge-gate"
@@ -93,27 +108,6 @@ RETIRED_TARGET = "test:retired"
 #: --suites") names no target and does not match.
 _SUITES_INVOCATION = re.compile(
     r"--suites[ =]`?([^\s,`'\"()<>]+(?:,[^\s,`'\"()<>]+)*)")
-
-_BOARD = None
-
-
-def setUpModule():
-    global _BOARD
-    bun = shutil.which("bun")
-    if bun is None:
-        raise unittest.SkipTest(
-            "the close reads its gate history from a REAL board, and without "
-            "`bun` there is none to boot — a missing toolchain, not a passing "
-            "assertion")
-    _BOARD = RealBoard(bun, "close-judges-suite-by-suite")
-
-
-def tearDownModule():
-    global _BOARD
-    if _BOARD is not None:
-        _BOARD.close()
-        _BOARD = None
-
 
 def entry(target, outcome):
     """One suite entry as a gate posts it. A failing entry's failing test is
@@ -154,9 +148,9 @@ def suites_without_scope(*entries):
 
 
 class _CloseJudgesSuiteBySuite(unittest.TestCase):
-    """The board project and declared project directory for ONE client; each
-    test files its own plan (one per CR), seeds that CR's gate history and
-    drives the client's `cr-close` for it."""
+    """The project and declared project directory for ONE client; each test
+    has its own board holding its own plan (one per CR) and that CR's gate
+    history, and drives the client's `cr-close` for it."""
 
     CLIENT = ""
     #: go only: whether the project's module declares the `integration` and
@@ -168,19 +162,10 @@ class _CloseJudgesSuiteBySuite(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        if _BOARD is None:
-            raise AssertionError("the module's real board was never booted")
-        cls.board = _BOARD
         cls.toon = _load_toon_module()
         name = f"close-by-suite-{cls.CLIENT}{cls.PROJECT_SUFFIX}"
-        project = cls.board.http("/api/v2/projects", {"name": name})
-        assert project.get("ok"), f"project creation failed: {project!r}"
-        cls.key = project["project"]["key"]
+        cls.key = f"{name}-key"
         cls.orchestrator = f"{name}-orchestrator"
-        reg = cls.board.http("/api/v2/agents/register",
-                             {"projectKey": cls.key, "agentId": cls.orchestrator,
-                              "role": "ORCHESTRATOR"})
-        assert reg.get("ok"), f"orchestrator registration failed: {reg!r}"
         cls.project_dir = _make_project_dir(cls.CLIENT)
         env_lines = [f"CRUCIBLE_PROJECT_KEY={cls.key}\n"]
         if cls.CLIENT == "arduino":
@@ -209,30 +194,34 @@ class _CloseJudgesSuiteBySuite(unittest.TestCase):
     # ── the board: plan, gate history, reads ────────────────────────────────
 
     def _plan(self, cr):
-        """File a one-cycle plan for `cr` and move its cycle to done, so the
-        close meets no non-terminal cycle."""
-        filed = self.board.http(f"/api/v2/projects/{self.key}/plans",
-                                {"cr": cr, "cycles": [{"label": "solo"}],
-                                 "agentId": self.orchestrator})
-        self.assertTrue(filed.get("ok"), f"plan-file failed for {cr!r}: {filed!r}")
-        plan_id, cycle_id = filed["planId"], filed["cycles"][0]["id"]
-        path = f"/api/v2/projects/{self.key}/plans/{plan_id}/cycles/{cycle_id}"
-        for status in ("active", "done"):
-            moved = _call(self.board.base, path,
-                          {"status": status, "agentId": self.orchestrator},
-                          method="PATCH")
-            self.assertTrue(moved.get("ok"), f"cycle {status} failed: {moved!r}")
+        """This test's board, holding one open plan for `cr` whose one cycle
+        is done, so the close meets no non-terminal cycle."""
+        self.board = RecordingBoard()
+        self.addCleanup(self.board.close)
+        self.board.answer("POST", "/api/v2/milestones",
+                          milestone_posted(self.board.mint_event_id()),
+                          status=MILESTONE_POSTED_STATUS)
+        plan_id, cycle_id = 1, 701
+        self.board.answer(
+            "GET", f"/api/v2/projects/{self.key}/plans",
+            {**PLANS_ANSWER, "filed": 1, "plans": [
+                {"planId": plan_id, "projectKey": self.key, "cr": cr,
+                 "status": "open", "orchestrator": self.orchestrator,
+                 "cycles": [{"id": cycle_id, "label": "solo",
+                             "kind": "red-green", "status": "done"}]}]},
+            prefix=True)
         return plan_id, cycle_id
 
     def _milestones(self, mtype, cr):
-        read = self.board.http(
-            f"/api/v2/projects/{self.key}/milestones?type={mtype}")
-        self.assertTrue(read.get("ok"), f"milestones read failed: {read!r}")
-        return [m for m in read.get("milestones") or [] if m.get("label") == cr]
+        """Every `mtype` milestone labelled `cr` the client posted."""
+        return [b for p, b in self.board.posts()
+                if p == "/api/v2/milestones" and isinstance(b, dict)
+                and b.get("type") == mtype and b.get("label") == cr]
 
     def _post_gate(self, cr, cycle_id, index, gate):
-        """POST one `pre-merge-gate` milestone. A gate given with `suites` and
-        no explicit outcome takes its verdict and counts from its entries."""
+        """One `pre-merge-gate` milestone as a gate posts it. A gate given
+        with `suites` and no explicit outcome takes its verdict and counts
+        from its entries."""
         body = {"projectKey": self.key, "agentId": self.orchestrator,
                 "type": GATE_TYPE, "label": cr,
                 "commit": f"c0ffee{index:034x}",
@@ -248,66 +237,50 @@ class _CloseJudgesSuiteBySuite(unittest.TestCase):
             if failing:
                 body["failingTests"] = failing
         body.update(gate)
-        posted = self.board.http("/api/v2/milestones", body)
-        self.assertTrue(posted.get("ok"),
-                        f"fixture: the gate milestone post was refused: {posted!r}")
-        return posted["event"]
-
-    def _await_clock_past(self, cr, event_id):
-        """Hold the next post until the host clock (the board's clock) has
-        passed this milestone's stored timestamp, so posting order IS time
-        order."""
-        stored = [m for m in self._milestones(GATE_TYPE, cr)
-                  if m.get("id") == event_id]
-        self.assertEqual(len(stored), 1,
-                         f"fixture: milestone {event_id} not read back")
-        stamp = stored[0].get("timestamp")
-        self.assertIsInstance(stamp, (int, float),
-                              f"fixture: no timestamp on {stored[0]!r}")
-        deadline = time.monotonic() + 5
-        while time.time() * 1000 <= stamp + 1:
-            if time.monotonic() > deadline:
-                raise AssertionError("fixture: the host clock never passed "
-                                     "the stored milestone timestamp")
+        return body
 
     def _history(self, cr, *gates):
-        """File `cr`'s plan and seed its gate history, oldest first. Returns
-        the plan id."""
+        """This test's board, holding `cr`'s plan and its gate history —
+        given oldest first, each a second after the last — listed as the
+        server lists it: newest first, each record stamped and minted
+        (`milestone_record`). Returns the plan id."""
         plan_id, cycle_id = self._plan(cr)
-        ids = []
+        start = int(time.time() * 1000)
+        records = []
         for index, gate in enumerate(gates):
-            ids.append(self._post_gate(cr, cycle_id, index, gate))
-            self._await_clock_past(cr, ids[-1])
-        stored = {m.get("id"): m for m in self._milestones(GATE_TYPE, cr)}
-        self.assertEqual(sorted(stored), sorted(ids),
-                         f"fixture: {cr}'s history is exactly the gates posted")
-        stamps = [stored[i].get("timestamp") for i in ids]
+            body = self._post_gate(cr, cycle_id, index, gate)
+            fields = {k: v for k, v in body.items()
+                      if k not in ("projectKey", "agentId", "type", "label")}
+            records.append(self.board.milestone_record(
+                self.key, self.orchestrator, GATE_TYPE, cr,
+                at_ms=start + 1000 * index, **fields))
+        stamps = [int(r["timestamp"]) for r in records]
         self.assertEqual(stamps, sorted(set(stamps)),
                          f"fixture: {cr}'s gates carry strictly increasing "
                          f"timestamps in posting order; got {stamps!r}")
-        for i, gate in zip(ids, gates, strict=True):
-            for field in ("scope", "suites"):
-                self.assertEqual(stored[i].get(field), gate.get(field),
-                                 f"fixture: the board kept the gate's {field}; "
-                                 f"got {stored[i]!r}")
+        self.board.answer(
+            "GET", f"/api/v2/projects/{self.key}/milestones?type={GATE_TYPE}",
+            {"ok": True, "milestones": list(reversed(records)),
+             "totalCount": len(records)})
         return plan_id
 
     def _plan_record(self, plan_id):
-        read = self.board.http(f"/api/v2/projects/{self.key}/plans")
-        self.assertTrue(read.get("ok"), f"plans read failed: {read!r}")
-        for plan in read.get("plans") or []:
-            if plan.get("planId") == plan_id:
-                return plan
-        raise AssertionError(f"plan {plan_id} not found")
+        """The plan as the close left it: `closed`, with the merge it sent,
+        when the client PATCHed it closed; `open` otherwise."""
+        closes = [b for p, b in self.board.posts()
+                  if p == f"/api/v2/projects/{self.key}/plans/{plan_id}"
+                  and isinstance(b, dict) and b.get("status") == "closed"]
+        self.assertLessEqual(len(closes), 1,
+                             f"the plan is closed at most once; got {closes!r}")
+        if not closes:
+            return {"planId": plan_id, "status": "open"}
+        return {"planId": plan_id, "status": "closed",
+                "merge": closes[0].get("merge")}
 
     # ── the close ───────────────────────────────────────────────────────────
 
     def _close(self, cr, commit, extra_argv=()):
         agent = f"{cr}-closer"
-        reg = self.board.http("/api/v2/agents/register",
-                              {"projectKey": self.key, "agentId": agent,
-                               "role": "ORCHESTRATOR"})
-        self.assertTrue(reg.get("ok"), f"closer registration failed: {reg!r}")
         script = CLIENT_FILES[self.CLIENT]
         verbs = enumerate_verbs(self.CLIENT, script)
         argv = (build_argv(CLOSE_VERB, verbs[CLOSE_VERB], self.project_dir)
@@ -316,7 +289,7 @@ class _CloseJudgesSuiteBySuite(unittest.TestCase):
         bin_dir = _build_fake_bin_dir()
         self.addCleanup(shutil.rmtree, bin_dir, True)
         result = drive_verb(script, argv, self.project_dir, bin_dir,
-                            timeout=60, board=self.board.base)
+                            timeout=60, board=self.board.url)
         _emits, axi = classify_envelope(result.stdout, self.toon)
         return result, axi or {}
 
