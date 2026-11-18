@@ -1,21 +1,25 @@
-"""CR-CRU-216 AC7 — through the real board: a test run filed through the python
-client is read back through the same client, and what it prints is what the
-board stored.
+"""CR-CRU-216 AC7 — a test run filed through the python client is read back
+through the same client, and what it prints is what the board answers.
 
-End to end against a REAL scratch board (`tests/client/real_board.py`: `bun run
-src/server.ts` on an OS-assigned free port over a `mkdtemp` store — never the
-live 3850/3849 and never the installer probe's 39877, so nothing here writes
-to a live board, CR-CRU-214). One plan with one active cycle is filed; a fake
-interpreter (the `--python` idiom of
+Against a fake board (`RecordingBoard`, tests/client/live_run_harness.py). A
+fake interpreter (the `--python` idiom of
 `test_python_exits_and_files_on_its_runners_exit.py`) writes an event stream
 (CR-CRU-224) holding one passing and one failing case, and `python-crucible.py
-test --cycle <it>` files that run. The comparison target is the board's OWN answer —
-`GET /api/v2/events/<id>` and `GET /api/v2/events/<id>?depth=suites` — never a
-value this test derives from what it told the fake to write.
+test --cycle <id>` files that run: the request log shows the agent bound to
+the cycle and the stream it sent. The board's answers to the read-back —
+`GET /api/v2/events?project=&cycleId=`, `GET /api/v2/events/<id>` and
+`GET /api/v2/events/<id>?depth=suites` — are scripted in the server's shapes
+as the record of exactly that filing (a minted `evt-<ms>-<seq>` id, the
+counts and tree of the stream the client sent, the tier, stack and codec it
+filed under), and the verbs must print them.
 
-RED today: `python-crucible.py` has no `runs` and no `run` verb, so both
-read-back drives die in argparse (`invalid choice`, exit 2, nothing on stdout)
-after the filing half of the test has already succeeded.
+That the server stores the run so, under the bound cycle, and answers those
+three reads with it is the server's half, held in bun by
+`events-anchored.test.ts` ("returns ONLY the requested cycle's linked runs
+…"), `v2-runs-events.test.ts` ("CR-CRU-094 §S1/AC1 — the cycle binding rides
+the run as a column"), `ingest-binding-attach.test.ts` and
+`drill-in.test.ts` / `the-suites-read-counts-a-runs-coverage-files.test.ts`
+(`?depth=suites`).
 
 The envelope field names (`runs`, `run`, `suites`, `failingTests`) are the
 decisions stated in `test_runs_and_run_read_a_projects_stored_runs_back.py`.
@@ -30,16 +34,20 @@ import stat
 import subprocess
 import sys
 import unittest
+import uuid
 from pathlib import Path
 
 from tests.client.live_run_harness import (
     CLIENTS,
+    START,
+    STREAM_ROUTE,
+    RecordingBoard,
+    install_project,
     load_toon,
     new_scratch,
     scrubbed_env,
+    stream_sent,
 )
-from tests.client.real_board import RealBoard
-from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers import _call
 
 TOON = load_toon()
 PYTHON_CLIENT = CLIENTS / "python-crucible.py"
@@ -47,7 +55,8 @@ TIMEOUT = 180
 
 AGENT = "run-read-back-e2e-red"
 ORCHESTRATOR = "run-read-back-e2e-orchestrator"
-CR = "CR-RUN-READ-BACK-E2E-FIXTURE"
+#: The cycle the run is filed under (an id the board would have given).
+CYCLE_ID = 9721
 
 PROBE_CLASS = "read_back_probe.ReadBackProbeCase"
 PASSING_CASE = "test_the_order_totals"
@@ -104,71 +113,71 @@ def _empty_to_none(value):
     return None if value == "" else value
 
 
-_BOARD = None
-
-
-def setUpModule():
-    global _BOARD
-    bun = shutil.which("bun")
-    if bun is None:
-        raise unittest.SkipTest(
-            "the run is filed on, and read back from, a REAL board, and "
-            "without `bun` there is none to boot — a missing toolchain, not a "
-            "passing assertion")
-    _BOARD = RealBoard(bun, "run-read-back-e2e")
-
-
-def tearDownModule():
-    global _BOARD
-    if _BOARD is not None:
-        _BOARD.close()
-        _BOARD = None
-
-
 class AFiledRunReadsBackAsTheBoardStoredItEndToEndTest(unittest.TestCase):
     """AC7 — file through the python client, read back through it, compare
-    with the board's own stored record."""
+    with the board's answer for the record of that filing."""
 
     @classmethod
     def setUpClass(cls):
-        if _BOARD is None:
-            raise AssertionError("the module's real board was never booted")
-        cls.board = _BOARD
+        cls.board = RecordingBoard()
+        cls.key = str(uuid.uuid4())
+        cls.cycle_id = CYCLE_ID
         cls.project = new_scratch("run-read-back-e2e-")
         Path(cls.project, "tests").mkdir()
         cls.fake_python = os.path.join(cls.project, "fake_python.py")
         Path(cls.fake_python).write_text("#!" + sys.executable + "\n" + _FAKE_PYTHON)
         os.chmod(cls.fake_python,
                  os.stat(cls.fake_python).st_mode | stat.S_IXUSR | stat.S_IRUSR)
-        cls.board.install(cls.project)
-        cls.cycle_id = cls._an_active_cycle()
+        install_project(cls.project, cls.board.url, cls.key)
         cls.filed = cls._client("test", "--agent", AGENT,
                                 "--python", cls.fake_python,
                                 "--reports", "reports",
                                 "--cycle", str(cls.cycle_id))
+        cls.records = cls._script_the_stored_record()
 
     @classmethod
     def tearDownClass(cls):
+        cls.board.close()
         shutil.rmtree(cls.project, ignore_errors=True)
 
     @classmethod
-    def _an_active_cycle(cls):
-        board = cls.board
-        reg = board.http("/api/v2/agents/register",
-                         {"projectKey": board.key, "agentId": ORCHESTRATOR,
-                          "role": "ORCHESTRATOR"})
-        assert reg.get("ok"), f"orchestrator registration failed: {reg!r}"
-        filed = board.http(f"/api/v2/projects/{board.key}/plans",
-                           {"cr": CR, "cycles": [{"label": "read-back"}],
-                            "agentId": ORCHESTRATOR})
-        assert filed.get("ok"), f"plan-file failed: {filed!r}"
-        plan_id, cycle_id = filed["planId"], filed["cycles"][0]["id"]
-        moved = _call(board.base,
-                      f"/api/v2/projects/{board.key}/plans/{plan_id}/cycles/{cycle_id}",
-                      {"status": "active", "agentId": ORCHESTRATOR},
-                      method="PATCH")
-        assert moved.get("ok"), f"cycle activation failed: {moved!r}"
-        return cycle_id
+    def _script_the_stored_record(cls):
+        """Script the board's three read-back answers as the record of the
+        run the client just filed: its stream's counts and tree, the tier
+        and stack its start named, the codec it closed under, the cycle it
+        was bound to, and a minted event id. None when nothing was filed
+        (the tests then fail on the request log, naming the drive)."""
+        posts = cls.board.posts()
+        starts = [b for p, b in posts if p == START and isinstance(b, dict)]
+        closes = [b for p, b in posts if p == "/api/v2/runs" and isinstance(b, dict)]
+        if len(starts) != 1 or len(closes) != 1:
+            return None
+        start, close = starts[0], closes[0]
+        sent = stream_sent(cls.board, close.get("runId") or "run-live-1")
+        summary = sent["summary"]
+        event_id = cls.board.mint_event_id()
+        brief = {"id": event_id, "projectKey": cls.key, "agentId": AGENT,
+                 "kind": "test", "tier": start.get("tier"),
+                 "codec": close.get("codec"), "stack": start.get("stack"),
+                 "cycleId": cls.cycle_id, **summary}
+        tree = [{"name": node["name"], "status": node["status"],
+                 "counts": {status: [c["status"] for c in node["children"]].count(
+                     "pass" if status == "passed" else
+                     "fail" if status == "failed" else "pending")
+                     for status in ("passed", "failed", "pending")},
+                 "children": node["children"]} for node in sent["tree"]]
+        full = {k: v for k, v in brief.items() if k not in summary}
+        full.update({"summary": summary, "tree": tree})
+        by_suite = dict(full, tree=[{k: v for k, v in node.items() if k != "children"}
+                                    for node in tree])
+        cls.board.answer("GET", f"/api/v2/events?project={cls.key}&cycleId={cls.cycle_id}",
+                         {"ok": True, "events": [brief], "openRuns": []})
+        cls.board.answer("GET", f"/api/v2/events/{event_id}",
+                         {"ok": True, "event": full})
+        cls.board.answer("GET", f"/api/v2/events/{event_id}?depth=suites",
+                         {"ok": True, "event": by_suite})
+        return {"brief": brief, "full": full, "suites": by_suite,
+                "sent": sent, "start": start, "close": close}
 
     @classmethod
     def _client(cls, verb, *argv):
@@ -184,35 +193,45 @@ class AFiledRunReadsBackAsTheBoardStoredItEndToEndTest(unittest.TestCase):
     # ── the board's own record ─────────────────────────────────────────────
 
     def stored_run(self):
-        """The ONE test run this agent filed under the cycle, as the board's
-        cycle list answers it, then read whole and by suite."""
-        listed = self.board.http(
-            f"/api/v2/events?project={self.board.key}&cycleId={self.cycle_id}")
-        self.assertTrue(listed.get("ok"), f"cycle list read failed: {listed!r}")
-        mine = [e for e in listed.get("events") or []
-                if e.get("agentId") == AGENT and e.get("kind") == "test"]
-        self.assertEqual(
-            len(mine), 1,
-            f"the python client files exactly one test run under cycle "
-            f"{self.cycle_id}; events={listed.get('events')!r}; "
-            f"{_diagnostics(self.filed)}")
-        brief = mine[0]
-        full = self.board.event(brief["id"])
+        """The ONE test run this agent filed under the cycle, as the client
+        sent it, and the board's scripted record of it: listed, whole and by
+        suite."""
+        records = self.records
+        self.assertIsNotNone(
+            records,
+            f"the python client opens and closes exactly one run; posts="
+            f"{[p for p, _ in self.board.posts()]!r}; {_diagnostics(self.filed)}")
+        assert records is not None
+        # `--cycle` binds the run's agent through its opening heartbeat
+        # (`GatedIdentity.open_payload`), before the run is opened.
+        bound = [(i, b) for i, (p, b) in enumerate(self.board.posts())
+                 if p in ("/api/v2/agents/register", "/api/v2/agents/heartbeat")
+                 and isinstance(b, dict) and b.get("agentId") == AGENT
+                 and b.get("cycleId") is not None]
+        opened = next(i for i, (p, _) in enumerate(self.board.posts())
+                      if p == START)
+        self.assertTrue(
+            bound and str(bound[0][1]["cycleId"]) == str(self.cycle_id)
+            and bound[0][0] < opened,
+            f"the agent is bound to cycle {self.cycle_id} before it opens "
+            f"its run; bindings={bound!r}")
         # The fixture's own precondition, so a red below is never a filing
         # that silently did not happen: the fake runner's one pass and one
-        # failure, stored under this cycle.
+        # failure, as the client streamed them.
+        summary = records["sent"]["summary"]
         self.assertEqual(
-            (full["summary"]["passed"], full["summary"]["failed"]), (1, 1),
-            f"the stored run holds the fake runner's one pass and one "
-            f"failure; event={full!r}")
-        self.assertEqual(brief.get("cycleId"), self.cycle_id, f"{brief!r}")
+            (summary["passed"], summary["failed"]), (1, 1),
+            f"the client streamed the fake runner's one pass and one "
+            f"failure; sent={records['sent']!r}")
+        self.assertTrue(
+            any(STREAM_ROUTE.match(p) for p, _ in self.board.posts()),
+            "the run's events went up its stream route")
         # A python unittest run is filed from its runner's stream (CR-CRU-224).
-        self.assertEqual(brief.get("codec"), "crucible-events",
-                         f"the stored run was filed from the runner's stream; "
-                         f"event={brief!r}")
-        suites = self.board.http(f"/api/v2/events/{brief['id']}?depth=suites")
-        self.assertTrue(suites.get("ok"), f"suites read failed: {suites!r}")
-        return brief, full, suites["event"].get("tree") or []
+        self.assertEqual(records["close"].get("codec"), "crucible-events",
+                         f"the run was closed under the stream's codec; "
+                         f"close={records['close']!r}")
+        return (records["brief"], records["full"],
+                records["suites"].get("tree") or [])
 
     def envelope(self, result):
         heads = [line for line in result.stdout.splitlines()
@@ -222,6 +241,7 @@ class AFiledRunReadsBackAsTheBoardStoredItEndToEndTest(unittest.TestCase):
         decoded = TOON.decode(result.stdout)
         axi = decoded.get("axi") if isinstance(decoded, dict) else None
         self.assertIsInstance(axi, dict, _diagnostics(result))
+        assert axi is not None
         return axi
 
     def test_runs_for_the_cycle_prints_the_stored_runs_values(self):
