@@ -1,5 +1,11 @@
 """A python coverage run names its least covered files, on a real board.
 
+The feature: the board ranks a run's coverage file by file, and the client
+lists the files in the board's order with the board's figures. No fake can
+prove it: the ranking, the per-file figures and the count beyond the listed
+rows are what the board's own store computed, and a scripted board would
+only hand back the order the test wrote into it.
+
 A scratch python project declares its coverage source as one package of
 twelve source files, with its tests outside that package. The real
 `python-crucible.py regression --coverage` runs it with the repo's own
