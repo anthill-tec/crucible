@@ -1,5 +1,5 @@
-"""A real stack report, filed through its own client, is stored as the board
-decodes it — end to end, against a REAL ephemeral board.
+"""A real stack report, filed through its own client, reaches the board as
+the bytes its runner wrote — driven end to end against a fake board.
 
 CR-CRU-152 froze one real run per stack under `tests/fixtures/reports/<stack>/`
 with its client's parse beside it (`expected.json`).
@@ -17,25 +17,32 @@ directory, compared by `(suite, case)`) run a faithful fake runner
 that writes the fixture's own report bytes where the client tells it to (and,
 for bun, prints the fixture's captured console as its output), exits non-zero
 as the fixture's run did, and the client sends what it found to the board
-(`ingest_reports`, clients/_crucible_run.py). The stored run is then read back
-over the board's own `GET /api/v2/events/<id>`.
+(`ingest_reports`, clients/_crucible_run.py). The board is a fake
+(`RecordingBoard`, one per test) whose run answer is scripted as the board's
+own for that fixture; what the client sent is read off its request log.
 
-  - the stored `total`, `passed`, `failed` and `pending`, and every case's
-    status in order, equal the fixture's `expected.json`;
-  - the stored codec is `junit` (the board decoded the report; nothing was
-    filed pre-parsed);
-  - the envelope's `run:` counts equal the stored ones (the client's figures
-    are the board's).
+  - the one run ingest is `junit` (nothing filed pre-parsed) and carries the
+    fixture's own report bytes, every report the fixture froze (rust: the
+    captured nextest stream, relayed whole, under `nextest`);
+  - the envelope's `run:` counts are the board's answer (the client's figures
+    are the board's), and so is its `files` where the fixture pins it.
 
 The fixtures are failing runs, whose coverage the board discards, so the
-coverage object is proven on a PASSING report filed beside each fixture's own
-lcov through the coverage-measuring verb (`regression --coverage`; rust's
-`regression-ingest`; arduino's `regression --coverage`): the stored coverage object equals the fixture's
-`expected.json` coverage.
+coverage is proven on a PASSING report filed beside each fixture's own
+coverage reports through the coverage-measuring verb (`regression --coverage`;
+rust's `regression-ingest`; arduino's `regression --coverage`): the ingest
+carries the passing report and, as its `coverage`, the fixture's own coverage
+reports under the fixture's coverage codec.
 
-The board is a scratch `bun run src/server.ts` on a free port with a throwaway
-store (never :3850/:3849/39877), booted once for the module; each test files
-under a project of its own.
+What the board stores from those bytes — the counts, every case's status, the
+distinct-file count and the coverage object of `expected.json` — is the
+server's half, held in bun by
+`tests/integration/real-stack-reports-decode-on-the-board.test.ts` ("stores
+the client's total, passed, failed and pending, …", "stores every case with
+the client's status, …", "decodes the real … report to the client's coverage
+object, …", "answers the run's distinct-file count, …") and, for rust's
+stream, `tests/integration/a-nextest-stream-is-stored-as-its-junit-record
+.test.ts`.
 
 Invocation:
     python3 clients/python-crucible.py test \
@@ -45,20 +52,22 @@ Invocation:
 import json
 import os
 import shutil
-import socket
 import stat
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
-import urllib.error
-import urllib.parse
-import urllib.request
+import uuid
 from pathlib import Path
 
-from tests.client.fake_nextest import private_fake_prelude
-from tests.client.live_run_harness import load_toon, scrubbed_env
+from tests.client.fake_nextest import held_results, private_fake_prelude
+from tests.client.live_run_harness import (
+    RecordingBoard,
+    junit_sent,
+    load_toon,
+    scrubbed_env,
+    stream_sent,
+)
 from tests.client.client_fleet_envelope_census_helpers import declare_and_require_board
 from tests.client import TEST_INSTALL_CLIENTS
 
@@ -291,84 +300,10 @@ sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 '''
 
 
-def _free_port():
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
-
-
-def _require_http(url):
-    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
-        raise ValueError(f"refusing a non-http(s) URL: {url!r}")
-    return url
-
-
-def _http(base, path, payload=None):
-    data = None if payload is None else json.dumps(payload).encode()
-    request = urllib.request.Request(  # noqa: S310 - scheme checked
-        _require_http(base + path), data=data,
-        method="POST" if data is not None else "GET",
-        headers={"content-type": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-            return json.loads(response.read().decode())
-    except urllib.error.HTTPError as exc:
-        return json.loads(exc.read().decode())
-
-
-def _await_board(base, proc, timeout=60):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"scratch board exited early with {proc.returncode}")
-        try:
-            with urllib.request.urlopen(  # noqa: S310 - scheme checked
-                    _require_http(base + "/api/v2/health"), timeout=2):
-                return
-        except (urllib.error.URLError, OSError):
-            time.sleep(0.2)
-    raise RuntimeError(f"scratch board never became reachable at {base}")
-
-
-_BOARD = {}
-
-
-def setUpModule():
-    bun = shutil.which("bun")
-    if bun is None:
-        raise unittest.SkipTest(
-            "the board that decodes these reports is a real `src/server.ts`: "
-            "without `bun` there is no board to boot")
-    store = tempfile.mkdtemp(prefix="real-reports-through-client-board-")
-    port = _free_port()
-    assert port not in (3850, 3849, 39877), f"reserved port handed back: {port}"
-    Path(store, "crucible.toml").write_text(
-        f'[server]\nhost = "127.0.0.1"\nport = {port}\n', encoding="utf-8")
-    proc = subprocess.Popen(
-        [bun, "run", "--no-env-file", "src/server.ts"], cwd=str(REPO_ROOT),
-        env={**os.environ, "CRUCIBLE_DB": os.path.join(store, "crucible.db")},
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    _BOARD.update(proc=proc, store=store, base=f"http://127.0.0.1:{port}")
-    try:
-        _await_board(_BOARD["base"], proc)
-    except BaseException:
-        tearDownModule()
-        raise
-
-
-def tearDownModule():
-    proc = _BOARD.pop("proc", None)
-    if proc is not None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-    store = _BOARD.pop("store", None)
-    if store:
-        shutil.rmtree(store, ignore_errors=True)
+#: The routes a run ingest is posted to (`RUN_INGEST_PATHS`).
+_RUN_INGESTS = ("/api/v2/runs", "/api/v2/runs/parsed")
+#: The board's counts for every passing report a coverage drive files.
+GREEN_SUMMARY = {"total": 1, "passed": 1, "failed": 0, "pending": 0}
 
 
 def _expected(fixture_dir):
@@ -380,9 +315,11 @@ def _counts(block):
     return {key: block.get(key) for key in ("total", "passed", "failed", "pending")}
 
 
-def _leaves(tree):
-    return [(case.get("name"), case.get("status"))
-            for suite in tree or [] for case in suite.get("children") or []]
+def _texts(fixture_dir, names):
+    """The fixture's own files, as text, sorted: the bytes a client must send,
+    whatever order it read them in."""
+    return sorted((FIXTURES / fixture_dir / name).read_text(encoding="utf-8")
+                  for name in names)
 
 
 def _envelope(stdout):
@@ -400,20 +337,19 @@ def _write_executable(path, body):
 
 
 class _FiledThroughTheClient(unittest.TestCase):
-    """A scratch project of its own on the module's board, a fake runner, and
-    the board's own read of what the client filed. Defines no test of its
-    own."""
+    """A scratch project of its own on a fake board of its own, a fake
+    runner, and the board's request log of what the client filed. Defines no
+    test of its own."""
 
     client_label = "a client"
 
     def setUp(self):
-        self.base = _BOARD["base"]
+        self.board = RecordingBoard()
+        self.addCleanup(self.board.close)
+        self.base = self.board.url
         self.scratch = tempfile.mkdtemp(prefix="real-reports-through-client-")
         self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
-        project = _http(self.base, "/api/v2/projects",
-                        {"name": f"real-reports-{os.path.basename(self.scratch)}"})
-        self.assertTrue(project.get("ok"), f"project creation failed: {project!r}")
-        self.key = project["project"]["key"]
+        self.key = str(uuid.uuid4())
         self.project = os.path.join(self.scratch, "project")
         os.makedirs(os.path.join(self.project, "tests"))
         Path(self.project, ".env").write_text(f"CRUCIBLE_PROJECT_KEY={self.key}\n")
@@ -439,56 +375,85 @@ class _FiledThroughTheClient(unittest.TestCase):
         return (f"exit={result.returncode} stdout={result.stdout!r} "
                 f"stderr={result.stderr[-3000:]!r}")
 
-    def stored_run(self, agent, result):
-        """The one run event this agent filed, as the board's detail read
-        answers it."""
-        listed = _http(self.base, f"/api/v2/events?project={self.key}&limit=100")
-        self.assertTrue(listed.get("ok"), f"events read failed: {listed!r}")
-        runs = [e for e in listed.get("events") or []
-                if e.get("agentId") == agent and e.get("kind") == "test"]
+    def board_answers(self, summary, files=None):
+        """Answer the run ingest as the board does for this fixture: its
+        decoded counts (`expected.json`, held in bun by the decode test), and
+        its distinct-file count where the fixture pins one."""
+        counts = {k: int(v or 0) for k, v in _counts(summary).items()}
+        self.board.script_run(passed=counts["passed"], failed=counts["failed"],
+                              pending=counts["pending"], total=counts["total"],
+                              files=files)
+
+    def sent_run(self, agent, result):
+        """The one run ingest this agent posted: its body, and the stream it
+        relayed to the run the body closes (`""` for none)."""
+        runs = [b for p, b in self.board.posts()
+                if p in _RUN_INGESTS and isinstance(b, dict)
+                and b.get("agentId") == agent]
         self.assertEqual(
             len(runs), 1,
-            f"the client files exactly one run for this drive; events="
-            f"{listed.get('events')!r} {self.diagnostics(result)}")
-        detail = _http(self.base, f"/api/v2/events/{runs[0]['id']}")
-        self.assertTrue(detail.get("ok", True), f"detail read failed: {detail!r}")
-        event = detail.get("event")
-        self.assertIsInstance(event, dict, f"detail={detail!r}")
-        return event
+            f"the client files exactly one run for this drive; posts="
+            f"{[p for p, _ in self.board.posts()]!r} {self.diagnostics(result)}")
+        body = runs[0] if runs else {}
+        run_id = body.get("runId")
+        return {"body": body, "runId": run_id,
+                "stream": self.board.held_stream(run_id) if run_id else ""}
+
+    def sent_summary(self, sent):
+        """The counts of the passing run the client sent, read from what it
+        sent: its JUnit, or the stream its run holds."""
+        codec = sent["body"].get("codec")
+        if codec == "junit":
+            return _counts((junit_sent(sent["body"]) or {}).get("summary"))
+        if codec == "nextest":
+            held = held_results(sent["stream"])
+            return {"total": sum(held.values()), "passed": held["ok"],
+                    "failed": held["failed"], "pending": held["ignored"]}
+        return _counts(stream_sent(self.board, sent["runId"])["summary"])
 
     def assert_fixture_stored(self, fixture_dir, agent, result, red_exit=True):
-        expected = _expected(fixture_dir)["client"]
-        event = self.stored_run(agent, result)
-        where = f"event={json.dumps(event)[:3000]} {self.diagnostics(result)}"
-        self.assertEqual(event.get("codec"), "junit",
-                         f"the board decoded the report the client sent; {where}")
-        self.assertEqual(_counts(event.get("summary")), _counts(expected["summary"]),
-                         f"the stored counts are the fixture's; {where}")
-        self.assertEqual(_leaves(event.get("tree")), _leaves(expected["tree"]),
-                         f"every case is stored with the fixture's status, in "
-                         f"order; {where}")
+        expected = _expected(fixture_dir)
+        sent = self.sent_run(agent, result)
+        body = sent["body"]
+        where = f"sent={json.dumps(body)[:3000]} {self.diagnostics(result)}"
+        self.assertEqual(body.get("codec"), "junit",
+                         f"the client sends the report for the board to "
+                         f"decode, nothing pre-parsed; {where}")
+        self.assertEqual(sorted(body.get("data") or []),
+                         _texts(fixture_dir, expected["reports"]),
+                         f"the client sends every report the runner wrote, "
+                         f"byte for byte; {where}")
         envelope = _envelope(result.stdout)
         self.assertIsNotNone(envelope, f"stdout is one TOON envelope; {where}")
         self.assertEqual(_counts((envelope or {}).get("run")),
-                         _counts(event.get("summary")),
-                         f"the envelope's run: counts are the stored ones; {where}")
+                         _counts(expected["client"]["summary"]),
+                         f"the envelope's run: counts are the board's answer; "
+                         f"{where}")
         if red_exit:
             self.assertNotEqual(result.returncode, 0,
                                 f"a run with failures is not green; {where}")
-        return event
+        return sent
 
     def assert_coverage_stored(self, fixture_dir, agent, result):
-        want = _expected(fixture_dir)["client"]["coverage"]
-        self.assertGreater(want["lines"]["total"], 0, "fixture sanity")
-        event = self.stored_run(agent, result)
-        where = f"event={json.dumps(event)[:3000]} {self.diagnostics(result)}"
-        self.assertEqual(event.get("coverage"), want,
-                         f"the fixture's lcov, filed beside a passing report, "
-                         f"is stored as the fixture's coverage object; {where}")
-        self.assertEqual(_counts(event.get("summary")),
+        expected = _expected(fixture_dir)
+        self.assertGreater(expected["client"]["coverage"]["lines"]["total"], 0,
+                           "fixture sanity")
+        sent = self.sent_run(agent, result)
+        body = sent["body"]
+        where = f"sent={json.dumps(body)[:3000]} {self.diagnostics(result)}"
+        coverage = body.get("coverage") or {}
+        self.assertEqual(coverage.get("codec"), expected["coverage"]["codec"],
+                         f"the coverage rides the run under the fixture's "
+                         f"coverage codec; {where}")
+        self.assertEqual(sorted(coverage.get("data") or []),
+                         _texts(fixture_dir, expected["coverage"]["reports"]),
+                         f"the fixture's coverage reports, filed beside a "
+                         f"passing report, are sent byte for byte; {where}")
+        self.assertEqual(self.sent_summary(sent),
                          {"total": 1, "passed": 1, "failed": 0, "pending": 0},
                          f"the passing report is the one filed; {where}")
         self.assertEqual(result.returncode, 0, where)
+        return sent
 
 
 class BunFixtureFiledThroughTheBunClientEndToEndTest(_FiledThroughTheClient):
@@ -506,6 +471,7 @@ class BunFixtureFiledThroughTheBunClientEndToEndTest(_FiledThroughTheClient):
 
     def test_the_bun_fixture_filed_by_bun_test_stores_its_expected_counts_and_statuses(self):
         agent = "real-bun-through-client"
+        self.board_answers(_expected("bun")["client"]["summary"])
         result = self.drive(BUN_CLIENT, self.argv("test", agent),
                             FAKE_JUNIT=str(FIXTURES / "bun" / "junit.xml"),
                             FAKE_CONSOLE=str(FIXTURES / "bun" / "console.txt"),
@@ -514,6 +480,7 @@ class BunFixtureFiledThroughTheBunClientEndToEndTest(_FiledThroughTheClient):
 
     def test_the_bun_fixtures_lcov_filed_by_regression_coverage_stores_its_expected_coverage(self):
         agent = "real-bun-coverage-through-client"
+        self.board_answers(GREEN_SUMMARY)
         green = Path(self.scratch, "green-junit.xml")
         green.write_text(GREEN_BUN_JUNIT, encoding="utf-8")
         result = self.drive(BUN_CLIENT, self.argv("regression", agent, "--coverage"),
@@ -551,6 +518,7 @@ class PythonFixturesFiledThroughThePythonClientEndToEndTest(_FiledThroughTheClie
         and `auto-ingest`'s: a unittest run no longer writes JUnit
         (CR-CRU-224), so the fixture's reports are filed as a JUnit dir."""
         agent = "real-xmlrunner-through-auto-ingest"
+        self.board_answers(_expected("python/xmlrunner")["client"]["summary"])
         reports = Path(self.project, "reports")
         reports.mkdir(parents=True, exist_ok=True)
         for name in _expected("python/xmlrunner")["reports"]:
@@ -566,6 +534,7 @@ class PythonFixturesFiledThroughThePythonClientEndToEndTest(_FiledThroughTheClie
 
     def test_the_pytest_fixture_filed_by_python_test_under_pytest_stores_its_expected_counts_and_statuses(self):
         agent = "real-pytest-through-client"
+        self.board_answers(_expected("python/pytest")["client"]["summary"])
         result = self.drive(PYTHON_CLIENT,
                             self.argv("test", agent, "--runner", "pytest"),
                             FAKE_REPORTS=self.fixture_reports("python/pytest"),
@@ -574,6 +543,7 @@ class PythonFixturesFiledThroughThePythonClientEndToEndTest(_FiledThroughTheClie
 
     def test_the_xmlrunner_fixtures_lcov_filed_by_a_streamed_regression_coverage_stores_its_expected_coverage(self):
         agent = "real-xmlrunner-coverage-through-client"
+        self.board_answers(GREEN_SUMMARY)
         stream = Path(self.scratch, "green", "crucible-events.ndjson")
         stream.parent.mkdir(parents=True, exist_ok=True)
         stream.write_text(GREEN_UNITTEST_STREAM, encoding="utf-8")
@@ -582,12 +552,13 @@ class PythonFixturesFiledThroughThePythonClientEndToEndTest(_FiledThroughTheClie
             FAKE_STREAM=str(stream),
             FAKE_LCOV=str(FIXTURES / "python" / "xmlrunner" / "lcov.info"),
             FAKE_EXIT="0")
-        self.assert_coverage_stored("python/xmlrunner", agent, result)
-        self.assertEqual(self.stored_run(agent, result).get("codec"), "crucible-events",
+        sent = self.assert_coverage_stored("python/xmlrunner", agent, result)
+        self.assertEqual(sent["body"].get("codec"), "crucible-events",
                          "a unittest run's coverage travels with its stream close")
 
     def test_the_pytest_fixtures_lcov_filed_by_regression_coverage_under_pytest_stores_its_expected_coverage(self):
         agent = "real-pytest-coverage-through-client"
+        self.board_answers(GREEN_SUMMARY)
         result = self.drive(
             PYTHON_CLIENT,
             self.argv("regression", agent, "--coverage", "--runner", "pytest"),
@@ -595,14 +566,6 @@ class PythonFixturesFiledThroughThePythonClientEndToEndTest(_FiledThroughTheClie
             FAKE_LCOV=str(FIXTURES / "python" / "pytest" / "lcov.info"),
             FAKE_EXIT="0")
         self.assert_coverage_stored("python/pytest", agent, result)
-
-
-def _cases(tree):
-    """Every case of a stored or frozen tree as `(suite, case, status)`,
-    sorted: the comparison by `(suite, case)` a run whose reports are read in
-    another order than the frozen parse read them still passes."""
-    return sorted((suite.get("name"), case.get("name"), case.get("status"))
-                  for suite in tree or [] for case in suite.get("children") or [])
 
 
 class MavenFixtureFiledThroughTheMavenClientEndToEndTest(_FiledThroughTheClient):
@@ -638,31 +601,22 @@ class MavenFixtureFiledThroughTheMavenClientEndToEndTest(_FiledThroughTheClient)
     def test_the_mvn_fixture_filed_by_regression_stores_its_expected_counts_and_statuses(self):
         agent = "real-mvn-through-client"
         expected = _expected("mvn")["client"]
+        self.board_answers(expected["summary"], files=expected["files"])
         result = self.drive(MVN_CLIENT, self.argv("regression", agent),
                             FAKE_SUREFIRE=self.fixture_reports("surefire"),
                             FAKE_FAILSAFE=self.fixture_reports("failsafe"),
                             FAKE_EXIT="1")
-        event = self.stored_run(agent, result)
-        where = f"event={json.dumps(event)[:3000]} {self.diagnostics(result)}"
-        self.assertEqual(event.get("codec"), "junit",
-                         f"the board decoded the reports the client sent; {where}")
-        self.assertEqual(_counts(event.get("summary")), _counts(expected["summary"]),
-                         f"the stored counts are the fixture's; {where}")
-        self.assertEqual(_cases(event.get("tree")), _cases(expected["tree"]),
-                         f"every case is stored with the fixture's status, by "
-                         f"(suite, case); {where}")
+        self.assert_fixture_stored("mvn", agent, result)
         envelope = _envelope(result.stdout) or {}
-        self.assertEqual(_counts(envelope.get("run")), _counts(event.get("summary")),
-                         f"the envelope's run: counts are the stored ones; {where}")
         self.assertEqual((envelope.get("run") or {}).get("files"), expected["files"],
                          f"the envelope's run.files is the answer's, the "
-                         f"fixture's {expected['files']}; {where}")
+                         f"fixture's {expected['files']}; "
+                         f"{self.diagnostics(result)}")
         self.assertEqual(expected["files"], 5, "fixture sanity")
-        self.assertNotEqual(result.returncode, 0,
-                            f"a run with failures is not green; {where}")
 
     def test_the_mvn_fixtures_csvs_filed_by_regression_coverage_store_its_expected_coverage(self):
         agent = "real-mvn-coverage-through-client"
+        self.board_answers(GREEN_SUMMARY)
         green = Path(self.scratch, "green", "TEST-com.acme.GreenTest.xml")
         green.parent.mkdir(parents=True)
         green.write_text(GREEN_SUREFIRE_JUNIT, encoding="utf-8")
@@ -673,11 +627,10 @@ class MavenFixtureFiledThroughTheMavenClientEndToEndTest(_FiledThroughTheClient)
                             FAKE_JACOCO_ROOT=str(FIXTURES / "mvn"),
                             FAKE_JACOCO=os.pathsep.join(csvs),
                             FAKE_EXIT="0")
-        self.assert_coverage_stored("mvn", agent, result)
-        event = self.stored_run(agent, result)
-        self.assertEqual(event.get("codec"), "junit",
-                         f"the board decoded the report and the CSVs the client "
-                         f"sent; event={json.dumps(event)[:3000]} "
+        sent = self.assert_coverage_stored("mvn", agent, result)
+        self.assertEqual(sent["body"].get("codec"), "junit",
+                         f"the client sent the report and the CSVs for the "
+                         f"board to decode; sent={json.dumps(sent['body'])[:3000]} "
                          f"{self.diagnostics(result)}")
 
 
@@ -708,41 +661,41 @@ class RustFixtureFiledThroughTheRustClientEndToEndTest(_FiledThroughTheClient):
         """A rust run's record is nextest's stream: the captured
         `distinct-targets` run (a lib, a bin and an integration target, a
         failure and an ignored test), streamed by `test --crate nx-targets`,
-        is stored as the board decodes the JUnit report the same nextest run
-        wrote, its ignored test a pending leaf JUnit does not have."""
+        reaches the board as the very stream the run wrote, under `nextest`.
+        That the board stores it as it decodes the JUnit report the same run
+        wrote, its ignored test a pending leaf JUnit does not have, is held in
+        bun by `a-nextest-stream-is-stored-as-its-junit-record.test.ts`."""
         agent = "real-rust-through-client"
         captured = NEXTEST_FIXTURES / "distinct-targets"
-        for caller in (agent, "real-rust-junit-oracle"):
-            registered = self.drive(RUST_CLIENT, ["register", "--agent", caller, "--role",
-                                                  "report", "--project-dir", self.project])
-            self.assertEqual(registered.returncode, 0, self.diagnostics(registered))
+        stored = {"total": 5, "passed": 3, "failed": 1, "pending": 1}
+        self.board_answers(stored)
+        registered = self.drive(RUST_CLIENT, ["register", "--agent", agent, "--role",
+                                              "report", "--project-dir", self.project])
+        self.assertEqual(registered.returncode, 0, self.diagnostics(registered))
         result = self.drive(RUST_CLIENT, self.argv("test", agent, "--crate", "nx-targets"),
                             FAKE_NEXTEST_FIXTURE=str(captured))
-        event = self.stored_run(agent, result)
-        where = f"event={json.dumps(event)[:3000]} {self.diagnostics(result)}"
-        self.assertEqual(event.get("codec"), "nextest",
-                         f"the board decoded the stream the client relayed; {where}")
-        oracle = _http(self.base, "/api/v2/runs", {
-            "projectKey": self.key, "agentId": "real-rust-junit-oracle",
-            "codec": "junit", "stack": "rust",
-            "data": [(captured / "junit.xml").read_text(encoding="utf-8")]})
-        self.assertTrue(oracle.get("ok"), f"the oracle's JUnit was decoded: {oracle!r}")
-        junit = _http(self.base, f"/api/v2/events/{oracle['event']}").get("event") or {}
-        self.assertEqual(_counts(event.get("summary")),
-                         {"total": 5, "passed": 3, "failed": 1, "pending": 1},
-                         f"fixture sanity; {where}")
-        self.assertEqual([c for c in _cases(event.get("tree")) if c[2] != "pending"],
-                         _cases(junit.get("tree")),
-                         f"every result is stored as the board decodes the same "
-                         f"run's JUnit, by (suite, case); {where}")
+        sent = self.sent_run(agent, result)
+        where = f"sent={json.dumps(sent['body'])[:3000]} {self.diagnostics(result)}"
+        self.assertEqual(sent["body"].get("codec"), "nextest",
+                         f"the client closes the run under the stream's codec; "
+                         f"{where}")
+        self.assertEqual(sent["stream"],
+                         (captured / "stream.jsonl").read_text(encoding="utf-8"),
+                         f"the client relays the run's stream whole, byte for "
+                         f"byte; {where}")
+        self.assertEqual(self.sent_summary(sent), stored,
+                         f"fixture sanity: the stream holds 3 passes, 1 "
+                         f"failure and 1 ignored test; {where}")
         envelope = _envelope(result.stdout) or {}
-        self.assertEqual(_counts(envelope.get("run")), _counts(event.get("summary")),
-                         f"the envelope's run: counts are the stored ones; {where}")
+        self.assertEqual(_counts(envelope.get("run")), stored,
+                         f"the envelope's run: counts are the board's answer; "
+                         f"{where}")
         self.assertNotEqual(result.returncode, 0,
                             f"a run with failures is not green; {where}")
 
     def test_the_rust_fixtures_lcov_filed_by_regression_ingest_stores_its_expected_coverage(self):
         agent = "real-rust-coverage-through-client"
+        self.board_answers(GREEN_SUMMARY)
         registered = self.drive(RUST_CLIENT, ["register", "--agent", agent, "--role",
                                               "report", "--project-dir", self.project])
         self.assertEqual(registered.returncode, 0, self.diagnostics(registered))
@@ -756,11 +709,10 @@ class RustFixtureFiledThroughTheRustClientEndToEndTest(_FiledThroughTheClient):
                             FAKE_JUNIT=str(green),
                             FAKE_LCOV=str(FIXTURES / "rust" / "lcov.info"),
                             FAKE_EXIT="0")
-        self.assert_coverage_stored("rust", agent, result)
-        event = self.stored_run(agent, result)
-        self.assertEqual(event.get("codec"), "nextest",
-                         f"the board decoded the stream and the lcov the client "
-                         f"sent; event={json.dumps(event)[:3000]} "
+        sent = self.assert_coverage_stored("rust", agent, result)
+        self.assertEqual(sent["body"].get("codec"), "nextest",
+                         f"the client sent the stream and the lcov for the "
+                         f"board to decode; sent={json.dumps(sent['body'])[:3000]} "
                          f"{self.diagnostics(result)}")
 
 
@@ -834,24 +786,18 @@ class ArduinoFixtureFiledThroughTheArduinoClientEndToEndTest(_FiledThroughTheCli
         expected = _expected("arduino")
         reports = [str(FIXTURES / "arduino" / name) for name in expected["reports"]]
         self.assertEqual(len(reports), 3, "fixture sanity: the three reports")
+        self.assertEqual(_counts(expected["client"]["summary"]),
+                         {"total": 13, "passed": 8, "failed": 2, "pending": 3},
+                         "fixture sanity: expected.json's counts")
+        # The board answers 2 distinct files: the esp32 and uno reports share
+        # a source (held in bun: "arduino: a source two binaries share is one
+        # file across the run").
+        self.board_answers(expected["client"]["summary"], files=2)
         result = self.drive(ARDUINO_CLIENT, self.argv("unit", agent),
                             FAKE_REPORTS=os.pathsep.join(reports), FAKE_EXIT="0")
-        event = self.stored_run(agent, result)
-        where = f"event={json.dumps(event)[:3000]} {self.diagnostics(result)}"
-        self.assertEqual(event.get("codec"), "junit",
-                         f"the board decoded the reports the client sent; {where}")
-        self.assertEqual(_counts(event.get("summary")),
-                         {"total": 13, "passed": 8, "failed": 2, "pending": 3},
-                         f"the stored counts are the fixture's; {where}")
-        self.assertEqual(_counts(event.get("summary")),
-                         _counts(expected["client"]["summary"]),
-                         f"the stored counts are expected.json's; {where}")
-        self.assertEqual(_cases(event.get("tree")), _cases(expected["client"]["tree"]),
-                         f"every case is stored with the fixture's status, by "
-                         f"(suite, case); {where}")
+        self.assert_fixture_stored("arduino", agent, result, red_exit=False)
+        where = self.diagnostics(result)
         envelope = _envelope(result.stdout) or {}
-        self.assertEqual(_counts(envelope.get("run")), _counts(event.get("summary")),
-                         f"the envelope's run: counts are the stored ones; {where}")
         self.assertEqual(expected["client"]["files"], 3,
                          "fixture sanity: the client summed 3 sources per report")
         self.assertEqual((envelope.get("run") or {}).get("files"), 2,
@@ -864,6 +810,7 @@ class ArduinoFixtureFiledThroughTheArduinoClientEndToEndTest(_FiledThroughTheCli
 
     def test_the_arduino_fixtures_lcov_filed_by_regression_coverage_stores_its_expected_coverage(self):
         agent = "real-arduino-coverage-through-client"
+        self.board_answers(GREEN_SUMMARY)
         green = Path(self.scratch, "green", "TEST-test_green.xml")
         green.parent.mkdir(parents=True)
         green.write_text(GREEN_NATIVE_JUNIT, encoding="utf-8")
@@ -874,11 +821,10 @@ class ArduinoFixtureFiledThroughTheArduinoClientEndToEndTest(_FiledThroughTheCli
                             FAKE_REPORTS=str(green),
                             FAKE_LCOV=str(FIXTURES / "arduino" / "lcov.info"),
                             FAKE_EXIT="0")
-        self.assert_coverage_stored("arduino", agent, result)
-        event = self.stored_run(agent, result)
-        self.assertEqual(event.get("codec"), "junit",
-                         f"the board decoded the report and the lcov the client "
-                         f"sent; event={json.dumps(event)[:3000]} "
+        sent = self.assert_coverage_stored("arduino", agent, result)
+        self.assertEqual(sent["body"].get("codec"), "junit",
+                         f"the client sent the report and the lcov for the "
+                         f"board to decode; sent={json.dumps(sent['body'])[:3000]} "
                          f"{self.diagnostics(result)}")
 
 
