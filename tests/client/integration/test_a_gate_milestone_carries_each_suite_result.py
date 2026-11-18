@@ -1,5 +1,13 @@
 """A gate's milestone carries each suite's result, and its envelope names the
-events of every run it composed.
+events of every run it composed; a cycle gate files every suite it runs under
+the cycle; and no composed gate is green on a failed runner.
+
+The feature this module keeps a live board for is gate composition across
+dispatched clients: bun's gate and the python client it dispatches, each a
+separate process, file their runs and the gate's milestone on one board. No
+fake can prove it, because the hand-off between those processes is the
+server's own storage: the dispatched child's stored event, the run the board
+adds for a runner's exit, and the cycle binding a real active cycle enforces.
 
 bun's `pre-merge-gate` is the fleet's composed gate: its own whole-suite
 regression (covering every bun-owned declared target) plus one dispatched run
@@ -27,12 +35,55 @@ suite dispatched to the real `clients/python-crucible.py`, each runner a small
 fake whose pass or fail this suite decides. Each scenario has its own plan and
 cycle, so its milestone is found by the plan's CR label and nothing else.
 
+`CycleGateFilesEverySuiteUnderTheCycleTest`: a gate given `--cycle <id>`
+files EVERY suite it runs under that cycle, the suites it dispatches to
+another stack's client included. While a project has an active cycle, a run
+whose agent is bound to no cycle and that carries neither `--cycle` nor
+`--release` is refused before its runner starts. A gate that composes several
+suites must therefore hand its cycle on: bun's `pre-merge-gate` runs its own
+whole-suite regression in a gated bracket (which binds, then removes, the
+identity it created) and only THEN dispatches each declared suite another
+stack owns to that stack's client as a separate process (`run_gate_suites` ->
+`_dispatch_gate_suite` -> the shared `sibling_client_argv`). If the cycle is
+not forwarded, the dispatched python suite arrives unbound, with no
+`--cycle`, while the cycle is active. It is refused, and the gate that was
+asked for the cycle reports a suite it never ran. Its board is its own
+`RealBoard`: the cycle must genuinely be ACTIVE for the refusal to have
+anything to answer. The project, the fake toolchain and the gate drive are
+the adopted multi-suite gate fixture (`test_gate_multi_suite_coverage.py`'s
+`_GateFixtureCase`, adopted by name the way
+`test_a_release_gate_files_every_suite_it_runs_under_the_release.py` adopts
+it): a project declaring a bun suite and a python-owned `test:client` suite
+whose script invokes the python client.
+
+`ComposedGateOverAFailedRunnerTest`, on the module's board, drives the real
+`clients/bun-crucible.py pre-merge-gate` over a project whose `package.json`
+declares a bun-owned suite (`test:unit`) and a python-owned one
+(`test:client`, whose script invokes the real `clients/python-crucible.py
+regression`). A runner that exits non-zero over a report that records only
+passes is a failed run: the board adds its `runner / exit <n>` case, and the
+gate that composed the run is not green:
+
+  * the bun whole-suite runner exits 1 over a passing-only report — the gate
+    exits non-zero, its envelope is `ok: false`, its totals and the covered
+    suite's row carry the board's added case, and the stored run holds it;
+  * the dispatched python suite's runner exits 1 over a passing-only report
+    while bun's run is clean — the same, attributed to `test:client`;
+  * both runners exit 0 over clean reports — the gate is green, exits 0, and
+    no run carries a `runner` suite (nothing else changes).
+
+Each fake runner reads its OWN exit variable (`FAKE_BUN_EXIT`,
+`FAKE_PYTHON_EXIT`), so one drive can fail one stack's runner and not the
+other's.
+
 Invocation:
     python3 -m unittest tests.client.integration.test_a_gate_milestone_carries_each_suite_result -v
 """
 
+import importlib.util
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -52,7 +103,9 @@ from tests.client.an_unattributed_run_is_refused_while_a_cycle_is_active_helpers
 from tests.client.client_fleet_envelope_census_helpers import (
     _FAKE_TOOLS,
     _make_project_dir,
+    declare_board,
     drive_verb,
+    would_resolve,
 )
 from tests.client.every_verb_that_files_a_run_is_refused_while_a_cycle_is_active_helpers import (
     _LOG_SNIPPET,
@@ -66,6 +119,9 @@ from tests.client.a_gate_milestone_carries_each_suite_result_helpers import (
     _executable,
     _FAKE_BUN,
     _FAKE_PYTHON,
+    _RUNNER_EXIT_FAKE_BUN,
+    _RUNNER_EXIT_FAKE_PYTHON,
+    PYTHON_CASE,
     PYTHON_FAILING_CASE,
     PYTHON_SUITE,
 )
@@ -90,6 +146,43 @@ _SCRUBBED = ("BUN_CRUCIBLE_PACKAGE_DIR", "BUN_CRUCIBLE_PROJECT_DIR",
              "CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY",
              "FAKE_BUN_FAIL", "FAKE_PYTHON_FAIL", "FAKE_TSC_FAIL",
              "FAKE_PYTHON_STREAM_CAPTURE")
+
+GATE_SUITE_FAILED = "gate-suite-failed"
+
+# Keys that would let the shell running this suite decide what either client
+# resolves or how it files: scrubbed from every runner-exit drive.
+_RUNNER_EXIT_SCRUBBED = ("BUN_CRUCIBLE_PACKAGE_DIR", "BUN_CRUCIBLE_PROJECT_DIR",
+                         "BUN_CRUCIBLE_BUN", "BUN_CRUCIBLE_NO_LIFECYCLE",
+                         "PY_CRUCIBLE_PYTHON", "PYTHON_CRUCIBLE_PROJECT_DIR",
+                         "CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY",
+                         "FAKE_BUN_EXIT", "FAKE_PYTHON_EXIT")
+
+TESTS_CLIENT_DIR = Path(__file__).resolve().parents[1]
+GATE_HARNESS_PATH = TESTS_CLIENT_DIR / "integration" / "test_gate_multi_suite_coverage.py"
+
+# Resolved at import, before the adopted gate fixture puts its fake
+# toolchains first on PATH: the cycle gate's board must run on the REAL bun.
+_REAL_BUN = shutil.which("bun")
+
+# The names the adopted fixture's two suites carry in their stored trees: the
+# bun probe file and the python probe's test class.
+BUN_SUITE_MARK = "probe.test.ts"
+PYTHON_SUITE_MARK = "DeclaredPythonSuiteTest"
+
+
+def _load_module(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# The multi-suite gate harness, adopted whole. Only NON-test names are taken:
+# importing one of its TestCases would run that suite a second time.
+_GATE = _load_module(GATE_HARNESS_PATH, "cycle_gate_dispatch_harness")
+CYCLE_GATE_PYTHON_SUITE = _GATE.PYTHON_SUITE
+GATE_AGENT = _GATE.AGENT
 
 
 def _diagnostics(result):
@@ -590,6 +683,344 @@ class AGateThatFailsAfterItsCompositionTest(_GateScenario):
         self.assertNotIn("suites", record,
                          f"a failure that escapes the gate, even after the "
                          f"composition, posts no `suites`; record={record!r}")
+
+
+class CycleGateFilesEverySuiteUnderTheCycleTest(_GATE._GateFixtureCase):
+    """`bun-crucible.py pre-merge-gate --cycle <id>`, the cycle active on a
+    live board, a python-owned suite declared beside the bun one: every
+    suite's run is stored under <id>."""
+
+    ORCHESTRATOR = "cycle-gate-fixture-orchestrator"
+    PLANTED_CR = "CR-T-CYCLE-GATE-DISPATCH"
+
+    @classmethod
+    def setUpClass(cls):
+        # The adopted fixture's fake toolchains go first on PATH for this
+        # class alone, and come off again once it is done.
+        _GATE.setUpModule()
+        cls.addClassCleanup(_GATE.tearDownModule)
+        super().setUpClass()
+        cls._live_board = None
+        if _REAL_BUN is None:
+            raise unittest.SkipTest(
+                "an ACTIVE cycle is a property of a REAL store: without `bun` "
+                "there is no server to carry one. A missing toolchain, not a "
+                "passing assertion.")
+        cls._live_board = RealBoard(_REAL_BUN, "cycle-gate-dispatch")
+        cls.base = cls._live_board.base
+        try:
+            cls._seed()
+        except BaseException:
+            cls._stop_board()
+            raise
+
+    @classmethod
+    def _seed(cls):
+        """One project carrying exactly ONE active cycle."""
+        board = cls._live_board
+        assert board is not None, "the class's real board was never booted"
+        key = board.key
+        reg = _call(cls.base, "/api/v2/agents/register",
+                    {"projectKey": key, "agentId": cls.ORCHESTRATOR,
+                     "role": "ORCHESTRATOR"})
+        assert reg.get("ok"), f"orchestrator registration failed: {reg!r}"
+        filed = _call(cls.base, f"/api/v2/projects/{key}/plans",
+                      {"cr": cls.PLANTED_CR, "cycles": [{"label": "solo"}],
+                       "agentId": cls.ORCHESTRATOR})
+        assert filed.get("ok"), f"plan-file failed: {filed!r}"
+        cycle_id = filed["cycles"][0]["id"]
+        activated = _call(
+            cls.base, f"/api/v2/projects/{key}/plans/{filed['planId']}/cycles/{cycle_id}",
+            {"status": "active", "agentId": cls.ORCHESTRATOR}, method="PATCH")
+        assert activated.get("ok"), f"cycle activation failed: {activated!r}"
+        # The adopted fixture writes this key into the project's `.env`, so
+        # the gate AND the sibling client it dispatches both resolve it.
+        cls.PROJECT_KEY = key
+        cls.cycle_id = cycle_id
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._stop_board()
+        super().tearDownClass()
+
+    @classmethod
+    def _stop_board(cls):
+        board = getattr(cls, "_live_board", None)
+        if board is None:
+            return
+        cls._live_board = None
+        board.close()
+
+    def setUp(self):
+        super().setUp()
+        # The adopted fixture declared its own stub board; this drive reports
+        # to the live one instead, for the gate and its sibling alike.
+        declare_board(Path(self.tmpdir) / "crucible.toml", self.base)
+
+    def require_the_declared_board_resolves(self):
+        """The adopted interlock, asked of the LIVE board this drive uses."""
+        ok, reason = would_resolve(_GATE.AXI_PATH, self.tmpdir, self.base)
+        self.assertTrue(
+            ok,
+            f"the gate's drive must resolve the board declared in "
+            f"{self.tmpdir}/crucible.toml, and nothing was spawned because it "
+            f"would not: {reason}")
+
+    def _stored_test_events(self):
+        """Every stored run-result event of the gate's agent, read in full."""
+        listed = _call(self.base, f"/api/v2/events?project={self.PROJECT_KEY}")
+        self.assertTrue(listed.get("ok"), f"events read failed: {listed!r}")
+        full = []
+        for event in listed.get("events") or []:
+            if event.get("agentId") != GATE_AGENT or event.get("kind") != "test":
+                continue
+            read = _call(self.base, f"/api/v2/events/{event['id']}")
+            self.assertTrue(read.get("ok", True) and read.get("event"),
+                            f"event read failed: {read!r}")
+            full.append(read["event"])
+        return full
+
+    def test_every_suite_a_cycle_gate_runs_is_stored_under_the_cycle(self):
+        drive = self.drive_gate(extra=["--cycle", str(self.cycle_id)])
+        envelope = self.gate_envelope(drive)
+
+        self.assertEqual(
+            drive.code, 0,
+            f"`pre-merge-gate --cycle {self.cycle_id}` with cycle "
+            f"{self.cycle_id} ACTIVE must run every declared suite; the "
+            f"dispatched `{CYCLE_GATE_PYTHON_SUITE}` must not be refused for carrying no "
+            f"cycle. gate envelope={envelope!r} "
+            f"stderr={drive.err[-3000:]!r}")
+        self.assertTrue(
+            envelope.get("ok"),
+            f"the gate's own envelope must be ok:true; got {envelope!r}")
+
+        match = re.search(
+            rf"dispatching `{re.escape(CYCLE_GATE_PYTHON_SUITE)}` to (?P<argv>[^\n]*)",
+            drive.err)
+        if match is None:
+            self.fail(f"the gate must dispatch `{CYCLE_GATE_PYTHON_SUITE}` to its sibling "
+                      f"client; stderr={drive.err[-3000:]!r}")
+        dispatched = match.group("argv") if match is not None else ""
+        self.assertRegex(
+            dispatched, rf"(^|\s)--cycle {self.cycle_id}(\s|$)",
+            f"the dispatched sibling command must carry `--cycle "
+            f"{self.cycle_id}`, as it carries the gate's --release; got "
+            f"{dispatched!r}")
+
+        events = self._stored_test_events()
+        bun_runs = [e for e in events if BUN_SUITE_MARK in repr(e.get("tree"))]
+        python_runs = [e for e in events if PYTHON_SUITE_MARK in repr(e.get("tree"))]
+        self.assertEqual(
+            (len(bun_runs), len(python_runs)), (1, 1),
+            f"one stored run per suite the gate ran (the bun whole suite AND "
+            f"the dispatched `{CYCLE_GATE_PYTHON_SUITE}`); got {len(events)} event(s): "
+            f"{[(e.get('id'), e.get('context')) for e in events]!r}")
+        for event in bun_runs + python_runs:
+            self.assertEqual(
+                (event.get("context") or {}).get("cycleId"), self.cycle_id,
+                f"every suite a `--cycle {self.cycle_id}` gate runs is stored "
+                f"under that cycle; event {event.get('id')} carries "
+                f"context={event.get('context')!r}")
+
+
+class ComposedGateOverAFailedRunnerTest(unittest.TestCase):
+    """The gate's exit, its envelope and the runs it filed, for a composed
+    gate one of whose runners exited non-zero over a passing-only report."""
+
+    def setUp(self):
+        board = _BOARD
+        if board is None:
+            self.fail("the module's real board was never booted")
+        self.board = board
+        self.project = new_scratch("composed-gate-runner-exit-")
+        self.addCleanup(shutil.rmtree, self.project, ignore_errors=True)
+        Path(self.project, "tests").mkdir()
+        self.fake_bun = _executable(os.path.join(self.project, "fake_bun.py"),
+                                    _RUNNER_EXIT_FAKE_BUN)
+        self.fake_python = _executable(
+            os.path.join(self.project, "fake_python.py"), _RUNNER_EXIT_FAKE_PYTHON)
+        python_suite = " ".join(shlex.quote(part) for part in (
+            sys.executable, str(PYTHON_CLIENT), "regression",
+            "--project-dir", self.project, "--python", self.fake_python,
+            "--reports", "py-reports"))
+        Path(self.project, "package.json").write_text(json.dumps({
+            "name": "composed-gate-runner-exit", "private": True,
+            "scripts": {BUN_SUITE: "bun test tests", PYTHON_SUITE: python_suite},
+        }, indent=2))
+        self.board.install(self.project)
+
+    # -- the drive -----------------------------------------------------------
+
+    def drive_gate(self, agent, *, bun_exit, python_exit):
+        env = scrubbed_env(None)
+        for key in _RUNNER_EXIT_SCRUBBED:
+            env.pop(key, None)
+        env["FAKE_BUN_EXIT"] = str(bun_exit)
+        env["FAKE_PYTHON_EXIT"] = str(python_exit)
+        cmd = [sys.executable, str(BUN_CLIENT), "pre-merge-gate",
+               "--agent", agent, "--project-dir", self.project,
+               "--package-dir", self.project, "--bun", self.fake_bun,
+               "--reports", "reports", "--skip-check"]
+        return subprocess.run(cmd, cwd=self.project, env=env,
+                              capture_output=True, text=True, timeout=TIMEOUT,
+                              check=False)
+
+    def gate_envelope(self, result):
+        """The gate's own envelope: the LAST `axi:` document on stdout naming
+        `pre-merge-gate`."""
+        out = result.stdout or ""
+        starts = [i for i in range(len(out))
+                  if out.startswith("axi:", i) and (i == 0 or out[i - 1] == "\n")]
+        for start in reversed(starts):
+            try:
+                decoded = TOON.decode(out[start:])
+            except ValueError:
+                continue
+            axi = decoded.get("axi") if isinstance(decoded, dict) else None
+            if isinstance(axi, dict) and axi.get("verb") == "pre-merge-gate":
+                return axi
+        self.fail(f"the gate put no `pre-merge-gate` envelope on stdout; "
+                  f"{_diagnostics(result)}")
+
+    def stored_runs(self, agent, result, expected):
+        events = self.board.test_events(agent)
+        self.assertEqual(
+            len(events), expected,
+            f"the gate files exactly {expected} test run(s) for its agent; "
+            f"events={events!r} {_diagnostics(result)}")
+        return [self.board.event(e["id"]) for e in events]
+
+    @staticmethod
+    def run_marked(runs, mark):
+        return [run for run in runs if mark in repr(run.get("tree"))]
+
+    @staticmethod
+    def runner_suites(run):
+        return [s for s in (run.get("tree") or []) if s.get("name") == "runner"]
+
+    def assert_runner_case(self, run, code):
+        runner = self.runner_suites(run)
+        self.assertEqual(len(runner), 1,
+                         f"exactly one `runner` suite; tree={run.get('tree')!r}")
+        children = runner[0].get("children") or []
+        self.assertEqual(len(children), 1, f"runner suite={runner[0]!r}")
+        case = children[0]
+        self.assertEqual(case.get("name"), f"exit {code}", f"case={case!r}")
+        self.assertEqual(case.get("status"), "fail", f"case={case!r}")
+        self.assertEqual(
+            (case.get("failure") or {}).get("message"),
+            f"the runner exited {code} but its report records no failure",
+            f"case={case!r}")
+
+    def assert_counts(self, counts, *, total, passed, failed, where):
+        self.assertEqual(
+            (counts.get("total"), counts.get("passed"), counts.get("failed")),
+            (total, passed, failed),
+            f"{where} counts (total, passed, failed); got {counts!r}")
+
+    @staticmethod
+    def suite_row(envelope, suite):
+        rows = [r for r in (envelope.get("suites") or [])
+                if isinstance(r, dict) and r.get("suite") == suite]
+        return rows[0] if len(rows) == 1 else {"rows": envelope.get("suites")}
+
+    @staticmethod
+    def failed_warnings(envelope):
+        return [w for w in (envelope.get("warnings") or [])
+                if isinstance(w, dict) and w.get("code") == GATE_SUITE_FAILED]
+
+    # -- the bun-owned suite: the whole-suite runner fails ------------------
+
+    def test_a_gate_whose_bun_runner_exits_1_over_a_passing_report_is_not_green(self):
+        agent = "composed-gate-bun-runner-exit"
+        result = self.drive_gate(agent, bun_exit=1, python_exit=0)
+        self.assertNotEqual(result.returncode, 0,
+                            f"a gate one of whose runners exited 1 never exits "
+                            f"green; {_diagnostics(result)}")
+        envelope = self.gate_envelope(result)
+        self.assertIs(envelope.get("ok"), False, f"envelope={envelope!r}")
+        # bun: 1 pass + the board's runner case; python: 1 pass.
+        self.assert_counts(envelope.get("run") or {}, total=3, passed=2,
+                           failed=1, where="the gate's run")
+        row = self.suite_row(envelope, BUN_SUITE)
+        self.assertIn("coveredBy", row,
+                      f"the bun-owned suite is covered by the whole-suite run; "
+                      f"row={row!r}")
+        self.assert_counts(row, total=2, passed=1, failed=1,
+                           where=f"the `{BUN_SUITE}` row's")
+        failed = self.failed_warnings(envelope)
+        self.assertEqual(len(failed), 1,
+                         f"exactly one failed-suite warning; "
+                         f"warnings={envelope.get('warnings')!r}")
+        self.assertIn(f"`{BUN_SUITE}`", failed[0].get("detail") or "",
+                      f"the warning names the suite the failed run covered; "
+                      f"warning={failed[0]!r}")
+        runs = self.stored_runs(agent, result, 2)
+        bun_runs = self.run_marked(runs, BUN_CASE)
+        self.assertEqual(len(bun_runs), 1, f"runs={runs!r}")
+        self.assert_runner_case(bun_runs[0], 1)
+        self.assert_counts(bun_runs[0].get("summary") or {}, total=2, passed=1,
+                           failed=1, where="the stored bun run's")
+        python_runs = self.run_marked(runs, PYTHON_CASE)
+        self.assertEqual(len(python_runs), 1, f"runs={runs!r}")
+        self.assertEqual(self.runner_suites(python_runs[0]), [],
+                         "the clean python run gets no `runner` suite")
+
+    # -- the dispatched python-owned suite: its runner fails ----------------
+
+    def test_a_gate_whose_dispatched_python_runner_exits_1_over_a_passing_report_is_not_green(self):
+        agent = "composed-gate-python-runner-exit"
+        result = self.drive_gate(agent, bun_exit=0, python_exit=1)
+        self.assertNotEqual(result.returncode, 0,
+                            f"a gate whose dispatched suite's runner exited 1 "
+                            f"never exits green; {_diagnostics(result)}")
+        envelope = self.gate_envelope(result)
+        self.assertIs(envelope.get("ok"), False, f"envelope={envelope!r}")
+        # bun: 1 pass; python: 1 pass + the board's runner case.
+        self.assert_counts(envelope.get("run") or {}, total=3, passed=2,
+                           failed=1, where="the gate's run")
+        row = self.suite_row(envelope, PYTHON_SUITE)
+        self.assertEqual(row.get("stack"), "python", f"row={row!r}")
+        self.assert_counts(row, total=2, passed=1, failed=1,
+                           where=f"the `{PYTHON_SUITE}` row's")
+        failed = self.failed_warnings(envelope)
+        self.assertEqual(len(failed), 1,
+                         f"exactly one failed-suite warning; "
+                         f"warnings={envelope.get('warnings')!r}")
+        self.assertIn(f"`{PYTHON_SUITE}`", failed[0].get("detail") or "",
+                      f"the warning names the dispatched suite; "
+                      f"warning={failed[0]!r}")
+        runs = self.stored_runs(agent, result, 2)
+        python_runs = self.run_marked(runs, PYTHON_CASE)
+        self.assertEqual(len(python_runs), 1, f"runs={runs!r}")
+        self.assert_runner_case(python_runs[0], 1)
+        self.assert_counts(python_runs[0].get("summary") or {}, total=2,
+                           passed=1, failed=1, where="the stored python run's")
+        bun_runs = self.run_marked(runs, BUN_CASE)
+        self.assertEqual(len(bun_runs), 1, f"runs={runs!r}")
+        self.assertEqual(self.runner_suites(bun_runs[0]), [],
+                         "the clean bun run gets no `runner` suite")
+
+    # -- nothing else changes ----------------------------------------------
+
+    def test_a_gate_whose_runners_both_exit_0_over_clean_reports_is_green(self):
+        agent = "composed-gate-clean"
+        result = self.drive_gate(agent, bun_exit=0, python_exit=0)
+        self.assertEqual(result.returncode, 0, _diagnostics(result))
+        envelope = self.gate_envelope(result)
+        self.assertIs(envelope.get("ok"), True, f"envelope={envelope!r}")
+        self.assert_counts(envelope.get("run") or {}, total=2, passed=2,
+                           failed=0, where="the gate's run")
+        self.assertEqual(self.failed_warnings(envelope), [],
+                         f"warnings={envelope.get('warnings')!r}")
+        runs = self.stored_runs(agent, result, 2)
+        for run in runs:
+            self.assertEqual(self.runner_suites(run), [],
+                             f"a clean runner adds no `runner` suite; "
+                             f"tree={run.get('tree')!r}")
+            self.assert_counts(run.get("summary") or {}, total=1, passed=1,
+                               failed=0, where="a stored run's")
 
 
 if __name__ == "__main__":

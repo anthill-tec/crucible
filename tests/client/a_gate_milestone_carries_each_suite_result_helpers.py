@@ -1,6 +1,7 @@
 """The helpers of `test_a_gate_milestone_carries_each_suite_result.py` that other modules import,
 moved out of that test module so no module imports a test module for a
-helper (CR-CRU-262). Holds no `TestCase` and no test.
+helper (CR-CRU-262), and the fixtures of the gate-composition classes merged
+into it. Holds no `TestCase` and no test.
 """
 
 import os
@@ -110,6 +111,68 @@ if stream:
 sys.exit(1 if fail else 0)
 '''
 
+
+# The runner-exit drive's fake `bun`: writes one passing JUnit case wherever
+# `--reporter-outfile=` points, then exits FAKE_BUN_EXIT.
+_RUNNER_EXIT_FAKE_BUN = r'''
+import os
+import sys
+
+FILE, CASE = ''' + repr((BUN_FILE, BUN_CASE)) + r'''
+
+junit = None
+for arg in sys.argv[1:]:
+    if arg.startswith("--reporter-outfile="):
+        junit = arg.split("=", 1)[1]
+sys.stdout.write(FILE + ":\n(pass) " + CASE + " [0.02ms]\n\n 1 pass\n 0 fail\n")
+sys.stdout.flush()
+if junit:
+    directory = os.path.dirname(junit)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(junit, "w") as handle:
+        handle.write(
+            '<?xml version="1.0" encoding="UTF-8"?><testsuites tests="1" failures="0">'
+            '<testsuite name="%s" file="%s" tests="1" failures="0">'
+            '<testcase name="%s" classname="" time="0.00002" file="%s"/>'
+            '</testsuite></testsuites>' % (FILE, FILE, CASE, FILE))
+sys.exit(int(os.environ.get("FAKE_BUN_EXIT", "0")))
+'''
+
+# The runner-exit drive's fake interpreter for the python client: run as the
+# suite it writes one passing case as a Crucible event stream to the file
+# `CRUCIBLE_STREAM` names, taking the variable out of its own environment
+# first, and writes no JUnit (CR-CRU-224 section S1); then it exits
+# FAKE_PYTHON_EXIT. A coverage.py probe (`-c <script>`) answers that the
+# project declares its source.
+_RUNNER_EXIT_FAKE_PYTHON = r'''
+import json
+import os
+import sys
+
+CLASS, CASE = ''' + repr((PYTHON_CLASS, PYTHON_CASE)) + r'''
+
+argv = sys.argv[1:]
+if argv[:1] == ["-c"]:
+    sys.stdout.write("true\n")
+    sys.exit(0)
+stream = os.environ.pop("CRUCIBLE_STREAM", None)
+sys.stderr.write("%s (%s.%s) ... ok\n" % (CASE, CLASS, CASE))
+sys.stderr.write("\n----------------------------------------------------------------------\n"
+                 "Ran 1 test in 0.001s\n\nOK\n")
+sys.stderr.flush()
+if stream:
+    with open(stream, "w", encoding="utf-8") as handle:
+        for event in (dict(event="run-start", total=1),
+                      dict(event="test-end", id=CLASS + "." + CASE, name=CASE,
+                           suite=CLASS, file=CLASS.split(".")[0] + ".py",
+                           status="pass", duration_ms=1),
+                      dict(event="run-end", total=1, passed=1, failed=0, pending=0,
+                           duration_ms=1)):
+            handle.write(json.dumps(event) + "\n")
+            handle.flush()
+sys.exit(int(os.environ.get("FAKE_PYTHON_EXIT", "0")))
+'''
 
 def _executable(path, body):
     Path(path).write_text("#!" + sys.executable + "\n" + body)

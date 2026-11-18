@@ -50,7 +50,8 @@ What the static graph does not follow: calls made through the shared module
 contribute — `verb_exit`, `runner_exit_code`, the gate composition — is pinned
 by the behavioural suites beside this one (`test_the_shared_exit_functions`,
 the per-client `test_<stack>_exits_and_files_on_its_runners_exit` suites and
-`test_no_composed_gate_is_green_on_a_failed_runner`).
+`ComposedGateOverAFailedRunnerTest` in
+`test_a_gate_milestone_carries_each_suite_result`).
 
 Invocation:
     python3 -m unittest tests.client.unit.test_every_verb_that_runs_a_test_runner_is_classified -v
