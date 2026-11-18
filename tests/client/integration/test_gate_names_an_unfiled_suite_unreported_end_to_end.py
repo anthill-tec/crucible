@@ -1,6 +1,6 @@
 """A `pre-merge-gate` whose suite ran but could not be filed names that suite
 unreported, states no figures for it, and is not green — end to end, against
-a REAL ephemeral board.
+a board that goes away.
 
 With no board there are no figures: a run whose ingest cannot reach the board,
 or whose health read before the ingest cannot, is not filed, and a gate that
@@ -26,13 +26,13 @@ Both gate shapes, for each of three clients:
     profile (an own-stack target the whole-suite run covers), so the gate
     composes.
 
-The board is a scratch `bun run src/server.ts` (never :3850/:3849/39877),
-booted once for the module, each test filing under a project of its own. The
-client reaches it through a transparent forwarding proxy that every request
-passes through untouched, so the run is opened, registered and (where it is)
-filed on the real board. The ONE thing the proxy adds is the board going
-away at a chosen moment, which a spawned server cannot be timed to do between
-two requests of one client:
+The board is a recording stand-in (`RecordingBoard`) per test, answering in
+the server's shapes (its health stating `milestones.gate`, as
+`src/server.ts`'s does). The client reaches it through a transparent
+forwarding proxy (`RecordingProxy`) that every request passes through
+untouched, so the run is opened, registered and (where it is) filed on that
+board. The ONE thing the proxy adds is the board going away at a chosen
+moment, between two requests of one client:
 
   - **unreachable at the health read** — the fake runner, while the suite is
     running, has the proxy stop listening; the ingest's health read and
@@ -52,33 +52,27 @@ Invocation:
 import json
 import os
 import shutil
-import socket
 import stat
 import subprocess
 import sys
 import tempfile
 import threading
-import time
 import unittest
-import urllib.error
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
-from tests.client.fake_nextest import private_fake_prelude
-from tests.client.live_run_harness import load_toon, scrubbed_env
-from tests.client.real_board import DROP, RecordingProxy
-from tests.client.client_fleet_envelope_census_helpers import declare_and_require_board
 from tests.client import TEST_INSTALL_CLIENTS
+from tests.client.client_fleet_envelope_census_helpers import declare_and_require_board
+from tests.client.fake_nextest import private_fake_prelude
 from tests.client.gate_names_an_unfiled_suite_unreported_end_to_end_helpers import (
     _CUT,
     _FAKE_BUN,
     _FAKE_PYTHON,
-    GREEN_LCOV,
     _SCRUBBED,
+    GREEN_LCOV,
 )
+from tests.client.live_run_harness import RecordingBoard, load_toon, scrubbed_env
+from tests.client.real_board import DROP, RecordingProxy
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 CLIENTS_DIR = TEST_INSTALL_CLIENTS
 BUN_CLIENT = CLIENTS_DIR / "bun-crucible.py"
 PYTHON_CLIENT = CLIENTS_DIR / "python-crucible.py"
@@ -160,59 +154,28 @@ sys.exit(0)
 ''')
 
 
-def _free_port():
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
-
-
-def _require_http(url):
-    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
-        raise ValueError(f"refusing a non-http(s) URL: {url!r}")
-    return url
-
-
-def _http(base, path, payload=None):
-    data = None if payload is None else json.dumps(payload).encode()
-    request = urllib.request.Request(  # noqa: S310 - scheme checked
-        _require_http(base + path), data=data,
-        method="POST" if data is not None else "GET",
-        headers={"content-type": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-            return json.loads(response.read().decode())
-    except urllib.error.HTTPError as exc:
-        return json.loads(exc.read().decode())
-
-
-def _await_board(base, proc, timeout=60):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"scratch board exited early with {proc.returncode}")
-        try:
-            with urllib.request.urlopen(  # noqa: S310 - scheme checked
-                    _require_http(base + "/api/v2/health"), timeout=2):
-                return
-        except (urllib.error.URLError, OSError):
-            time.sleep(0.2)
-    raise RuntimeError(f"scratch board never became reachable at {base}")
+def _gate_board():
+    """A recording board whose health states, as the server's does, that it
+    records a gate's scope and suites (`milestones.gate`, `src/server.ts`)."""
+    board = RecordingBoard()
+    health = board.default_health()
+    health["milestones"] = {"gate": ["scope", "suites"]}
+    board.script_health(health)
+    return board
 
 
 def _cut_proxy(upstream):
-    """A `RecordingProxy` to the real board that forwards every request, byte
+    """A `RecordingProxy` to the board that forwards every request, byte
     for byte, until it is told to stop listening: at once (`CUT_NOW`), or once
     armed (`CUT_AFTER_HEALTH`) at the run's filing: just before it answers
     the next health read, or, when a `POST /api/v2/runs` comes first (a
     streamed run's close, CR-CRU-224, which need read no health first), on
     that POST, which it never forwards. Once it has stopped, its address
     refuses every connection, as a board that has gone away does.
-    `forwarded_after_control` lists every path it forwarded once a control
-    path reached it."""
+    Returns the proxy and `forwarded_after_control`: every path it forwarded
+    once a control path reached it."""
     proxy = RecordingProxy(upstream, timeout=120)
-    proxy.forwarded_after_control = []
+    forwarded_after_control = []
     lock = threading.Lock()
     state = {"controlled": False, "armed": False}
 
@@ -235,7 +198,7 @@ def _cut_proxy(upstream):
                 return DROP
         with lock:
             if state["controlled"]:
-                proxy.forwarded_after_control.append(path)
+                forwarded_after_control.append(path)
         return None
 
     def after(method, path, _status):
@@ -246,46 +209,7 @@ def _cut_proxy(upstream):
                 proxy.stop_listening()
 
     proxy.intercept, proxy.after = intercept, after
-    return proxy
-
-
-_BOARD = {}
-
-
-def setUpModule():
-    bun = shutil.which("bun")
-    if bun is None:
-        raise unittest.SkipTest(
-            "the board these gates file to is a real `src/server.ts`: without "
-            "`bun` there is no board to boot")
-    store = tempfile.mkdtemp(prefix="gate-unreported-board-")
-    port = _free_port()
-    assert port not in (3850, 3849, 39877), f"reserved port handed back: {port}"
-    Path(store, "crucible.toml").write_text(
-        f'[server]\nhost = "127.0.0.1"\nport = {port}\n', encoding="utf-8")
-    proc = subprocess.Popen(
-        [bun, "run", "--no-env-file", "src/server.ts"], cwd=str(REPO_ROOT),
-        env={**os.environ, "CRUCIBLE_DB": os.path.join(store, "crucible.db")},
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    _BOARD.update(proc=proc, store=store, base=f"http://127.0.0.1:{port}")
-    try:
-        _await_board(_BOARD["base"], proc)
-    except BaseException:
-        tearDownModule()
-        raise
-
-
-def tearDownModule():
-    proc = _BOARD.pop("proc", None)
-    if proc is not None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-    store = _BOARD.pop("store", None)
-    if store:
-        shutil.rmtree(store, ignore_errors=True)
+    return proxy, forwarded_after_control
 
 
 def _envelope(stdout):
@@ -320,19 +244,18 @@ def _write_executable(path, body):
 
 
 class _GateAgainstABoardThatGoesAway(unittest.TestCase):
-    """A scratch project of its own on the module's board, reached through a
+    """A scratch project on a board of its own, reached through a
     `_cut_proxy`; both fake runners; and the gate's envelope. Defines no test
     of its own."""
 
     def setUp(self):
-        self.base = _BOARD["base"]
+        self.board = _gate_board()
+        self.addCleanup(self.board.close)
+        self.base = self.board.url
         self.scratch = tempfile.mkdtemp(prefix="gate-unreported-")
         self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
-        project = _http(self.base, "/api/v2/projects",
-                        {"name": f"gate-unreported-{os.path.basename(self.scratch)}"})
-        self.assertTrue(project.get("ok"), f"project creation failed: {project!r}")
-        self.key = project["project"]["key"]
-        self.proxy = _cut_proxy(self.base)
+        self.key = f"gate-unreported-{os.path.basename(self.scratch)}-key"
+        self.proxy, self.forwarded_after_control = _cut_proxy(self.base)
         self.addCleanup(self.proxy.close)
         self.project = os.path.join(self.scratch, "project")
         os.makedirs(os.path.join(self.project, "tests"))
@@ -408,7 +331,7 @@ class _GateAgainstABoardThatGoesAway(unittest.TestCase):
     def assert_the_cut_landed(self, when, result):
         """Fixture sanity: the proxy was told to go away, and (for the ingest
         cut) the run's filing reached it after it was armed: a health read
-        answered by the real board, or the `POST /api/v2/runs` it cut."""
+        answered by the board, or the `POST /api/v2/runs` it cut."""
         paths = [p for _m, p in self.proxy.requests]
         control = {"health": CUT_NOW, "ingest": CUT_AFTER_HEALTH}[when]
         self.assertIn(control, paths, f"the fake runner made its cut; "
@@ -418,7 +341,7 @@ class _GateAgainstABoardThatGoesAway(unittest.TestCase):
             self.assertTrue(any(p in HEALTH_PATHS or p == "/api/v2/runs" for p in after),
                             f"the run's filing reached the armed proxy; "
                             f"requests={paths!r} {self.diagnostics(result)}")
-        self.assertNotIn("/api/v2/runs", self.proxy.forwarded_after_control,
+        self.assertNotIn("/api/v2/runs", self.forwarded_after_control,
                          f"no ingest reached the board after the cut; "
                          f"requests={paths!r} {self.diagnostics(result)}")
 
