@@ -1,6 +1,12 @@
 """RED test — §S4/AC8: `project-meta`'s wiring end to end against a real,
 ephemeral board — no stubbed transport.
 
+The feature: project metadata is written, read back and refused by role
+through the client against the board's own store. No fake can prove it: a
+no-op write's `changed: false` and the role refusal are the server's stored
+state comparison and its own role check, which a scripted board would only
+echo as the test wrote them.
+
 A registered ORCHESTRATOR writes through the real `python-crucible.py
 project-meta` subprocess (a `set` of two keys, then an `unset` of one, then
 a THIRD identical write to prove `changed: false` on a no-op). A second,
@@ -21,9 +27,7 @@ transport that silently drops the write, or a server that ignores its own
 role check would all be caught here rather than passing on an empty map by
 accident.
 
-Follows the `status` verb's own end-to-end idiom
-(`test_status_verb_shows_open_plans_end_to_end.py`, itself following
-`test_queue_rows_carry_title_and_lifecycle.py`): a scratch `bun run
+The board is `RealBoard` (`tests/client/real_board.py`): a scratch `bun run
 src/server.ts` on a free port with a throwaway `mkdtemp` store (never
 :3850/:3849, never a live project), the board built through real HTTP
 routes, the verb driven as a genuine `python-crucible.py` subprocess, its
@@ -37,11 +41,9 @@ import importlib.util
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 import urllib.error
 import urllib.parse
@@ -52,6 +54,7 @@ from tests.client.client_fleet_envelope_census_helpers import (  # noqa: E402
     declare_and_require_board,
 )
 from tests.client import TEST_INSTALL_CLIENTS
+from tests.client.real_board import RealBoard
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLIENTS_DIR = TEST_INSTALL_CLIENTS
@@ -70,23 +73,10 @@ def _load_module_by_path(path, module_name):
     return module
 
 
-def _free_port():
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
-
-
-def _declare_listener(store_dir, port, host="127.0.0.1"):
-    Path(store_dir, "crucible.toml").write_text(
-        f'[server]\nhost = "{host}"\nport = {port}\n', encoding="utf-8")
-
-
 def _require_http_scheme(url):
     """Refuses anything but http(s) before it ever reaches urlopen — the
     scratch server's own base URL is always `http://127.0.0.1:<port>` (built
-    by `_free_port`/setUpClass), never operator input, but this keeps
+    by `RealBoard`), never operator input, but this keeps
     `urlopen` itself provably scoped to the schemes this suite ever uses."""
     scheme = urllib.parse.urlsplit(url).scheme
     if scheme not in ("http", "https"):
@@ -105,20 +95,6 @@ def _http(base, path, payload=None, method=None):
             return json.loads(response.read().decode())
     except urllib.error.HTTPError as exc:
         return json.loads(exc.read().decode())
-
-
-def _await_server(base, proc, timeout=60):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"scratch server exited early with "
-                               f"{proc.returncode}")
-        try:
-            with urllib.request.urlopen(_require_http_scheme(base + "/api/v2/health"), timeout=2):  # noqa: S310
-                return
-        except Exception:
-            time.sleep(0.2)
-    raise RuntimeError(f"scratch server never became reachable at {base}")
 
 
 def _register(base, key, agent_id, role):
@@ -147,7 +123,7 @@ class ProjectMetaVerbWiresWriteReadAndRefusalEndToEndTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._tmpdir = tempfile.mkdtemp(prefix="project-meta-e2e-")
-        cls._proc = None
+        cls._board = None
         bun = shutil.which("bun")
         if bun is None:
             raise unittest.SkipTest(
@@ -155,18 +131,13 @@ class ProjectMetaVerbWiresWriteReadAndRefusalEndToEndTest(unittest.TestCase):
                 "the REAL server-side role check: without `bun` there is "
                 "no server to hold either. A missing toolchain, not a "
                 "passing assertion.")
-        port = _free_port()
-        cls.base = f"http://127.0.0.1:{port}"
-        _declare_listener(cls._tmpdir, port)
-        cls._proc = subprocess.Popen(
-            [bun, "run", "--no-env-file", "src/server.ts"], cwd=str(REPO_ROOT),
-            env={**os.environ,
-                 "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cls._board = RealBoard(bun, "project-meta-e2e")
+        cls.base = cls._board.base
+        cls.key = cls._board.key
         try:
             cls._boot()
         except BaseException:
-            # A child spawned and then abandoned by a FAILING setUpClass is
+            # A board booted and then abandoned by a FAILING setUpClass is
             # never torn down (tearDownClass does not run), and an orphaned
             # server holds its port for as long as it lives.
             cls._stop_server()
@@ -190,10 +161,6 @@ class ProjectMetaVerbWiresWriteReadAndRefusalEndToEndTest(unittest.TestCase):
 
     @classmethod
     def _boot(cls):
-        _await_server(cls.base, cls._proc)
-
-        project = _http(cls.base, "/api/v2/projects", {"name": "project-meta-e2e"})
-        cls.key = project["project"]["key"]
         _register(cls.base, cls.key, cls.ORCHESTRATOR, "ORCHESTRATOR")
         _register(cls.base, cls.key, cls.REPORTER, "report")
 
@@ -258,15 +225,11 @@ class ProjectMetaVerbWiresWriteReadAndRefusalEndToEndTest(unittest.TestCase):
 
     @classmethod
     def _stop_server(cls):
-        proc = getattr(cls, "_proc", None)
-        if proc is None:
+        board = getattr(cls, "_board", None)
+        if board is None:
             return
-        cls._proc = None
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        cls._board = None
+        board.close()
 
     def _decode_toon_axi(self, stdout_text):
         decoded = self.toon.decode(stdout_text)
