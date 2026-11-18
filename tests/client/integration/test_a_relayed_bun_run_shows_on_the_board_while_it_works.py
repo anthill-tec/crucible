@@ -1,5 +1,11 @@
 """A relayed bun run shows on the board while it works (CR-CRU-201 AC5).
 
+The feature this module keeps a live board for is the bun relayed run
+lifecycle end to end: `bun test`'s console relayed to the open run and the
+run closed on the board. No fake can prove it, because what is asserted is
+the server's own decoding of that console into the open run's live view, and
+its stored run against the same tests filed with no relay.
+
 The real `clients/bun-crucible.py` runs the real `bun test` against a scratch
 board (`RealBoard`, tests/client/real_board.py: `bun run src/server.ts` from
 this branch, on a free port over a throwaway store), on a scratch package whose
