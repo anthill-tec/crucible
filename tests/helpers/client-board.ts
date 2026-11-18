@@ -6,7 +6,7 @@
  * Every bun suite that drives a real client as a subprocess declares its board
  * through here, so the fleet's target is spelled one way in the TypeScript
  * half exactly as it is in the python half (`declare_and_require_board` in
- * `tests/client/integration/test_client_fleet_envelope_census.py`).
+ * `tests/client/client_fleet_envelope_census_helpers.py`).
  *
  * THE INTERLOCK IS A SAFETY DEVICE, NOT CEREMONY. A suite that simply stopped
  * exporting does not fail: it silently stops steering, and the drive falls
