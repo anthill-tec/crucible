@@ -96,9 +96,10 @@ own tiers that way.
   change, and a direct `python-crucible.py regression` still files `regression`.
 - **The dispatched run has no `-t` (ruling on F4).** The translation drops `-t` and the python client passes none, so
   the gate's run imports `tests/client/<tier>` modules as top-level modules (the deferred "no top-level directory"
-  defect, `docs/changes/README.md`, stays deferred). Everything that keeps such a run correct is guarded: every module
-  under `tests/client/unit/` and `tests/client/integration/` imports `tests.client` (so the suite's isolation always
-  applies), and none puts its own directory on `sys.path`. The `_python_suite_argv` docstring and the README's
+  defect, `docs/changes/README.md`, stays deferred). The refactor keeps such a run correct: every module under
+  `tests/client/unit/` and `tests/client/integration/` imports `tests.client` (so the suite's isolation always
+  applies), and none puts its own directory on `sys.path`. No test is written to check this (user ruling 2026-11-18:
+  no tests that test the tests); the orchestrator and VERIFY check it on the moved tree. The `_python_suite_argv` docstring and the README's
   deferred note are corrected to say so.
 - **The classifier retires.** `scripts/test-targets.ts` and everything it exports (`INTEGRATION_MARKERS`,
   `classifyTestSource`, `declaresRealWait`, `enumerateTestFiles`, `partitionTestFiles`) and the guard tests that pin it
@@ -106,8 +107,9 @@ own tiers that way.
   `scripts/webkit-docker-server.ts`, `tests/help-surface-order-independence.test.ts`) follow. The three python guards
   that partition this repo's test files through it (`test_bun_vitest_fixture_stays_out_of_this_repos_suite.py`,
   `test_playwright_bdd_fixture_stays_out_of_this_repos_suites.py`, `test_pytest_fixture_stays_out_of_this_repos_suite.py`)
-  check instead that no file under a tier directory is a fixture and that the scripts and CI steps run only the tier
-  directories (pre-review F6).
+  are refactored to the new mechanism, reading the tier directories and the new script and CI steps instead of the
+  classifier (pre-review F6). Existing tests are refactored to conform; no new test pins the layout, the tiers or the
+  test tree (user ruling 2026-11-18: no tests that test the tests).
 - **CI and the gate run tiers by path.** `release.yml`'s `test-bun` runs `bun test --timeout <declared>
   ./tests/unit` then `./tests/integration` (the declared figure, pinned equal to the client's by
   `pipeline-test-timeout-default.test.ts` as today); `test-python` runs `discover -s tests/client/unit -t .` then
@@ -140,8 +142,9 @@ own tiers that way.
   `tests/unit_helpers` → `regression`; no start directory → not dispatchable, as today. One feature-level integration
   test drives a fixture project declaring `test:client-unit` and `test:client-integration` through the bun gate on a
   test-only board and finds two python runs filed, tier `unit` and tier `integration`, each with its own `suites[]`
-  row and counts. Discovered WITHOUT `-t`, each tier directory of this repo collects the same number of tests as its
-  `test:client-<tier>` script. The orchestrator's own gate over this repo is the "over this repo" evidence.
+  row and counts. The orchestrator checks that, discovered WITHOUT `-t`, each tier directory of this repo collects the
+  same number of tests as its `test:client-<tier>` script, and its own gate over this repo is the "over this repo"
+  evidence.
 - [ ] **AC5 — classifier gone.** `scripts/test-targets.ts` and all it exported (`INTEGRATION_MARKERS`,
   `classifyTestSource`, `declaresRealWait`, `enumerateTestFiles`, `partitionTestFiles`) no longer exist; no test pins
   them; `REPO_ROOT`'s three importers import it from its new home; the DN and the two test comments no longer describe
@@ -150,16 +153,16 @@ own tiers that way.
   `test:client-integration` by path, and no `test:client`. `scripts/run-test-target.ts` has no `client` target; its
   `unit` and `integration` run `bun test` over `./tests/<tier>` with the per-test budget read from `bun-crucible.py`
   (its pin in `pipeline-test-timeout-default.test.ts` updated). `release.yml`'s `test-bun` and `test-python` run the
-  tier directories with the declared budget; the `ci-toolchain-provisioning` pins and the three fixture guards
-  (`test_bun_vitest_fixture_…`, `test_playwright_bdd_fixture_…`, `test_pytest_fixture_…`) pin the new steps and check
-  that no file under a tier directory is a fixture.
+  tier directories with the declared budget; the existing `ci-toolchain-provisioning` pins and the three fixture
+  guards (`test_bun_vitest_fixture_…`, `test_playwright_bdd_fixture_…`, `test_pytest_fixture_…`) are refactored to
+  the new steps and directories.
 - [ ] **AC7 — the core's guard.** The shared-module line budgets pass (re-recorded in their three copies if the core
   grows, within 9120; split only past it); every client's suite stays green.
 - [ ] **AC8 — citations hold.** `tests/citations-cite-by-symbol.test.ts` passes: no citation in its scope names a test
   path that no longer resolves.
-- [ ] **AC9 — a moved python module stands on its own.** A static guard over `tests/client/unit/` and
-  `tests/client/integration/` finds that every module imports `tests.client` and that none inserts its own directory
-  (or any `tests/client` path) into `sys.path`.
+- [ ] **AC9 — a moved python module stands on its own (orchestrator check, no test).** On the moved tree, every
+  module under `tests/client/unit/` and `tests/client/integration/` imports `tests.client`, and none inserts its own
+  directory (or any `tests/client` path) into `sys.path`.
 
 ## Non-goals
 
