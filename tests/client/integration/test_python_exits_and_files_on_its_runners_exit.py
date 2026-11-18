@@ -11,13 +11,17 @@ non-zero `runnerExit` over a run that records no failure, adds one failing
 case — suite `runner`, case `exit <n>` — before it stores the run.
 
 `PythonRunnerExitOnARealBoardTest`
-    End to end against a REAL scratch board (`tests/client/real_board.py`):
-    a fake interpreter whose runner exits 1 over a passing-only stream,
-    through `test`, `regression` and `pre-merge-gate` — the stored run carries
-    the `runner / exit 1` case, the envelope's `run` counts include it, and
-    the verb exits non-zero. A runner killed by SIGKILL files `exit 137`. A
-    runner exiting non-zero with no stream exits non-zero. A clean runner over
-    a passing stream is filed and exits exactly as before.
+    The client half, against a recording board answering in the server's
+    shapes: a fake interpreter whose runner exits 1 over a passing-only
+    stream, through `test`, `regression` and `pre-merge-gate` — the one close
+    carries `runnerExit: 1` over a relayed stream that records no failure,
+    the envelope's `run` counts are the board's answer (the runner case
+    included), and the verb exits non-zero. A runner killed by SIGKILL sends
+    `runnerExit: 137`. A runner exiting non-zero with no stream exits
+    non-zero and closes no run as a test result. A clean runner over a
+    passing stream is filed and exits exactly as before. The board's half —
+    the `runner / exit N` case it adds and counts — is held in bun by
+    `tests/integration/run-ingest-runner-exit.test.ts`.
 
 `PythonRunnerExitReachesTheIngestTest`
     Against a recording board: what the ingest body CARRIES as `runnerExit`,
@@ -45,11 +49,12 @@ from pathlib import Path
 from tests.client.live_run_harness import (
     CLIENTS,
     RecordingBoard,
+    install_project,
     load_toon,
     new_scratch,
     scrubbed_env,
+    stream_sent,
 )
-from tests.client.real_board import RealBoard
 
 TOON = load_toon()
 PYTHON_CLIENT = CLIENTS / "python-crucible.py"
@@ -153,73 +158,74 @@ class _FakeInterpreterProject:
         return envelope or {}
 
 
-# ── End to end, against a real board ────────────────────────────────────────
-
-_BOARD: RealBoard | None = None
-
-
-def setUpModule():
-    global _BOARD
-    bun = shutil.which("bun")
-    if bun is None:
-        raise unittest.SkipTest(
-            "the board that adds the runner's case is a REAL server, and "
-            "without `bun` there is none to boot — a missing toolchain, not "
-            "a passing assertion")
-    _BOARD = RealBoard(bun, "python-runner-exit-e2e")
-
-
-def tearDownModule():
-    global _BOARD
-    if _BOARD is not None:
-        _BOARD.close()
-        _BOARD = None
-
+# ── The client half of the runner case, against a recording board ──────────
 
 class PythonRunnerExitOnARealBoardTest(_FakeInterpreterProject, unittest.TestCase):
-    """The run the board stores, the envelope the client prints and the
-    client's exit, for a runner whose exit disagrees with its report."""
+    """The run the client sends, the envelope it prints and its exit, for a
+    runner whose exit disagrees with its report. The board answers the close
+    with the `run` block the server answers for that stream and exit (the
+    runner case counted); the case itself is the server's, held in bun by
+    `tests/integration/run-ingest-runner-exit.test.ts`."""
+
+    PROJECT_KEY = "py-runner-exit-live-half-key"
 
     def setUp(self):
-        board = _BOARD
-        if board is None:
-            self.fail("the module's real board was never booted")
-        self.board = board
+        self.board = RecordingBoard()
         self.make_project()
 
     def tearDown(self):
+        self.board.close()
         shutil.rmtree(self.project, ignore_errors=True)
 
     def drive_filed(self, verb, agent, extra=(), **fake_env):
-        self.board.install(self.project)
+        install_project(self.project, self.board.url, self.PROJECT_KEY,
+                        "python-runner-exit-e2e")
+        if fake_env.get("FAKE_EXIT", "0") != "0" or "FAKE_SIGNAL" in fake_env:
+            # The server's answer for a passing stream and a non-zero exit:
+            # the stream's one pass and the `runner / exit N` case it adds.
+            self.board.script_run(passed=1, failed=1)
+        else:
+            self.board.script_run(passed=1)
         return self.drive(verb, agent, extra, **fake_env)
 
     def the_one_stored_run(self, agent, result):
-        events = self.board.test_events(agent)
+        """The one close the client sent, `{"body", "held"}`: its body and
+        the stream its run holds, read as the board's codec counts it."""
+        bodies = [b for p, b in self.board.posts() if p == RUNS_INGEST]
         self.assertEqual(
-            len(events), 1,
-            f"exactly one test run is filed for this agent; events={events!r} "
-            f"{_diagnostics(result)}")
-        return self.board.event(events[0]["id"])
+            len(bodies), 1,
+            f"exactly one test run is filed for this agent; "
+            f"posts={[p for p, _ in self.board.posts()]!r} {_diagnostics(result)}")
+        body = bodies[0]
+        self.assertEqual(body.get("agentId"), agent,
+                         f"the run is filed under its agent; "
+                         f"agentId={body.get('agentId')!r}")
+        self.assertEqual(body.get("codec"), "crucible-events",
+                         "a unittest run is closed from its stream")
+        return {"body": body,
+                "held": stream_sent(self.board, body.get("runId") or "")}
 
-    def runner_suites(self, event):
-        return [s for s in (event.get("tree") or []) if s.get("name") == "runner"]
+    def runner_suites(self, sent):
+        return [s for s in (sent["held"].get("tree") or [])
+                if s.get("name") == "runner"]
 
-    def assert_runner_case_filed(self, event, code, result):
-        runner = self.runner_suites(event)
-        self.assertEqual(
-            len(runner), 1,
-            f"the stored run holds exactly one `runner` suite; "
-            f"tree={event.get('tree')!r} {_diagnostics(result)}")
-        children = runner[0].get("children") or []
-        self.assertEqual(len(children), 1, f"runner suite={runner[0]!r}")
-        case = children[0]
-        self.assertEqual(case.get("name"), f"exit {code}", f"case={case!r}")
-        self.assertEqual(case.get("status"), "fail", f"case={case!r}")
-        self.assertEqual(
-            (case.get("failure") or {}).get("message"),
-            f"the runner exited {code} but its report records no failure",
-            f"case={case!r}")
+    def assert_sent(self, sent, *, code):
+        """The stream relayed holds the run's one pass and no `runner` case
+        of the client's own, and the close states the runner's exit as
+        `runnerExit` — from which the board adds the `runner / exit N` case."""
+        self.assertEqual(self.runner_suites(sent), [],
+                         f"the client adds no `runner` suite itself; "
+                         f"tree={sent['held'].get('tree')!r}")
+        self.assert_counts(sent["held"].get("summary") or {}, total=1,
+                           passed=1, failed=0, where="the stream relayed")
+        body = sent["body"]
+        self.assertEqual(body.get("runnerExit"), code,
+                         f"runnerExit={body.get('runnerExit')!r}")
+        self.assertIs(type(body.get("runnerExit")), int,
+                      "runnerExit is sent as an integer")
+
+    def assert_runner_case_filed(self, sent, code, result):
+        self.assert_sent(sent, code=code)
 
     def assert_counts(self, counts, *, total, passed, failed, where):
         self.assertEqual(
@@ -230,8 +236,8 @@ class PythonRunnerExitOnARealBoardTest(_FakeInterpreterProject, unittest.TestCas
     def assert_no_test_result_filed(self, agent):
         # A run with no report keeps filing what it files today (a compile
         # record, or the opened run closed as aborted) — never a test result.
-        filed = [e for e in self.board.test_events(agent)
-                 if e.get("status") != "aborted"]
+        filed = [b for p, b in self.board.posts() if p == RUNS_INGEST
+                 and isinstance(b, dict) and b.get("agentId") == agent]
         self.assertEqual(filed, [], "a run with no report files no test result")
 
     def assert_filed_red_with_the_runner_case(self, verb, agent, extra=()):
@@ -241,8 +247,6 @@ class PythonRunnerExitOnARealBoardTest(_FakeInterpreterProject, unittest.TestCas
                             f"{_diagnostics(result)}")
         event = self.the_one_stored_run(agent, result)
         self.assert_runner_case_filed(event, 1, result)
-        self.assert_counts(event.get("summary") or {}, total=2, passed=1,
-                           failed=1, where="the stored run's")
         envelope = self.envelope_of(result)
         self.assertEqual(envelope.get("verb"), verb,
                          f"the envelope speaks for the verb invoked; "
@@ -299,11 +303,7 @@ class PythonRunnerExitOnARealBoardTest(_FakeInterpreterProject, unittest.TestCas
         result = self.drive_filed("test", agent, FAKE_EXIT="0")
         self.assertEqual(result.returncode, 0, _diagnostics(result))
         event = self.the_one_stored_run(agent, result)
-        self.assertEqual(self.runner_suites(event), [],
-                         f"a clean runner adds no `runner` suite; "
-                         f"tree={event.get('tree')!r}")
-        self.assert_counts(event.get("summary") or {}, total=1, passed=1,
-                           failed=0, where="the stored run's")
+        self.assert_sent(event, code=0)
         envelope = self.envelope_of(result)
         self.assert_counts(envelope.get("run") or {}, total=1, passed=1,
                            failed=0, where="the envelope's run")
