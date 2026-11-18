@@ -46,6 +46,7 @@ Invocation:
 import json
 import shutil
 import sys
+import threading
 import unittest
 import uuid
 import xml.etree.ElementTree as ET
@@ -226,6 +227,22 @@ class _Drive:
 
 _DRIVES = {}
 
+#: Each drive's board, being closed. `RecordingBoard.close` waits out its
+#: server loop's half-second poll, so a drive hands its board here to close
+#: in the background and moves on; the module waits for every one at its end.
+_CLOSING = []
+
+
+def _close_in_the_background(board):
+    closer = threading.Thread(target=board.close, daemon=True)
+    closer.start()
+    _CLOSING.append(closer)
+
+
+def tearDownModule():
+    while _CLOSING:
+        _CLOSING.pop().join(timeout=10)
+
 
 class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
     """`events` on the envelope of every run-filing verb of all five clients,
@@ -320,7 +337,7 @@ class EveryFilingVerbNamesItsEventsTest(unittest.TestCase):
                 extra_env={"PY_CRUCIBLE_PYTHON": sys.executable})
             filed = _filed_from_the_log(board, ids)
         finally:
-            board.close()
+            _close_in_the_background(board)
         emits, axi = classify_envelope(result.stdout, TOON)
         drive = _Drive(result, emits, axi or {}, filed, argv)
         _DRIVES[cache_key] = drive
