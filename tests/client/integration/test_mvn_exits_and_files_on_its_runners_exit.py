@@ -12,15 +12,18 @@ never decides it. The board, handed a non-zero `runnerExit` over a run that
 records no failure, adds one failing case — suite `runner`, case `exit <n>`.
 
 `MavenRunnerExitOnARealBoardTest`
-    End to end against a REAL scratch board (`tests/client/real_board.py`):
-    a fake `mvnw` whose build exits 1 over passing-only surefire/failsafe
-    reports, through `unit`, `test`, `module` over two report files,
-    `integration`, `regression` and `pre-merge-gate` — the stored run carries the
-    `runner / exit 1` case, the envelope's `run` counts include it, and the
-    verb exits non-zero. A build killed by SIGKILL files `exit 137`. A failing
-    report makes `unit` and `module` exit non-zero even when maven itself
-    exited 0. A clean build over a passing report is filed and exits exactly
-    as before.
+    The client half, against a recording board answering in the server's
+    shapes: a fake `mvnw` whose build exits 1 over passing-only
+    surefire/failsafe reports, through `unit`, `test`, `module` over two
+    report files, `integration`, `regression` and `pre-merge-gate` — the one
+    ingest carries every passing report and `runnerExit: 1`, the envelope's
+    `run` counts are the board's answer (the runner case included), and the
+    verb exits non-zero. A build killed by SIGKILL sends `runnerExit: 137`. A
+    failing report makes `unit` and `module` exit non-zero even when maven
+    itself exited 0. A clean build over a passing report is filed and exits
+    exactly as before. The board's half — the `runner / exit N` case it adds
+    and counts, only over a run that records no failure — is held in bun by
+    `tests/integration/run-ingest-runner-exit.test.ts`.
 
 `MavenRunnerExitReachesTheIngestTest`
     Against a recording board: what the ingest body CARRIES as `runnerExit`,
@@ -49,11 +52,11 @@ from tests.client.live_run_harness import (
     CLIENTS,
     RecordingBoard,
     install_project,
+    junit_sent,
     load_toon,
     new_scratch,
     scrubbed_env,
 )
-from tests.client.real_board import RealBoard
 
 TOON = load_toon()
 MVN_CLIENT = CLIENTS / "mvn-crucible.py"
@@ -173,73 +176,80 @@ class _FakeMavenProject:
         return envelope or {}
 
 
-# ── End to end, against a real board ────────────────────────────────────────
-
-_BOARD: RealBoard | None = None
-
-
-def setUpModule():
-    global _BOARD
-    bun = shutil.which("bun")
-    if bun is None:
-        raise unittest.SkipTest(
-            "the board that adds the runner's case is a REAL server, and "
-            "without `bun` there is none to boot — a missing toolchain, not "
-            "a passing assertion")
-    _BOARD = RealBoard(bun, "mvn-runner-exit-e2e")
-
-
-def tearDownModule():
-    global _BOARD
-    if _BOARD is not None:
-        _BOARD.close()
-        _BOARD = None
-
+# ── The client half of the runner case, against a recording board ──────────
 
 class MavenRunnerExitOnARealBoardTest(_FakeMavenProject, unittest.TestCase):
-    """The run the board stores, the envelope the client prints and the
-    client's exit, for a build whose exit disagrees with its reports."""
+    """The run the client sends, the envelope it prints and its exit, for a
+    build whose exit disagrees with its reports. The board answers the
+    ingest with the `run` block the server answers for those reports and
+    that exit (a runner case counted over a run with no failure); the case
+    itself is the server's, held in bun by
+    `tests/integration/run-ingest-runner-exit.test.ts`."""
+
+    PROJECT_KEY = "mvn-runner-exit-live-half-key"
 
     def setUp(self):
-        board = _BOARD
-        if board is None:
-            self.fail("the module's real board was never booted")
-        self.board = board
+        self.board = RecordingBoard()
         self.make_project()
 
     def tearDown(self):
+        self.board.close()
         shutil.rmtree(self.project, ignore_errors=True)
 
     def drive_filed(self, verb, agent, extra=(), **fake_env):
-        self.board.install(self.project)
+        """Drive `verb` as `agent`, the board answering as the server does:
+        every class's pass but a failing one, and one failure — the
+        report's own, or the runner case — unless the build exited 0 over
+        passing reports."""
+        install_project(self.project, self.board.url, self.PROJECT_KEY,
+                        "mvn-runner-exit-e2e")
+        classes = int(fake_env.get("FAKE_CLASSES", "1"))
+        failing = fake_env.get("FAKE_FAILING") == "1"
+        red_exit = fake_env.get("FAKE_EXIT", "0") != "0" or "FAKE_SIGNAL" in fake_env
+        if failing:
+            self.board.script_run(passed=classes - 1, failed=1)
+        elif red_exit:
+            self.board.script_run(passed=classes, failed=1)
+        else:
+            self.board.script_run(passed=classes)
         return self.drive(verb, agent, extra, **fake_env)
 
     def the_one_stored_run(self, agent, result):
-        events = self.board.test_events(agent)
+        bodies = [b for p, b in self.board.posts() if p == RAW_INGEST]
         self.assertEqual(
-            len(events), 1,
-            f"exactly one test run is filed for this agent; events={events!r} "
-            f"{_diagnostics(result)}")
-        return self.board.event(events[0]["id"])
+            len(bodies), 1,
+            f"exactly one test run is filed for this agent; "
+            f"posts={[p for p, _ in self.board.posts()]!r} {_diagnostics(result)}")
+        body = bodies[0]
+        self.assertEqual(body.get("agentId"), agent,
+                         f"the run is filed under its agent; "
+                         f"agentId={body.get('agentId')!r}")
+        return body
 
-    def runner_suites(self, event):
-        return [s for s in (event.get("tree") or []) if s.get("name") == "runner"]
+    def runner_suites(self, body):
+        return [s for s in ((junit_sent(body) or {}).get("tree") or [])
+                if s.get("name") == "runner"]
 
-    def assert_runner_case_filed(self, event, code, result):
-        runner = self.runner_suites(event)
-        self.assertEqual(
-            len(runner), 1,
-            f"the stored run holds exactly one `runner` suite; "
-            f"tree={event.get('tree')!r} {_diagnostics(result)}")
-        children = runner[0].get("children") or []
-        self.assertEqual(len(children), 1, f"runner suite={runner[0]!r}")
-        case = children[0]
-        self.assertEqual(case.get("name"), f"exit {code}", f"case={case!r}")
-        self.assertEqual(case.get("status"), "fail", f"case={case!r}")
-        self.assertEqual(
-            (case.get("failure") or {}).get("message"),
-            f"the runner exited {code} but its report records no failure",
-            f"case={case!r}")
+    def assert_sent(self, body, *, code, classes, failed):
+        """The ingest carries every report the build wrote — `classes`
+        cases, `failed` of them failing, never a `runner` case of the
+        client's own — and the build's exit as `runnerExit`, from which the
+        board adds the `runner / exit N` case over a run with no failure."""
+        sent = junit_sent(body) or {}
+        self.assertTrue(sent, f"the ingest is a junit report; keys={sorted(body)!r}")
+        self.assertEqual(self.runner_suites(body), [],
+                         f"the client adds no `runner` suite itself; "
+                         f"tree={sent.get('tree')!r}")
+        self.assert_counts(sent.get("summary") or {}, total=classes,
+                           passed=classes - failed, failed=failed,
+                           where="the reports sent")
+        self.assertEqual(body.get("runnerExit"), code,
+                         f"runnerExit={body.get('runnerExit')!r}")
+        self.assertIs(type(body.get("runnerExit")), int,
+                      "runnerExit is sent as an integer")
+
+    def assert_runner_case_filed(self, body, code, result, classes=1):
+        self.assert_sent(body, code=code, classes=classes, failed=0)
 
     def assert_counts(self, counts, *, total, passed, failed, where):
         self.assertEqual(
@@ -255,9 +265,7 @@ class MavenRunnerExitOnARealBoardTest(_FakeMavenProject, unittest.TestCase):
                             f"a build that exited 1 never exits green; "
                             f"{_diagnostics(result)}")
         event = self.the_one_stored_run(agent, result)
-        self.assert_runner_case_filed(event, 1, result)
-        self.assert_counts(event.get("summary") or {}, total=classes + 1,
-                           passed=classes, failed=1, where="the stored run's")
+        self.assert_runner_case_filed(event, 1, result, classes=classes)
         envelope = self.envelope_of(result)
         self.assertEqual(envelope.get("verb"), verb,
                          f"the envelope speaks for the verb invoked; "
@@ -275,12 +283,7 @@ class MavenRunnerExitOnARealBoardTest(_FakeMavenProject, unittest.TestCase):
             f"a {verb} run whose report records a failure exits non-zero; "
             f"{_diagnostics(result)}")
         event = self.the_one_stored_run(agent, result)
-        self.assertEqual(self.runner_suites(event), [],
-                         f"a run that already records a failure gets no "
-                         f"`runner` case; tree={event.get('tree')!r}")
-        self.assert_counts(event.get("summary") or {}, total=classes,
-                           passed=classes - 1, failed=1,
-                           where="the stored run's")
+        self.assert_sent(event, code=0, classes=classes, failed=1)
         self.assert_counts(self.envelope_of(result).get("run") or {},
                            total=classes, passed=classes - 1, failed=1,
                            where="the envelope's run")
@@ -338,11 +341,7 @@ class MavenRunnerExitOnARealBoardTest(_FakeMavenProject, unittest.TestCase):
         result = self.drive_filed("unit", agent, FAKE_EXIT="0")
         self.assertEqual(result.returncode, 0, _diagnostics(result))
         event = self.the_one_stored_run(agent, result)
-        self.assertEqual(self.runner_suites(event), [],
-                         f"a clean build adds no `runner` suite; "
-                         f"tree={event.get('tree')!r}")
-        self.assert_counts(event.get("summary") or {}, total=1, passed=1,
-                           failed=0, where="the stored run's")
+        self.assert_sent(event, code=0, classes=1, failed=0)
         self.assert_counts(self.envelope_of(result).get("run") or {}, total=1,
                            passed=1, failed=0, where="the envelope's run")
 
@@ -351,9 +350,7 @@ class MavenRunnerExitOnARealBoardTest(_FakeMavenProject, unittest.TestCase):
         result = self.drive_filed("regression", agent, FAKE_EXIT="0")
         self.assertEqual(result.returncode, 0, _diagnostics(result))
         event = self.the_one_stored_run(agent, result)
-        self.assertEqual(self.runner_suites(event), [],
-                         f"a clean build adds no `runner` suite; "
-                         f"tree={event.get('tree')!r}")
+        self.assert_sent(event, code=0, classes=1, failed=0)
         self.assert_counts(self.envelope_of(result).get("run") or {}, total=1,
                            passed=1, failed=0, where="the envelope's run")
 
