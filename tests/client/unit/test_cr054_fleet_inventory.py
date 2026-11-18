@@ -2148,8 +2148,9 @@ def _track_set_computations(source, filename="<scratch>"):
 class Cr108TrackRuleIsNotRederivedByTheFleetTest(unittest.TestCase):
     """AC4 -- `queue_tracks` contains no distinct-set computation: it reads the
     published `tracks`. The BEHAVIOURAL half (a payload whose entries and whose
-    published list disagree) lives in
-    `tests/client/integration/test_cr092_next_decision_resolver.py`; this is the sweep that
+    published list disagree) lived in the former
+    `test_cr092_next_decision_resolver.py` (since merged into
+    `test_next_lane_carries_release_and_wave`); this is the sweep that
     proves the deletion reached the whole fleet rather than one function."""
 
     def test_the_sweep_finds_the_retired_computation_in_every_shape(self):

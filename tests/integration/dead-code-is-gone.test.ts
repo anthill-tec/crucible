@@ -98,7 +98,9 @@ describe("§S2 test code nothing calls (AC2)", () => {
   });
 
   test("other_stored is no longer assigned in test_cr092_next_decision_resolver.py", () => {
-    const src = readSource("tests/client/integration/test_cr092_next_decision_resolver.py");
+    // The module merged into test_next_lane_carries_release_and_wave.py
+    // (CR-CRU-262), which holds its track-canonicalisation class.
+    const src = readSource("tests/client/integration/test_next_lane_carries_release_and_wave.py");
     expect(src).not.toMatch(/cls\.other_stored\s*=/);
   });
 });

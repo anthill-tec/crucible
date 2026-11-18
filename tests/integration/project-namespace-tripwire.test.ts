@@ -610,7 +610,9 @@ const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "client", "unit", "test_cr084_release_packages.py")]: 3,
   [join("tests", "client", "test_cr087_console_failure_attribution.py")]: 1,
   [join("tests", "client", "unit", "test_cr091_roadmap_verbs.py")]: 7,
-  [join("tests", "client", "integration", "test_cr092_next_decision_resolver.py")]: 8,
+  // REMOVED 2026-11-18 by CR-CRU-262: test_cr092_next_decision_resolver.py
+  // merged into test_next_lane_carries_release_and_wave.py, which measures 0
+  // asserted literals by this file's own checker, so it takes no entry.
   [join("tests", "client", "unit", "test_crucible_axi_shared.py")]: 3,
   [join("tests", "client", "unit", "test_crucible_axi_stages.py")]: 8,
   [join("tests", "client", "integration", "test_crucible_axi_wheel_packaging.py")]: 1,

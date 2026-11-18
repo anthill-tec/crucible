@@ -1549,8 +1549,10 @@ CR092_NEXT_FORBIDDEN_FLAGS = ("--agent", "--user-approved")
 def _next_entry(cr, seq, status="PENDING", wave="5", release=None, track=None,
                 depends=()):
     """One queue entry in the shape CR-CRU-091's read publishes -- `seq`
-    always, `release`/`track` only when non-null -- mirroring the sibling
-    `test_cr092_next_decision_resolver.py`'s own `_entry` helper so the two
+    always, `release`/`track` only when non-null -- mirroring the former
+    `test_cr092_next_decision_resolver.py`'s own `_entry` helper (since
+    deleted; the module is merged into
+    `test_next_lane_carries_release_and_wave`) so the two
     harnesses cannot drift into two ideas of the wire format."""
     entry = {"cr": cr, "seq": seq, "status": status, "wave": wave,
              "dependsOn": list(depends)}
@@ -2673,7 +2675,8 @@ def _get_harness_isolation_drives():
 class Cr092HarnessLanePlanIsolationTest(unittest.TestCase):
     """CR-CRU-092 §S5/AC11, BEHAVIOURALLY -- the companion to the STATIC scans
     (byte scan, AST, import surface) in the sibling
-    `test_cr092_next_decision_resolver.py`.
+    `test_next_lane_carries_release_and_wave_without_a_board.py`
+    (`HarnessIsolationTest`).
 
     A scan proves no client SPELLS the harness lane-plan database. It cannot
     prove the ANSWER is unaffected by one that EXISTS. So: plant a populated

@@ -4,8 +4,8 @@ keeps only the thin per-client delegator.
 Spec: docs/changes/CR-CRU-098-the-plan-pointer-has-no-publisher.md §S3, AC10/AC11
 Classification: docs/changes/CR-CRU-098-test-classification.md
 
-Adapts `ResolverLandsOnceTest` (tests/client/integration/test_cr092_next_decision_resolver.py,
-KEPT-but-rewritten per the classification table): its
+Adapts `ResolverLandsOnceTest` (the former `test_cr092_next_decision_resolver.py`,
+since merged into `test_next_lane_carries_release_and_wave`; KEPT-but-rewritten per the classification table): its
 `test_the_shared_module_owns_every_resolver_symbol` asserted the OPPOSITE of
 what AC10 now requires (that `canonical_track`/`queue_tracks`/`resolve_next`
 ARE callable in the shared module) — that assertion is now WRONG and is

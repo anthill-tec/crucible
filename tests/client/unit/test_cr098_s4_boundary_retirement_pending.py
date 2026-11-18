@@ -46,7 +46,9 @@ from pathlib import Path
 import tests.client  # noqa: F401
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CR092_PATH = REPO_ROOT / "tests" / "client" / "integration" / "test_cr092_next_decision_resolver.py"
+# test_cr092_next_decision_resolver.py merged into this module (CR-CRU-262),
+# with its track-canonicalisation class and the retirement notes.
+CR092_PATH = REPO_ROOT / "tests" / "client" / "integration" / "test_next_lane_carries_release_and_wave.py"
 CENSUS_PATH = REPO_ROOT / "tests" / "client" / "integration" / "test_client_fleet_envelope_census.py"
 
 # CR-CRU-098 §S4/AC12, corrected at C3 (spec a018e0f):
@@ -67,7 +69,7 @@ def _names_a_retirement_comment(path: Path) -> bool:
     """A comment naming BOTH this CR and the §S4 reason — the shape
     `test_cr108`'s own deletion note sets (the note just above
     `test_the_server_refuses_exactly_what_the_helper_refuses` in
-    test_cr092_next_decision_resolver.py, "was deleted here ... its ... claim
+    test_next_lane_carries_release_and_wave.py, "was deleted here ... its ... claim
     survives ... below")."""
     text = path.read_text(encoding="utf-8")
     return "CR-CRU-098" in text and (
