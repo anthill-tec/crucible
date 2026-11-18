@@ -1,5 +1,11 @@
 """A declared arduino target streams a REAL native run to a REAL board.
 
+The feature this module keeps a live board for is the arduino native run
+lifecycle end to end: a run opened, fed `crucible-events` batches while the
+native binaries run, and closed on the board. No fake can prove it, because
+what is asserted is the server's own decoding, live view and stored record of
+that stream, compared with the same board's reading of the run's JUnit.
+
 The real `clients/arduino-crucible.py`, real `make` and `g++`, and a real
 board (`bun run src/server.ts` on a free port with a throwaway store, behind a
 loopback proxy that records every request with its time). The native harness
