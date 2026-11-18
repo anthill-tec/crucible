@@ -52,7 +52,7 @@ from unittest import mock
 
 from tests.client.fake_nextest import held_results, private_fake_prelude
 from tests.client.live_run_harness import StreamingPost, get_answering_health
-from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client.client_fleet_envelope_census_helpers import install_project_limits
 from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

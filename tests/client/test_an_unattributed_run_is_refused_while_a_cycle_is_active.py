@@ -45,7 +45,7 @@ import urllib.request
 import json as _json
 from pathlib import Path
 
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     _build_fake_bin_dir,
     _load_toon_module,

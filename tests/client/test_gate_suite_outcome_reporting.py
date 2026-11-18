@@ -157,9 +157,7 @@ _GATE = _load_module(GATE_HARNESS_PATH, "cr112_c2_gate_harness")
 
 #: CR-CRU-139 §S2 -- the fleet's ONE replace-safe `[client] url` writer, for the
 #: one fixture below that builds its own project instead of the harness's.
-from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
-    declare_board,
-)
+from tests.client.client_fleet_envelope_census_helpers import declare_board  # noqa: E402
 
 BUN_SUITE = _GATE.BUN_SUITE
 PYTHON_SUITE = _GATE.PYTHON_SUITE

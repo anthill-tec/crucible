@@ -50,7 +50,7 @@ import sys
 import unittest
 from unittest import mock
 
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     _load_module,
     _load_toon_module,

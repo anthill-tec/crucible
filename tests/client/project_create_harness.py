@@ -53,7 +53,7 @@ import urllib.parse
 import uuid
 from pathlib import Path
 
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     _CLIENT_TABLE,
     declare_and_require_board,
     declare_board,

@@ -59,7 +59,7 @@ from unittest import mock
 # CR-CRU-131 §S1b — the project fixture carries the `crucible.toml` an
 # installed project has; the fleet census owns that helper (one fixture shape
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
-from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client.client_fleet_envelope_census_helpers import install_project_limits
 from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

@@ -43,7 +43,10 @@ from tests.client.test_an_unattributed_run_is_refused_while_a_cycle_is_active im
     _declare_listener,
     _free_port,
 )
-from tests.client.test_client_fleet_envelope_census import declare_board, would_resolve
+from tests.client.client_fleet_envelope_census_helpers import (
+    declare_board,
+    would_resolve,
+)
 
 TESTS_CLIENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TESTS_CLIENT_DIR.parents[1]

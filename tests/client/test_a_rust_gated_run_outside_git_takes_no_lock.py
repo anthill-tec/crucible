@@ -74,9 +74,7 @@ from tests.client.live_run_harness import (
     RecordingBoard,
     load_client,
 )
-from tests.client.test_client_fleet_envelope_census import (
-    declare_and_require_board,
-)
+from tests.client.client_fleet_envelope_census_helpers import declare_and_require_board
 
 RUST_CLIENT = CLIENTS / "rust-crucible.py"
 GATE_LOCK_FILE = "nai-gate.lock"

@@ -79,7 +79,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+from tests.client.client_fleet_envelope_census_helpers import (  # noqa: E402
     declare_and_require_board,
 )
 from tests.client.test_bun_crucible_cycle_add import (
@@ -89,10 +89,6 @@ from tests.client.test_bun_crucible_cycle_add import (
 )
 from tests.client.test_plan_file_names_the_release_it_plans import (
     AXI_MODULE,
-    CLIENT_FILES,
-    CLIENTS,
-    CLIENTS_DIR,
-    ENV_KEYS,
     EXPECTED_CLIENT_COUNT,
     REPO_ROOT,
     _UNREACHABLE_CRUCIBLE_URL,
@@ -101,8 +97,14 @@ from tests.client.test_plan_file_names_the_release_it_plans import (
     _free_port,
     _functions_handed_the_parser,
     _http,
-    _load_module_by_path,
     _shared_functions_declaring,
+)
+from tests.client.plan_file_names_the_release_it_plans_helpers import (
+    CLIENT_FILES,
+    CLIENTS,
+    CLIENTS_DIR,
+    ENV_KEYS,
+    _load_module_by_path,
 )
 
 VERB = "cycle-add"

@@ -67,7 +67,7 @@ from tests.client.declaration_schema_harness import (
     write_targets_toml,
     write_toml,
 )
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     _UNREACHABLE_CRUCIBLE_URL,
     declare_and_require_board,
 )

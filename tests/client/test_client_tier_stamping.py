@@ -189,7 +189,7 @@ from tests.client.live_run_harness import (  # noqa: E402
     StreamingPost,
     get_answering_health,
 )
-from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+from tests.client.client_fleet_envelope_census_helpers import (  # noqa: E402
     declare_and_require_board,
 )
 from tests.client import TEST_INSTALL_CLIENTS

@@ -51,7 +51,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tests.client.test_plan_file_names_the_release_it_plans import (
+from tests.client.plan_file_names_the_release_it_plans_helpers import (
     CLIENT_FILES,
     CLIENTS,
     ENV_KEYS,

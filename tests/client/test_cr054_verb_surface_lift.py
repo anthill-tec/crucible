@@ -171,7 +171,7 @@ import importlib.util
 from pathlib import Path
 from unittest import mock
 
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     _UNREACHABLE_CRUCIBLE_URL,
     declare_and_require_board,
 )

@@ -61,7 +61,7 @@ from tests.client.test_a_gate_posted_by_the_fleet_carries_its_run_and_release im
     _load_module,
     _run_main,
 )
-from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client.client_fleet_envelope_census_helpers import install_project_limits
 from tests.client.test_cr054_fleet_inventory import CLIENT_FILES
 
 GATES_PATH = "/api/v2/gates"

@@ -54,14 +54,15 @@ from pathlib import Path
 from unittest import mock
 
 from tests.client.live_run_harness import get_answering_health, load_client
-from tests.client import (
-    CLIENT_SOURCE_DIR,
-    install_clients_candidates,
+from tests.client import install_clients_candidates
+from tests.client.the_run_pipeline_lives_in_its_own_shared_module_helpers import (
+    CLIENTS,
+    CORE_MODULE,
+    is_core_view,
+    top_level_definitions,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS = CLIENT_SOURCE_DIR
-CORE_MODULE = CLIENTS / "_crucible_axi.py"
 RUN_MODULE = CLIENTS / "_crucible_run.py"
 # The release-notes verb's module, loaded by the core the same way.
 RELEASE_MODULE = CLIENTS / "_crucible_release.py"
@@ -117,29 +118,6 @@ COUNT_KEYS = ("passed", "failed", "pending", "total", "files")
 
 def _source(path):
     return Path(path).read_text(encoding="utf-8")
-
-
-def _target_names(target):
-    if isinstance(target, ast.Name):
-        return [target.id]
-    if isinstance(target, (ast.Tuple, ast.List)):
-        return [name for element in target.elts for name in _target_names(element)]
-    return []
-
-
-def top_level_definitions(tree):
-    """Every name `tree` binds at its top level by `def`, `class` or an
-    assignment, in source order and with repeats: imports bind nothing here."""
-    names = []
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.append(node.name)
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                names += _target_names(target)
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            names.append(node.target.id)
-    return names
 
 
 def _is_dunder(name):
@@ -260,24 +238,6 @@ def run_namespace(test, core, expected_dir=CLIENTS):
         (Path(expected_dir) / RUN_MODULE.name).resolve(),
         "the run module is read from the core's own directory")
     return namespace
-
-
-def is_core_view(value, core):
-    """`value` is the run module's view of `core`: the core itself, or an
-    object or mapping through which `core.post_ingest` is reached."""
-    if value is core:
-        return True
-    if getattr(value, "post_ingest", None) is core.post_ingest:
-        return True
-    getter = getattr(value, "get", None)
-    if callable(getter):
-        try:
-            return getter("post_ingest") is core.post_ingest
-        except (TypeError, AttributeError, KeyError):
-            # A `get` that is not a mapping's (a class's unbound method, one
-            # taking other arguments) is not a view of the core.
-            return False
-    return False
 
 
 def reexport_misses(core, namespace, names):

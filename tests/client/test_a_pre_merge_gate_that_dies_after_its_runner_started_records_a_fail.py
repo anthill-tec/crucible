@@ -49,7 +49,7 @@ import shutil
 import unittest
 from unittest import mock
 
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     _load_module,
     _make_project_dir,

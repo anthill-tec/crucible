@@ -43,7 +43,7 @@ from tests.client.kept_coverage_answer import (
     listed_rows,
 )
 from tests.client.live_run_harness import load_toon
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     declare_board,
     install_project_limits,
 )

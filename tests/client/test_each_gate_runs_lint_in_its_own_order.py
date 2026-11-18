@@ -75,7 +75,7 @@ from tests.client.live_run_harness import (
     board_health,
 )
 from tests.client.project_create_harness import ScratchFleet
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     _build_fake_bin_dir,
     write_go_module,
 )

@@ -33,7 +33,7 @@ import unittest
 from pathlib import Path
 
 from tests.client.live_run_harness import load_client
-from tests.client.test_the_run_pipeline_lives_in_its_own_shared_module import (
+from tests.client.the_run_pipeline_lives_in_its_own_shared_module_helpers import (
     CLIENTS,
     CORE_MODULE,
     is_core_view,

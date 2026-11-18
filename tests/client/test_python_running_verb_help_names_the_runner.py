@@ -45,7 +45,7 @@ import shutil
 import unittest
 
 from tests.client.test_bun_client_printed_help_names_no_project import option_help
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     CLIENTS_DIR,
     _build_fake_bin_dir,

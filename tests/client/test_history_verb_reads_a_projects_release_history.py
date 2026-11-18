@@ -92,7 +92,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client.client_fleet_envelope_census_helpers import install_project_limits
 from tests.client.test_cr054_fleet_inventory import CLIENT_FILES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

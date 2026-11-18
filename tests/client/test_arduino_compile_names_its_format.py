@@ -27,7 +27,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     declare_board,
     install_project_limits,
 )

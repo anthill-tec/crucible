@@ -49,7 +49,7 @@ import urllib.parse
 from pathlib import Path
 from unittest import mock
 
-from tests.client.test_a_clients_board_is_its_projects_configuration import (
+from tests.client.a_clients_board_is_its_projects_configuration_helpers import (
     CONFIG_NAME,
     _argv_for,
     _RecordingBoard,
@@ -57,9 +57,9 @@ from tests.client.test_a_clients_board_is_its_projects_configuration import (
     _summarise,
     drive,
 )
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.test_client_fleet_envelope_census import BoardInterlockCase
+from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
-    BoardInterlockCase,
     _build_fake_bin_dir,
     _load_module,
     _load_toon_module,

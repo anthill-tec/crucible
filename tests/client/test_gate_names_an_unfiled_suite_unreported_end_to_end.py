@@ -68,7 +68,7 @@ from pathlib import Path
 
 from tests.client.fake_nextest import private_fake_prelude
 from tests.client.live_run_harness import load_toon, scrubbed_env
-from tests.client.test_client_fleet_envelope_census import declare_and_require_board
+from tests.client.client_fleet_envelope_census_helpers import declare_and_require_board
 from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

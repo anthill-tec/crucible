@@ -28,7 +28,7 @@ from tests.client.project_create_harness import (
     BoardDoubleMixin,
     key_for_token,
 )
-from tests.client.test_client_fleet_envelope_census import enumerate_verbs
+from tests.client.client_fleet_envelope_census_helpers import enumerate_verbs
 
 
 def _add_parser_help(path, verb):

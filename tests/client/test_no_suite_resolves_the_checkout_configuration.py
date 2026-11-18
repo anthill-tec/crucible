@@ -119,9 +119,7 @@ CLIENT_LIMITS = ("truncate_field_chars", "error_detail_chars", "roadmap_list_row
 
 #: CR-CRU-139 §S2 -- the shared module's ONE name for the board resolution,
 #: imported rather than re-spelled (one resolver must not become two names).
-from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
-    BOARD_RESOLVER,
-)
+from tests.client.client_fleet_envelope_census_helpers import BOARD_RESOLVER  # noqa: E402
 
 #: The board the FIXTURE declares, in its own scratch install: the answer every
 #: board assertion below demands.

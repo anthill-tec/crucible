@@ -48,7 +48,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+from tests.client.client_fleet_envelope_census_helpers import (  # noqa: E402
     declare_and_require_board,
 )
 from tests.client import TEST_INSTALL_CLIENTS

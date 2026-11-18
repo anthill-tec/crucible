@@ -23,7 +23,7 @@ import re
 import unittest
 from pathlib import Path
 
-from tests.client.test_a_clients_board_is_its_projects_configuration import CONFIG_NAME
+from tests.client.a_clients_board_is_its_projects_configuration_helpers import CONFIG_NAME
 from tests.client import CLIENT_SOURCE_DIR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

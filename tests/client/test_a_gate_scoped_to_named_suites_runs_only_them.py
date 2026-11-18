@@ -52,7 +52,7 @@ from tests.client.test_a_gate_milestone_carries_each_suite_result import (
 from tests.client.test_an_unattributed_run_is_refused_while_a_cycle_is_active import (
     _call,
 )
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     _FAKE_TOOLS,
     CLIENT_FILES,
     _make_project_dir,

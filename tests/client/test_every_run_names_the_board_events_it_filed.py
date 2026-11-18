@@ -41,7 +41,7 @@ from tests.client.real_board import RealBoard
 from tests.client.test_an_unattributed_run_is_refused_while_a_cycle_is_active import (
     _call,
 )
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     _build_fake_bin_dir,
     _load_toon_module,

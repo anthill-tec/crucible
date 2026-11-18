@@ -56,7 +56,7 @@ import unittest
 from pathlib import Path
 
 from tests.client.live_run_harness import RecordingBoard, scrubbed_env
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     _build_fake_bin_dir,
     _load_module,

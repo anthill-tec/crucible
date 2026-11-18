@@ -103,7 +103,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+from tests.client.client_fleet_envelope_census_helpers import (  # noqa: E402
     declare_and_require_board,
 )
 from tests.client import CLIENT_SOURCE_DIR, client_script

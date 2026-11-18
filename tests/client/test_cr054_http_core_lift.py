@@ -87,7 +87,7 @@ from unittest import mock
 
 #: CR-CRU-139 §S2 -- the shared module's ONE name for the board resolution the
 #: five deleted constants collapsed into, imported rather than re-spelled.
-from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+from tests.client.client_fleet_envelope_census_helpers import (  # noqa: E402
     _UNREACHABLE_CRUCIBLE_URL,
     BOARD_RESOLVER,
     declare_and_require_board,

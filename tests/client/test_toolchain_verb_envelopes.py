@@ -68,7 +68,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     _UNREACHABLE_CRUCIBLE_URL,
     CLIENT_FILES,
     _FAKE_TOOLS,

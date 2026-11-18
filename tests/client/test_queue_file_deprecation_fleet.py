@@ -52,9 +52,11 @@ import threading
 import unittest
 
 from tests.client.test_client_fleet_envelope_census import (
-    CLIENT_FILES,
     _QUEUE_TABLE_HEADER,
     _QUEUE_TABLE_ROWS,
+)
+from tests.client.client_fleet_envelope_census_helpers import (
+    CLIENT_FILES,
     _build_fake_bin_dir,
     _load_toon_module,
     _make_project_dir,

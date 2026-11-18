@@ -101,8 +101,6 @@ from tests.client.test_cycle_add_targets_the_plan_it_means import (
 )
 from tests.client.test_plan_file_names_the_release_it_plans import (
     AXI_MODULE,
-    CLIENT_FILES,
-    CLIENTS,
     EXPECTED_CLIENT_COUNT,
     PLANS_PATH_SUFFIX,
     VERB,
@@ -111,10 +109,14 @@ from tests.client.test_plan_file_names_the_release_it_plans import (
     _flags_declared_directly_on,
     _functions_handed_the_parser,
     _http,
-    _load_module_by_path,
     _plan_file_parser_names,
-    _run_main,
     _shared_functions_declaring,
+)
+from tests.client.plan_file_names_the_release_it_plans_helpers import (
+    CLIENT_FILES,
+    CLIENTS,
+    _load_module_by_path,
+    _run_main,
 )
 from tests.client import test_plan_file_names_the_release_it_plans as _release_suite
 

@@ -200,7 +200,7 @@ from tests.client.live_run_harness import (  # noqa: E402
     junit_sent,
     stream_sent,
 )
-from tests.client.test_client_fleet_envelope_census import (  # noqa: E402
+from tests.client.client_fleet_envelope_census_helpers import (  # noqa: E402
     declare_board,
     would_resolve,
 )

@@ -39,7 +39,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     _load_toon_module,
     classify_envelope,
 )

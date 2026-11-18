@@ -101,7 +101,10 @@ from tests.client.live_run_harness import (
     write_fake_native,
     write_fake_python,
 )
-from tests.client.test_client_fleet_envelope_census import fake_go_body, write_go_module
+from tests.client.client_fleet_envelope_census_helpers import (
+    fake_go_body,
+    write_go_module,
+)
 from tests.client.test_cr017_client_lifecycle import (
     MISSING_CYCLE_CODE,
     _Cr094PreflightBase,

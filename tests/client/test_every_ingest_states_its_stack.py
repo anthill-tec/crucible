@@ -39,7 +39,7 @@ from tests.client.live_run_harness import (
     write_fake_cargo,
     write_fake_mvnw,
 )
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     declare_board,
     fake_go_body,
     install_project_limits,

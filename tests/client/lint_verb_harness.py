@@ -57,7 +57,7 @@ from tests.client.project_create_harness import (
     closed_port_url,
     decode_envelope,
 )
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     _build_fake_bin_dir,
     declare_and_require_board,
     install_project_limits,

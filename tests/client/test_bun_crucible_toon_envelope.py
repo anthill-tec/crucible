@@ -75,7 +75,7 @@ from unittest import mock
 # installed project has; the fleet census owns that helper (one fixture shape
 # for the fleet), exactly as its bin-dir and drive helpers are shared.
 from tests.client.live_run_harness import get_answering_health
-from tests.client.test_client_fleet_envelope_census import install_project_limits
+from tests.client.client_fleet_envelope_census_helpers import install_project_limits
 from tests.client import client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

@@ -96,7 +96,7 @@ import urllib.request
 from pathlib import Path
 
 from tests.client.fake_nextest import private_fake_prelude
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     CLIENT_FILES,
     _build_fake_bin_dir,
     _load_toon_module,

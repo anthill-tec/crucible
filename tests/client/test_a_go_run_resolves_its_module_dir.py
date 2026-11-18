@@ -42,7 +42,7 @@ from tests.client.go_client_harness import (
     said,
 )
 from tests.client.live_run_harness import new_scratch
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     declare_board,
     would_resolve,
 )

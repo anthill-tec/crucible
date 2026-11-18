@@ -27,7 +27,7 @@ from pathlib import Path
 from tests.client.changelog_section import changelog_entries, changelog_section
 from tests.client.kept_coverage_answer import FILE_KEYS, ROW_KEYS
 from tests.client.stored_run_coverage import RUN_VERB_CLIENTS
-from tests.client.test_client_fleet_envelope_census import enumerate_verbs
+from tests.client.client_fleet_envelope_census_helpers import enumerate_verbs
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
