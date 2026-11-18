@@ -50,7 +50,13 @@ own tiers that way.
   - a python module that mixes unit and heavier tests goes whole to `integration` (ruling R2); CR-CRU-262, which
     rewrites the heavy tests, re-places them;
   - a python module goes to the heavier tier of itself and of every test module it imports, transitively (ruling on
-    F8: 182 `from tests.client.test_… import` lines in 124 modules, some importing `TestCase` classes);
+    F8: 182 `from tests.client.test_… import` lines in 124 modules, some importing `TestCase` classes). Before the
+    rule is applied, the plain helpers that unit modules import from an integration test module are lifted into a
+    helper module beside `tests/client/__init__.py`, and the importers import them from there (user ruling
+    2026-11-18): above all `test_client_fleet_envelope_census.py`'s `declare_and_require_board`, `CLIENT_FILES`,
+    `install_project_limits`, `_build_fake_bin_dir`, `_load_toon_module` and `_UNREACHABLE_CRUCIBLE_URL`, which alone
+    raise 25 of the 32 modules the rule raises at `d199371b`. A `TestCase` class is never lifted. The placement is
+    recomputed after the lift (census261b measured: unit 86 modules / 1350 tests before it; bun 89 unit files of 443);
   - a bun event charged to a helper rather than a file (an async frame that lost its file) is charged to every test
     file importing that helper, directly or through another helper.
 
