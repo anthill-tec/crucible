@@ -26,9 +26,9 @@ Two test shapes, per the RED-agent brief:
    ORDER, and that mixed entries still produce a uniform key set.
 
 2. `QueueVerbCarriesTitleAndLifecycleEndToEndTest` — the real `queue` verb
-   (python-crucible.py, a genuine subprocess) driven against an ephemeral
-   board (free port, scratch `bun run src/server.ts`, mkdtemp DB — never the
-   live instance) holding one live CR, one voided CR and one superseded CR.
+   (python-crucible.py, a genuine subprocess) driven against a fake board
+   (`RecordingBoard`) whose queue answer holds one live CR, one voided CR
+   and one superseded CR, in the server's shape.
    The verb's TOON stdout is decoded with `clients/toon.py`'s OWN decoder
    (never a third-party one), and the decoded table's header (= every row's
    shared key set), per-row title/lifecycle, and the dead rows' still-DERIVED
@@ -44,22 +44,21 @@ Invocation:
 """
 
 import importlib.util
-import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-import urllib.error
-import urllib.request
+import uuid
 from pathlib import Path
 
 from tests.client.client_fleet_envelope_census_helpers import (  # noqa: E402
     declare_and_require_board,
 )
+from tests.client.live_run_harness import (
+    MILESTONES_ANSWER, QUEUE_ANSWER, RecordingBoard)
 from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -245,76 +244,24 @@ class BuildQueueRowsCarriesTitleAndLifecycleTest(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# §S3 — the `queue` verb end-to-end, wired through a real ephemeral board
+# §S3 — the `queue` verb end-to-end, against a fake board
 # ═══════════════════════════════════════════════════════════════════════════
 
 RELEASE_LABEL = "9.9.9"
-# CR-CRU-118 §S4 — a proposal declares the date it aims at; nothing here is
-# ABOUT that date, the fixture just needs a plannable target.
-FIXTURE_TARGET_AT = 1_788_220_800  # 2026-09-01T00:00:00Z
-
-
-def _free_port():
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
-
-
-def _declare_listener(store_dir, port, host="127.0.0.1"):
-    """Declare the scratch server's OWN listener (never the live board's
-    :3850/:3849) where the server reads it — the `crucible.toml` beside the
-    database it is pointed at."""
-    Path(store_dir, "crucible.toml").write_text(
-        f'[server]\nhost = "{host}"\nport = {port}\n', encoding="utf-8")
-
-
-def _http(base, path, payload=None, method=None):
-    """One JSON call against the scratch server. A non-2xx still carries the
-    server's structured body, which is the assertion subject for a
-    refusal."""
-    data = None if payload is None else json.dumps(payload).encode()
-    request = urllib.request.Request(
-        base + path, data=data, method=method or ("POST" if data else "GET"),
-        headers={"content-type": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return json.loads(response.read().decode())
-    except urllib.error.HTTPError as exc:
-        return json.loads(exc.read().decode())
-
-
-def _await_server(base, proc, timeout=60):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"scratch server exited early with "
-                               f"{proc.returncode}")
-        try:
-            with urllib.request.urlopen(base + "/api/v2/health", timeout=2):
-                return
-        except Exception:
-            time.sleep(0.2)
-    raise RuntimeError(f"scratch server never became reachable at {base}")
 
 
 class QueueVerbCarriesTitleAndLifecycleEndToEndTest(unittest.TestCase):
     """§S3 end-to-end (both ACs, "wire the call path") — the REAL `queue`
     verb (`clients/python-crucible.py`, a genuine subprocess, never a stub)
-    driven against an EPHEMERAL board (free port, scratch
-    `bun run src/server.ts`, mkdtemp DB — never :3850/:3849, never a live
-    project) holding one live CR, one VOID CR and one SUPERSEDED CR. The
-    verb's TOON stdout is decoded with `clients/toon.py`'s OWN decoder (never
-    a third-party one), and the decoded table's header — every row's shared
-    key set — plus each row's title/lifecycle and the dead rows' still-
-    DERIVED `status` are asserted.
-
-    RED today: `cmd_queue` -> `build_queue_rows` emits only
-    `cr,wave,status,planId` per row, so the decoded rows' shared key set is
-    `{cr,wave,status,planId}` — missing `title`/`lifecycle` entirely — and
-    every row-level `row.get("title")`/`row.get("lifecycle")` assertion below
-    fails against real board data, not a hand-built fixture."""
+    driven against a fake board (`RecordingBoard`) whose `GET …/queue`
+    answers, in the server's own shape (`QueueEntry`, src/types.ts), one live
+    CR, one VOID CR and one SUPERSEDED CR — the answer the real board gives
+    once `cr-void` and `cr-supersede` are posted (that server half is held in
+    bun by `roadmap-registration-routes.test.ts`, and the stored title by
+    `queue-registration.test.ts`). The verb's TOON stdout is decoded with
+    `clients/toon.py`'s OWN decoder (never a third-party one), and the
+    decoded table's header — every row's shared key set — plus each row's
+    title/lifecycle and the dead rows' still-DERIVED `status` are asserted."""
 
     ORCHESTRATOR = "cr147-c2-queue-e2e-orchestrator"
     LIVE_CR = "CR-Q147-LIVE"
@@ -330,69 +277,27 @@ class QueueVerbCarriesTitleAndLifecycleEndToEndTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._tmpdir = tempfile.mkdtemp(prefix="cr147-c2-queue-e2e-")
-        cls._proc = None
-        bun = shutil.which("bun")
-        if bun is None:
-            raise unittest.SkipTest(
-                "the queue row's title/lifecycle columns are a property of "
-                "the REAL board's stored entries: without `bun` there is no "
-                "server to hold them. A missing toolchain, not a passing "
-                "assertion.")
-        port = _free_port()
-        cls.base = f"http://127.0.0.1:{port}"
-        _declare_listener(cls._tmpdir, port)
-        cls._proc = subprocess.Popen(
-            [bun, "run", "--no-env-file", "src/server.ts"], cwd=str(REPO_ROOT),
-            env={**os.environ,
-                 "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        try:
-            cls._boot()
-        except BaseException:
-            # A child spawned and then abandoned by a FAILING setUpClass is
-            # never torn down (tearDownClass does not run), and an orphaned
-            # server holds its port for as long as it lives.
-            cls._stop_server()
-            raise
-
-    @classmethod
-    def _boot(cls):
-        _await_server(cls.base, cls._proc)
-
-        project = _http(cls.base, "/api/v2/projects",
-                        {"name": "cr147-c2-queue-e2e"})
-        cls.key = project["project"]["key"]
-        registered = _http(
-            cls.base, "/api/v2/agents/register",
-            {"projectKey": cls.key, "agentId": cls.ORCHESTRATOR,
-             "role": "ORCHESTRATOR"})
-        assert registered.get("ok"), (
-            f"orchestrator registration failed: {registered!r}")
-        proposed = _http(
-            cls.base, f"/api/v2/projects/{cls.key}/release-proposals",
-            {"agentId": cls.ORCHESTRATOR, "label": RELEASE_LABEL,
-             "targetAt": FIXTURE_TARGET_AT})
-        assert proposed.get("ok"), f"release proposal failed: {proposed!r}"
-
-        for cr, title in ((cls.LIVE_CR, cls.LIVE_TITLE),
-                          (cls.VOID_CR, cls.VOID_TITLE),
-                          (cls.SUPERSEDED_CR, cls.SUPERSEDED_TITLE)):
-            planned = _http(
-                cls.base, f"/api/v2/projects/{cls.key}/queue/plan",
-                {"cr": cr, "title": title, "release": RELEASE_LABEL,
-                 "wave": cls.WAVE, "agentId": cls.ORCHESTRATOR})
-            assert planned.get("ok"), f"cr-plan failed for {cr}: {planned!r}"
-
-        voided = _http(
-            cls.base, f"/api/v2/projects/{cls.key}/queue/{cls.VOID_CR}/void",
-            {"reason": cls.VOID_REASON, "agentId": cls.ORCHESTRATOR})
-        assert voided.get("ok"), f"cr-void failed: {voided!r}"
-
-        superseded = _http(
-            cls.base,
-            f"/api/v2/projects/{cls.key}/queue/{cls.SUPERSEDED_CR}/supersede",
-            {"by": cls.SUCCESSOR_CR, "agentId": cls.ORCHESTRATOR})
-        assert superseded.get("ok"), f"cr-supersede failed: {superseded!r}"
+        cls.board = RecordingBoard()
+        cls.base = cls.board.url
+        cls.key = str(uuid.uuid4())
+        at_ms = int(time.time() * 1000)
+        entries = []
+        for seq, (cr, title) in enumerate(
+                ((cls.LIVE_CR, cls.LIVE_TITLE),
+                 (cls.VOID_CR, cls.VOID_TITLE),
+                 (cls.SUPERSEDED_CR, cls.SUPERSEDED_TITLE)), start=1):
+            entries.append({"cr": cr, "title": title, "wave": cls.WAVE,
+                            "dependsOn": [], "status": "PENDING",
+                            "seq": seq, "release": RELEASE_LABEL})
+        entries[1]["lifecycle"] = {"state": "VOID", "reason": cls.VOID_REASON,
+                                   "at": at_ms, "author": cls.ORCHESTRATOR}
+        entries[2]["lifecycle"] = {"state": "SUPERSEDED",
+                                   "by": cls.SUCCESSOR_CR, "at": at_ms,
+                                   "author": cls.ORCHESTRATOR}
+        queue = dict(QUEUE_ANSWER, entries=entries)
+        cls.board.answer("GET", f"/api/v2/projects/{cls.key}/queue", queue)
+        cls.board.answer("GET", f"/api/v2/projects/{cls.key}/milestones",
+                         MILESTONES_ANSWER, prefix=True)
 
         cls.project_dir = os.path.join(cls._tmpdir, "project")
         os.makedirs(cls.project_dir)
@@ -403,22 +308,8 @@ class QueueVerbCarriesTitleAndLifecycleEndToEndTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls._stop_server()
+        cls.board.close()
         shutil.rmtree(cls._tmpdir, ignore_errors=True)
-
-    @classmethod
-    def _stop_server(cls):
-        """Stop the scratch server, from teardown OR from a setUpClass that
-        failed after spawning it. Idempotent, so both callers may run."""
-        proc = getattr(cls, "_proc", None)
-        if proc is None:
-            return
-        cls._proc = None
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
 
     def _run_queue_verb(self):
         # CR-CRU-139 §S2 — the board is declared in the fixture's OWN project
