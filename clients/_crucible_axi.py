@@ -6856,15 +6856,19 @@ def declaring_stack(command):
 
 def _python_suite_argv(tokens):
     """`python -m unittest discover -s <dir> [-p <pattern>]` → the python
-    client's own `regression` over that SAME discovery.
+    client's own run over that SAME discovery, under the tier its start
+    directory names: a last path component naming a tier the gate covers (one
+    of `TIER_MEANINGS`, neither `regression` nor in `GATE_UNCOVERED_TIERS`)
+    runs that tier's verb, and any other directory runs `regression`.
 
     Nothing is invented: the flags that client takes are the discovery's own
-    (CR-CRU-111 ruling 1 — on that stack the declaration IS the invocation), so
-    the gate reads the declared paths and hands them to the client that can
-    ingest them. `-t` has no client flag and is dropped: the run's top-level
-    dir is the project dir the client resolves. None when the command declares
-    no discovery this gate can read, which the gate REPORTS against the suite
-    rather than skipping."""
+    (on that stack the declaration IS the invocation), so the gate reads the
+    declared paths and hands them to the client that can ingest them. `-t` has
+    no client flag and is dropped, and the python client passes none, so the
+    dispatched run has NO top-level directory: unittest takes the start
+    directory as the top level. None when the command declares no discovery
+    this gate can read, which the gate REPORTS against the suite rather than
+    skipping."""
     if "unittest" not in tokens:
         return None
     flags = {"-s": "--start-dir", "--start-dir": "--start-dir",
@@ -6877,7 +6881,12 @@ def _python_suite_argv(tokens):
         if flag is None:
             continue
         argv += [flag, tokens[index + 1]]
-        start_dir = start_dir or flag == "--start-dir"
+        if flag == "--start-dir":
+            start_dir = True
+            tier = os.path.basename(os.path.normpath(tokens[index + 1]))
+            covered = set(TIER_MEANINGS) - {"regression"}
+            if tier in covered - set(GATE_UNCOVERED_TIERS):
+                argv[2] = tier
     return argv if start_dir else None
 
 
