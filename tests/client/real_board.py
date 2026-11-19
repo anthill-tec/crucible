@@ -2,9 +2,8 @@
 
 Boots `bun run src/server.ts` on an OS-assigned free port (never the live
 3850/3849, never the installer probe's 39877) over a `mkdtemp` store, creates
-one project over HTTP and reads the board's own answers back — the same idiom
-`test_bun_declared_target_exit_without_report_aborts_its_run_end_to_end.py`
-uses, lifted so more than one suite can stand a board up without copying it.
+one project over HTTP and reads the board's own answers back — the one place a
+suite stands a board up, so none copies it.
 
 Not a test module: it holds no `TestCase`. Every reader here compares the
 board's stored run (its `summary` and `tree`) — the outcome a client run
