@@ -22,8 +22,8 @@
 //
 // PORTED FROM (per the classification table): CanonicalTrackTest, TrackScopingTest,
 // NextDecisionTest, HoldDecisionTest, DrainedDecisionTest, LaneOrderTest
-// (tests/client/integration/test_cr092_next_decision_resolver.py, since merged into
-// test_next_lane_carries_release_and_wave.py) and
+// (tests/client/integration/test_cr092_next_decision_resolver.py, since deleted; its
+// retirement notes stand in test_next_lane_carries_release_and_wave.py) and
 // PublishedOrderIsConsumedTest + SeqlessRowKeepsItsPublishedPositionTest
 // (tests/client/test_cr095_next_consumes_published_order.py, since deleted) — semantics preserved
 // exactly (CR's own Non-goals), re-expressed as bun tests of the pure function.

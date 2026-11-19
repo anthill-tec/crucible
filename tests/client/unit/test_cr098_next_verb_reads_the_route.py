@@ -4,8 +4,9 @@ published route.
 Spec: docs/changes/CR-CRU-098-the-plan-pointer-has-no-publisher.md §S3, AC8/AC9
 Classification: docs/changes/CR-CRU-098-test-classification.md
 
-Adapts `NextVerbEnvelopeTest` (the former `test_cr092_next_decision_resolver.py`,
-since merged into `test_next_lane_carries_release_and_wave`; KEPT per the classification table) onto the §S3 contract: `cmd_next` makes
+Adapts `NextVerbEnvelopeTest` (from `test_cr092_next_decision_resolver.py`, since
+deleted; its retirement notes stand in `test_next_lane_carries_release_and_wave`;
+KEPT per the classification table) onto the §S3 contract: `cmd_next` makes
 EXACTLY ONE GET of `.../next` (never `.../queue` again), passing
 `track`/`release`/`wave` as query parameters, and emits whatever the route
 answers (§S3 — "passes its flags through, and emits what it receives"), never

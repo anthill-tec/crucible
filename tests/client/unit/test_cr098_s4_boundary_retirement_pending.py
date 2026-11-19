@@ -46,8 +46,9 @@ from pathlib import Path
 import tests.client  # noqa: F401
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-# test_cr092_next_decision_resolver.py merged into this module (CR-CRU-262),
-# with its track-canonicalisation class and the retirement notes.
+# test_cr092_next_decision_resolver.py was deleted by CR-CRU-262; its
+# track-canonicalisation class and the retirement notes moved to the module
+# this path names.
 CR092_PATH = REPO_ROOT / "tests" / "client" / "integration" / "test_next_lane_carries_release_and_wave.py"
 CENSUS_PATH = REPO_ROOT / "tests" / "client" / "integration" / "test_client_fleet_envelope_census.py"
 
