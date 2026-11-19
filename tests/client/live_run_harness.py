@@ -88,6 +88,9 @@ HISTORY_ANSWER = {"ok": True, "releases": [], "acceptedFailingGates": []}
 PLANS_ANSWER = {"ok": True, "plans": [], "lastClosedCr": None, "filed": 0}
 # `handleProjectMetadataGet` -- `GET .../projects/<key>/metadata`.
 METADATA_ANSWER = {"ok": True, "metadata": {}}
+# `handleAgentsList` -- `GET /api/v2/agents[?project=]`: each agent the
+# board holds (none here), as the pre-flight attribution read takes it.
+AGENTS_ANSWER = {"ok": True, "agents": []}
 # `handleMilestones` -- `POST /api/v2/milestones`, a new record: 201 with
 # the event id the store minted (see `milestone_posted`).
 MILESTONE_POSTED_STATUS = 201
@@ -174,7 +177,13 @@ def load_client(name):
 class RecordingBoard:
     """A real `ThreadingHTTPServer` on loopback that records every request in
     wire order with its receipt time, opens a run on `/api/v2/runs/start` and
-    answers everything else `ok`.
+    answers every other write `ok`.
+
+    A read (`GET`) is answered only where the board models it: health, below,
+    and the open plans `refuse_cycle_binding` scripts. Any other read a test
+    has not scripted (`answer`) is a 404 `{ok: False, error: "unscripted
+    read: GET <path>"}` -- never a made-up `ok` -- so a test that forgets a
+    read its client makes meets a refusal, not a silent 200.
 
     Health (`HEALTH_PATHS`) is answered as a board that decodes the clients'
     reports states it \u2014 `version`, `codecs` and `limits.ingest_body_bytes`
@@ -314,6 +323,7 @@ class RecordingBoard:
                     board.events.append((time.time(), "GET", self.path, None))
                     health = board._health_answer()
                     failure = board._health_failure
+                    binding_scripted = board._active_cycle is not None
                 scripted = board._scripted_answer(self.command, self.path)
                 if scripted is not None:
                     self._reply_status(*scripted)
@@ -323,10 +333,12 @@ class RecordingBoard:
                         self._reply_status(status, {"ok": False, "error": error})
                     else:
                         self._reply(health)
-                elif "/plans" in self.path:
-                    self._reply({"ok": True, "plans": board._open_plans()})
+                elif "/plans" in self.path and binding_scripted:
+                    self._reply(board._open_plans())
                 else:
-                    self._reply({"ok": True, "agents": []})
+                    self._reply_status(404, {
+                        "ok": False,
+                        "error": f"unscripted read: {self.command} {self.path}"})
 
             def _drop_connection(self, shape):
                 """Break this connection in one of `DROP_SHAPES`, after the
@@ -729,13 +741,15 @@ class RecordingBoard:
                 f"require an ACTIVE cycle")
 
     def _open_plans(self):
+        """The plans read (`handlePlansList`' shape, `PLANS_ANSWER`) of a
+        board `refuse_cycle_binding` scripted: one open plan naming its
+        active and its done cycle."""
         with self._lock:
             active, done = self._active_cycle, self._refused_binding
-        if active is None:
-            return []
-        return [{"planId": 1, "cr": "CR-T-BINDING", "status": "open",
-                 "cycles": [{"id": active, "status": "active"},
-                            {"id": done, "status": "done"}]}]
+        plans = [{"planId": 1, "cr": "CR-T-BINDING", "status": "open",
+                  "cycles": [{"id": active, "status": "active"},
+                             {"id": done, "status": "done"}]}]
+        return dict(PLANS_ANSWER, plans=plans, filed=len(plans))
 
     def _caller_refusal(self, path, body):
         """`(status, answer)` for a POST the scripted binding refusal

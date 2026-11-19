@@ -28,7 +28,7 @@ Invocation:
 import os
 import unittest
 
-from tests.client.go_client_harness import GoProject, go_toolchain_gap
+from tests.client.go_client_harness import PROJECT_KEY, GoProject, go_toolchain_gap
 from tests.client.go_tier_harness import (
     UNATTRIBUTED_CODE,
     UNDECLARED_CODE,
@@ -41,7 +41,7 @@ from tests.client.go_tier_harness import (
     tier_project,
     where,
 )
-from tests.client.live_run_harness import new_scratch
+from tests.client.live_run_harness import AGENTS_ANSWER, new_scratch
 
 DONE_CYCLE = 9030
 ACTIVE_CYCLE = 9031
@@ -82,6 +82,9 @@ class AnUnattributedTierRunIsRefusedFirstTest(_RefusalCase):
     def active_cycle_project(self, fixture="tiers"):
         p = tier_project(self, fixture)
         p.board.refuse_cycle_binding(DONE_CYCLE, ACTIVE_CYCLE)
+        # The attribution pre-flight reads the project's agents first: the
+        # board holds none, the run's agent bound to no cycle.
+        p.board.answer("GET", f"/api/v2/agents?project={PROJECT_KEY}", AGENTS_ANSWER)
         return p
 
     def assert_unattributed(self, p, result, verb):
