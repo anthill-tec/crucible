@@ -4,7 +4,7 @@
 2026-11-18: the bun suite is its own CR; `src/server.ts` exports the board's request router, with no behaviour change)
 · gap analysis 2026-11-19 · spec pre-review 2026-11-19 (CHANGES, F1–F7 folded)
 **Type:** fix
-**Points:** 8
+**Points:** 13 (re-scored from 8 at the spec pre-review, 2026-11-19, user ruling)
 **Wave:** 8 (0.4.0)
 **Depends on:** CR-CRU-262
 **Labels:** tests, server, release
