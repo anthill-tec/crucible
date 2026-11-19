@@ -408,9 +408,14 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
     def _plan_record(self, board, project_key, plan_id):
         """The plan as the close left it: `closed`, with the merge it sent,
         when the client PATCHed it closed; `open` otherwise."""
-        closes = [b for p, b in board.posts()
-                  if p == f"/api/v2/projects/{project_key}/plans/{plan_id}"
-                  and isinstance(b, dict) and b.get("status") == "closed"]
+        plan_path = f"/api/v2/projects/{project_key}/plans/{plan_id}"
+        writes = [b for p, b in board.posts() if p == plan_path]
+        patched = [b for p, b in board.patches() if p == plan_path]
+        self.assertEqual(writes, patched,
+                         f"the plan is closed with a PATCH, never a POST; every "
+                         f"write to it: {writes!r}, of them PATCHes: {patched!r}")
+        closes = [b for b in patched
+                  if isinstance(b, dict) and b.get("status") == "closed"]
         self.assertLessEqual(len(closes), 1,
                              f"the plan is closed at most once; got {closes!r}")
         if not closes:

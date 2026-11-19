@@ -133,10 +133,12 @@ class CrCloseReportsItsOwnCrMergedPostTest(unittest.TestCase):
         return drive_verb(PYTHON_CLIENT, argv, scenario["project_dir"], self.bin_dir,
                           timeout=timeout, board=board or self.base)
 
+    def _plan_path(self, scenario):
+        return f"/api/v2/projects/{scenario['key']}/plans/{scenario['plan_id']}"
+
     def _closes(self, scenario):
         """Every close the client sent: a PATCH of the plan itself."""
-        plan_path = f"/api/v2/projects/{scenario['key']}/plans/{scenario['plan_id']}"
-        return [b for p, b in self.board.posts() if p == plan_path]
+        return [b for p, b in self.board.patches() if p == self._plan_path(scenario)]
 
     def _cr_merged_posts(self, scenario):
         """Every `cr-merged` milestone the client posted for the CR."""
@@ -211,6 +213,10 @@ class CrCloseReportsItsOwnCrMergedPostTest(unittest.TestCase):
 
     def _assert_closed_with_the_commit(self, scenario, reason=None):
         closes = self._closes(scenario)
+        writes = [b for p, b in self.board.posts() if p == self._plan_path(scenario)]
+        self.assertEqual(writes, closes,
+                         f"the plan is closed with a PATCH, never a POST; every "
+                         f"write to it: {writes!r}, of them PATCHes: {closes!r}")
         self.assertEqual(len(closes), 1, f"the plan is closed once; got {closes!r}")
         close = closes[0] or {}
         self.assertEqual(close.get("status"), "closed",

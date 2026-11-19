@@ -359,7 +359,9 @@ class RecordingBoard:
             def do_POST(self):
                 body = self._body()
                 with board._lock:
-                    board.events.append((time.time(), "POST", self.path, body))
+                    # Logged under the method it came in on: a PATCH (routed
+                    # here by `do_PATCH`) is logged as a PATCH.
+                    board.events.append((time.time(), self.command, self.path, body))
                     held = board._hold_path == self.path
                     if held:
                         board._hold_path = None
@@ -649,9 +651,16 @@ class RecordingBoard:
                     if m == "GET" and p in HEALTH_PATHS]
 
     def posts(self):
-        """`[(path, body), ...]` for every POST, in wire order."""
+        """`[(path, body), ...]` for every POST and PATCH, in wire order --
+        every write the board took; `patches()` keeps only the PATCHes."""
         with self._lock:
-            return [(p, b) for _, m, p, b in self.events if m == "POST"]
+            return [(p, b) for _, m, p, b in self.events if m in ("POST", "PATCH")]
+
+    def patches(self):
+        """`[(path, body), ...]` for every PATCH, in wire order (a subset of
+        `posts()`), so a test can assert a write came in as a PATCH."""
+        with self._lock:
+            return [(p, b) for _, m, p, b in self.events if m == "PATCH"]
 
     def aborts(self):
         """CR-CRU-170 \u00a7S2 \u2014 `[(path, body), ...]` for every `POST
@@ -775,7 +784,8 @@ class RecordingBoard:
 
     def received_at(self, post_index):
         with self._lock:
-            return [t for t, m, _p, _b in self.events if m == "POST"][post_index]
+            return [t for t, m, _p, _b in self.events
+                    if m in ("POST", "PATCH")][post_index]
 
     def messages(self):
         """Every heartbeat message, in wire order."""
