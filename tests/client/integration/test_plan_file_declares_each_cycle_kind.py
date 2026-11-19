@@ -19,7 +19,8 @@ What this module pins, against the spec
        help is one wording across the fleet, and the client count is asserted.
   §S3  the request body carries `kind` per cycle entry.
   §S4  a cycle with NO kind is refused CLIENT-SIDE — and the ROUTE stays
-       PERMISSIVE, which is a REGRESSION PIN here, not an omission.
+       PERMISSIVE — that regression pin (a kindless cycle stored
+       `red-green`) is held in bun, not here.
   §S4a `--cycles` (the legacy comma-split form) is REFUSED for filing, with a
        `help[]` handing back the `--cycle` + `--cycle-kind` form. The flag
        stays DECLARED so the refusal is a structured envelope rather than
@@ -83,9 +84,9 @@ in bun by `tests/integration/plan-file-route-stores-and-refuses-kinds.test.ts`.
 RED, measured against `e5d6275`: no client declares `--cycle-kind`, so every
 surface/census test fails, every wire test dies in argparse with
 `unrecognized arguments: --cycle-kind`, and both templates spell an invocation
-that carries no kind at all. The ONE test that PASSES on arrival is the
-permissive-route pin (§S4) — deliberately, because no server file is touched
-by this CR and the pin exists to prove it.
+that carries no kind at all. The permissive-route pin (§S4), which passed on
+arrival, now lives in bun ("a cycle filed with no kind is stored as
+red-green, read back from the store").
 
 Invocation:
     python3 -m unittest tests.client.integration.test_plan_file_declares_each_cycle_kind
@@ -631,7 +632,6 @@ class FiledCyclesAreStoredWithTheKindsTheyDeclaredTest(_ScratchBoardTestBase):
     ORCHESTRATOR = "cr-127-e2e-orchestrator"
     CR = "CR-127-E2E-KINDS"
     UNKNOWN_CR = "CR-127-E2E-UNKNOWN-KIND"
-    PERMISSIVE_CR = "CR-127-E2E-ROUTE-STAYS-PERMISSIVE"
 
     def _file(self, cr, *cycle_argv):
         return self._client(
@@ -758,46 +758,6 @@ class FiledCyclesAreStoredWithTheKindsTheyDeclaredTest(_ScratchBoardTestBase):
             [(self.UNKNOWN_CR, [(FIRST_LABEL, "smoke")])],
             f"`smoke` travels verbatim in ONE filing and the refusal is never "
             f"retried or re-sent as another kind; got {filings!r}")
-
-    def test_a_kindless_cycle_posted_straight_to_the_route_still_stores_red_green(self):
-        """§S4's REGRESSION PIN, and the whole point of the 2026-09-13 CLI-only
-        ruling: the mandate is CLIENT-SIDE, so `POST …/plans` stays PERMISSIVE
-        and `parseCycleInput` keeps its `red-green` default. NO server file is
-        touched by this CR.
-
-        PASSES ON ARRIVAL, deliberately. It is what proves the omission was a
-        decision rather than an oversight — and it is the test that fails the
-        day someone "finishes the job" by tightening the route, which would
-        silently retire CR-CRU-124 §S4/AC3 through the SHARED `parseCycleInput`
-        (`src/v2.ts`, also called by `handleCycleAppend`).
-
-        The residue is recorded in the spec's non-goals: anything that is not
-        one of the five clients can still file a kindless cycle.
-
-        The route's half — a kindless cycle posted straight at `POST …/plans`
-        is accepted and stored `red-green` — is bun's "a cycle filed with no
-        kind is stored as red-green, read back from the store". The client's
-        half of the same ruling is the mandate: `plan-file` refuses the
-        kindless cycle itself, so nothing reaches the permissive route."""
-        refused = self._file(
-            self.PERMISSIVE_CR, REPEATABLE_FLAG, "a cycle carrying no kind")
-        self.assertNotEqual(
-            refused.returncode, 0,
-            f"a kindless cycle is refused CLIENT-SIDE; "
-            f"stdout={refused.stdout.strip()[:600]!r}")
-        decoded = self.toon.decode(refused.stdout)
-        self.assertIs(
-            decoded["axi"].get("ok"), False,
-            f"the client-side refusal is ok:false; got {decoded['axi']!r}")
-        self.assertIn(
-            AXI.CYCLE_KIND_REQUIRED_CODE, refused.stderr,
-            f"the refusal names the kind mandate; got "
-            f"{refused.stderr.strip()[:600]!r}")
-        self.assertEqual(
-            self._filings(), [],
-            "the mandate is enforced before the POST: the client files "
-            "nothing, so only a caller that is not one of the five clients "
-            "meets the route's `red-green` default")
 
 
 if __name__ == "__main__":
