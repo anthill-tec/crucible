@@ -28,6 +28,26 @@ verbatim.test.ts`, `plans.test.ts` and `queue-registration.test.ts`. These
 suites keep the CLIENT's half: what it reads, in which order, and what it
 drafts from the answers.
 
+The seeder's `SeededProject.history` / `_history_row` /
+`SeededProject._place_unheld_crs` are a second copy of the server's
+`projectHistory` / `historyRow` / `placeUnnamedCrs` (src/v2.ts), good for
+these scenarios only. They differ from the server in exactly these ways:
+
+- no dead-CR filter: a queued CR declared VOID or SUPERSEDED that no plan
+  took up is still placed in a release (`projectHistory` drops it);
+- no `activatedAt` fallback: a CR with no closed plan is placed as a CR with
+  no time yet, where `placeUnnamedCrs` places it by its first cycle's
+  `activatedAt`;
+- `commit`: a shipped row always carries the fixture's `FIXTURE_COMMIT`,
+  where `historyRow` carries the release record's own commit, and none when
+  the record holds none;
+- `gateRuns`: always empty (with `verificationRuns` 0 and no `packages`),
+  where `historyRow` lists the release's gate runs.
+
+If the server changes how it derives history, these suites stay green against
+the old shape: the bun test that holds the server's derivation is
+`tests/integration/history-by-release-read.test.ts`.
+
 Every project directory declares its board in its own `crucible.toml` and is
 checked by `declare_and_require_board`, so no drive can resolve another board.
 """
