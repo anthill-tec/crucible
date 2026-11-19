@@ -26,14 +26,24 @@ exports it.
 - **The router is exported.** `src/server.ts` exports a board object — its store, a `fetch(req)` that is exactly the
   router `Bun.serve` runs today, and `stop()` — and `startServer` builds it and wraps its `fetch` in `Bun.serve`. No
   behaviour change: every route, header, body limit check and error path is the same code; `startServer`'s handle and
-  boot disclosures are unchanged.
+  boot disclosures are unchanged. Two things the router does not do stay where they are and say so: the request-body
+  limit is enforced by `Bun.serve` (`maxRequestBodySize`), so an in-process `fetch` is not limited and a test of the
+  413 keeps `startServer`; health's `listener` block names the bound socket, so an in-process board, which has none,
+  states that in its health rather than inventing a port, and a test that reads `listener` keeps `startServer`. The
+  SSE route (`/api/stream`) answers in process with a streaming `Response`; a test that holds a real connection open
+  keeps `startServer`.
 - **Route tests call it with no socket.** A test that only calls routes builds the board on a scratch store and sends
   `Request`s to its `fetch`, with no `Bun.serve`, no port and no `fetch` over the network. The three helpers are
   converted first (converting a helper converts its users); the remaining route-only files are rewritten mechanically
   (the base URL and the fetch callee), keeping their test names and assertions.
 - **What keeps `startServer`.** A test of the listener, the SSE stream over a real connection, the boot path, the body
-  size limit as `Bun.serve` enforces it, or a spawned client talking to the board keeps `startServer` and stays in
-  `tests/integration/`.
+  size limit as `Bun.serve` enforces it, a real browser (chromium/playwright) driving the board, or a spawned client
+  talking to the board keeps `startServer` and stays in `tests/integration/`. The happy-dom shell of `served-app.ts`
+  is not a real browser: its reads are answered by the in-process board.
+- **The residue is measured first** (gap analysis 2026-11-19, `test-reports/work/cr264-gap-analysis.md`): of the 228
+  files that reach the server at `f097a22b`, about 174 only call routes (some with a timer, which does not need a
+  socket); the rest — real browser, listener, body limit, SSE connection, spawned client — is estimated at 35–40. The
+  first work item lists the residue file by file with its reason; a residue above AC2's cap goes to the user.
 - **Tier follows.** A converted file moves to `tests/unit/` when, measured, it no longer takes a socket, a process or a
   real wait (CR-CRU-261's rule); otherwise it stays in `tests/integration/`.
 
