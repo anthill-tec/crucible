@@ -28,9 +28,14 @@ cycle of a closed plan, stores no marker then, and records exactly one marker
 carrying the commit once the poster is unregistered and registered again
 unbound, is the server's half, held in bun by
 `tests/integration/milestone-routes-order-and-refuse-as-clients-read-them
-.test.ts`; that a close stores the merge commit (and an accepted failing
-gate's reason) by `plan-close-guard.test.ts` and
-`closed-plans-read-carries-merge-and-title-verbatim.test.ts`.
+.test.ts`; that a close stores the merge commit by
+`closed-plans-read-carries-merge-and-title-verbatim.test.ts`; and that a close
+over an accepted failing gate keeps its reason by
+`tests/integration/a-close-over-an-accepted-failing-gate-keeps-its-reason
+.test.ts` ("stores the reason as given, and the plans read serves it back
+under merge.acceptedFailingGateReason beside the commit", and "a cr-merged
+marker posted with the reason reads back carrying it exactly; one posted
+without carries no reason key").
 
 The "board does not answer" case puts `real_board.RecordingProxy` in front of
 the fake: it forwards every request unchanged until the board has answered
