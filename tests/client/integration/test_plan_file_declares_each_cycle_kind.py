@@ -76,8 +76,9 @@ FINDINGS recorded by RED, not guessed around:
       stronger than a count, and is what §S5's second AC ("the python client
       suites are green") measures.
 
-Tier: INTEGRATION. This module spawns client subprocesses and a real server
-built from this repo's own source.
+Tier: INTEGRATION. This module spawns client subprocesses against a fake
+board (`RecordingBoard`); what the STORE holds is the server's half, pinned
+in bun by `tests/integration/plan-file-route-stores-and-refuses-kinds.test.ts`.
 
 RED, measured against `e5d6275`: no client declares `--cycle-kind`, so every
 surface/census test fails, every wire test dies in argparse with
@@ -107,7 +108,6 @@ from tests.client.plan_file_names_the_release_it_plans_helpers import (
     _drive_plan_file_help,
     _flags_declared_directly_on,
     _functions_handed_the_parser,
-    _http,
     _plan_file_parser_names,
     _PlanFileWireTestBase,
     _shared_functions_declaring,
@@ -602,13 +602,28 @@ class SuggestedInvocationTemplatesTeachTheMandatedFormTest(_CycleKindWireTestBas
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# END TO END — what gets STORED, read back from a real board
+# END TO END — the client against a fake board, the store's half in bun
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# §S1's first AC says the kinds are read back FROM THE STORE, never from the
-# POST response: a response echoing the kind proves the route parsed it, not
-# that the board now records the right kind of work. The scratch-board harness
-# is CR-CRU-124's, inherited rather than re-invented.
+# The real `python-crucible.py`, a genuine subprocess, against a fake board
+# (`RecordingBoard`) that answers `POST …/plans` in the server's own shapes
+# (`handlePlanFile`, src/v2.ts), its 400 refusal of an unknown kind included.
+# What the client SENT — the cycles and kinds of each filing, in order — is
+# read off the request log, and what it reports is read off its envelope.
+# What the STORE then holds (§S1's first AC reads the kinds back from the
+# store, never from the POST response) — a kindless cycle stored `red-green`,
+# two declared kinds stored against their own cycles in the authored order, an
+# unknown kind refused with the route's exact body and nothing stored — is the
+# server's half, held in bun by
+# `tests/integration/plan-file-route-stores-and-refuses-kinds.test.ts`.
+
+#: The server's refusal of a kind `parseCycleInput` (src/v2.ts) does not know.
+_INVALID_SMOKE = "invalid kind: smoke (expected red-green | verify | fix)"
+
+#: `hints.cycleInput` (src/hints.ts) — the help[] `handlePlanFile` sends with it.
+_CYCLE_INPUT_HELP = [
+    "each cycle needs a non-empty label; kind is optional and one of: "
+    "red-green | verify | fix (defaults to red-green)"]
 
 
 class FiledCyclesAreStoredWithTheKindsTheyDeclaredTest(_ScratchBoardTestBase):
@@ -624,6 +639,22 @@ class FiledCyclesAreStoredWithTheKindsTheyDeclaredTest(_ScratchBoardTestBase):
             "--wave", self.WAVE, *cycle_argv,
             "--agent", self.ORCHESTRATOR, "--project-dir", self.project_dir)
 
+    def _answer_filing(self, cr, pairs):
+        """Answer the next `POST …/plans` as `handlePlanFile` does for an
+        accepted filing: 201, the plan and its cycles as stored."""
+        self.board.answer(
+            "POST", self.plans_path,
+            {"ok": True, "changed": True, "planId": 901, "cr": cr,
+             "status": "open", "title": f"{cr} under test",
+             "orchestrator": self.ORCHESTRATOR, "wave": self.WAVE,
+             "cycles": [{"id": next(self._ids), "label": label, "kind": kind,
+                         "status": "pending"} for label, kind in pairs]},
+            status=201, times=1)
+
+    def _filings(self):
+        """Every `POST …/plans` body the client sent, in wire order."""
+        return [b for p, b in self.board.posts() if p == self.plans_path]
+
     @staticmethod
     def _ordered_pairs(plan):
         """The plan's cycles as an ORDERED list of (label, kind) — a dict keyed
@@ -634,7 +665,14 @@ class FiledCyclesAreStoredWithTheKindsTheyDeclaredTest(_ScratchBoardTestBase):
     def test_two_declared_kinds_are_stored_against_the_cycles_they_were_paired_with(self):
         """§S1/AC1 + AC2 — the criterion this whole CR exists for. Cycle 442 of
         this CR's OWN plan is a verify cycle stored `red-green`; after this,
-        the kinds a caller declares are the kinds the board holds."""
+        the kinds a caller declares are the kinds the board holds.
+
+        The client's half: ONE filing whose cycles carry the Nth declared kind
+        against the Nth declared cycle, in the authored order. The store's
+        half is bun's "two different declared kinds in one filing are stored
+        against their own cycles, in the authored order"."""
+        self._answer_filing(
+            self.CR, [(FIRST_LABEL, FIRST_KIND), (SECOND_LABEL, SECOND_KIND)])
         filed = self._file(
             self.CR,
             REPEATABLE_FLAG, FIRST_LABEL, KIND_FLAG, FIRST_KIND,
@@ -644,12 +682,22 @@ class FiledCyclesAreStoredWithTheKindsTheyDeclaredTest(_ScratchBoardTestBase):
             f"filing two kinded cycles must succeed; "
             f"stdout={filed.stdout.strip()[:600]!r} "
             f"stderr={filed.stderr.strip()[:600]!r}")
+        decoded = self.toon.decode(filed.stdout)
+        self.assertIs(
+            decoded["axi"].get("ok"), True,
+            f"the accepted filing is reported ok:true; got {decoded['axi']!r}")
 
-        pairs = self._ordered_pairs(self._plan_for(self.CR))
+        filings = self._filings()
+        self.assertEqual(
+            len(filings), 1,
+            f"exactly one plans POST; got {filings!r}")
+        self.assertEqual(filings[0].get("cr"), self.CR,
+                         f"the filing names its CR; got {filings[0]!r}")
+        pairs = self._ordered_pairs(filings[0])
         self.assertEqual(
             pairs,
             [(FIRST_LABEL, FIRST_KIND), (SECOND_LABEL, SECOND_KIND)],
-            f"the STORE must hold the Nth declared kind against the Nth "
+            f"the FILING must carry the Nth declared kind against the Nth "
             f"declared cycle, in the authored order — the kinds are DIFFERENT "
             f"and non-alphabetical, so a pairing that sorts or reverses lands "
             f"on {[(SECOND_LABEL, SECOND_KIND), (FIRST_LABEL, FIRST_KIND)]!r} "
@@ -658,7 +706,18 @@ class FiledCyclesAreStoredWithTheKindsTheyDeclaredTest(_ScratchBoardTestBase):
     def test_an_unrecognised_kind_is_refused_by_the_route_and_stores_nothing(self):
         """§S1/AC4 — the flag carries no `choices=`, so `smoke` must travel to
         the ROUTE and come back as the SERVER's own refusal. An argparse exit
-        would mean the fleet had grown a second copy of `CYCLE_KINDS`."""
+        would mean the fleet had grown a second copy of `CYCLE_KINDS`.
+
+        The client's half: `smoke` travels in the one filing and the route's
+        400 reaches the caller as an ok:false envelope in the route's words,
+        never retried. That the route refuses it with exactly that body and
+        stores no plan and no cycle is bun's "an unrecognised kind is refused
+        400 with the route's exact invalid-kind body and stores no plan and no
+        cycle"."""
+        self.board.answer(
+            "POST", self.plans_path,
+            {"ok": False, "error": _INVALID_SMOKE, "help": _CYCLE_INPUT_HELP},
+            status=400, times=1)
         refused = self._file(
             self.UNKNOWN_CR,
             REPEATABLE_FLAG, FIRST_LABEL, KIND_FLAG, "smoke")
@@ -689,15 +748,16 @@ class FiledCyclesAreStoredWithTheKindsTheyDeclaredTest(_ScratchBoardTestBase):
             f"the refusal is ok:false, not a silently dropped cycle; got "
             f"{decoded['axi']!r}")
         self.assertIn(
-            "invalid kind", combined,
+            _INVALID_SMOKE, combined,
             f"the caller must read the ROUTE's own words — `parseCycleInput` "
             f"names the offending field; got {combined[:600]!r}")
 
-        stored = [p for p in self._plans() if p.get("cr") == self.UNKNOWN_CR]
+        filings = self._filings()
         self.assertEqual(
-            stored, [],
-            f"a refused kind stores NOTHING — no plan, no cycle; got "
-            f"{stored!r}")
+            [(b.get("cr"), self._ordered_pairs(b)) for b in filings],
+            [(self.UNKNOWN_CR, [(FIRST_LABEL, "smoke")])],
+            f"`smoke` travels verbatim in ONE filing and the refusal is never "
+            f"retried or re-sent as another kind; got {filings!r}")
 
     def test_a_kindless_cycle_posted_straight_to_the_route_still_stores_red_green(self):
         """§S4's REGRESSION PIN, and the whole point of the 2026-09-13 CLI-only
@@ -712,22 +772,32 @@ class FiledCyclesAreStoredWithTheKindsTheyDeclaredTest(_ScratchBoardTestBase):
         (`src/v2.ts`, also called by `handleCycleAppend`).
 
         The residue is recorded in the spec's non-goals: anything that is not
-        one of the five clients can still file a kindless cycle."""
-        filed = _http(
-            self.base, f"/api/v2/projects/{self.key}/plans",
-            {"cr": self.PERMISSIVE_CR, "title": "filed straight at the route",
-             "wave": self.WAVE, "agentId": self.ORCHESTRATOR,
-             "cycles": [{"label": "a cycle carrying no kind"}]})
-        self.assertIs(
-            filed.get("ok"), True,
-            f"the route must still ACCEPT a cycle entry with no `kind` — the "
-            f"enforcement this CR adds is client-side ONLY; got {filed!r}")
+        one of the five clients can still file a kindless cycle.
 
-        pairs = self._ordered_pairs(self._plan_for(self.PERMISSIVE_CR))
+        The route's half — a kindless cycle posted straight at `POST …/plans`
+        is accepted and stored `red-green` — is bun's "a cycle filed with no
+        kind is stored as red-green, read back from the store". The client's
+        half of the same ruling is the mandate: `plan-file` refuses the
+        kindless cycle itself, so nothing reaches the permissive route."""
+        refused = self._file(
+            self.PERMISSIVE_CR, REPEATABLE_FLAG, "a cycle carrying no kind")
+        self.assertNotEqual(
+            refused.returncode, 0,
+            f"a kindless cycle is refused CLIENT-SIDE; "
+            f"stdout={refused.stdout.strip()[:600]!r}")
+        decoded = self.toon.decode(refused.stdout)
+        self.assertIs(
+            decoded["axi"].get("ok"), False,
+            f"the client-side refusal is ok:false; got {decoded['axi']!r}")
+        self.assertIn(
+            AXI.CYCLE_KIND_REQUIRED_CODE, refused.stderr,
+            f"the refusal names the kind mandate; got "
+            f"{refused.stderr.strip()[:600]!r}")
         self.assertEqual(
-            pairs, [("a cycle carrying no kind", "red-green")],
-            f"the route's own default (`parseCycleInput` in src/v2.ts) "
-            f"must still apply and still be `red-green`; got {pairs!r}")
+            self._filings(), [],
+            "the mandate is enforced before the POST: the client files "
+            "nothing, so only a caller that is not one of the five clients "
+            "meets the route's `red-green` default")
 
 
 if __name__ == "__main__":
