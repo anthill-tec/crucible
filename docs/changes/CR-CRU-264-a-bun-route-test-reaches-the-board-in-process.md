@@ -1,6 +1,6 @@
 # CR-CRU-264 — a bun route test reaches the board in process
 
-**Status:** PENDING · filed 2026-11-18 (release fix; split from CR-CRU-262 at its gap analysis — user rulings
+**Status:** COMPLETED — 2026-11-20 (on release/0.4.0; its CI run waits for the user's push) · filed 2026-11-18 (release fix; split from CR-CRU-262 at its gap analysis — user rulings
 2026-11-18: the bun suite is its own CR; `src/server.ts` exports the board's request router, with no behaviour change)
 · gap analysis 2026-11-19 · spec pre-review 2026-11-19 (CHANGES, F1–F7 folded)
 **Type:** fix
@@ -62,24 +62,67 @@ without the socket: `startServer` builds the whole router (`/api/health`, `/api/
 
 ## Acceptance criteria
 
-- [ ] **AC1 — one router.** `src/server.ts` exports `createBoard`; `startServer` serves exactly its `fetch`; the tests
+- [x] **AC1 — one router.** `src/server.ts` exports `createBoard`; `startServer` serves exactly its `fetch`; the tests
   that keep `startServer` pass unchanged; an in-process board's two health routes carry `listener: null` with every
   other key as `startServer`'s; after `board.stop()`, an in-process `/api/stream` body is closed and no interval
   remains.
-- [ ] **AC2 — sparing (orchestrator check).** At most 38 bun files record a `serve` event in the CR-CRU-261 bun census
+- [x] **AC2 — sparing (orchestrator check).** At most 38 bun files record a `serve` event in the CR-CRU-261 bun census
   (an event charged to a helper is charged to every file using it); each remaining one is in the residue list with one
   of the Design's keep reasons.
-- [ ] **AC3 — nothing lost (orchestrator check).** Each converted file has the same set of test names before and after
+- [x] **AC3 — nothing lost (orchestrator check).** Each converted file has the same set of test names before and after
   (JUnit, by file stem); its diff changes no `expect(` line except those that read the port or `listener`, and those
   are listed in the close-out.
-- [ ] **AC4 — the pyramid is measured (orchestrator check).** The bun census (`leak-census/run-dep-census-bun.sh` with
+- [x] **AC4 — the pyramid is measured (orchestrator check).** The bun census (`leak-census/run-dep-census-bun.sh` with
   `bun-dep-preload.ts`, CR-CRU-261's clone and namespace) re-run after the change reports the class counts per file,
   recorded in the close-out; the converted files that took no socket, process or wait are in `tests/unit/`; a run of
   `tests/unit/` alone records no spawn, serve, connect, fetch or wait event.
-- [ ] **AC5 — suites green.** Both suites and the e2e suite pass; the pre-merge gate passes.
+- [x] **AC5 — suites green.** Both suites and the e2e suite pass; the pre-merge gate passes.
 
 ## Non-goals
 
 - The python client suite's live boards (CR-CRU-262).
 - Changing any route's behaviour or the client contract.
 - New tests that test the tests (user ruling 2026-11-18).
+
+## Close-out (2026-11-20)
+
+- **AC1.** `createBoard` in `src/server.ts` is the router `Bun.serve` ran, moved unchanged (the stream handler now takes
+  the per-request abort signal); `startServer` serves `board.fetch` with the same options; an in-process board's health
+  carries `listener: null`; `stop()` aborts held streams and disposes the store once; a throwing handler answers an
+  empty 500.
+- **AC2 — 28 files serve (census at `c432f030`), ≤ 38.** The 25 that keep `startServer`:
+  - `an-oversized-ingest-body-is-refused-with-a-json-413` — Bun's body-limit backstop and the `Bun.serve` spy
+  - `clients-bun-crucible` — a spawned client
+  - `clients-narration` — a spawned client
+  - `clients-python-arduino-crucible` — a spawned client
+  - `clients-rust-mvn-crucible` — a spawned client
+  - `cr-depends-declaration` — a spawned client
+  - `e2e-suite-reaches-the-board` — a spawned client
+  - `gate-run-release-inheritance` — a spawned client (the release ceremony)
+  - `playwright-bdd-fixture-streams-through-the-bun-client` — a spawned client
+  - `release-provenance` — a spawned client (the release ceremony)
+  - `release-report-skips-voided-crs` — a spawned client (the release ceremony)
+  - `release-reporting-live` — a spawned client (the release ceremony)
+  - `release-target-mandatory` — a spawned client
+  - `shim-retirement` — a spawned client
+  - `suite-integrity` — a spawned client (`bun-crucible.py regression`)
+  - `toon-conformance` — a spawned client
+  - `e2e-harness-agent-identity` — playwright's HTTP request context needs a socket
+  - `v2-json-only-responses` — the boot path (a staged production install)
+  - `store-disclosure` — the boot path
+  - `db-path-resolution` — the boot path (store resolution)
+  - `the-server-stop-disposes-its-store` — the boot path (`startServer`'s own stop)
+  - `server` — `stop()` closes the socket
+  - `server-listener-is-configuration` — the listener
+  - `the-in-process-board-answers-as-the-served-board` — the listener (parity of the served and in-process boards)
+  - `v2-stream-paging` — SSE over a held connection
+  and three that run a server of their own, not the board:
+  - `plans-read-timeout-envelope` — its own `Bun.serve` proxy (not the board)
+  - `roadmap-visual-grammar` — its own fixture servers (not the board)
+  - `webkit-docker-client-process-group` — its own `Bun.serve` (not the board)
+- **AC3.** Over the whole range, no `expect(` line and no test declaration changed in any converted file (VERIFY 978);
+  every converted file kept its JUnit test-name set (passes A and B, 208 files).
+- **AC4.** The bun census: 5733/0 in 450 files; unit files 236 (was 89; 147 moved from `tests/integration/`); a run of
+  `tests/unit/` and `tests/client/unit/` alone records no process, socket, fetch or wait (python 1917/0, bun 3136/0).
+  The two happy-dom tests of the in-process board run in `tests/integration/` (happy-dom's teardown arms a real timer).
+- **AC5.** Pre-merge gate, cycle 979: 14766 passed, 0 failed.
