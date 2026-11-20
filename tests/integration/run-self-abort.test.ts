@@ -28,11 +28,10 @@
 // documents. The delay used is the smallest that reliably clears the
 // configured tombstone deadline.
 //
-// SAFETY: every server binds port 0 (never the dog-food 3849/3850) and every
+// SAFETY: every board is in process (no socket, no port) and every
 // store is ":memory:" — `data/crucible.db` is never opened.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { shippedLimits } from "../../src/limits.ts";
 import {
   declare,
@@ -40,34 +39,31 @@ import {
   serverConfigDir,
   writeConfig,
 } from "../helpers/server-limits-fixture.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
   restoreServerLimitsFixture();
 });
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
 
-function baseOf(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
-}
-
-async function postJson(handle: ServerHandle, route: string, body: unknown): Promise<Response> {
-  return fetch(`${baseOf(handle)}${route}`, {
+async function postJson(handle: BoardHandle, route: string, body: unknown): Promise<Response> {
+  return send(handle, route, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function getJson(handle: ServerHandle, route: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${baseOf(handle)}${route}`);
+async function getJson(handle: BoardHandle, route: string): Promise<Record<string, unknown>> {
+  const res = await send(handle, route);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
@@ -78,7 +74,7 @@ interface LivenessOverride {
   pruneAfterMs: number;
 }
 
-function seedProject(handle: ServerHandle, liveness?: LivenessOverride): string {
+function seedProject(handle: BoardHandle, liveness?: LivenessOverride): string {
   const key = crypto.randomUUID();
   handle.store.addProject({
     key,
@@ -93,7 +89,7 @@ function seedProject(handle: ServerHandle, liveness?: LivenessOverride): string 
 // ORCHESTRATOR — the same exempt-role choice tests/integration/run-lifecycle.test.ts
 // makes: a bound TDD role is orthogonal to run-abort, and this keeps every
 // fixture about the abort route and nothing else.
-async function register(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function register(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const res = await postJson(handle, "/api/v2/agents/register", {
     projectKey: key,
     agentId,
@@ -103,7 +99,7 @@ async function register(handle: ServerHandle, key: string, agentId: string): Pro
 }
 
 async function startRun(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
 ): Promise<{ runId: string; startedAt: number }> {
@@ -113,7 +109,7 @@ async function startRun(
 }
 
 async function abortRun(
-  handle: ServerHandle,
+  handle: BoardHandle,
   runId: string,
   body: Record<string, unknown>,
 ): Promise<Response> {
@@ -128,13 +124,13 @@ const PARSED_RUN = {
 };
 
 /** The run (test/compile) events in a project — lifecycle (register/unregister) excluded. */
-function runEvents(handle: ServerHandle, key: string): Record<string, unknown>[] {
+function runEvents(handle: BoardHandle, key: string): Record<string, unknown>[] {
   return handle.store
     .listEvents(key, 200)
     .filter((e) => e.kind !== "lifecycle") as unknown as Record<string, unknown>[];
 }
 
-function abortedEvents(handle: ServerHandle, key: string): Record<string, unknown>[] {
+function abortedEvents(handle: BoardHandle, key: string): Record<string, unknown>[] {
   return runEvents(handle, key).filter((e) => e.status === "aborted");
 }
 
@@ -160,7 +156,7 @@ function configureAbandonDeadline(ms: number): void {
 
 /** Drive the real auto-abort sweep until it settles at least one run, or give up. */
 async function sweepUntilAborted(
-  handle: ServerHandle,
+  handle: BoardHandle,
   budgetMs = 2_000,
 ): Promise<ReturnType<typeof handle.store.sweepOpenRuns>> {
   const deadline = Date.now() + budgetMs;

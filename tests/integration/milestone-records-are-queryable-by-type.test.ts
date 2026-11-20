@@ -46,7 +46,8 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Store } from "../../src/store.ts";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 import {
   restoreServerLimitsFixture,
   serverConfigDir,
@@ -82,7 +83,7 @@ interface AnyBody {
 }
 
 describe("CR-CRU-129 §S3 — milestone records are QUERYABLE by type, not scannable", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   beforeEach(() => {
     // This suite needs a project whose telemetry is NOT pruned, and the honest
@@ -112,17 +113,14 @@ describe("CR-CRU-129 §S3 — milestone records are QUERYABLE by type, not scann
     restoreServerLimitsFixture();
   });
 
-  function boot(): ServerHandle {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
-    return handle;
-  }
-
-  function base(): string {
-    return `http://localhost:${String(handle!.server.port)}`;
+  function boot(): BoardHandle {
+    const board = bootInProcess();
+    handle = board;
+    return board;
   }
 
   async function get(path: string): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`);
+    const res = await send(handle!, path);
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 
@@ -139,7 +137,7 @@ describe("CR-CRU-129 §S3 — milestone records are QUERYABLE by type, not scann
   // ── fixture ──────────────────────────────────────────────────────────────
 
   async function seedProject(name: string): Promise<string> {
-    const res = await fetch(`${base()}/api/v2/projects`, {
+    const res = await send(handle!, "/api/v2/projects", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name }),

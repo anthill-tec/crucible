@@ -1,5 +1,5 @@
 // A run's stored raw output is capped at `raw_output_chars` — its first and
-// last halves kept, its middle cut and named — on a real server.
+// last halves kept, its middle cut and named — on a real board.
 //
 // A run's raw output longer than `raw_output_chars` Unicode CODE POINTS is
 // stored as its first `floor(n/2)` code points, then the marker
@@ -16,7 +16,7 @@
 // The parsed route (`POST /api/v2/runs/parsed`, whose `raw` it stores)
 // applies the same cap.
 //
-// Every case is driven through the production HTTP surface (`startServer`,
+// Every case is driven through the production router (`bootInProcess`,
 // in-memory store, a scratch operator `crucible.toml` setting
 // `raw_output_chars`) and read back through the run detail read
 // (`GET /api/v2/events/<id>`, `handleEventGet` in src/v2.ts), which answers the
@@ -37,15 +37,16 @@
 // is the text the cap sees.
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  boot,
+  bootInProcess,
   declare,
   restoreServerLimitsFixture,
   serverConfigDir,
   writeConfig,
-  type BootedServer,
   type LimitDeclaration,
 } from "../helpers/server-limits-fixture.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { shippedLimits } from "../../src/limits.ts";
+import { send } from "../helpers/run-stream-harness.ts";
 
 afterEach(restoreServerLimitsFixture);
 
@@ -81,13 +82,13 @@ function codePoints(text: string): number {
 // ── The server and the two routes ───────────────────────────────────────────
 
 interface Subject {
-  handle: BootedServer;
+  handle: BoardHandle;
   dir: string;
   key: string;
   agentId: string;
 }
 
-/** A real server whose operator file sets `raw_output_chars` to `limit`, one
+/** A real board whose operator file sets `raw_output_chars` to `limit`, one
  *  project, and one live registered caller. */
 async function subject(limit: number): Promise<Subject> {
   const d = rawLimit();
@@ -95,11 +96,11 @@ async function subject(limit: number): Promise<Subject> {
   expect(limit).toBeLessThanOrEqual(d.max);
   const dir = serverConfigDir();
   writeConfig(dir, { raw_output_chars: declare(d, limit) });
-  const handle = boot();
+  const handle = bootInProcess();
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: "raw-cap", type: "backend", sutRoot: "/tmp/raw-cap" });
   const agentId = "raw-cap-orchestrator";
-  const res = await fetch(`http://127.0.0.1:${handle.server.port}/api/v2/agents/register`, {
+  const res = await send(handle, `/api/v2/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
@@ -137,7 +138,7 @@ interface StoredEvent {
 }
 
 async function post(s: Subject, route: Route, body: unknown): Promise<string> {
-  const res = await fetch(`http://127.0.0.1:${s.handle.server.port}${route}`, {
+  const res = await send(s.handle, `${route}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -150,7 +151,7 @@ async function post(s: Subject, route: Route, body: unknown): Promise<string> {
 }
 
 async function readBack(s: Subject, eventId: string): Promise<StoredEvent> {
-  const res = await fetch(`http://127.0.0.1:${s.handle.server.port}/api/v2/events/${eventId}`);
+  const res = await send(s.handle, `/api/v2/events/${eventId}`);
   expect(res.status).toBe(200);
   return ((await res.json()) as { event: StoredEvent }).event;
 }

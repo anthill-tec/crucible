@@ -1,7 +1,7 @@
 // The close of a streamed run: `POST /api/v2/runs` with the `runId`,
 // `codec: "crucible-events"` and no report decodes the run's held stream and
 // stores it as the run's one event, through the route's whole pipeline — on a
-// real server (`startServer`, port 0, ":memory:" unless an operator limit is
+// real board (`bootInProcess`, no socket, ":memory:" unless an operator limit is
 // set through the server's own `crucible.toml`).
 //
 // What is held here:
@@ -30,7 +30,7 @@ import type { Database } from "bun:sqlite";
 import { codecs } from "../../src/codecs/index.ts";
 import { RUN_STREAM_TABLES } from "../../src/run-stream.ts";
 import { shippedLimits } from "../../src/limits.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   declare,
   restoreServerLimitsFixture,
@@ -38,8 +38,7 @@ import {
   writeConfig,
 } from "../helpers/server-limits-fixture.ts";
 import {
-  base,
-  bootOn,
+  bootInProcess,
   eventLine,
   getJson,
   openRun,
@@ -50,17 +49,18 @@ import {
   storedEvent,
   utf8,
   type Answer,
+  send,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
   restoreServerLimitsFixture();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -113,14 +113,14 @@ const LCOV_ALL_HIT = ["SF:src/gamma.ts", "FNF:2", "FNH:2", "LF:23", "LH:23", "en
 // ── The subject ─────────────────────────────────────────────────────────────
 
 interface Subject {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   agentId: string;
   runId: string;
 }
 
 async function subject(
-  handle: ServerHandle = boot(),
+  handle: BoardHandle = boot(),
   agentId = "closer",
   start: Record<string, unknown> = { stack: "bun", tier: "unit" },
 ): Promise<Subject> {
@@ -588,8 +588,8 @@ describe("a close resent after the run settled", () => {
 /** The unbound orchestrator that files and moves the plans a bound agent binds to. */
 const PLANNER = "planner";
 
-async function patchJson(handle: ServerHandle, route: string, body: unknown): Promise<Answer> {
-  const res = await fetch(`${base(handle)}${route}`, {
+async function patchJson(handle: BoardHandle, route: string, body: unknown): Promise<Answer> {
+  const res = await send(handle, `${route}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -599,7 +599,7 @@ async function patchJson(handle: ServerHandle, route: string, body: unknown): Pr
 
 /** A one-cycle plan, filed and its cycle activated through the real plan routes. */
 async function fileAndActivate(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   cr: string,
 ): Promise<{ planId: number; cycleId: number }> {
@@ -616,7 +616,7 @@ async function fileAndActivate(
 }
 
 async function transitionCycle(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   planId: number,
   cycleId: number,
@@ -630,7 +630,7 @@ async function transitionCycle(
 }
 
 async function registerBound(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
   role: string,

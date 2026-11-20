@@ -56,14 +56,14 @@
 // ── Safety ─────────────────────────────────────────────────────────────────
 // Every store is an mkdtempSync scratch file or ":memory:" — the populated
 // store is one this file builds itself; `data/crucible.db` is never read,
-// copied or opened. Every server binds port 0; NEVER the dog-food 3849.
+// copied or opened. Every board is in process; no port is bound.
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 import { Store, MIGRATIONS, SCHEMA_VERSION } from "../../src/store.ts";
 import type { MigrationStep } from "../../src/store.ts";
 import { shippedLimits } from "../../src/limits.ts";
@@ -120,7 +120,7 @@ const PRE_CR_EVENT_KEYS: Record<string, true> = {
 // ── scratch + handle bookkeeping ───────────────────────────────────────────
 
 const scratchDirs: string[] = [];
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 function tmpDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crucible-cr017-"));
@@ -390,19 +390,15 @@ function makePopulatedPreLifecycleStore(): string {
 
 // ── server harness ─────────────────────────────────────────────────────────
 
-function boot(dbPath = ":memory:"): ServerHandle {
-  // port 0 — an ephemeral port, NEVER the dog-food dashboard's 3849.
-  const handle = startServer({ port: 0, dbPath });
+function boot(dbPath = ":memory:"): BoardHandle {
+  // in process — no socket, no port.
+  const handle = bootInProcess(dbPath);
   handles.push(handle);
   return handle;
 }
 
-function baseOf(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
-}
-
-async function postJson(handle: ServerHandle, route: string, body: unknown): Promise<Response> {
-  return fetch(`${baseOf(handle)}${route}`, {
+async function postJson(handle: BoardHandle, route: string, body: unknown): Promise<Response> {
+  return send(handle, route, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -415,7 +411,7 @@ interface LivenessOverride {
   pruneAfterMs: number;
 }
 
-function seedProject(handle: ServerHandle, liveness?: LivenessOverride): string {
+function seedProject(handle: BoardHandle, liveness?: LivenessOverride): string {
   const key = crypto.randomUUID();
   handle.store.addProject({
     key,
@@ -432,7 +428,7 @@ function seedProject(handle: ServerHandle, liveness?: LivenessOverride): string 
  * route boundary (409), and a cycle binding is orthogonal to run lifecycle —
  * the exempt role keeps these fixtures about §S1 and nothing else.
  */
-async function register(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function register(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const res = await postJson(handle, "/api/v2/agents/register", {
     projectKey: key,
     agentId,
@@ -464,7 +460,7 @@ interface StartedRun {
 }
 
 async function startRun(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
   extra: Record<string, unknown> = {},
@@ -544,7 +540,7 @@ function abortReasonOf(event: RunEvent): string {
   return value;
 }
 
-function abortedEvents(handle: ServerHandle, key: string): RunEvent[] {
+function abortedEvents(handle: BoardHandle, key: string): RunEvent[] {
   return handle.store.listEvents(key, 200).filter((e) => statusOf(e) === "aborted");
 }
 
@@ -558,7 +554,7 @@ function abortedEvents(handle: ServerHandle, key: string): RunEvent[] {
  * pins the OUTCOME, not the mechanism.
  */
 async function settleOpenRuns(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   budgetMs = 2_000,
 ): Promise<RunEvent[]> {
@@ -567,8 +563,8 @@ async function settleOpenRuns(
   const sweep = "sweepOpenRuns" in store ? store.sweepOpenRuns : undefined;
   do {
     if (typeof sweep === "function") sweep.call(handle.store);
-    await fetch(`${baseOf(handle)}/api/v2/agents?project=${key}`);
-    await fetch(`${baseOf(handle)}/api/v2/events?project=${key}`);
+    await send(handle, `/api/v2/agents?project=${key}`);
+    await send(handle, `/api/v2/events?project=${key}`);
     const aborted = abortedEvents(handle, key);
     if (aborted.length > 0) return aborted;
     await Bun.sleep(25);

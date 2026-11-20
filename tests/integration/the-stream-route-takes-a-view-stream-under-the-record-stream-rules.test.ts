@@ -24,22 +24,22 @@
 // The batches are cut from a real bun console capture
 // (tests/fixtures/bun-console-live-captures.ts).
 //
-// SAFETY: every server binds port 0; every store is ":memory:".
+// SAFETY: every board is in process (no socket); every store is ":memory:".
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
 import { resolveLimit, shippedLimits } from "../../src/limits.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { LIVE_FRAME_MS, Store, type ChangeKind } from "../../src/store.ts";
 import {
-  boot as bootWithOperatorFile,
+  bootInProcess as bootWithOperatorFile,
   declare,
   restoreServerLimitsFixture,
   serverConfigDir,
   writeConfig,
 } from "../helpers/server-limits-fixture.ts";
-import { bootOn, eventLine, openRun, readyProject, sendBatch, utf8, type Answer } from "../helpers/run-stream-harness.ts";
+import { bootInProcess, eventLine, openRun, readyProject, sendBatch, utf8, type Answer } from "../helpers/run-stream-harness.ts";
 import { COLOURED_RUN, PLAIN_RUN } from "../fixtures/bun-console-live-captures.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   setSystemTime();
@@ -47,8 +47,8 @@ afterEach(() => {
   restoreServerLimitsFixture();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -59,13 +59,13 @@ const VIEW_CODEC = "bun-console";
 const NOTHING_STORED = /\bnothing (?:was )?stored\b|\bnot stored\b/i;
 
 interface Subject {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   agentId: string;
   runId: string;
 }
 
-async function subject(handle: ServerHandle = boot(), agentId = "viewer"): Promise<Subject> {
+async function subject(handle: BoardHandle = boot(), agentId = "viewer"): Promise<Subject> {
   const key = await readyProject(handle, [agentId], "view-stream-route");
   const runId = await openRun(handle, key, agentId, { stack: "bun", tier: "unit" });
   return { handle, key, agentId, runId };

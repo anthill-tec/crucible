@@ -95,7 +95,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   activeFlags,
-  boot,
+  bootInProcess,
   declare,
   documentOnly,
   eventCount,
@@ -443,7 +443,7 @@ describe("CR-CRU-131 §S1 — project_inactive_ms resolves from the server's fil
     );
     writeConfig(dir, { project_inactive_ms: declare(shipped, window) });
 
-    const handle = boot();
+    const handle = bootInProcess();
     const fresh = projectLastActiveAgo(handle.store, Math.floor(window / 2), "within-window");
     const stale = projectLastActiveAgo(handle.store, window * 2, "beyond-window");
     // Old enough to exceed the operator's window but not the recommendation:
@@ -478,7 +478,7 @@ describe("CR-CRU-131 §S1 — project_inactive_ms resolves from the server's fil
     expect(age, "…and sit inside the loose one").toBeLessThan(loose);
 
     writeConfig(dir, { project_inactive_ms: declare(shipped, tight) });
-    const handle = boot();
+    const handle = bootInProcess();
     const key = projectLastActiveAgo(handle.store, age, "edit-subject");
 
     // FIRST read, before the edit.
@@ -570,7 +570,7 @@ describe("CR-CRU-131 §S1 — each limit governs its OWN site and no other", () 
       project_inactive_ms: declare(inactive, window),
       run_abandon_ms: declare(abandon, abandon.min),
     });
-    const handle = boot();
+    const handle = bootInProcess();
     const key = projectLastActiveAgo(handle.store, age, "independence-subject");
     expect((await activeFlags(handle)).get(key)).toBe(false);
 
@@ -620,7 +620,7 @@ describe("CR-CRU-131 §S1 — with nothing configured, a limit runs at its shipp
     serverConfigDir();
     const shipped = (await limits()).shippedLimits().project_inactive_ms!;
 
-    const handle = boot();
+    const handle = bootInProcess();
     const fresh = projectLastActiveAgo(
       handle.store,
       Math.floor(shipped.recommended / 2),

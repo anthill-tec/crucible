@@ -65,7 +65,7 @@ import {
   RETIRED_CONNECTION_ENV,
   RETIRED_LIMIT_ENV,
   activeFlags,
-  boot,
+  bootInProcess,
   declare,
   documentOnly,
   eventCount,
@@ -201,7 +201,7 @@ describe("CR-CRU-131 §S1b — $CRUCIBLE_PROJECT_INACTIVE_MS no longer decides t
     writeConfig(dir, { project_inactive_ms: declare(shipped, window) });
     const raw = override("CRUCIBLE_PROJECT_INACTIVE_MS", ignored);
 
-    const handle = boot();
+    const handle = bootInProcess();
     const past = projectLastActiveAgo(handle.store, age, "inactive-override-subject");
     // NEGATIVE control — a project INSIDE the file's window, so a route that
     // simply called everything inactive could not pass.

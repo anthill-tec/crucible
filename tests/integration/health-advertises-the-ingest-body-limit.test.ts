@@ -11,8 +11,8 @@
 // health route that cached it would advertise a bound the handler no longer
 // enforces.
 //
-// Driven through the REAL production boot (`startServer` on port 0, a
-// ":memory:" store) over a real socket. Every expectation is derived from the
+// Driven through the REAL production router (`bootInProcess`, no socket, a
+// ":memory:" store) through the board's own `fetch`. Every expectation is derived from the
 // shipped declaration read back (`shippedLimits()`), never written out.
 //
 // ── Safety ──────────────────────────────────────────────────────────────────
@@ -22,15 +22,16 @@
 // resolves beside it; the store itself is ":memory:".
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  boot,
+  bootInProcess,
   declare,
   restoreServerLimitsFixture,
   serverConfigDir,
   writeConfig,
-  type BootedServer,
   type LimitDeclaration,
 } from "../helpers/server-limits-fixture.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { shippedLimits } from "../../src/limits.ts";
+import { send } from "../helpers/run-stream-harness.ts";
 
 afterEach(restoreServerLimitsFixture);
 
@@ -43,10 +44,10 @@ function bodyLimit(): LimitDeclaration {
 }
 
 /** The `limits` member each health route answers, by route. */
-async function advertised(handle: BootedServer): Promise<Record<string, unknown>> {
+async function advertised(handle: BoardHandle): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   for (const route of HEALTH_ROUTES) {
-    const res = await fetch(`http://127.0.0.1:${handle.server.port}${route}`);
+    const res = await send(handle, `${route}`);
     expect(res.status, `${route} must answer 200`).toBe(200);
     const body = (await res.json()) as { ok?: unknown; limits?: unknown };
     expect(body.ok, `${route} must answer ok`).toBe(true);
@@ -64,7 +65,7 @@ describe("both health routes advertise the ingest body limit", () => {
   test("with no operator file, both carry limits.ingest_body_bytes at the shipped recommendation — and nothing else under limits", async () => {
     serverConfigDir();
     const d = bodyLimit();
-    const handle = boot();
+    const handle = bootInProcess();
 
     expect(await advertised(handle)).toEqual(onBothRoutes(d.recommended));
   });
@@ -75,7 +76,7 @@ describe("both health routes advertise the ingest body limit", () => {
     const chosen = d.min;
     expect(chosen, "a value distinguishable from the recommendation").not.toBe(d.recommended);
     writeConfig(dir, { ingest_body_bytes: declare(d, chosen) });
-    const handle = boot();
+    const handle = bootInProcess();
 
     expect(await advertised(handle)).toEqual(onBothRoutes(chosen));
   });
@@ -84,7 +85,7 @@ describe("both health routes advertise the ingest body limit", () => {
     const dir = serverConfigDir();
     const d = bodyLimit();
     writeConfig(dir, { ingest_body_bytes: declare(d, d.min) });
-    const handle = boot();
+    const handle = bootInProcess();
 
     // The first read, asserted BEFORE the edit, so "it changed" is a claim
     // about the edit and not about the fixture.
@@ -99,7 +100,7 @@ describe("both health routes advertise the ingest body limit", () => {
     const d = bodyLimit();
     const illegal = d.max + 1;
     writeConfig(dir, { ingest_body_bytes: declare(d, illegal) });
-    const handle = boot();
+    const handle = bootInProcess();
 
     const limits = await advertised(handle);
     expect(limits).toEqual(onBothRoutes(d.recommended));

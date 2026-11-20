@@ -7,7 +7,8 @@
 // with none left, inactive once now-lastActivity EXCEEDS the timeout.
 // lastActivity = max(project's last event timestamp, agents' last-seen).
 //
-// Drives the REAL production entry (startServer + real HTTP GET), never a
+// Drives the REAL production router (the board in process + a real GET
+// through its own `fetch`), never a
 // hand-wired store read — the ONLY deviation from a pure black-box HTTP test
 // is fixture seeding: Store#touchAgent/recordTestEvent always stamp
 // Date.now() internally (no timestamp-override lever anywhere in the public
@@ -16,9 +17,9 @@
 // "N ago" fixtures without literally sleeping for 2 hours. That reaches past
 // Store's `private readonly db` field (TypeScript `private` is compile-time
 // only, not a JS runtime boundary) purely to set up state — every assertion
-// below still goes through the real HTTP endpoint.
+// below still goes through the real route.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { Store } from "../../src/store.ts";
 import { shippedLimits } from "../../src/limits.ts";
 import {
@@ -27,6 +28,7 @@ import {
   serverConfigDir,
   writeConfig,
 } from "../helpers/server-limits-fixture.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 /**
  * CR-CRU-131 §S1b — the project-inactive window is CONFIGURATION, and since C2
@@ -79,7 +81,7 @@ function backdateEventTimestamp(store: Store, eventId: string, msAgo: number): v
 }
 
 describe("GET /api/v2/projects — §S5 AC4 activity rule (active + lastActivity)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -87,17 +89,14 @@ describe("GET /api/v2/projects — §S5 AC4 activity rule (active + lastActivity
     restoreServerLimitsFixture();
   });
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   test(
     "project A (1 online agent, seen 5s ago) and C (no live agents, 10min-old activity) are active; " +
       "project B (no live agents, 2h-old activity, timeout exceeded) is inactive; badge order A, C, B",
     async () => {
       configureInactiveWindow(3_600_000);
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const store = handle.store;
+      const board = bootInProcess();
+      handle = board;
+      const store = board.store;
 
       const keyA = crypto.randomUUID();
       const keyB = crypto.randomUUID();
@@ -134,7 +133,7 @@ describe("GET /api/v2/projects — §S5 AC4 activity rule (active + lastActivity
       backdateEventTimestamp(store, evC.id, 600_000);
       backdateAgentLastSeen(store, keyC, "agent-c-ghost", 600_000);
 
-      const res = await fetch(`${base()}/api/v2/projects`);
+      const res = await send(handle!, "/api/v2/projects");
       expect(res.status).toBe(200);
       const body = (await res.json()) as { ok: boolean; projects: ProjectWithActivity[] };
       expect(body.ok).toBe(true);
@@ -164,8 +163,9 @@ describe("GET /api/v2/projects — §S5 AC4 activity rule (active + lastActivity
 
   test("boundary: now - lastActivity exactly AT the configured timeout is still active (only EXCEEDING flips it)", async () => {
     configureInactiveWindow(3_600_000);
-    handle = startServer({ port: 0, dbPath: ":memory:" });
-    const store = handle.store;
+    const board = bootInProcess();
+    handle = board;
+    const store = board.store;
 
     const key = crypto.randomUUID();
     store.addProject({ key, name: "Boundary Project", type: "backend", sutRoot: "/tmp/x" });
@@ -178,7 +178,7 @@ describe("GET /api/v2/projects — §S5 AC4 activity rule (active + lastActivity
     backdateEventTimestamp(store, ev.id, 3_600_000);
     backdateAgentLastSeen(store, key, "agent-boundary-ghost", 3_600_000);
 
-    const res = await fetch(`${base()}/api/v2/projects`);
+    const res = await send(handle!, "/api/v2/projects");
     const body = (await res.json()) as { ok: boolean; projects: ProjectWithActivity[] };
     const project = body.projects.find((p) => p.key === key);
 
@@ -190,8 +190,9 @@ describe("GET /api/v2/projects — §S5 AC4 activity rule (active + lastActivity
     // inactive under this setting, even though it would be active under the
     // 1h default used by every other test in this file.
     configureInactiveWindow(5_000);
-    handle = startServer({ port: 0, dbPath: ":memory:" });
-    const store = handle.store;
+    const board = bootInProcess();
+    handle = board;
+    const store = board.store;
 
     const key = crypto.randomUUID();
     store.addProject({ key, name: "Short Timeout Project", type: "backend", sutRoot: "/tmp/y" });
@@ -204,7 +205,7 @@ describe("GET /api/v2/projects — §S5 AC4 activity rule (active + lastActivity
     backdateEventTimestamp(store, ev.id, 10_000);
     backdateAgentLastSeen(store, key, "agent-short-ghost", 10_000);
 
-    const res = await fetch(`${base()}/api/v2/projects`);
+    const res = await send(handle!, "/api/v2/projects");
     const body = (await res.json()) as { ok: boolean; projects: ProjectWithActivity[] };
     const project = body.projects.find((p) => p.key === key);
 

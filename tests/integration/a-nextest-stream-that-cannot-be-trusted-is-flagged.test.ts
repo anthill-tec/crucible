@@ -1,5 +1,5 @@
-// A nextest run's record is checked at its close — on a real server
-// (`startServer`, port 0, ":memory:", or the operator `crucible.toml` for the
+// A nextest run's record is checked at its close — on a real board
+// (`bootInProcess`, no socket, ":memory:", or the operator `crucible.toml` for the
 // size bound). The run is stored flagged `incomplete`, each reason stated,
 // when:
 //  - its passed and failed tests differ from its total (the listed total,
@@ -15,7 +15,7 @@
 // `incomplete`, and the close's `stream-incomplete` warning.
 import { describe, test, expect, afterEach } from "bun:test";
 import { shippedLimits } from "../../src/limits.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   closedNextestRun,
   closeNextest,
@@ -34,7 +34,7 @@ import {
   type NextestRunPlan,
 } from "../helpers/nextest-harness.ts";
 import {
-  bootOn,
+  bootInProcess,
   openRun,
   postJson,
   readyProject,
@@ -44,22 +44,22 @@ import {
   type Answer,
 } from "../helpers/run-stream-harness.ts";
 import {
-  boot as bootWithOperatorFile,
+  bootInProcess as bootWithOperatorFile,
   declare,
   restoreServerLimitsFixture,
   serverConfigDir,
   writeConfig,
 } from "../helpers/server-limits-fixture.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
   restoreServerLimitsFixture();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }

@@ -1,5 +1,5 @@
-// An open run takes nextest's own test list — on a real server
-// (`startServer`, port 0, ":memory:", or the operator `crucible.toml` for the
+// An open run takes nextest's own test list — on a real board
+// (`bootInProcess`, no socket, ":memory:", or the operator `crucible.toml` for the
 // size bound):
 //  - `POST /api/v2/runs/<runId>/tests {projectKey, agentId, codec:
 //    "nextest-list", data}` gives an open run the list, as
@@ -18,7 +18,7 @@
 // state reads.
 import { describe, test, expect, afterEach } from "bun:test";
 import { shippedLimits } from "../../src/limits.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   capturedRun,
   closedNextestRun,
@@ -32,24 +32,24 @@ import {
   testOk,
   testsRoute,
 } from "../helpers/nextest-harness.ts";
-import { bootOn, openRun, postJson, readyProject, storedEvent } from "../helpers/run-stream-harness.ts";
+import { bootInProcess, openRun, postJson, readyProject, storedEvent } from "../helpers/run-stream-harness.ts";
 import {
-  boot as bootWithOperatorFile,
+  bootInProcess as bootWithOperatorFile,
   declare,
   restoreServerLimitsFixture,
   serverConfigDir,
   writeConfig,
 } from "../helpers/server-limits-fixture.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
   restoreServerLimitsFixture();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -88,12 +88,12 @@ const LIST_OF_FIVE = listOf([
 const ONE_PASS = suiteStarted(CRATE, CRATE, "lib", 3) + testOk(lib("tests::a"), 0.001);
 
 interface Subject {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   runId: string;
 }
 
-async function subject(handle: ServerHandle = boot(), startTotal?: number): Promise<Subject> {
+async function subject(handle: BoardHandle = boot(), startTotal?: number): Promise<Subject> {
   const key = await readyProject(handle, [AGENT, OTHER], "nextest-list");
   const runId = await openRun(handle, key, AGENT, {
     stack: "rust",

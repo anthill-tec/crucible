@@ -38,19 +38,19 @@
 //
 // ── Safety ────────────────────────────────────────────────────────────────
 //
-// Every server is `:memory:` on port 0 and every configuration file is written
-// into a fresh OS tmpdir (never inside the checkout). The live board is never
-// reached: no project of its is patched, `data/crucible.db` is never opened and
-// port 3849 is never bound.
+// Every board is `:memory:` and in process (no socket), and every configuration
+// file is written into a fresh OS tmpdir (never inside the checkout). The live
+// board is never reached: no project of its is patched, `data/crucible.db` is
+// never opened and no port is bound.
 import { describe, test, expect, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { serverConfigPath, shippedLimits } from "../../src/limits.ts";
-import { retentionDisclosure } from "../../src/server.ts";
+import { retentionDisclosure, type BoardHandle } from "../../src/server.ts";
 import type { Store } from "../../src/store.ts";
 import {
-  boot,
+  bootInProcess,
   declare,
   eventCount,
   ingest,
@@ -58,8 +58,8 @@ import {
   seedProject,
   serverConfigDir,
   writeConfig,
-  type BootedServer,
 } from "../helpers/server-limits-fixture.ts";
+import { send } from "../helpers/run-stream-harness.ts";
 
 interface PatchResult {
   status: number;
@@ -109,16 +109,12 @@ describe("§S2 — the project retention surface: a cap can be cleared, and zero
     return file;
   }
 
-  function url(handle: BootedServer, suffix: string): string {
-    return `http://127.0.0.1:${String(handle.server.port)}/api/v2${suffix}`;
-  }
-
   async function patchProject(
-    handle: BootedServer,
+    handle: BoardHandle,
     key: string,
     body: Record<string, unknown>,
   ): Promise<PatchResult> {
-    const res = await fetch(url(handle, `/projects/${key}`), {
+    const res = await send(handle, `/api/v2/projects/${key}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -127,8 +123,8 @@ describe("§S2 — the project retention surface: a cap can be cleared, and zero
   }
 
   /** The project as the board READS it — the real list route, not the store. */
-  async function readBack(handle: BootedServer, key: string): Promise<ProjectRow> {
-    const res = await fetch(url(handle, "/projects"));
+  async function readBack(handle: BoardHandle, key: string): Promise<ProjectRow> {
+    const res = await send(handle, "/api/v2/projects");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; projects: ProjectRow[] };
     expect(body.ok).toBe(true);
@@ -158,7 +154,7 @@ describe("§S2 — the project retention surface: a cap can be cleared, and zero
     const FLEET = 6;
     const OWN = 3;
     configureFleetCap(FLEET);
-    const handle = boot();
+    const handle = bootInProcess();
     const key = seedProject(handle.store, "inherits-after-clearing");
 
     const set = await patchProject(handle, key, { retention: OWN });
@@ -194,7 +190,7 @@ describe("§S2 — the project retention surface: a cap can be cleared, and zero
   test("a zero retention is ACCEPTED and enforced as a cap of zero — it evicts everything, and it is a cap rather than a clear", async () => {
     const FLEET = 5;
     configureFleetCap(FLEET);
-    const handle = boot();
+    const handle = bootInProcess();
     const key = seedProject(handle.store, "capped-at-zero");
 
     const set = await patchProject(handle, key, { retention: 0 });
@@ -224,7 +220,7 @@ describe("§S2 — the project retention surface: a cap can be cleared, and zero
     const FLEET = 9;
     const OWN = 2;
     configureFleetCap(FLEET);
-    const handle = boot();
+    const handle = bootInProcess();
     const key = seedProject(handle.store, "cap-must-survive-an-unrelated-patch");
 
     expect((await patchProject(handle, key, { retention: OWN })).status).toBe(200);
@@ -251,7 +247,7 @@ describe("§S2 — the project retention surface: a cap can be cleared, and zero
   test("a PATCH naming a different field leaves a ZERO cap at zero — the variant a truthiness test for `did this mention retention?` gets wrong", async () => {
     const FLEET = 9;
     configureFleetCap(FLEET);
-    const handle = boot();
+    const handle = bootInProcess();
     const key = seedProject(handle.store, "zero-cap-must-survive-an-unrelated-patch");
 
     expect((await patchProject(handle, key, { retention: 0 })).status).toBe(200);
@@ -285,7 +281,7 @@ describe("§S2 — the project retention surface: a cap can be cleared, and zero
   test("a negative, fractional or non-numeric cap is still refused, and each refusal names the forms that ARE accepted", async () => {
     const OWN = 4;
     configureFleetCap(9);
-    const handle = boot();
+    const handle = bootInProcess();
     const key = seedProject(handle.store, "refuses-what-is-not-a-cap");
     expect((await patchProject(handle, key, { retention: OWN })).status).toBe(200);
 
@@ -322,7 +318,7 @@ describe("§S2 — the project retention surface: a cap can be cleared, and zero
     const FLEET = 8;
     const OWN = 3;
     configureFleetCap(FLEET);
-    const handle = boot();
+    const handle = bootInProcess();
     const key = seedProject(handle.store, "precedence-subject");
 
     // Layer 2 beats layer 1.

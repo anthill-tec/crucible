@@ -1,5 +1,5 @@
 // A streamed run whose stream cannot be trusted is stored flagged
-// `incomplete`, the reason stated — on a real server (`startServer`, port 0,
+// `incomplete`, the reason stated — on a real board (`bootInProcess`, no socket,
 // ":memory:", or the operator `crucible.toml` for the size bound).
 //
 // One stream is closed for each reason the codec states, in its own words:
@@ -23,16 +23,16 @@
 // test uses (tests/helpers/server-limits-fixture.ts).
 import { describe, test, expect, afterEach } from "bun:test";
 import { shippedLimits } from "../../src/limits.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
-  boot as bootWithOperatorFile,
+  bootInProcess as bootWithOperatorFile,
   declare,
   restoreServerLimitsFixture,
   serverConfigDir,
   writeConfig,
 } from "../helpers/server-limits-fixture.ts";
 import {
-  bootOn,
+  bootInProcess,
   closeStream,
   eventLine,
   getJson,
@@ -42,17 +42,18 @@ import {
   storedEvent,
   utf8,
   type Answer,
+  send,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
   restoreServerLimitsFixture();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -109,13 +110,13 @@ const COMPLETE = L_START + L_PASS_A + L_PASS_B + L_END_TWO;
 // ── The subject ─────────────────────────────────────────────────────────────
 
 interface Closed {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   answer: Answer;
   eventId: string;
 }
 
-async function closeOne(stream: string, handle: ServerHandle = boot()): Promise<Closed> {
+async function closeOne(stream: string, handle: BoardHandle = boot()): Promise<Closed> {
   const key = await readyProject(handle, ["flagger"]);
   const runId = await openRun(handle, key, "flagger", { stack: "bun", tier: "unit" });
   const sent = await sendBatch(handle, runId, { projectKey: key, agentId: "flagger", from: 0, data: stream });
@@ -238,7 +239,7 @@ describe("a complete stream's run carries no incomplete key", () => {
     const handle = boot();
     const key = await readyProject(handle, ["reporter"]);
     const runId = await openRun(handle, key, "reporter", { stack: "bun", tier: "unit" });
-    const res = await fetch(`http://127.0.0.1:${handle.server.port}/api/v2/runs`, {
+    const res = await send(handle, `/api/v2/runs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

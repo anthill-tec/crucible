@@ -32,11 +32,10 @@
 // smallest that clear the deadline they test, and the abort case awaits the
 // CONDITION (polling the real read surface) instead of a guessed duration.
 //
-// SAFETY: every server binds port 0 (never the dog-food 3849) and every store
+// SAFETY: every board is in process (no socket, no port) and every store
 // is ":memory:" — `data/crucible.db` is never opened.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { shippedLimits } from "../../src/limits.ts";
 import {
   declare,
@@ -44,8 +43,9 @@ import {
   serverConfigDir,
   writeConfig,
 } from "../helpers/server-limits-fixture.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 /**
  * CR-CRU-131 §S1b — the abandon deadline is CONFIGURATION, and since C2 the
@@ -70,22 +70,22 @@ afterEach(() => {
   restoreServerLimitsFixture();
 });
 
-function boot(dbPath = ":memory:"): ServerHandle {
-  const handle = startServer({ port: 0, dbPath });
+function boot(dbPath = ":memory:"): BoardHandle {
+  const handle = bootInProcess(dbPath);
   handles.push(handle);
   return handle;
 }
 
-async function postJson(handle: ServerHandle, route: string, body: unknown): Promise<Response> {
-  return fetch(`http://127.0.0.1:${handle.server.port}${route}`, {
+async function postJson(handle: BoardHandle, route: string, body: unknown): Promise<Response> {
+  return send(handle, `${route}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function getJson(handle: ServerHandle, route: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`http://127.0.0.1:${handle.server.port}${route}`);
+async function getJson(handle: BoardHandle, route: string): Promise<Record<string, unknown>> {
+  const res = await send(handle, `${route}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
@@ -96,7 +96,7 @@ interface LivenessOverride {
   pruneAfterMs: number;
 }
 
-function seedProject(handle: ServerHandle, liveness?: LivenessOverride): string {
+function seedProject(handle: BoardHandle, liveness?: LivenessOverride): string {
   const key = crypto.randomUUID();
   handle.store.addProject({
     key,
@@ -111,7 +111,7 @@ function seedProject(handle: ServerHandle, liveness?: LivenessOverride): string 
 // ORCHESTRATOR for the same reason tests/integration/run-lifecycle.test.ts uses it: a bound
 // TDD role is orthogonal to the read surface (CR-CRU-056 §S2's 409 is not the
 // subject here).
-async function register(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function register(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const res = await postJson(handle, "/api/v2/agents/register", {
     projectKey: key,
     agentId,
@@ -121,7 +121,7 @@ async function register(handle: ServerHandle, key: string, agentId: string): Pro
 }
 
 async function startRun(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
   extra: Record<string, unknown> = {},
@@ -177,7 +177,7 @@ const runEventsOf = (body: Record<string, unknown>) =>
  * ingest/start attach boundary accepts (a made-up id is a 400, by design), and
  * what §S3's Workflow-tab AC needs a running run to be bound to.
  */
-async function activeCycleId(handle: ServerHandle, key: string, agentId: string): Promise<number> {
+async function activeCycleId(handle: BoardHandle, key: string, agentId: string): Promise<number> {
   const filed = await postJson(handle, `/api/v2/projects/${key}/plans`, {
     cr: "CR-READ-SURFACE",
     agentId,
@@ -186,8 +186,9 @@ async function activeCycleId(handle: ServerHandle, key: string, agentId: string)
   expect(filed.ok).toBe(true);
   const plan = (await filed.json()) as { planId: number; cycles: { id: number }[] };
   const cycleId = plan.cycles[0]?.id as number;
-  const activated = await fetch(
-    `http://127.0.0.1:${handle.server.port}/api/v2/projects/${key}/plans/${plan.planId}/cycles/${cycleId}`,
+  const activated = await send(
+    handle,
+    `/api/v2/projects/${key}/plans/${plan.planId}/cycles/${cycleId}`,
     {
       method: "PATCH",
       headers: { "content-type": "application/json" },

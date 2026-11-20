@@ -1,6 +1,6 @@
 // `POST /api/v2/runs/<runId>/stream` takes an open run's test stream in
 // batches `{projectKey, agentId, codec, from, data}` and answers how much of
-// it the board holds — on a real server (`startServer`, port 0, ":memory:").
+// it the board holds — on a real board (`bootInProcess`, no socket, ":memory:").
 //
 // What is held here:
 //  - the answer: `200 {ok: true, runId, held}` after every batch, `held`
@@ -34,16 +34,16 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { codecs } from "../../src/codecs/index.ts";
 import { shippedLimits } from "../../src/limits.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
-  boot as bootWithOperatorFile,
+  bootInProcess as bootWithOperatorFile,
   declare,
   restoreServerLimitsFixture,
   serverConfigDir,
   writeConfig,
 } from "../helpers/server-limits-fixture.ts";
 import {
-  bootOn,
+  bootInProcess,
   eventLine,
   openRun,
   postJson,
@@ -55,15 +55,15 @@ import {
   type Answer,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
   restoreServerLimitsFixture();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -103,13 +103,13 @@ const GREEN_REPORT = '<testsuite name="green" tests="1"><testcase name="passes" 
 // ── The subject ─────────────────────────────────────────────────────────────
 
 interface Subject {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   agentId: string;
   runId: string;
 }
 
-async function subject(handle: ServerHandle = boot(), agentId = "streamer"): Promise<Subject> {
+async function subject(handle: BoardHandle = boot(), agentId = "streamer"): Promise<Subject> {
   const key = await readyProject(handle, [agentId]);
   const runId = await openRun(handle, key, agentId, { stack: "bun", tier: "unit" });
   return { handle, key, agentId, runId };
