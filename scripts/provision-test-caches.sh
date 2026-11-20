@@ -47,7 +47,10 @@ POM_SHA=$(sha256sum "$FIXTURE/pom.xml" | cut -d ' ' -f 1)
 # JDK a run had before any build starts.
 echo "provision-test-caches: java -version"
 java -version 2>&1 || echo "provision-test-caches: no java on PATH"
-MVN_REPORT=$(HOME="$WORK/home" MAVEN_OPTS="-Duser.home=$WORK/home" mvn --version)
+MVN_REPORT=$(HOME="$WORK/home" MAVEN_OPTS="-Duser.home=$WORK/home" mvn --version) || {
+    echo "provision-test-caches: mvn --version failed (exit $?)" >&2
+    exit 1
+}
 printf '%s\n' "$MVN_REPORT"
 VERSION=$(printf '%s\n' "$MVN_REPORT" \
     | sed -n 's/.*Apache Maven \([0-9][0-9A-Za-z.-]*\).*/\1/p' | head -n 1)
