@@ -103,6 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
+          persist-credentials: false
           fetch-depth: 0          # hatch-vcs needs tags for the dynamic version
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
@@ -142,6 +143,7 @@ jobs:
       # reachable from origin/develop, so history is all that was missing.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
+          persist-credentials: false
           fetch-depth: 0          # a pinned pre-CR baseline is read with `git show`
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
@@ -251,6 +253,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.14"
@@ -362,6 +366,8 @@ jobs:
       CRUCIBLE_DB: ${{ github.workspace }}/e2e-scratch/data/crucible.db
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
           # CR-CRU-137 §S2 -- declared once, at the head of this file
@@ -401,6 +407,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
           node-version: "22"
@@ -429,6 +437,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
+          persist-credentials: false
           fetch-depth: 0          # need full tag history to detect the tag at HEAD
       - name: Create GitHub Release for version tag at HEAD (idempotent)
         env:
@@ -470,6 +479,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
+          persist-credentials: false
           fetch-depth: 0          # guard needs origin/master history for the ancestry check
       - name: Guard — tag ref + on-master ancestry
         run: |
@@ -532,6 +542,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
+          persist-credentials: false
           fetch-depth: 0          # hatch-vcs needs tags to derive the version
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
@@ -577,6 +588,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
+          persist-credentials: false
           fetch-depth: 0          # guard needs origin/master history for the ancestry check
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
@@ -618,8 +630,12 @@ jobs:
       # gate) is retired; a trusted publisher works under npm's most
       # restrictive "disallow bypass-2fa tokens" account setting, and
       # --provenance draws its identity from the same OIDC token.
-      - name: Upgrade npm (>= 11.5.1 for OIDC trusted publishing)
-        run: npm install -g npm@latest
+      # Trusted publishing needs npm >= 11.5.1, newer than the npm node 22
+      # ships. Pinned to an exact release (the latest when it was written)
+      # rather than `npm@latest`, so a new npm never arrives unreviewed on
+      # release day; a bump is a deliberate edit here.
+      - name: Upgrade npm to 12.2.3 (>= 11.5.1 for OIDC trusted publishing)
+        run: npm install -g npm@12.2.3
       - name: Publish server to npm via OIDC trusted publisher
         run: npm publish --provenance --access public
 
@@ -641,6 +657,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
           # CR-CRU-137 §S2 -- declared once, at the head of this file
