@@ -202,9 +202,12 @@ jobs:
       # The browsers' system packages come through apt, which takes dpkg's
       # lock: one attempt under the step limit, never retried, since a killed
       # apt can leave the lock and a half-configured package behind. The
-      # browser download after it keeps its timed retry.
+      # browser download after it keeps its timed retry. The step normally
+      # takes 1-2 minutes; its limit is 30 because a slow Ubuntu mirror was
+      # seen serving its ~126 MB at about 40 KB/s (run 44770330869, where
+      # test-python's step hit a 10-minute limit).
       - name: Playwright's system packages (apt, for the browsers below)
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: bunx playwright install-deps chromium webkit
       - name: Install Playwright browsers (the suite includes the Chromium tier)
         # CR-CRU-018 (DN decision 13): WebKit beside Chromium. This job runs
@@ -355,9 +358,10 @@ jobs:
             attempt=$((attempt + 1))
             echo "::warning::bun install failed; attempt $attempt of 2"
           done
-      # apt takes dpkg's lock: one attempt, never retried (see test-bun).
+      # apt takes dpkg's lock: one attempt, never retried; 30 minutes for a
+      # slow mirror, though it normally takes 1-2 (see test-bun).
       - name: Playwright's system packages (apt, for the browsers below)
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: bunx playwright install-deps chromium webkit
       - name: Install Playwright browsers (the playwright reporter proofs)
         timeout-minutes: 25
@@ -497,9 +501,10 @@ jobs:
             attempt=$((attempt + 1))
             echo "::warning::bun install failed; attempt $attempt of 2"
           done
-      # apt takes dpkg's lock: one attempt, never retried (see test-bun).
+      # apt takes dpkg's lock: one attempt, never retried; 30 minutes for a
+      # slow mirror, though it normally takes 1-2 (see test-bun).
       - name: Playwright's system packages (apt, for the browsers below)
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: bunx playwright install-deps chromium webkit
       - name: Install Playwright browsers
         # CR-CRU-018 (DN decision 13) — the `webkit-iphone` project runs here
