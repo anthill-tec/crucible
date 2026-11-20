@@ -175,14 +175,36 @@ def _which_without_systemctl(resolved="/usr/bin/bun"):
     return _which
 
 
+def _sandbox_environment(tmp_dir):
+    """`HOME`, every XDG base directory and Bun's global prefix, all inside
+    `tmp_dir` -- none of them the operator's."""
+    return {"HOME": tmp_dir,
+            "XDG_CONFIG_HOME": tmp_dir,
+            "XDG_DATA_HOME": os.path.join(tmp_dir, "xdg-data"),
+            "XDG_STATE_HOME": os.path.join(tmp_dir, "xdg-state"),
+            "XDG_CACHE_HOME": os.path.join(tmp_dir, "xdg-cache"),
+            "BUN_INSTALL": os.path.join(tmp_dir, "bun-install")}
+
+
 @contextlib.contextmanager
 def _unit_stage_sandboxed(tmp_dir):
     """CR-CRU-070 isolation for a test that runs the REAL `[unit]` stage
-    runner: no resolvable `systemctl`, and a tmp `$XDG_CONFIG_HOME`/`$HOME`."""
-    with mock.patch.dict(os.environ,
-                         {"XDG_CONFIG_HOME": tmp_dir, "HOME": tmp_dir}), \
+    runner: no resolvable `systemctl`, and a tmp `$XDG_CONFIG_HOME`/`$HOME`.
+
+    The real `[manifest]` stage also reads the server's side:
+    `server_config_plan` asks whether a server is provisioned under
+    `$BUN_INSTALL` and where its own `crucible.toml` belongs
+    (`$XDG_DATA_HOME/crucible`), and with no file there yet it PROBES the
+    declared port range with a real `bind`. So every operator root the install
+    reads -- `$XDG_DATA_HOME`, `$XDG_STATE_HOME`, `$XDG_CACHE_HOME`,
+    `$BUN_INSTALL` -- is this test's own scratch too, and the probe is answered
+    in process: `_port_is_bindable` says every port binds, so no socket ever
+    opens."""
+    with mock.patch.dict(os.environ, _sandbox_environment(tmp_dir)), \
             mock.patch("crucible_axi.install.shutil.which",
-                       side_effect=_which_without_systemctl()):
+                       side_effect=_which_without_systemctl()), \
+            mock.patch("crucible_axi.install._port_is_bindable",
+                       return_value=True):
         yield
 
 
