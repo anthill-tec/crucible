@@ -62,7 +62,29 @@ cp -R "$FIXTURE" "$WORK/project"
 rm -rf "$WORK/project/target"
 # The committed maven.config holds `-o`; the provisioning run is online.
 : > "$WORK/project/.mvn/maven.config"
-(cd "$WORK/project" && HOME="$WORK/home" MAVEN_OPTS="-Duser.home=$WORK/home" \
-    mvn -B clean test -Dmaven.repo.local="$REPO" -Dmaven.test.failure.ignore=true)
+# One bad download must not fail the fill. Maven's resolver retries a dropped
+# connection itself, three times (the property under its resolver 1.x and 2.x
+# names). A fill that still fails runs once more, with -U: maven records an
+# artifact it could not fetch as missing and would not ask for it again.
+ATTEMPTS=2
+attempt=1
+update=""
+while :; do
+    echo "provision-test-caches: fill attempt $attempt of $ATTEMPTS"
+    if (cd "$WORK/project" && HOME="$WORK/home" MAVEN_OPTS="-Duser.home=$WORK/home" \
+        mvn -B clean test $update -Dmaven.repo.local="$REPO" -Dmaven.test.failure.ignore=true \
+            -Daether.connector.http.retryHandler.count=3 \
+            -Daether.transport.http.retryHandler.count=3); then
+        break
+    fi
+    if [ "$attempt" -ge "$ATTEMPTS" ]; then
+        echo "provision-test-caches: the fill failed on all $ATTEMPTS attempts" >&2
+        exit 1
+    fi
+    echo "provision-test-caches: fill attempt $attempt failed; retrying in 10 s" >&2
+    attempt=$((attempt + 1))
+    update="-U"
+    sleep 10
+done
 printf '%s\n' "$EXPECTED" > "$STAMP"
 echo "provision-test-caches: wrote $STAMP"
