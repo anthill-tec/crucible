@@ -42,7 +42,14 @@ trap 'exit 130' INT TERM
 mkdir "$WORK/home"
 
 POM_SHA=$(sha256sum "$FIXTURE/pom.xml" | cut -d ' ' -f 1)
-VERSION=$(HOME="$WORK/home" MAVEN_OPTS="-Duser.home=$WORK/home" mvn --version \
+# The JDK the fill compiles with, then maven's own report (it names the JDK
+# it runs on): the fixture compiles with `release 21`, so the log says which
+# JDK a run had before any build starts.
+echo "provision-test-caches: java -version"
+java -version 2>&1 || echo "provision-test-caches: no java on PATH"
+MVN_REPORT=$(HOME="$WORK/home" MAVEN_OPTS="-Duser.home=$WORK/home" mvn --version)
+printf '%s\n' "$MVN_REPORT"
+VERSION=$(printf '%s\n' "$MVN_REPORT" \
     | sed -n 's/.*Apache Maven \([0-9][0-9A-Za-z.-]*\).*/\1/p' | head -n 1)
 if [ -z "$VERSION" ]; then
     echo "provision-test-caches: could not read maven's version off mvn --version" >&2

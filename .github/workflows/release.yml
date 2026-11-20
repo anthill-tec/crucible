@@ -405,8 +405,24 @@ jobs:
           done
           tar xzf "$dir/$ARCHIVE" -C "$dir" arduino-cli
           echo "ARDUINO_CLI=$dir/arduino-cli" >> "$GITHUB_ENV"
-      # The script retries its own maven fill once (with -U), logging each
-      # attempt; the step limit covers both.
+      # The surefire fixture compiles with `release 21`, and the runner's
+      # default JDK is older (run 44750449794: "release version 21 not
+      # supported"). ubuntu-24.04 ships a JDK 21 and names it in
+      # JAVA_HOME_21_X64; every later step runs on it. No action, no download.
+      # The fill step's log opens with `java -version` and maven's own version
+      # report, both read on that PATH.
+      - name: JDK 21, the image's own (the surefire fixture's release)
+        run: |
+          jdk="${JAVA_HOME_21_X64:-}"
+          if [ -z "$jdk" ] || [ ! -x "$jdk/bin/java" ]; then
+            echo "::error::JAVA_HOME_21_X64 names no JDK 21 (value: '$jdk')"
+            exit 1
+          fi
+          echo "JAVA_HOME=$jdk" >> "$GITHUB_ENV"
+          echo "$jdk/bin" >> "$GITHUB_PATH"
+      # The script retries its own maven fill once (with -U), and only after
+      # a resolution or transfer failure; any other failure fails at once.
+      # The step limit covers both attempts.
       - name: The suite's own test caches (the one step that needs the network)
         timeout-minutes: 20
         run: scripts/provision-test-caches.sh
