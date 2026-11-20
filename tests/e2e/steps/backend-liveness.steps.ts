@@ -133,7 +133,7 @@ After(() => {
 
 function spawnServer(scratchCwd: string, port: number): ChildProcess {
   declareListener(scratchCwd, port);
-  const child = spawn("bun", ["run", SERVER_ENTRY], {
+  const child = spawn("bun", ["run", "--no-env-file", SERVER_ENTRY], {
     cwd: scratchCwd,
     env: {
       ...process.env,

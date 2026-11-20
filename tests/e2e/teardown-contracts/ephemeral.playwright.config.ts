@@ -126,7 +126,7 @@ export default defineConfig({
     baseURL: `http://localhost:${E2E_PORT}`,
   },
   webServer: {
-    command: `bun run ${SERVER_ENTRY}`,
+    command: `bun run --no-env-file ${SERVER_ENTRY}`,
     cwd: SCRATCH_CWD,
     env: { CRUCIBLE_DB: ":memory:" },
     port: E2E_PORT,

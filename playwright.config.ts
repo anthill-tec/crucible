@@ -321,7 +321,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `bun run ${SERVER_ENTRY}`,
+    command: `bun run --no-env-file ${SERVER_ENTRY}`,
     cwd: SCRATCH_CWD,
     // CR-CRU-052 §S5 — Playwright spawns this command with
     // `{...process.env, ...env}` (verified in playwright/lib/plugins/
