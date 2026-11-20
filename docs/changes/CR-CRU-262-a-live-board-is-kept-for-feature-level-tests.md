@@ -1,6 +1,6 @@
 # CR-CRU-262 — a live board is kept for feature-level tests
 
-**Status:** PENDING · filed 2026-11-15 (release fix; user rulings 2026-11-15: the test pyramid applies, all five
+**Status:** COMPLETED — 2026-11-19 (on release/0.4.0; its CI run waits for the user's push) · filed 2026-11-15 (release fix; user rulings 2026-11-15: the test pyramid applies, all five
 proposed changes go into the 0.4.0 release fix, and unit = no process, no socket) · gap analysis 2026-11-18 (user
 rulings: split — this CR is the python client suite, the bun suite is CR-CRU-264; kept modules are consolidated, one
 per feature) · spec pre-review 2026-11-18 (CHANGES, F1–F10 folded)
@@ -72,25 +72,25 @@ logic.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the kept list.** This spec's close-out records the python modules that still start a live board, each
+- [x] **AC1 — the kept list.** This spec's close-out records the python modules that still start a live board, each
   with the feature it proves; the dependency census (orchestrator check) shows no other python test spawning the
   server. The census charges a fixture's events to its module by the module's own name (the last dotted part before
   the class — the tier package is not the module), and the kept modules must show up as live-board (a known positive)
   before a zero elsewhere counts (pre-review F1).
-- [ ] **AC2 — sparing.** At most 15 python modules spawn a server, one per feature; a larger kept set needs the user's
+- [x] **AC2 — sparing.** At most 15 python modules spawn a server, one per feature; a larger kept set needs the user's
   ruling, recorded here.
-- [ ] **AC3 — nothing lost.** Every demoted or merged test still runs under its name, passes, and asserts at least what
+- [x] **AC3 — nothing lost.** Every demoted or merged test still runs under its name, passes, and asserts at least what
   it did; the route pass is recorded in the close-out, and each route behaviour a demoted test relied on has a
   server-side bun test. The close-out holds one row per demoted assertion: the old assertion, and either its new
   client-side assertion against the fake (sent body, request log, envelope) or the bun test (file and test name) that
   now asserts the server half (pre-review F3).
-- [ ] **AC4 — the pyramid is measured (orchestrator check).** The census re-run after the change reports the python
+- [x] **AC4 — the pyramid is measured (orchestrator check).** The census re-run after the change reports the python
   class counts (unit, socket fake, process, toolchain, live board), recorded in the close-out; the live-board share of
   python tests is below 3%, measured per test with a module's fixture events charged to its tests.
-- [ ] **AC5 — one spawner (orchestrator check).** No python test module spawns `src/server.ts` itself — a search for
+- [x] **AC5 — one spawner (orchestrator check).** No python test module spawns `src/server.ts` itself — a search for
   the server's argv under `tests/client/` outside `real_board.py` finds none — and no test module defines its own
   recording proxy; every live board comes from `RealBoard`.
-- [ ] **AC6 — suites green.** Both suites and the e2e suite pass; the pre-merge gate passes.
+- [x] **AC6 — suites green.** Both suites and the e2e suite pass; the pre-merge gate passes.
 
 ## Non-goals
 
@@ -99,3 +99,36 @@ logic.
 - Changing server behaviour or the client contract.
 - New tests that test the tests (user ruling 2026-11-18). The sparing rule is checked once, at this CR's close-out;
   no standing guard enforces it.
+
+## Close-out (2026-11-19)
+
+- **AC1/AC2 — the kept list (census at `51a428d0`, clone, isolated network, tripwire 0 hits).** Exactly 15 python
+  modules start a live board, one per feature, each through `RealBoard`:
+  arduino native run (`test_an_arduino_declared_target_streams_a_real_native_run_end_to_end`), rust/nextest run
+  (`test_a_rust_run_streams_real_nextest_end_to_end`), maven surefire-console run
+  (`test_a_declared_maven_run_shows_its_real_surefire_console_live_end_to_end`), go test-json run
+  (`test_a_go_run_streams_real_go_test_to_a_real_board`), bun relayed run
+  (`test_a_relayed_bun_run_shows_on_the_board_while_it_works`), python crucible-events run
+  (`test_a_streamed_python_run_reaches_the_board_while_it_works`), gate composition
+  (`test_a_gate_milestone_carries_each_suite_result`), settled-run abort refusal
+  (`test_the_board_refuses_a_settled_runs_abort_as_the_clients_expect_end_to_end`), project metadata
+  (`test_project_meta_verb_wires_write_read_and_refusal_end_to_end`), project-create by token
+  (`test_project_create_against_a_real_board`), release retirement at insert (`test_gate_names_the_release_it_gates`),
+  plan-file's queue registration (`test_plan_file_names_the_release_it_plans`), coverage file ranking
+  (`test_a_python_coverage_run_names_its_files_on_a_real_board`), `next` agrees with the write side
+  (`test_next_lane_carries_release_and_wave`), go coverage merging
+  (`test_a_go_coverage_regression_stores_statement_coverage_on_a_real_board`).
+- **AC3 — nothing lost.** The route pass and its rows are in `test-reports/work/red970-report.md`,
+  `red972-report.md`, `red973-report.md` and the per-pass AC3 tables (`green972-a/-b/-c`, `green973-d`); new server
+  tests: `cycle-append-route-stores-and-refuses-kinds`, `milestone-routes-order-and-refuse-as-clients-read-them`,
+  `closed-plans-read-carries-merge-and-title-verbatim`, `events-list-keeps-each-agents-own-run-totals`,
+  `a-close-over-an-accepted-failing-gate-keeps-its-reason`, `plan-file-route-stores-and-refuses-kinds`. One python test
+  was deleted by user ruling (`test_a_kindless_cycle_posted_straight_to_the_route_still_stores_red_green`: its whole
+  assertion is the bun test "a cycle filed with no kind is stored as red-green, read back from the store").
+- **AC4 — the pyramid (python, per test).** unit 52.0%, process 25.9%, toolchain 18.2%, live board 1.8% (102 of 5793;
+  was 470, 8.1%), socket fake 1.8%, clock 0.3%.
+- **AC5 — one spawner.** No python test module starts `src/server.ts` outside `real_board.py`; `RecordingProxy` is the
+  one proxy.
+- **AC6 — green.** Pre-merge gate, cycle 975: 14750 passed, 0 failed.
+- **The fake board** answers only what a test scripts (an unscripted read is a 404), logs each method as sent, and
+  mints store-shaped event ids.
