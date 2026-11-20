@@ -33,7 +33,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Store } from "../../src/store.ts";
-import { startServer } from "../../src/server.ts";
+import { createBoard, startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { SuiteNode } from "../../src/types.ts";
 
 /**
@@ -328,8 +329,11 @@ export type BootedServer = ReturnType<typeof startServer>;
 
 /** The `active` verdict per project, read off the REAL route the dashboard
  *  reads (`GET /api/v2/projects`) rather than off the resolver. */
-export async function activeFlags(handle: BootedServer): Promise<Map<string, boolean>> {
-  const res = await fetch(`http://127.0.0.1:${handle.server.port}/api/v2/projects`);
+export async function activeFlags(handle: BootedServer | BoardHandle): Promise<Map<string, boolean>> {
+  const res =
+    "server" in handle
+      ? await fetch(`http://127.0.0.1:${handle.server.port}/api/v2/projects`)
+      : await handle.fetch(new Request("http://board.invalid/api/v2/projects"));
   expect(res.status).toBe(200);
   const body = (await res.json()) as { ok: boolean; projects: ProjectActivityRow[] };
   expect(body.ok).toBe(true);
@@ -340,6 +344,20 @@ export function boot(): BootedServer {
   const handle = startServer({ port: 0, dbPath: ":memory:" });
   openHandles.push(handle);
   return handle;
+}
+
+/** `boot`'s in-process twin: a board with no socket over a ":memory:" store,
+ *  addressed at `http://board.invalid`, stopped by `restoreServerLimitsFixture`.
+ *  The limits it enforces are still read from the configuration directory
+ *  `serverConfigDir` points `CRUCIBLE_DB` at, per request. */
+export function bootInProcess(): BoardHandle {
+  const board = createBoard({
+    store: Store.open(":memory:"),
+    storeResolution: { path: ":memory:", rule: "explicit" },
+    listener: () => null,
+  });
+  openHandles.push(board);
+  return board;
 }
 
 /** A project with no `retention` of its own, so the fleet cap is what decides
