@@ -21,7 +21,7 @@
 //     the red one the suite's first failing scenario, the green one its first
 //     scenario.
 //
-// HARNESS — a real board (`startServer` through `bootOn`, port 0) and the
+// HARNESS — a real board (`bootInProcess`, no socket) and the
 // production shell mounted against it in happy-dom (tests/helpers/served-app.ts).
 // A run is filed through the stream routes, the junit route, or the store's own
 // `recordTestEvent` where the shape it needs can no longer be posted (a run
@@ -29,7 +29,7 @@
 // walked back the way the migration's own tests walk one back, reopened by the
 // board, which migrates it.
 //
-// SAFETY: every server binds port 0, on ":memory:" or on a file under a fresh
+// SAFETY: every board is in process (no socket), on ":memory:" or on a file under a fresh
 // OS tmpdir removed after each test.
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -38,7 +38,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as AppLogic from "../../public/app-logic.mjs";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { Store } from "../../src/store.ts";
 import type { SuiteNode } from "../../src/types.ts";
 import {
@@ -56,7 +56,7 @@ import {
   type BddScenario,
 } from "../helpers/playwright-bdd-run.ts";
 import {
-  bootOn,
+  bootInProcess,
   closeStream,
   eventLine,
   getJson,
@@ -71,7 +71,7 @@ const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.me
 const LOCATE_BLINK = "app-locate-blink";
 const AGENT = "spec-view-framework-runner";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 const scratchDirs: string[] = [];
 
 afterEach(async () => {
@@ -80,8 +80,8 @@ afterEach(async () => {
   while (scratchDirs.length > 0) fs.rmSync(scratchDirs.pop() as string, { recursive: true, force: true });
 });
 
-function boot(dbPath = ":memory:"): ServerHandle {
-  const handle = bootOn(dbPath);
+function boot(dbPath = ":memory:"): BoardHandle {
+  const handle = bootInProcess(dbPath);
   handles.push(handle);
   return handle;
 }
@@ -128,7 +128,7 @@ const CODEC_SHAPE_SUMMARY = { total: 5, passed: 3, failed: 1, pending: 1, durati
  * run the retired codec filed (codec `playwright`, no framework, the codec's
  * shape), reopened by the board. Answers the board, the project and the run.
  */
-function migratedBoard(): { handle: ServerHandle; key: string; eventId: string } {
+function migratedBoard(): { handle: BoardHandle; key: string; eventId: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crucible-spec-view-framework-"));
   scratchDirs.push(dir);
   const dbPath = path.join(dir, "crucible.db");
@@ -347,13 +347,13 @@ interface FeatureRow {
   feature: string | null;
 }
 
-function featuresOf(handle: ServerHandle, eventId: string): FeatureRow[] {
+function featuresOf(handle: BoardHandle, eventId: string): FeatureRow[] {
   return dbOf(handle.store)
     .query<FeatureRow, [string]>("SELECT name, feature FROM run_suites WHERE event_id = ? ORDER BY position")
     .all(eventId);
 }
 
-async function streamed(handle: ServerHandle, key: string, framework: string, text: string): Promise<string> {
+async function streamed(handle: BoardHandle, key: string, framework: string, text: string): Promise<string> {
   const runId = await openRun(handle, key, AGENT, { tier: "e2e", stack: "bun", framework });
   const batch = await sendBatch(handle, runId, { projectKey: key, agentId: AGENT, from: 0, data: text });
   expect(batch.status, JSON.stringify(batch.body)).toBe(200);

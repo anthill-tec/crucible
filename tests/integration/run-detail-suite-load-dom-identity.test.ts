@@ -28,16 +28,16 @@
 // leaf per scenario. Its unit of loading is a feature: a folded feature's
 // heading click opens it and reads its suite.
 //
-// SAFETY: every server binds port 0 on ":memory:".
+// SAFETY: every board is in process (no socket) on ":memory:".
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { settleDom } from "../helpers/dom-settle";
 import { bddProject, passingStep, streamBddRun, type BddScenario } from "../helpers/playwright-bdd-run.ts";
-import { bootOn } from "../helpers/run-stream-harness.ts";
+import { bootInProcess } from "../helpers/run-stream-harness.ts";
 import { mountServedApp, restoreRealFetch, settleServedApp } from "../helpers/served-app.ts";
 
 const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
@@ -164,7 +164,7 @@ async function settle(ticks = 6): Promise<void> {
   await settleDom({ ticks });
 }
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(async () => {
   await restoreRealFetch();
@@ -253,7 +253,7 @@ function specScenarios(): BddScenario[] {
 /** Streams the spec run to a real board (tier `e2e`: Density, with its heat
  *  strip) and mounts the shell at its run detail. */
 async function mountSpecRun(name: string): Promise<void> {
-  const handle = bootOn();
+  const handle = bootInProcess();
   handles.push(handle);
   const key = await bddProject(handle, name);
   const eventId = await streamBddRun(handle, key, specScenarios(), "e2e");

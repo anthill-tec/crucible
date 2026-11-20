@@ -13,15 +13,15 @@
 //     two streamed playwright-bdd runs, a JUnit run and a streamed run of
 //     another framework.
 //
-// SAFETY: every server binds port 0 on ":memory:".
+// SAFETY: every board is in process (no socket) on ":memory:".
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import * as AppLogic from "../../public/app-logic.mjs";
 import {
-  bootOn,
+  bootInProcess,
   closeStream,
   eventLine,
   openRun,
@@ -120,7 +120,7 @@ describe("CrucibleEventBrief carries the run's framework in the module's declara
 
 // ── The BDD tab on a real board ───────────────────────────────────────────
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(async () => {
   await restoreRealFetch();
@@ -129,7 +129,7 @@ afterEach(async () => {
 
 const AGENT = "index-board-runner";
 
-async function streamRun(handle: ServerHandle, key: string, framework: string, text: string): Promise<string> {
+async function streamRun(handle: BoardHandle, key: string, framework: string, text: string): Promise<string> {
   const runId = await openRun(handle, key, AGENT, { tier: "e2e", stack: "bun", framework });
   const batch = await sendBatch(handle, runId, { projectKey: key, agentId: AGENT, from: 0, data: text });
   expect(batch.status, JSON.stringify(batch.body)).toBe(200);
@@ -178,7 +178,7 @@ const JUNIT_XML =
   '<testsuites tests="1" failures="0"><testsuite name="math" tests="1" failures="0">' +
   '<testcase name="adds" classname="math" time="0.001"/></testsuite></testsuites>\n';
 
-async function ingest(handle: ServerHandle, body: Record<string, unknown>): Promise<string> {
+async function ingest(handle: BoardHandle, body: Record<string, unknown>): Promise<string> {
   const res = await postJson(handle, "/api/v2/runs", { agentId: AGENT, ...body });
   expect(res.status, JSON.stringify(res.body)).toBe(200);
   return res.body.event as string;
@@ -186,7 +186,7 @@ async function ingest(handle: ServerHandle, body: Record<string, unknown>): Prom
 
 describe("the BDD tab lists the playwright-bdd runs", () => {
   test("on a real board: the two streamed playwright-bdd runs are listed newest first; the junit run and the vitest stream are not", async () => {
-    const handle = bootOn();
+    const handle = bootInProcess();
     handles.push(handle);
     const key = crypto.randomUUID();
     handle.store.addProject({ key, name: "bdd-index-board", type: "frontend", sutRoot: "/tmp/bdd-index-board" });

@@ -9,11 +9,11 @@
 //  - it is the whole run's root however few files the read answers, and it is
 //    read by aggregate: no statement hands back every file row to work it out.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production router (`bootInProcess`, in-memory
 // store), each run ingested with a coverage block of the names under test.
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { bootOn, readyProject } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, readyProject } from "../helpers/run-stream-harness.ts";
 import {
   byCodeUnit,
   dbOf,
@@ -30,14 +30,14 @@ import {
   type CoverageFile,
 } from "../helpers/coverage-files-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }

@@ -6,12 +6,12 @@
 //  - no `run_coverage_files` row is stored for it;
 //  - its answer has neither `coverageFileCount` nor `coverageFiles`.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production router (`bootInProcess`, in-memory
 // store), beside a run of files on the same board, so "no row" is never "no
 // table".
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { bootOn, postJson, readyProject, type Answer } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, postJson, readyProject, type Answer } from "../helpers/run-stream-harness.ts";
 import {
   dbOf,
   eventIdOf,
@@ -23,14 +23,14 @@ import {
   TWELVE_BLOCK,
 } from "../helpers/coverage-files-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -48,7 +48,7 @@ const POSTED_FILES = [
   { path: "src/posted-alpha.ts", lines: { total: 40, covered: 30, percent: 75 }, functions: { total: 3, covered: 2, percent: 66.7 } },
 ];
 
-function postDecoded(handle: ServerHandle, key: string): Promise<Answer> {
+function postDecoded(handle: BoardHandle, key: string): Promise<Answer> {
   return postJson(handle, "/api/v2/runs/parsed", {
     projectKey: key,
     agentId: AGENT,

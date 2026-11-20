@@ -9,7 +9,7 @@
 //     "no failure detail captured by the reporter"; a failure with a message
 //     carries no note.
 //
-// HARNESS — a real board (`bootOn`, port 0, ":memory:") holding a streamed
+// HARNESS — a real board (`bootInProcess`, no socket, ":memory:") holding a streamed
 // `playwright-bdd` run, the production shell mounted against it in happy-dom
 // (tests/helpers/served-app.ts).
 //
@@ -23,9 +23,9 @@
 //     tier `e2e` (Density, where the heat strip draws). Nothing here asserts
 //     what a Density scenario box shows before any focus.
 //
-// SAFETY: every server binds port 0 on ":memory:".
+// SAFETY: every board is in process (no socket) on ":memory:".
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   bddProject,
   failingStep,
@@ -36,18 +36,18 @@ import {
   streamBddRun,
   type BddScenario,
 } from "../helpers/playwright-bdd-run.ts";
-import { bootOn } from "../helpers/run-stream-harness.ts";
+import { bootInProcess } from "../helpers/run-stream-harness.ts";
 import { mountServedApp, restoreRealFetch, settleServedApp } from "../helpers/served-app.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(async () => {
   await restoreRealFetch();
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }

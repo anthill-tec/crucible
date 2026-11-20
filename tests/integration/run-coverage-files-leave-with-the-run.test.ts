@@ -8,7 +8,7 @@
 //  - a retention sweep that evicts the run (`enforceRetention`, run by the
 //    ingest that takes the project over its cap).
 //
-// Each run is ingested over the real production HTTP surface (`startServer`,
+// Each run is ingested over the real production router (`bootInProcess`,
 // in-memory store) with a coverage block, so its rows are the ones an ingest writes; the removals are
 // the store's own. A kept run's rows are compared whole, before and after.
 //
@@ -16,8 +16,8 @@
 // itself, so the removal is exercised first and each test then states, in
 // order: the run is gone, it had rows, none remains, the others are untouched.
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { bootOn, readyProject, register } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, readyProject, register } from "../helpers/run-stream-harness.ts";
 import {
   dbOf,
   eventIdOf,
@@ -30,14 +30,14 @@ import {
   lcovText,
 } from "../helpers/coverage-files-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -45,7 +45,7 @@ function boot(): ServerHandle {
 const AGENT = "coverage-runner";
 
 /** A green run whose coverage names `files` files under `prefix`; answers the event it stored. */
-async function runWithFiles(handle: ServerHandle, key: string, prefix: string, files: number): Promise<string> {
+async function runWithFiles(handle: BoardHandle, key: string, prefix: string, files: number): Promise<string> {
   const records = Array.from({ length: files }, (_, index) => ({
     path: `${prefix}/file-${index}.ts`,
     lf: 10 + index,

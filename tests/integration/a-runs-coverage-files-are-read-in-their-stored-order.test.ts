@@ -9,12 +9,12 @@
 // A file with no lines comes after every file that has lines, and several
 // such files are ordered among themselves by name in code-unit order.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production router (`bootInProcess`, in-memory
 // store). The expected order is written out by hand, and checked against the
 // stored rows.
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { bootOn, readyProject } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, readyProject } from "../helpers/run-stream-harness.ts";
 import {
   dbOf,
   eventIdOf,
@@ -29,14 +29,14 @@ import {
   type LcovRecord,
 } from "../helpers/coverage-files-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -84,7 +84,7 @@ const ORDERED: CoverageFile[] = [
 const ORDERED_NAMES = ORDERED.map((file) => file.path);
 
 /** A board holding the ten-file run, and the names `?depth=coverage<more>` answers for it. */
-async function namesRead(more = ""): Promise<{ handle: ServerHandle; eventId: string; event: Record<string, unknown>; names: string[] }> {
+async function namesRead(more = ""): Promise<{ handle: BoardHandle; eventId: string; event: Record<string, unknown>; names: string[] }> {
   const handle = boot();
   const key = await readyProject(handle, [AGENT]);
   const eventId = eventIdOf(await ingestRun(handle, key, AGENT, BLOCK));

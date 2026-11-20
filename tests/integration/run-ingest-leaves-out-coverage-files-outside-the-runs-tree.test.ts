@@ -17,12 +17,12 @@
 // test, and a run that already answers so — a run of the two files alone, and
 // a run whose coverage text cannot be decoded.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
-// store, port 0); every stored outcome is read back through the board's own
+// Driven through the real production router (`bootInProcess`, in-memory
+// store, no socket); every stored outcome is read back through the board's own
 // reads.
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { bootOn, postJson, readyProject, type Answer } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, postJson, readyProject, type Answer } from "../helpers/run-stream-harness.ts";
 import {
   closeStreamedRun,
   dbOf,
@@ -37,14 +37,14 @@ import {
   type LcovRecord,
 } from "../helpers/coverage-files-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -72,7 +72,7 @@ const KEPT_FILES: CoverageFile[] = [
 ];
 
 /** A single-shot green bun run of two tests, filed with `coverage`. */
-function bunRun(handle: ServerHandle, projectKey: string, coverage: unknown): Promise<Answer> {
+function bunRun(handle: BoardHandle, projectKey: string, coverage: unknown): Promise<Answer> {
   return postJson(handle, "/api/v2/runs", {
     projectKey,
     agentId: AGENT,
@@ -83,7 +83,7 @@ function bunRun(handle: ServerHandle, projectKey: string, coverage: unknown): Pr
   });
 }
 
-type Filing = (handle: ServerHandle, projectKey: string, coverage: unknown) => Promise<Answer>;
+type Filing = (handle: BoardHandle, projectKey: string, coverage: unknown) => Promise<Answer>;
 
 const singleShot: Filing = bunRun;
 const streamedClose: Filing = (handle, projectKey, coverage) => closeStreamedRun(handle, projectKey, AGENT, coverage);
@@ -114,7 +114,7 @@ function expectTheKeptCoverageAnswered(answer: Answer): void {
 }
 
 /** The read of the run's files answers the same count and files, and `src/` as their root. */
-async function expectTheKeptCoverageReadBack(handle: ServerHandle, eventId: string): Promise<void> {
+async function expectTheKeptCoverageReadBack(handle: BoardHandle, eventId: string): Promise<void> {
   const event = await eventRead(handle, eventId, "?depth=coverage");
   expect(event.coverageFileCount).toBe(2);
   expect(event.coverageFiles).toEqual(KEPT_FILES);
@@ -124,7 +124,7 @@ async function expectTheKeptCoverageReadBack(handle: ServerHandle, eventId: stri
 }
 
 /** The store holds a row for each of the two kept files, in the kept order, and no other. */
-async function expectTheKeptRowsStored(handle: ServerHandle, eventId: string): Promise<void> {
+async function expectTheKeptRowsStored(handle: BoardHandle, eventId: string): Promise<void> {
   expect(fileRowCount(dbOf(handle.store), eventId)).toBe(2);
   const stored = await storedFiles(dbOf(handle.store), eventId);
   expect(stored.map((file) => file.path)).toEqual(["src/lib/b.ts", "src/a.ts"]);
@@ -205,7 +205,7 @@ describe("a green bun run whose lcov names src/a.ts and src/lib/b.ts alone answe
 // ── No file left ────────────────────────────────────────────────────────────
 
 /** The run is stored with its test results and without coverage or files, and the answer warns once that the named block's coverage was dropped. */
-async function expectStoredWithItsCoverageDropped(handle: ServerHandle, answer: Answer, block: string): Promise<string> {
+async function expectStoredWithItsCoverageDropped(handle: BoardHandle, answer: Answer, block: string): Promise<string> {
   expect(answer.status, JSON.stringify(answer.body)).toBe(200);
   expect(answer.body.ok).toBe(true);
   const warnings = answer.body.warnings as Array<{ code: string; detail: string }> | undefined;

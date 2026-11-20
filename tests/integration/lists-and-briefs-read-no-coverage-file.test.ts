@@ -6,13 +6,13 @@
 //  - none of them runs a statement on `run_coverage_files`;
 //  - an event brief carries the run's totals as before, and no file key.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production router (`bootInProcess`, in-memory
 // store). "Without those files" is the same run with its file rows taken out
 // on the board's own connection, so nothing but the files differs between the
 // two answers.
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { bootOn, getJson, readyProject } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, getJson, readyProject } from "../helpers/run-stream-harness.ts";
 import {
   dbOf,
   eventIdOf,
@@ -25,14 +25,14 @@ import {
   type QueryRecord,
 } from "../helpers/coverage-files-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -40,7 +40,7 @@ function boot(): ServerHandle {
 const AGENT = "list-reader";
 
 /** A board whose one project's newest run is a green run of the twelve files. */
-async function projectWithAFileBearingRun(): Promise<{ handle: ServerHandle; key: string; eventId: string }> {
+async function projectWithAFileBearingRun(): Promise<{ handle: BoardHandle; key: string; eventId: string }> {
   const handle = boot();
   const key = await readyProject(handle, [AGENT], "file-bearing");
   const eventId = eventIdOf(await ingestRun(handle, key, AGENT, TWELVE_BLOCK));
@@ -49,14 +49,14 @@ async function projectWithAFileBearingRun(): Promise<{ handle: ServerHandle; key
 }
 
 /** Take the run's file rows out, leaving the run as one that kept no files. */
-function takeTheFilesOut(handle: ServerHandle, eventId: string): void {
+function takeTheFilesOut(handle: BoardHandle, eventId: string): void {
   const db = dbOf(handle.store);
   db.query(`DELETE FROM run_coverage_files WHERE event_id = ?`).run(eventId);
   expect(fileRowCount(db, eventId)).toBe(0);
 }
 
 /** One read's body, and the statements the store ran to answer it. */
-async function logged(handle: ServerHandle, route: string): Promise<{ body: Record<string, unknown>; records: QueryRecord[] }> {
+async function logged(handle: BoardHandle, route: string): Promise<{ body: Record<string, unknown>; records: QueryRecord[] }> {
   let body: Record<string, unknown> = {};
   const records = await recordQueries(handle.store, async () => {
     body = await getJson(handle, route);

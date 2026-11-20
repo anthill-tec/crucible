@@ -13,7 +13,7 @@
 // The page is drawn in two containers, the home pane and the workspace, and
 // every behaviour here is checked in both.
 //
-// Every run is ingested over HTTP on a real board (`startServer`, port 0, an
+// Every run is ingested over HTTP on a real board (`bootInProcess`, no socket, an
 // in-memory store), and the production page is mounted against that board.
 import { afterEach, describe, expect, test } from "bun:test";
 import {
@@ -49,7 +49,7 @@ import {
   RUN_PAGE_CONTAINERS,
   runPage,
   shownRows,
-  startBoard,
+  startBoardInProcess,
   totalsOnlyRun,
   workspaceRunPath,
 } from "../helpers/coverage-files-view.ts";
@@ -84,7 +84,7 @@ function shownNames(root: string): string[] {
 
 describe("the run page's own loading line", () => {
   test("while a run's detail is read, its page shows the spinner beside loading run detail…, and neither once the detail is drawn", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await lcovRun(board, TWELVE_RECORDS);
     await openPage(board, "/");
     const gate = gateFetch((url) => url.includes("depth=suites"));
@@ -107,7 +107,7 @@ describe("the run page's own loading line", () => {
 
 describe("a run's own page on a run whose report states no function counters", () => {
   test("its coverage line reads two percents: the lines percent, then the functions percent the board answers", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await lcovRun(board, [
       { path: "/srv/app/src/a.ts", lf: 10, lh: 4 },
       { path: "/srv/app/src/b.ts", lf: 10, lh: 5 },
@@ -130,7 +130,7 @@ describe("a run's own page on a run whose report states no function counters", (
 
 describe("a run's own page while its show all read is in flight", () => {
   test("the 50 rows stay, one spinner stands beneath them in the control's place, one read is sent, and all 60 rows replace it when the read answers", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await lcovRun(board, numberedRecords(60));
     await openPage(board, workspaceRunPath(board, eventId));
     await press(coverageLine(), "the coverage line");
@@ -170,7 +170,7 @@ describe("a run's own page while its show all read is in flight", () => {
 for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
   describe(`a run's own page in ${container} shows its coverage folded`, () => {
     test("a test run with files shows one coverage line above its test tree, reading its lines percent, its functions percent and its file count, with no table and no read of its files", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await lcovRun(board, TWELVE_RECORDS);
 
       await openPage(board, pathOf(board, eventId));
@@ -187,7 +187,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
     });
 
     test("a click shows the file table beneath the line and above the test tree, a second click removes it, and unfolding again reads nothing", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await lcovRun(board, TWELVE_RECORDS);
       await openPage(board, pathOf(board, eventId));
 
@@ -220,7 +220,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
     });
 
     test("a run whose coverage states no functions reads one percent on its coverage line", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await greenRun(
         board,
         { codec: "go-coverprofile", data: fixtureText("go-coverprofile", "shop-plain.coverprofile") },
@@ -237,7 +237,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
     });
 
     test("a run of one file reads 1 file on its coverage line", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await lcovRun(board, [{ path: "/srv/app/src/only.ts", lf: 8, lh: 6, fnf: 4, fnh: 1 }]);
 
       await openPage(board, pathOf(board, eventId));
@@ -249,7 +249,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
     });
 
     test("a Maven run's table heads its name column class", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await greenRun(
         board,
         { codec: "jacoco", data: fixtureText("jacoco-csv", "multi-row.csv") },
@@ -275,7 +275,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
     });
 
     test("a run of 60 files unfolds to its first 50 rows and show all 60, and the control lists all 60 and goes", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await lcovRun(board, numberedRecords(60));
       await openPage(board, pathOf(board, eventId));
       expect(reading(coverageLine())).toContain("60 files");
@@ -297,7 +297,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
 
   describe(`a run's own page in ${container} on a run without files`, () => {
     test("a run filed with totals only shows its percents and no per-file coverage for this run, with no table and nothing to unfold", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await totalsOnlyRun(board, {
         lines: { total: 200, covered: 150, percent: 75 },
         functions: { total: 20, covered: 11, percent: 55 },
@@ -322,7 +322,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
     });
 
     test("a run whose report decoded to no file shows its percent and no per-file coverage for this run, with no table and nothing to unfold", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await greenRun(
         board,
         { codec: "go-coverprofile", data: fixtureText("go-coverprofile", "contracts-types-only.coverprofile") },
@@ -348,7 +348,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
     });
 
     test("a green run filed with no coverage shows its test tree and no coverage line", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await greenRun(board);
 
       await openPage(board, pathOf(board, eventId));
@@ -361,7 +361,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
     });
 
     test("a failing run filed with a coverage report keeps no coverage and shows no coverage line", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await failingRun(board, {
         codec: "lcov",
         data: "SF:/srv/app/src/red.ts\nLF:10\nLH:1\nend_of_record\n",
@@ -379,7 +379,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
 
   describe(`a run's own page in ${container} while its files are read, and when the read fails`, () => {
     test("while the files are read the table's place shows the page's loading line, the coverage line and the test tree stay, and the rows replace it when the read answers", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await lcovRun(board, TWELVE_RECORDS);
       await openPage(board, pathOf(board, eventId));
       expect(all("spinner", runPage())).toHaveLength(0);
@@ -409,7 +409,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
     });
 
     test("a read that never reaches the board shows could not read this run's files, the percents stay, and the next unfold reads again", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await lcovRun(board, TWELVE_RECORDS);
       await openPage(board, pathOf(board, eventId));
       const gate = gateFetch((url) => isFileRead(url));
@@ -449,7 +449,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
     });
 
     test("a read the board answers with an error shows could not read this run's files, and the next unfold reads again", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await lcovRun(board, TWELVE_RECORDS);
       await openPage(board, pathOf(board, eventId));
       const refusal = refuseFileReads(500);
@@ -471,7 +471,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
     });
 
     test("a failed show all read keeps the 50 rows with the failure line beneath them, and the next click reads again and lists all 60", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await lcovRun(board, numberedRecords(60));
       await openPage(board, pathOf(board, eventId));
       await press(coverageLine(), "the coverage line");
@@ -505,7 +505,7 @@ for (const [container, pathOf] of RUN_PAGE_CONTAINERS) {
 
   describe(`a run's own page in ${container} across a refresh`, () => {
     test("an unfolded page showing all 60 files keeps its 60 rows and sends no request for the files when a frame arrives", async () => {
-      const board = await startBoard();
+      const board = await startBoardInProcess();
       const eventId = await lcovRun(board, numberedRecords(60));
       await openPage(board, pathOf(board, eventId));
       await press(coverageLine(), "the coverage line");

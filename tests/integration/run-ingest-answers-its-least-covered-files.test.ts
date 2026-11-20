@@ -10,13 +10,13 @@
 //    file at all;
 //  - the close of a streamed run answers as a single-shot ingest does.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production router (`bootInProcess`, in-memory
 // store). Every expected file is read from the coverage text by the oracle in
 // `tests/helpers/coverage-files-harness.ts`, and the least covered names are
 // also written out here by hand.
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { bootOn, getJson, readyProject, type Answer } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, getJson, readyProject, type Answer } from "../helpers/run-stream-harness.ts";
 import {
   closeStreamedRun,
   dbOf,
@@ -33,14 +33,14 @@ import {
   type LcovRecord,
 } from "../helpers/coverage-files-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -95,7 +95,7 @@ function fileKeysOf(answer: Answer): string[] {
 }
 
 /** A three-file green run on the same board answers its files: the control beside every "neither key" answer. */
-async function expectAFileBearingRunAnswersItsFiles(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function expectAFileBearingRunAnswersItsFiles(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const control = await ingestRun(handle, key, agentId, THREE_BLOCK);
   expect(control.status, JSON.stringify(control.body)).toBe(200);
   expect(fileKeysOf(control)).toEqual(["coverageFileCount", "coverageFiles"]);

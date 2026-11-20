@@ -11,12 +11,12 @@
 //    `depth=suites`;
 //  - `files=` on a read other than `?depth=coverage` is ignored.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production router (`bootInProcess`, in-memory
 // store). A run with files and no tree is written by no ingest: its state is
 // made here on the board's own connection, from a stored run of files.
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { bootOn, readyProject } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, readyProject } from "../helpers/run-stream-harness.ts";
 import {
   callsAnAggregate,
   dbOf,
@@ -34,14 +34,14 @@ import {
   TWELVE_TOTALS,
 } from "../helpers/coverage-files-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -55,7 +55,7 @@ const GREEN_SUITES = [{ name: "Green", status: "pass", counts: { passed: 2, fail
 const NO_FILE_BLOCK = { codec: "jacoco", data: fixtureText("jacoco-csv", "header-only.csv") };
 
 /** A board holding a green run of the twelve files and, beside it, a green run whose coverage states no file. */
-async function aRunWithFilesAndOneWithout(): Promise<{ handle: ServerHandle; key: string; withFiles: string; without: string }> {
+async function aRunWithFilesAndOneWithout(): Promise<{ handle: BoardHandle; key: string; withFiles: string; without: string }> {
   const handle = boot();
   const key = await readyProject(handle, [AGENT]);
   const withFiles = eventIdOf(await ingestRun(handle, key, AGENT, TWELVE_BLOCK));
@@ -69,7 +69,7 @@ async function aRunWithFilesAndOneWithout(): Promise<{ handle: ServerHandle; key
  * Leave a stored run with no tree: the state `?depth=suites` gives its other
  * answer for. The run's files are untouched.
  */
-function dropTheTree(handle: ServerHandle, eventId: string): void {
+function dropTheTree(handle: BoardHandle, eventId: string): void {
   const db = dbOf(handle.store);
   db.query(`UPDATE run_details SET has_tree = 0 WHERE event_id = ?`).run(eventId);
   db.query(`DELETE FROM run_cases WHERE event_id = ?`).run(eventId);

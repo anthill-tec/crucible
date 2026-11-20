@@ -2,7 +2,7 @@
 // reveal and the header's failure jump reach it, exactly as they reach a leaf
 // row of any other run.
 //
-// HARNESS — a real board (`startServer` through `bootOn`, port 0, ":memory:")
+// HARNESS — a real board (`bootInProcess`, no socket, ":memory:")
 // holding a streamed `playwright-bdd` run, and the production shell mounted
 // against it in happy-dom (tests/helpers/served-app.ts). Tier `e2e`, so the
 // run detail draws in Density, with its heat strip.
@@ -21,9 +21,9 @@
 // title's ` › <scenario name>` tail and its status class, so no assertion here
 // pins how a suite key is spelled — only that the row and the strip agree.
 //
-// SAFETY: every server binds port 0 on ":memory:".
+// SAFETY: every board is in process (no socket) on ":memory:".
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   bddProject,
   failingStep,
@@ -36,18 +36,18 @@ import {
   waitUntil,
   type BddScenario,
 } from "../helpers/playwright-bdd-run.ts";
-import { bootOn } from "../helpers/run-stream-harness.ts";
+import { bootInProcess } from "../helpers/run-stream-harness.ts";
 import { mountServedApp, restoreRealFetch, settleServedApp } from "../helpers/served-app.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(async () => {
   await restoreRealFetch();
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }

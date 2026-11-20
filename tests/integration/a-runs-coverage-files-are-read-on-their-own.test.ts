@@ -14,13 +14,13 @@
 //    empty list and the empty root;
 //  - an id the board does not hold answers 404, as the other reads do.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production router (`bootInProcess`, in-memory
 // store). The statements a read runs are taken from the store's own
 // connection, with the rows each hands back.
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
-  bootOn,
+  bootInProcess,
   eventLine,
   openRun,
   postJson,
@@ -60,14 +60,14 @@ import {
   type CoverageFile,
 } from "../helpers/coverage-files-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -75,7 +75,7 @@ function boot(): ServerHandle {
 const AGENT = "file-reader";
 
 /** A board holding one green run of the twelve files. */
-async function twelveFileRun(): Promise<{ handle: ServerHandle; key: string; eventId: string }> {
+async function twelveFileRun(): Promise<{ handle: BoardHandle; key: string; eventId: string }> {
   const handle = boot();
   const key = await readyProject(handle, [AGENT]);
   const eventId = eventIdOf(await ingestRun(handle, key, AGENT, TWELVE_BLOCK));
@@ -92,7 +92,7 @@ const TWELVE_PATHS = TWELVE_FILES.map((file) => file.path);
 const RAW_OUTPUT = "$ runner\nraw-output-marker-41d9\n2 pass";
 
 /** A board holding one green run of the twelve files that also has raw output. */
-async function twelveFileRunWithRawOutput(): Promise<{ handle: ServerHandle; key: string; eventId: string; rawOutput: string }> {
+async function twelveFileRunWithRawOutput(): Promise<{ handle: BoardHandle; key: string; eventId: string; rawOutput: string }> {
   const handle = boot();
   const key = await readyProject(handle, [AGENT]);
   const eventId = eventIdOf(
@@ -486,7 +486,7 @@ describe("?depth=coverage on an id the board does not hold", () => {
 
 describe("a refused files= is refused before the store is read", () => {
   /** Answering a request runs no statement by itself: a read refused for a missing parameter runs none. */
-  async function expectARequestAloneRunsNoStatement(handle: ServerHandle): Promise<void> {
+  async function expectARequestAloneRunsNoStatement(handle: BoardHandle): Promise<void> {
     let status = 0;
     const records = await recordQueries(handle.store, async () => {
       status = (await getAnswer(handle, "/api/v2/status")).status;
@@ -559,7 +559,7 @@ const STEPPED_STREAM =
   eventLine({ event: "run-end", total: 2, passed: 2, failed: 0, pending: 0, duration_ms: 40 });
 
 /** A board holding a green streamed run of the twelve files that has a tree, steps under its tests, and raw output. */
-async function twelveFileRunWithStepsAndRawOutput(): Promise<{ handle: ServerHandle; eventId: string }> {
+async function twelveFileRunWithStepsAndRawOutput(): Promise<{ handle: BoardHandle; eventId: string }> {
   const handle = boot();
   const key = await readyProject(handle, [AGENT]);
   const runId = await openRun(handle, key, AGENT, { stack: "bun", framework: "playwright-bdd" });
@@ -631,7 +631,7 @@ const TWO_FILE_BLOCK = {
 interface Fileless {
   what: string;
   /** Stores the event on `handle`'s board and answers its id. */
-  store: (handle: ServerHandle, key: string) => Promise<string>;
+  store: (handle: BoardHandle, key: string) => Promise<string>;
 }
 
 const FILELESS: Fileless[] = [
@@ -717,7 +717,7 @@ function createdIdOf(answer: { status: number; body: Record<string, unknown> }):
   return answer.body.event as string;
 }
 
-function postGate(handle: ServerHandle, key: string, gateRunId?: string): Promise<{ status: number; body: Record<string, unknown> }> {
+function postGate(handle: BoardHandle, key: string, gateRunId?: string): Promise<{ status: number; body: Record<string, unknown> }> {
   return postJson(handle, "/api/v2/gates", {
     projectKey: key,
     agentId: AGENT,
@@ -733,7 +733,7 @@ function postGate(handle: ServerHandle, key: string, gateRunId?: string): Promis
 interface OtherKind {
   what: string;
   /** Stores the event on `handle`'s board and answers its id. */
-  store: (handle: ServerHandle, key: string) => Promise<string>;
+  store: (handle: BoardHandle, key: string) => Promise<string>;
   /** What the full read of the event must show, so the event is the kind it is named. */
   isTheKind: (full: Record<string, unknown>) => void;
 }

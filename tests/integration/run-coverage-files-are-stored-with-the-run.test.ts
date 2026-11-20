@@ -15,15 +15,15 @@
 //    first, then most uncovered lines, then name in code-unit order (`B.ts`
 //    before `a.ts`); a file with no lines after every file that has lines.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production router (`bootInProcess`, in-memory
 // store); the rows are read from the store's own connection. The table's columns are read by what
 // they hold (`tests/helpers/coverage-files-harness.ts`), never by a name the
 // board has not committed to; `event_id` is the column every run-detail table
 // is deleted by.
 import { afterEach, describe, expect, test } from "bun:test";
 import { coveragePercent } from "../../src/codecs/coverage.ts";
-import type { ServerHandle } from "../../src/server.ts";
-import { bootOn, postJson, readyProject, type Answer } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, postJson, readyProject, type Answer } from "../helpers/run-stream-harness.ts";
 import {
   closeStreamedRun,
   dbOf,
@@ -45,14 +45,14 @@ import {
   type StoredFile,
 } from "../helpers/coverage-files-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -76,7 +76,7 @@ const TWO_FILES_TOTALS = {
 };
 
 /** The run's `events.coverage` column, as the text the store holds. */
-function storedCoverageText(handle: ServerHandle, eventId: string): string | null {
+function storedCoverageText(handle: BoardHandle, eventId: string): string | null {
   const row = dbOf(handle.store)
     .query<{ coverage: string | null }, [string]>(`SELECT coverage FROM events WHERE id = ?`)
     .get(eventId);
@@ -90,7 +90,7 @@ function expectedRows(codec: CoverageCodecName, texts: readonly string[]): Store
 }
 
 /** A green two-file run on the same board: the rows a file-bearing run stores, so "no row" is never "no table". */
-async function expectAGreenRunStoresItsFiles(handle: ServerHandle, key: string, agentId: string): Promise<string> {
+async function expectAGreenRunStoresItsFiles(handle: BoardHandle, key: string, agentId: string): Promise<string> {
   const control = eventIdOf(await ingestRun(handle, key, agentId, TWO_FILES_BLOCK));
   expect(await storedFiles(dbOf(handle.store), control)).toEqual(TWO_FILES_ROWS);
   return control;

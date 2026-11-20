@@ -10,7 +10,7 @@
 // in place. The table follows the project's latest coverage run, and a
 // refresh that leaves that run in place redraws nothing and reads nothing.
 //
-// Every run here is ingested over HTTP on a real board (`startServer`, port 0,
+// Every run here is ingested over HTTP on a real board (`bootInProcess`, no socket,
 // an in-memory store), and the production page is mounted against that board.
 import { afterEach, describe, expect, test } from "bun:test";
 import { fixtureText, TWELVE_FILES, TWELVE_RECORDS, TWELVE_ROOT, type CoverageFile } from "../helpers/coverage-files-harness.ts";
@@ -41,7 +41,7 @@ import {
   refuseFileReads,
   selectCoverageTab,
   shownRows,
-  startBoard,
+  startBoardInProcess,
   totalsOnlyRun,
 } from "../helpers/coverage-files-view.ts";
 import { gateFetch } from "../helpers/fetch-gate.ts";
@@ -93,7 +93,7 @@ const SHOP_GO_FILES: CoverageFile[] = [
 
 describe("the Coverage tab lists the files of the latest green coverage run", () => {
   test("beneath the totals and view run, the tab shows the files heading and one row per file in the board's order", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await lcovRun(board, TWELVE_RECORDS);
     const kept = await boardFiles(board, eventId);
     expect(kept, "the board keeps the twelve files this test expects").toEqual({
@@ -136,7 +136,7 @@ describe("the Coverage tab lists the files of the latest green coverage run", ()
   });
 
   test("each row reads its name, its lines as covered/total, its lines percent and its functions as covered/total · percent, with a meter filled to the lines percent", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await lcovRun(board, TWELVE_RECORDS);
 
     await openCoverageTab(board);
@@ -152,7 +152,7 @@ describe("the Coverage tab lists the files of the latest green coverage run", ()
   });
 
   test("the tab requests the run's first 50 files, once", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await lcovRun(board, TWELVE_RECORDS);
 
     await openPage(board, `/p/${board.key}`);
@@ -163,7 +163,7 @@ describe("the Coverage tab lists the files of the latest green coverage run", ()
   });
 
   test("the newest green coverage run is the one listed, not an older one", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const older = await lcovRun(board, TWELVE_RECORDS);
     const newer = await lcovRun(board, numberedRecords(3));
 
@@ -178,7 +178,7 @@ describe("the Coverage tab lists the files of the latest green coverage run", ()
 
 describe("the Coverage tab's file names and headings", () => {
   test("a row shows its name without the directory every file shares, and carries the whole name as its title", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await lcovRun(board, TWELVE_RECORDS);
 
     await openCoverageTab(board);
@@ -195,7 +195,7 @@ describe("the Coverage tab's file names and headings", () => {
   });
 
   test("a run whose files share no directory shows each name whole", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await lcovRun(board, [
       { path: "src/a.ts", lf: 10, lh: 1 },
       { path: "srcgen/b.ts", lf: 10, lh: 9 },
@@ -210,7 +210,7 @@ describe("the Coverage tab's file names and headings", () => {
   });
 
   test("a run that is not a Maven run heads its name column file", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await lcovRun(board, TWELVE_RECORDS, { stack: "bun" });
 
     await openCoverageTab(board);
@@ -222,7 +222,7 @@ describe("the Coverage tab's file names and headings", () => {
   });
 
   test("a Maven run heads its name column class, names each class whole, and leaves the functions cell of a class with no methods empty", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await greenRun(
       board,
       { codec: "jacoco", data: fixtureText("jacoco-csv", "multi-row.csv") },
@@ -247,7 +247,7 @@ describe("the Coverage tab's file names and headings", () => {
   });
 
   test("a Go run's rows show lines only: every functions cell is empty", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await greenRun(
       board,
       { codec: "go-coverprofile", data: fixtureText("go-coverprofile", "shop-plain.coverprofile") },
@@ -277,7 +277,7 @@ describe("the Coverage tab's file names and headings", () => {
 
 describe("the Coverage tab on a run of more than 50 files", () => {
   test("a run of 60 files opens on its first 50 rows and one control reading show all 60", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await lcovRun(board, numberedRecords(60));
 
     await openCoverageTab(board);
@@ -294,7 +294,7 @@ describe("the Coverage tab on a run of more than 50 files", () => {
   });
 
   test("show all requests the files with no limit, lists all 60 and removes the control", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await lcovRun(board, numberedRecords(60));
     await openCoverageTab(board);
 
@@ -308,7 +308,7 @@ describe("the Coverage tab on a run of more than 50 files", () => {
   });
 
   test("a run of exactly 50 files lists its 50 rows and shows no control", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await lcovRun(board, numberedRecords(50));
 
     await openCoverageTab(board);
@@ -320,7 +320,7 @@ describe("the Coverage tab on a run of more than 50 files", () => {
   });
 
   test("a run of 51 files opens on 50 rows and a control reading show all 51", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await lcovRun(board, numberedRecords(51));
 
     await openCoverageTab(board);
@@ -330,7 +330,7 @@ describe("the Coverage tab on a run of more than 50 files", () => {
   });
 
   test("a run of 3 files lists its 3 rows and shows no control", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await lcovRun(board, numberedRecords(3));
 
     await openCoverageTab(board);
@@ -341,7 +341,7 @@ describe("the Coverage tab on a run of more than 50 files", () => {
   });
 
   test("a run of one file heads its table Files · 1", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await lcovRun(board, [{ path: "/srv/app/src/only.ts", lf: 8, lh: 6 }]);
 
     await openCoverageTab(board);
@@ -355,7 +355,7 @@ describe("the Coverage tab on a run of more than 50 files", () => {
 
 describe("the Coverage tab on a run that kept coverage and no file", () => {
   test("a run filed with totals only shows its totals, view run and no per-file coverage for this run, with no table", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await totalsOnlyRun(board, {
       lines: { total: 200, covered: 150, percent: 75 },
       functions: { total: 20, covered: 11, percent: 55 },
@@ -374,7 +374,7 @@ describe("the Coverage tab on a run that kept coverage and no file", () => {
   });
 
   test("a run whose report decoded to no file shows its totals and no per-file coverage for this run, with no table", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await greenRun(
       board,
       { codec: "go-coverprofile", data: fixtureText("go-coverprofile", "contracts-types-only.coverprofile") },
@@ -393,7 +393,7 @@ describe("the Coverage tab on a run that kept coverage and no file", () => {
   });
 
   test("a run with files does not say it has none", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await lcovRun(board, numberedRecords(3));
 
     await openCoverageTab(board);
@@ -406,7 +406,7 @@ describe("the Coverage tab on a run that kept coverage and no file", () => {
 
 describe("the Coverage tab while its files are read, and when the read fails", () => {
   test("while the files are read the table's place shows the board's spinner, the totals and view run stay, and the rows replace it when the read answers", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await lcovRun(board, numberedRecords(3));
     await openPage(board, `/p/${board.key}`);
     const gate = gateFetch((url) => isFileRead(url));
@@ -433,7 +433,7 @@ describe("the Coverage tab while its files are read, and when the read fails", (
   });
 
   test("a read that never reaches the board shows could not read this run's files, and the totals and view run stay", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await lcovRun(board, numberedRecords(3));
     await openPage(board, `/p/${board.key}`);
     const gate = gateFetch((url) => isFileRead(url));
@@ -453,7 +453,7 @@ describe("the Coverage tab while its files are read, and when the read fails", (
   });
 
   test("a read the board answers with an error shows could not read this run's files, and the totals and view run stay", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await lcovRun(board, numberedRecords(3));
     await openPage(board, `/p/${board.key}`);
     const refusal = refuseFileReads(500);
@@ -469,7 +469,7 @@ describe("the Coverage tab while its files are read, and when the read fails", (
   });
 
   test("while the show all read is in flight the 50 rows stay, one spinner stands beneath them in the control's place, one read is sent, and all 60 rows replace it when the read answers", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await lcovRun(board, numberedRecords(60));
     await openCoverageTab(board);
     expect(all("coverage-file-row")).toHaveLength(50);
@@ -501,7 +501,7 @@ describe("the Coverage tab while its files are read, and when the read fails", (
   });
 
   test("a failed show all read keeps the 50 rows with the failure line beneath them, and the next click reads again and lists all 60", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await lcovRun(board, numberedRecords(60));
     await openCoverageTab(board);
     expect(all("coverage-file-row")).toHaveLength(50);
@@ -545,7 +545,7 @@ describe("the Coverage tab follows the project's latest coverage run", () => {
   ];
 
   test("a newer green coverage run arriving on a frame moves the tab's totals to that run's", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await lcovRun(board, numberedRecords(60));
     await openCoverageTab(board);
     expect(panelText()).toContain("lines 1770/6000 · 29.5%");
@@ -562,7 +562,7 @@ describe("the Coverage tab follows the project's latest coverage run", () => {
   });
 
   test("with all 60 files shown, a newer green coverage run of 3 files arriving shows that run's 3 files, its totals and no control", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     await lcovRun(board, numberedRecords(60));
     await openCoverageTab(board);
     await press(one("coverage-files-show-all"), "the show all control");
@@ -589,7 +589,7 @@ describe("the Coverage tab follows the project's latest coverage run", () => {
   });
 
   test("a read for the older run that answers after the newer run arrived does not replace the newer run's files", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const older = await lcovRun(board, numberedRecords(60));
     await openCoverageTab(board);
     expect(all("coverage-file-row")).toHaveLength(50);
@@ -626,7 +626,7 @@ describe("the Coverage tab follows the project's latest coverage run", () => {
   });
 
   test("with all 60 files shown, a frame that leaves the latest coverage run unchanged keeps the 60 rows and sends no request for the files", async () => {
-    const board = await startBoard();
+    const board = await startBoardInProcess();
     const eventId = await lcovRun(board, numberedRecords(60));
     await openCoverageTab(board);
     await press(one("coverage-files-show-all"), "the show all control");

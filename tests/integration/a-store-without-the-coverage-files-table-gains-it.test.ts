@@ -15,18 +15,18 @@
 // the build before the table arrived looks. The version an unstamped store is
 // baselined at is measured on a reference store by this build, never written
 // here as a number. The ingest into an aged store goes through the real
-// production HTTP surface (`startServer`, port 0) on that scratch file. The
+// production router (`bootInProcess`, no socket) on that scratch file. The
 // live store is never read.
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { MIGRATIONS, SCHEMA_VERSION, Store } from "../../src/store.ts";
 import type { MigrationStep } from "../../src/store.ts";
 import type { SuiteNode } from "../../src/types.ts";
-import { bootOn, register } from "../helpers/run-stream-harness.ts";
+import { bootInProcess, register } from "../helpers/run-stream-harness.ts";
 import { dbOf, eventIdOf, FILES_TABLE, fileRowCount, ingestRun, lcovText } from "../helpers/coverage-files-harness.ts";
 
 /** The six run-detail tables a store held before this one. */
@@ -103,7 +103,7 @@ const SEED_COVERAGE = {
 };
 
 const scratchDirs: string[] = [];
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
@@ -196,7 +196,7 @@ describe("a store at the current schema version without run_coverage_files", () 
 
   test("once opened, a green run ingested with a coverage block stores its files in the gained table", async () => {
     const { dbPath, projectKey } = agedStore({ drop: [FILES_TABLE] });
-    const handle = bootOn(dbPath);
+    const handle = bootInProcess(dbPath);
     handles.push(handle);
     const earlier = handle.store
       .listEvents(projectKey)

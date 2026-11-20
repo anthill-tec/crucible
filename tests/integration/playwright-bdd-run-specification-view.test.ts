@@ -2,7 +2,7 @@
 // from the shape the board stores for it: one suite per feature and browser,
 // one test per scenario, and the scenario's Gherkin steps in `TestLeaf.steps`.
 //
-// HARNESS — a real board (`startServer`, port 0, ":memory:") holding stored
+// HARNESS — a real board (`bootInProcess`, no socket, ":memory:") holding stored
 // runs, and the production shell mounted against it in happy-dom
 // (tests/helpers/served-app.ts): the new-shape run is streamed in
 // `crucible-events` and closed over HTTP exactly as the bun client streams a
@@ -43,11 +43,11 @@
 //     order; the bounds below hold under either reading of "then" (the first two
 //     of all features, or the first two after the failing ones).
 //
-// SAFETY: every server binds port 0 on ":memory:".
+// SAFETY: every board is in process (no socket) on ":memory:".
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
-  bootOn,
+  bootInProcess,
   closeStream,
   eventLine,
   openRun,
@@ -56,22 +56,22 @@ import {
 } from "../helpers/run-stream-harness.ts";
 import { mountServedApp, restoreRealFetch, servedFetchLog, settleServedApp } from "../helpers/served-app.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(async () => {
   await restoreRealFetch();
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
 
 const AGENT = "spec-view-runner";
 
-async function frontendProject(handle: ServerHandle, name: string): Promise<string> {
+async function frontendProject(handle: BoardHandle, name: string): Promise<string> {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name, type: "frontend", sutRoot: `/tmp/${name}` });
   await register(handle, key, AGENT);
@@ -130,7 +130,7 @@ function streamOf(scenarios: ScenarioFields[]): string {
 }
 
 /** Opens, streams and closes a playwright-bdd run over HTTP; answers the event it stored. */
-async function streamBddRun(handle: ServerHandle, key: string, scenarios: ScenarioFields[]): Promise<string> {
+async function streamBddRun(handle: BoardHandle, key: string, scenarios: ScenarioFields[]): Promise<string> {
   const runId = await openRun(handle, key, AGENT, { tier: "e2e", stack: "bun", framework: "playwright-bdd" });
   const batch = await sendBatch(handle, runId, { projectKey: key, agentId: AGENT, from: 0, data: streamOf(scenarios) });
   expect(batch.status, JSON.stringify(batch.body)).toBe(200);
@@ -274,7 +274,7 @@ function suiteReads(eventId: string): string[] {
     .map((q) => `${q.get("suite")}|${q.get("browser") ?? ""}`);
 }
 
-async function openRunDetail(handle: ServerHandle, key: string, eventId: string): Promise<void> {
+async function openRunDetail(handle: BoardHandle, key: string, eventId: string): Promise<void> {
   await mountServedApp(handle, `/p/${key}/run/${eventId}`);
 }
 
