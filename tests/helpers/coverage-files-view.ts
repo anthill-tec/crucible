@@ -15,7 +15,7 @@
 //    its meter is drawn at;
 //  - which reads of a run's files the page sent, as the shell asked for them.
 import { expect } from "bun:test";
-import type { BoardHandle, ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   eventIdOf,
   eventRead,
@@ -25,44 +25,29 @@ import {
   type CoverageFile,
   type LcovRecord,
 } from "./coverage-files-harness.ts";
-import { bootInProcess, bootOn, postJson, readyProject } from "./run-stream-harness.ts";
+import { bootInProcess, postJson, readyProject } from "./run-stream-harness.ts";
 import { mountServedApp, restoreRealFetch, servedFetchLog, settleServedApp } from "./served-app.ts";
 import { FakeEventSource, installEventSource, restoreEventSource } from "./stream-workspace-harness.ts";
 
 // ── The board ───────────────────────────────────────────────────────────────
 
-export interface Board {
-  handle: ServerHandle;
+/** A board with no socket, answered by its own `fetch` at
+ *  `http://board.invalid`, holding one project and its registered agent. */
+export interface InProcessBoard {
+  handle: BoardHandle;
   /** The one project's key. */
   key: string;
   /** The agent every run is filed by. */
   agentId: string;
 }
 
-/** `Board`'s in-process twin: the same project and agent, on a board with no
- *  socket, answered by its own `fetch` at `http://board.invalid`. */
-export interface InProcessBoard {
-  handle: BoardHandle;
-  key: string;
-  agentId: string;
-}
+/** The board every helper below drives. */
+export type AnyBoard = InProcessBoard;
 
-/** Either board: every helper below drives both the same way. */
-export type AnyBoard = Board | InProcessBoard;
+const started: BoardHandle[] = [];
 
-const started: Array<ServerHandle | BoardHandle> = [];
-
-/** A board on port 0 and an in-memory store, holding one project and its registered agent. */
-export async function startBoard(name = "coverage-files-view"): Promise<Board> {
-  const handle = bootOn();
-  started.push(handle);
-  const agentId = "coverage-runner";
-  const key = await readyProject(handle, [agentId], name);
-  return { handle, key, agentId };
-}
-
-/** `startBoard` in process: an in-memory store with no socket, holding one
- *  project and its registered agent; `closeBoards` stops it. */
+/** An in-memory store with no socket, holding one project and its registered
+ *  agent; `closeBoards` stops it. */
 export async function startBoardInProcess(name = "coverage-files-view"): Promise<InProcessBoard> {
   const handle = bootInProcess();
   started.push(handle);
