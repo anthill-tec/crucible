@@ -5,54 +5,50 @@
 // verb) must never leave the card on the `ingesting…` its narrator posted just
 // before — nor on the running count before that.
 //
-// Driven through the real production HTTP surface (`startServer`), the same
+// Driven through the real production HTTP surface (`bootInProcess`), the same
 // register / plan / cycle / run-lifecycle routes the sibling ingest-outcome
 // tests use. The outcome is written in the style of `ingestOutcome` (the
 // tally the test-ingest routes write): `compile · <n> errors · ingested`,
 // singular for one error.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
 
-function base(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
-}
-
-async function postJson(handle: ServerHandle, route: string, body: unknown): Promise<Response> {
-  return fetch(`${base(handle)}${route}`, {
+async function postJson(handle: BoardHandle, route: string, body: unknown): Promise<Response> {
+  return send(handle, `${route}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function patchJson(handle: ServerHandle, route: string, body: unknown): Promise<Response> {
-  return fetch(`${base(handle)}${route}`, {
+async function patchJson(handle: BoardHandle, route: string, body: unknown): Promise<Response> {
+  return send(handle, `${route}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function getJson(handle: ServerHandle, route: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base(handle)}${route}`);
+async function getJson(handle: BoardHandle, route: string): Promise<Record<string, unknown>> {
+  const res = await send(handle, `${route}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
 
-function seedProject(handle: ServerHandle): string {
+function seedProject(handle: BoardHandle): string {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: "P", type: "backend", sutRoot: "/tmp/p" });
   return key;
@@ -66,7 +62,7 @@ interface AgentBrief {
 }
 
 async function agentById(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
 ): Promise<AgentBrief | undefined> {
@@ -74,7 +70,7 @@ async function agentById(
   return (body.agents as AgentBrief[]).find((a) => a.agentId === agentId);
 }
 
-async function openRunIds(handle: ServerHandle, key: string): Promise<string[]> {
+async function openRunIds(handle: BoardHandle, key: string): Promise<string[]> {
   const body = await getJson(handle, `/api/v2/events?project=${key}`);
   return (body.openRuns as { runId: string }[]).map((r) => r.runId);
 }
@@ -82,7 +78,7 @@ async function openRunIds(handle: ServerHandle, key: string): Promise<string[]> 
 const FIXTURE_ORCH = "fixture-orch";
 
 async function fileAndActivateCycle(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   cr: string,
 ): Promise<{ planId: number; cycleId: number }> {
@@ -110,7 +106,7 @@ async function fileAndActivateCycle(
 }
 
 async function registerBound(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
   cycleId: number,
@@ -124,13 +120,13 @@ async function registerBound(
   expect(res.status).toBe(200);
 }
 
-async function startRun(handle: ServerHandle, key: string, agentId: string): Promise<string> {
+async function startRun(handle: BoardHandle, key: string, agentId: string): Promise<string> {
   const res = await postJson(handle, "/api/v2/runs/start", { projectKey: key, agentId });
   expect(res.status).toBe(202);
   return ((await res.json()) as { runId: string }).runId;
 }
 
-async function sayIngesting(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function sayIngesting(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const res = await postJson(handle, "/api/v2/agents/heartbeat", {
     projectKey: key,
     agentId,

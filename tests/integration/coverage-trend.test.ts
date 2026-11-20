@@ -55,10 +55,11 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { Store } from "../../src/store.ts";
 import type { RunSummary, SuiteNode } from "../../src/types.ts";
 import { settleDom } from "../helpers/dom-settle";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 // ── (S1) STORE — rollup buckets keyed by UTC day, never by wave (CR-CRU-033 §S1) ──
 //
@@ -193,7 +194,7 @@ function seedLegacyWaveRollup(store: Store, projectKey: string, bucket: string, 
 }
 
 describe("GET /api/v2/projects — coverageTrend (date-keyed {day,percent}[] series, CR-CRU-033 §S2)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -204,13 +205,13 @@ describe("GET /api/v2/projects — coverageTrend (date-keyed {day,percent}[] ser
   });
 
   async function projectsList(): Promise<ProjectPayload[]> {
-    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/projects`);
+    const res = await send(handle!, `/api/v2/projects`);
     const body = (await res.json()) as ProjectsListResponse;
     return body.projects;
   }
 
   test("4 coverage-bearing green-regression runs, all pruned past retention: coverageTrend still returns all 4 points, oldest→newest", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store: Store = handle.store;
     const key = crypto.randomUUID();
     // retention: 0 forces every insertEvent to immediately overflow (count
@@ -269,7 +270,7 @@ describe("GET /api/v2/projects — coverageTrend (date-keyed {day,percent}[] ser
   });
 
   test("1 coverage-bearing green-regression run, pruned past retention: coverageTrend returns exactly 1 point keyed to its UTC day", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store: Store = handle.store;
     const key = crypto.randomUUID();
     store.addProject({ key, name: "trend-1", type: "backend", sutRoot: "/tmp/trend-1", retention: 0 });
@@ -296,7 +297,7 @@ describe("GET /api/v2/projects — coverageTrend (date-keyed {day,percent}[] ser
   });
 
   test("fresh project with no coverage-bearing rollup: coverageTrend is ABSENT from the payload (not merely empty/null)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store: Store = handle.store;
     const key = crypto.randomUUID();
     store.addProject({ key, name: "trend-0", type: "backend", sutRoot: "/tmp/trend-0" });
@@ -308,7 +309,7 @@ describe("GET /api/v2/projects — coverageTrend (date-keyed {day,percent}[] ser
   });
 
   test("a FAILING run carrying a coverage payload never contributes a coverageTrend point (§S4 discard-on-fail), even when pruned", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store: Store = handle.store;
     const key = crypto.randomUUID();
     store.addProject({ key, name: "trend-fail", type: "backend", sutRoot: "/tmp/trend-fail", retention: 0 });
@@ -333,7 +334,7 @@ describe("GET /api/v2/projects — coverageTrend (date-keyed {day,percent}[] ser
   });
 
   test("§S2 merge: 2 pruned day-rollups (07-15=90, 07-16=91) + within-retention live events (07-17=93, 07-18=94) yield exactly 4 points, oldest→newest", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store: Store = handle.store;
     const key = crypto.randomUUID();
     // retention: 2 keeps at most 2 raw events; inserting a 3rd/4th event
@@ -376,7 +377,7 @@ describe("GET /api/v2/projects — coverageTrend (date-keyed {day,percent}[] ser
   });
 
   test("§S2 same-day dedup: a day with BOTH a pruned rollup (percent 80) AND a within-retention live event (percent 88) yields ONE point with the live value winning", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store: Store = handle.store;
     const key = crypto.randomUUID();
     // retention: 1 keeps at most 1 raw event: each new insert immediately
@@ -440,7 +441,7 @@ describe("GET /api/v2/projects — coverageTrend (date-keyed {day,percent}[] ser
   });
 
   test("§S2 legacy exclusion: a wave-keyed rollup bucket (\"4\", non-date string) contributes NO point alongside a valid dated point", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store: Store = handle.store;
     const key = crypto.randomUUID();
     store.addProject({ key, name: "trend-legacy", type: "backend", sutRoot: "/tmp/trend-legacy", retention: 0 });
@@ -783,7 +784,7 @@ describe("workspace Vitals COVERAGE TREND bars — driven by the SERVER coverage
 // payload directly." Blocks (A) and (B) above each cover one HALF of this
 // path in isolation: (A) hits the real server but never mounts the client;
 // (B) mounts the client but hand-authors project.coverageTrend as a literal.
-// This block drives BOTH halves in the SAME test — a real startServer(),
+// This block drives BOTH halves in the SAME test — a real bootInProcess(),
 // seeded with coverage events that stay WITHIN the default retention cap
 // (never forced to prune, unlike the retention:0/1/2 fixtures above, so the
 // merge is proven for the live-event half without a rollup ever existing) —
@@ -791,7 +792,7 @@ describe("workspace Vitals COVERAGE TREND bars — driven by the SERVER coverage
 // mountApp's scripted fetch, so the render consumes the server's actual
 // merge output rather than a constructed fixture.
 describe("§S3 integration — within-retention coverage renders bars end-to-end (real server -> mounted app) (CR-CRU-033)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(async () => {
     handle?.stop();
@@ -801,7 +802,7 @@ describe("§S3 integration — within-retention coverage renders bars end-to-end
   });
 
   test("a project whose only coverage runs are within retention (NONE pruned) renders coverage-trend-bar elements sourced from the REAL /api/v2/projects merge, not a hand-authored payload", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store: Store = handle.store;
     const key = crypto.randomUUID();
     // DEFAULT retention (no override, unlike the retention:0/1/2 fold
@@ -843,7 +844,7 @@ describe("§S3 integration — within-retention coverage renders bars end-to-end
 
     // Step 1 — drive the REAL server: fetch the real /api/v2/projects
     // response, not a constructed payload.
-    const res = await fetch(`http://localhost:${handle.server.port}/api/v2/projects`);
+    const res = await send(handle!, `/api/v2/projects`);
     const body = (await res.json()) as ProjectsListResponse;
     const fetchedProject = body.projects.find((p) => p.key === key);
     expect(fetchedProject).toBeDefined();

@@ -11,7 +11,7 @@
 // declaration journal does not, so before the refusal its burndown answered
 // 200 with `totalPoints: 0` — neither the release's real total nor a refusal.
 //
-// Drives the REAL production server (`startServer` on an ephemeral port and a
+// Drives the REAL production router (`bootInProcess`, no port, and a
 // scratch database), seeded only through the HTTP routes: project create,
 // orchestrator register, release-proposal, queue/plan (with points),
 // milestones, archive.
@@ -19,8 +19,9 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { hints } from "../../src/hints.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface AnyBody {
   ok?: boolean;
@@ -30,7 +31,7 @@ interface AnyBody {
 }
 
 const scratchDirs: string[] = [];
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
@@ -40,16 +41,12 @@ afterEach(() => {
   }
 });
 
-/** A per-test scratch store on an OS-assigned port — never the live board. */
-function boot(): ServerHandle {
+/** A per-test scratch store in process (no port) — never the live board. */
+function boot(): BoardHandle {
   const dir = mkdtempSync(join(tmpdir(), "archived-analytics-"));
   scratchDirs.push(dir);
-  handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+  handle = bootInProcess(join(dir, "crucible.db"));
   return handle;
-}
-
-function base(): string {
-  return `http://localhost:${handle!.server.port}`;
 }
 
 async function readBody(res: Response): Promise<AnyBody> {
@@ -62,7 +59,7 @@ async function readBody(res: Response): Promise<AnyBody> {
 }
 
 async function post(path: string, body: unknown): Promise<{ status: number; body: AnyBody }> {
-  const res = await fetch(`${base()}${path}`, {
+  const res = await send(handle!, `${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -71,7 +68,7 @@ async function post(path: string, body: unknown): Promise<{ status: number; body
 }
 
 async function get(path: string): Promise<{ status: number; body: AnyBody }> {
-  const res = await fetch(`${base()}${path}`);
+  const res = await send(handle!, `${path}`);
   return { status: res.status, body: await readBody(res) };
 }
 

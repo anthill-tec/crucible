@@ -30,13 +30,14 @@
 // is the fleet census's to read (`tests/client/…fleet_envelope_census.py`),
 // because that is the harness that reads every client's argparse.
 //
-// Every server here is booted on an OS-assigned port against an mkdtempSync
+// Every server here is booted in process (no port) against an mkdtempSync
 // scratch db. The live data/crucible.db and port 3849 are never touched.
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface QueueEntryWire {
   cr: string;
@@ -83,7 +84,7 @@ const C = "CR-ENVELOPE-3";
 const UNKNOWN_TARGET = "CR-NEW-9";
 
 describe("CR-CRU-106 §S2b/§S3 — cr-depends: the envelope, the remedy hint and the migration door", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -97,15 +98,11 @@ describe("CR-CRU-106 §S2b/§S3 — cr-depends: the envelope, the remedy hint an
   function boot(): void {
     const dir = mkdtempSync(join(tmpdir(), "cru106-env-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
-  }
-
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
+    handle = bootInProcess(join(dir, "crucible.db"));
   }
 
   async function post(path: string, body: unknown): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`, {
+    const res = await send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -114,7 +111,7 @@ describe("CR-CRU-106 §S2b/§S3 — cr-depends: the envelope, the remedy hint an
   }
 
   async function get(path: string): Promise<AnyBody> {
-    return (await (await fetch(`${base()}${path}`)).json()) as AnyBody;
+    return (await (await send(handle!, `${path}`)).json()) as AnyBody;
   }
 
   /** A project with ONE orchestrator; the role gate itself is cycle 1's. */

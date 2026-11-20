@@ -11,7 +11,8 @@
 // The Store-level contract (exact values, absence cases, cost) lives in
 // tests/unit/commit-boundary-derivation.test.ts; this file owns the ROUTES only.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface PlanRecord {
   planId: number;
@@ -38,19 +39,15 @@ const expectedBoundary = {
 };
 
 describe("commitBoundary is served on every route that carries it today (CR-CRU-126 §S1)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function url(path: string): string {
-    return `http://localhost:${handle!.server.port}${path}`;
-  }
-
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(url(path), {
+    return send(handle!, path, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -58,7 +55,7 @@ describe("commitBoundary is served on every route that carries it today (CR-CRU-
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(url(path), {
+    return send(handle!, path, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -66,7 +63,7 @@ describe("commitBoundary is served on every route that carries it today (CR-CRU-
   }
 
   async function plansAt(path: string): Promise<PlanRecord[]> {
-    const res = await fetch(url(path));
+    const res = await send(handle!, path);
     expect(res.status).toBe(200);
     return ((await res.json()) as PlansListResponse).plans;
   }
@@ -125,7 +122,7 @@ describe("commitBoundary is served on every route that carries it today (CR-CRU-
   }
 
   test("the UNFILTERED project plans list carries the full boundary", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await boardWithClosedMergedPlan("CR-ROUTE-ALL", "track-1");
 
     const plans = await plansAt(`/api/v2/projects/${key}/plans`);
@@ -134,7 +131,7 @@ describe("commitBoundary is served on every route that carries it today (CR-CRU-
   });
 
   test("the ?cr= filtered list carries the full boundary", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await boardWithClosedMergedPlan("CR-ROUTE-CR", "track-1");
 
     const plans = await plansAt(`/api/v2/projects/${key}/plans?cr=CR-ROUTE-CR`);
@@ -143,7 +140,7 @@ describe("commitBoundary is served on every route that carries it today (CR-CRU-
   });
 
   test("the ?track= filtered list carries the full boundary", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await boardWithClosedMergedPlan("CR-ROUTE-TRACK", "track-2");
 
     const plans = await plansAt(`/api/v2/projects/${key}/plans?track=track-2`);
@@ -152,7 +149,7 @@ describe("commitBoundary is served on every route that carries it today (CR-CRU-
   });
 
   test("the GLOBAL cross-project plans list carries the full boundary", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     await boardWithClosedMergedPlan("CR-ROUTE-GLOBAL", "track-3");
 
     const plans = await plansAt("/api/v2/plans");

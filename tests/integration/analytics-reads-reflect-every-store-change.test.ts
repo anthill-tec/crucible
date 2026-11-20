@@ -21,7 +21,8 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 /** Narrow a store op's `T | { error: string }` union, loudly. */
 function planned<T extends object>(result: T): Exclude<T, { error: string }> {
@@ -30,7 +31,7 @@ function planned<T extends object>(result: T): Exclude<T, { error: string }> {
 }
 
 const scratchDirs: string[] = [];
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
@@ -40,11 +41,11 @@ afterEach(() => {
   }
 });
 
-function boot(): { handle: ServerHandle; dbPath: string } {
+function boot(): { handle: BoardHandle; dbPath: string } {
   const dir = mkdtempSync(join(tmpdir(), "analytics-fresh-"));
   scratchDirs.push(dir);
   const dbPath = join(dir, "crucible.db");
-  handle = startServer({ port: 0, dbPath });
+  handle = bootInProcess(dbPath);
   return { handle, dbPath };
 }
 
@@ -60,8 +61,8 @@ interface AnalyticsBody {
   [key: string]: unknown;
 }
 
-async function getJson(h: ServerHandle, path: string): Promise<{ status: number; body: AnalyticsBody }> {
-  const res = await fetch(`http://localhost:${h.server.port}${path}`);
+async function getJson(h: BoardHandle, path: string): Promise<{ status: number; body: AnalyticsBody }> {
+  const res = await send(h, `${path}`);
   let body: AnalyticsBody = {};
   try {
     body = (await res.json()) as AnalyticsBody;

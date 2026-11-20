@@ -32,10 +32,11 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { Store } from "../../src/store.ts";
 import type { Coverage } from "../../src/types.ts";
 import { settleDom } from "../helpers/dom-settle";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 // ─────────────────────────────────────────────────────────────────────────
 // (A) SERVER — GET /api/v2/projects carries latestCoverageEventId
@@ -55,7 +56,7 @@ interface ProjectsRollupResponse {
 const GREEN: Coverage = { lines: { total: 10, covered: 8, percent: 80 } };
 
 describe("GET /api/v2/projects — latestCoverageEventId (integration AC, §nav table)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -63,13 +64,13 @@ describe("GET /api/v2/projects — latestCoverageEventId (integration AC, §nav 
   });
 
   async function projectsList(): Promise<ProjectRollupWithCoverageId[]> {
-    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/projects`);
+    const res = await send(handle!, `/api/v2/projects`);
     const body = (await res.json()) as ProjectsRollupResponse;
     return body.projects;
   }
 
   test("a green (all-pass) run with coverage sets latestCoverageEventId to that event's id", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store: Store = handle.store;
     const key = crypto.randomUUID();
     store.addProject({ key, name: "cov-id-1", type: "backend", sutRoot: "/tmp/cov-id-1" });
@@ -92,7 +93,7 @@ describe("GET /api/v2/projects — latestCoverageEventId (integration AC, §nav 
   });
 
   test("fresh project with no green-coverage run: latestCoverageEventId is ABSENT from the payload (not merely null)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store: Store = handle.store;
     const key = crypto.randomUUID();
     store.addProject({ key, name: "cov-id-2", type: "backend", sutRoot: "/tmp/cov-id-2" });
@@ -105,7 +106,7 @@ describe("GET /api/v2/projects — latestCoverageEventId (integration AC, §nav 
   });
 
   test("two green-coverage runs: latestCoverageEventId matches the NEWEST event, not the first", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store: Store = handle.store;
     const key = crypto.randomUUID();
     store.addProject({ key, name: "cov-id-3", type: "backend", sutRoot: "/tmp/cov-id-3" });
@@ -140,7 +141,7 @@ describe("GET /api/v2/projects — latestCoverageEventId (integration AC, §nav 
   });
 
   test("a FAILING run carrying a coverage payload never sets latestCoverageEventId (§S4 discard-on-fail)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store: Store = handle.store;
     const key = crypto.randomUUID();
     store.addProject({ key, name: "cov-id-4", type: "backend", sutRoot: "/tmp/cov-id-4" });

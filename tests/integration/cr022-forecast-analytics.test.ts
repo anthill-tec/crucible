@@ -44,8 +44,9 @@ import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { QueuePlanInput } from "../../src/store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 function planned<T extends object>(result: T): Exclude<T, { error: string }> {
   if ("error" in result) throw new Error(`plan op refused: ${String((result as { error: string }).error)}`);
@@ -65,7 +66,7 @@ interface ForecastBody {
 }
 
 const scratchDirs: string[] = [];
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 const DAY_MS = 86_400_000;
 
 afterEach(() => {
@@ -77,15 +78,11 @@ afterEach(() => {
   }
 });
 
-function boot(): ServerHandle {
+function boot(): BoardHandle {
   const dir = mkdtempSync(join(tmpdir(), "cru022-fcst-"));
   scratchDirs.push(dir);
-  handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+  handle = bootInProcess(join(dir, "crucible.db"));
   return handle;
-}
-
-function base(): string {
-  return `http://localhost:${handle!.server.port}`;
 }
 
 async function getForecast(
@@ -93,8 +90,7 @@ async function getForecast(
   release: string,
   seed = 42,
 ): Promise<{ status: number; body: ForecastBody }> {
-  const res = await fetch(
-    `${base()}/api/v2/projects/${key}/analytics/forecast` +
+  const res = await send(handle!, `/api/v2/projects/${key}/analytics/forecast` +
       `?release=${encodeURIComponent(release)}&seed=${seed}`,
   );
   let body: ForecastBody = {};

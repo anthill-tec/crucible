@@ -41,7 +41,7 @@
 //
 // Harness: reuses the EXACT time-injection + store-reopen technique from
 // tests/integration/cycle-epochs.test.ts (bun:test's `setSystemTime()` mocks
-// process-wide `Date.now()`; a "restart" is a fresh `startServer()` over the
+// process-wide `Date.now()`; a "restart" is a fresh `bootInProcess()` over the
 // SAME on-disk dbPath) and tests/unit/boot-safety.test.ts's tmp-dir convention —
 // no new clock mechanism invented here.
 
@@ -50,9 +50,8 @@ import { setSystemTime } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { startServer } from "../../src/server.ts";
-
-type ServerHandle = ReturnType<typeof startServer>;
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface CyclePayload {
   id: number;
@@ -101,11 +100,11 @@ function freshTmpDbPath(): string {
   return path.join(dir, "crucible.db");
 }
 
-let servers: ServerHandle[] = [];
+let servers: BoardHandle[] = [];
 
 /** Boots (or "restarts", when reusing a real dbPath) a production server. */
-function boot(dbPath: string): ServerHandle {
-  const handle = startServer({ port: 0, dbPath });
+function boot(dbPath: string): BoardHandle {
+  const handle = bootInProcess(dbPath);
   servers.push(handle);
   return handle;
 }
@@ -146,39 +145,39 @@ function withFixtureAgent(body: unknown): unknown {
 // tests/integration/cycle-epochs.test.ts). Re-touch (re-register) it against the
 // CURRENT (possibly mocked) clock immediately before every mutating call,
 // keyed off the projectKey embedded in the request path.
-async function touchFixtureAgent(handle: ServerHandle, urlPath: string): Promise<void> {
+async function touchFixtureAgent(handle: BoardHandle, urlPath: string): Promise<void> {
   const match = /^\/api\/v2\/projects\/([^/]+)\//.exec(urlPath);
   if (match === null) return;
-  await fetch(`http://localhost:${handle.server.port}/api/v2/agents/register`, {
+  await send(handle, `/api/v2/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ projectKey: match[1], agentId: "fixture-orch", role: "ORCHESTRATOR" }),
   });
 }
 
-async function postJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
+async function postJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
   await touchFixtureAgent(handle, urlPath);
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
+  return send(handle, `${urlPath}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
-async function patchJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
+async function patchJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
   await touchFixtureAgent(handle, urlPath);
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
+  return send(handle, `${urlPath}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
-async function getJson(handle: ServerHandle, urlPath: string): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`);
+async function getJson(handle: BoardHandle, urlPath: string): Promise<Response> {
+  return send(handle, `${urlPath}`);
 }
 
-async function createProject(handle: ServerHandle): Promise<string> {
+async function createProject(handle: BoardHandle): Promise<string> {
   const res = await postJson(handle, "/api/v2/projects", { name: `checkpoint-${crypto.randomUUID()}` });
   const body = (await res.json()) as { ok: true; project: { key: string } };
   return body.project.key;
@@ -193,7 +192,7 @@ function projectPath(key: string, suffix = ""): string {
 }
 
 async function fileSingleCycle(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   cr: string,
 ): Promise<{ planId: number | string; cycleId: number }> {
@@ -202,14 +201,14 @@ async function fileSingleCycle(
   return { planId: body.planId, cycleId: body.cycles[0]!.id };
 }
 
-async function getCycle(handle: ServerHandle, key: string, cr: string): Promise<CyclePayload> {
+async function getCycle(handle: BoardHandle, key: string, cr: string): Promise<CyclePayload> {
   const res = await getJson(handle, plansPath(key, `?cr=${encodeURIComponent(cr)}`));
   const body = (await res.json()) as PlansListResponse;
   const plan = body.plans.find((p) => p.cr === cr);
   return plan!.cycles[0]!;
 }
 
-async function activate(handle: ServerHandle, key: string, planId: number | string, cycleId: number): Promise<void> {
+async function activate(handle: BoardHandle, key: string, planId: number | string, cycleId: number): Promise<void> {
   const res = await patchJson(handle, plansPath(key, `/${planId}/cycles/${cycleId}`), { status: "active" });
   expect(res.status).toBe(200);
 }
@@ -298,7 +297,7 @@ describe("§S5.2 — graceful-signal checkpoint (server checkpoints EVERY active
   // SHUTDOWN-HOOK FUNCTION DIRECTLY: `store.checkpointAllActive()` is the
   // store-wide fold GREEN's SIGTERM/SIGINT handler (in src/server.ts) must
   // invoke on every active cycle, across every plan, across every project,
-  // before the process exits. `ServerHandle.store` is already a public field
+  // before the process exits. `BoardHandle.store` is already a public field
   // (see src/server.ts), so this calls it directly in-process instead of via
   // a real signal — the exact call the signal handler is required to make.
   test("checkpointAllActive() folds the live epoch of EVERY active cycle across ALL projects/plans in one call — the exact call the SIGTERM/SIGINT hook must make before exit — so a fresh store reopen resumes each cycle exactly", async () => {

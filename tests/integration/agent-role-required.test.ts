@@ -25,7 +25,7 @@
 // RENAMED column, matching src/store.ts's `agentCols.has("phase") &&
 // !agentCols.has("role")` in-place rename path.
 //
-// Drives the REAL production server (startServer) + real HTTP, same harness
+// Drives the REAL production router in process (`bootInProcess`) + its real routes, same harness
 // pattern as tests/integration/agent-lifecycle.test.ts / tests/integration/v2-core.test.ts. The
 // legacy-db fixtures build a genuinely INDEPENDENT pre-migration schema with
 // a raw bun:sqlite Database (not via the Store class, which would just
@@ -36,8 +36,9 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { Store } from "../../src/store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -136,19 +137,15 @@ function seedLegacyDb(dbPath: string, projectKey: string, agentId: string): void
 }
 
 describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   async function postJson(path_: string, body: unknown): Promise<Response> {
-    return fetch(`${base()}${path_}`, {
+    return send(handle!, `${path_}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -156,11 +153,11 @@ describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
   }
 
   async function getJson(path_: string): Promise<Response> {
-    return fetch(`${base()}${path_}`);
+    return send(handle!, `${path_}`);
   }
 
   async function patchJson(path_: string, body: unknown): Promise<Response> {
-    return fetch(`${base()}${path_}`, {
+    return send(handle!, `${path_}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -218,7 +215,7 @@ describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
 
   describe("§S1 required + enumerated — POST /api/v2/agents/register", () => {
     test("registering with NO role field is REJECTED (400, ok:false) with an AXI error naming the accepted enumeration", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
 
@@ -239,7 +236,7 @@ describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
     });
 
     test('registering with an out-of-enum role ("banana") is REJECTED the same way (400, ok:false, enumeration named)', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
 
@@ -260,7 +257,7 @@ describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
     });
 
     test("every enum value is individually ACCEPTED (200, ok:true) on register AND round-trips exactly via GET /api/v2/agents", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       // CR-CRU-056 §S2 — TDD roles (RED/GREEN/FIX/VERIFY) now REQUIRE a
@@ -306,7 +303,7 @@ describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
     // round-trip) without dragging in a cycle-binding fixture incidental to
     // this test's actual purpose.
     test('register with role:"report" -> GET /api/v2/agents returns role:"report" for that agent', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store);
       const agentId = "role-roundtrip-1";
 
@@ -333,7 +330,7 @@ describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
       "an agentId that does NOT end in '-GREEN' (CR-CRU-041-C1-GREEN-bun) registered with " +
         'role:"GREEN" classifies as GREEN — the declared value, not a guess from the id shape',
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = seedProject(handle.store);
         const agentId = "CR-CRU-041-C1-GREEN-bun";
         // CR-CRU-056 §S2 — the SPECIFIC GREEN value is this test's genuine
@@ -360,7 +357,7 @@ describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
       "an agentId ENDING in '-GREEN' registered with role:\"RED\" classifies as RED, " +
         "NEGATIVE: never GREEN — the id's trailing label must not override the declaration",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = seedProject(handle.store);
         const agentId = "some-agent-suffix-GREEN";
         // CR-CRU-056 §S2 — RED is this test's genuine subject too (proving
@@ -393,7 +390,7 @@ describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
         "succeeds (200, ok:true) AND does NOT blank the agent's stored role — heartbeat is not " +
         "a re-declaration",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = seedProject(handle.store);
         const agentId = "role-heartbeat-1";
 
@@ -443,7 +440,7 @@ describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
       "register with role:\"report\", then POST a run to /api/v2/runs/parsed for the SAME " +
         "agent (runs carry no role) -> GET /api/v2/agents still reads role:\"report\", not null",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = seedProject(handle.store);
         const agentId = "role-ingest-1";
 
@@ -475,7 +472,7 @@ describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
       "role survives MULTIPLE role-less ingests in a row (repeated touchAgent calls with no " +
         "options must each preserve, never progressively erase, the stored value)",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = seedProject(handle.store);
         const agentId = "role-ingest-2";
 
@@ -551,7 +548,7 @@ describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
         const legacyAgentId = "legacy-agent-2";
         seedLegacyDb(dbPath, projectKey, legacyAgentId);
 
-        handle = startServer({ port: 0, dbPath });
+        handle = bootInProcess(dbPath);
 
         // CR-CRU-056 C2 final sweep: this test's subject is legacy/fresh
         // coexistence + exact-value round-trip, not the RED TDD role

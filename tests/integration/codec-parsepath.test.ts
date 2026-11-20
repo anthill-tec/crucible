@@ -16,10 +16,11 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { codecs } from "../../src/codecs/index.ts";
 import type { Codec } from "../../src/codecs/index.ts";
 import type { RunSchema } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 /** Runtime-only view of a codec's optional parsePath — avoids depending on
  * the Codec interface already declaring `parsePath` (that's GREEN's job),
@@ -66,7 +67,7 @@ function extractFunctionBody(source: string, signatureStart: string): string {
 }
 
 describe("Codec.parsePath interface — CR-CRU-010 §S1", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
   let tmpDirs: string[] = [];
 
   afterEach(() => {
@@ -78,7 +79,7 @@ describe("Codec.parsePath interface — CR-CRU-010 §S1", () => {
   });
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -146,7 +147,7 @@ describe("Codec.parsePath interface — CR-CRU-010 §S1", () => {
   // tests/archive/v1-sections.test.ts on shim retirement. The v2 test below
   // already exercises the exact same shared parseRunBody/registry logic.
   test("400: dataPath request through a codec without parsePath names the codec (v2 POST /api/v2/runs)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProjectV2("parsepath-stub-v2");
     const dir = freshDir();
     tmpDirs.push(dir);

@@ -17,15 +17,16 @@
 // reads back 200 today (the C1 baseline this CR is deliberately flipping);
 // the ORCHESTRATOR/report block is expected to PASS today AND after GREEN.
 //
-// Harness: drives the REAL production server (startServer) + real HTTP, the
+// Harness: drives the REAL production router in process (`bootInProcess`) + its real routes, the
 // same pattern as tests/integration/agent-role-required.test.ts (register/heartbeat/GET agents)
 // and tests/integration/checkpoint-stop.test.ts (the plans/cycles HTTP surface: POST
 // .../plans to file, PATCH .../plans/<planId>/cycles/<id> to transition,
 // PATCH .../plans/<planId> to close) — no new mechanism invented here.
 
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { Store } from "../../src/store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -86,16 +87,12 @@ function errorSurface(body: ErrResponse): string {
 const ROLE_ENUM = ["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"] as const;
 
 describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, additive)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
-
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
 
   // CR-CRU-056 §S2b fixture-repair (C3): plan-file/cycle-transition/plan-
   // close are mutating v2 workflow verbs and now refuse an unregistered
@@ -109,7 +106,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
   }
 
   async function postJson(path_: string, body: unknown): Promise<Response> {
-    return fetch(`${base()}${path_}`, {
+    return send(handle!, `${path_}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -117,7 +114,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
   }
 
   async function patchJson(path_: string, body: unknown): Promise<Response> {
-    return fetch(`${base()}${path_}`, {
+    return send(handle!, `${path_}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -125,7 +122,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
   }
 
   async function getJson(path_: string): Promise<Response> {
-    return fetch(`${base()}${path_}`);
+    return send(handle!, `${path_}`);
   }
 
   function seedProject(store: Store): string {
@@ -206,7 +203,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
 
   describe("§S1 register with a VALID cycle binding", () => {
     test("registering bound to an ACTIVE cycle of an OPEN plan succeeds (200, ok:true) and GET /api/v2/agents exposes the EXACT bound cycle id as boundCycleId", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const { cycleId } = await fileAndActivate(key, "CR-CRU-056-T1");
@@ -236,7 +233,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
 
   describe("§S1 validation — refused bindings (409, ok:false, non-empty help[] naming the actual state)", () => {
     test("register bound to an UNKNOWN cycleId (no such cycle in ANY of this project's plans) is REFUSED — 409, error/help names 'unknown', agent NOT registered", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "cycle-unknown-1";
@@ -261,7 +258,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
     });
 
     test("register bound to a cycle that is still PENDING (never activated) is REFUSED — 409, error/help names 'pending', agent NOT registered", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const { cycleId } = await fileOnly(key, "CR-CRU-056-T2-pending");
@@ -284,7 +281,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
     });
 
     test("register bound to a cycle already DONE (plan still open) is REFUSED — 409, error/help names 'done', agent NOT registered", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const { planId, cycleId } = await fileAndActivate(key, "CR-CRU-056-T2-done");
@@ -308,7 +305,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
     });
 
     test("register bound to a cycle whose PLAN is now CLOSED is REFUSED — 409, error/help names 'closed', agent NOT registered", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const { planId, cycleId } = await fileAndActivate(key, "CR-CRU-056-T2-closed");
@@ -337,7 +334,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
 
   describe("heartbeat never blanks a stored cycle binding (mirrors CR-CRU-044's role contract)", () => {
     test("POST /api/v2/agents/heartbeat with no cycleId field on an already-bound agent still succeeds AND does NOT blank the stored boundCycleId", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const { cycleId } = await fileAndActivate(key, "CR-CRU-056-T3");
@@ -390,7 +387,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
   describe("§S2 register with NO cycleId — TDD roles (RED/GREEN/FIX/VERIFY) are REFUSED (409)", () => {
     for (const role of TDD_ROLES) {
       test(`register with role:"${role}" and no cycleId field at all is REFUSED — 409, ok:false, non-empty help[] telling the caller to register with --cycle; agent row NOT created`, async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const store = handle.store;
         const key = seedProject(store);
         const agentId = `cycle-unbound-${role}`;
@@ -418,7 +415,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
   describe("§S2 refusal help[] NAMES the project's actual active cycle when one exists (CR-024 help convention)", () => {
     for (const role of TDD_ROLES) {
       test(`register with role:"${role}", no cycleId, project HAS an active cycle → 409 whose help[] names that ACTUAL active cycle id (not a generic platitude)`, async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const store = handle.store;
         const key = seedProject(store);
         const { cycleId: activeCycleId } = await fileAndActivate(
@@ -446,7 +443,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
   describe("§S2 regression — register with NO cycleId still succeeds for ORCHESTRATOR/report (unchanged)", () => {
     for (const role of UNBOUND_OK_ROLES) {
       test(`register with role:"${role}" and no cycleId field at all still succeeds (200, ok:true) and no boundCycleId is fabricated`, async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const store = handle.store;
         const key = seedProject(store);
         const agentId = `cycle-unbound-${role}`;
@@ -474,7 +471,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
 
   describe("re-registration rebinds explicitly; a refused rebind never mutates the stored binding", () => {
     test("re-registering the SAME agent id with a DIFFERENT valid cycle binding updates the stored boundCycleId to the NEW value", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const { cycleId: cycleA } = await fileAndActivate(key, "CR-CRU-056-T5-rebind-A");
@@ -505,7 +502,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
     });
 
     test("re-registering the SAME agent id with an INVALID cycle binding is REFUSED (409) AND the previously stored boundCycleId is UNCHANGED", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const { cycleId: validCycle } = await fileAndActivate(key, "CR-CRU-056-T5-refused-rebind");
@@ -550,7 +547,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
     // NEW binding is exposed exactly, and it is NOT the old one" instead of
     // "no binding at all".
     test("unregister deletes the bound agent row; re-registering the SAME agent id afterward with a NEW cycleId does not inherit the OLD boundCycleId", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const { cycleId } = await fileAndActivate(key, "CR-CRU-056-T6");

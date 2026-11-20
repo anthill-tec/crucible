@@ -26,16 +26,15 @@
 // case below currently returns 200/ok:true and stores the bad value instead
 // of the 409 this file asserts. Every assertion fails today for that reason.
 //
-// Harness: drives the REAL production server (startServer) + real HTTP, same
+// Harness: drives the REAL production router in process (`bootInProcess`) + its real routes, same
 // pattern as tests/integration/agent-role-required.test.ts (whose `errorSurface` /
 // `postJson` / `getJson` / `seedProject` conventions this file mirrors).
 //
 // Does NOT touch src/ or clients/ — tests only.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { Store } from "../../src/store.ts";
-
-type ServerHandle = ReturnType<typeof startServer>;
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -86,19 +85,15 @@ function errorSurface(body: ErrResponse): string {
 }
 
 describe("CR-CRU-059 §S1 — identity.source validated at the route boundary (server)", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   async function postJson(path_: string, body: unknown): Promise<Response> {
-    return fetch(`${base()}${path_}`, {
+    return send(handle!, `${path_}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -106,7 +101,7 @@ describe("CR-CRU-059 §S1 — identity.source validated at the route boundary (s
   }
 
   async function getJson(path_: string): Promise<Response> {
-    return fetch(`${base()}${path_}`);
+    return send(handle!, `${path_}`);
   }
 
   function seedProject(store: Store): string {
@@ -126,7 +121,7 @@ describe("CR-CRU-059 §S1 — identity.source validated at the route boundary (s
   describe("§S1 every valid enum member registers successfully", () => {
     for (const value of SOURCE_ENUM) {
       test(`identity.source:"${value}" is ACCEPTED (200, ok:true) and round-trips exactly`, async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const store = handle.store;
         const key = seedProject(store);
         const agentId = `source-accept-${value}`;
@@ -160,7 +155,7 @@ describe("CR-CRU-059 §S1 — identity.source validated at the route boundary (s
       'the historical drift case: identity.source:"openclaw" (CR-CRU-054\'s hardcoded, ' +
         "outside-the-enum value) is refused",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const store = handle.store;
         const key = seedProject(store);
         const agentId = "source-reject-openclaw";
@@ -191,7 +186,7 @@ describe("CR-CRU-059 §S1 — identity.source validated at the route boundary (s
     );
 
     test("an empty-string source is refused the same way", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "source-reject-empty";
@@ -222,7 +217,7 @@ describe("CR-CRU-059 §S1 — identity.source validated at the route boundary (s
     });
 
     test("a non-string source (a number) is refused the same way", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "source-reject-number";
@@ -249,7 +244,7 @@ describe("CR-CRU-059 §S1 — identity.source validated at the route boundary (s
     });
 
     test("a non-string source (an object) is refused the same way", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "source-reject-object";
@@ -282,7 +277,7 @@ describe("CR-CRU-059 §S1 — identity.source validated at the route boundary (s
 
   describe("§S1 an ABSENT source (or absent identity entirely) still registers — this CR does not make it required", () => {
     test("identity present but with NO source field registers successfully (200, ok:true)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "source-absent-field";
@@ -309,7 +304,7 @@ describe("CR-CRU-059 §S1 — identity.source validated at the route boundary (s
     });
 
     test("NO identity object at all registers successfully (200, ok:true)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "source-absent-identity";
@@ -331,7 +326,7 @@ describe("CR-CRU-059 §S1 — identity.source validated at the route boundary (s
 
   describe("§S1 displayName/repoPath are unaffected by the source validator (regression guard)", () => {
     test("a valid source alongside displayName + repoPath stores ALL THREE fields exactly", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "source-siblings-1";
@@ -365,7 +360,7 @@ describe("CR-CRU-059 §S1 — identity.source validated at the route boundary (s
 
   describe("§S1 heartbeat shares the validation seam (handleAgentTouch)", () => {
     test("a heartbeat carrying a valid source succeeds (200, ok:true) and updates the stored value", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "source-heartbeat-valid";
@@ -396,7 +391,7 @@ describe("CR-CRU-059 §S1 — identity.source validated at the route boundary (s
       "a heartbeat carrying an out-of-enum source is refused the SAME way (409, ok:false, " +
         "help[] naming the received value + valid set) and does NOT overwrite the stored value",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const store = handle.store;
         const key = seedProject(store);
         const agentId = "source-heartbeat-invalid";

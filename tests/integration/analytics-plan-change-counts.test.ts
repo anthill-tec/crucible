@@ -54,8 +54,9 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { ChangeRecord } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 /** Narrow a store op's `T | { error: string }` union, loudly. */
 function planned<T extends object>(result: T): Exclude<T, { error: string }> {
@@ -78,7 +79,7 @@ interface ChangesBody {
 }
 
 const scratchDirs: string[] = [];
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
@@ -94,14 +95,10 @@ function scratch(): string {
   return dir;
 }
 
-function boot(dbPath?: string): ServerHandle {
+function boot(dbPath?: string): BoardHandle {
   const dir = scratch();
-  handle = startServer({ port: 0, dbPath: dbPath ?? join(dir, "crucible.db") });
+  handle = bootInProcess(dbPath ?? join(dir, "crucible.db"));
   return handle;
-}
-
-function base(): string {
-  return `http://localhost:${handle!.server.port}`;
 }
 
 async function getChanges(
@@ -109,7 +106,7 @@ async function getChanges(
   release?: string,
 ): Promise<{ status: number; body: ChangesBody }> {
   const qs = release !== undefined ? `?release=${encodeURIComponent(release)}` : "";
-  const res = await fetch(`${base()}/api/v2/projects/${key}/analytics/changes${qs}`);
+  const res = await send(handle!, `/api/v2/projects/${key}/analytics/changes${qs}`);
   let body: ChangesBody = {};
   try {
     body = (await res.json()) as ChangesBody;

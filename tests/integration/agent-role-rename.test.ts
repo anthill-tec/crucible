@@ -29,7 +29,7 @@
 // carry `phase`/`phase_inferred` columns, not `role`/`role_inferred`. Every
 // assertion below fails today for that reason.
 //
-// Harness: drives the REAL production server (startServer) + real HTTP, same
+// Harness: drives the REAL production router in process (`bootInProcess`) + its real routes, same
 // pattern as tests/integration/agent-role-required.test.ts / tests/integration/event-role-stamping.test.ts.
 // The §6 migration fixture builds a genuinely INDEPENDENT live-shaped schema
 // with a raw bun:sqlite Database (never through the Store class, which would
@@ -43,10 +43,9 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { Store } from "../../src/store.ts";
-
-type ServerHandle = ReturnType<typeof startServer>;
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -109,19 +108,15 @@ function freshTmpDir(): string {
 }
 
 describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   async function postJson(path_: string, body: unknown): Promise<Response> {
-    return fetch(`${base()}${path_}`, {
+    return send(handle!, `${path_}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -129,11 +124,11 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
   }
 
   async function getJson(path_: string): Promise<Response> {
-    return fetch(`${base()}${path_}`);
+    return send(handle!, `${path_}`);
   }
 
   async function patchJson(path_: string, body: unknown): Promise<Response> {
-    return fetch(`${base()}${path_}`, {
+    return send(handle!, `${path_}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -180,7 +175,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
 
   describe("§1 wire — register accepts `role` (not `phase`), every enum member round-trips", () => {
     test("every ROLE_ENUM member registers (200, ok:true) with `role`, and GET /api/v2/agents reads back the EXACT declared value under `role`", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const { cycleId } = await fileAndActivate(key, "CR-CRU-059-role-accept-all");
@@ -211,7 +206,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
 
   describe("§2 CLEAN BREAK (user ruling 2026-08-02) — a legacy `phase`-only body is refused exactly like an absent role, no alias", () => {
     test('registering with {phase: "RED"} and NO `role` field is REFUSED (400, ok:false), help[] names `role` — nothing stored', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
 
@@ -234,7 +229,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
     });
 
     test('a {phase: "RED"} body produces the IDENTICAL refusal (status code) as a body with neither `phase` nor `role` — the legacy key earns no special-case handling', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store);
 
       const withLegacyPhase = await postJson("/api/v2/agents/register", {
@@ -257,7 +252,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
 
   describe("§3 CR-044 semantics survive under `role` — required, enum-constrained, never blanked by heartbeat", () => {
     test("registering with NO `role` field is REJECTED (400, ok:false) naming the accepted enumeration", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
 
@@ -281,7 +276,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
     });
 
     test('registering with an out-of-enum role ("banana") is REJECTED the same way (400, ok:false, enumeration named)', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
 
@@ -310,7 +305,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
     });
 
     test("a heartbeat with no `role` field on an already-registered agent succeeds AND does not blank the stored role", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store);
       const agentId = "role-heartbeat-1";
 
@@ -346,7 +341,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
 
   describe("§4 CR-056 semantics survive under `role` — TDD roles bind to a cycle, ORCHESTRATOR/report may register unbound", () => {
     test("registering role: RED with NO cycleId is REFUSED (409, ok:false), help names the cycle-binding requirement", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
 
@@ -365,7 +360,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
     });
 
     test("registering role: ORCHESTRATOR with NO cycleId SUCCEEDS (200, ok:true) — orchestrator/report stay exempt from the binding requirement", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
 
@@ -398,7 +393,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
 
   describe("§5 storage + read path — agents/events expose `role`/`roleInferred`, ingest echoes `role`", () => {
     test("Store.touchAgent persists a `role` option and Store.getAgent/GET /api/v2/agents both read it back", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "storage-role-1";
@@ -417,7 +412,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
     });
 
     test("Store.recordTestEvent persists `role` (declared, roleInferred:false) and GET /api/v2/events reads both back", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "storage-role-event-1";
@@ -443,7 +438,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
     });
 
     test("POST /api/v2/runs/parsed echoes `role` top-level in its response, mirroring the agent's stored role", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "storage-role-echo-1";

@@ -3,7 +3,7 @@
 // id its row stores, which counts every cycle ever filed in the project and
 // says nothing about where the agent is in its CR.
 //
-// Driven against a real board: `startServer` on an in-memory store, seeded
+// Driven against a real board: `bootInProcess` on an in-memory store, seeded
 // only through the production HTTP routes (register, release-propose,
 // plan-file, cycle transitions, runs). The server composes the line at the
 // agents read; the SPA's agent row renders it. The DOM half mounts the real
@@ -20,9 +20,9 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { settleDom } from "../helpers/dom-settle";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 const REAL_FETCH = globalThis.fetch;
 // The server runs in THIS process, so its handlers build their answers from
@@ -35,7 +35,7 @@ const BUN_FETCH_GLOBALS = {
   Request: globalThis.Request,
   Headers: globalThis.Headers,
 };
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(async () => {
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
@@ -43,31 +43,27 @@ afterEach(async () => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
 
-function base(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
-}
-
 async function send(
-  handle: ServerHandle,
+  handle: BoardHandle,
   method: "POST" | "PATCH",
   route: string,
   body: unknown,
 ): Promise<Response> {
-  return REAL_FETCH(`${base(handle)}${route}`, {
+  return boardSend(handle, `${route}`, {
     method,
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function getJson(handle: ServerHandle, route: string): Promise<Record<string, unknown>> {
-  const res = await REAL_FETCH(`${base(handle)}${route}`);
+async function getJson(handle: BoardHandle, route: string): Promise<Record<string, unknown>> {
+  const res = await boardSend(handle, `${route}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
@@ -80,7 +76,7 @@ interface AgentBrief {
   [key: string]: unknown;
 }
 
-async function agentById(handle: ServerHandle, key: string, agentId: string): Promise<AgentBrief> {
+async function agentById(handle: BoardHandle, key: string, agentId: string): Promise<AgentBrief> {
   const body = await getJson(handle, `/api/v2/agents?project=${key}`);
   const found = (body.agents as AgentBrief[]).find((a) => a.agentId === agentId);
   if (found === undefined) throw new Error(`no agent ${agentId} on the agents read`);
@@ -104,7 +100,7 @@ interface Board {
 }
 
 async function filePlan(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   cr: string,
   track: string,
@@ -125,7 +121,7 @@ async function filePlan(
 }
 
 async function setCycle(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   planId: number,
   cycleId: number,
@@ -141,7 +137,7 @@ async function setCycle(
 /** Two open plans on two lanes (so the roadmap shows lane badges): the
  *  neighbour (seven cycles, filed first) and the subject (five cycles), whose
  *  first cycle is done and whose SECOND is the active one. */
-async function seedBoard(handle: ServerHandle): Promise<Board> {
+async function seedBoard(handle: BoardHandle): Promise<Board> {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: "Badge Project", type: "backend", sutRoot: "/tmp/badge" });
   const reg = await send(handle, "POST", "/api/v2/agents/register", {
@@ -171,7 +167,7 @@ async function seedBoard(handle: ServerHandle): Promise<Board> {
 }
 
 async function registerBound(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
   role: string,
@@ -186,7 +182,7 @@ async function registerBound(
   expect(res.status).toBe(200);
 }
 
-async function ingestPassingRun(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function ingestPassingRun(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const started = await send(handle, "POST", "/api/v2/runs/start", { projectKey: key, agentId });
   expect(started.status).toBe(202);
   const { runId } = (await started.json()) as { runId: string };
@@ -217,13 +213,13 @@ let cacheBust = 0;
 
 /** Mounts the production shell on the project's roadmap, every read it makes
  *  forwarded to the real server. */
-async function mountAgainst(handle: ServerHandle, pathname: string): Promise<void> {
+async function mountAgainst(handle: BoardHandle, pathname: string): Promise<void> {
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
   await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
   Object.assign(globalThis, BUN_FETCH_GLOBALS);
   document.body.innerHTML = '<div id="app"></div>';
   (globalThis as unknown as { fetch: typeof fetch }).fetch = ((input: string, init?: RequestInit) =>
-    REAL_FETCH(`${base(handle)}${String(input)}`, init)) as typeof fetch;
+    boardSend(handle, `${String(input)}`, init)) as typeof fetch;
   (0, eval)(VAN_SRC);
   (0, eval)(VAN_X_SRC);
   cacheBust += 1;

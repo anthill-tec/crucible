@@ -8,7 +8,7 @@
 // whatever the run's stack.
 //
 // Each case is driven through the real production HTTP surface
-// (`startServer`, in-memory store): a bun JUnit report whose failures are
+// (`bootInProcess`, in-memory store): a bun JUnit report whose failures are
 // bare `<failure type="…"/>` nodes is posted to `POST /api/v2/runs` with the
 // console text in `raw`, and the stored leaves are read back through
 // `GET /api/v2/events/<id>`. Because the report's failures are bare, a stored
@@ -17,8 +17,7 @@
 // (CLIENT_READING in tests/fixtures/bun-console-captures.ts, the same
 // captures the client's tests pinned).
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   AFTERMATH_BLEED,
   BARE_JUNIT_AFTERMATH_RUN,
@@ -47,21 +46,18 @@ import {
   VARIABLE_NAME,
 } from "../fixtures/bun-console-captures.ts";
 import type { Capture, WireForm } from "../fixtures/bun-console-captures.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
-}
-
-function base(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
 }
 
 interface Posted {
@@ -69,8 +65,8 @@ interface Posted {
   body: Record<string, unknown>;
 }
 
-async function postJson(handle: ServerHandle, route: string, body: unknown): Promise<Posted> {
-  const res = await fetch(`${base(handle)}${route}`, {
+async function postJson(handle: BoardHandle, route: string, body: unknown): Promise<Posted> {
+  const res = await send(handle, `${route}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -79,7 +75,7 @@ async function postJson(handle: ServerHandle, route: string, body: unknown): Pro
 }
 
 /** A project with one registered (unbound) agent, ready to ingest. */
-async function ready(handle: ServerHandle, agentId: string): Promise<string> {
+async function ready(handle: BoardHandle, agentId: string): Promise<string> {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: "P", type: "backend", sutRoot: "/tmp/p" });
   const res = await postJson(handle, "/api/v2/agents/register", {
@@ -108,8 +104,8 @@ interface StoredEvent {
   tree?: Array<{ name: string; children: StoredLeaf[] }>;
 }
 
-async function storedEvent(handle: ServerHandle, eventId: string): Promise<StoredEvent> {
-  const res = await fetch(`${base(handle)}/api/v2/events/${eventId}`);
+async function storedEvent(handle: BoardHandle, eventId: string): Promise<StoredEvent> {
+  const res = await send(handle, `/api/v2/events/${eventId}`);
   expect(res.status).toBe(200);
   return ((await res.json()) as { event: StoredEvent }).event;
 }

@@ -10,15 +10,16 @@
 // `Store.lastRunTimestamp` — the agent's newest run of ALL time. So an agent
 // whose last run predates its latest registration reads a negative runtime.
 //
-// Drives the REAL server (startServer) and its real HTTP routes — register,
+// Drives the REAL router in process (`bootInProcess`) and its real routes — register,
 // unregister, the agents read — the same harness as tests/integration/agent-lifecycle.test.ts.
 // Timestamps are seeded with that file's raw-db backdating technique (the
 // Store has no timestamp lever in its public API), purely to place the run,
 // the registration and the last seen deterministically; every assertion goes
 // through GET /api/v2/agents.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { Store } from "../../src/store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface AgentBrief {
   agentId: string;
@@ -41,20 +42,15 @@ interface RawDb {
   query(sql: string): QueryHandle;
 }
 
-let handle: ReturnType<typeof startServer> | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
   handle = undefined;
 });
 
-function base(): string {
-  if (handle === undefined) throw new Error("the server is not started");
-  return `http://localhost:${handle.server.port}`;
-}
-
 async function postJson(path: string, body: unknown): Promise<Response> {
-  return fetch(`${base()}${path}`, {
+  return send(handle!, `${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -104,7 +100,7 @@ async function unregister(projectKey: string, agentId: string): Promise<void> {
 
 /** The agent's one brief on the agents read. */
 async function agentBrief(projectKey: string, agentId: string): Promise<AgentBrief> {
-  const res = await fetch(`${base()}/api/v2/agents?project=${projectKey}`);
+  const res = await send(handle!, `/api/v2/agents?project=${projectKey}`);
   expect(res.status).toBe(200);
   const body = (await res.json()) as AgentsListResponse;
   const mine = body.agents.filter((a) => a.agentId === agentId);
@@ -121,7 +117,7 @@ const LAST_SEEN = 860_000;
 
 describe("a tombstoned agent's runtime counts from its latest registration", () => {
   test("ran, unregistered, registered again and tombstoned with no run since: the runtime runs from that registration to its last seen (40 s), not back to the earlier run", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store = handle.store;
     const key = seedProject(store);
     const agentId = "re-registered-no-run-since";
@@ -141,7 +137,7 @@ describe("a tombstoned agent's runtime counts from its latest registration", () 
   });
 
   test("ran, unregistered, registered again and tombstoned the moment it registered: the runtime is 0, never below", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store = handle.store;
     const key = seedProject(store);
     const agentId = "re-registered-never-seen-since";
@@ -159,7 +155,7 @@ describe("a tombstoned agent's runtime counts from its latest registration", () 
   });
 
   test("ran, unregistered, registered again, ran once more and tombstoned: the runtime runs from that registration to that run (30 s), not to its last seen", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store = handle.store;
     const key = seedProject(store);
     const agentId = "re-registered-ran-since";
@@ -179,7 +175,7 @@ describe("a tombstoned agent's runtime counts from its latest registration", () 
   });
 
   test("never unregistered: a tombstoned agent's runtime still runs from its registration to its last run", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store = handle.store;
     const key = seedProject(store);
     const agentId = "registered-once";

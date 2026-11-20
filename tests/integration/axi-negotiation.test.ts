@@ -1,6 +1,6 @@
 // CR-CRU-005 §S3 — the help[] hints module — plus the integration guard
 // that every v2 response routes through ONE shared response gate.
-// Drives the REAL production server (startServer).
+// Drives the REAL production router in process (`bootInProcess`).
 //
 // THIS FILE WAS "§S2 (content negotiation) + §S3 (help[] hints module) + §S4
 // (TOON truncation with pointer)". CR-CRU-132 §S2 deleted the §S2 and §S4
@@ -34,8 +34,9 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { hints } from "../../src/hints.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -69,7 +70,7 @@ const JUNIT_1FAIL = [
 ].join("\n");
 
 describe("AXI help[] hints and the shared response gate (CR-CRU-005 §S3)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -77,7 +78,7 @@ describe("AXI help[] hints and the shared response gate (CR-CRU-005 §S3)", () =
   });
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -115,7 +116,7 @@ describe("AXI help[] hints and the shared response gate (CR-CRU-005 §S3)", () =
     });
 
     test("register response help joined text includes 'heartbeat'", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("hint-register");
 
       const res = await postJson("/api/v2/agents/register", {
@@ -133,7 +134,7 @@ describe("AXI help[] hints and the shared response gate (CR-CRU-005 §S3)", () =
     });
 
     test("a RED-verdict POST /api/v2/runs response help includes 'transition'", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("hint-red-verdict");
       await registerAgent(key, "red-agent");
 
@@ -152,7 +153,7 @@ describe("AXI help[] hints and the shared response gate (CR-CRU-005 §S3)", () =
     });
 
     test("a 404 unknown-project error's help names 'POST /api/v2/projects'", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
       const res = await postJson("/api/v2/agents/register", {
         projectKey: crypto.randomUUID(),

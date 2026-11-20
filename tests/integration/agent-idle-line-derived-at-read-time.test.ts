@@ -31,55 +31,51 @@
 //     exact duration, since the real elapsed time between actions in a test
 //     process is not controllable to the second.
 //
-// Harness: the real production HTTP surface (`startServer`), the same
+// Harness: the real production HTTP surface (`bootInProcess`), the same
 // register/plan/cycle + runs/start/parsed sequence as this file's §S2
 // sibling — no new mechanism.
 //
 // RED phase: `idleLine` does not exist on the agent payload at all today, so
 // every `.idleLine` assertion below is undefined — both tests fail.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
 
-function base(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
-}
-
-async function postJson(handle: ServerHandle, route: string, body: unknown): Promise<Response> {
-  return fetch(`${base(handle)}${route}`, {
+async function postJson(handle: BoardHandle, route: string, body: unknown): Promise<Response> {
+  return send(handle, `${route}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function patchJson(handle: ServerHandle, route: string, body: unknown): Promise<Response> {
-  return fetch(`${base(handle)}${route}`, {
+async function patchJson(handle: BoardHandle, route: string, body: unknown): Promise<Response> {
+  return send(handle, `${route}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function getJson(handle: ServerHandle, route: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base(handle)}${route}`);
+async function getJson(handle: BoardHandle, route: string): Promise<Record<string, unknown>> {
+  const res = await send(handle, `${route}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
 
-function seedProject(handle: ServerHandle): string {
+function seedProject(handle: BoardHandle): string {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: "P", type: "backend", sutRoot: "/tmp/p" });
   return key;
@@ -93,7 +89,7 @@ interface AgentBrief {
 }
 
 async function agentByIdFrom(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
 ): Promise<AgentBrief | undefined> {
@@ -105,7 +101,7 @@ async function agentByIdFrom(
 const FIXTURE_ORCH = "fixture-orch";
 
 async function fileAndActivateCycle(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   cr: string,
 ): Promise<{ planId: number; cycleId: number }> {
@@ -133,7 +129,7 @@ async function fileAndActivateCycle(
 }
 
 async function registerBound(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
   cycleId: number,
@@ -148,7 +144,7 @@ async function registerBound(
 }
 
 async function startRun(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
   extra: Record<string, unknown> = {},

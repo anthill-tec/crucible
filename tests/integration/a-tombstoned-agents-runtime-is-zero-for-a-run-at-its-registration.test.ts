@@ -7,14 +7,15 @@
 // `runtime_ms` from its latest registration (`firstSeen`) to its last run
 // since that registration, else to its last seen.
 //
-// Drives the REAL server (startServer) and its real HTTP routes — register,
+// Drives the REAL router in process (`bootInProcess`) and its real routes — register,
 // unregister, the agents read — as the tombstoned-runtime file beside it does.
 // Timestamps are placed with raw-db backdating (the Store has no timestamp
 // lever in its public API), purely to put the run, the registration and the
 // last seen at fixed instants; every assertion goes through GET /api/v2/agents.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { Store } from "../../src/store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface AgentBrief {
   agentId: string;
@@ -31,20 +32,15 @@ interface RawDb {
   query(sql: string): QueryHandle;
 }
 
-let handle: ReturnType<typeof startServer> | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
   handle = undefined;
 });
 
-function base(): string {
-  if (handle === undefined) throw new Error("the server is not started");
-  return `http://localhost:${handle.server.port}`;
-}
-
 async function postJson(route: string, body: unknown): Promise<Response> {
-  return fetch(`${base()}${route}`, {
+  return send(handle!, `${route}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -90,7 +86,7 @@ async function unregister(projectKey: string, agentId: string): Promise<void> {
 }
 
 async function agentBrief(projectKey: string, agentId: string): Promise<AgentBrief> {
-  const res = await fetch(`${base()}/api/v2/agents?project=${projectKey}`);
+  const res = await send(handle!, `/api/v2/agents?project=${projectKey}`);
   expect(res.status).toBe(200);
   const body = (await res.json()) as { agents: AgentBrief[] };
   const mine = body.agents.filter((a) => a.agentId === agentId);
@@ -105,7 +101,7 @@ const LAST_SEEN = 860_000;
 
 describe("a tombstoned agent's runtime for a run at the instant of its latest registration", () => {
   test("ran, unregistered, registered again and ran at the very instant of that registration, then tombstoned: the runtime is 0, measured to that run rather than to its last seen 40 s later", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const store = handle.store;
     const key = seedProject(store);
     const agentId = "ran-at-its-registration";

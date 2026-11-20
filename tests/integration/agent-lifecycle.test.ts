@@ -9,7 +9,7 @@
 // live -> now - firstSeen (ticking); tombstoned/pruned -> last run
 // timestamp - firstSeen (sealed).
 //
-// Drives the REAL production server (startServer) + real HTTP, same harness
+// Drives the REAL production router in process (`bootInProcess`) + its real routes, same harness
 // pattern as tests/integration/plans.test.ts. (History: this line also cited
 // tests/shim-projects-agents.test.ts — archived by CR-CRU-008's shim-
 // retirement sweep, then deleted outright with tests/archive by CR-CRU-047.
@@ -20,8 +20,9 @@
 // deterministic state; every assertion goes through the real HTTP endpoint
 // or a documented public Store method (listRollups/countEvents/hasAgent).
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { Store } from "../../src/store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -101,19 +102,15 @@ function setEventTimestamp(store: Store, eventId: string, ts: number): void {
 }
 
 describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rule", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`${base()}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -141,7 +138,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
         "visible via GET /api/v2/events?project=; the unregistered event carries " +
         "firstSeen and runtime_ms = unregistered.timestamp - firstSeen exactly",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const store = handle.store;
         const key = seedProject(store);
         const agentId = "agent-lifecycle-1";
@@ -165,7 +162,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
         expect(unregBody.ok).toBe(true);
         expect(unregBody.changed).toBe(true);
 
-        const eventsRes = await fetch(`${base()}/api/v2/events?project=${key}`);
+        const eventsRes = await send(handle!, `/api/v2/events?project=${key}`);
         expect(eventsRes.status).toBe(200);
         const eventsBody = (await eventsRes.json()) as EventsListResponse;
         expect(eventsBody.ok).toBe(true);
@@ -198,7 +195,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
     );
 
     test("removeAgent still physically deletes the agents row on unregister (regression pin)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "agent-lifecycle-2";
@@ -211,7 +208,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
     });
 
     test("a repeat unregister on an already-gone agent -> changed:false (idempotent, unchanged from pre-CR-011 shape)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "agent-lifecycle-3";
@@ -225,7 +222,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
     });
 
     test("a heartbeat on an EXISTING agent does not append a second 'registered' lifecycle event", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "agent-lifecycle-4";
@@ -236,7 +233,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       await postJson("/api/v2/agents/heartbeat", { projectKey: key, agentId });
       await postJson("/api/v2/agents/heartbeat", { projectKey: key, agentId });
 
-      const eventsRes = await fetch(`${base()}/api/v2/events?project=${key}`);
+      const eventsRes = await send(handle!, `/api/v2/events?project=${key}`);
       const eventsBody = (await eventsRes.json()) as EventsListResponse;
       const registeredEvents = eventsBody.events.filter(
         (e) => e.kind === "lifecycle" && e.action === "registered",
@@ -253,7 +250,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
         "per-project retention cap) but are EXCLUDED from folded rollup counts " +
         "(runs/passed/failed) when evicted",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const store = handle.store;
         const key = seedProject(store, { retention: 1 });
 
@@ -304,7 +301,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
     );
 
     test("the brief/status paths (GET /api/v2/status lastTest) are unaffected by newer lifecycle events", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
 
@@ -321,7 +318,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       await postJson("/api/v2/agents/register", { projectKey: key, agentId, role: "report" });
       await postJson("/api/v2/agents/unregister", { projectKey: key, agentId });
 
-      const statusRes = await fetch(`${base()}/api/v2/status?project=${key}`);
+      const statusRes = await send(handle!, `/api/v2/status?project=${key}`);
       expect(statusRes.status).toBe(200);
       const statusBody = (await statusRes.json()) as StatusResponse;
       expect(statusBody.status.lastTest).not.toBeNull();
@@ -334,7 +331,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
 
   describe("§S2 runtime rule (GET /api/v2/agents runtime_ms)", () => {
     test("still-live agent: runtime_ms = now - firstSeen, ticking (monotonically increasing across two samples)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const store = handle.store;
       const key = seedProject(store);
       const agentId = "agent-live-1";
@@ -343,7 +340,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       const firstSeen = Date.now() - 10_000;
       setAgentTimestamps(store, key, agentId, { firstSeen, lastSeen: Date.now() });
 
-      const res1 = await fetch(`${base()}/api/v2/agents?project=${key}`);
+      const res1 = await send(handle!, `/api/v2/agents?project=${key}`);
       const body1 = (await res1.json()) as AgentsListResponse;
       const agent1 = body1.agents.find((a) => a.agentId === agentId);
       expect(agent1).toBeDefined();
@@ -355,7 +352,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
 
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      const res2 = await fetch(`${base()}/api/v2/agents?project=${key}`);
+      const res2 = await send(handle!, `/api/v2/agents?project=${key}`);
       const body2 = (await res2.json()) as AgentsListResponse;
       const agent2 = body2.agents.find((a) => a.agentId === agentId);
       expect(agent2).toBeDefined();
@@ -367,7 +364,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       "tombstoned agent (no explicit unregister): runtime_ms = lastRunTimestamp - firstSeen, sealed " +
         "(AC fixture: register at t0, runs at t0+10s and t0+60s -> runtime exactly 60s)",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const store = handle.store;
         const key = seedProject(store);
         const agentId = "agent-tombstoned-1";
@@ -398,7 +395,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
         // the only observable point the AC's runtime value can be asserted.
         setAgentTimestamps(store, key, agentId, { firstSeen: t0, lastSeen: t0 + 60_000 });
 
-        const res = await fetch(`${base()}/api/v2/agents?project=${key}`);
+        const res = await send(handle!, `/api/v2/agents?project=${key}`);
         const body = (await res.json()) as AgentsListResponse;
         const agent = body.agents.find((a) => a.agentId === agentId);
         expect(agent).toBeDefined();
@@ -409,7 +406,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
         // Sealed — a second read some real time later must be IDENTICAL
         // (never "now - firstSeen" for a non-live agent).
         await new Promise((resolve) => setTimeout(resolve, 300));
-        const res2 = await fetch(`${base()}/api/v2/agents?project=${key}`);
+        const res2 = await send(handle!, `/api/v2/agents?project=${key}`);
         const body2 = (await res2.json()) as AgentsListResponse;
         const agent2 = body2.agents.find((a) => a.agentId === agentId);
         expect(agent2!.runtime_ms).toBe(60_000);
@@ -444,7 +441,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
     const FIXTURE_ORCH = "lifecycle-cycle-fixture-orch";
 
     async function patchJson(path: string, body: unknown): Promise<Response> {
-      return fetch(`${base()}${path}`, {
+      return send(handle!, `${path}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
@@ -483,7 +480,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       key: string,
       agentId: string,
     ): Promise<LifecycleEventBrief[]> {
-      const res = await fetch(`${base()}/api/v2/events?project=${key}`);
+      const res = await send(handle!, `/api/v2/events?project=${key}`);
       expect(res.status).toBe(200);
       const body = (await res.json()) as EventsListResponse;
       return body.events
@@ -511,7 +508,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       "register bound to cycle N, ingest NOTHING, unregister: BOTH lifecycle events " +
         "still name the agent, its role and cycle N after the agents row is gone",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const store = handle.store;
         const key = seedProject(store);
         const cycleId = await fileAndActivate(key);
@@ -561,7 +558,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       "the REGISTER-side event carries the cycle on its own: it is readable before any " +
         "unregister happens, so an agent still at work is already attributable",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const store = handle.store;
         const key = seedProject(store);
         const cycleId = await fileAndActivate(key);
@@ -587,7 +584,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       "prune by silence: the row is destroyed with NO unregister, and the surviving " +
         "'registered' event still names the role and cycle N",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const store = handle.store;
         const key = seedProject(store);
         const cycleId = await fileAndActivate(key);
@@ -608,7 +605,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
         // the row. No new machinery, no clock injection, no config patch.
         setAgentTimestamps(store, key, agentId, { lastSeen: Date.now() - 4_000_000 });
 
-        const listRes = await fetch(`${base()}/api/v2/agents?project=${key}`);
+        const listRes = await send(handle!, `/api/v2/agents?project=${key}`);
         expect(listRes.status).toBe(200);
         const listBody = (await listRes.json()) as AgentsListResponse;
         expect(listBody.agents.map((a) => a.agentId)).not.toContain(agentId);
@@ -631,7 +628,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       "an UNBOUND registration (ORCHESTRATOR, no cycleId) leaves lifecycle events with " +
         "NO cycleId key at all — absent, never 0 and never null",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const store = handle.store;
         const key = seedProject(store);
         const agentId = "participation-unbound";
