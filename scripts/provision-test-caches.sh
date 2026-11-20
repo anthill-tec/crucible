@@ -69,26 +69,54 @@ cp -R "$FIXTURE" "$WORK/project"
 rm -rf "$WORK/project/target"
 # The committed maven.config holds `-o`; the provisioning run is online.
 : > "$WORK/project/.mvn/maven.config"
-# One bad download must not fail the fill. Maven's resolver retries a dropped
-# connection itself, three times (the property under its resolver 1.x and 2.x
-# names). A fill that still fails runs once more, with -U: maven records an
-# artifact it could not fetch as missing and would not ask for it again.
+# One bad download must not fail the fill, and nothing else is retried.
+# Maven's resolver retries a dropped connection itself, three times (the
+# property under its resolver 1.x and 2.x names). A fill that still fails runs
+# once more, with -U (maven records an artifact it could not fetch as missing
+# and would not ask for it again), but only when it failed fetching:
+#
+#   an attempt is retried when one of maven's `[ERROR]` lines in its output
+#   matches RESOLUTION_FAILURE below, case-insensitively. Those are maven's
+#   resolution and transfer messages ("Could not resolve dependencies",
+#   "Plugin ... could not be resolved", "Could not transfer artifact",
+#   "Failed to read artifact descriptor", "Non-resolvable parent POM") and the
+#   network errors they carry (connection reset or refused, a timeout, an
+#   unknown host, a handshake the remote host cut).
+#
+# Any other failure is the build's own (a compile error, an unsupported
+# `release`, a bad pom, a plugin's error): the same build fails the same way
+# again, so it fails at once. Maven's output streams to this log as it runs.
+RESOLUTION_FAILURE='could not resolve|could not be resolved|could not transfer|failed to read artifact descriptor|non-resolvable|transfer failed|connection reset|connection refused|timed out|unknown host|remote host terminated'
 ATTEMPTS=2
 attempt=1
 update=""
 while :; do
     echo "provision-test-caches: fill attempt $attempt of $ATTEMPTS"
-    if (cd "$WORK/project" && HOME="$WORK/home" MAVEN_OPTS="-Duser.home=$WORK/home" \
-        mvn -B clean test $update -Dmaven.repo.local="$REPO" -Dmaven.test.failure.ignore=true \
-            -Daether.connector.http.retryHandler.count=3 \
-            -Daether.transport.http.retryHandler.count=3); then
+    rm -f "$WORK/fill.status"
+    (
+        cd "$WORK/project"
+        rc=0
+        HOME="$WORK/home" MAVEN_OPTS="-Duser.home=$WORK/home" \
+            mvn -B clean test $update -Dmaven.repo.local="$REPO" -Dmaven.test.failure.ignore=true \
+                -Daether.connector.http.retryHandler.count=3 \
+                -Daether.transport.http.retryHandler.count=3 || rc=$?
+        echo "$rc" > "$WORK/fill.status"
+    ) 2>&1 | tee "$WORK/fill.log"
+    status=$(cat "$WORK/fill.status" 2>/dev/null || echo 1)
+    if [ "$status" -eq 0 ]; then
         break
     fi
-    if [ "$attempt" -ge "$ATTEMPTS" ]; then
-        echo "provision-test-caches: the fill failed on all $ATTEMPTS attempts" >&2
+    if ! grep -E -i -q "\[ERROR\].*($RESOLUTION_FAILURE)" "$WORK/fill.log"; then
+        echo "provision-test-caches: fill attempt $attempt failed (maven exit $status) on no resolution or transfer error; a build failure is not retried, maven's output is above" >&2
         exit 1
     fi
-    echo "provision-test-caches: fill attempt $attempt failed; retrying in 10 s" >&2
+    if [ "$attempt" -ge "$ATTEMPTS" ]; then
+        echo "provision-test-caches: the fill failed resolving or transferring an artifact on all $ATTEMPTS attempts" >&2
+        exit 1
+    fi
+    echo "provision-test-caches: fill attempt $attempt failed resolving or transferring an artifact:" >&2
+    grep -E -i -m 3 "\[ERROR\].*($RESOLUTION_FAILURE)" "$WORK/fill.log" >&2
+    echo "provision-test-caches: retrying in 10 s with -U" >&2
     attempt=$((attempt + 1))
     update="-U"
     sleep 10
