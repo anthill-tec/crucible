@@ -9,7 +9,7 @@
 // with no `cycleId` is now REFUSED (409); ORCHESTRATOR/report unbound
 // registration is UNCHANGED (still 200) — a real regression pin, not a RED
 // case. §S3 ingest-attach stamping is covered separately in
-// tests/integration/ingest-binding-attach.test.ts, not here. No caller-auth on other
+// tests/unit/ingest-binding-attach.test.ts, not here. No caller-auth on other
 // mutating verbs (§S2b/§S3b) — still out of scope for this cycle.
 //
 // RED phase: handleAgentTouch (src/v2.ts) has NO per-role cycleId
@@ -18,8 +18,8 @@
 // the ORCHESTRATOR/report block is expected to PASS today AND after GREEN.
 //
 // Harness: drives the REAL production router in process (`bootInProcess`) + its real routes, the
-// same pattern as tests/integration/agent-role-required.test.ts (register/heartbeat/GET agents)
-// and tests/integration/checkpoint-stop.test.ts (the plans/cycles HTTP surface: POST
+// same pattern as tests/unit/agent-role-required.test.ts (register/heartbeat/GET agents)
+// and tests/unit/checkpoint-stop.test.ts (the plans/cycles HTTP surface: POST
 // .../plans to file, PATCH .../plans/<planId>/cycles/<id> to transition,
 // PATCH .../plans/<planId> to close) — no new mechanism invented here.
 
@@ -74,7 +74,7 @@ interface PlanFileResponse {
   [key: string]: unknown;
 }
 
-/** Same helper as tests/integration/agent-role-required.test.ts's errorSurface — concatenate
+/** Same helper as tests/unit/agent-role-required.test.ts's errorSurface — concatenate
  * every string-ish field an AXI error could carry the named state in, so
  * the assertion survives whatever exact wording GREEN picks while still
  * requiring the actual state (unknown / pending / done / closed-plan) to be

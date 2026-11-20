@@ -27,7 +27,7 @@
 // of the 409 this file asserts. Every assertion fails today for that reason.
 //
 // Harness: drives the REAL production router in process (`bootInProcess`) + its real routes, same
-// pattern as tests/integration/agent-role-required.test.ts (whose `errorSurface` /
+// pattern as tests/unit/agent-role-required.test.ts (whose `errorSurface` /
 // `postJson` / `getJson` / `seedProject` conventions this file mirrors).
 //
 // Does NOT touch src/ or clients/ — tests only.
@@ -76,7 +76,7 @@ interface AgentsListResponse {
 const SOURCE_ENUM = ["claude-md", "package-json", "git-repo", "manual"] as const;
 
 /** Concatenate every string-ish field an AXI error could carry content in,
- * mirroring tests/integration/agent-role-required.test.ts's `errorSurface` so the
+ * mirroring tests/unit/agent-role-required.test.ts's `errorSurface` so the
  * assertion survives whatever exact wording GREEN picks while still
  * requiring the accepted values (and the received one) to be NAMED. */
 function errorSurface(body: ErrResponse): string {

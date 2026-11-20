@@ -26,7 +26,7 @@
 // !agentCols.has("role")` in-place rename path.
 //
 // Drives the REAL production router in process (`bootInProcess`) + its real routes, same harness
-// pattern as tests/integration/agent-lifecycle.test.ts / tests/integration/v2-core.test.ts. The
+// pattern as tests/integration/agent-lifecycle.test.ts / tests/unit/v2-core.test.ts. The
 // legacy-db fixtures build a genuinely INDEPENDENT pre-migration schema with
 // a raw bun:sqlite Database (not via the Store class, which would just
 // re-apply whatever migration already exists in THIS checkout) so the
@@ -174,7 +174,7 @@ describe("CR-CRU-044 C1 — role as first-class data (server)", () => {
   // REQUIRES a cycle binding. Where a test's actual subject is the ROLE
   // enumeration/declaration itself (not incidental to some other CR-044
   // behaviour), it must supply one — same fixture primitive as
-  // tests/integration/agent-cycle-binding.test.ts: files a real ONE-cycle plan through
+  // tests/unit/agent-cycle-binding.test.ts: files a real ONE-cycle plan through
   // the plans API and activates that cycle through the real PATCH transition
   // route (never store.filePlan/direct DB writes).
   // CR-CRU-056 §S2b fixture-repair (C3): plan-file/cycle-transition are

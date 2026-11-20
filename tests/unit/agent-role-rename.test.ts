@@ -30,11 +30,11 @@
 // assertion below fails today for that reason.
 //
 // Harness: drives the REAL production router in process (`bootInProcess`) + its real routes, same
-// pattern as tests/integration/agent-role-required.test.ts / tests/integration/event-role-stamping.test.ts.
+// pattern as tests/unit/agent-role-required.test.ts / tests/unit/event-role-stamping.test.ts.
 // The §6 migration fixture builds a genuinely INDEPENDENT live-shaped schema
 // with a raw bun:sqlite Database (never through the Store class, which would
 // just re-apply whatever migration already exists in THIS checkout), mirror-
-// ing tests/integration/agent-role-required.test.ts's `seedLegacyDb` convention.
+// ing tests/unit/agent-role-required.test.ts's `seedLegacyDb` convention.
 //
 // Does NOT touch src/, clients/, or any existing test file — tests only.
 
@@ -471,7 +471,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
   // `phase`/`phase_inferred` — exactly the schema this checkout's Store
   // writes today, so the migration assertions are meaningful regardless of
   // RED/GREEN state (same independent-fixture principle as
-  // tests/integration/agent-role-required.test.ts's seedLegacyDb).
+  // tests/unit/agent-role-required.test.ts's seedLegacyDb).
 
   describe("§6 migration idempotently RENAMES phase->role/phase_inferred->role_inferred, preserving CR-057's classification counts exactly", () => {
     let tmpDir: string | undefined;

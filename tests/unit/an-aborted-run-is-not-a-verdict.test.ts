@@ -10,7 +10,7 @@
 // Two aborted streamed runs are read: one whose stream held failures, one
 // whose stream held only passes. The briefs are the shape `eventBrief`
 // (src/v2.ts) serves for an aborted streamed run — its counts, `status` and
-// `abortReason`, as tests/integration/an-aborted-streamed-run-keeps-its-tests.test.ts
+// `abortReason`, as tests/unit/an-aborted-streamed-run-keeps-its-tests.test.ts
 // asserts on the real events list. The rollup is read on a real board:
 // a project with `retention: 0` folds every run into its day rollup the moment
 // it is stored (the technique tests/integration/coverage-trend.test.ts uses), read back

@@ -12,7 +12,7 @@
 //     — PRESENT only when the agent has no open run (the same absence
 //     convention `boundCycleId`/`role` already use: never fabricated, never
 //     null, just absent), so the raw `message` this CR's companion file
-//     (tests/integration/ingest-outcome-overwrites-agent-message.test.ts) pins is never
+//     (tests/unit/ingest-outcome-overwrites-agent-message.test.ts) pins is never
 //     lost or overwritten by the derived view;
 //   - its exact text, taken from storyboard F19's own states 5′/5 (the
 //     `· ` middle-dot separator between segments, `, ` between the last-run

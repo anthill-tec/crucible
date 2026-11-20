@@ -42,7 +42,7 @@
 // Fixture technique for the "unrecorded" bucket: a real pre-CR-165
 // (schema v13) sqlite file, built from the LITERAL pre-migration
 // `plans`/`plan_cycles` DDL (same technique as
-// tests/integration/cycle-change-fields-storage-migration.test.ts's `makeLegacyStore` —
+// tests/unit/cycle-change-fields-storage-migration.test.ts's `makeLegacyStore` —
 // never a downgrade of a future build), carrying an ALREADY-aborted plan
 // with an ALREADY-skipped cycle, neither with a reason/cause/specRef column
 // to even populate (those columns don't exist pre-migration) — booting the
@@ -119,7 +119,7 @@ async function getChanges(
 /**
  * A pre-CR-165 (user_version 13) file: literal pre-migration `plans`/
  * `plan_cycles`/`projects` DDL (lifted verbatim from
- * tests/integration/cycle-change-fields-storage-migration.test.ts's makeLegacyStore),
+ * tests/unit/cycle-change-fields-storage-migration.test.ts's makeLegacyStore),
  * carrying ONE plan that is already `aborted` with ONE cycle already
  * `skipped` — neither column exists yet to even hold a reason.
  */
