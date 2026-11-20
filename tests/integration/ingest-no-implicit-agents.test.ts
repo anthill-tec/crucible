@@ -19,8 +19,8 @@
 // materialised agent row, instead of a 409 refusal with no row created.
 //
 // Harness: drives the real production router in process (`bootInProcess`) + its real routes,
-// the same pattern as tests/integration/agent-cycle-binding.test.ts and
-// tests/integration/checkpoint-stop.test.ts. State checks read `handle.store` directly.
+// the same pattern as tests/unit/agent-cycle-binding.test.ts and
+// tests/unit/checkpoint-stop.test.ts. State checks read `handle.store` directly.
 
 import { describe, test, expect, afterEach } from "bun:test";
 import type { BoardHandle } from "../../src/server.ts";

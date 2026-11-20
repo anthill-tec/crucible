@@ -11,7 +11,7 @@
 // C1 (539853d, merged) already makes the SERVER emit `decisionSummary` on a
 // sealed gate's events-LIST brief — `{decisions, fixed, added, declined,
 // approvedWithReason}` (verbatim field names, confirmed against
-// tests/integration/sealed-gate-events-carry-a-decision-summary.test.ts, which also
+// tests/unit/sealed-gate-events-carry-a-decision-summary.test.ts, which also
 // reproduces the spec's own worked example: decisions:4 fixed:3 added:1
 // declined:16 approvedWithReason:1 — the fixtures below reuse it verbatim
 // rather than invent new numbers). C1 ALSO already changed `public/app.js`'s
@@ -395,7 +395,7 @@ describe("CR-CRU-166 §S1 AC1/AC7 — the gate card's decision-summary line and 
 // NOTE — these two bound/negative pins legitimately PASS against current
 // production already (nothing renders `gate-decision-summary` yet at all, in
 // any state). Kept anyway, per this CR's own C1 server-side RED file's
-// precedent (tests/integration/sealed-gate-events-carry-a-decision-summary.test.ts:
+// precedent (tests/unit/sealed-gate-events-carry-a-decision-summary.test.ts:
 // "kept to catch a later implementation that fabricates the key where the
 // spec forbids it") — they guard against a GREEN that shows a line
 // unconditionally instead of gating it on `decisionSummary`'s presence.

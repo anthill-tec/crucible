@@ -7,7 +7,7 @@
 // `unregister` deletes that row, so the moment an agent finishes (the
 // state most of the board is in, most of the time) classification fell
 // back to `phaseRole(agentId)` NAME parsing. CR-CRU-057 §S1 (already
-// landed — tests/integration/event-role-stamping.test.ts) closed that at the SERVER:
+// landed — tests/unit/event-role-stamping.test.ts) closed that at the SERVER:
 // every run/lifecycle event now carries the agent's declared `role` (+
 // `roleInferred`) stamped at ingest time, through CR-CRU-056's existing
 // `resolveIngestAttach` seam, surviving the posting agent's

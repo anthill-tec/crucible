@@ -18,7 +18,7 @@
 //  - the throttled frames: a view batch that changes the live state emits the
 //    project's `events` change at once, a second inside `LIVE_FRAME_MS` is
 //    deferred to the window's end — driven on the Store's scheduler seam with
-//    a hand-moved clock, as tests/integration/live-frames-are-throttled-per-project.test.ts
+//    a hand-moved clock, as tests/unit/live-frames-are-throttled-per-project.test.ts
 //    drives it.
 //
 // The batches are cut from a real bun console capture

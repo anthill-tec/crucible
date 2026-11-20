@@ -10,7 +10,7 @@
 // timed assertion sharing a file with seven throwaway HTTP servers
 // is the 2026-09-07 false latency alarm waiting to happen. So the Store-level
 // contract lives here (unit: no browser, no process, no server, no waiting),
-// the per-route surface lives in tests/integration/commit-boundary-routes.test.ts, and
+// the per-route surface lives in tests/unit/commit-boundary-routes.test.ts, and
 // plans.test.ts is left untouched — its 53 tests are this CR's baseline.
 //
 // The output-equality tests below are CHARACTERIZATION pins: they pass before

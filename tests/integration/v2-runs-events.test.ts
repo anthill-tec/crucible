@@ -7,7 +7,7 @@
 // until GREEN wires handleV2 to dispatch them.
 import { describe, test, expect, afterEach } from "bun:test";
 // CR-CRU-094 §S1/AC1 — the column is read STRAIGHT OUT OF THE STORE FILE by a
-// second connection, the way tests/integration/store-migration.test.ts's `columnsOf` /
+// second connection, the way tests/unit/store-migration.test.ts's `columnsOf` /
 // `rowCounts` already inspect a store; nothing else in this file needs sqlite.
 import { Database } from "bun:sqlite";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -718,7 +718,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
 // stamped the blob since it merged — and therefore proves nothing about this
 // CR. So this block's store is FILE-BACKED, not `:memory:`, and a second
 // read-only connection reads the row back, the same "open the store file and
-// inspect it raw" approach tests/integration/store-migration.test.ts's `columnsOf` /
+// inspect it raw" approach tests/unit/store-migration.test.ts's `columnsOf` /
 // `rowCounts` established.
 //
 // ONE SEAM, NOT TWO. §S1 pins the stamp at `resolveIngestAttach`'s return, and

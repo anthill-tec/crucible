@@ -9,7 +9,7 @@
 // its encoding). The board's rounding is the coverage codecs' one function,
 // `coveragePercent(covered, total)` in src/codecs/coverage.ts; the same
 // rounding is held through `POST /api/v2/runs` in
-// tests/integration/run-ingest-decodes-coverage.test.ts.
+// tests/unit/run-ingest-decodes-coverage.test.ts.
 import { describe, test, expect } from "bun:test";
 import { coveragePercent } from "../../src/codecs/coverage.ts";
 import { loadCoveragePercentOracle } from "../helpers/coverage-percent-oracle.ts";

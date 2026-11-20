@@ -3,7 +3,7 @@
 // tolerance, query filters, SSE change notification, and non-interference
 // with run-event rollups. C1 is server-only — no UI/lens assertions here.
 // Drives the REAL production router in process (`bootInProcess`), same harness pattern as
-// tests/integration/v2-core.test.ts. (History: this line also cited
+// tests/unit/v2-core.test.ts. (History: this line also cited
 // tests/shim-ingest-events.test.ts — archived by CR-CRU-008's shim-retirement
 // sweep, then deleted outright with tests/archive by CR-CRU-047.)
 import { describe, test, expect, afterEach } from "bun:test";

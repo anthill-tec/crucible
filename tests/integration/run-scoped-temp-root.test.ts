@@ -127,10 +127,10 @@ const TRACTABLE_BUN_SUITES = [
   "tests/integration/queue-registration.test.ts",
   "tests/integration/db-path-resolution.test.ts",
   "tests/integration/releases.test.ts",
-  "tests/integration/checkpoint-stop.test.ts",
-  "tests/integration/cycle-epochs.test.ts",
+  "tests/unit/checkpoint-stop.test.ts",
+  "tests/unit/cycle-epochs.test.ts",
   "tests/unit/boot-safety.test.ts",
-  "tests/integration/plan-abort.test.ts",
+  "tests/unit/plan-abort.test.ts",
   "playwright.config.ts",
   "tests/e2e/teardown-contracts/ephemeral.playwright.config.ts",
 ] as const;

@@ -101,7 +101,7 @@ const FLATTENED_TEST_BRIEF_KEYS = [
 
 // CR-CRU-007 §S5.2 F8 vitals anatomy (additive) — a COVERAGE-BEARING brief
 // also gains the optional `coverageLines` field (see
-// tests/integration/v2-brief-context.test.ts). The guard for coverage-bearing items
+// tests/unit/v2-brief-context.test.ts). The guard for coverage-bearing items
 // below pins this exact set; the no-coverage failItem (still
 // FLATTENED_TEST_BRIEF_KEYS) keeps proving the field's absence.
 const FLATTENED_TEST_BRIEF_KEYS_WITH_COVERAGE_LINES = [

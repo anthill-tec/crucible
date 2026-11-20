@@ -1623,7 +1623,7 @@ describe("F4 anatomy — tree lines, ▾/▸ affordance, fail-first counts", () 
 // structurally, not via computed style — see this file's header), so this
 // is a grep-style assertion over the REAL stylesheet source, same
 // convention as the codec "registry-only resolution" grep tests
-// (tests/integration/codec-parsepath.test.ts) and tests/unit/drill-in-mode.test.ts's new
+// (tests/unit/codec-parsepath.test.ts) and tests/unit/drill-in-mode.test.ts's new
 // "no drillin-mode source references" tests.
 describe("F4 anatomy — no border/outline highlight on tree rows (styles.css)", () => {
   const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");

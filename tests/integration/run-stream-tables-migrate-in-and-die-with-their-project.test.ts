@@ -1,12 +1,12 @@
 // The tables an open run's stream and live state are held in (CR-CRU-200
 // §S2, §S4) — `run_stream_batches`, `run_live` and `run_live_failures`:
 //  - a project's cascade delete (`DELETE /api/v2/projects/<key>`, archived
-//    and `userApproved: true`, as tests/integration/project-teardown.test.ts drives it)
+//    and `userApproved: true`, as tests/unit/project-teardown.test.ts drives it)
 //    removes its runs' rows from all three, and leaves another project's
 //    rows alone;
 //  - the store migrates v20 → v21 by creating them: a store from this build
 //    walked back to v20 (the three tables dropped, `user_version` stamped
-//    20), as tests/integration/store-migration.test.ts walks a store back for its own
+//    20), as tests/unit/store-migration.test.ts walks a store back for its own
 //    retrofits, gains all three with their columns and is stamped 21.
 //
 // Rows are counted with a direct SQL count through the store's own

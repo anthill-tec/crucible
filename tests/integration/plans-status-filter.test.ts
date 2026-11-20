@@ -25,7 +25,7 @@
 // because `filed`/`lastClosedCr` are `undefined` on the response.
 //
 // Harness: reuses the exact postJson/patchJson/getJson + withFixtureAgent +
-// createProject + scopedPlansPath conventions from tests/integration/plans-global.test.ts,
+// createProject + scopedPlansPath conventions from tests/unit/plans-global.test.ts,
 // and the activate->done->close-with-merge idiom from that same file's
 // closePlan() (commit-boundary-routes.test.ts confirms a merge-commit close
 // alone — no run ingestion — is enough for store.ts's deriveCommitBoundary to

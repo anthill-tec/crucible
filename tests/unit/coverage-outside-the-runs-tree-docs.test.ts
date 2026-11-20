@@ -102,8 +102,8 @@ describe("the tests of the rule, and the decoder it is written in, name no chang
   const CHANGE_REQUEST = /CR-[A-Z]{2,}-\d+|\u00a7/;
 
   const FILES = [
-    "tests/integration/a-runs-coverage-keeps-only-the-files-inside-its-tree.test.ts",
-    "tests/integration/run-ingest-leaves-out-coverage-files-outside-the-runs-tree.test.ts",
+    "tests/unit/a-runs-coverage-keeps-only-the-files-inside-its-tree.test.ts",
+    "tests/unit/run-ingest-leaves-out-coverage-files-outside-the-runs-tree.test.ts",
     "tests/unit/coverage-outside-the-runs-tree-docs.test.ts",
     "src/codecs/coverage.ts",
   ];

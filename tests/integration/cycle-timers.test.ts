@@ -111,7 +111,7 @@ interface CycleFixture {
   doneAt?: number;
   // CR-CRU-023 §S3 (a) — additive: server-fed accumulated attention time in
   // ms (persisted `activeMs`, restart-resume semantics — store/server side
-  // pinned in tests/integration/cycle-epochs.test.ts). ACTIVE rows must derive their
+  // pinned in tests/unit/cycle-epochs.test.ts). ACTIVE rows must derive their
   // ticking badge from THIS field, not from `Date.now() - activatedAt`.
   activeMs?: number;
 }
@@ -1049,7 +1049,7 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): sealed rows never tick even ac
 // accumulated `activeMs` per active cycle; on service restart resume the
 // count, excluding downtime)". The server/store side of this contract
 // (persisted `activeMs`, restart-resume-excludes-downtime) is pinned in
-// tests/integration/cycle-epochs.test.ts; THIS block pins the UI-CONSUMER side of the
+// tests/unit/cycle-epochs.test.ts; THIS block pins the UI-CONSUMER side of the
 // SAME contract: once the server feeds an additive `activeMs` on the cycle
 // payload, the ACTIVE ticking badge must derive its value from THAT field —
 // never from client-side `Date.now() - activatedAt`, which is exactly the

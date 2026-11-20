@@ -16,7 +16,7 @@
 // today: no marker, `live=false`, dim badge, silent no-op on click. That
 // conflation is exactly what CR-CRU-032 §S2/§S3 fixes.
 //
-// §S1 (already GREEN, `tests/integration/events-anchored.test.ts`) added
+// §S1 (already GREEN, `tests/unit/events-anchored.test.ts`) added
 // `GET /api/v2/events?project=<key>&cycleId=<id>` -> `{ok, events, cycle?}`.
 // This file assumes the client wires §S2 on top of that: when the retry
 // budget is exhausted without finding the marker, issue that anchored
@@ -25,7 +25,7 @@
 // mount — the cycle's own `done` status is already known from
 // `state.plans`), then `scrollIntoView` + blink. An anchor response with
 // an EMPTY `events` array and NO `cycle` field is the server's "truly
-// unknown/pruned" signal (mirrors `tests/integration/events-anchored.test.ts`'s
+// unknown/pruned" signal (mirrors `tests/unit/events-anchored.test.ts`'s
 // "unknown cycleId" case) — §S3 requires that case to surface explicit
 // feedback, never a silent no-op.
 //
@@ -128,7 +128,7 @@ interface ProjectFixture {
   lastActivity?: number;
 }
 
-// The §S1 anchored route's response shape (`tests/integration/events-anchored.test.ts`):
+// The §S1 anchored route's response shape (`tests/unit/events-anchored.test.ts`):
 // `events` always present; `cycle` present ONLY when the boundary resolves
 // server-side (absent = truly unknown/pruned).
 interface AnchorResponse {
@@ -444,7 +444,7 @@ describe("§S3 cycle-to-runs anchor-fetch — genuinely pruned boundary", () => 
       events: [],
       plans: [plan],
       // Server's "truly unknown/pruned" signal (mirrors
-      // tests/integration/events-anchored.test.ts's "unknown cycleId" case): empty
+      // tests/unit/events-anchored.test.ts's "unknown cycleId" case): empty
       // events, no `cycle` field at all.
       anchorResponse: { events: [] },
     });
@@ -613,7 +613,7 @@ describe("§S3 cycle-to-runs pill — genuinely-pruned pill DIMS after the confi
       events: [],
       plans: [plan],
       // Server's "truly unknown/pruned" signal (mirrors AC2 and
-      // tests/integration/events-anchored.test.ts's "unknown cycleId" case): empty
+      // tests/unit/events-anchored.test.ts's "unknown cycleId" case): empty
       // events, no `cycle` field at all.
       anchorResponse: { events: [] },
     });
@@ -701,7 +701,7 @@ describe("§S3 cycle-to-runs pill — durable prunedCycles store dims a freshly 
       events: [],
       plans: [plan],
       // Server's "truly unknown/pruned" signal: empty events, no `cycle`
-      // field at all (mirrors AC2/AC5 and tests/integration/events-anchored.test.ts's
+      // field at all (mirrors AC2/AC5 and tests/unit/events-anchored.test.ts's
       // "unknown cycleId" case).
       anchorResponse: { events: [] },
     });
@@ -787,7 +787,7 @@ describe("§S3 cycle-to-runs pill — durable prunedCycles store dims a freshly 
 //     `cycle-activate`". A DOM-level test has no board behind it; the fixture's
 //     `status: "active"` cycle IS the shape the plans route returns after
 //     `cycle-activate`, and the REAL transition verb is driven by this CR's §S5
-//     test in tests/integration/events-anchored.test.ts. Flagging the substitution rather
+//     test in tests/unit/events-anchored.test.ts. Flagging the substitution rather
 //     than making it silently.
 //   - ESCALATION: §S4 does not pin the `empty` message's wording. Pinned here
 //     as its observable discriminators ONLY: it names that no runs have been

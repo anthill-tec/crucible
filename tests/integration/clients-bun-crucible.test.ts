@@ -78,7 +78,7 @@
 // (POST /api/v2/runs), whose bun-console codec marries a failing leaf to its
 // detail; that contract is pinned against frozen captures in the board's own
 // suites (tests/unit/bun-console-failure-reading.test.ts and
-// tests/integration/bun-load-errors-are-read-on-the-board.test.ts). The live-bun fixture
+// tests/unit/bun-load-errors-are-read-on-the-board.test.ts). The live-bun fixture
 // here keeps covering only what is version-stable: which leaves FAIL, and
 // that a failing leaf carries its own detail from whichever channel
 // supplied it.
@@ -1034,7 +1034,7 @@ describe("clients/bun-crucible.py — CR-CRU-088 AC4 (E2E): an aftermath block n
     // red on a bun that reordered it and blocked every publish). The
     // defect's exact input shape is therefore observed and reported here,
     // and pinned fatally only over FROZEN BYTES — now on the board, in
-    // tests/integration/bun-console-failure-detail-is-read-on-the-board.test.ts (the
+    // tests/unit/bun-console-failure-detail-is-read-on-the-board.test.ts (the
     // AFTERMATH_BLEED capture), where no installed bun can move it. The
     // fix's own guarantee is asserted
     // version-independently in the next test.

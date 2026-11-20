@@ -23,7 +23,7 @@
 // `{message, trace?}` — the failure of the one `?` case the client files for
 // that path (the shape CLIENT_LOAD_ERROR_READING freezes). The junit codec's
 // `readRaw` path is what turns that reading into stored cases; the route test
-// (tests/integration/bun-load-errors-are-read-on-the-board.test.ts) pins that.
+// (tests/unit/bun-load-errors-are-read-on-the-board.test.ts) pins that.
 import { describe, test, expect } from "bun:test";
 import { parseBunLoadErrors } from "../../src/codecs/bun-console.ts";
 import {

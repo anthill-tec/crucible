@@ -12,7 +12,7 @@
 //
 // Cycle 636 (GREEN, merged) already built the server read this page now
 // drives: GET /api/v2/projects/<key>/history (src/v2.ts
-// `handleProjectHistory`, tests/integration/history-by-release-read.test.ts). THIS file
+// `handleProjectHistory`, tests/unit/history-by-release-read.test.ts). THIS file
 // pins the PAGE half only — fetch mocked, never the real server — AC1's
 // release tree (order, folding, expansion) and AC2's page half (gate-run
 // rows, `→ gate`, the verification line, packages, the not-started line),
@@ -68,7 +68,7 @@
 //   - `[data-testid="history-workflow-packages"]` wrapping one
 //     `[data-testid="history-package"]` per entry, rendered ONLY when the
 //     wire's `workflow.packages` key is PRESENT (iff shipped, per the wire
-//     contract tests/integration/history-by-release-read.test.ts already pins) — reusing
+//     contract tests/unit/history-by-release-read.test.ts already pins) — reusing
 //     the EXISTING package line format `public/app.js`'s `RoadmapPackage`
 //     already renders elsewhere (`${registry} · ${name} ${version}`), the
 //     one established convention for a package line on this board.
@@ -98,7 +98,7 @@ const VAN_X_SRC = readFileSync(path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.n
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
-// ── wire shapes (mirrors tests/integration/history-by-release-read.test.ts's own) ──────
+// ── wire shapes (mirrors tests/unit/history-by-release-read.test.ts's own) ──────
 
 interface PackageRefWire {
   registry: string;
@@ -126,7 +126,7 @@ interface HistoryWaveWire {
   crs: string[];
   // CR-CRU-177 \u00a7S2: optional here (RED's call) so the many EXISTING
   // fixtures above need no churn; absent reads as 0, matching the server's
-  // always-present \"0 when none\" contract (tests/integration/history-by-release-read.test.ts).
+  // always-present \"0 when none\" contract (tests/unit/history-by-release-read.test.ts).
   pendingCount?: number;
 }
 interface HistoryReleaseWire {

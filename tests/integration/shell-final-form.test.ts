@@ -13,7 +13,7 @@
 // exactly the seam a frontend unit test is expected to substitute at (the
 // SERVER's actual computation of the new `active`/`lastActivity` fields is
 // separately covered end-to-end against the real HTTP server in
-// tests/integration/v2-projects-activity.test.ts).
+// tests/unit/v2-projects-activity.test.ts).
 //
 // RED phase: expected to fail against the CURRENT public/app.js (still the
 // CR-CRU-006 shape — TopBar renders project chips directly, no projects-row/

@@ -47,7 +47,7 @@
 // SCHEMA_VERSION, which would defend nothing. What this guard still asserts is
 // unchanged: a freshly booted store round-trips the queue without any
 // per-boot retrofit, and the version it reports is a value someone chose.
-// tests/integration/store-migration.test.ts derives every version from schemaVersion()
+// tests/unit/store-migration.test.ts derives every version from schemaVersion()
 // (reads SCHEMA_VERSION) — it pins NO literal — so the two do different jobs.
 //
 // Drives the REAL production router in process (`bootInProcess`) — POST/GET
@@ -124,7 +124,7 @@ interface PlanFileResponse {
 // ── CR-CRU-099 §S1 — the consumers this route's dropped fields feed ────────
 
 /** §S2/AC23 as widened by CR-CRU-095 §S2 — the ONE warning wording, pinned
- *  once (the same string tests/integration/queue-defaulted-seq-scope.test.ts pins) so the
+ *  once (the same string tests/unit/queue-defaulted-seq-scope.test.ts pins) so the
  *  regression ACs below assert CR-CRU-095's shipped message and not a
  *  paraphrase of it. */
 interface WarningWire {
@@ -1329,8 +1329,8 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
   // `size` are each pinned above, and the validation 400s that name a field
   // AND an index with them. A field this route ACCEPTS and DROPS belongs
   // beside them. The two alternatives were rejected:
-  // tests/integration/queue-defaulted-seq-scope.test.ts is CR-CRU-095's, which is shipped
-  // and not edited, and tests/integration/roadmap-registration-routes.test.ts is the five
+  // tests/unit/queue-defaulted-seq-scope.test.ts is CR-CRU-095's, which is shipped
+  // and not edited, and tests/unit/roadmap-registration-routes.test.ts is the five
   // per-CR verbs' suite — this route is not one of them.
   //
   // WHAT IS BROKEN TODAY. `handleQueuePost` builds its `QueueEntryInput` from
@@ -1874,7 +1874,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
   // ONE AUTHORIZATION RULE, ONE WORDING. These fixtures assert the refusal
   // `requireOrchestrator` already answers — 409, the caller named, the
   // required role named, a state-derived `help[]` — and NOT a second error
-  // shape invented for this route. tests/integration/roadmap-registration-routes.test.ts
+  // shape invented for this route. tests/unit/roadmap-registration-routes.test.ts
   // (AC16) pins the same three refusal shapes on the five verbs; what is new
   // here is only WHICH POSTS the rule reaches.
   //
@@ -1930,7 +1930,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
     /** A LIVE registered caller that is NOT an orchestrator. A TDD role cannot
      *  register unbound (CR-CRU-056 §S1 refuses that 409), so RED is bound to
      *  the ACTIVE cycle of a throwaway plan filed on a cr that never enters
-     *  the queue — the fixture tests/integration/roadmap-registration-routes.test.ts uses
+     *  the queue — the fixture tests/unit/roadmap-registration-routes.test.ts uses
      *  for the same reason. */
     async function registerRed(key: string): Promise<string> {
       const { planId, cycleId } = await filePlan(key, "CR-Q99-GATE-BIND");

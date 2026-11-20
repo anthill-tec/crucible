@@ -13,7 +13,7 @@
 // ── Safety ─────────────────────────────────────────────────────────────────
 // The synthetic fixtures are mkdtemp scratch files, built through the ordinary
 // `Store` door and then DOWNGRADED on disk to the pre-this-CR shape — the
-// `tests/integration/milestone-dates-migration.test.ts` / `tests/release-unification-migration
+// `tests/unit/milestone-dates-migration.test.ts` / `tests/release-unification-migration
 // .test.ts` idiom, so the same fixture-builder keeps testing the real migration
 // once it exists rather than a shape only a pre-GREEN build can produce.
 //
@@ -76,7 +76,7 @@ const PRE_UPGRADE_RE = /\.pre-upgrade-\d+$/;
 /**
  * The ONE chain body this file owns, found by what it declares — never by
  * index and never by the chain's length, both of which every later step is
- * free to move (the tests/integration/gate-retirement.test.ts pattern).
+ * free to move (the tests/unit/gate-retirement.test.ts pattern).
  */
 function boundaryStep(): (typeof MIGRATIONS)[number] {
   const owned = MIGRATIONS.filter((step) => (step.description ?? "").includes("boundary_branch"));

@@ -72,8 +72,8 @@ import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 // bucket key is observable via store.listRollups() without waiting on real
 // wall-clock retention. bun:test's setSystemTime() pins Date.now() (and thus
 // the event's timestamp) to a known UTC day before each recordTestEvent call
-// — same clock-injection technique as tests/integration/cycle-epochs.test.ts /
-// tests/integration/checkpoint-stop.test.ts.
+// — same clock-injection technique as tests/unit/cycle-epochs.test.ts /
+// tests/unit/checkpoint-stop.test.ts.
 
 function coverageSummary(overrides?: Partial<RunSummary>): RunSummary {
   return { total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 20, ...overrides };
@@ -178,7 +178,7 @@ interface RawDb {
  * "legacy bucket contributes nothing" AC is to reach past `Store`'s
  * `private readonly db` (TypeScript `private` is compile-time only) and
  * insert the row directly, same technique as
- * tests/integration/v2-projects-activity.test.ts's backdateEventTimestamp.
+ * tests/unit/v2-projects-activity.test.ts's backdateEventTimestamp.
  */
 function seedLegacyWaveRollup(store: Store, projectKey: string, bucket: string, percent: number): void {
   (store as unknown as { db: RawDb }).db

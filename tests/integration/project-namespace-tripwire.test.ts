@@ -153,7 +153,7 @@ function titleSpans(text: string): Span[] {
 }
 
 // RULED, NOT CODED — a test's own DIAGNOSTIC failure message.
-// `spanOf` in tests/integration/queue-canonical-order.test.ts throws
+// `spanOf` in tests/unit/queue-canonical-order.test.ts throws
 // `CR-CRU-095: ${cr} is absent from the published order`, and `entryOf` in
 // tests/unit/roadmap-registration-store.test.ts has the same shape. Both are
 // EXEMPT, and the argument is: a thrown diagnostic is the test telling a
@@ -256,7 +256,7 @@ function expectMessageSpans(relPath: string, text: string): Span[] {
 // asserting the reproduction and never a rule.
 const EXEMPT_CONSTANTS: Record<string, { file: string; reason: string }> = {
   BOARD_SNAPSHOT_2026_09_02: {
-    file: join("tests", "integration", "queue-canonical-order.test.ts"),
+    file: join("tests", "unit", "queue-canonical-order.test.ts"),
     reason:
       "AC5's dated reproduction — this project's own board as it stood on 2026-09-02, " +
       "frozen so CR-CRU-095's defect keeps reproducing. The rules around it run on synthetic ids.",
@@ -317,7 +317,7 @@ function exemptConstantSpans(relPath: string, text: string): Span[] {
 // guard FAILED on the day their files were written — the deny-by-default rule
 // working, not a hole being widened: `CR-PTS-1` is the cr §S1's story-points
 // suite plans with `--points 5` and then reads back from the queue
-// (tests/integration/cr022-story-points.test.ts:154, asserted at :160), and `CR-UI-2` is
+// (tests/unit/cr022-story-points.test.ts:154, asserted at :160), and `CR-UI-2` is
 // the unpointed cr of §S5's UI fixture queue that the roadmap-progress band
 // must NAME (tests/integration/cr022-analytics-ui.test.ts:74, asserted at :231; its
 // pointed sibling `CR-UI-1` is at :73). Both ids are what their assertions are
@@ -327,7 +327,7 @@ function exemptConstantSpans(relPath: string, text: string): Span[] {
 // third, `CR-VEL`, did NOT fail the guard and is registered anyway, found by
 // scanning every CR-shaped literal the CR added under tests/ rather than only
 // the two the guard reported: §S2's velocity suite invents `CR-VEL-1..4` as
-// its merged-cr fixtures (tests/integration/cr022-velocity-analytics.test.ts:167-197, and
+// its merged-cr fixtures (tests/unit/cr022-velocity-analytics.test.ts:167-197, and
 // prose at :31). Today they sit only in fixture setup, but they are the suite's
 // own invention, and listing the namespace now means a later assertion on one
 // is read as synthetic rather than reported as a real board id. The CR's other
@@ -348,7 +348,7 @@ const SYNTHETIC_NAMESPACES: Record<string, string> = {
   "CR-EXPLICIT": "CR-CRU-140 §S3's explicit-body-context milestone fixture — the `cr` a caller states and gets back",
   "CR-GW": "workflow gate-widget fixture",
   "CR-NEW": "§S5's synthetic newly-planned rows (AC4's remedy)",
-  "CR-NEXTPTR": "CR-CRU-098 fixtures for the ported next resolver/route tests (tests/unit/next-resolver.test.ts, tests/integration/next-route.test.ts)",
+  "CR-NEXTPTR": "CR-CRU-098 fixtures for the ported next resolver/route tests (tests/unit/next-resolver.test.ts, tests/unit/next-route.test.ts)",
   "CR-NT": "f13 fidelity fixture — a no-title CR",
   "CR-ORD": "workflow-history ordering fixture",
   "CR-PLANLESS": "home-marker fixture — a run with no plan",
@@ -660,7 +660,7 @@ const PRE_CR_ASSERTION_RESIDUE: Record<string, number> = {
   [join("tests", "e2e", "teardown-contracts", "ephemeral.contract.ts")]: 1,
   [join("tests", "integration", "release-provenance.test.ts")]: 7,
   [join("tests", "integration", "releases.test.ts")]: 2,
-  [join("tests", "integration", "roadmap-registration-routes.test.ts")]: 8,
+  [join("tests", "unit", "roadmap-registration-routes.test.ts")]: 8,
   [join("tests", "unit", "roadmap-registration-store.test.ts")]: 5,
   // RAISED 2026-09-25 by CR-CRU-147's close-out (cycle 527), 11 -> 12. The C4
   // commit that moved three tests to the §S2 row contract (64f6e60) removed
@@ -3114,8 +3114,8 @@ describe("CR-CRU-097 AC7/AC7a — no test asserts on a project CR literal outsid
     // the stronger half of the ceiling. Inventing a second assertion for an
     // untouched file would add no guarantee.
     for (const rel of [
-      join("tests", "integration", "queue-canonical-order.test.ts"),
-      join("tests", "integration", "queue-default-into-wave-block.test.ts"),
+      join("tests", "unit", "queue-canonical-order.test.ts"),
+      join("tests", "unit", "queue-default-into-wave-block.test.ts"),
       join("tests", "integration", "queue-registration.test.ts"),
     ]) {
       expect(assertedLiterals(rel, readFileSync(join(REPO_ROOT, rel), "utf8"))).toEqual([]);

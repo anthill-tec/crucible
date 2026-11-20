@@ -56,7 +56,7 @@ afterEach(async () => {
  * `APIRequestContext` pointed at it: the same request-shaped object
  * harness.ts's helpers are typed to accept. Seeds one project directly
  * through the real `Store` (bypassing HTTP for the seed itself, matching
- * `tests/integration/agent-cycle-binding.test.ts`'s own precedent for this exact
+ * `tests/unit/agent-cycle-binding.test.ts`'s own precedent for this exact
  * server-level test shape) so every test below starts from a real,
  * queryable project.
  */

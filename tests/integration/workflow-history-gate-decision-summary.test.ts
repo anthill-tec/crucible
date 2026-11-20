@@ -330,7 +330,7 @@ describe("CR-CRU-166 §S1 AC1 — the History wave row carries the SAME summary 
 // NOTE \u2014 this bound/negative pin legitimately PASSES against current
 // production already (nothing renders `wave-decision-summary` yet at all).
 // Kept anyway, per this CR's own C1 server-side RED file's precedent
-// (tests/integration/sealed-gate-events-carry-a-decision-summary.test.ts: "kept to catch
+// (tests/unit/sealed-gate-events-carry-a-decision-summary.test.ts: "kept to catch
 // a later implementation that fabricates the key where the spec forbids
 // it") \u2014 it guards against a GREEN that shows a line unconditionally
 // instead of gating it on the summarised gate's own `decisionSummary`.

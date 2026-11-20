@@ -11,7 +11,7 @@
 // helper and its own comment in src/v2.ts: "the brief list does no per-event
 // join"). A decision wire object is `{id, agentId, runId, step?, action,
 // findings?, addedFinding?, instructions?, reason?, timestamp, …}` (verbatim
-// field names from tests/integration/gate-decision-is-recorded.test.ts's own fixtures,
+// field names from tests/unit/gate-decision-is-recorded.test.ts's own fixtures,
 // already round-tripped against the real server).
 //
 // Current-code facts verified against public/app.js on this branch:

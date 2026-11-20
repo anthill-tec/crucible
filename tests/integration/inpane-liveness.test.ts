@@ -688,7 +688,7 @@ describe("negative bound — the SSE-driven poll refetch does not reset the open
 // The per-agent dim rule (store.livenessOf on that agent's OWN lastSeen
 // silence, independent of siblings) is locked here as a regression guard —
 // these are expected to PASS against CURRENT production. Only the
-// agentsOnline COUNT (tests/integration/v2-core.test.ts) is the in-scope defect for this
+// agentsOnline COUNT (tests/unit/v2-core.test.ts) is the in-scope defect for this
 // CR; if any of the following unexpectedly fails, that is a real bug, not
 // something to paper over.
 describe("CR-CRU-037 §S1 characterization — per-agent liveness dimming has no sibling coupling", () => {

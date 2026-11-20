@@ -18,7 +18,7 @@
 //
 // WHAT IS SYNTHETIC AND WHAT IS LIVE. Every board here is synthetic and
 // in-memory: booted on an OS-assigned port against an mkdtempSync scratch db
-// (the sibling convention of tests/integration/queue-release-membership-mandatory.test.ts).
+// (the sibling convention of tests/unit/queue-release-membership-mandatory.test.ts).
 // The live data/crucible.db and port 3849 are never read and never written.
 // The release LABELS are this suite's own `0.9.x` shapes, never the project's
 // real versions, so nothing here can be confused with the board's own plan.
@@ -99,7 +99,7 @@ function staticRoadmapHelp(): string[][] {
  * today. §S4 names the signature as its own deliverable, and this repo already
  * reads a published type declaration as text where there is no runtime value
  * to interrogate (`queueWarningCodeUnion`,
- * tests/integration/queue-release-membership-mandatory.test.ts). Same reason, same method.
+ * tests/unit/queue-release-membership-mandatory.test.ts). Same reason, same method.
  */
 function recordReleaseProposalMeta(): string {
   const source = readFileSync(join(REPO_ROOT, "src", "store.ts"), "utf8");
