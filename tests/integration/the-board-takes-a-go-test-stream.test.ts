@@ -1,5 +1,5 @@
 // The board takes a `go test -json` stream as a record stream codec, on a real
-// server (`startServer`, port 0, ":memory:"):
+// board (`bootInProcess`, no socket, ":memory:"):
 //  - a batch naming the `go-test` codec is accepted on an open run (200), and
 //    the answer gives the bytes held, as for any stream;
 //  - a run whose first batch fixed `go-test` refuses a `crucible-events` batch
@@ -11,7 +11,7 @@
 //    failed and pending as the cases land, each failure live with its
 //    message's first line, in order — a parent's terminal event decided across a batch boundary.
 import { describe, test, expect, afterEach } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   afterLine,
   casesOf,
@@ -21,16 +21,16 @@ import {
   GO_TEST_CODEC,
   streamGoTest,
 } from "../helpers/go-test-harness.ts";
-import { bootOn, eventLine, getJson, openRun, readyProject, sendBatch, utf8 } from "../helpers/run-stream-harness.ts";
+import { bootInProcess, eventLine, getJson, openRun, readyProject, sendBatch, utf8 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }

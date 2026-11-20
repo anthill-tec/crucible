@@ -27,15 +27,15 @@
 // The registry is read through the module namespace, so a missing export
 // fails each test on its own assertion rather than failing the file's import.
 //
-// SAFETY: every server binds port 0 on ":memory:".
+// SAFETY: every board is in process (no socket) on ":memory:".
 import { describe, test, expect, afterEach } from "bun:test";
 import { readFileSync } from "node:fs";
 import { relative } from "node:path";
 import * as codecIndex from "../../src/codecs/index.ts";
 import { codecs } from "../../src/codecs/index.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
-  bootOn,
+  bootInProcess,
   getJson,
   openRun,
   postJson,
@@ -47,14 +47,14 @@ import {
 import { balancedEnd, jsLiveCode, listFiles } from "../helpers/source-scan.ts";
 import { PLAIN_RUN } from "../fixtures/bun-console-live-captures.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -114,7 +114,7 @@ describe("health lists the view codecs under codecs.view", () => {
 const AGENT = "view-refused";
 
 interface Subject {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   runId: string;
 }

@@ -1,5 +1,5 @@
 // The board takes a nextest stream as a record stream codec — on a real
-// server (`startServer`, port 0, ":memory:"):
+// board (`bootInProcess`, no socket, ":memory:"):
 //  - a batch naming the `nextest` codec is accepted on an open run (200), the
 //    bytes held answered as for any stream;
 //  - health lists `nextest` under `codecs.test` and `codecs.stream`, on both
@@ -7,7 +7,7 @@
 //  - a run whose first batch fixed `nextest` refuses a `crucible-events`
 //    batch (400), and holds nothing more, as any stream refuses a second codec.
 import { describe, test, expect, afterEach } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   NEXTEST_CODEC,
   suiteStarted,
@@ -16,7 +16,7 @@ import {
   testStarted,
 } from "../helpers/nextest-harness.ts";
 import {
-  bootOn,
+  bootInProcess,
   eventLine,
   getJson,
   openRun,
@@ -25,14 +25,14 @@ import {
   utf8,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }

@@ -9,31 +9,31 @@
 // when DeltaTest and GammaTest have closed and BetaTest and AlphaTest are both
 // open; the second batch is the rest.
 //
-// SAFETY: every server binds port 0; every store is ":memory:".
+// SAFETY: every board is in process (no socket); every store is ":memory:".
 import { describe, test, expect, afterEach } from "bun:test";
 import { readFileSync } from "node:fs";
 import { codecs, isRecordStreamCodec, viewCodecs } from "../../src/codecs/index.ts";
-import type { ServerHandle } from "../../src/server.ts";
-import { base, bootOn, openRun, readyProject, sendBatch, utf8, type Answer } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, openRun, readyProject, sendBatch, utf8, type Answer, send } from "../helpers/run-stream-harness.ts";
 
 const VIEW_CODEC = "surefire-console";
 const AF = "org.opentest4j.AssertionFailedError: ";
 const FORKS = readFileSync(`${import.meta.dir}/../fixtures/surefire-console/3.5.4/forks.txt`, "utf8");
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
 
 interface Subject {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   agentId: string;
   runId: string;
@@ -52,7 +52,7 @@ function batch(s: Subject, from: number, data: string): Promise<Answer> {
 }
 
 async function liveOf(s: Subject): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base(s.handle)}/api/v2/runs/${s.runId}/live`);
+  const res = await send(s.handle, `/api/v2/runs/${s.runId}/live`);
   expect(res.status, "the open run holds a live state").toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
