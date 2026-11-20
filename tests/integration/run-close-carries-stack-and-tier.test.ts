@@ -12,28 +12,24 @@
 //    non-empty string — `""` or a non-string is refused with 400 and nothing
 //    is stored.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production HTTP surface (`bootInProcess`, in-memory
 // store); every outcome is read back through the board's own reads — the
 // event detail `GET /api/v2/events/<id>`, the events list (its `events` and
 // `openRuns`) and the agents list `GET /api/v2/agents?project=…`.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
-}
-
-function base(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
 }
 
 interface Posted {
@@ -41,8 +37,8 @@ interface Posted {
   body: Record<string, unknown>;
 }
 
-async function postJson(handle: ServerHandle, route: string, body: unknown): Promise<Posted> {
-  const res = await fetch(`${base(handle)}${route}`, {
+async function postJson(handle: BoardHandle, route: string, body: unknown): Promise<Posted> {
+  const res = await send(handle, `${route}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -50,19 +46,19 @@ async function postJson(handle: ServerHandle, route: string, body: unknown): Pro
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
-async function getJson(handle: ServerHandle, route: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base(handle)}${route}`);
+async function getJson(handle: BoardHandle, route: string): Promise<Record<string, unknown>> {
+  const res = await send(handle, `${route}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
 
-function seedProject(handle: ServerHandle): string {
+function seedProject(handle: BoardHandle): string {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: "P", type: "backend", sutRoot: "/tmp/p" });
   return key;
 }
 
-async function register(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function register(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const res = await postJson(handle, "/api/v2/agents/register", {
     projectKey: key,
     agentId,
@@ -72,7 +68,7 @@ async function register(handle: ServerHandle, key: string, agentId: string): Pro
 }
 
 async function startRun(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
   meta: { stack?: string; tier?: string },
@@ -91,17 +87,17 @@ interface EventDetail {
   [key: string]: unknown;
 }
 
-async function eventDetail(handle: ServerHandle, eventId: string): Promise<EventDetail> {
+async function eventDetail(handle: BoardHandle, eventId: string): Promise<EventDetail> {
   const body = await getJson(handle, `/api/v2/events/${eventId}`);
   return body.event as EventDetail;
 }
 
-async function eventIds(handle: ServerHandle, key: string): Promise<string[]> {
+async function eventIds(handle: BoardHandle, key: string): Promise<string[]> {
   const body = await getJson(handle, `/api/v2/events?project=${key}`);
   return (body.events as { id: string }[]).map((e) => e.id);
 }
 
-async function openRunIds(handle: ServerHandle, key: string): Promise<string[]> {
+async function openRunIds(handle: BoardHandle, key: string): Promise<string[]> {
   const body = await getJson(handle, `/api/v2/events?project=${key}`);
   return (body.openRuns as { runId: string }[]).map((r) => r.runId);
 }
@@ -113,7 +109,7 @@ interface AgentBrief {
   [key: string]: unknown;
 }
 
-async function agentById(handle: ServerHandle, key: string, agentId: string): Promise<AgentBrief> {
+async function agentById(handle: BoardHandle, key: string, agentId: string): Promise<AgentBrief> {
   const body = await getJson(handle, `/api/v2/agents?project=${key}`);
   const agent = (body.agents as AgentBrief[]).find((a) => a.agentId === agentId);
   expect(agent).toBeDefined();
@@ -213,7 +209,7 @@ describe("an ingest that closes a run keeps the stack and tier its start stated"
  * snapshot everything a refused close must leave untouched.
  */
 async function openRunWithSnapshot(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
   start: { stack: string; tier: string },
@@ -235,7 +231,7 @@ async function openRunWithSnapshot(
 }
 
 async function expectNothingChanged(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
   snapshot: { runId: string; events: string[]; message: string; lastSeen: number },

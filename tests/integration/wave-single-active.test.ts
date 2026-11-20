@@ -78,14 +78,15 @@
 // declares `CR-CRU-092` in wave 5), and the §S1 fixture below reproduces
 // exactly that disagreement.
 //
-// Every server here boots on an OS-assigned port against an mkdtempSync
+// Every server here boots in process (no port) against an mkdtempSync
 // scratch db. The live data/crucible.db and port 3849 are never touched.
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { QueueEntryInput } from "../../src/store.ts";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 // ── wire shapes this suite PINS ───────────────────────────────────────────
 
@@ -160,7 +161,7 @@ const FIVE_LATE = "CR-WAVE-FIVE-LATE";
 const LOOSE = "CR-WAVE-LOOSE";
 
 describe("CR-CRU-116 §S1/§S2/§S3 — one active wave, ascending, refused actionably", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -174,7 +175,7 @@ describe("CR-CRU-116 §S1/§S2/§S3 — one active wave, ascending, refused acti
   function boot(): void {
     const dir = mkdtempSync(join(tmpdir(), "cru116-wave-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
   }
 
   async function send(
@@ -182,7 +183,7 @@ describe("CR-CRU-116 §S1/§S2/§S3 — one active wave, ascending, refused acti
     path: string,
     body?: unknown,
   ): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`http://localhost:${handle!.server.port}${path}`, {
+    const res = await boardSend(handle!, `${path}`, {
       method,
       ...(body === undefined
         ? {}

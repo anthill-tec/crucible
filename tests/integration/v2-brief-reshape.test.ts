@@ -3,7 +3,7 @@
 // numbers to top-level scalars {id, projectKey, agentId, kind, tier, codec,
 // timestamp, total, passed, failed, pending, duration_ms, hasCoverage} with NO
 // nested `summary`. Full detail (GET /api/v2/events/:id) keeps nested
-// summary/tree unchanged. Drives the REAL production server (startServer)
+// summary/tree unchanged. Drives the REAL production router in process (`bootInProcess`)
 // end to end.
 //
 // CR-CRU-008 §S4 modernization note: this file originally also pinned "the
@@ -12,8 +12,9 @@
 // tests/archive/v1-sections.test.ts on shim retirement.
 import { describe, test, expect, afterEach } from "bun:test";
 
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { Coverage } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -118,7 +119,7 @@ const RUSTC_ERRORS = [
 ].join("\n");
 
 describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -126,7 +127,7 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
   });
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -134,7 +135,7 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function createProject(name: string): Promise<string> {
@@ -197,7 +198,7 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
   // 1. GET /api/v2/events list items — flattened brief, no summary key.
   // -------------------------------------------------------------------
   test("GET /api/v2/events list items carry flattened top-level run numbers + hasCoverage, no summary key", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject("brief-list");
 
     await seedCoveredTestEvent(key);
@@ -271,7 +272,7 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
   //    flattened shape, no summary key.
   // -------------------------------------------------------------------
   test("status.lastTest/lastCompile and project-rollup lastEvent are flattened briefs with no summary key", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject("brief-status");
 
     const testId = await seedCoveredTestEvent(key);
@@ -325,7 +326,7 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
   // 3. GET /api/v2/events/<id> detail — nested summary AND tree unchanged.
   // -------------------------------------------------------------------
   test("GET /api/v2/events/:id detail keeps nested summary and tree unchanged", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject("brief-detail");
     const id = await seedCoveredTestEvent(key);
 

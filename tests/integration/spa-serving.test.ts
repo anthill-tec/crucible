@@ -1,25 +1,22 @@
 // CR-CRU-006 §S1/§S2/§S5 — static SPA serving, client-side routing fallback,
 // vendored assets, no-CDN AC, and static-path safety. Drives the REAL prod
-// boot via startServer (port 0 / :memory:), never a hand-wired store.
+// boot via bootInProcess (in process / :memory:), never a hand-wired store.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   test("GET / serves the SPA shell HTML with the forge theme and app mount", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
 
-    const res = await fetch(`${base()}/`);
+    const res = await send(handle!, `/`);
 
     expect(res.status).toBe(200);
     const contentType = res.headers.get("content-type") ?? "";
@@ -31,13 +28,13 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
 
   describe("SPA fallback for deep links (§S2 — 2 pages + overlay, deep-linkable)", () => {
     test("GET /p/<key> returns the SAME index HTML as / (fresh-load deep link)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
-      const rootRes = await fetch(`${base()}/`);
+      const rootRes = await send(handle!, `/`);
       expect(rootRes.status).toBe(200);
       const rootBody = await rootRes.text();
 
-      const workspaceRes = await fetch(`${base()}/p/some-key`);
+      const workspaceRes = await send(handle!, `/p/some-key`);
       expect(workspaceRes.status).toBe(200);
       expect(workspaceRes.headers.get("content-type") ?? "").toContain("text/html");
       const workspaceBody = await workspaceRes.text();
@@ -47,12 +44,12 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
     });
 
     test("GET /p/<key>/run/<eventId> (overlay deep link) returns the SAME index HTML as /", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
-      const rootRes = await fetch(`${base()}/`);
+      const rootRes = await send(handle!, `/`);
       const rootBody = await rootRes.text();
 
-      const overlayRes = await fetch(`${base()}/p/x/run/evt-123`);
+      const overlayRes = await send(handle!, `/p/x/run/evt-123`);
       expect(overlayRes.status).toBe(200);
       expect(overlayRes.headers.get("content-type") ?? "").toContain("text/html");
       const overlayBody = await overlayRes.text();
@@ -62,9 +59,9 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
     });
 
     test("API discipline preserved: GET /api/nope still 404 JSON (not swallowed by the SPA fallback)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
-      const res = await fetch(`${base()}/api/nope`);
+      const res = await send(handle!, `/api/nope`);
 
       expect(res.status).toBe(404);
       expect(res.headers.get("content-type") ?? "").toContain("application/json");
@@ -73,9 +70,9 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
     });
 
     test("API discipline preserved: GET /api/health still 200 JSON (not swallowed by the SPA fallback)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
-      const res = await fetch(`${base()}/api/health`);
+      const res = await send(handle!, `/api/health`);
 
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type") ?? "").toContain("application/json");
@@ -86,38 +83,38 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
 
   describe("Vendored app-shell assets served (§S1 — no CDN, no build step)", () => {
     test("GET /vendor/van-1.5.5.nomodule.min.js → 200 javascript", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const res = await fetch(`${base()}/vendor/van-1.5.5.nomodule.min.js`);
+      handle = bootInProcess();
+      const res = await send(handle!, `/vendor/van-1.5.5.nomodule.min.js`);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type") ?? "").toContain("javascript");
     });
 
     test("GET /vendor/daisyui-5.5.19.css → 200 text/css", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const res = await fetch(`${base()}/vendor/daisyui-5.5.19.css`);
+      handle = bootInProcess();
+      const res = await send(handle!, `/vendor/daisyui-5.5.19.css`);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type") ?? "").toContain("css");
     });
 
     test("GET /app.js (app shell entry) → 200 javascript", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const res = await fetch(`${base()}/app.js`);
+      handle = bootInProcess();
+      const res = await send(handle!, `/app.js`);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type") ?? "").toContain("javascript");
     });
 
     test("GET /styles.css (app shell styles, forge theme) → 200 css", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const res = await fetch(`${base()}/styles.css`);
+      handle = bootInProcess();
+      const res = await send(handle!, `/styles.css`);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type") ?? "").toContain("css");
     });
   });
 
   test("no-CDN AC: served index HTML contains NO http:// or https:// in any src=/href= attribute", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
 
-    const res = await fetch(`${base()}/`);
+    const res = await send(handle!, `/`);
     expect(res.status).toBe(200);
     const body = await res.text();
 
@@ -126,9 +123,9 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
   });
 
   test("index.html references exactly the 5 vendor files + app.js + styles.css as relative paths", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
 
-    const res = await fetch(`${base()}/`);
+    const res = await send(handle!, `/`);
     expect(res.status).toBe(200);
     const body = await res.text();
 
@@ -149,9 +146,9 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
 
   describe("Static path safety — no traversal outside public/ (§S1)", () => {
     test("GET /%2e%2e/package.json does not leak the repo's package.json", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
-      const res = await fetch(`${base()}/%2e%2e/package.json`);
+      const res = await send(handle!, `/%2e%2e/package.json`);
 
       if (res.status === 200) {
         const body = await res.text();
@@ -164,9 +161,9 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
     });
 
     test("GET /vendor/%2e%2e/%2e%2e/.env does not leak files outside public/", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
-      const res = await fetch(`${base()}/vendor/%2e%2e/%2e%2e/.env`);
+      const res = await send(handle!, `/vendor/%2e%2e/%2e%2e/.env`);
 
       // No .env exists in this repo either way, but the request must not be
       // served as a 200 with arbitrary filesystem content — 404 (unresolved)
@@ -177,9 +174,9 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
 
   describe("Extension-based SPA-vs-404 static dispatch (§S2 deep-link fallback)", () => {
     test("GET /favicon.ico (unknown extensioned static asset) falls back to the SPA HTML", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
-      const res = await fetch(`${base()}/favicon.ico`);
+      const res = await send(handle!, `/favicon.ico`);
 
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type") ?? "").toContain("text/html");
@@ -188,9 +185,9 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
     });
 
     test("GET /mission-control (unknown extension-less path) falls back to the SPA HTML", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
-      const res = await fetch(`${base()}/mission-control`);
+      const res = await send(handle!, `/mission-control`);
 
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type") ?? "").toContain("text/html");
@@ -199,9 +196,9 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
     });
 
     test("GET /nope.js (unknown path WITH an extension) 404s instead of falling back to the SPA", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
-      const res = await fetch(`${base()}/nope.js`);
+      const res = await send(handle!, `/nope.js`);
 
       expect(res.status).toBe(404);
       const contentType = res.headers.get("content-type") ?? "";
@@ -209,9 +206,9 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
     });
 
     test("GET /app-logic.mjs → 200 javascript module, never the SPA HTML (blank-page defect)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
-      const res = await fetch(`${base()}/app-logic.mjs`);
+      const res = await send(handle!, `/app-logic.mjs`);
 
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type") ?? "").toContain("javascript");
@@ -220,9 +217,9 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
     });
 
     test("GET /nope.mjs (missing .mjs file) 404s instead of falling back to the SPA", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
-      const res = await fetch(`${base()}/nope.mjs`);
+      const res = await send(handle!, `/nope.mjs`);
 
       expect(res.status).toBe(404);
     });

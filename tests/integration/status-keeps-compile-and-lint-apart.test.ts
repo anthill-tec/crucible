@@ -3,35 +3,31 @@
 // no `lint` marker, and `lastLint` is the newest one that does, or null. The
 // status shape is `{hasData, lastTest, lastCompile, lastLint}`.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production HTTP surface (`bootInProcess`, in-memory
 // store): records are posted on `/api/v2/runs/compile` — a lint record is a
 // post naming its linter in `lint` — and read back through `/api/v2/status`.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
 
-function base(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
-}
-
 async function postJson(
-  handle: ServerHandle,
+  handle: BoardHandle,
   route: string,
   body: unknown,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  const res = await fetch(`${base(handle)}${route}`, {
+  const res = await send(handle, `${route}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -41,7 +37,7 @@ async function postJson(
 
 const ORCHESTRATOR = "fixture-orch";
 
-async function seedProject(handle: ServerHandle): Promise<string> {
+async function seedProject(handle: BoardHandle): Promise<string> {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: `lint-status-${key}`, type: "backend", sutRoot: "/tmp/p" });
   const res = await postJson(handle, "/api/v2/agents/register", {
@@ -58,7 +54,7 @@ const RUSTC_ONE_ERROR = ["error[E0308]: mismatched types", " --> src/lib.rs:12:5
 const TSC_ONE_ERROR = "src/a.ts(1,1): error TS2304: Cannot find name 'x'.";
 
 /** A plain compile record; returns its event id. Waits so the next post is newer. */
-async function postCompileRecord(handle: ServerHandle, key: string): Promise<string> {
+async function postCompileRecord(handle: BoardHandle, key: string): Promise<string> {
   const res = await postJson(handle, "/api/v2/runs/compile", {
     projectKey: key,
     agentId: ORCHESTRATOR,
@@ -71,7 +67,7 @@ async function postCompileRecord(handle: ServerHandle, key: string): Promise<str
 }
 
 /** A lint record naming `lint`; returns its event id. Waits so the next post is newer. */
-async function postLintRecord(handle: ServerHandle, key: string, lint: string): Promise<string> {
+async function postLintRecord(handle: BoardHandle, key: string, lint: string): Promise<string> {
   const res = await postJson(handle, "/api/v2/runs/compile", {
     projectKey: key,
     agentId: ORCHESTRATOR,
@@ -87,8 +83,8 @@ async function postLintRecord(handle: ServerHandle, key: string, lint: string): 
 
 type Brief = Record<string, unknown> & { id: string };
 
-async function statusOf(handle: ServerHandle, key: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base(handle)}/api/v2/status?project=${key}`);
+async function statusOf(handle: BoardHandle, key: string): Promise<Record<string, unknown>> {
+  const res = await send(handle, `/api/v2/status?project=${key}`);
   expect(res.status).toBe(200);
   const body = (await res.json()) as { ok: boolean; status: Record<string, unknown> };
   expect(body.ok).toBe(true);

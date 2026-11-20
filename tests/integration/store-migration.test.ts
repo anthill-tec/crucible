@@ -60,7 +60,7 @@
 // Every store here is an mkdtempSync scratch file, a COPY of the committed
 // fixture, or ":memory:". The live `data/crucible.db` is NEVER read, copied
 // or opened — AC2's populated store is one this file builds itself
-// (tests/helpers/populated-store.ts). Every server binds port 0 (ephemeral) —
+// (tests/helpers/populated-store.ts). Every server runs in process (no port) —
 // NEVER the dog-food :3849.
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -70,9 +70,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Store } from "../../src/store.ts";
 import * as storeModule from "../../src/store.ts";
-import type { ServerHandle } from "../../src/server.ts";
-import * as serverModule from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { populateStore } from "../helpers/populated-store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 // ── the seam types this suite is written against ───────────────────────────
 
@@ -100,7 +100,7 @@ const COUNTED_TABLES = ["projects", "plans", "plan_cycles", "events", "rollups",
                         "agents"] as const;
 
 const scratchDirs: string[] = [];
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 function tmpDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crucible-cr071-"));
@@ -500,8 +500,8 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function health(handle: ServerHandle, route: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`http://localhost:${handle.server.port}${route}`, {
+async function health(handle: BoardHandle, route: string): Promise<Record<string, unknown>> {
+  const res = await send(handle!, `${route}`, {
     headers: { accept: "application/json" },
   });
   expect(res.status).toBe(200);
@@ -780,9 +780,9 @@ describe("CR-CRU-071 AC5 — a newer store is REFUSED, and refusal is NOT quaran
     stampUserVersion(dbPath, schemaVersion() + 1);
     const hashBefore = sha256(dbPath);
 
-    let handle: ServerHandle | undefined;
+    let handle: BoardHandle | undefined;
     const error = captureThrow(() => {
-      handle = serverModule.startServer({ port: 0, dbPath });
+      handle = bootInProcess(dbPath);
       return handle;
     });
     if (handle !== undefined) handles.push(handle);
@@ -815,7 +815,7 @@ describe("CR-CRU-071 AC5 — a newer store is REFUSED, and refusal is NOT quaran
 describe("CR-CRU-071 AC6 — migration outcome is disclosed, not silent", () => {
   test("AC6 — both health routes report the schema version beside CR-CRU-068's { path, rule }", async () => {
     const dbPath = path.join(tmpDir(), "crucible.db");
-    const handle = serverModule.startServer({ port: 0, dbPath });
+    const handle = bootInProcess(dbPath);
     handles.push(handle);
 
     for (const route of ["/api/health", "/api/v2/health"]) {
@@ -836,7 +836,7 @@ describe("CR-CRU-071 AC6 — migration outcome is disclosed, not silent", () => 
     const dir = tmpDir();
     const dbPath = makePreRenameStore(dir);
 
-    const handle = serverModule.startServer({ port: 0, dbPath });
+    const handle = bootInProcess(dbPath);
     handles.push(handle);
 
     const backup = path.join(dir, siblings(dir, PRE_UPGRADE_RE)[0] ?? "MISSING");
@@ -918,9 +918,9 @@ describe("CR-CRU-071 AC7 — a failed migration fails the upgrade", () => {
     );
     const hashBefore = sha256(dbPath);
 
-    let handle: ServerHandle | undefined;
+    let handle: BoardHandle | undefined;
     const error = captureThrow(() => {
-      handle = serverModule.startServer({ port: 0, dbPath });
+      handle = bootInProcess(dbPath);
       return handle;
     });
     if (handle !== undefined) handles.push(handle);

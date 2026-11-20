@@ -14,9 +14,9 @@
 // equal `.length` would not prove the implementation counts bytes rather than
 // code units.
 import { afterEach, describe, expect, test } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { SuiteNode } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -29,7 +29,7 @@ interface EventGetResponse extends OkResponse {
   event: { id: string; tree?: unknown; raw?: unknown; rawBytes?: unknown; [key: string]: unknown };
 }
 
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
@@ -37,14 +37,14 @@ afterEach(() => {
 });
 
 async function postJson(p: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle!.server.port}${p}`, {
+  return send(handle!, `${p}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 async function getJson(p: string): Promise<Response> {
-  return fetch(`http://localhost:${handle!.server.port}${p}`);
+  return send(handle!, `${p}`);
 }
 async function createProject(name: string): Promise<string> {
   const res = await postJson("/api/v2/projects", { name });
@@ -88,7 +88,7 @@ describe("progressive run-detail reads carry rawBytes, never raw", () => {
     // distinguish "counts bytes" from "counts UTF-16 code units".
     expect(expectedBytes).not.toBe(MULTI_BYTE_RAW_OUTPUT.length);
 
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const projectKey = await createProject("raw-bytes-suites");
     await registerAgent(projectKey, "raw-bytes-agent");
 
@@ -117,7 +117,7 @@ describe("progressive run-detail reads carry rawBytes, never raw", () => {
   test("?suite=: rawBytes equals the UTF-8 byte length for a run with raw output, is absent for a run without, and raw itself never appears", async () => {
     const expectedBytes = Buffer.byteLength(MULTI_BYTE_RAW_OUTPUT, "utf-8");
 
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const projectKey = await createProject("raw-bytes-suite");
     await registerAgent(projectKey, "raw-bytes-agent");
 

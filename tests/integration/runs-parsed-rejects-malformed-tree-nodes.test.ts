@@ -5,10 +5,11 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 describe("POST /api/v2/runs/parsed refuses a tree holding a node that is not a SuiteNode/TestLeaf", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
   let dirs: string[] = [];
 
   afterEach(() => {
@@ -18,29 +19,29 @@ describe("POST /api/v2/runs/parsed refuses a tree holding a node that is not a S
     dirs = [];
   });
 
-  function boot(): number {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "runs-parsed-tree-validation-"));
     dirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
-    return handle.server.port!;
+    handle = bootInProcess(join(dir, "crucible.db"));
+    return handle;
   }
 
-  async function postJson(port: number, path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${port}${path}`, {
+  async function postJson(board: BoardHandle, path: string, body: unknown): Promise<Response> {
+    return send(board, path, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
   }
 
-  async function createProject(port: number, name: string): Promise<string> {
-    const res = await postJson(port, "/api/v2/projects", { name });
+  async function createProject(board: BoardHandle, name: string): Promise<string> {
+    const res = await postJson(board, "/api/v2/projects", { name });
     const body = (await res.json()) as { project: { key: string } };
     return body.project.key;
   }
 
-  async function registerAgent(port: number, key: string, agentId: string): Promise<void> {
-    const res = await postJson(port, "/api/v2/agents/register", {
+  async function registerAgent(board: BoardHandle, key: string, agentId: string): Promise<void> {
+    const res = await postJson(board, "/api/v2/agents/register", {
       projectKey: key,
       agentId,
       role: "ORCHESTRATOR",
@@ -49,12 +50,12 @@ describe("POST /api/v2/runs/parsed refuses a tree holding a node that is not a S
   }
 
   test("a leaf with no `status` → 400 naming the offending leaf, and nothing is stored", async () => {
-    const port = boot();
-    const key = await createProject(port, "tree-leaf-no-status");
-    await registerAgent(port, key, "a1");
+    const board = boot();
+    const key = await createProject(board, "tree-leaf-no-status");
+    await registerAgent(board, key, "a1");
     const before = handle!.store.listEvents(key).length;
 
-    const res = await postJson(port, "/api/v2/runs/parsed", {
+    const res = await postJson(board, "/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "a1",
       summary: { total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 1 },
@@ -75,12 +76,12 @@ describe("POST /api/v2/runs/parsed refuses a tree holding a node that is not a S
   });
 
   test("a suite whose `children` is not an array → 400 naming the offending suite, and nothing is stored", async () => {
-    const port = boot();
-    const key = await createProject(port, "tree-non-array-children");
-    await registerAgent(port, key, "a1");
+    const board = boot();
+    const key = await createProject(board, "tree-non-array-children");
+    await registerAgent(board, key, "a1");
     const before = handle!.store.listEvents(key).length;
 
-    const res = await postJson(port, "/api/v2/runs/parsed", {
+    const res = await postJson(board, "/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "a1",
       summary: { total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 1 },
@@ -95,12 +96,12 @@ describe("POST /api/v2/runs/parsed refuses a tree holding a node that is not a S
   });
 
   test("a suite whose `name` is not a string → 400, and nothing is stored", async () => {
-    const port = boot();
-    const key = await createProject(port, "tree-non-string-name");
-    await registerAgent(port, key, "a1");
+    const board = boot();
+    const key = await createProject(board, "tree-non-string-name");
+    await registerAgent(board, key, "a1");
     const before = handle!.store.listEvents(key).length;
 
-    const res = await postJson(port, "/api/v2/runs/parsed", {
+    const res = await postJson(board, "/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "a1",
       summary: { total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 1 },
@@ -116,12 +117,12 @@ describe("POST /api/v2/runs/parsed refuses a tree holding a node that is not a S
   });
 
   test("a `tree` that IS an array but holds no SuiteNode-shaped elements is refused, not merely Array.isArray-checked", async () => {
-    const port = boot();
-    const key = await createProject(port, "tree-any-array-no-longer-accepted");
-    await registerAgent(port, key, "a1");
+    const board = boot();
+    const key = await createProject(board, "tree-any-array-no-longer-accepted");
+    await registerAgent(board, key, "a1");
     const before = handle!.store.listEvents(key).length;
 
-    const res = await postJson(port, "/api/v2/runs/parsed", {
+    const res = await postJson(board, "/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "a1",
       summary: { total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 1 },

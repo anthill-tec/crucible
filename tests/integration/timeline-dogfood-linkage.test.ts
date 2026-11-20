@@ -4,7 +4,7 @@
 // scenario the CR-CRU-019 patch fixes (a full-suite gate run landing outside
 // the cycle that produced it).
 //
-// Drives the REAL production server (src/server.ts startServer) for BOTH
+// Drives the REAL production router in process (`bootInProcess`) for BOTH
 // the plan/cycle routes AND the parsed-ingest path, round-trips through
 // the REAL GET /api/v2/events + GET /api/v2/projects/<key>/plans routes
 // (exactly what the client fetches), then feeds those REAL payloads into
@@ -26,7 +26,8 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 const VAN_SRC = readFileSync(
@@ -99,7 +100,7 @@ const FIXED_TREE = [
 ];
 
 describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-019 §P1 AC-3)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(async () => {
     handle?.stop();
@@ -108,7 +109,7 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
   });
 
   async function postJson(reqPath: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${reqPath}`, {
+    return send(handle!, `${reqPath}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -116,7 +117,7 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
   }
 
   async function patchJson(reqPath: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${reqPath}`, {
+    return send(handle!, `${reqPath}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -124,7 +125,7 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
   }
 
   async function getJson(reqPath: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${reqPath}`);
+    return send(handle!, `${reqPath}`);
   }
 
   // CR-CRU-056 §S2b fixture-repair (C3): plan-file/cycle-activate/run-ingest
@@ -137,7 +138,7 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
   }
 
   test("RED(2/5) + targeted-GREEN(24/24) + full-suite gate(559/559), each ingested via /api/v2/runs/parsed (modernized off the retired v1 shim, CR-CRU-008 §S4) with context.cycleId, render as ONE declared open-span containing all three real runs and ZERO inferred transition markers", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const pk = crypto.randomUUID();
     handle.store.addProject({
       key: pk,

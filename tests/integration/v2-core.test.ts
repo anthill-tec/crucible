@@ -1,12 +1,13 @@
 // CR-CRU-004 §S1+§S5 — v2 API: orientation, health parity, project rollups (PRD §4.2),
 // agent lifecycle verbs (PRD §4.3), and the changed:true|false write-report contract (§S5).
-// Drives the REAL production server (startServer) — src/v2.ts does not exist yet (RED
+// Drives the REAL production router in process (`bootInProcess`) — src/v2.ts does not exist yet (RED
 // phase), so every v2 route currently 404s through the existing catch-all in src/server.ts
 // (`{ok:false, error}` at HTTP 404) until GREEN wires it in.
 import { describe, test, expect, afterEach } from "bun:test";
 import { setSystemTime } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { Coverage, RunSummary } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -75,7 +76,7 @@ function isNonEmptyStringArray(v: unknown): v is string[] {
 }
 
 describe("v2 API — orientation, health parity, project rollups, agent verbs (CR-CRU-004 §S1+§S5)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -84,7 +85,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
   });
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -92,7 +93,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs and /api/v2/runs/parsed
@@ -145,7 +146,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
   // ── GET /api/v2 — orientation ─────────────────────────────────────────
   describe("GET /api/v2", () => {
     test("200 {ok:true, service:'crucible', version:<string>, projects:[...], help:[non-empty strings]}", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
       const res = await getJson("/api/v2");
 
@@ -160,7 +161,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     });
 
     test("projects array reflects a project added through the store (not a hardcoded empty stub)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = crypto.randomUUID();
       handle.store.addProject({ key, name: "orient-p", type: "backend", sutRoot: "/tmp" });
 
@@ -174,7 +175,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
   // ── GET /api/v2/health — parity with /api/health ────────────────────────
   describe("GET /api/v2/health", () => {
     test("same shape and values as GET /api/health (same store instance)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = crypto.randomUUID();
       handle.store.addProject({ key, name: "h", type: "backend", sutRoot: "/tmp" });
 
@@ -197,7 +198,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
   // ── POST /api/v2/projects ───────────────────────────────────────────────
   describe("POST /api/v2/projects", () => {
     test("{name:'X'} (no key) → 200 {ok:true, changed:true, project:{key:UUID, name:'X', type:'backend'}}", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
       const res = await postJson("/api/v2/projects", { name: "X" });
 
@@ -211,7 +212,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     });
 
     test("repeating with the SAME auto-generated key + any name → 200 {ok:true, changed:false} (NOT 400 — differs from the v1 shim)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const first = await postJson("/api/v2/projects", { name: "X" });
       const firstBody = (await first.json()) as OkResponse & { project: ProjectPayload };
       const key = firstBody.project.key;
@@ -225,7 +226,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     });
 
     test("{key:'bad'} (non-UUID key) → 400", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
       const res = await postJson("/api/v2/projects", { key: "bad" });
 
@@ -235,7 +236,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     });
 
     test("{} (no name) → 400", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
       const res = await postJson("/api/v2/projects", {});
 
@@ -245,7 +246,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     });
 
     test("{name:'F', type:'frontend'} → project.type is 'frontend'", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
       const res = await postJson("/api/v2/projects", { name: "F", type: "frontend" });
 
@@ -258,7 +259,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
   // ── GET /api/v2/projects — rollups ──────────────────────────────────────
   describe("GET /api/v2/projects — rollups", () => {
     test("fresh project: agentsOnline=0, agentsTotal=0, lastEvent=null, latestGreenCoverage=null", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("roll");
 
       const res = await getJson("/api/v2/projects");
@@ -273,7 +274,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     });
 
     test("after agent register + a green parsed ingest with coverage (via v2 /api/v2/runs/parsed, same store — modernized off the retired v1 shim, CR-CRU-008 §S4): agentsTotal>=1, lastEvent non-null, latestGreenCoverage non-null", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("roll2");
 
       const registerRes = await postJson("/api/v2/agents/register", {
@@ -320,7 +321,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     }
 
     test("POST .../runs/parsed with body.raw set → the stored event, fetched via GET /api/v2/events/:id, carries raw with that EXACT text", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("raw-parsed-present");
       await registerAgent(key, "ingest-agent");
       const raw = "captured stdout line\ncaptured stderr line";
@@ -334,7 +335,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     });
 
     test("POST .../runs/parsed WITHOUT a raw field → the stored event carries NO raw key at all (not fabricated as an empty string)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("raw-parsed-absent");
       await registerAgent(key, "ingest-agent");
 
@@ -347,7 +348,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     });
 
     test("raw persists on a FAILING parsed ingest — unlike coverage, raw is never discarded on fail", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("raw-parsed-failing");
       await registerAgent(key, "ingest-agent");
       const raw = "failure diagnostics blob";
@@ -364,7 +365,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     });
 
     test("POST /api/v2/runs (codec:'junit') with <system-out>/<system-err> in the XML → the stored event carries raw containing both captured texts", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("raw-junit-ingest");
       const xml = [
         '<testsuite name="RawSuite" tests="1">',
@@ -401,7 +402,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
         "a third tombstoned agent is excluded from the count (currently FAILS: production counts only " +
         "liveness === 'online' and returns 1)",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const T0 = 1_700_000_000_000;
         setSystemTime(T0);
         const key = await createProject("s1-agents-online-count");
@@ -475,7 +476,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
   // ── POST /api/v2/agents/register ────────────────────────────────────────
   describe("POST /api/v2/agents/register", () => {
     test("known project → 200 {ok:true, changed:true, help:[non-empty strings]}", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("reg-p");
 
       const res = await postJson("/api/v2/agents/register", {
@@ -494,7 +495,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     });
 
     test("second register of the same agent → changed:false", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("reg-p2");
       const registerBody = { projectKey: key, agentId: "a1", message: "m", role: "report", identity: { displayName: "A" } };
 
@@ -509,7 +510,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     });
 
     test("unknown (valid-UUID but unregistered) project → 404 with help array present", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
       const res = await postJson("/api/v2/agents/register", {
         projectKey: crypto.randomUUID(),
@@ -525,7 +526,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     });
 
     test("missing agentId → 400", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("reg-p3");
 
       const res = await postJson("/api/v2/agents/register", { projectKey: key, message: "m" });
@@ -539,7 +540,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
   // ── POST /api/v2/agents/heartbeat ───────────────────────────────────────
   describe("POST /api/v2/agents/heartbeat", () => {
     test("{ok:true}; updates message/status of an already-registered agent", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("hb-p");
       await postJson("/api/v2/agents/register", {
         projectKey: key,
@@ -570,7 +571,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     });
 
     test("a fresh agent's computed liveness is 'online' via GET /api/v2/agents?project=", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("hb-p2");
       await postJson("/api/v2/agents/register", {
         projectKey: key,
@@ -592,7 +593,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
   // ── POST /api/v2/agents/unregister ──────────────────────────────────────
   describe("POST /api/v2/agents/unregister", () => {
     test("{projectKey, agentId} → {ok:true, changed:true}; repeat → changed:false; agent gone from GET", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("unreg-p");
       await postJson("/api/v2/agents/register", {
         projectKey: key,

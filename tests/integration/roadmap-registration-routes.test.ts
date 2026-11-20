@@ -41,14 +41,15 @@
 //   A `warnings[]` member is an OBJECT: {code, message, crs?, containers?} —
 //   structured because the five clients RENDER it and must not parse prose.
 //
-// Every server here is booted on an OS-assigned port against an mkdtempSync
+// Every server here is booted in process (no port) against an mkdtempSync
 // scratch db. The live data/crucible.db and port 3849 are never touched.
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 // ── wire shapes this suite PINS ────────────────────────────────────────────
 
@@ -138,7 +139,7 @@ interface RawDb {
 }
 
 describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the role gate", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   let dbPath = "";
   const scratchDirs: string[] = [];
 
@@ -150,20 +151,16 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
     }
   });
 
-  function boot(): ServerHandle {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru091-routes-"));
     scratchDirs.push(dir);
     dbPath = join(dir, "crucible.db");
-    handle = startServer({ port: 0, dbPath });
+    handle = bootInProcess(dbPath);
     return handle;
   }
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   async function send(method: string, path: string, body?: unknown): Promise<Response> {
-    return fetch(`${base()}${path}`, {
+    return boardSend(handle!, `${path}`, {
       method,
       ...(body === undefined
         ? {}

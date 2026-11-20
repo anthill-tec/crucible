@@ -19,47 +19,45 @@
 // tests/integration/run-lifecycle-read-surface.test.ts (no top-level counts on an open-run
 // brief) is the companion contract and is deliberately left untouched.
 //
-// SAFETY: every server binds port 0 and every store is ":memory:".
+// SAFETY: every server runs in process (no port) and every store is ":memory:".
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { RunLive, RunLiveFailure } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
 
-const base = (handle: ServerHandle): string => `http://127.0.0.1:${handle.server.port}`;
-
-async function postJson(handle: ServerHandle, route: string, body: unknown): Promise<Response> {
-  return fetch(`${base(handle)}${route}`, {
+async function postJson(handle: BoardHandle, route: string, body: unknown): Promise<Response> {
+  return send(handle, route, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function getJson(handle: ServerHandle, route: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base(handle)}${route}`);
+async function getJson(handle: BoardHandle, route: string): Promise<Record<string, unknown>> {
+  const res = await send(handle, route);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
 
-function seedProject(handle: ServerHandle): string {
+function seedProject(handle: BoardHandle): string {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: "Live", type: "backend", sutRoot: "/tmp/live" });
   return key;
 }
 
-async function register(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function register(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const res = await postJson(handle, "/api/v2/agents/register", {
     projectKey: key,
     agentId,
@@ -68,7 +66,7 @@ async function register(handle: ServerHandle, key: string, agentId: string): Pro
   expect(res.status).toBe(200);
 }
 
-async function startRun(handle: ServerHandle, key: string, agentId: string): Promise<string> {
+async function startRun(handle: BoardHandle, key: string, agentId: string): Promise<string> {
   const res = await postJson(handle, "/api/v2/runs/start", { projectKey: key, agentId, tier: "unit" });
   expect(res.status).toBe(202);
   const body = (await res.json()) as { runId: string };
@@ -131,7 +129,7 @@ const LIVE_COUNTS = {
  * to its live state, every other id answers null (no live state held). The
  * returned array is every run id the read was asked for, in order.
  */
-function stubRunLive(handle: ServerHandle, answers: Record<string, RunLive>): string[] {
+function stubRunLive(handle: BoardHandle, answers: Record<string, RunLive>): string[] {
   const asked: string[] = [];
   handle.store.runLive = (runId: string): RunLive | null => {
     asked.push(runId);
@@ -146,12 +144,12 @@ function stubRunLive(handle: ServerHandle, answers: Record<string, RunLive>): st
  * fails here with its status and its raw text, never quietly as a null body.
  */
 async function liveOf(
-  handle: ServerHandle,
+  handle: BoardHandle,
   runId: string,
   query = "",
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const path = `/api/v2/runs/${encodeURIComponent(runId)}/live${query}`;
-  const res = await fetch(`${base(handle)}${path}`);
+  const res = await send(handle, path);
   const text = await res.text();
   let body: unknown;
   try {

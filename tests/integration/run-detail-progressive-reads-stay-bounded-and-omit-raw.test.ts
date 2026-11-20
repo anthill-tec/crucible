@@ -10,9 +10,9 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import type { Statement } from "bun:sqlite";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { SuiteNode } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -25,7 +25,7 @@ interface EventGetResponse extends OkResponse {
   event: { id: string; tree?: unknown; raw?: unknown; [key: string]: unknown };
 }
 
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
@@ -33,14 +33,14 @@ afterEach(() => {
 });
 
 async function postJson(p: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle!.server.port}${p}`, {
+  return send(handle!, `${p}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 async function getJson(p: string): Promise<Response> {
-  return fetch(`http://localhost:${handle!.server.port}${p}`);
+  return send(handle!, `${p}`);
 }
 async function createProject(name: string): Promise<string> {
   const res = await postJson("/api/v2/projects", { name });
@@ -67,7 +67,7 @@ function bigTree(): SuiteNode[] {
 }
 
 async function seedBigRun(): Promise<string> {
-  handle = startServer({ port: 0, dbPath: ":memory:" });
+  handle = bootInProcess();
   const key = await createProject("bounded-reads");
   await registerAgent(key, "bounded-reads-agent");
   const res = await postJson("/api/v2/runs/parsed", {
@@ -169,7 +169,7 @@ describe("progressive run-detail reads stay bounded to what they actually answer
 
 describe("the run's raw output rides only the full read", () => {
   test("GET .../events/:id carries raw; ?depth=suites and ?suite= do not", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject("raw-only-full-read");
     await registerAgent(key, "raw-agent");
     const rawOutput = "$ bun test\n3 pass\nraw tail";

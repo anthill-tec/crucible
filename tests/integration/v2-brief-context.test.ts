@@ -2,11 +2,12 @@
 // + compile counts (errors/warnings). Today `eventBrief` (src/v2.ts) carries
 // neither `context` nor `errors`/`warnings` — run cards cannot render context
 // badges or compile previews from the GET /api/v2/events list payload until
-// GREEN adds them. Drives the REAL production server (startServer) end to
+// GREEN adds them. Drives the REAL production router in process (`bootInProcess`) end to
 // end, same harness pattern as tests/integration/v2-brief-reshape.test.ts (CR-CRU-006 §S0).
 import { describe, test, expect, afterEach } from "bun:test";
 
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -49,7 +50,7 @@ const RUSTC_ERRORS = [
 ].join("\n");
 
 describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -57,7 +58,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
   });
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -65,7 +66,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function createProject(name: string): Promise<string> {
@@ -98,7 +99,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
   //    when the event was ingested with one — absent (not null) otherwise.
   // -------------------------------------------------------------------
   test("GET /api/v2/events brief carries context verbatim (incl. additive cycle) when ingested with one; absent (no key) when not", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject("brief-context");
 
     // Exact fixture per dispatch — copied verbatim, not paraphrased.
@@ -146,7 +147,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
   //    (from the stored compile payload); test-event briefs carry neither.
   // -------------------------------------------------------------------
   test("compile-event brief carries errors/warnings counts from the stored compile payload; test-event brief carries neither key", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject("brief-compile-counts");
 
     await registerAgent(key, "compile-brief-agent");
@@ -191,7 +192,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
   //     No other brief field changes.
   // -------------------------------------------------------------------
   test("eventBrief carries optional coverageLines (lines percent) on coverage-bearing events; absent otherwise; no other brief field changes", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject("brief-coverage-lines");
 
     await registerAgent(key, "coverage-lines-agent");
@@ -236,7 +237,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
   //    key (CR-CRU-006 §S0 cross-surface contract intact).
   // -------------------------------------------------------------------
   test("regression guard: the flattened brief still has no summary key", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject("brief-summary-regression");
 
     await registerAgent(key, "summary-regression-agent");

@@ -22,7 +22,8 @@ import { describe, test, expect, afterEach, afterAll } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -66,7 +67,7 @@ interface ReleasesListResponse extends OkResponse {
 }
 
 describe("CR-CRU-074 — releases are first class (§S1 milestone type + §S3 read route)", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   /** Every scratch store directory `boot()` made — removed after each test
    *  (and once more after the suite), whether the test passed or failed. */
   const scratchDirs: string[] = [];
@@ -90,15 +91,15 @@ describe("CR-CRU-074 — releases are first class (§S1 milestone type + §S3 re
   });
 
   /** An on-disk, per-boot ephemeral store — never data/crucible.db, and the
-   *  server always takes an OS-assigned port (never 3849, the live board). */
-  function boot(): ServerHandle {
+   *  board is in process, with no port (never 3849, the live board). */
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru074-releases-"));
     scratchDirs.push(dir);
-    return startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    return bootInProcess(join(dir, "crucible.db"));
   }
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -106,7 +107,7 @@ describe("CR-CRU-074 — releases are first class (§S1 milestone type + §S3 re
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function registerAgent(projectKey: string, agentId: string): Promise<void> {

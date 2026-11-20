@@ -22,7 +22,7 @@
 // mirroring `withGateDecisions`' own "nothing to show" rule on the
 // single-event detail read.
 //
-// This file drives the REAL production server (`startServer`). Today
+// This file drives the REAL production router in process (`bootInProcess`). Today
 // `eventBrief` carries no `decisionSummary` key on ANY event, gate or
 // otherwise (confirmed by reading it directly), so every POSITIVE assertion
 // below (the worked example, the dedup pin, the approved-only-sum pin, and
@@ -37,7 +37,8 @@
 // forbids it (e.g. an in-flight gate, or every gate unconditionally).
 import { describe, test, expect, afterEach, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -74,20 +75,20 @@ interface GateStepFixture {
 }
 
 describe("sealed gate events carry a decisionSummary in the events list", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function boot(): ServerHandle {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+  function boot(): BoardHandle {
+    handle = bootInProcess();
     return handle;
   }
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -95,7 +96,7 @@ describe("sealed gate events carry a decisionSummary in the events list", () => 
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function createProject(name: string): Promise<string> {

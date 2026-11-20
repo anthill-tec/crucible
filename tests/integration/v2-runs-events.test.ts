@@ -1,7 +1,7 @@
 // CR-CRU-004 §S1 (runs/events/status routes) + §S2 (run context, graceful) +
 // §S5 (every write reports changed:true|false) — v2 API: raw junit ingest,
 // parsed ingest w/ context, compile ingest, events list/get/delete, status.
-// Drives the REAL production server (startServer) — the /api/v2/runs*,
+// Drives the REAL production router in process (`bootInProcess`) — the /api/v2/runs*,
 // /api/v2/events*, /api/v2/status routes do not exist in src/v2.ts yet
 // (RED phase), so they currently 404 through src/server.ts's catch-all
 // until GREEN wires handleV2 to dispatch them.
@@ -13,8 +13,9 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { Coverage, RunContext, RunSummary, SuiteNode } from "../../src/types.ts";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -105,7 +106,7 @@ const RUSTC_ERRORS = [
 ].join("\n");
 
 describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
   let tmpDirs: string[] = [];
 
   afterEach(() => {
@@ -116,7 +117,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
   });
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return boardSend(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -124,14 +125,14 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return boardSend(handle!, `${path}`);
   }
 
   // CR-CRU-008 §S4 — guarded run deletion: DELETE now carries an optional
   // {userApproved} body (the approval gate); a caller with none gets the
   // codebase's uniform empty-body treatment.
   async function deleteJson(path: string, body?: Record<string, unknown>): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return boardSend(handle!, `${path}`, {
       method: "DELETE",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body ?? {}),
@@ -139,7 +140,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return boardSend(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -201,7 +202,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
   // ---------------------------------------------------------------------
   describe("POST /api/v2/runs", () => {
     test("junit data w/ 1 failing case → 200 {ok:true, changed:true, event:'evt-…', verdict starting 'RED'}", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("runs-red");
       await registerAgent(key, "red-1");
 
@@ -226,7 +227,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     });
 
     test("junit data, all pass → verdict starting 'GREEN'", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("runs-green");
       await registerAgent(key, "green-1");
 
@@ -247,7 +248,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     });
 
     test("dataPath variant: temp dir with TEST-a.xml (all pass) → 200, verdict starting 'GREEN'", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("runs-datapath");
       const dir = freshDir();
       tmpDirs.push(dir);
@@ -276,7 +277,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     });
 
     test("unknown codec → 400 {ok:false}", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("runs-badcodec");
 
       const res = await postJson("/api/v2/runs", {
@@ -296,7 +297,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
       const dir = freshDir();
       tmpDirs.push(dir);
       const dbPath = join(dir, "crucible.db");
-      handle = startServer({ port: 0, dbPath });
+      handle = bootInProcess(dbPath);
       const key = await createProject("runs-retired-codec");
       // Registered, so the refusal is the codec's and not the caller check's.
       await registerAgent(key, "retired-1");
@@ -345,7 +346,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     });
 
     test("malformed junit data → 400 JSON {ok:false, error}, never a plain-text 500", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("runs-badxml");
 
       const res = await postJson("/api/v2/runs", {
@@ -362,7 +363,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     });
 
     test("nonexistent dataPath → 400 JSON {ok:false, error}, never a plain-text 500", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("runs-baddatapath");
 
       const res = await postJson("/api/v2/runs", {
@@ -379,7 +380,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     });
 
     test("unknown project → 404 with help array present", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
       const res = await postJson("/api/v2/runs", {
         projectKey: crypto.randomUUID(),
@@ -401,7 +402,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
   // ---------------------------------------------------------------------
   describe("POST /api/v2/runs/parsed", () => {
     test("with context {git, wave, orchestrator} + tier:'regression' → 200 {ok:true, changed:true, event, verdict}; GET events/:id echoes context deep-equal + tier", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("parsed-context");
       const context: RunContext = {
         git: { branch: "develop", commit: "abc123" },
@@ -431,7 +432,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     });
 
     test("with NO context → 200 ok; the stored event has NO context key at all (graceful — no fabrication)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("parsed-no-context");
       await registerAgent(key, "no-ctx-agent");
 
@@ -454,7 +455,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     });
 
     test("coverage discard-on-fail: failing summary + coverage → the stored event has no coverage key (help mention of DISCARDED is optional)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("parsed-discard-coverage");
       const coverage: Coverage = { lines: { total: 10, covered: 8, percent: 80 } };
       await registerAgent(key, "discard-agent");
@@ -489,7 +490,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
   // ---------------------------------------------------------------------
   describe("POST /api/v2/runs/compile", () => {
     test("rustc fixture (1 error, 1 warning) → 200 {ok:true, changed:true, event, errors:1, warnings:1, verdict containing 'COMPILE'}", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("compile-run");
       await registerAgent(key, "compile-agent");
 
@@ -514,7 +515,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     });
 
     test("missing errors field → 400 {ok:false}", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("compile-missing-errors");
 
       const res = await postJson("/api/v2/runs/compile", {
@@ -551,7 +552,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     }
 
     test("GET /api/v2/events?project=<key>&limit=2 → {ok:true, events} 2 newest, newest-first", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("events-list");
       const ids = await seedThreeEvents(key);
 
@@ -566,7 +567,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     });
 
     test("GET /api/v2/events/:id → {ok:true, event} full detail (tree present)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("events-get");
       const [id] = await seedThreeEvents(key);
 
@@ -581,7 +582,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     });
 
     test("GET /api/v2/events/:id — unknown id → 404 {ok:false} with an event-specific error (not the generic route catch-all)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
       const res = await getJson("/api/v2/events/evt-0000000000000-9999");
 
@@ -602,7 +603,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     // 403 without config, 409 without approval, 200 only with both; a
     // repeat delete (both gates still open) then 404s on the now-gone event.
     test("DELETE /api/v2/events/:id?project=<key>: 403 without allowRunDeletion; 409 with config ON but no userApproved; 200 with both gates open (changed:true, event gone); repeat → 404 {ok:false}", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("events-delete");
       const [id] = await seedThreeEvents(key);
 
@@ -648,7 +649,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     // calling — otherwise the config/approval gate would fire first and mask
     // the ownership check this test actually pins.
     test("DELETE /api/v2/events/:id?project=<wrong-key>, both gates open on wrong-key → 404 and the event still exists", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("events-delete-wrongproj");
       const otherKey = await createProject("events-delete-otherproj");
       const [id] = await seedThreeEvents(key);
@@ -671,7 +672,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
   // ---------------------------------------------------------------------
   describe("GET /api/v2/status", () => {
     test("?project=<key> → {ok:true, status:{hasData, lastTest, lastCompile}}", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("status-p");
       await registerAgent(key, "status-agent");
 
@@ -693,7 +694,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     });
 
     test("missing project query param → 400 {ok:false}", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
       const res = await getJson("/api/v2/status");
 
@@ -730,7 +731,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
 const SYNTHETIC_CR = "CR-AUTH-1";
 
 describe("CR-CRU-094 §S1/AC1 — the cycle binding rides the run as a column", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
   let dbPath = "";
   let dirs: string[] = [];
 
@@ -746,11 +747,11 @@ describe("CR-CRU-094 §S1/AC1 — the cycle binding rides the run as a column", 
     const dir = freshDir();
     dirs.push(dir);
     dbPath = join(dir, "crucible.db");
-    handle = startServer({ port: 0, dbPath });
+    handle = bootInProcess(dbPath);
   }
 
   async function send(method: string, path_: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path_}`, {
+    return boardSend(handle!, `${path_}`, {
       method,
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -825,8 +826,7 @@ describe("CR-CRU-094 §S1/AC1 — the cycle binding rides the run as a column", 
   }
 
   async function briefOf(key: string, eventId: string): Promise<Record<string, unknown>> {
-    const res = await fetch(
-      `http://localhost:${handle!.server.port}/api/v2/events?project=${key}&limit=100`,
+    const res = await boardSend(handle!, `/api/v2/events?project=${key}&limit=100`,
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as EventsListResponse;

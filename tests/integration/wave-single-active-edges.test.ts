@@ -18,7 +18,7 @@
 // THE SUBJECT IS THE SERVER. Every assertion drives
 // `POST /api/v2/projects/<key>/plans` — the write that opens work — because
 // §S1 requires the refusal (and the non-refusal) to be the route's, not a
-// store unit's. Every server here boots on an OS-assigned port against an
+// store unit's. Every server here boots in process (no port) against an
 // mkdtempSync scratch db; the live data/crucible.db and port 3849 are never
 // touched.
 //
@@ -30,13 +30,14 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { QueueEntryInput } from "../../src/store.ts";
 // §S2 — the ONE ordering function the store publishes. Imported rather than
 // restated: the digit-free case below asserts the ORDER it answers, so a
 // second ordering rule written anywhere would have to disagree with this
 // import to pass.
 import { waveNumber } from "../../src/store.ts";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 // ── wire shapes this suite PINS (tests/integration/wave-single-active.test.ts's, so the
 //    two files cannot describe the envelope two ways) ──────────────────────
@@ -89,7 +90,7 @@ const LANDED = "CR-EDGE-LANDED";
 const ALPHA_WAVE = "alpha";
 
 describe("CR-CRU-116 §S1/§S2 — the guard's edges: outside the constraint, and one ordering rule", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -103,7 +104,7 @@ describe("CR-CRU-116 §S1/§S2 — the guard's edges: outside the constraint, an
   function boot(): void {
     const dir = mkdtempSync(join(tmpdir(), "cru116-edges-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
   }
 
   async function send(
@@ -111,7 +112,7 @@ describe("CR-CRU-116 §S1/§S2 — the guard's edges: outside the constraint, an
     path: string,
     body?: unknown,
   ): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`http://localhost:${handle!.server.port}${path}`, {
+    const res = await boardSend(handle!, `${path}`, {
       method,
       ...(body === undefined
         ? {}

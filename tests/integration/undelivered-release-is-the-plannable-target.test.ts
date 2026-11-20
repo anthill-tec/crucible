@@ -38,13 +38,14 @@
 //     is a `release-proposal` row, so `?type=release&delivered=false` answers
 //     nothing.
 //
-// Every server is booted on an OS-assigned port against an mkdtemp scratch db.
+// Every server is booted in process (no port) against an mkdtemp scratch db.
 // The live data/crucible.db is never opened and port 3849 is never touched.
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const ORCH = "orchestrator-1";
 const TARGET_AT = 1_789_171_200;
@@ -114,7 +115,7 @@ interface AnyBody {
 
 describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an UNDELIVERED release", () => {
   const scratchDirs: string[] = [];
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -122,19 +123,15 @@ describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an 
     while (scratchDirs.length > 0) rmSync(scratchDirs.pop()!, { recursive: true, force: true });
   });
 
-  function boot(): ServerHandle {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru130-c2-s4b-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
     return handle;
   }
 
-  function base(): string {
-    return `http://localhost:${String(handle!.server.port)}`;
-  }
-
   async function post(path: string, body: unknown): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`, {
+    const res = await send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -143,7 +140,7 @@ describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an 
   }
 
   async function get(path: string): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`);
+    const res = await send(handle!, `${path}`);
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 
@@ -169,7 +166,7 @@ describe("CR-CRU-130 §S4b — every consumer of 'a live proposal' now reads an 
 
   /** §S2's form of an OUTSTANDING release, written through the ordinary
    *  milestone door: a `release` carrying a target and no delivery. */
-  function recordOutstandingRelease(server: ServerHandle, key: string, label: string, at: number) {
+  function recordOutstandingRelease(server: BoardHandle, key: string, label: string, at: number) {
     return server.store.recordMilestoneEvent(key, ORCH, "release", { label, targetAt: at }).event;
   }
 

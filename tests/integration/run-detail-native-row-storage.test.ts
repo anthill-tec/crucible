@@ -11,10 +11,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../../src/store.ts";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { parseJunit } from "../../src/codecs/junit.ts";
 import { parseCompile } from "../../src/codecs/compile.ts";
 import type { Project, RunSummary, SuiteNode } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 // ── generic, naming-agnostic raw-SQLite introspection ───────────────────────
 
@@ -190,7 +191,7 @@ const RUSTC_ERRORS = [
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("ingest via the real routes stores no suite/test/compile JSON, and reads stay value-equal", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
   let dirs: string[] = [];
 
   afterEach(() => {
@@ -200,34 +201,34 @@ describe("ingest via the real routes stores no suite/test/compile JSON, and read
     dirs = [];
   });
 
-  function boot(): { port: number; dbPath: string } {
+  function boot(): { board: BoardHandle; dbPath: string } {
     const dir = mkdtempSync(join(tmpdir(), "run-detail-rows-route-"));
     dirs.push(dir);
     const dbPath = join(dir, "crucible.db");
-    handle = startServer({ port: 0, dbPath });
-    return { port: handle.server.port!, dbPath };
+    handle = bootInProcess(dbPath);
+    return { board: handle, dbPath };
   }
 
-  async function postJson(port: number, path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${port}${path}`, {
+  async function postJson(board: BoardHandle, path: string, body: unknown): Promise<Response> {
+    return send(board, path, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
   }
 
-  async function getJson(port: number, path: string): Promise<Response> {
-    return fetch(`http://localhost:${port}${path}`);
+  async function getJson(board: BoardHandle, path: string): Promise<Response> {
+    return send(board, path);
   }
 
-  async function createProject(port: number, name: string): Promise<string> {
-    const res = await postJson(port, "/api/v2/projects", { name });
+  async function createProject(board: BoardHandle, name: string): Promise<string> {
+    const res = await postJson(board, "/api/v2/projects", { name });
     const body = (await res.json()) as { project: { key: string } };
     return body.project.key;
   }
 
-  async function registerAgent(port: number, key: string, agentId: string): Promise<void> {
-    const res = await postJson(port, "/api/v2/agents/register", {
+  async function registerAgent(board: BoardHandle, key: string, agentId: string): Promise<void> {
+    const res = await postJson(board, "/api/v2/agents/register", {
       projectKey: key,
       agentId,
       role: "ORCHESTRATOR",
@@ -236,9 +237,9 @@ describe("ingest via the real routes stores no suite/test/compile JSON, and read
   }
 
   test("a junit run with a failing case (message+type+trace) reads back value-equal to the codec's own output, and no table/column anywhere holds it as JSON", async () => {
-    const { port, dbPath } = boot();
-    const key = await createProject(port, "junit-native");
-    await registerAgent(port, key, "a1");
+    const { board, dbPath } = boot();
+    const key = await createProject(board, "junit-native");
+    await registerAgent(board, key, "a1");
 
     const xml = [
       '<testsuite name="Suite1" tests="3">',
@@ -249,7 +250,7 @@ describe("ingest via the real routes stores no suite/test/compile JSON, and read
     ].join("\n");
     const expected = parseJunit(xml);
 
-    const runRes = await postJson(port, "/api/v2/runs", {
+    const runRes = await postJson(board, "/api/v2/runs", {
       projectKey: key,
       agentId: "a1",
       codec: "junit",
@@ -258,7 +259,7 @@ describe("ingest via the real routes stores no suite/test/compile JSON, and read
     expect(runRes.status).toBe(200);
     const runBody = (await runRes.json()) as { event: string };
 
-    const getRes = await getJson(port, `/api/v2/events/${runBody.event}`);
+    const getRes = await getJson(board, `/api/v2/events/${runBody.event}`);
     const getBody = (await getRes.json()) as { event: { tree: SuiteNode[]; summary: RunSummary } };
     expect(getBody.event.tree).toEqual(expected.tree);
     expect(getBody.event.summary).toEqual(expected.summary);
@@ -272,9 +273,9 @@ describe("ingest via the real routes stores no suite/test/compile JSON, and read
   });
 
   test("two suites sharing (name, browser) keep their posted order, and ?suite= still answers the first", async () => {
-    const { port, dbPath } = boot();
-    const key = await createProject(port, "dup-suites-native");
-    await registerAgent(port, key, "a1");
+    const { board, dbPath } = boot();
+    const key = await createProject(board, "dup-suites-native");
+    await registerAgent(board, key, "a1");
 
     const tree = [
       {
@@ -293,7 +294,7 @@ describe("ingest via the real routes stores no suite/test/compile JSON, and read
       },
     ];
 
-    const runRes = await postJson(port, "/api/v2/runs/parsed", {
+    const runRes = await postJson(board, "/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "a1",
       summary: { total: 2, passed: 1, failed: 1, pending: 0, duration_ms: 3 },
@@ -302,12 +303,12 @@ describe("ingest via the real routes stores no suite/test/compile JSON, and read
     expect(runRes.status).toBe(200);
     const runBody = (await runRes.json()) as { event: string };
 
-    const fullRes = await getJson(port, `/api/v2/events/${runBody.event}`);
+    const fullRes = await getJson(board, `/api/v2/events/${runBody.event}`);
     const fullBody = (await fullRes.json()) as { event: { tree: SuiteNode[] } };
     expect(fullBody.event.tree).toEqual(tree as unknown as SuiteNode[]);
 
     const suiteRes = await getJson(
-      port,
+      board,
       `/api/v2/events/${runBody.event}?suite=Login&browser=chromium`,
     );
     const suiteBody = (await suiteRes.json()) as { event: { tree: SuiteNode[] } };
@@ -322,13 +323,13 @@ describe("ingest via the real routes stores no suite/test/compile JSON, and read
   });
 
   test("a compile report (1 rustc error + 1 warning) reads back value-equal to the codec's own output, and no table/column anywhere holds it as JSON", async () => {
-    const { port, dbPath } = boot();
-    const key = await createProject(port, "compile-native");
-    await registerAgent(port, key, "a1");
+    const { board, dbPath } = boot();
+    const key = await createProject(board, "compile-native");
+    await registerAgent(board, key, "a1");
 
     const expected = parseCompile(RUSTC_ERRORS, "rustc");
 
-    const runRes = await postJson(port, "/api/v2/runs/compile", {
+    const runRes = await postJson(board, "/api/v2/runs/compile", {
       projectKey: key,
       agentId: "a1",
       errors: RUSTC_ERRORS,
@@ -337,7 +338,7 @@ describe("ingest via the real routes stores no suite/test/compile JSON, and read
     expect(runRes.status).toBe(200);
     const runBody = (await runRes.json()) as { event: string };
 
-    const getRes = await getJson(port, `/api/v2/events/${runBody.event}`);
+    const getRes = await getJson(board, `/api/v2/events/${runBody.event}`);
     const getBody = (await getRes.json()) as { event: { compile: unknown } };
     expect(getBody.event.compile).toEqual(expected);
 
@@ -350,9 +351,9 @@ describe("ingest via the real routes stores no suite/test/compile JSON, and read
   });
 
   test("a failure recorded with only `type` (no message, no trace) round-trips exactly — nothing fabricated", async () => {
-    const { port, dbPath } = boot();
-    const key = await createProject(port, "failure-type-only");
-    await registerAgent(port, key, "a1");
+    const { board, dbPath } = boot();
+    const key = await createProject(board, "failure-type-only");
+    await registerAgent(board, key, "a1");
 
     const tree = [
       {
@@ -364,7 +365,7 @@ describe("ingest via the real routes stores no suite/test/compile JSON, and read
       },
     ];
 
-    const runRes = await postJson(port, "/api/v2/runs/parsed", {
+    const runRes = await postJson(board, "/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "a1",
       summary: { total: 1, passed: 0, failed: 1, pending: 0, duration_ms: 9 },
@@ -373,7 +374,7 @@ describe("ingest via the real routes stores no suite/test/compile JSON, and read
     expect(runRes.status).toBe(200);
     const runBody = (await runRes.json()) as { event: string };
 
-    const getRes = await getJson(port, `/api/v2/events/${runBody.event}`);
+    const getRes = await getJson(board, `/api/v2/events/${runBody.event}`);
     const getBody = (await getRes.json()) as { event: { tree: SuiteNode[] } };
     const leaf = getBody.event.tree[0]?.children[0] as unknown as Record<string, unknown>;
     expect(leaf?.failure).toEqual({ type: "AssertionError" });

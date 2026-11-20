@@ -6,17 +6,17 @@
 // `/`, counted once across the whole run (every report of it). It is
 // computed per response and never stored.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production HTTP surface (`bootInProcess`, in-memory
 // store); what is stored is read back through the run detail read
 // `GET /api/v2/events/<id>` and the events list.
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 const tmpDirs: string[] = [];
 
 afterEach(() => {
@@ -24,14 +24,10 @@ afterEach(() => {
   while (tmpDirs.length > 0) rmSync(tmpDirs.pop()!, { recursive: true, force: true });
 });
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
-}
-
-function base(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
 }
 
 interface Posted {
@@ -39,8 +35,8 @@ interface Posted {
   body: Record<string, unknown>;
 }
 
-async function postJson(handle: ServerHandle, route: string, body: unknown): Promise<Posted> {
-  const res = await fetch(`${base(handle)}${route}`, {
+async function postJson(handle: BoardHandle, route: string, body: unknown): Promise<Posted> {
+  const res = await send(handle, `${route}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -48,14 +44,14 @@ async function postJson(handle: ServerHandle, route: string, body: unknown): Pro
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
-async function getJson(handle: ServerHandle, route: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base(handle)}${route}`);
+async function getJson(handle: BoardHandle, route: string): Promise<Record<string, unknown>> {
+  const res = await send(handle, `${route}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
 
 /** A project with one registered (unbound) agent, ready to ingest. */
-async function ready(handle: ServerHandle, agentId: string): Promise<string> {
+async function ready(handle: BoardHandle, agentId: string): Promise<string> {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: "P", type: "backend", sutRoot: "/tmp/p" });
   const res = await postJson(handle, "/api/v2/agents/register", {
@@ -76,7 +72,7 @@ function envelopeCounts(run: unknown): Record<string, unknown> {
 async function ingest(
   agentId: string,
   payload: Record<string, unknown>,
-): Promise<{ handle: ServerHandle; key: string; res: Posted }> {
+): Promise<{ handle: BoardHandle; key: string; res: Posted }> {
   const handle = boot();
   const key = await ready(handle, agentId);
   const res = await postJson(handle, "/api/v2/runs", {
