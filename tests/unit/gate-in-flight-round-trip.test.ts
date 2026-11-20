@@ -27,7 +27,7 @@
 // dependency rule this is `integration`, not `unit`.
 //
 // HARNESS: the `bootInProcess()` + real `fetch`
-// pattern of tests/integration/agent-cycle-binding.test.ts and tests/integration/agent-lifecycle.test.ts.
+// pattern of tests/unit/agent-cycle-binding.test.ts and tests/integration/agent-lifecycle.test.ts.
 // No new mechanism.
 //
 // FIXTURES: the exact interim body `stream_axi_ladder` builds for a mid-run

@@ -17,10 +17,10 @@
 //
 // The step is found BY ITS DESCRIPTION, never by index and never by the
 // chain's length — exactly as tests/unit/milestone-record-migration.test.ts and
-// tests/integration/gate-retirement.test.ts find their own.
+// tests/unit/gate-retirement.test.ts find their own.
 //
 // ── Two spellings are assumed, and ONLY here + in
-//    tests/integration/milestone-dates-are-first-class.test.ts ───────────────────────────
+//    tests/unit/milestone-dates-are-first-class.test.ts ───────────────────────────
 // The COLUMN names, snake_case like `retired_at`/`cycle_id`. If GREEN spells
 // them differently, these two constants move.
 //
@@ -259,7 +259,7 @@ describe("the dates a milestone already held become columns, and history keeps e
   // of THIS step: C2 owns the rung after it. What the claim was protecting —
   // that this build writes the version its chain produces — has MOVED to the
   // step that now ends the chain, and is asserted there
-  // (`tests/integration/release-unification-migration.test.ts`, `step.to === SCHEMA_VERSION`
+  // (`tests/unit/release-unification-migration.test.ts`, `step.to === SCHEMA_VERSION`
   // beside `SCHEMA_VERSION === MIGRATIONS.length`). What is left here is what
   // is still this step's own: it is a RUNG, at a real position, and the chain
   // it sits in still ends where the build says it does.
@@ -473,7 +473,7 @@ describe("the dates a milestone already held become columns, and history keeps e
     // those rows. The comparison therefore covers every record neither step
     // rewrites, and §S2's rewrite is
     // proved row by row, by its own rule, in
-    // `tests/integration/release-unification-migration.test.ts`.
+    // `tests/unit/release-unification-migration.test.ts`.
     const nowStored = storedRows(after);
     const unified = new Set(
       wasStored
@@ -833,7 +833,7 @@ describe("the dates a milestone already held become columns, and history keeps e
       // step's claim, served as one the next step rewrote, or a SUPERSEDED
       // proposal (a revision's retired predecessor), which the next step folds
       // into its label's one record, proved by its own rule in
-      // tests/integration/release-unification-migration.test.ts.
+      // tests/unit/release-unification-migration.test.ts.
       const superseded = proof.rowsBefore.filter(
         (row) => row.type === "release-proposal" && row.retired_at !== null,
       ).length;

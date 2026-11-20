@@ -159,7 +159,7 @@ describe("a milestone carries its dates — every type, both dates, column and p
   /**
    * The accepted milestone vocabulary, READ OFF THE SERVER — the refusal is
    * the only channel that publishes it, and it publishes it verbatim
-   * (`milestoneVocabulary` in tests/integration/milestone-records-survive-retention.test.ts
+   * (`milestoneVocabulary` in tests/unit/milestone-records-survive-retention.test.ts
    * established this read; this file reuses it rather than holding a second
    * copy of the list).
    * A test that typed the six types would go stale the day a seventh lands.

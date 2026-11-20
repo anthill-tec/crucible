@@ -38,8 +38,8 @@
 // 200 with no complaint).
 //
 // Harness: reuses the EXACT bootInProcess/postJson/getJson/createProject/
-// plansPath/filePlanAB/activate conventions from tests/integration/plan-abort.test.ts,
-// and the parsedRunBody shape from tests/integration/axi-negotiation.test.ts.
+// plansPath/filePlanAB/activate conventions from tests/unit/plan-abort.test.ts,
+// and the parsedRunBody shape from tests/unit/axi-negotiation.test.ts.
 
 import { describe, test, expect, afterEach } from "bun:test";
 import { readFileSync } from "node:fs";

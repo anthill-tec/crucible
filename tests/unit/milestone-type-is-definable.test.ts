@@ -33,8 +33,8 @@
 //
 // The accepted set a project may post is READ OFF THE SERVER'S OWN REFUSAL
 // (`type must be one of: …`), which is how `milestoneVocabulary` in
-// `tests/integration/milestone-records-survive-retention.test.ts` and its twin in
-// `tests/integration/milestone-dates-are-first-class.test.ts` already read it, and is the
+// `tests/unit/milestone-records-survive-retention.test.ts` and its twin in
+// `tests/unit/milestone-dates-are-first-class.test.ts` already read it, and is the
 // "way to SEE the live list" §S5 requires. No test
 // in this file holds a copy of the vocabulary.
 //
@@ -490,7 +490,7 @@ describe("CR-CRU-130 §S4 — reserved types stay reserved; every other type is 
       // …while the accepted set the refusal publishes is declared ∪ reserved ∪
       // seeded — which is what keeps the generic door's own tripwire
       // (the `release-proposal` tripwire test in
-      // `tests/integration/roadmap-registration-routes.test.ts`) reading a full list.
+      // `tests/unit/roadmap-registration-routes.test.ts`) reading a full list.
       const accepted = await acceptedTypes(key);
       for (const type of ["risk-review", "field-trial", ...RESERVED, ...SEEDED, "custom"]) {
         expect(accepted).toContain(type);

@@ -8,7 +8,7 @@
 //
 // These two tests pin the fix at the ONE place that can prove it: a plain
 // `GET /api/v2/agents` read, driven through the real production HTTP surface
-// (`bootInProcess`), exactly like tests/integration/agent-cycle-binding.test.ts drives
+// (`bootInProcess`), exactly like tests/unit/agent-cycle-binding.test.ts drives
 // register/plan/cycle routes and tests/integration/run-lifecycle-read-surface.test.ts
 // drives `/runs/start` + `/runs/parsed`. No mechanism here is new: this file
 // composes the SAME two existing helpers (a fixture ORCHESTRATOR files and
@@ -82,7 +82,7 @@ async function agentByIdFrom(
 const FIXTURE_ORCH = "fixture-orch";
 
 /** Files a one-cycle plan and activates it, the same real-route pattern
- * tests/integration/agent-cycle-binding.test.ts's `fileAndActivate` uses. */
+ * tests/unit/agent-cycle-binding.test.ts's `fileAndActivate` uses. */
 async function fileAndActivateCycle(
   handle: BoardHandle,
   key: string,

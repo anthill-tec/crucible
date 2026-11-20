@@ -14,8 +14,8 @@
 // gate_decisions` (a no-op today, since it does not exist yet) and
 // `PRAGMA user_version` stamped to the step's OWN `.from`, found BY WHAT THE
 // STEP DECLARES, never by index or by "SCHEMA_VERSION - 1" — the SAME
-// technique tests/integration/release-unification-migration.test.ts's unificationStep
-// and tests/integration/milestone-dates-migration.test.ts's datesStep use. That keeps
+// technique tests/unit/release-unification-migration.test.ts's unificationStep
+// and tests/unit/milestone-dates-migration.test.ts's datesStep use. That keeps
 // this file correct after GREEN lands, and correct again the day a LATER CR
 // appends a step after this one.
 import { describe, test, expect, afterEach } from "bun:test";

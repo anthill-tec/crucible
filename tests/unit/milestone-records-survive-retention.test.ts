@@ -463,7 +463,7 @@ describe("CR-CRU-129 §S1 — structural records survive a retention sweep that 
       };
 
       // The queue, seeded through the STORE exactly as the live-board invariant
-      // suites seed history (tests/integration/queue-historical-membership.test.ts): these
+      // suites seed history (tests/unit/queue-historical-membership.test.ts): these
       // rows have no plan, so their COMPLETED_UNTRACKED status is derived
       // ENTIRELY from the release records' `crs` — the derivation the eviction
       // broke on the live board.

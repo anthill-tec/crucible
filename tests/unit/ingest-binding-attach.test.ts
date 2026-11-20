@@ -27,15 +27,15 @@
 // is ALREADY correct today — CR-CRU-024 §S7's explicit-context path for an
 // UNBOUND agent, and a matching (belt-and-braces) explicit cycleId trivially
 // equal to the binding — mirroring the established "guard:" convention in
-// tests/integration/ingest-cycle-validation.test.ts (§S7.3). Every other test below is a
+// tests/unit/ingest-cycle-validation.test.ts (§S7.3). Every other test below is a
 // genuine RED failure against the missing server-stamping/re-validation
 // contract.
 //
 // Harness: drives the REAL production router in process (`bootInProcess`) + its real routes —
-// register/plans/cycles conventions from tests/integration/agent-cycle-binding.test.ts
+// register/plans/cycles conventions from tests/unit/agent-cycle-binding.test.ts
 // (fileAndActivate/transitionCycle via the real PATCH routes), and the
 // parsedRunBody/postParsedRun/eventsForProject conventions from
-// tests/integration/ingest-cycle-validation.test.ts (GET /api/v2/events as the read
+// tests/unit/ingest-cycle-validation.test.ts (GET /api/v2/events as the read
 // path) — no new mechanism invented here.
 
 import { describe, test, expect, afterEach } from "bun:test";
