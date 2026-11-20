@@ -108,9 +108,19 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.14" # the floor; quoted, or YAML reads a float
+      # A step that downloads is time-limited, and its download is retried
+      # once: each attempt runs under `timeout`, and a failed or hung attempt
+      # gets one more (the same shape on every download step below).
       - name: Build crucible-axi sdist + wheel
+        timeout-minutes: 15
         run: |
-          python -m pip install --upgrade build twine
+          attempt=1
+          until timeout 5m python -m pip install --upgrade build twine
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::pip install failed; attempt $attempt of 2"
+          done
           python -m build
           twine check dist/*
       # CR-CRU-137 §S5 — MATCHED PAIR with actions/download-artifact in
@@ -164,8 +174,19 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.14"
+      # Each download step: every attempt under `timeout`, one retry, and a
+      # step limit above both attempts. Run 44730247029's browser install hung
+      # here for over 40 minutes; the same command took 62 s in test-python.
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        timeout-minutes: 12
+        run: |
+          attempt=1
+          until timeout 5m bun install --frozen-lockfile
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::bun install failed; attempt $attempt of 2"
+          done
       # CR-CRU-112 §S1 (measured on the 0.2.0 release, run 34303803078) — this
       # job runs `bun test`, which collects the WHOLE suite: 2102 tests across
       # 154 files, including the Chromium integration tier. Only `test-e2e`
@@ -181,7 +202,15 @@ jobs:
       - name: Install Playwright browsers (the suite includes the Chromium tier)
         # CR-CRU-018 (DN decision 13): WebKit beside Chromium. This job runs
         # the whole `bun test` suite; the phone band asserts BOTH engines.
-        run: bunx playwright install --with-deps chromium webkit
+        timeout-minutes: 25
+        run: |
+          attempt=1
+          until timeout 10m bunx playwright install --with-deps chromium webkit
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::the browser install failed; attempt $attempt of 2"
+          done
       # CR-CRU-137 §S1 — the suite's default per-test budget is this project's
       # own figure, not bun's 5000 ms: two content assertions failed THIS job on
       # wall clock alone (5.1 s, 6.2 s) on trees whose suites were green.
@@ -274,8 +303,18 @@ jobs:
       # tests to the same one (`_resolve_python` in clients/python-crucible.py
       # falls back to `sys.executable`), so coverage and pytest must be
       # importable there too. Nothing has yet proven no test takes that path.
+      # Each download step below: every attempt under `timeout`, one retry,
+      # and a step limit above both attempts.
       - name: Install the project with its dev extra (pyproject.toml is the declaration)
-        run: python3 -m pip install --upgrade '.[dev]'
+        timeout-minutes: 12
+        run: |
+          attempt=1
+          until timeout 5m python3 -m pip install --upgrade '.[dev]'
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::pip install failed; attempt $attempt of 2"
+          done
       # Measured on the 0.4.0 rehearsal (run 43653899622): 147 of this suite's
       # tests drive the REAL toolchains they prove, and this job had none of
       # them, so it has failed since 2026-10-28. The job that runs a tier owns
@@ -300,30 +339,76 @@ jobs:
           bun-version: "${{ env.BUN_VERSION }}"
           no-cache: true
       - name: Install dependencies (the real board and the bun-side proofs)
-        run: bun install --frozen-lockfile
+        timeout-minutes: 12
+        run: |
+          attempt=1
+          until timeout 5m bun install --frozen-lockfile
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::bun install failed; attempt $attempt of 2"
+          done
       - name: Install Playwright browsers (the playwright reporter proofs)
-        run: bunx playwright install --with-deps chromium webkit
+        timeout-minutes: 25
+        run: |
+          attempt=1
+          until timeout 10m bunx playwright install --with-deps chromium webkit
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::the browser install failed; attempt $attempt of 2"
+          done
       - name: The repo's own .venv, with the dev extra
+        timeout-minutes: 12
         run: |
           uv venv .venv --python 3.14
-          uv pip install --python .venv/bin/python -e '.[dev]'
+          attempt=1
+          until timeout 5m uv pip install --python .venv/bin/python -e '.[dev]'
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::uv pip install failed; attempt $attempt of 2"
+          done
+      # An action, so no shell retry: the step limit alone.
       - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f  # v2
+        timeout-minutes: 10
         with:
           tool: cargo-nextest,cargo-llvm-cov
       - name: llvm-tools-preview (cargo-llvm-cov reads its profiles with it)
-        run: rustup component add llvm-tools-preview
+        timeout-minutes: 12
+        run: |
+          attempt=1
+          until timeout 5m rustup component add llvm-tools-preview
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::rustup component add failed; attempt $attempt of 2"
+          done
       # A pinned release archive, not an action: arduino/setup-arduino-cli's
       # newest major (v2) still declares node20 (CR-CRU-137 §S5).
+      # The archive is downloaded to a file and then unpacked, so a retried
+      # download never feeds tar a half-read stream.
       - name: arduino-cli 1.5.1, named for the arduino client
+        timeout-minutes: 12
         env:
           ARCHIVE: arduino-cli_1.5.1_Linux_64bit.tar.gz
         run: |
           dir="$RUNNER_TEMP/arduino-cli"
           mkdir -p "$dir"
-          curl -fsSL "https://downloads.arduino.cc/arduino-cli/$ARCHIVE" \
-            | tar xz -C "$dir" arduino-cli
+          attempt=1
+          until curl -fsSL --max-time 300 -o "$dir/$ARCHIVE" \
+              "https://downloads.arduino.cc/arduino-cli/$ARCHIVE"
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::arduino-cli download failed; attempt $attempt of 2"
+          done
+          tar xzf "$dir/$ARCHIVE" -C "$dir" arduino-cli
           echo "ARDUINO_CLI=$dir/arduino-cli" >> "$GITHUB_ENV"
+      # The script retries its own maven fill once (with -U), logging each
+      # attempt; the step limit covers both.
       - name: The suite's own test caches (the one step that needs the network)
+        timeout-minutes: 20
         run: scripts/provision-test-caches.sh
       # The suite runs by tier DIRECTORY, unit first, each discovered with the
       # repo root as top level. Each tier runs hermetically
@@ -373,12 +458,30 @@ jobs:
           # CR-CRU-137 §S2 -- declared once, at the head of this file
           bun-version: "${{ env.BUN_VERSION }}"
           no-cache: true
+      # Each download step: every attempt under `timeout`, one retry, and a
+      # step limit above both attempts.
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        timeout-minutes: 12
+        run: |
+          attempt=1
+          until timeout 5m bun install --frozen-lockfile
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::bun install failed; attempt $attempt of 2"
+          done
       - name: Install Playwright browsers
         # CR-CRU-018 (DN decision 13) — the `webkit-iphone` project runs here
         # natively; Ubuntu runners provision WebKit directly.
-        run: bunx playwright install --with-deps chromium webkit
+        timeout-minutes: 25
+        run: |
+          attempt=1
+          until timeout 10m bunx playwright install --with-deps chromium webkit
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::the browser install failed; attempt $attempt of 2"
+          done
       - name: E2E suite
         run: bun run test:e2e
 
