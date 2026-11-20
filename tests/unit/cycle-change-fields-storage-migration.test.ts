@@ -12,13 +12,13 @@
 // round-trip fails against production as it stands.
 //
 // Legacy fixture: hand-written DDL (never a downgrade of a future build) —
-// the SAME technique tests/integration/store-migration.test.ts's makePreCycleIdStore and
+// the SAME technique tests/unit/store-migration.test.ts's makePreCycleIdStore and
 // tests/unit/milestone-record-migration.test.ts use, because a fixture built by
 // opening a POST-GREEN Store would stop testing the migration the moment the
 // migration existed.
 //
 // New column NAMES are intentionally never pinned here (unlike
-// tests/integration/milestone-dates-migration.test.ts's TARGET_COLUMN/DELIVERED_COLUMN):
+// tests/unit/milestone-dates-migration.test.ts's TARGET_COLUMN/DELIVERED_COLUMN):
 // this suite discovers what the step adds by diffing `PRAGMA table_info`
 // before/after, and proves the storage works by round-tripping reason/cause/
 // specRef through the real HTTP skip/abort routes — never through hand-typed
@@ -199,7 +199,7 @@ describe("CR-CRU-165 storage migration — schema v14 carries reason/cause/spec-
     const step = recordedReasonStep();
     // The step's OWN position \u2014 stable even once a later CR (CR-CRU-162)
     // appends a step after it: "later steps may follow it, so the pin is its
-    // own rung, not the end" (tests/integration/release-unification-migration.test.ts's
+    // own rung, not the end" (tests/unit/release-unification-migration.test.ts's
     // precedent).
     expect(step.to).toBe(14);
     expect(step.to).toBe(step.from + 1);

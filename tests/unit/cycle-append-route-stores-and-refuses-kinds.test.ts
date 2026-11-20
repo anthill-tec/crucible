@@ -14,7 +14,7 @@
 // Server rules pinned: `parseCycleInput`'s accepted kinds and its invalid-kind
 // refusal (src/v2.ts), and `Store#appendCycle`'s insert of the parsed kind
 // (src/store.ts). `appendCycle`'s fix-needs-its-verify-done guard itself is
-// pinned by tests/integration/cycle-add-fix-only.test.ts; here a fix append is
+// pinned by tests/unit/cycle-add-fix-only.test.ts; here a fix append is
 // made only after its plan's verify cycle is done, as a client must.
 //
 // Safety: every board is in process (no socket) on a ":memory:" store; nothing outside

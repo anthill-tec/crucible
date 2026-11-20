@@ -19,8 +19,8 @@
 // keys are simply absent from the stored row and from the JSON envelope).
 //
 // Harness: drives the REAL production router in process (`bootInProcess`) + its real routes,
-// following tests/integration/agent-cycle-binding.test.ts (fileAndActivate/register
-// conventions) and tests/integration/ingest-binding-attach.test.ts (parsedRunBody/
+// following tests/unit/agent-cycle-binding.test.ts (fileAndActivate/register
+// conventions) and tests/unit/ingest-binding-attach.test.ts (parsedRunBody/
 // eventsForProject/response-echo conventions) — no new mechanism invented.
 
 import { describe, test, expect, afterEach } from "bun:test";

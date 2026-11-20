@@ -40,7 +40,7 @@
 // calling a method that doesn't exist.
 //
 // Harness: reuses the EXACT time-injection + store-reopen technique from
-// tests/integration/cycle-epochs.test.ts (bun:test's `setSystemTime()` mocks
+// tests/unit/cycle-epochs.test.ts (bun:test's `setSystemTime()` mocks
 // process-wide `Date.now()`; a "restart" is a fresh `bootInProcess()` over the
 // SAME on-disk dbPath) and tests/unit/boot-safety.test.ts's tmp-dir convention —
 // no new clock mechanism invented here.
@@ -94,7 +94,7 @@ function removeScratchDirs(): void {
 
 function freshTmpDbPath(): string {
   // NEVER inside the repo — a fresh OS tmpdir per test (same technique as
-  // tests/unit/boot-safety.test.ts's freshTmpDir() / tests/integration/cycle-epochs.test.ts).
+  // tests/unit/boot-safety.test.ts's freshTmpDir() / tests/unit/cycle-epochs.test.ts).
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crucible-checkpoint-test-"));
   scratchDirs.push(dir);
   return path.join(dir, "crucible.db");
@@ -142,7 +142,7 @@ function withFixtureAgent(body: unknown): unknown {
 // at REAL wall-clock time would otherwise fall outside its lazy-prune
 // liveness window the instant the mocked clock jumps ahead, spuriously
 // 409ing every workflow verb that follows a time jump (same fix as
-// tests/integration/cycle-epochs.test.ts). Re-touch (re-register) it against the
+// tests/unit/cycle-epochs.test.ts). Re-touch (re-register) it against the
 // CURRENT (possibly mocked) clock immediately before every mutating call,
 // keyed off the projectKey embedded in the request path.
 async function touchFixtureAgent(handle: BoardHandle, urlPath: string): Promise<void> {
@@ -214,7 +214,7 @@ async function activate(handle: BoardHandle, key: string, planId: number | strin
 }
 
 // A fixed epoch anchor — arbitrary but constant, same convention as
-// tests/integration/cycle-epochs.test.ts's T0.
+// tests/unit/cycle-epochs.test.ts's T0.
 const T0 = 1_800_000_000_000;
 const THREE_MIN_MS = 3 * 60 * 1000;
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;

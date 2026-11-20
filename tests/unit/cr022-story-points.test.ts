@@ -22,7 +22,7 @@
 // The declaration JOURNAL (§S1's third AC) has no read API of its own — the
 // CR's API surface table lists only the three GET …/analytics/* routes, no
 // journal endpoint. Its effects are asserted through the burndown endpoint's
-// `points[]` steps in tests/integration/cr022-burndown-analytics.test.ts (naming the CR
+// `points[]` steps in tests/unit/cr022-burndown-analytics.test.ts (naming the CR
 // and the verb that moved the release), which is the only OBSERVABLE
 // contract the spec actually publishes for it — asserting against a guessed
 // internal table/column name here would test this RED agent's guess, not

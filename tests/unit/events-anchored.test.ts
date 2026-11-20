@@ -17,7 +17,7 @@
 // does NOT pin the project param's name, and explicitly requires this route
 // stay "TOON-negotiable like sibling v2 GET routes" — EVERY existing v2 GET
 // route (handleEventsList itself, the activity feed, etc., see
-// tests/integration/axi-negotiation.test.ts, tests/integration/ingest-cycle-validation.test.ts,
+// tests/unit/axi-negotiation.test.ts, tests/unit/ingest-cycle-validation.test.ts,
 // tests/integration/v2-brief-reshape.test.ts) scopes by `?project=<key>`, never
 // `?projectKey=`. This file uses `project=<key>` to match that sibling
 // convention rather than inventing a new, inconsistent param name.

@@ -5,8 +5,8 @@
 // §S1's "the plan grows only by FIX cycles" timing half carries NO bypass
 // (unlike the KIND half below, which the orchestrator's 2026-10-03 revision
 // of R1 turned into a guarded exception alongside insert-before/rename —
-// see tests/integration/cycle-insert-before.test.ts / tests/integration/cycle-edit-label.test.ts for
-// those, and tests/integration/cycle-skip-guards.test.ts for cycle-skip itself).
+// see tests/unit/cycle-insert-before.test.ts / tests/unit/cycle-edit-label.test.ts for
+// those, and tests/unit/cycle-skip-guards.test.ts for cycle-skip itself).
 //
 // A non-`fix` kind is ALLOWED when the body carries `reason` (non-empty),
 // `cause` (`spec-design` | `gap-analysis`) and `specRef` (non-empty) from an

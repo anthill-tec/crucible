@@ -113,8 +113,8 @@ interface QueryRecord {
 /** Every query the store's OWN connection issues while `body` runs, with the
  *  row count `.all()`/`.get()` actually handed back — never timing. Same
  *  instrumentation as
- *  tests/integration/run-detail-progressive-reads-stay-bounded-and-omit-raw.test.ts and
- *  tests/integration/projects-list-bounded-reads.test.ts. */
+ *  tests/unit/run-detail-progressive-reads-stay-bounded-and-omit-raw.test.ts and
+ *  tests/unit/projects-list-bounded-reads.test.ts. */
 async function recordQueries(body: () => Promise<unknown>): Promise<QueryRecord[]> {
   const db = (handle!.store as unknown as { db: Database }).db;
   const query = db.query.bind(db);

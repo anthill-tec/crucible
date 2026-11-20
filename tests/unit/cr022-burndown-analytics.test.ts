@@ -10,7 +10,7 @@
 //
 // Baseline (measured 2026-09-24, re-confirmed): no `/analytics/*` route
 // exists in src/v2.ts's dispatch, `upsertQueueEntry` ignores `points`
-// entirely (see tests/integration/cr022-story-points.test.ts), and nothing in
+// entirely (see tests/unit/cr022-story-points.test.ts), and nothing in
 // src/store.ts appends any kind of scope-change log. Every assertion below
 // is expected to FAIL.
 //
