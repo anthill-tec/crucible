@@ -146,6 +146,8 @@ while [ "$tenths" -lt "$BANNER_WAIT_TENTHS" ]; do
     sleep 0.1
     tenths=$((tenths + 1))
 done
+# Globbing off: each socket is a word, and `[::1]:3849` is also a glob.
+set -f
 for socket in $SOCKETS; do
     case " $banner " in
     *" $socket "*) ;;
@@ -156,6 +158,7 @@ for socket in $SOCKETS; do
         ;;
     esac
 done
+set +f
 echo "hermetic: $banner"
 
 echo "hermetic: running $*"
