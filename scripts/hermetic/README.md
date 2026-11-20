@@ -86,7 +86,8 @@ The hooks record each dependency a test takes and never fail a call. They append
 - `hooks/bun-preload.ts` is loaded with `bun test --preload ./scripts/hermetic/hooks/bun-preload.ts`.
   It records `spawn`, `serve`, `connect` (including WebSocket), `fetch`, and `wait`: any timer or
   sleep above 0 ms, and any interval. Each event is charged to the test file on the stack, and the
-  preload records the top frame outside itself and `node_modules`. Its first line is
+  preload records the top frame outside itself, `node_modules` and Bun's own internal frames (a
+  `node:`, `bun:` or `internal:` module, or native code). Its first line is
   `-\tpreload\tloaded`. That line proves the preload ran and is not counted as a dependency.
 - `tagging_runner.py <start-dir>` discovers `<start-dir>` with `-t .`. It sets
   `HERMETIC_TEST=<file>::<test id>` for each test, which every child process inherits. Its exit code

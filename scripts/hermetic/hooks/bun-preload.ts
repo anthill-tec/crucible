@@ -14,7 +14,7 @@
 //
 // <charge> is the test file found on the call stack (`helper:<file>` for a
 // tests/ helper with no test file above it), else `-`. <frame> is the top
-// stack frame outside this preload and outside node_modules, so an event
+// stack frame outside this preload, node_modules and Bun's internals, so an event
 // charged to no file can still be traced. Lines are de-duplicated on
 // charge, event and detail. The preload's own first line is marked with the
 // event `preload` (detail `loaded`): it proves the preload ran and is never
@@ -36,10 +36,23 @@ function charge(stack: string): string {
   return helper ? `helper:${helper[1]}` : "-";
 }
 
+/** A frame inside Bun itself: its location (the part in the trailing
+ *  parentheses, or the whole frame when it has none) is a `node:`, `bun:` or
+ *  `internal:` module or native code (`native:1:11`, `[native code]`). A
+ *  source file whose path merely contains "native" is not one. */
+function isInternalFrame(frame: string): boolean {
+  const location = /\(([^()]*)\)$/.exec(frame)?.[1] ?? frame;
+  return (
+    /^(?:node|bun|internal|native):/.test(location) ||
+    location === "native" ||
+    location.includes("[native code]")
+  );
+}
+
 function topFrame(stack: string): string {
   for (const line of stack.split("\n").slice(1)) {
     const frame = line.trim().replace(/^at\s+/, "");
-    if (frame.includes(SELF) || frame.includes("node_modules") || frame.includes("native")) continue;
+    if (frame.includes(SELF) || frame.includes("node_modules") || isInternalFrame(frame)) continue;
     return frame.slice(0, 200);
   }
   return "?";
