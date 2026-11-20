@@ -5,7 +5,7 @@ standing guard, on this repo's CI now and as a client feature for every project 
 (user rulings: the CI run is the proof — no tests of the hermetic scripts; `release/0.4.0` is pushed when this CR needs
 its CI run) · spec pre-review 2026-11-20 (CHANGES, F1–F10 folded)
 **Type:** fix
-**Points:** 8 (re-scored from 3 at the gap analysis: AC5 and AC6 joined)
+**Points:** 13 (re-scored from 3: 8 at the gap analysis, 13 at the spec pre-review — user ruling 2026-11-20)
 **Wave:** 8 (0.4.0)
 **Depends on:** CR-CRU-262, CR-CRU-264
 **Labels:** ci, tests, release
