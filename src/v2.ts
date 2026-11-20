@@ -82,6 +82,11 @@ import type {
   Tier,
 } from "./types.ts";
 
+// The runtime's own web classes, captured as this module loads, so every v2
+// answer is a native Response even while another library's globals are
+// installed (see the matching capture in src/server.ts).
+const { Blob, Request, Response } = globalThis;
+
 export interface V2Deps {
   version: string;
   /** Builds the exact same payload as GET /api/health (same store instance). */
