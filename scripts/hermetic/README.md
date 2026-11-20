@@ -53,6 +53,13 @@ place. Every other variable is inherited unchanged.
 
 Codes 90–95 report a broken setup. They are never a verdict on the command.
 
+The command's own status passes through unchanged, so a command that itself exits 90–95 or 99
+reads as one of the codes above. The wrapper does not remap it; its log tells the two apart. A
+status that is the command's own follows `hermetic: VERDICT clean — no tripwire hit; the command's
+status is <status>`, a setup failure prints `hermetic: SETUP FAILURE (exit <code>)` (a usage error
+prints `usage:`), and a hit prints `hermetic: VERDICT HIT`. `bun test` and unittest exit 0 or 1;
+wrap a command that can exit 90 or above only where its log, not its code, is read.
+
 ## `tripwire.py`
 
 Run it as `python3 -I tripwire.py`, inside the namespace only. It listens on `127.0.0.1` and `::1`,
