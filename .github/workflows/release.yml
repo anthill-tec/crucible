@@ -595,9 +595,15 @@ jobs:
           # CR-CRU-137 §S2 -- declared once, at the head of this file
           bun-version: "${{ env.BUN_VERSION }}"
           no-cache: true
+      # Trusted publishing needs npm >= 11.5.1. It comes from the npm that
+      # setup-node's Node release bundles, not from a global install: Node
+      # v24.22.3 (LTS "Krypton") bundles npm 11.19.1, per the `npm` field of
+      # https://nodejs.org/dist/index.json. The Node version is exact, so a
+      # new npm never arrives unreviewed on release day; a bump is a
+      # deliberate edit here, re-checked against that index.
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
-          node-version: "22"
+          node-version: "24.22.3"
           package-manager-cache: false
           registry-url: "https://registry.npmjs.org"
       - name: Guard — tag ref + on-master ancestry
@@ -630,12 +636,22 @@ jobs:
       # gate) is retired; a trusted publisher works under npm's most
       # restrictive "disallow bypass-2fa tokens" account setting, and
       # --provenance draws its identity from the same OIDC token.
-      # Trusted publishing needs npm >= 11.5.1, newer than the npm node 22
-      # ships. Pinned to an exact release (the latest when it was written)
-      # rather than `npm@latest`, so a new npm never arrives unreviewed on
-      # release day; a bump is a deliberate edit here.
-      - name: Upgrade npm to 12.2.3 (>= 11.5.1 for OIDC trusted publishing)
-        run: npm install -g npm@12.2.3
+      # Trusted publishing needs npm >= 11.5.1: the bundled npm (see the
+      # setup-node step) is asserted here, so a Node pin whose npm is too old
+      # fails loudly before the publish rather than inside it.
+      - name: Assert the bundled npm is >= 11.5.1 (OIDC trusted publishing)
+        run: |
+          MIN_NPM="11.5.1"
+          NPM_VERSION="$(npm --version)"
+          LOWEST="$(printf '%s\n' "$MIN_NPM" "$NPM_VERSION" \
+            | sort -V | head -n 1)"
+          if [ "$LOWEST" != "$MIN_NPM" ]; then
+            MSG="npm $NPM_VERSION < $MIN_NPM (OIDC trusted publishing)"
+            MSG="$MSG; pin a Node whose bundled npm is >= $MIN_NPM"
+            echo "::error::$MSG"
+            exit 1
+          fi
+          echo "npm $NPM_VERSION >= $MIN_NPM"
       - name: Publish server to npm via OIDC trusted publisher
         run: npm publish --provenance --access public
 
