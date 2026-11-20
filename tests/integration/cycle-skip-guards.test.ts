@@ -16,8 +16,9 @@
 // 200s (or silently ignores the extra fields); the stored-field assertions
 // currently read undefined.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { RunSummary, SuiteNode } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface CyclePayload {
   id: number;
@@ -62,7 +63,7 @@ const VALID_FIELDS = {
 };
 
 describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded route (CR-CRU-165 §S2/R2, AC3/AC4/AC10)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -77,7 +78,7 @@ describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded rout
   }
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -85,7 +86,7 @@ describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded rout
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -93,11 +94,11 @@ describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded rout
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function registerAgent(key: string, agentId: string, role: string): Promise<void> {
-    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+    const res = await send(handle!, `/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectKey: key, agentId, role }),
@@ -153,7 +154,7 @@ describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded rout
   // ── R2 — PENDING only: active/done/failed all refuse, even with valid fields ──
 
   test("ACTIVE cycle: {status:'skipped'} even WITH valid reason/cause/specRef is refused (400); the cycle stays active (R2 — active→skipped left the transition table)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, ids } = await fileCycles(key, "CR-SKIP-1", ["A", "B"]);
     const [a] = ids as [number, number];
@@ -167,7 +168,7 @@ describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded rout
   });
 
   test("an ACTIVE cycle still ends done|failed — the other two legal active transitions are unchanged by R2", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, ids } = await fileCycles(key, "CR-SKIP-1B", ["A"]);
     const [a] = ids as [number];
@@ -179,7 +180,7 @@ describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded rout
   });
 
   test("DONE cycle: {status:'skipped'} with valid fields is refused (400); cycle stays done", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, ids } = await fileCycles(key, "CR-SKIP-2", ["A", "B"]);
     const [a] = ids as [number, number];
@@ -194,7 +195,7 @@ describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded rout
   });
 
   test("FAILED cycle: {status:'skipped'} with valid fields is refused (400); cycle stays failed", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, ids } = await fileCycles(key, "CR-SKIP-3", ["A", "B"]);
     const [a] = ids as [number, number];
@@ -211,12 +212,12 @@ describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded rout
   // ── a run filed against the (pending) cycle refuses the skip ──────────────
 
   test("a PENDING cycle with a run filed against it: {status:'skipped'} with valid fields is refused (400); cycle stays pending", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, ids } = await fileCycles(key, "CR-SKIP-4", ["A", "B"]);
     const [a] = ids as [number, number];
 
-    const ingest = await fetch(`http://localhost:${handle!.server.port}/api/v2/runs/parsed`, {
+    const ingest = await send(handle!, `/api/v2/runs/parsed`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(parsedRunBody(key, a)),
@@ -233,7 +234,7 @@ describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded rout
   // ── the plan's last unskipped cycle refuses ────────────────────────────────
 
   test("the plan's LAST non-skipped cycle: {status:'skipped'} with valid fields is refused (400) — a plan must keep at least one non-skipped cycle", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, ids } = await fileCycles(key, "CR-SKIP-5", ["A", "B"]);
     const [a, b] = ids as [number, number];
@@ -249,7 +250,7 @@ describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded rout
   // ── the three fields are mandatory and validated ──────────────────────────
 
   test("a skippable PENDING cycle with NO reason/cause/specRef at all: refused (400) naming reason", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, ids } = await fileCycles(key, "CR-SKIP-6", ["A", "B"]);
     const [a] = ids as [number, number];
@@ -264,7 +265,7 @@ describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded rout
   });
 
   test("a skippable PENDING cycle with reason+specRef but an invalid `cause`: refused (400) naming cause", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, ids } = await fileCycles(key, "CR-SKIP-7", ["A", "B"]);
     const [a] = ids as [number, number];
@@ -281,12 +282,12 @@ describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded rout
   // ── orchestrator-role only ─────────────────────────────────────────────────
 
   test("a skippable PENDING cycle, valid fields, but a NON-orchestrator caller: refused (409) naming ORCHESTRATOR; cycle stays pending", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, ids } = await fileCycles(key, "CR-SKIP-8", ["A", "B"]);
     const [a] = ids as [number, number];
 
-    const res = await fetch(`http://localhost:${handle!.server.port}${plansPath(key, `/${planId}/cycles/${a}`)}`, {
+    const res = await send(handle!, `${plansPath(key, `/${planId}/cycles/${a}`)}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ status: "skipped", ...VALID_FIELDS, agentId: OTHER_ROLE }),
@@ -302,7 +303,7 @@ describe("PATCH …/cycles/<id> {status:'skipped'} — cycle-skip's guarded rout
   // ── every guard satisfied: the skip executes and stores the three fields ──
 
   test("a PENDING, not-last, no-run-filed cycle, valid fields, ORCHESTRATOR caller: 200 — skipped, stores reason/cause/specRef/changeKind:'skip', response carries the process-failure warning", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, ids } = await fileCycles(key, "CR-SKIP-9", ["A", "B"]);
     const [a] = ids as [number, number];

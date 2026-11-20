@@ -35,7 +35,7 @@
 //
 // ── Safety ──────────────────────────────────────────────────────────────────
 // Every store here is an mkdtempSync scratch file or ":memory:"; the live
-// data/crucible.db is NEVER opened. Every server binds port 0 (ephemeral),
+// data/crucible.db is NEVER opened. Every server runs in process (no port),
 // NEVER :3849.
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -44,11 +44,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Store } from "../../src/store.ts";
 import * as storeModule from "../../src/store.ts";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 // ── scratch-dir bookkeeping ─────────────────────────────────────────────────
 const scratchDirs: string[] = [];
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 function tmpDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cru-gate-retire-"));
@@ -160,23 +161,22 @@ function makeTest(store: Store, pk: string, agent: string): string {
 // ─────────────────────────────────────────────────────────────────────────────
 describe("CR-CRU-073 AC1 — a gate names the release it gated, first-class", () => {
   test("POST /api/v2/gates accepts a top-level version and stores it first-class on the event", async () => {
-    const handle = startServer({ port: 0, dbPath: ":memory:" });
+    const handle = bootInProcess();
     handles.push(handle);
-    const base = `http://localhost:${handle.server.port}`;
 
-    const pRes = await fetch(`${base}/api/v2/projects`, {
+    const pRes = await send(handle, `/api/v2/projects`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "gate-version" }),
     });
     const pk = ((await pRes.json()) as { project: { key: string } }).project.key;
-    await fetch(`${base}/api/v2/agents/register`, {
+    await send(handle, `/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectKey: pk, agentId: "orch-1", role: "ORCHESTRATOR" }),
     });
 
-    const res = await fetch(`${base}/api/v2/gates`, {
+    const res = await send(handle, `/api/v2/gates`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectKey: pk, agentId: "orch-1", version: "0.2.0", gate: GATE }),
@@ -184,7 +184,7 @@ describe("CR-CRU-073 AC1 — a gate names the release it gated, first-class", ()
     expect(res.status).toBe(201);
 
     const listed = (await (
-      await fetch(`${base}/api/v2/events?project=${pk}`)
+      await send(handle, `/api/v2/events?project=${pk}`)
     ).json()) as { events: RetireEvent[] };
     const gate = listed.events.find((e) => e.kind === "gate");
     expect(gate).toBeDefined();

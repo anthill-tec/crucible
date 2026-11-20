@@ -11,8 +11,8 @@
 // every filtering assertion below fails for that reason (not a typo), and the
 // brief carries no `release` key because no route ever stamps one.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -39,7 +39,7 @@ function parsedBody(overrides: Record<string, unknown> = {}): Record<string, unk
 }
 
 describe("CR-CRU-164 §S2 — GET /api/v2/events?release=X answers exactly that release's runs (server route)", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -47,11 +47,11 @@ describe("CR-CRU-164 §S2 — GET /api/v2/events?release=X answers exactly that 
   });
 
   function boot(): void {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
   }
 
   async function send(method: string, path_: string, body?: unknown): Promise<Response> {
-    return fetch(`http://127.0.0.1:${handle!.server.port}${path_}`, {
+    return boardSend(handle!, `${path_}`, {
       method,
       ...(body !== undefined
         ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }

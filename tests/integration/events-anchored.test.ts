@@ -45,10 +45,9 @@
 // requested cycle is present, resolved via `Store#findCycle` (CR-024 §S7),
 // and that it is ABSENT for an unknown cycleId.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { RunSummary, SuiteNode } from "../../src/types.ts";
-
-type ServerHandle = ReturnType<typeof startServer>;
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface PlanCyclePayload {
   id: number;
@@ -87,10 +86,10 @@ interface AnchoredEventsResponse {
   [key: string]: unknown;
 }
 
-let servers: ServerHandle[] = [];
+let servers: BoardHandle[] = [];
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   servers.push(handle);
   return handle;
 }
@@ -112,32 +111,32 @@ function withFixtureAgent(body: unknown): unknown {
   return body;
 }
 
-async function postJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
+async function postJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
+  return send(handle, `${urlPath}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
-async function patchJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
+async function patchJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
+  return send(handle, `${urlPath}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
-async function getRaw(handle: ServerHandle, urlPath: string): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`);
+async function getRaw(handle: BoardHandle, urlPath: string): Promise<Response> {
+  return send(handle, `${urlPath}`);
 }
 
-async function registerAgent(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function registerAgent(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const res = await postJson(handle, "/api/v2/agents/register", { projectKey: key, agentId, role: "ORCHESTRATOR" });
   expect(res.status).toBe(200);
 }
 
-async function createProject(handle: ServerHandle): Promise<string> {
+async function createProject(handle: BoardHandle): Promise<string> {
   const res = await postJson(handle, "/api/v2/projects", { name: `anchor-${crypto.randomUUID()}` });
   const body = (await res.json()) as { ok: true; project: { key: string } };
   await registerAgent(handle, body.project.key, "fixture-orch");
@@ -149,7 +148,7 @@ function plansPath(key: string, suffix = ""): string {
 }
 
 async function filePlanAB(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   cr: string,
 ): Promise<{ planId: number | string; a: number; b: number }> {
@@ -163,7 +162,7 @@ async function filePlanAB(
 }
 
 async function transition(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   planId: number | string,
   cycleId: number,
@@ -202,7 +201,7 @@ function parsedRunBody(overrides: {
 }
 
 async function postParsedRun(
-  handle: ServerHandle,
+  handle: BoardHandle,
   projectKey: string,
   agentId: string,
   context?: Record<string, unknown>,
@@ -217,7 +216,7 @@ async function postParsedRun(
 }
 
 async function getAnchoredEvents(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   cycleId: number,
 ): Promise<{ status: number; body: AnchoredEventsResponse }> {
@@ -412,7 +411,7 @@ interface AnchoredShapeExpectation {
 }
 
 async function expectAnchoredShape(
-  handle: ServerHandle,
+  handle: BoardHandle,
   expected: AnchoredShapeExpectation,
 ): Promise<void> {
   const { status, body } = await getAnchoredEvents(handle, expected.key, expected.cycleId);

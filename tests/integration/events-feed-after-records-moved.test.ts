@@ -44,7 +44,8 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Store } from "../../src/store.ts";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const AGENT = "cr129-c2-feed";
 
@@ -72,29 +73,25 @@ interface AnyBody {
 }
 
 describe("CR-CRU-129 §S3 — what `GET /api/v2/events` serves once the records moved", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function boot(): ServerHandle {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+  function boot(): BoardHandle {
+    handle = bootInProcess();
     return handle;
   }
 
-  function base(): string {
-    return `http://localhost:${String(handle!.server.port)}`;
-  }
-
   async function get(path: string): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`);
+    const res = await send(handle!, `${path}`);
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 
   async function seedProject(name: string): Promise<string> {
-    const res = await fetch(`${base()}/api/v2/projects`, {
+    const res = await send(handle!, `/api/v2/projects`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name }),

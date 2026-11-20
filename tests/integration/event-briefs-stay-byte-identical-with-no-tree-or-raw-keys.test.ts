@@ -20,12 +20,12 @@
 // brief appears — the thing a later "optimization" that leaks a run's detail
 // back into a list read would break.
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { SuiteNode } from "../../src/types.ts";
 import type { CompileReport } from "../../src/codecs/compile.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   setSystemTime();
@@ -41,14 +41,14 @@ function clockAt(seconds: number): void {
   setSystemTime(EPOCH_MS + seconds * 1_000);
 }
 
-function boot(): ServerHandle {
+function boot(): BoardHandle {
   clockAt(0);
-  handle = startServer({ port: 0, dbPath: ":memory:" });
+  handle = bootInProcess();
   return handle;
 }
 
 async function getJson(path: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`http://127.0.0.1:${handle!.server.port}${path}`);
+  const res = await send(handle!, `${path}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }

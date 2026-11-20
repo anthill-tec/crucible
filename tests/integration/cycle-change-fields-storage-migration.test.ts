@@ -31,7 +31,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, SCHEMA_VERSION } from "../../src/store.ts";
 import * as storeModule from "../../src/store.ts";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface ChainStep {
   readonly from: number;
@@ -181,7 +182,7 @@ function makeLegacyStore(dir: string): string {
 
 describe("CR-CRU-165 storage migration — schema v14 carries reason/cause/spec-ref", () => {
   const scratchDirs: string[] = [];
-  const handles: ServerHandle[] = [];
+  const handles: BoardHandle[] = [];
 
   afterEach(() => {
     while (handles.length > 0) handles.pop()?.stop();
@@ -286,11 +287,10 @@ describe("CR-CRU-165 storage migration — schema v14 carries reason/cause/spec-
   test("§S3 — the historical skip/abort predating this CR is NEVER back-filled: after migration, its cycle and its plan carry NO reason/cause/specRef", async () => {
     const dir = scratch();
     const dbPath = makeLegacyStore(dir);
-    const handle = startServer({ port: 0, dbPath });
+    const handle = bootInProcess(dbPath);
     handles.push(handle);
 
-    const res = await fetch(
-      `http://localhost:${handle.server.port}/api/v2/projects/11111111-1111-1111-1111-111111111111/plans`,
+    const res = await send(handle, `/api/v2/projects/11111111-1111-1111-1111-111111111111/plans`,
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as PlansListResponse;
@@ -310,19 +310,18 @@ describe("CR-CRU-165 storage migration — schema v14 carries reason/cause/spec-
   test("after migration, the pre-existing PENDING cycle is immediately skippable with reason/cause/specRef via the real PATCH route, and they round-trip on GET", async () => {
     const dir = scratch();
     const dbPath = makeLegacyStore(dir);
-    const handle = startServer({ port: 0, dbPath });
+    const handle = bootInProcess(dbPath);
     handles.push(handle);
     const key = "11111111-1111-1111-1111-111111111111";
 
-    const registerRes = await fetch(`http://localhost:${handle.server.port}/api/v2/agents/register`, {
+    const registerRes = await send(handle, `/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectKey: key, agentId: "migrated-orch", role: "ORCHESTRATOR" }),
     });
     expect(registerRes.status).toBe(200);
 
-    const skipRes = await fetch(
-      `http://localhost:${handle.server.port}/api/v2/projects/${key}/plans/9001/cycles/1`,
+    const skipRes = await send(handle, `/api/v2/projects/${key}/plans/9001/cycles/1`,
       {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -337,7 +336,7 @@ describe("CR-CRU-165 storage migration — schema v14 carries reason/cause/spec-
     );
     expect(skipRes.status).toBe(200);
 
-    const res = await fetch(`http://localhost:${handle.server.port}/api/v2/projects/${key}/plans`);
+    const res = await send(handle, `/api/v2/projects/${key}/plans`);
     const body = (await res.json()) as PlansListResponse;
     const plan = body.plans.find((p) => p.cr === "CR-LEGACY-OPEN");
     const cycle = plan!.cycles.find((c) => c.id === 1);

@@ -21,12 +21,12 @@
 // false green this whole CR exists to remove, and break nothing. This file is
 // the test that would break.
 //
-// TIER: INTEGRATION. `startServer` binds a real HTTP listener and every
-// assertion below reads a value that came back over the socket — never the
+// TIER: INTEGRATION. `bootInProcess` answers through the board's own `fetch`; every
+// assertion below reads a value that came back through the board's `fetch` — never the
 // object that was sent. A listener is a dependency, so by the project's own
 // dependency rule this is `integration`, not `unit`.
 //
-// HARNESS: the `startServer({ port: 0, dbPath: ":memory:" })` + real `fetch`
+// HARNESS: the `bootInProcess()` + real `fetch`
 // pattern of tests/integration/agent-cycle-binding.test.ts and tests/integration/agent-lifecycle.test.ts.
 // No new mechanism.
 //
@@ -38,8 +38,9 @@
 // NO top-level `version`.
 
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { Store } from "../../src/store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface GateStep {
   name: string;
@@ -123,16 +124,12 @@ function sealGate(intent: string): Record<string, unknown> {
 }
 
 describe("CR-CRU-117 §S1 — an in-flight gate's mark survives the real client→server→read-back round trip (integration)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
-
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
 
   function seedProject(store: Store): string {
     const key = crypto.randomUUID();
@@ -144,7 +141,7 @@ describe("CR-CRU-117 §S1 — an in-flight gate's mark survives the real client�
    *  an unregistered caller (CR-CRU-056 §S2b), and an ORCHESTRATOR may
    *  register unbound, which is what a gate poster is. */
   async function registerPoster(key: string, agentId: string): Promise<void> {
-    const res = await fetch(`${base()}/api/v2/agents/register`, {
+    const res = await send(handle!, `/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
@@ -159,7 +156,7 @@ describe("CR-CRU-117 §S1 — an in-flight gate's mark survives the real client�
     gate: Record<string, unknown>,
     version?: string,
   ): Promise<string> {
-    const res = await fetch(`${base()}/api/v2/gates`, {
+    const res = await send(handle!, `/api/v2/gates`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -175,10 +172,10 @@ describe("CR-CRU-117 §S1 — an in-flight gate's mark survives the real client�
     return body.event;
   }
 
-  /** Reads the timeline back over the socket. Everything asserted below comes
+  /** Reads the timeline back through the board's `fetch`. Everything asserted below comes
    *  out of THIS payload — never out of the object that was posted. */
   async function readEvents(key: string): Promise<EventBrief[]> {
-    const res = await fetch(`${base()}/api/v2/events?project=${key}`, {
+    const res = await send(handle!, `/api/v2/events?project=${key}`, {
       headers: { accept: "application/json" },
     });
     expect(res.status).toBe(200);
@@ -201,7 +198,7 @@ describe("CR-CRU-117 §S1 — an in-flight gate's mark survives the real client�
   }
 
   test("an interim gate POSTed with inFlight:true reads back from GET /api/v2/events with gate.inFlight still exactly true", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = seedProject(handle.store);
     const agentId = "round-trip-poster";
     await registerPoster(key, agentId);
@@ -226,7 +223,7 @@ describe("CR-CRU-117 §S1 — an in-flight gate's mark survives the real client�
   });
 
   test("the ANTI-VACUITY twin: in ONE read-back, the interim gate carries inFlight:true and the same run's SEAL carries no inFlight key at all", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = seedProject(handle.store);
     const agentId = "round-trip-poster";
     await registerPoster(key, agentId);
@@ -253,7 +250,7 @@ describe("CR-CRU-117 §S1 — an in-flight gate's mark survives the real client�
   });
 
   test("the interim gate's nine-row ladder reads back intact — every name, the tool's own order, and all six pending rows still pending", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = seedProject(handle.store);
     const agentId = "round-trip-poster";
     await registerPoster(key, agentId);
@@ -279,7 +276,7 @@ describe("CR-CRU-117 §S1 — an in-flight gate's mark survives the real client�
   });
 
   test("an interim gate POSTed with no top-level version reads back with no version key, while the same run's seal reads back carrying its version", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = seedProject(handle.store);
     const agentId = "round-trip-poster";
     await registerPoster(key, agentId);

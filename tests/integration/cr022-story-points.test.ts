@@ -28,14 +28,15 @@
 // internal table/column name here would test this RED agent's guess, not
 // the spec.
 //
-// Every server here is booted on an OS-assigned port against an
+// Every server here is booted in process (no port) against an
 // mkdtempSync scratch db. The live data/crucible.db and port 3849 are never
 // touched.
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 interface QueueEntryWire {
   cr: string;
@@ -61,7 +62,7 @@ const ORCH = "orchestrator-1";
 const TARGET_AT = 1_788_220_800; // 2026-09-01T00:00:00Z
 
 describe("CR-CRU-022 §S1 — story points: storage, the Fibonacci scale, omission", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -72,19 +73,15 @@ describe("CR-CRU-022 §S1 — story points: storage, the Fibonacci scale, omissi
     }
   });
 
-  function boot(): ServerHandle {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru022-points-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
     return handle;
   }
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   async function send(method: string, path: string, body?: unknown): Promise<Response> {
-    return fetch(`${base()}${path}`, {
+    return boardSend(handle!, `${path}`, {
       method,
       ...(body === undefined
         ? {}

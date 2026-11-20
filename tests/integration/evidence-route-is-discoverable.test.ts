@@ -32,14 +32,15 @@
 // never count — is the strongest derivation available. If the dispatch ever
 // becomes a real table, `dispatchTable()` is the one thing to replace.
 //
-// SAFETY. Every server here is `startServer({ port: 0, dbPath: ":memory:" })`
-// — an ephemeral process-local instance on an OS-assigned port. The live
+// SAFETY. Every server here is `bootInProcess()`
+// — an ephemeral in-process board (no port). The live
 // board is never contacted, and `data/crucible.db` is never opened.
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { REPO_ROOT, jsUncommented } from "../helpers/source-scan.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 // ── the route table, read off the chain that declares it ──────────────────
 
@@ -157,19 +158,15 @@ interface JsonBody {
 }
 
 describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`${base()}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -177,7 +174,7 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`${base()}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -263,7 +260,7 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
       if (/project/i.test(key)) return `${key}=${fill.projectKey}`;
       throw new Error(`the hint names a parameter the caller cannot fill: ${key}`);
     });
-    const res = await fetch(`${base()}${path}?${filled.join("&")}`);
+    const res = await send(handle!, `${path}?${filled.join("&")}`);
     expect(res.status).toBe(200);
     return readJson(res);
   }
@@ -277,8 +274,8 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
     expect(dispatchTable().length).toBeGreaterThan(9);
     expect(route.queryKeys.length).toBeGreaterThan(1);
 
-    handle = startServer({ port: 0, dbPath: ":memory:" });
-    const body = await readJson(await fetch(`${base()}/api/v2`));
+    handle = bootInProcess();
+    const body = await readJson(await send(handle!, `/api/v2`));
     const help = body.help as string[];
 
     // POSITIVE — exactly ONE entry advertises the route, and it carries the
@@ -364,7 +361,7 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
         dispatchTable().some((r) => r.method === "POST" && r.path === fixture.path),
       ).toBe(true);
 
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const projectKey = await createProject(`cr140-${fixture.path.replaceAll("/", "-")}`);
       const agentId = "evidence-poster";
       await register(projectKey, agentId);
@@ -396,7 +393,7 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
     // the run-lifecycle opener. None stores evidence under an event id.
     expect(others.length).toBeGreaterThan(3);
 
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const projectKey = await createProject("cr140-other-posts");
 
     const bodies: Record<string, JsonBody> = {
@@ -450,7 +447,7 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
   // ── AC4 ─────────────────────────────────────────────────────────────────
 
   test("a reader following ONLY the ingest reply — its returned id, its echoed cycle and its own hint — reaches exactly that cycle's recorded runs", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const projectKey = await createProject("cr140-end-to-end");
     await register(projectKey, "fixture-orch");
     const cycleId = await activeCycle(projectKey, "CR-CRU-140-E2E");
@@ -505,7 +502,7 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
   // ── §S3 / AC1 ───────────────────────────────────────────────────────────
 
   test("§S3 — a milestone filed by a cycle-BOUND agent with NO explicit context is returned by the read its own reply advertises", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const projectKey = await createProject("cr140-s3-bound-milestone");
     await register(projectKey, "fixture-orch");
     const cycleId = await activeCycle(projectKey, "CR-CRU-140-S3");
@@ -536,7 +533,7 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
   // ── §S3 / AC2 ───────────────────────────────────────────────────────────
 
   test("§S3 — an explicit body context still WINS on /milestones: its own fields survive the binding stamp, and the milestone lands in the cycle the caller stated", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const projectKey = await createProject("cr140-s3-explicit-context");
     await register(projectKey, "fixture-orch");
     const cycleId = await activeCycle(projectKey, "CR-CRU-140-S3-EXPLICIT");
@@ -571,14 +568,14 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
 
   for (const fixture of INGEST_ROUTES) {
     test(`§S3 — POST ${fixture.path} refuses a body context naming a DIFFERENT cycle than the poster's binding, storing nothing — the stated cycle is never silently re-stamped`, async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const projectKey = await createProject(`cr140-s3-conflict-${fixture.path.replaceAll("/", "-")}`);
       await register(projectKey, "fixture-orch");
       const cycleId = await activeCycle(projectKey, "CR-CRU-140-S3-CONFLICT");
       await register(projectKey, "s3-conflict", { role: "RED", cycleId });
 
       const before = (
-        (await readJson(await fetch(`${base()}/api/v2/events?project=${projectKey}`)))
+        (await readJson(await send(handle!, `/api/v2/events?project=${projectKey}`)))
           .events as unknown[]
       ).length;
 
@@ -594,7 +591,7 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
       expect(body.event).toBeUndefined();
 
       const after = (
-        (await readJson(await fetch(`${base()}/api/v2/events?project=${projectKey}`)))
+        (await readJson(await send(handle!, `/api/v2/events?project=${projectKey}`)))
           .events as unknown[]
       ).length;
       expect(after).toBe(before);
@@ -627,7 +624,7 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
 
   for (const fixture of INGEST_ROUTES) {
     test(`§S3 — POST ${fixture.path} by a cycle-BOUND agent is VISIBLE in the read its own reply advertises`, async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const projectKey = await createProject(`cr140-s3-visible-${fixture.path.replaceAll("/", "-")}`);
       await register(projectKey, "fixture-orch");
       const cycleId = await activeCycle(projectKey, "CR-CRU-140-S3-VISIBLE");

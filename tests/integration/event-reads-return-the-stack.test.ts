@@ -10,28 +10,24 @@
 // Beside them, the detail read `GET /api/v2/events/<id>` serves the full event
 // and already carries the stack; it is checked here as a guard.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production HTTP surface (`bootInProcess`, in-memory
 // store): events are ingested on each of the three ingest routes
 // (`/api/v2/runs`, `/api/v2/runs/parsed`, `/api/v2/runs/compile`) and read back
 // through the board's own reads.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
-}
-
-function base(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
 }
 
 interface Answered {
@@ -40,12 +36,12 @@ interface Answered {
 }
 
 async function sendJson(
-  handle: ServerHandle,
+  handle: BoardHandle,
   method: "POST" | "PATCH",
   route: string,
   body: unknown,
 ): Promise<Answered> {
-  const res = await fetch(`${base(handle)}${route}`, {
+  const res = await send(handle, `${route}`, {
     method,
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -53,8 +49,8 @@ async function sendJson(
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
-async function getJson(handle: ServerHandle, route: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base(handle)}${route}`);
+async function getJson(handle: BoardHandle, route: string): Promise<Record<string, unknown>> {
+  const res = await send(handle, `${route}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
@@ -64,7 +60,7 @@ async function getJson(handle: ServerHandle, route: string): Promise<Record<stri
 const ORCHESTRATOR = "fixture-orch";
 
 /** A project with its orchestrator registered (plans and ingests need a live caller). */
-async function seedProject(handle: ServerHandle): Promise<string> {
+async function seedProject(handle: BoardHandle): Promise<string> {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: `stack-reads-${key}`, type: "backend", sutRoot: "/tmp/p" });
   const res = await sendJson(handle, "POST", "/api/v2/agents/register", {
@@ -80,7 +76,7 @@ async function seedProject(handle: ServerHandle): Promise<string> {
 }
 
 /** File a one-cycle plan and activate its cycle; returns the cycle id. */
-async function activeCycle(handle: ServerHandle, key: string): Promise<number> {
+async function activeCycle(handle: BoardHandle, key: string): Promise<number> {
   const filed = await sendJson(handle, "POST", `/api/v2/projects/${key}/plans`, {
     agentId: ORCHESTRATOR,
     cr: "CR-STACK-READS",
@@ -99,7 +95,7 @@ async function activeCycle(handle: ServerHandle, key: string): Promise<number> {
 }
 
 /** Declare a release on the project's roadmap so runs may be filed under it. */
-function declareRelease(handle: ServerHandle, key: string, label: string): void {
+function declareRelease(handle: BoardHandle, key: string, label: string): void {
   handle.store.recordReleaseProposal(key, "fixture-setup", {
     label,
     targetAt: Math.floor(Date.now() / 1000) + 86_400,
@@ -141,7 +137,7 @@ function payloadFor(route: IngestRoute): Record<string, unknown> {
 
 /** Ingest on `route` as the orchestrator; returns the stored event id. */
 async function ingest(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   route: IngestRoute,
   extra: Record<string, unknown>,
@@ -158,7 +154,7 @@ async function ingest(
   return eventId;
 }
 
-async function startRun(handle: ServerHandle, key: string, stack: string): Promise<string> {
+async function startRun(handle: BoardHandle, key: string, stack: string): Promise<string> {
   const res = await sendJson(handle, "POST", "/api/v2/runs/start", {
     projectKey: key,
     agentId: ORCHESTRATOR,
@@ -181,13 +177,13 @@ function onlyEntry(events: Brief[], eventId: string): Brief {
   return hits[0]!;
 }
 
-async function fromPlainList(handle: ServerHandle, key: string, eventId: string): Promise<Brief> {
+async function fromPlainList(handle: BoardHandle, key: string, eventId: string): Promise<Brief> {
   const body = await getJson(handle, `/api/v2/events?project=${key}&limit=100`);
   return onlyEntry(body.events as Brief[], eventId);
 }
 
 async function fromCycleList(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   cycleId: number,
   eventId: string,
@@ -199,7 +195,7 @@ async function fromCycleList(
 }
 
 async function fromReleaseList(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   release: string,
   eventId: string,
@@ -212,7 +208,7 @@ async function fromReleaseList(
 
 /** `status.lastCompile` for the compile route, `status.lastTest` otherwise. */
 async function fromStatus(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   route: IngestRoute,
   eventId: string,
@@ -225,7 +221,7 @@ async function fromStatus(
   return brief!;
 }
 
-async function fromProjectLastEvent(handle: ServerHandle, key: string, eventId: string): Promise<Brief> {
+async function fromProjectLastEvent(handle: BoardHandle, key: string, eventId: string): Promise<Brief> {
   const body = await getJson(handle, "/api/v2/projects");
   const projects = (body.projects as { key: string; lastEvent: Brief | null }[]).filter((p) => p.key === key);
   expect(projects.length).toBe(1);
@@ -235,7 +231,7 @@ async function fromProjectLastEvent(handle: ServerHandle, key: string, eventId: 
   return lastEvent!;
 }
 
-async function fromDetail(handle: ServerHandle, eventId: string): Promise<Brief> {
+async function fromDetail(handle: BoardHandle, eventId: string): Promise<Brief> {
   const body = await getJson(handle, `/api/v2/events/${eventId}`);
   const event = body.event as Brief;
   expect(event.id).toBe(eventId);

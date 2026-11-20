@@ -22,7 +22,8 @@
 // with NO reason/cause/specRef at all (the fields are accepted and silently
 // dropped, never stored, never round-tripped on GET).
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface CyclePayload {
   id: number;
@@ -60,7 +61,7 @@ const ORCH = "fixture-orch";
 const OTHER_ROLE = "reporter-1";
 
 describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR-CRU-165 §S1/AC1)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -75,7 +76,7 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
   }
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -83,7 +84,7 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -91,11 +92,11 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function registerAgent(key: string, agentId: string, role: string): Promise<void> {
-    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+    const res = await send(handle!, `/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectKey: key, agentId, role }),
@@ -133,7 +134,7 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
   // ── timing gate: the plan's VERIFY cycle must be DONE, no bypass ─────────
 
   test("a plan with NO verify cycle at all: appending a fix cycle is refused (400), naming verify", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const filed = await postJson(plansPath(key), {
       cr: "CR-FIXONLY-1",
@@ -151,7 +152,7 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
   });
 
   test("VERIFY cycle still PENDING: appending a fix cycle is refused (400), naming verify; nothing appended", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const filed = await postJson(plansPath(key), {
       cr: "CR-FIXONLY-2",
@@ -169,7 +170,7 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
   });
 
   test("VERIFY cycle ACTIVE (not done): appending a fix cycle is refused (400)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const filed = await postJson(plansPath(key), {
       cr: "CR-FIXONLY-3",
@@ -183,7 +184,7 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
   });
 
   test("VERIFY cycle not done: a fix append carrying reason, cause AND specRef from the orchestrator is STILL refused (400) by the verify-not-done rule — the change record is no bypass for the timing gate; nothing appended", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const cr = "fix before verify, record supplied";
     const filed = await postJson(plansPath(key), {
@@ -213,7 +214,7 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
   });
 
   test("VERIFY cycle DONE: appending a fix cycle succeeds (201), lands with kind:fix, no reason/cause/specRef needed", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const filed = await postJson(plansPath(key), {
       cr: "CR-FIXONLY-4",
@@ -237,7 +238,7 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
   // ── kind gate: non-fix kind needs the three-field, orchestrator-only bypass ──
 
   test("non-fix kind with NO reason/cause/specRef: refused (400), naming reason; nothing appended", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const filed = await postJson(plansPath(key), { cr: "CR-FIXONLY-5", cycles: [{ label: "solo" }] });
     const plan = (await filed.json()) as PlanFileResponse;
@@ -255,7 +256,7 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
   });
 
   test("non-fix kind with all three fields, ORCHESTRATOR caller: 201 — succeeds even with NO verify cycle in the plan at all, stores reason/cause/specRef on the cycle, and the response carries the process-failure warning", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const filed = await postJson(plansPath(key), { cr: "CR-FIXONLY-6", cycles: [{ label: "solo" }] });
     const plan = (await filed.json()) as PlanFileResponse;
@@ -282,7 +283,7 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
   });
 
   test("non-fix kind with all three fields but an invalid `cause` value: refused (400), naming cause; nothing appended", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const filed = await postJson(plansPath(key), { cr: "CR-FIXONLY-7", cycles: [{ label: "solo" }] });
     const plan = (await filed.json()) as PlanFileResponse;
@@ -303,12 +304,12 @@ describe("POST …/plans/<planId>/cycles — a plan grows only by FIX cycles (CR
   });
 
   test("non-fix kind with all three fields but a NON-orchestrator caller: refused (409) naming ORCHESTRATOR; nothing appended", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const filed = await postJson(plansPath(key), { cr: "CR-FIXONLY-8", cycles: [{ label: "solo" }] });
     const plan = (await filed.json()) as PlanFileResponse;
 
-    const res = await fetch(`http://localhost:${handle!.server.port}${plansPath(key, `/${plan.planId}/cycles`)}`, {
+    const res = await send(handle!, `${plansPath(key, `/${plan.planId}/cycles`)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

@@ -31,13 +31,14 @@
 //     (GET /api/v2/events), which stays one row per event with no per-event
 //     join. The drill-in opens a brief card to request this detail.
 //
-// This file drives the REAL production server (startServer) — POST
+// This file drives the REAL production router in process (`bootInProcess`) — POST
 // /api/v2/gate-decisions does not exist in src/v2.ts yet (every request
 // below 404s through the catch-all), `gate.run.id` is not yet lifted onto
 // the event, and GET /api/v2/events/:id never adds a `decisions` key — every
 // assertion below fails against production as it stands.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -107,20 +108,20 @@ interface PlanFileResponse {
 }
 
 describe("POST /api/v2/gate-decisions — a gate decision is its own record (CR-CRU-162 C1)", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function boot(): ServerHandle {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+  function boot(): BoardHandle {
+    handle = bootInProcess();
     return handle;
   }
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -128,7 +129,7 @@ describe("POST /api/v2/gate-decisions — a gate decision is its own record (CR-
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -136,7 +137,7 @@ describe("POST /api/v2/gate-decisions — a gate decision is its own record (CR-
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function createProject(name: string): Promise<string> {
@@ -562,7 +563,7 @@ describe("POST /api/v2/gate-decisions — a gate decision is its own record (CR-
 
       const archiveRes = await postJson(`/api/v2/projects/${doomed}/archive`, {});
       expect(archiveRes.status).toBe(200);
-      const deleteRes = await fetch(`http://localhost:${handle!.server.port}/api/v2/projects/${doomed}`, {
+      const deleteRes = await send(handle!, `/api/v2/projects/${doomed}`, {
         method: "DELETE",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ userApproved: true }),

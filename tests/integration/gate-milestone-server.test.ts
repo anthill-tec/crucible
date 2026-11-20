@@ -13,15 +13,14 @@
 //     (the rollup in src/store.ts, now `ROLLUP_ELIGIBLE_KINDS`) — C1 must invert this to a rollup-ELIGIBLE set
 //     {test, compile} so gate/milestone (like lifecycle) are excluded.
 //
-// This file drives the REAL production server (startServer) — POST
+// This file drives the REAL production router in process (`bootInProcess`) — POST
 // /api/v2/gates and POST /api/v2/milestones do not exist in src/v2.ts yet,
 // so every request below 404s through the catch-all until GREEN wires the
 // widened kind union + payload column + rollup-eligible set + the two
 // routes.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-
-type ServerHandle = ReturnType<typeof startServer>;
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -126,7 +125,7 @@ async function nextFrameMatching(
 }
 
 describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-013 C1)", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -134,7 +133,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
   });
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -142,11 +141,11 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -259,7 +258,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
       "full gate shape → 201; GET /api/v2/events shows kind:'gate', codec:'no-mistakes', " +
         "and the FULL gate object (intent/outcome/steps/fixes/push/pr) round-tripping verbatim",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject("gate-roundtrip");
         const body = gateBody(key);
 
@@ -284,7 +283,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
     );
 
     test("a step name outside the no-mistakes ladder is preserved verbatim (forward-tolerant)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("gate-forward-tolerant");
       const body = gateBody(key, {
         intent: "custom vendor pipeline",
@@ -314,7 +313,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
   // ── §S1 — field + enum validation ────────────────────────────────────
   describe("§S1 POST /api/v2/gates — field + enum validation", () => {
     test("missing gate.intent → 400 naming intent", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("gate-missing-intent");
       const gate = defaultGate() as Record<string, unknown>;
       delete gate.intent;
@@ -331,7 +330,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
     });
 
     test("missing gate.outcome → 400 naming outcome", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("gate-missing-outcome");
       const gate = defaultGate() as Record<string, unknown>;
       delete gate.outcome;
@@ -347,7 +346,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
     });
 
     test("missing gate.steps → 400 naming steps", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("gate-missing-steps");
       const gate = defaultGate() as Record<string, unknown>;
       delete gate.steps;
@@ -363,7 +362,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
     });
 
     test("gate.outcome not in {checks-passed, passed, failed, cancelled} → 400 naming outcome", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("gate-bad-outcome");
 
       const res = await postJson("/api/v2/gates", gateBody(key, { outcome: "sorta-passed" }));
@@ -374,7 +373,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
     });
 
     test("each valid outcome value ({checks-passed, passed, failed, cancelled}) is accepted → 201", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("gate-outcomes");
       for (const outcome of ["checks-passed", "passed", "failed", "cancelled"]) {
         const res = await postJson("/api/v2/gates", gateBody(key, { outcome }));
@@ -383,7 +382,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
     });
 
     test("unknown projectKey → 404", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
       const res = await postJson("/api/v2/gates", gateBody(crypto.randomUUID()));
       expect(res.status).toBe(404);
@@ -398,7 +397,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
       "a GATE contributes NOTHING to a rollup while a TEST event folds into one — the " +
         "exclusion is kind-specific, not a broken fold pipeline",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject("gate-rollup-exclusion");
 
         const patchRes = await patchJson(`/api/v2/projects/${key}`, { retention: 1 });
@@ -446,10 +445,10 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
   // ── §S1 — SSE emission ───────────────────────────────────────────────
   describe("§S1 gate ingest emits an SSE events frame", () => {
     test("POST /api/v2/gates triggers a {type:'events', projectKey} SSE frame (stream capture)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("gate-sse");
 
-      const streamRes = await fetch(`http://localhost:${handle.server.port}/api/stream`);
+      const streamRes = await send(handle!, `/api/stream`);
       const reader = streamRes.body!.getReader();
       const sse = new SseReader(reader);
       await nextFrameMatching(sse, (f) => !f.isComment && f.data?.type === "hello", 1000);
@@ -475,7 +474,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
       "type:'gap-analysis' → 201; GET /api/v2/events shows kind:'milestone', " +
         "type/label/context round-tripping",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject("milestone-roundtrip");
         const body = milestoneBody(key);
 
@@ -498,7 +497,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
     );
 
     test("each additional valid type ({design-review, stage-flip, custom}) is accepted → 201", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("milestone-valid-types");
       for (const type of ["design-review", "stage-flip", "custom"]) {
         const res = await postJson("/api/v2/milestones", milestoneBody(key, { type }));
@@ -507,7 +506,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
     });
 
     test("type:'deploy' (unknown) → 400 naming type", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("milestone-bad-type");
 
       const res = await postJson("/api/v2/milestones", milestoneBody(key, { type: "deploy" }));
@@ -518,7 +517,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
     });
 
     test("unknown projectKey → 404", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
       const res = await postJson("/api/v2/milestones", milestoneBody(crypto.randomUUID()));
       expect(res.status).toBe(404);
@@ -534,7 +533,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
         "context:{cr:'CR-NAI-042', wave:1}} → 201; stored as a milestone with commit + label " +
         "round-tripping verbatim; 'cr-merged' joins the §S4b valid-type set",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject("cr-merged-marker");
         const body = {
           projectKey: key,
@@ -568,7 +567,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
     test(
       "a MILESTONE contributes NOTHING to a rollup while a TEST event folds into one",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject("milestone-rollup-exclusion");
 
         const patchRes = await patchJson(`/api/v2/projects/${key}`, { retention: 1 });

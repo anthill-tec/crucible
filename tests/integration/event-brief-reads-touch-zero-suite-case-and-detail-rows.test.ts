@@ -23,25 +23,25 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import type { Statement } from "bun:sqlite";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { SuiteNode } from "../../src/types.ts";
 import type { CompileReport } from "../../src/codecs/compile.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
   handle = undefined;
 });
 
-function boot(): ServerHandle {
-  handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  handle = bootInProcess();
   return handle;
 }
 
 async function getJson(path: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`http://127.0.0.1:${handle!.server.port}${path}`);
+  const res = await send(handle!, `${path}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }

@@ -20,9 +20,10 @@
 // — no cycle-guard hints exist in the hints.ts registry).
 //
 // Same harness pattern as tests/integration/plans.test.ts (drives the REAL production
-// server via startServer — no guard implementation is stubbed or mocked).
+// server via bootInProcess — no guard implementation is stubbed or mocked).
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface CyclePayload {
   id: number;
@@ -60,7 +61,7 @@ interface ErrResponse {
 }
 
 describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -79,7 +80,7 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
   }
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -87,7 +88,7 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -95,11 +96,11 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function registerOrchestrator(key: string, agentId: string): Promise<void> {
-    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+    const res = await send(handle!, `/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
@@ -161,7 +162,7 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
 
   // ── AC1 — §S1 out-of-order activation guard ──────────────────────────
   test("AC1: activating B while A is still pending -> 400 out-of-order naming A, help offers activate-A-first + skip-A paths, B stays pending (no partial state)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, a, b } = await filePlanAB(key, "CR-GUARD-1");
 
@@ -183,7 +184,7 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
 
   // ── AC2 — the sanctioned swap: skip the earlier sibling, then activate ──
   test("AC2: after A -> skipped, activating B succeeds (200) — the sanctioned out-of-order swap", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, a, b } = await filePlanAB(key, "CR-GUARD-2");
 
@@ -204,7 +205,7 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
 
   // ── AC3 — §S2 single-active enforcement ──────────────────────────────
   test("AC3: activating B while A is active -> 400 naming A as active, help offers terminal-transition path; after A -> done, activating B succeeds (200)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, a, b } = await filePlanAB(key, "CR-GUARD-3");
 
@@ -234,7 +235,7 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
 
   // ── AC4 — regression guard: the whole legal sequential table still works ─
   test("AC4: sequential happy path unchanged — activate A, done A, activate B, done B all succeed", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, a, b } = await filePlanAB(key, "CR-GUARD-4");
 
@@ -255,7 +256,7 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
   // separate "activate" verb in this API (confirmed: src/v2.ts's only
   // cycle-status route is handleCycleTransition via PATCH).
   test("AC6: plan-7 replay — 5-cycle plan, activating cycle 2 while cycle 1 is pending -> 400 (the incident becomes impossible)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const filed = await postJson(plansPath(key), {
       cr: "CR-GUARD-6",
@@ -281,7 +282,7 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
   // ── AC5 — §S4 sweep: every 4xx from plans/cycles carries non-empty help[] ─
   describe("AC5: every 4xx from plans/cycles routes carries a non-empty help[] naming a concrete next action", () => {
     test("illegal transition (active -> pending) -> 400, help mentions cycles never retreat + append-for-rework", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const filed = await postJson(plansPath(key), { cr: "CR-GUARD-5A", cycles: [{ label: "solo" }] });
       const plan = (await filed.json()) as PlanFileResponse;
@@ -298,7 +299,7 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
     });
 
     test("PATCH on a closed plan -> 400, non-empty help[]", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const filed = await postJson(plansPath(key), { cr: "CR-GUARD-5B", cycles: [{ label: "solo" }] });
       const plan = (await filed.json()) as PlanFileResponse;
@@ -322,7 +323,7 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
     });
 
     test("unknown planId -> 404, non-empty help[]", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const res = await activate(key, 999999, 1);
@@ -332,7 +333,7 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
     });
 
     test("unknown cycleId -> 404, non-empty help[]", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const filed = await postJson(plansPath(key), { cr: "CR-GUARD-5D", cycles: [{ label: "solo" }] });
       const plan = (await filed.json()) as PlanFileResponse;
@@ -344,7 +345,7 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
     });
 
     test("malformed cycle input (missing label) -> 400, non-empty help[]", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const res = await postJson(plansPath(key), { cr: "CR-GUARD-5E", cycles: [{}] });
@@ -354,7 +355,7 @@ describe("plan-cycle activation guards + AXI help (CR-CRU-024 §S1+§S2+§S4)", 
     });
 
     test("duplicate open plan per cr -> 400, non-empty help[]", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const first = await postJson(plansPath(key), { cr: "CR-GUARD-5F", cycles: [{ label: "a" }] });
       expect(first.status).toBe(201);

@@ -25,7 +25,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, SCHEMA_VERSION } from "../../src/store.ts";
 import * as storeModule from "../../src/store.ts";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface ChainStep {
   readonly from: number;
@@ -141,7 +142,7 @@ function makeLegacyStore(dir: string): { dbPath: string; legacyGateEventId: stri
 
 describe("CR-CRU-162 storage migration — schema v15 carries gate_decisions, the decision's own record", () => {
   const scratchDirs: string[] = [];
-  const handles: ServerHandle[] = [];
+  const handles: BoardHandle[] = [];
   const openDbs: Database[] = [];
 
   afterEach(() => {
@@ -231,7 +232,7 @@ describe("CR-CRU-162 storage migration — schema v15 carries gate_decisions, th
     const decisionCount = raw.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM gate_decisions`).get()!.n;
     expect(decisionCount).toBe(0);
 
-    const handle = startServer({ port: 0, dbPath });
+    const handle = bootInProcess(dbPath);
     handles.push(handle);
     const res = fetchJson(handle, `/api/v2/events/${legacyGateEventId}`);
     return res.then((body) => {
@@ -244,7 +245,7 @@ describe("CR-CRU-162 storage migration — schema v15 carries gate_decisions, th
   test("a migrated board accepts a NEW gate-decision through the real HTTP routes, and the legacy pre-migration gate's own read stays untouched (never fabricated history for an old run)", async () => {
     const dir = scratch();
     const { dbPath, legacyGateEventId } = makeLegacyStore(dir);
-    const handle = startServer({ port: 0, dbPath });
+    const handle = bootInProcess(dbPath);
     handles.push(handle);
 
     const key = crypto.randomUUID();
@@ -289,15 +290,15 @@ describe("CR-CRU-162 storage migration — schema v15 carries gate_decisions, th
   });
 });
 
-async function postJson(handle: ServerHandle, path: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${path}`, {
+async function postJson(handle: BoardHandle, path: string, body: unknown): Promise<Response> {
+  return send(handle, `${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function fetchJson(handle: ServerHandle, path: string): Promise<EventDetailResponse> {
-  const res = await fetch(`http://localhost:${handle.server.port}${path}`);
+async function fetchJson(handle: BoardHandle, path: string): Promise<EventDetailResponse> {
+  const res = await send(handle, `${path}`);
   return (await res.json()) as EventDetailResponse;
 }

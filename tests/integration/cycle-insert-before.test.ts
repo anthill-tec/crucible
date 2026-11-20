@@ -21,7 +21,8 @@
 // runs. Every gated-refusal assertion below currently 201s; every
 // stored-field assertion currently reads undefined.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface CyclePayload {
   id: number;
@@ -65,7 +66,7 @@ const VALID_FIELDS = {
 };
 
 describe("POST …/cycles `before:` — insert-before, gated like cycle-skip (CR-CRU-165 R1 revised)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -80,7 +81,7 @@ describe("POST …/cycles `before:` — insert-before, gated like cycle-skip (CR
   }
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -88,7 +89,7 @@ describe("POST …/cycles `before:` — insert-before, gated like cycle-skip (CR
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -96,11 +97,11 @@ describe("POST …/cycles `before:` — insert-before, gated like cycle-skip (CR
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function registerAgent(key: string, agentId: string, role: string): Promise<void> {
-    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+    const res = await send(handle!, `/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectKey: key, agentId, role }),
@@ -156,7 +157,7 @@ describe("POST …/cycles `before:` — insert-before, gated like cycle-skip (CR
   }
 
   test("`before:` a later PENDING sibling, NO reason/cause/specRef: refused (400) naming reason; sibling set untouched", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const cr = "CR-INS-1";
     const { planId, a, b, c, d } = await fileActiveFixture(key, cr);
@@ -171,7 +172,7 @@ describe("POST …/cycles `before:` — insert-before, gated like cycle-skip (CR
   });
 
   test("`before:` a later PENDING sibling, WITH all three fields from an ORCHESTRATOR caller: 201 — lands immediately before the target in GET order, stores reason/cause/specRef/changeKind:'insert', response carries the process-failure warning", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const cr = "CR-INS-2";
     const { planId, a, b, c, d } = await fileActiveFixture(key, cr);
@@ -198,7 +199,7 @@ describe("POST …/cycles `before:` — insert-before, gated like cycle-skip (CR
   });
 
   test("`before:` with all three fields but an invalid `cause`: refused (400) naming cause; nothing inserted", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const cr = "CR-INS-3";
     const { planId, a, b, c, d } = await fileActiveFixture(key, cr);
@@ -219,12 +220,12 @@ describe("POST …/cycles `before:` — insert-before, gated like cycle-skip (CR
   });
 
   test("`before:` with all three fields but a NON-orchestrator caller: refused (409) naming ORCHESTRATOR; nothing inserted", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const cr = "CR-INS-4";
     const { planId, a, b, c, d } = await fileActiveFixture(key, cr);
 
-    const res = await fetch(`http://localhost:${handle!.server.port}${plansPath(key, `/${planId}/cycles`)}`, {
+    const res = await send(handle!, `${plansPath(key, `/${planId}/cycles`)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ label: "E", before: c, ...VALID_FIELDS, agentId: OTHER_ROLE }),
@@ -238,7 +239,7 @@ describe("POST …/cycles `before:` — insert-before, gated like cycle-skip (CR
   });
 
   test("`before:` pointing at the ACTIVE cycle, even WITH all three fields + orchestrator: still 400 naming the active cycle — the insert-before-active guard is unchanged", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const cr = "CR-INS-5";
     const { planId, a, b, c, d } = await fileActiveFixture(key, cr);

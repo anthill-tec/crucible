@@ -11,11 +11,11 @@
 // `passed` and `failed` both non-negative integers or both absent (absent
 // only on "fail"), and an optional `failingTests` that is a list of strings.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production HTTP surface (`bootInProcess`, in-memory
 // store) with a registered caller, as the gate-milestone server tests are.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const CALLER = "orchestrator-1";
 /** The label every gate milestone in this file is posted under. */
@@ -41,34 +41,34 @@ interface MilestonesResponse {
   totalCount: number;
 }
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): string {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
-  return `http://127.0.0.1:${handle.server.port}`;
+  return handle;
 }
 
-async function postJson(base: string, path: string, body: unknown): Promise<Response> {
-  return fetch(`${base}${path}`, {
+async function postJson(base: BoardHandle, path: string, body: unknown): Promise<Response> {
+  return send(base, path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function getJson<T>(base: string, path: string): Promise<T> {
-  const res = await fetch(`${base}${path}`);
+async function getJson<T>(base: BoardHandle, path: string): Promise<T> {
+  const res = await send(base, path);
   expect(res.status).toBe(200);
   return (await res.json()) as T;
 }
 
 /** A project with the milestone caller registered, as the gate-milestone tests set one up. */
-async function createProject(base: string, name: string): Promise<string> {
+async function createProject(base: BoardHandle, name: string): Promise<string> {
   const res = await postJson(base, "/api/v2/projects", { name });
   expect(res.ok).toBe(true);
   const key = ((await res.json()) as { project: { key: string } }).project.key;
@@ -111,11 +111,11 @@ function wellFormedSuites(): Record<string, unknown>[] {
   ];
 }
 
-async function preMergeGateMilestones(base: string, key: string): Promise<MilestonesResponse> {
+async function preMergeGateMilestones(base: BoardHandle, key: string): Promise<MilestonesResponse> {
   return getJson<MilestonesResponse>(base, `/api/v2/projects/${key}/milestones?type=pre-merge-gate`);
 }
 
-async function milestoneEventCount(base: string, key: string): Promise<number> {
+async function milestoneEventCount(base: BoardHandle, key: string): Promise<number> {
   const body = await getJson<{ events: { kind: string }[] }>(base, `/api/v2/events?project=${key}`);
   return body.events.filter((e) => e.kind === "milestone").length;
 }
@@ -254,7 +254,7 @@ const ILL_FORMED_SUITES: [string, unknown][] = [
   ],
 ];
 
-async function expectRefusedAndNothingRecorded(base: string, key: string, body: Record<string, unknown>) {
+async function expectRefusedAndNothingRecorded(base: BoardHandle, key: string, body: Record<string, unknown>) {
   const res = await postJson(base, "/api/v2/milestones", body);
   expect(res.status).toBe(400);
   const err = (await res.json()) as { ok: boolean; error?: unknown };

@@ -28,16 +28,17 @@
 // exec 1000ms / loop 3000ms / gate 2000ms shape, the BDD-tier split on
 // CR-VEL-4) are KEPT VERBATIM from the original pin.
 //
-// Every server here is booted on an OS-assigned port against an
+// Every server here is booted in process (no port) against an
 // mkdtempSync scratch db. The live data/crucible.db and port 3849 are never
 // touched.
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { QueuePlanInput } from "../../src/store.ts";
 import type { RunSchema } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 function testRun(durationMs: number): RunSchema {
   return {
@@ -67,7 +68,7 @@ interface VelocityBody {
 }
 
 const scratchDirs: string[] = [];
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   setSystemTime();
@@ -78,20 +79,16 @@ afterEach(() => {
   }
 });
 
-function boot(): ServerHandle {
+function boot(): BoardHandle {
   const dir = mkdtempSync(join(tmpdir(), "cru022-vel-"));
   scratchDirs.push(dir);
-  handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+  handle = bootInProcess(join(dir, "crucible.db"));
   return handle;
-}
-
-function base(): string {
-  return `http://localhost:${handle!.server.port}`;
 }
 
 async function getVelocity(key: string, release?: string): Promise<{ status: number; body: VelocityBody }> {
   const qs = release !== undefined ? `?release=${encodeURIComponent(release)}` : "";
-  const res = await fetch(`${base()}/api/v2/projects/${key}/analytics/velocity${qs}`);
+  const res = await send(handle!, `/api/v2/projects/${key}/analytics/velocity${qs}`);
   let body: VelocityBody = {};
   try {
     body = (await res.json()) as VelocityBody;

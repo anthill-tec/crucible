@@ -16,7 +16,8 @@
 // tests/archive/v1-sections.test.ts on shim retirement. The v2-route §S3
 // branches below are unaffected and stay in place.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -30,7 +31,7 @@ interface ErrResponse {
 }
 
 describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -38,7 +39,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
   });
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -46,7 +47,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function createProjectV2(name: string): Promise<string> {
@@ -74,7 +75,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
   describe("§S3 per-branch 400 assertions", () => {
     // `handleRunsCompile` (src/v2.ts)
     test("400: compile ingest without errors (v2 /api/v2/runs/compile)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProjectV2("compile-v2-missing-errors");
 
       const res = await postJson("/api/v2/runs/compile", { projectKey: key, agentId: "a1" });
@@ -87,7 +88,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
 
     // `handleRunsParsed` (src/v2.ts), its `summary` check
     test("400: parsed ingest without summary (v2 /api/v2/runs/parsed)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProjectV2("parsed-v2-missing-summary");
 
       const res = await postJson("/api/v2/runs/parsed", { projectKey: key, agentId: "a1", tree: [] });
@@ -100,7 +101,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
 
     // `handleRunsParsed` (src/v2.ts), its `tree` check
     test("400: parsed ingest without tree (v2 /api/v2/runs/parsed)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProjectV2("parsed-v2-missing-tree");
 
       const res = await postJson("/api/v2/runs/parsed", {
@@ -117,7 +118,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
 
     // `handleStatus` (src/v2.ts)
     test("400: status missing project query param (v2 GET /api/v2/status)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
 
       const res = await getJson("/api/v2/status");
 
@@ -129,7 +130,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
 
     // `handleAgentTouch` (src/v2.ts)
     test("400: agentId missing (v2 POST /api/v2/agents/register)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProjectV2("agents-v2-register-missing-agentid");
 
       const res = await postJson("/api/v2/agents/register", { projectKey: key });
@@ -142,7 +143,7 @@ describe("cross-surface + per-branch 400 hardening — CR-CRU-010 §S2+§S3", ()
 
     // `handleAgentUnregister` (src/v2.ts)
     test("400: agentId missing (v2 POST /api/v2/agents/unregister)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProjectV2("agents-v2-unregister-missing-agentid");
 
       const res = await postJson("/api/v2/agents/unregister", { projectKey: key });

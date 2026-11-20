@@ -22,7 +22,8 @@
 // check runs. Every gated-refusal assertion below currently 200s; every
 // stored-field assertion currently reads undefined.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface CyclePayload {
   id: number;
@@ -66,7 +67,7 @@ const VALID_FIELDS = {
 };
 
 describe("PATCH …/cycles/<id> {label} — rename, gated like cycle-skip (CR-CRU-165 R1 revised)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -81,7 +82,7 @@ describe("PATCH …/cycles/<id> {label} — rename, gated like cycle-skip (CR-CR
   }
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -89,7 +90,7 @@ describe("PATCH …/cycles/<id> {label} — rename, gated like cycle-skip (CR-CR
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -97,11 +98,11 @@ describe("PATCH …/cycles/<id> {label} — rename, gated like cycle-skip (CR-CR
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function registerAgent(key: string, agentId: string, role: string): Promise<void> {
-    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+    const res = await send(handle!, `/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectKey: key, agentId, role }),
@@ -144,7 +145,7 @@ describe("PATCH …/cycles/<id> {label} — rename, gated like cycle-skip (CR-CR
   }
 
   test("PENDING cycle, PATCH {label} with NO reason/cause/specRef: refused (400) naming reason; label unchanged", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, cycleId } = await fileSolo(key, "CR-EDIT-1");
 
@@ -158,7 +159,7 @@ describe("PATCH …/cycles/<id> {label} — rename, gated like cycle-skip (CR-CR
   });
 
   test("PENDING cycle, PATCH {label} WITH all three fields from an ORCHESTRATOR caller: 200 — label changes, stores reason/cause/specRef/changeKind:'rename', response carries the process-failure warning", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, cycleId } = await fileSolo(key, "CR-EDIT-2");
 
@@ -187,7 +188,7 @@ describe("PATCH …/cycles/<id> {label} — rename, gated like cycle-skip (CR-CR
   });
 
   test("PENDING cycle, PATCH {label} with all three fields but an invalid `cause`: refused (400) naming cause; label unchanged", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, cycleId } = await fileSolo(key, "CR-EDIT-3");
 
@@ -206,11 +207,11 @@ describe("PATCH …/cycles/<id> {label} — rename, gated like cycle-skip (CR-CR
   });
 
   test("PENDING cycle, PATCH {label} with all three fields but a NON-orchestrator caller: refused (409) naming ORCHESTRATOR; label unchanged", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, cycleId } = await fileSolo(key, "CR-EDIT-4");
 
-    const res = await fetch(`http://localhost:${handle!.server.port}${plansPath(key, `/${planId}/cycles/${cycleId}`)}`, {
+    const res = await send(handle!, `${plansPath(key, `/${planId}/cycles/${cycleId}`)}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ label: "renamed", ...VALID_FIELDS, agentId: OTHER_ROLE }),
@@ -224,7 +225,7 @@ describe("PATCH …/cycles/<id> {label} — rename, gated like cycle-skip (CR-CR
   });
 
   test("ACTIVE cycle, PATCH {label} even WITH all three fields + orchestrator: still 400 'locked' — the active-cycle guard is unchanged", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, cycleId } = await fileSolo(key, "CR-EDIT-5");
     expect((await transition(key, planId, cycleId, "active")).status).toBe(200);
@@ -243,7 +244,7 @@ describe("PATCH …/cycles/<id> {label} — rename, gated like cycle-skip (CR-CR
   });
 
   test("DONE cycle, PATCH {label} even WITH all three fields + orchestrator: still 400 'immutable history' — the terminal-cycle guard is unchanged", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, cycleId } = await fileSolo(key, "CR-EDIT-6");
     expect((await transition(key, planId, cycleId, "active")).status).toBe(200);
@@ -262,7 +263,7 @@ describe("PATCH …/cycles/<id> {label} — rename, gated like cycle-skip (CR-CR
   });
 
   test("label+status in one body, even WITH all three fields + orchestrator: still 400 'one mutation per call'; nothing changed", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject();
     const { planId, cycleId } = await fileSolo(key, "CR-EDIT-7");
 

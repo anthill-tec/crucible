@@ -21,7 +21,7 @@
 //      pending->skipped) — the store's transition table already forbids
 //      reactivating a done cycle, so that path is not pinned here.
 //
-// Drives the REAL production server (startServer), same harness pattern as
+// Drives the REAL production router in process (`bootInProcess`), same harness pattern as
 // tests/integration/plans.test.ts. `setSystemTime()` (bun:test) mocks `Date.now()`
 // process-wide — including inside the in-process Bun.serve handler — so it
 // deterministically controls both the server's activatedAt stamps and its
@@ -33,9 +33,8 @@ import { setSystemTime } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { startServer } from "../../src/server.ts";
-
-type ServerHandle = ReturnType<typeof startServer>;
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface CyclePayload {
   id: number;
@@ -86,11 +85,11 @@ function freshTmpDbPath(): string {
   return path.join(dir, "crucible.db");
 }
 
-let servers: ServerHandle[] = [];
+let servers: BoardHandle[] = [];
 
 /** Boots (or "restarts", when reusing a real dbPath) a production server. */
-function boot(dbPath: string): ServerHandle {
-  const handle = startServer({ port: 0, dbPath });
+function boot(dbPath: string): BoardHandle {
+  const handle = bootInProcess(dbPath);
   servers.push(handle);
   return handle;
 }
@@ -123,8 +122,8 @@ function withFixtureAgent(body: unknown): unknown {
   return body;
 }
 
-async function registerOrchestrator(handle: ServerHandle, key: string, agentId: string): Promise<void> {
-  const res = await fetch(`http://localhost:${handle.server.port}/api/v2/agents/register`, {
+async function registerOrchestrator(handle: BoardHandle, key: string, agentId: string): Promise<void> {
+  const res = await send(handle, `/api/v2/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
@@ -139,39 +138,39 @@ async function registerOrchestrator(handle: ServerHandle, key: string, agentId: 
 // workflow verb that follows a time jump. Re-touch (re-register) it against
 // the CURRENT (possibly mocked) clock immediately before every mutating
 // call, keyed off the projectKey embedded in the request path.
-async function touchFixtureAgent(handle: ServerHandle, urlPath: string): Promise<void> {
+async function touchFixtureAgent(handle: BoardHandle, urlPath: string): Promise<void> {
   const match = /^\/api\/v2\/projects\/([^/]+)\//.exec(urlPath);
   if (match === null) return;
-  await fetch(`http://localhost:${handle.server.port}/api/v2/agents/register`, {
+  await send(handle, `/api/v2/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ projectKey: match[1], agentId: "fixture-orch", role: "ORCHESTRATOR" }),
   });
 }
 
-async function postJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
+async function postJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
   await touchFixtureAgent(handle, urlPath);
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
+  return send(handle, `${urlPath}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
-async function patchJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
+async function patchJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
   await touchFixtureAgent(handle, urlPath);
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
+  return send(handle, `${urlPath}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
-async function getJson(handle: ServerHandle, urlPath: string): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`);
+async function getJson(handle: BoardHandle, urlPath: string): Promise<Response> {
+  return send(handle, `${urlPath}`);
 }
 
-async function createProject(handle: ServerHandle): Promise<string> {
+async function createProject(handle: BoardHandle): Promise<string> {
   const res = await postJson(handle, "/api/v2/projects", { name: `epochs-${crypto.randomUUID()}` });
   const body = (await res.json()) as { ok: true; project: { key: string } };
   await registerOrchestrator(handle, body.project.key, "fixture-orch");
@@ -183,7 +182,7 @@ function plansPath(key: string, suffix = ""): string {
 }
 
 async function fileSingleCycle(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   cr: string,
 ): Promise<{ planId: number | string; cycleId: number }> {
@@ -192,7 +191,7 @@ async function fileSingleCycle(
   return { planId: body.planId, cycleId: body.cycles[0]!.id };
 }
 
-async function getCycle(handle: ServerHandle, key: string, cr: string): Promise<CyclePayload> {
+async function getCycle(handle: BoardHandle, key: string, cr: string): Promise<CyclePayload> {
   const res = await getJson(handle, plansPath(key, `?cr=${encodeURIComponent(cr)}`));
   const body = (await res.json()) as PlansListResponse;
   const plan = body.plans.find((p) => p.cr === cr);
