@@ -46,17 +46,17 @@
 // browser tells them apart: what these routes serve is what the store wrote,
 // never a tree hand-authored to match what the test wants.
 //
-// SAFETY: every server binds port 0 on ":memory:".
+// SAFETY: every board is in process (no socket) on ":memory:".
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { SuiteNode, RunSummary } from "../../src/types.ts";
 import { settleDom } from "../helpers/dom-settle";
 import { bddProject, failingStep, passingStep, streamBddRun, type BddScenario } from "../helpers/playwright-bdd-run.ts";
-import { bootOn, getJson } from "../helpers/run-stream-harness.ts";
+import { bootInProcess, getJson } from "../helpers/run-stream-harness.ts";
 
 const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 const VAN_SRC = readFileSync(path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"), "utf8");
@@ -123,15 +123,15 @@ function servedTree(body: Record<string, unknown>): ServedSuite[] {
 }
 
 describe("CR-CRU-145 §S1 — route: a scenario run under two browsers opens THAT browser's own steps", () => {
-  const handles: ServerHandle[] = [];
+  const handles: BoardHandle[] = [];
 
   afterEach(() => {
     while (handles.length > 0) handles.pop()?.stop();
   });
 
   /** A board holding the streamed cross-browser run; answers it and the run's event id. */
-  async function seedCrossBrowserRun(name: string): Promise<{ handle: ServerHandle; id: string }> {
-    const handle = bootOn();
+  async function seedCrossBrowserRun(name: string): Promise<{ handle: BoardHandle; id: string }> {
+    const handle = bootInProcess();
     handles.push(handle);
     const key = await bddProject(handle, name);
     const id = await streamBddRun(handle, key, crossBrowserScenarios(), "e2e");

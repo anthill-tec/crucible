@@ -21,10 +21,10 @@
 //
 // The clock is frozen with bun:test's `setSystemTime`, which the in-process
 // server reads too, so each close's `closedAt` is exact rather than raced.
-// Safety: every server binds port 0 on a ":memory:" store.
+// Safety: every board is in process (no socket) on a ":memory:" store.
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { base, bootOn, getJson, postJson, register } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, getJson, postJson, register, send } from "../helpers/run-stream-harness.ts";
 import type { Answer } from "../helpers/run-stream-harness.ts";
 
 const ORCH = "accepted-gate-orchestrator";
@@ -42,7 +42,7 @@ interface PlanRow {
   [key: string]: unknown;
 }
 
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   setSystemTime();
@@ -50,8 +50,8 @@ afterEach(() => {
   handle = undefined;
 });
 
-async function patchJson(h: ServerHandle, route: string, body: unknown): Promise<Answer> {
-  const res = await fetch(`${base(h)}${route}`, {
+async function patchJson(h: BoardHandle, route: string, body: unknown): Promise<Answer> {
+  const res = await send(h, `${route}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -59,7 +59,7 @@ async function patchJson(h: ServerHandle, route: string, body: unknown): Promise
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
-async function newProject(h: ServerHandle, name: string): Promise<string> {
+async function newProject(h: BoardHandle, name: string): Promise<string> {
   const created = await postJson(h, "/api/v2/projects", { name });
   expect(created.status, `creating ${name}`).toBe(200);
   const key = (created.body.project as { key: string }).key;
@@ -68,7 +68,7 @@ async function newProject(h: ServerHandle, name: string): Promise<string> {
 }
 
 /** File `cr` with one cycle and seal that cycle, so the plan may close. Answers its plan id. */
-async function sealedPlan(h: ServerHandle, key: string, cr: string): Promise<number> {
+async function sealedPlan(h: BoardHandle, key: string, cr: string): Promise<number> {
   const filed = await postJson(h, `/api/v2/projects/${key}/plans`, {
     cr,
     cycles: [{ label: "solo" }],
@@ -87,7 +87,7 @@ async function sealedPlan(h: ServerHandle, key: string, cr: string): Promise<num
   return planId;
 }
 
-function closePlan(h: ServerHandle, key: string, planId: number, merge: unknown): Promise<Answer> {
+function closePlan(h: BoardHandle, key: string, planId: number, merge: unknown): Promise<Answer> {
   return patchJson(h, `/api/v2/projects/${key}/plans/${planId}`, {
     status: "closed",
     agentId: ORCH,
@@ -95,13 +95,13 @@ function closePlan(h: ServerHandle, key: string, planId: number, merge: unknown)
   });
 }
 
-async function plansRead(h: ServerHandle, key: string, query = ""): Promise<PlanRow[]> {
+async function plansRead(h: BoardHandle, key: string, query = ""): Promise<PlanRow[]> {
   const read = await getJson(h, `/api/v2/projects/${key}/plans${query}`);
   expect(read.ok).toBe(true);
   return read.plans as PlanRow[];
 }
 
-async function historyRead(h: ServerHandle, key: string): Promise<Record<string, unknown>> {
+async function historyRead(h: BoardHandle, key: string): Promise<Record<string, unknown>> {
   const read = await getJson(h, `/api/v2/projects/${key}/history`);
   expect(read.ok).toBe(true);
   return read;
@@ -109,7 +109,7 @@ async function historyRead(h: ServerHandle, key: string): Promise<Record<string,
 
 describe("PATCH …/plans/<planId> — a close over an accepted failing gate", () => {
   test("stores the reason as given, and the plans read serves it back under merge.acceptedFailingGateReason beside the commit", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await newProject(handle, "accepted-gate-close");
     const planId = await sealedPlan(handle, key, "ACCEPT-GATE-1");
 
@@ -134,7 +134,7 @@ describe("PATCH …/plans/<planId> — a close over an accepted failing gate", (
   });
 
   test("a close with a merge commit and no reason stores none: its merge is the commit alone", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await newProject(handle, "green-gate-close");
     const planId = await sealedPlan(handle, key, "GREEN-GATE-1");
 
@@ -148,7 +148,7 @@ describe("PATCH …/plans/<planId> — a close over an accepted failing gate", (
   });
 
   test("an empty or non-string reason is refused 400 with the route's wording, the plan stays open and nothing is listed as accepted", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await newProject(handle, "refused-reason-close");
     const planId = await sealedPlan(handle, key, "REFUSED-REASON-1");
 
@@ -171,7 +171,7 @@ describe("PATCH …/plans/<planId> — a close over an accepted failing gate", (
 
 describe("GET …/history — acceptedFailingGates", () => {
   test("lists each close over an accepted failing gate with its cr, planId, commit, reason and closedAt, oldest close first, leaving out every other plan", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     setSystemTime(new Date(T0));
     const key = await newProject(handle, "accepted-gate-history");
     const first = await sealedPlan(handle, key, "ACCEPT-GATE-FILED-FIRST");
@@ -214,7 +214,7 @@ describe("GET …/history — acceptedFailingGates", () => {
   });
 
   test("a project with no close over an accepted failing gate lists an empty array", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await newProject(handle, "no-accepted-gate-history");
     expect((await historyRead(handle, key)).acceptedFailingGates).toEqual([]);
 
@@ -226,7 +226,7 @@ describe("GET …/history — acceptedFailingGates", () => {
 
 describe("POST /api/v2/milestones — the cr-merged marker of an accepted close", () => {
   test("a cr-merged marker posted with the reason reads back carrying it exactly; one posted without carries no reason key", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await newProject(handle, "accepted-gate-marker");
     const markers: Array<{ cr: string; reason?: string }> = [
       { cr: "ACCEPT-GATE-MARKED", reason: REASON },

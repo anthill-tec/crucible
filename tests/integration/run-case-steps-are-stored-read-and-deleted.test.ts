@@ -25,15 +25,15 @@
 //  - `TestLeaf.steps` is `TestStep[]`, a step being `{name, status,
 //    duration_ms, failure?}`; a test with no steps answers no `steps` key.
 //
-// SAFETY: every server binds port 0 on ":memory:".
+// SAFETY: every board is in process (no socket) on ":memory:".
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import type { Statement } from "bun:sqlite";
 import { Store, migrateMilestoneRecords } from "../../src/store.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { SuiteNode } from "../../src/types.ts";
 import {
-  bootOn,
+  bootInProcess,
   closeStream,
   eventLine,
   getJson,
@@ -43,7 +43,7 @@ import {
   sendBatch,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 const stores: Store[] = [];
 
 afterEach(() => {
@@ -51,8 +51,8 @@ afterEach(() => {
   while (stores.length > 0) dbOf(stores.pop() as Store).close();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -164,7 +164,7 @@ const STORED_STEP_ORDER = [
 
 /** A run opened, streamed and closed over HTTP; answers the event it stored. */
 async function streamedRun(
-  handle: ServerHandle,
+  handle: BoardHandle,
   text: string,
   start: Record<string, unknown> = { stack: "bun", framework: "playwright-bdd" },
 ): Promise<{ key: string; eventId: string }> {

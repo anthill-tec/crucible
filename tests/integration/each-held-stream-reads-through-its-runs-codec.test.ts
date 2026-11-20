@@ -1,5 +1,5 @@
 // A held stream is read through its own run's codec, never a named one — on
-// a real server (`startServer`, port 0, ":memory:"). Each of the three
+// a real board (`bootInProcess`, no socket, ":memory:"). Each of the three
 // readers of a held stream is driven with a `nextest` run and with a
 // `crucible-events` run carrying the same three tests (a pass, a failure, a
 // pending test):
@@ -9,7 +9,7 @@
 // Each reader answers the same counts and the same tree for both codecs, and
 // a crucible-events run reads exactly as it did before nextest.
 import { describe, test, expect, afterEach } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   NEXTEST_CODEC,
   panicStdout,
@@ -21,7 +21,7 @@ import {
   testStarted,
 } from "../helpers/nextest-harness.ts";
 import {
-  bootOn,
+  bootInProcess,
   eventLine,
   openRun,
   postJson,
@@ -31,7 +31,7 @@ import {
   utf8,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
@@ -74,13 +74,13 @@ const CODECS: ReadonlyArray<{ codec: string; stream: string }> = [
 ];
 
 interface Subject {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   runId: string;
 }
 
 async function streamed(codec: string, stream: string): Promise<Subject> {
-  const handle = bootOn();
+  const handle = bootInProcess();
   handles.push(handle);
   const key = await readyProject(handle, [AGENT], "codec-reader");
   const runId = await openRun(handle, key, AGENT, { stack: "rust", tier: "unit" });

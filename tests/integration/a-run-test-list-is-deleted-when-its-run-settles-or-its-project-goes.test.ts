@@ -1,5 +1,5 @@
 // A run's stored test list (`run_test_lists`) lives only as long as the open
-// run it was given to — on a real server (`startServer`, port 0, ":memory:"):
+// run it was given to — on a real board (`bootInProcess`, no socket, ":memory:"):
 //  - the close (`POST /api/v2/runs` naming `nextest`) deletes it;
 //  - an abort deletes it, by the client's own `POST /api/v2/runs/<runId>/abort`
 //    and by the sweep (`Store#sweepOpenRuns` driven with a `now`), whether the
@@ -13,7 +13,7 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { shippedLimits } from "../../src/limits.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   closeNextest,
   listOf,
@@ -23,16 +23,16 @@ import {
   testName,
   testOk,
 } from "../helpers/nextest-harness.ts";
-import { base, bootOn, openRun, postJson, readyProject, register } from "../helpers/run-stream-harness.ts";
+import { bootInProcess, openRun, postJson, readyProject, register, send } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -59,19 +59,19 @@ const STREAM =
   testOk(testName(CRATE, CRATE, "tests::a"), 0.001) +
   testOk(testName(CRATE, CRATE, "tests::b"), 0.002);
 
-function dbOf(handle: ServerHandle): Database {
+function dbOf(handle: BoardHandle): Database {
   return (handle.store as unknown as { db: Database }).db;
 }
 
 /** The run's rows in `run_test_lists`. */
-function listRows(handle: ServerHandle, runId: string): number {
+function listRows(handle: BoardHandle, runId: string): number {
   return dbOf(handle)
     .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM run_test_lists WHERE run_id = ?")
     .get(runId)!.n;
 }
 
 interface Subject {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   runId: string;
 }
@@ -92,7 +92,7 @@ const NEVER_TOMBSTONED: Liveness = {
 };
 
 /** An open rust run that has taken its list (one row held), on a project of its own. */
-async function runWithAList(handle: ServerHandle, name: string, liveness?: Liveness): Promise<Subject> {
+async function runWithAList(handle: BoardHandle, name: string, liveness?: Liveness): Promise<Subject> {
   let key: string;
   if (liveness === undefined) {
     key = await readyProject(handle, [AGENT], name);
@@ -118,13 +118,13 @@ async function abortByClient(s: Subject): Promise<void> {
   expect(s.handle.store.getRun(s.runId)?.state).toBe("aborted");
 }
 
-async function archive(handle: ServerHandle, key: string): Promise<void> {
+async function archive(handle: BoardHandle, key: string): Promise<void> {
   const res = await postJson(handle, `/api/v2/projects/${key}/archive`, {});
   expect(res.status, JSON.stringify(res.body)).toBe(200);
 }
 
-async function deleteProject(handle: ServerHandle, key: string): Promise<number> {
-  const res = await fetch(`${base(handle)}/api/v2/projects/${key}`, {
+async function deleteProject(handle: BoardHandle, key: string): Promise<number> {
+  const res = await send(handle, `/api/v2/projects/${key}`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ userApproved: true }),

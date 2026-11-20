@@ -23,25 +23,26 @@
 // The streams are `crucible-events` streams (the record codec the live state
 // already reads), so each total rule is shown without a view codec.
 //
-// SAFETY: every server binds port 0 on ":memory:"; the migrated store is a
+// SAFETY: every board is in process (no socket) on ":memory:"; the migrated store is a
 // file under a fresh OS tmpdir, removed after each test.
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { SCHEMA_VERSION, Store } from "../../src/store.ts";
 import {
-  bootOn,
+  bootInProcess,
   eventLine,
   getJson,
   postJson,
   readyProject,
   sendBatch,
+  send,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 const scratchDirs: string[] = [];
 const stores: Store[] = [];
 
@@ -55,8 +56,8 @@ function dbOf(store: Store): Database {
   return (store as unknown as { db: Database }).db;
 }
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -64,11 +65,11 @@ function boot(): ServerHandle {
 const AGENT = "totaller";
 
 /** A run opened with whatever the start body states; answers the raw route answer. */
-function start(handle: ServerHandle, key: string, extra: Record<string, unknown>) {
+function start(handle: BoardHandle, key: string, extra: Record<string, unknown>) {
   return postJson(handle, "/api/v2/runs/start", { projectKey: key, agentId: AGENT, stack: "bun", tier: "unit", ...extra });
 }
 
-async function openWith(handle: ServerHandle, key: string, extra: Record<string, unknown>): Promise<string> {
+async function openWith(handle: BoardHandle, key: string, extra: Record<string, unknown>): Promise<string> {
   const res = await start(handle, key, extra);
   expect(res.status, JSON.stringify(res.body)).toBe(202);
   expect(typeof res.body.runId).toBe("string");
@@ -76,7 +77,7 @@ async function openWith(handle: ServerHandle, key: string, extra: Record<string,
 }
 
 /** The run's `runs.total` column, read off the store's own connection. */
-function storedTotal(handle: ServerHandle, runId: string): number | null | undefined {
+function storedTotal(handle: BoardHandle, runId: string): number | null | undefined {
   return dbOf(handle.store)
     .query<{ total: number | null }, [string]>("SELECT total FROM runs WHERE run_id = ?")
     .get(runId)?.total;
@@ -85,13 +86,13 @@ function storedTotal(handle: ServerHandle, runId: string): number | null | undef
 const PASS = (n: number): string =>
   eventLine({ event: "test-end", id: `t${n}`, name: `case ${n}`, suite: "Totals", file: "src/totals.test.ts", status: "pass" });
 
-async function stream(handle: ServerHandle, key: string, runId: string, text: string): Promise<void> {
+async function stream(handle: BoardHandle, key: string, runId: string, text: string): Promise<void> {
   const res = await sendBatch(handle, runId, { projectKey: key, agentId: AGENT, from: 0, data: text });
   expect(res.status, JSON.stringify(res.body)).toBe(200);
 }
 
 /** The total each live surface answers for the run: runLive, the open-run brief, and the /live route. */
-async function totalsOf(handle: ServerHandle, key: string, runId: string): Promise<Array<number | undefined>> {
+async function totalsOf(handle: BoardHandle, key: string, runId: string): Promise<Array<number | undefined>> {
   const fromStore = handle.store.runLive(runId)?.total;
   const events = await getJson(handle, `/api/v2/events?project=${key}`);
   const brief = (events.openRuns as Array<{ runId: string; live?: { total?: number } }>).find((r) => r.runId === runId);
@@ -177,7 +178,7 @@ describe("an open run with a start total and no batch has no live state", () => 
     expect(storedTotal(handle, runId)).toBe(1280);
 
     expect(handle.store.runLive(runId)).toBeNull();
-    const before = await fetch(`http://127.0.0.1:${handle.server.port}/api/v2/runs/${runId}/live`);
+    const before = await send(handle, `/api/v2/runs/${runId}/live`);
     expect(before.status).toBe(404);
     const events = await getJson(handle, `/api/v2/events?project=${key}`);
     const brief = (events.openRuns as Array<{ runId: string }>).find((r) => r.runId === runId);

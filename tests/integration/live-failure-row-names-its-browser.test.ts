@@ -3,7 +3,7 @@
 // drill-in (`/run/<runId>` in its live mode).
 //
 // The failures the view draws are the ones a REAL board answers: a
-// `playwright-bdd` run is opened on an in-process board (`bootOn`, port 0,
+// `playwright-bdd` run is opened on an in-process board (`bootInProcess`, no socket,
 // ":memory:"), one scenario's failing `test-end` is streamed under `chromium`
 // and under `firefox`, and `GET /api/v2/runs/<runId>/live` is read. That
 // answer — every key the board serialised, `browser` included — is what the
@@ -13,9 +13,9 @@
 // INTERFACE CHOICE: the browser is drawn inside the `live-failure-row`, beside
 // the test's name and file; this file asserts the row's text, not a testid.
 //
-// SAFETY: every server binds port 0 on ":memory:".
+// SAFETY: every board is in process (no socket) on ":memory:".
 import { afterEach, describe, expect, test } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   mountLive,
   unmountLive,
@@ -23,9 +23,9 @@ import {
   type LiveFailureFixture,
   type LiveMountOpts,
 } from "../helpers/live-run-harness";
-import { base, bootOn, eventLine, openRun, readyProject, sendBatch } from "../helpers/run-stream-harness.ts";
+import { bootInProcess, eventLine, openRun, readyProject, sendBatch, send } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(async () => {
   await unmountLive();
@@ -62,13 +62,13 @@ interface LiveAnswerBody {
 
 /** An open run on a real board, streamed `text`; answers its runId, its key and its /live answer. */
 async function liveOf(text: string): Promise<{ runId: string; key: string; body: LiveAnswerBody }> {
-  const handle = bootOn();
+  const handle = bootInProcess();
   handles.push(handle);
   const key = await readyProject(handle, [AGENT], "live-browser-row");
   const runId = await openRun(handle, key, AGENT, { tier: "e2e", stack: "bun", framework: "playwright-bdd" });
   const batch = await sendBatch(handle, runId, { projectKey: key, agentId: AGENT, from: 0, data: text });
   expect(batch.status, JSON.stringify(batch.body)).toBe(200);
-  const res = await fetch(`${base(handle)}/api/v2/runs/${encodeURIComponent(runId)}/live`);
+  const res = await send(handle, `/api/v2/runs/${encodeURIComponent(runId)}/live`);
   expect(res.status).toBe(200);
   const body = (await res.json()) as LiveAnswerBody;
   expect(body.state).toBe("open");

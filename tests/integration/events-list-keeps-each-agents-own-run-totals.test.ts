@@ -8,10 +8,10 @@
 //   POST /api/v2/runs (codec "junit")              — each agent's report, sent concurrently
 //   GET  /api/v2/events?project=<key>&limit=100    — the briefs, read back per agent
 //
-// Safety: every server binds port 0 on a ":memory:" store.
+// Safety: every board is in process (no socket) on a ":memory:" store.
 import { describe, test, expect, afterEach } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { bootOn, getJson, postJson, register } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, getJson, postJson, register } from "../helpers/run-stream-harness.ts";
 
 const ALPHA = "agent-alpha";
 const BRAVO = "agent-bravo";
@@ -26,7 +26,7 @@ interface EventBrief {
   [key: string]: unknown;
 }
 
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
@@ -45,7 +45,7 @@ function junit(agent: string, passing: number, failing: number): string {
 
 describe("GET /api/v2/events keeps each agent's own run totals", () => {
   test("two agents filing concurrently into one project each read back exactly one run with their own (total, passed, failed)", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const created = await postJson(handle, "/api/v2/projects", { name: "events-two-agents" });
     expect(created.status).toBe(200);
     const key = (created.body.project as { key: string }).key;

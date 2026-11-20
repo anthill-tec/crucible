@@ -21,14 +21,14 @@
 // The view stream is a real bun console capture
 // (tests/fixtures/bun-console-live-captures.ts).
 //
-// SAFETY: every server binds port 0 on ":memory:".
+// SAFETY: every board is in process (no socket) on ":memory:".
 import { describe, test, expect, afterEach } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { shippedLimits } from "../../src/limits.ts";
 import { RUN_STREAM_TABLES } from "../../src/run-stream.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
-  bootOn,
+  bootInProcess,
   eventLine,
   getJson,
   openRun,
@@ -41,7 +41,7 @@ import {
 } from "../helpers/run-stream-harness.ts";
 import { PLAIN_RUN } from "../fixtures/bun-console-live-captures.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
@@ -58,13 +58,13 @@ interface Liveness {
 }
 
 interface Board {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   agentId: string;
 }
 
 async function board(agentId = "viewer", liveness?: Liveness): Promise<Board> {
-  const handle = bootOn();
+  const handle = bootInProcess();
   handles.push(handle);
   const key = crypto.randomUUID();
   handle.store.addProject({

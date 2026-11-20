@@ -4,8 +4,8 @@
 // event's payload and comes back as `lint` on the event and on every brief
 // built from it, and is absent on every record posted without one.
 //
-// What is pinned here, all through the real production HTTP surface
-// (`startServer`, in-memory store) and the board's own reads:
+// What is pinned here, all through the real production router
+// (`createBoard` in process, in-memory store) and the board's own reads:
 //  - the marker: accepted, stored, returned; refused (400, nothing stored)
 //    when it is not a non-empty string; absent, byte-for-byte as before, on a
 //    post without it;
@@ -33,26 +33,21 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { hints } from "../../src/hints.ts";
 import type { CompileReport } from "../../src/codecs/compile.ts";
-import { eventLine, sendBatch, STREAM_CODEC, utf8 } from "../helpers/run-stream-harness.ts";
+import { bootInProcess, eventLine, send, sendBatch, STREAM_CODEC, utf8 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
-}
-
-function base(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
 }
 
 interface Answered {
@@ -61,12 +56,12 @@ interface Answered {
 }
 
 async function sendJson(
-  handle: ServerHandle,
+  handle: BoardHandle,
   method: "POST" | "PATCH",
   route: string,
   body: unknown,
 ): Promise<Answered> {
-  const res = await fetch(`${base(handle)}${route}`, {
+  const res = await send(handle, `${route}`, {
     method,
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -74,8 +69,8 @@ async function sendJson(
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
-async function getJson(handle: ServerHandle, route: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base(handle)}${route}`);
+async function getJson(handle: BoardHandle, route: string): Promise<Record<string, unknown>> {
+  const res = await send(handle, `${route}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
@@ -86,7 +81,7 @@ const ORCHESTRATOR = "fixture-orch";
 const COMPILE_ROUTE = "/api/v2/runs/compile";
 
 /** A project with its orchestrator registered (an ingest needs a live caller). */
-async function seedProject(handle: ServerHandle): Promise<string> {
+async function seedProject(handle: BoardHandle): Promise<string> {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: `lint-route-${key}`, type: "backend", sutRoot: "/tmp/p" });
   const res = await sendJson(handle, "POST", "/api/v2/agents/register", {
@@ -102,7 +97,7 @@ async function seedProject(handle: ServerHandle): Promise<string> {
 
 /** Post on the compile route as the orchestrator. */
 async function postCompile(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   body: Record<string, unknown>,
 ): Promise<Answered> {
@@ -111,7 +106,7 @@ async function postCompile(
 
 /** Post and expect it stored; returns the answer's body. */
 async function postAccepted(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
@@ -150,36 +145,36 @@ const TSC_ONE_ERROR = "src/a.ts(1,1): error TS2304: Cannot find name 'x'.";
 type Brief = Record<string, unknown> & { id: string };
 
 /** Every stored event of the project, as briefs, from the events list. */
-async function listedEvents(handle: ServerHandle, key: string): Promise<Brief[]> {
+async function listedEvents(handle: BoardHandle, key: string): Promise<Brief[]> {
   const body = await getJson(handle, `/api/v2/events?project=${key}&limit=100`);
   return body.events as Brief[];
 }
 
 /** How many compile-kind events the project holds (lint records are compile-kind). */
-async function compileEventCount(handle: ServerHandle, key: string): Promise<number> {
+async function compileEventCount(handle: BoardHandle, key: string): Promise<number> {
   return (await listedEvents(handle, key)).filter((e) => e.kind === "compile").length;
 }
 
 /** The ONE events-list brief carrying `eventId` (exactly one, never more). */
-async function fromList(handle: ServerHandle, key: string, eventId: string): Promise<Brief> {
+async function fromList(handle: BoardHandle, key: string, eventId: string): Promise<Brief> {
   const hits = (await listedEvents(handle, key)).filter((e) => e.id === eventId);
   expect(hits.length).toBe(1);
   return hits[0]!;
 }
 
-async function fromDetail(handle: ServerHandle, eventId: string): Promise<Brief> {
+async function fromDetail(handle: BoardHandle, eventId: string): Promise<Brief> {
   const body = await getJson(handle, `/api/v2/events/${eventId}`);
   const event = body.event as Brief;
   expect(event.id).toBe(eventId);
   return event;
 }
 
-async function statusOf(handle: ServerHandle, key: string): Promise<Record<string, Brief | null>> {
+async function statusOf(handle: BoardHandle, key: string): Promise<Record<string, Brief | null>> {
   const body = await getJson(handle, `/api/v2/status?project=${key}`);
   return body.status as Record<string, Brief | null>;
 }
 
-async function fromProjectLastEvent(handle: ServerHandle, key: string, eventId: string): Promise<Brief> {
+async function fromProjectLastEvent(handle: BoardHandle, key: string, eventId: string): Promise<Brief> {
   const body = await getJson(handle, "/api/v2/projects");
   const projects = (body.projects as { key: string; lastEvent: Brief | null }[]).filter((p) => p.key === key);
   expect(projects.length).toBe(1);
@@ -206,7 +201,7 @@ interface StoredCompile {
 }
 
 /** The compile report the detail read serves for `eventId`. */
-async function storedCompile(handle: ServerHandle, eventId: string): Promise<StoredCompile> {
+async function storedCompile(handle: BoardHandle, eventId: string): Promise<StoredCompile> {
   const event = await fromDetail(handle, eventId);
   expect(event.kind).toBe("compile");
   return event.compile as StoredCompile;
@@ -776,7 +771,7 @@ interface AgentBrief {
   [key: string]: unknown;
 }
 
-async function agentById(handle: ServerHandle, key: string, agentId: string): Promise<AgentBrief> {
+async function agentById(handle: BoardHandle, key: string, agentId: string): Promise<AgentBrief> {
   const body = await getJson(handle, `/api/v2/agents?project=${key}`);
   const agent = (body.agents as AgentBrief[]).find((a) => a.agentId === agentId);
   expect(agent).toBeDefined();
@@ -784,7 +779,7 @@ async function agentById(handle: ServerHandle, key: string, agentId: string): Pr
 }
 
 /** File a one-cycle plan, activate it, and register `agentId` bound to it. */
-async function registerBoundAgent(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function registerBoundAgent(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const filed = await sendJson(handle, "POST", `/api/v2/projects/${key}/plans`, {
     cr: "lint-outcome",
     agentId: ORCHESTRATOR,
@@ -890,20 +885,20 @@ describe("the agent's last outcome after a lint post says lint", () => {
 // ── A lint post rides the run lifecycle as a compile post does ──────────────
 
 /** Opens a run for the orchestrator with `POST /api/v2/runs/start`; answers its runId. */
-async function openRun(handle: ServerHandle, key: string, extra: Record<string, unknown> = {}): Promise<string> {
+async function openRun(handle: BoardHandle, key: string, extra: Record<string, unknown> = {}): Promise<string> {
   const res = await sendJson(handle, "POST", "/api/v2/runs/start", { projectKey: key, agentId: ORCHESTRATOR, ...extra });
   expect(res.status).toBe(202);
   expect(typeof res.body.runId).toBe("string");
   return res.body.runId as string;
 }
 
-async function openRunIds(handle: ServerHandle, key: string): Promise<string[]> {
+async function openRunIds(handle: BoardHandle, key: string): Promise<string[]> {
   const body = await getJson(handle, `/api/v2/events?project=${key}`);
   return (body.openRuns as { runId: string }[]).map((r) => r.runId);
 }
 
 /** Every stored event id of the project, read off the store (a registration's lifecycle row included). */
-function storedEventIds(handle: ServerHandle, key: string): string[] {
+function storedEventIds(handle: BoardHandle, key: string): string[] {
   return handle.store.listEvents(key, Number.MAX_SAFE_INTEGER).map((e) => e.id);
 }
 
@@ -1051,7 +1046,7 @@ describe("a store holding compile rows written before the marker existed", () =>
 
     // Seed: the store's own lower-level writer, then each row's payload
     // rewritten by SQL to the shape a store wrote before the marker: no `lint`.
-    const seeder = startServer({ port: 0, dbPath });
+    const seeder = bootInProcess(dbPath);
     const key = crypto.randomUUID();
     let older: string;
     let newer: string;
@@ -1078,7 +1073,7 @@ describe("a store holding compile rows written before the marker existed", () =>
     }
 
     // Open it, and read every record back.
-    const handle = startServer({ port: 0, dbPath });
+    const handle = bootInProcess(dbPath);
     handles.push(handle);
 
     const expected: Record<string, { codec: string; errors: number; warnings: number }> = {

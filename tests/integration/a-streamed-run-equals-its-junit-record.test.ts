@@ -2,7 +2,7 @@
 // report is stored as — for every real stack's report in
 // `tests/fixtures/reports/<stack>/` (see the README there).
 //
-// For each fixture, on a real server (`startServer`, port 0, ":memory:"):
+// For each fixture, on a real board (`bootInProcess`, no socket, ":memory:"):
 //  1. its JUnit reports are posted to `POST /api/v2/runs` as its client sends
 //     them (tests/integration/real-stack-reports-decode-on-the-board.test.ts's way:
 //     `codec: "junit"`, the stack, the report texts, bun's console as `raw`),
@@ -30,10 +30,10 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   batchesOf,
-  bootOn,
+  bootInProcess,
   closeStream,
   eventLine,
   openRun,
@@ -45,14 +45,14 @@ import {
 
 const FIXTURES = join(import.meta.dir, "../fixtures", "reports");
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }

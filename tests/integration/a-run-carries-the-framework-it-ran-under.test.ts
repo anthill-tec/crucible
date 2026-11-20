@@ -25,17 +25,17 @@
 // The board is string-only (P1): it stores any non-empty framework and never
 // checks it against a vocabulary — the bun client does that.
 //
-// SAFETY: every server binds port 0 on ":memory:"; a migrated store is a file
+// SAFETY: every board is in process (no socket) on ":memory:"; a migrated store is a file
 // under a fresh OS tmpdir, removed after each test.
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { SCHEMA_VERSION, Store } from "../../src/store.ts";
 import {
-  bootOn,
+  bootInProcess,
   closeStream,
   eventLine,
   getJson,
@@ -45,7 +45,7 @@ import {
   utf8,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 const scratchDirs: string[] = [];
 
 afterEach(() => {
@@ -53,8 +53,8 @@ afterEach(() => {
   while (scratchDirs.length > 0) fs.rmSync(scratchDirs.pop() as string, { recursive: true, force: true });
 });
 
-function boot(dbPath = ":memory:"): ServerHandle {
-  const handle = bootOn(dbPath);
+function boot(dbPath = ":memory:"): BoardHandle {
+  const handle = bootInProcess(dbPath);
   handles.push(handle);
   return handle;
 }
@@ -94,15 +94,15 @@ function payloadFor(route: IngestRoute): Record<string, unknown> {
   }
 }
 
-function ingest(handle: ServerHandle, route: IngestRoute, key: string, extra: Record<string, unknown>) {
+function ingest(handle: BoardHandle, route: IngestRoute, key: string, extra: Record<string, unknown>) {
   return postJson(handle, route, { projectKey: key, agentId: AGENT, ...payloadFor(route), ...extra });
 }
 
-function start(handle: ServerHandle, key: string, extra: Record<string, unknown>) {
+function start(handle: BoardHandle, key: string, extra: Record<string, unknown>) {
   return postJson(handle, "/api/v2/runs/start", { projectKey: key, agentId: AGENT, ...extra });
 }
 
-async function openWith(handle: ServerHandle, key: string, extra: Record<string, unknown>): Promise<string> {
+async function openWith(handle: BoardHandle, key: string, extra: Record<string, unknown>): Promise<string> {
   const res = await start(handle, key, extra);
   expect(res.status, JSON.stringify(res.body)).toBe(202);
   expect(typeof res.body.runId).toBe("string");
@@ -113,46 +113,46 @@ async function openWith(handle: ServerHandle, key: string, extra: Record<string,
 
 type Wire = Record<string, unknown>;
 
-async function eventDetail(handle: ServerHandle, eventId: unknown): Promise<Wire> {
+async function eventDetail(handle: BoardHandle, eventId: unknown): Promise<Wire> {
   expect(typeof eventId, "the ingest must answer the event it stored").toBe("string");
   const body = await getJson(handle, `/api/v2/events/${eventId as string}`);
   return body.event as Wire;
 }
 
-async function eventsList(handle: ServerHandle, key: string): Promise<{ events: Wire[]; openRuns: Wire[] }> {
+async function eventsList(handle: BoardHandle, key: string): Promise<{ events: Wire[]; openRuns: Wire[] }> {
   const body = await getJson(handle, `/api/v2/events?project=${key}`);
   return { events: body.events as Wire[], openRuns: body.openRuns as Wire[] };
 }
 
-async function eventBrief(handle: ServerHandle, key: string, eventId: unknown): Promise<Wire> {
+async function eventBrief(handle: BoardHandle, key: string, eventId: unknown): Promise<Wire> {
   const brief = (await eventsList(handle, key)).events.find((e) => e.id === eventId);
   expect(brief, `event ${String(eventId)} is in the feed`).toBeDefined();
   return brief as Wire;
 }
 
-async function openRunBriefOf(handle: ServerHandle, key: string, runId: string): Promise<Wire> {
+async function openRunBriefOf(handle: BoardHandle, key: string, runId: string): Promise<Wire> {
   const brief = (await eventsList(handle, key)).openRuns.find((r) => r.runId === runId);
   expect(brief, `run ${runId} is in openRuns`).toBeDefined();
   return brief as Wire;
 }
 
-async function eventIds(handle: ServerHandle, key: string): Promise<unknown[]> {
+async function eventIds(handle: BoardHandle, key: string): Promise<unknown[]> {
   return (await eventsList(handle, key)).events.map((e) => e.id);
 }
 
-async function openRunIds(handle: ServerHandle, key: string): Promise<unknown[]> {
+async function openRunIds(handle: BoardHandle, key: string): Promise<unknown[]> {
   return (await eventsList(handle, key)).openRuns.map((r) => r.runId);
 }
 
 /** The run's `runs.framework` column, read off the store's own connection. */
-function storedRunFramework(handle: ServerHandle, runId: string): string | null | undefined {
+function storedRunFramework(handle: BoardHandle, runId: string): string | null | undefined {
   return dbOf(handle.store)
     .query<{ framework: string | null }, [string]>("SELECT framework FROM runs WHERE run_id = ?")
     .get(runId)?.framework;
 }
 
 /** The event's `events.framework` column, read off the store's own connection. */
-function storedEventFramework(handle: ServerHandle, eventId: string): string | null | undefined {
+function storedEventFramework(handle: BoardHandle, eventId: string): string | null | undefined {
   return dbOf(handle.store)
     .query<{ framework: string | null }, [string]>("SELECT framework FROM events WHERE id = ?")
     .get(eventId)?.framework;

@@ -2,7 +2,7 @@
 // report is stored as — for every run captured under
 // `tests/fixtures/nextest/runs/` (see the README there).
 //
-// For each captured run, on a real server (`startServer`, port 0, ":memory:"):
+// For each captured run, on a real board (`bootInProcess`, no socket, ":memory:"):
 //  1. its `junit.xml` is posted to `POST /api/v2/runs` as a rust client files
 //     it (`codec: "junit"`, `stack: "rust"`), and the stored run is read back
 //     through `GET /api/v2/events/<id>`;
@@ -26,7 +26,7 @@
 // Each run's list matches its stream, so no stored record is flagged
 // incomplete.
 import { describe, test, expect, afterEach } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   CAPTURED_RUNS,
   capturedRun,
@@ -36,9 +36,9 @@ import {
   type CapturedRun,
   type CapturedRunName,
 } from "../helpers/nextest-harness.ts";
-import { bootOn, openRun, postJson, readyProject, storedEvent } from "../helpers/run-stream-harness.ts";
+import { bootInProcess, openRun, postJson, readyProject, storedEvent } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
@@ -132,7 +132,7 @@ interface Pair {
 
 /** The run's JUnit record and its streamed record, each stored by a real board. */
 async function bothRecords(run: CapturedRun): Promise<Pair> {
-  const handle = bootOn();
+  const handle = bootInProcess();
   handles.push(handle);
   const key = await readyProject(handle, [AGENT], "nextest-record");
 

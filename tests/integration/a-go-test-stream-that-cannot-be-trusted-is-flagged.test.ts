@@ -1,6 +1,6 @@
 // A go run's record is checked at its close. At codec level (the codec the
 // registry holds, given the run start's total as the board gives it), and over
-// real HTTP (`startServer`, port 0, ":memory:"), the run is flagged
+// the real routes (`bootInProcess`, no socket, ":memory:"), the run is flagged
 // `incomplete`, each reason stated, when:
 //  - a top-level test started (`run`) but never reached a terminal event, for
 //    itself or a subtest: the reason names it;
@@ -12,7 +12,7 @@
 // A whole run is not flagged, even when its subtests outnumber its total, and a
 // benchmark that reaches no terminal event is not a test that never reported.
 import { describe, test, expect, afterEach } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   beforeLine,
   byCodePoint,
@@ -22,16 +22,16 @@ import {
   FORMS,
   terminalTestEvents,
 } from "../helpers/go-test-harness.ts";
-import { bootOn } from "../helpers/run-stream-harness.ts";
+import { bootInProcess } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }

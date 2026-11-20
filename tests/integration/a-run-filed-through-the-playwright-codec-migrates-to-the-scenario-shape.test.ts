@@ -31,17 +31,17 @@
 // GET /api/v2/events/<id>, ?depth=suites and ?suite=&browser=.
 //
 // SAFETY: every store is a file under a fresh OS tmpdir (or ":memory:"),
-// removed after each test; every server binds port 0.
+// removed after each test; every board is in process (no socket).
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SCHEMA_VERSION, Store } from "../../src/store.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { SuiteNode } from "../../src/types.ts";
 import {
-  bootOn,
+  bootInProcess,
   closeStream,
   eventLine,
   getJson,
@@ -57,7 +57,7 @@ const AGENT = "scenario-shape-runner";
 
 const scratchDirs: string[] = [];
 const stores: Store[] = [];
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
@@ -81,8 +81,8 @@ function open(dbPath: string): Store {
   return store;
 }
 
-function boot(dbPath: string): ServerHandle {
-  const handle = bootOn(dbPath);
+function boot(dbPath: string): BoardHandle {
+  const handle = bootInProcess(dbPath);
   handles.push(handle);
   return handle;
 }
@@ -377,7 +377,7 @@ const NO_STEP_STREAM =
   eventLine({ event: "run-end", total: 1, passed: 0, failed: 1, pending: 0, duration_ms: 9 });
 
 /** Stream `text` into a fresh run of framework `playwright-bdd` on `handle`, closed; answers its event id. */
-async function streamRun(handle: ServerHandle, key: string, text: string): Promise<string> {
+async function streamRun(handle: BoardHandle, key: string, text: string): Promise<string> {
   const runId = await openRun(handle, key, AGENT, { tier: "e2e", stack: "bun", framework: "playwright-bdd" });
   const batch = await sendBatch(handle, runId, { projectKey: key, agentId: AGENT, from: 0, data: text });
   expect(batch.status, JSON.stringify(batch.body)).toBe(200);
@@ -391,7 +391,7 @@ async function streamRun(handle: ServerHandle, key: string, text: string): Promi
 
 /** What the event, suite and case reads answer for a run: its scenario content, not its identity. */
 async function readsOf(
-  handle: ServerHandle,
+  handle: BoardHandle,
   eventId: string,
   suite: { name: string; browser: string },
 ): Promise<Record<string, unknown>> {

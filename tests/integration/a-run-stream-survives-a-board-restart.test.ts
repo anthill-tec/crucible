@@ -4,22 +4,22 @@
 // record a single board would have stored.
 //
 // `Store` has no close verb, so the restart is a SECOND server — a second
-// `Store.open` through `startServer` — opened on the same database file after
+// `Store.open` through `bootInProcess` — opened on the same database file after
 // the first server stopped listening. Every batch, read and close goes
-// through the real HTTP routes; the live state is read through each server's
+// through the real routes; the live state is read through each board's
 // own `Store#runLive`.
 //
 // Safety: the database file sits in a fresh OS tmpdir, removed after each
-// test; every server binds port 0.
+// test; every board is in process (no socket).
 import { describe, test, expect, afterEach } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { RunLive } from "../../src/types.ts";
 import {
   batchesOf,
-  bootOn,
+  bootInProcess,
   closeStream,
   eventLine,
   openRun,
@@ -31,7 +31,7 @@ import {
   type StoredRun,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 const scratchDirs: string[] = [];
 
 afterEach(() => {
@@ -39,8 +39,8 @@ afterEach(() => {
   while (scratchDirs.length > 0) fs.rmSync(scratchDirs.pop() ?? "", { recursive: true, force: true });
 });
 
-function boot(dbPath = ":memory:"): ServerHandle {
-  const handle = bootOn(dbPath);
+function boot(dbPath = ":memory:"): BoardHandle {
+  const handle = bootInProcess(dbPath);
   handles.push(handle);
   return handle;
 }
@@ -139,8 +139,8 @@ async function singleBoardRecord(): Promise<Pick<StoredRun, "summary" | "tree">>
 }
 
 interface Restarted {
-  first: ServerHandle;
-  second: ServerHandle;
+  first: BoardHandle;
+  second: BoardHandle;
   key: string;
   runId: string;
 }

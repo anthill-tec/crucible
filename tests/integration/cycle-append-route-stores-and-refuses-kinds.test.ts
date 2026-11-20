@@ -17,11 +17,11 @@
 // pinned by tests/integration/cycle-add-fix-only.test.ts; here a fix append is
 // made only after its plan's verify cycle is done, as a client must.
 //
-// Safety: every server binds port 0 on a ":memory:" store; nothing outside
+// Safety: every board is in process (no socket) on a ":memory:" store; nothing outside
 // the process is read or written.
 import { describe, test, expect, afterEach } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { base, bootOn, getJson, postJson, register } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, getJson, postJson, register, send } from "../helpers/run-stream-harness.ts";
 import type { Answer } from "../helpers/run-stream-harness.ts";
 
 const ORCH = "cycle-append-orchestrator";
@@ -50,15 +50,15 @@ interface PlanRow {
   cycles: CycleRow[];
 }
 
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
   handle = undefined;
 });
 
-async function patchJson(h: ServerHandle, route: string, body: unknown): Promise<Answer> {
-  const res = await fetch(`${base(h)}${route}`, {
+async function patchJson(h: BoardHandle, route: string, body: unknown): Promise<Answer> {
+  const res = await send(h, `${route}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -67,7 +67,7 @@ async function patchJson(h: ServerHandle, route: string, body: unknown): Promise
 }
 
 /** A project created over the route, with the orchestrator registered. */
-async function newProject(h: ServerHandle, name: string): Promise<string> {
+async function newProject(h: BoardHandle, name: string): Promise<string> {
   const created = await postJson(h, "/api/v2/projects", { name });
   expect(created.status, `creating ${name}`).toBe(200);
   const key = (created.body.project as { key: string }).key;
@@ -76,7 +76,7 @@ async function newProject(h: ServerHandle, name: string): Promise<string> {
 }
 
 /** File a plan for `cr` with one red-green cycle; answers the stored plan. */
-async function filePlan(h: ServerHandle, key: string, cr: string, firstCycle: string): Promise<PlanRow> {
+async function filePlan(h: BoardHandle, key: string, cr: string, firstCycle: string): Promise<PlanRow> {
   const filed = await postJson(h, `/api/v2/projects/${key}/plans`, {
     cr,
     cycles: [{ label: firstCycle, kind: "red-green" }],
@@ -86,11 +86,11 @@ async function filePlan(h: ServerHandle, key: string, cr: string, firstCycle: st
   return filed.body as unknown as PlanRow;
 }
 
-function appendCycle(h: ServerHandle, key: string, planId: number, body: Record<string, unknown>): Promise<Answer> {
+function appendCycle(h: BoardHandle, key: string, planId: number, body: Record<string, unknown>): Promise<Answer> {
   return postJson(h, `/api/v2/projects/${key}/plans/${planId}/cycles`, { agentId: ORCH, ...body });
 }
 
-async function moveCycle(h: ServerHandle, key: string, planId: number, cycleId: number, status: string): Promise<void> {
+async function moveCycle(h: BoardHandle, key: string, planId: number, cycleId: number, status: string): Promise<void> {
   const moved = await patchJson(h, `/api/v2/projects/${key}/plans/${planId}/cycles/${cycleId}`, {
     status,
     agentId: ORCH,
@@ -98,7 +98,7 @@ async function moveCycle(h: ServerHandle, key: string, planId: number, cycleId: 
   expect(moved.status, `moving cycle ${cycleId} to ${status}: ${JSON.stringify(moved.body)}`).toBe(200);
 }
 
-async function planById(h: ServerHandle, key: string, planId: number): Promise<PlanRow> {
+async function planById(h: BoardHandle, key: string, planId: number): Promise<PlanRow> {
   const read = await getJson(h, `/api/v2/projects/${key}/plans`);
   const matches = (read.plans as PlanRow[]).filter((p) => p.planId === planId);
   expect(matches.length, `plan ${planId} is held exactly once`).toBe(1);
@@ -111,7 +111,7 @@ function kindsByLabel(plan: PlanRow): Record<string, string> {
 
 describe("POST …/plans/<planId>/cycles stores the kind it is given", () => {
   test("a verify cycle appended with its change record reads back as verify, beside the untouched red-green cycle", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await newProject(handle, "cycle-append-verify");
     const plan = await filePlan(handle, key, "CR-KIND-VERIFY", "the red-green cycle");
 
@@ -131,7 +131,7 @@ describe("POST …/plans/<planId>/cycles stores the kind it is given", () => {
   });
 
   test("every declared kind round-trips as itself, and an unknown kind is refused 400 with the route's invalid-kind wording, storing nothing", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await newProject(handle, "cycle-append-roundtrip");
     const plan = await filePlan(handle, key, "CR-KIND-ROUNDTRIP", "the filed cycle");
 
@@ -181,7 +181,7 @@ describe("POST …/plans/<planId>/cycles stores the kind it is given", () => {
   });
 
   test("a cycle appended to a CR's re-filed open plan lands there with its kind, while the aborted sibling keeps exactly its own cycle", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await newProject(handle, "cycle-append-aborted-sibling");
     const cr = "CR-KIND-ABORTED-SIBLING";
     const abandoned = await filePlan(handle, key, cr, "the abandoned cycle");

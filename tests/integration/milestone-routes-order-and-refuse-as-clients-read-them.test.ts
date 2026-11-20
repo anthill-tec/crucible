@@ -21,10 +21,10 @@
 //
 // The clock is frozen with bun:test's `setSystemTime`, which the in-process
 // server reads too, so a timestamp and a same-millisecond tie are exact rather
-// than raced. Safety: every server binds port 0 on a ":memory:" store.
+// than raced. Safety: every board is in process (no socket) on a ":memory:" store.
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { base, bootOn, getJson, postJson, register } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, getJson, postJson, register, send } from "../helpers/run-stream-harness.ts";
 import type { Answer } from "../helpers/run-stream-harness.ts";
 
 const ORCH = "milestone-orchestrator";
@@ -47,7 +47,7 @@ interface MilestoneRecord {
   [key: string]: unknown;
 }
 
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   setSystemTime();
@@ -55,8 +55,8 @@ afterEach(() => {
   handle = undefined;
 });
 
-async function patchJson(h: ServerHandle, route: string, body: unknown): Promise<Answer> {
-  const res = await fetch(`${base(h)}${route}`, {
+async function patchJson(h: BoardHandle, route: string, body: unknown): Promise<Answer> {
+  const res = await send(h, `${route}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -64,7 +64,7 @@ async function patchJson(h: ServerHandle, route: string, body: unknown): Promise
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
-async function newProject(h: ServerHandle, name: string): Promise<string> {
+async function newProject(h: BoardHandle, name: string): Promise<string> {
   const created = await postJson(h, "/api/v2/projects", { name });
   expect(created.status, `creating ${name}`).toBe(200);
   const key = (created.body.project as { key: string }).key;
@@ -73,7 +73,7 @@ async function newProject(h: ServerHandle, name: string): Promise<string> {
 }
 
 /** One well-formed red `pre-merge-gate` verdict for `GATED_CR`; answers the recorded id. */
-async function postGate(h: ServerHandle, key: string): Promise<string> {
+async function postGate(h: BoardHandle, key: string): Promise<string> {
   const res = await postJson(h, "/api/v2/milestones", {
     projectKey: key,
     agentId: ORCH,
@@ -89,7 +89,7 @@ async function postGate(h: ServerHandle, key: string): Promise<string> {
   return res.body.event as string;
 }
 
-async function milestonesOfType(h: ServerHandle, key: string, type: string): Promise<MilestoneRecord[]> {
+async function milestonesOfType(h: BoardHandle, key: string, type: string): Promise<MilestoneRecord[]> {
   const read = await getJson(h, `/api/v2/projects/${key}/milestones?type=${type}`);
   expect(read.ok).toBe(true);
   return read.milestones as MilestoneRecord[];
@@ -103,7 +103,7 @@ function idParts(id: string): { ms: number; seq: number } {
 
 describe("GET …/milestones?type= lists a CR's gate history as the clients order it", () => {
   test("gates recorded at three instants read back newest first, each stamped with its millisecond and an evt-<ms>-<seq> id", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await newProject(handle, "milestone-order-instants");
     const instants = [T0, T0 + 1_000, T0 + 2_500];
     const posted: string[] = [];
@@ -120,7 +120,7 @@ describe("GET …/milestones?type= lists a CR's gate history as the clients orde
   });
 
   test("gates recorded within one millisecond read back in reverse posting order, their sequence numbers growing numerically past two digits", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await newProject(handle, "milestone-order-same-ms");
     setSystemTime(new Date(T0));
 
@@ -151,7 +151,7 @@ describe("POST /api/v2/milestones — a cr-merged post from a stale binding", ()
    * that cycle, then the cycle completed and the plan closed with its merge
    * commit: the poster's binding now names a done cycle of a closed plan.
    */
-  async function closedPlanWithABoundPoster(h: ServerHandle, poster: string): Promise<{ key: string; cycleId: number }> {
+  async function closedPlanWithABoundPoster(h: BoardHandle, poster: string): Promise<{ key: string; cycleId: number }> {
     const key = await newProject(h, `milestone-stale-${poster}`);
     const filed = await postJson(h, `/api/v2/projects/${key}/plans`, {
       cr: MERGED_CR,
@@ -183,7 +183,7 @@ describe("POST /api/v2/milestones — a cr-merged post from a stale binding", ()
     return { key, cycleId };
   }
 
-  function postCrMerged(h: ServerHandle, key: string, poster: string): Promise<Answer> {
+  function postCrMerged(h: BoardHandle, key: string, poster: string): Promise<Answer> {
     return postJson(h, "/api/v2/milestones", {
       projectKey: key,
       agentId: poster,
@@ -194,7 +194,7 @@ describe("POST /api/v2/milestones — a cr-merged post from a stale binding", ()
   }
 
   test("is refused 409 with the stale-binding wording naming the bound cycle and its closed plan, and records no cr-merged marker", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const poster = "stale-merge-poster";
     const { key, cycleId } = await closedPlanWithABoundPoster(handle, poster);
 
@@ -209,7 +209,7 @@ describe("POST /api/v2/milestones — a cr-merged post from a stale binding", ()
   });
 
   test("once the poster is unregistered and registered again unbound, the same post records exactly one cr-merged marker carrying the merge commit", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const poster = "remedied-merge-poster";
     const { key } = await closedPlanWithABoundPoster(handle, poster);
     expect((await postCrMerged(handle, key, poster)).status).toBe(409);

@@ -12,10 +12,10 @@
 //   PATCH /api/v2/projects/<key>/plans/<planId>              — close it, with or without `merge`
 //   GET   /api/v2/projects/<key>/plans?status=closed         — the closed plans read
 //
-// Safety: every server binds port 0 on a ":memory:" store.
+// Safety: every board is in process (no socket) on a ":memory:" store.
 import { describe, test, expect, afterEach } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { base, bootOn, getJson, postJson, register } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, getJson, postJson, register, send } from "../helpers/run-stream-harness.ts";
 import type { Answer } from "../helpers/run-stream-harness.ts";
 
 const ORCH = "closed-plans-orchestrator";
@@ -30,15 +30,15 @@ interface ClosedPlan {
   [key: string]: unknown;
 }
 
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
   handle = undefined;
 });
 
-async function patchJson(h: ServerHandle, route: string, body: unknown): Promise<Answer> {
-  const res = await fetch(`${base(h)}${route}`, {
+async function patchJson(h: BoardHandle, route: string, body: unknown): Promise<Answer> {
+  const res = await send(h, `${route}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -46,7 +46,7 @@ async function patchJson(h: ServerHandle, route: string, body: unknown): Promise
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
-async function newProject(h: ServerHandle, name: string): Promise<string> {
+async function newProject(h: BoardHandle, name: string): Promise<string> {
   const created = await postJson(h, "/api/v2/projects", { name });
   expect(created.status, `creating ${name}`).toBe(200);
   const key = (created.body.project as { key: string }).key;
@@ -56,7 +56,7 @@ async function newProject(h: ServerHandle, name: string): Promise<string> {
 
 /** File `cr` (titled when `title` is given), seal its one cycle and close it — with `commit` as its merge when given. */
 async function landPlan(
-  h: ServerHandle,
+  h: BoardHandle,
   key: string,
   cr: string,
   opts: { title?: string; commit?: string },
@@ -86,7 +86,7 @@ async function landPlan(
   return planId;
 }
 
-async function closedPlans(h: ServerHandle, key: string): Promise<ClosedPlan[]> {
+async function closedPlans(h: BoardHandle, key: string): Promise<ClosedPlan[]> {
   const read = await getJson(h, `/api/v2/projects/${key}/plans?status=closed`);
   expect(read.ok).toBe(true);
   return read.plans as ClosedPlan[];
@@ -94,7 +94,7 @@ async function closedPlans(h: ServerHandle, key: string): Promise<ClosedPlan[]> 
 
 describe("GET …/plans?status=closed serves what each close recorded", () => {
   test("a plan closed with a merge commit carries it, and one closed without a merge carries no merge key at all", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await newProject(handle, "closed-plans-merge");
     const merged = await landPlan(handle, key, "CR-LANDED-MERGED", { commit: MERGE_SHA });
     const bare = await landPlan(handle, key, "CR-LANDED-BARE", {});
@@ -110,7 +110,7 @@ describe("GET …/plans?status=closed serves what each close recorded", () => {
   });
 
   test("a title holding a newline, a tab and runs of spaces is served back byte for byte", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await newProject(handle, "closed-plans-title");
     const wrapped = "Wrapped   title\twith a tab\n## [9.9.9] - 2020-01-01";
     const planId = await landPlan(handle, key, "CR-LANDED-WRAPPED", { title: wrapped, commit: MERGE_SHA });

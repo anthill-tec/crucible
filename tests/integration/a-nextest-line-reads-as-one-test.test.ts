@@ -1,5 +1,5 @@
 // How a nextest stream's lines read into the stored record — on a real
-// server (`startServer`, port 0, ":memory:"), each stream closed under the
+// board (`bootInProcess`, no socket, ":memory:"), each stream closed under the
 // `nextest` codec and read back through `GET /api/v2/events/<id>`.
 //
 // The lines are nextest's own `libtest-json-plus` shapes (message format 0.1),
@@ -16,7 +16,7 @@
 //    not panic as expected` line, the first `thread '` line, the first
 //    non-blank line. Its body is the `stdout`, and it carries no type.
 import { describe, test, expect, afterEach } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   closedNextestRun,
   listOf,
@@ -30,9 +30,9 @@ import {
   testStarted,
   type NextestRunPlan,
 } from "../helpers/nextest-harness.ts";
-import { bootOn, type StoredRun } from "../helpers/run-stream-harness.ts";
+import { bootInProcess, type StoredRun } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
@@ -41,7 +41,7 @@ afterEach(() => {
 const AGENT = "nextest-reader";
 
 async function record(plan: NextestRunPlan): Promise<StoredRun> {
-  const handle = bootOn();
+  const handle = bootInProcess();
   handles.push(handle);
   return (await closedNextestRun(handle, AGENT, plan)).event;
 }

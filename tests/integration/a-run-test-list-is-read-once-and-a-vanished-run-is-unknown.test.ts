@@ -1,5 +1,5 @@
-// The test list route and the batches after it — on a real server
-// (`startServer`, port 0, ":memory:"):
+// The test list route and the batches after it — on a real board
+// (`bootInProcess`, no socket, ":memory:"):
 //  - a run that is gone by the time its list is taken (its project deleted
 //    after the route checked the run, before the store takes the list) is
 //    refused as an unknown run: a 400 naming the run unknown, never the 409 a
@@ -13,7 +13,7 @@
 // so the board behaves as it would without it.
 import { describe, test, expect, afterEach, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   closeNextest,
   listOf,
@@ -25,16 +25,16 @@ import {
   testName,
   testOk,
 } from "../helpers/nextest-harness.ts";
-import { bootOn, openRun, readyProject, storedEvent } from "../helpers/run-stream-harness.ts";
+import { bootInProcess, openRun, readyProject, storedEvent } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -42,11 +42,11 @@ function boot(): ServerHandle {
 const AGENT = "list-reader";
 const CRATE = "nxonce";
 
-function dbOf(handle: ServerHandle): Database {
+function dbOf(handle: BoardHandle): Database {
   return (handle.store as unknown as { db: Database }).db;
 }
 
-function listRows(handle: ServerHandle, runId: string): number {
+function listRows(handle: BoardHandle, runId: string): number {
   return dbOf(handle)
     .query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM run_test_lists WHERE run_id = ?")
     .get(runId)!.n;
@@ -96,12 +96,12 @@ const LISTED_FAILURES = [
 ];
 
 interface Subject {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   runId: string;
 }
 
-async function subject(handle: ServerHandle = boot()): Promise<Subject> {
+async function subject(handle: BoardHandle = boot()): Promise<Subject> {
   const key = await readyProject(handle, [AGENT], "list-once");
   const runId = await openRun(handle, key, AGENT, { stack: "rust", tier: "unit" });
   return { handle, key, runId };

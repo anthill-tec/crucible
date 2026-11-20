@@ -18,15 +18,14 @@
 // `runLiveOf` in src/run-stream.ts). Each test names, in its own comment, the
 // regression it fails against.
 //
-// Every batch, read and close goes through the real HTTP routes on a real
-// server (port 0, ":memory:"); the run is opened with `POST /api/v2/runs/start`.
+// Every batch, read and close goes through the real routes on a real
+// server (in process, ":memory:"); the run is opened with `POST /api/v2/runs/start`.
 import { describe, test, expect, afterEach } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { RunLive } from "../../src/types.ts";
 import {
-  base,
   batchesOf,
-  bootOn,
+  bootInProcess,
   eventLine,
   getJson,
   openRun,
@@ -34,9 +33,10 @@ import {
   sendAll,
   sendBatch,
   utf8,
+  send,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
@@ -45,14 +45,14 @@ afterEach(() => {
 const AGENT = "live-fill-streamer";
 
 interface Streamed {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   runId: string;
 }
 
-/** A real server, a project with the streaming agent registered, and an open run. */
+/** A real board, a project with the streaming agent registered, and an open run. */
 async function openStreamingRun(): Promise<Streamed> {
-  const handle = bootOn();
+  const handle = bootInProcess();
   handles.push(handle);
   const key = await readyProject(handle, [AGENT], "live-fill");
   const runId = await openRun(handle, key, AGENT, { stack: "bun", tier: "unit" });
@@ -262,7 +262,7 @@ describe("CR-CRU-223's readers serve the filled state unchanged", () => {
     expect(gap.body.held).toBe(0);
 
     expect(s.handle.store.runLive(s.runId)).toBeNull();
-    const res = await fetch(`${base(s.handle)}/api/v2/runs/${s.runId}/live`);
+    const res = await send(s.handle, `/api/v2/runs/${s.runId}/live`);
     expect(res.status).toBe(404);
     const brief = await openRunBrief(s);
     expect(brief?.runId).toBe(s.runId);

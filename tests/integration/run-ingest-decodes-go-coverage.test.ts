@@ -12,13 +12,13 @@
 // The profiles are real captures (`tests/fixtures/go-coverprofile/`, Go
 // 1.27.3); every expected figure is the independent oracle's
 // (`tests/helpers/go-coverprofile-oracle.ts`) or Go's own `cover -func` total.
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production router (`bootInProcess`, in-memory
 // store).
 import { describe, test, expect, afterEach } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { coverFuncTotal, goCoverFixture, profileFigure } from "../helpers/go-coverprofile-oracle.ts";
 import {
-  bootOn,
+  bootInProcess,
   eventLine,
   getJson,
   openRun,
@@ -31,14 +31,14 @@ import {
   type Answer,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -71,7 +71,7 @@ const FAILING_REPORT = [
 ].join("\n");
 
 async function ingest(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
   coverage: unknown,
@@ -97,7 +97,7 @@ interface Brief {
   coverageLines?: number;
 }
 
-async function briefs(handle: ServerHandle, key: string): Promise<Brief[]> {
+async function briefs(handle: BoardHandle, key: string): Promise<Brief[]> {
   const body = await getJson(handle, `/api/v2/events?project=${key}`);
   return body.events as Brief[];
 }

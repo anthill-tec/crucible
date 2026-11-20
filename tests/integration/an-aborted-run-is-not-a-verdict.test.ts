@@ -11,15 +11,15 @@
 // whose stream held only passes. The briefs are the shape `eventBrief`
 // (src/v2.ts) serves for an aborted streamed run — its counts, `status` and
 // `abortReason`, as tests/integration/an-aborted-streamed-run-keeps-its-tests.test.ts
-// asserts on the real events list. The rollup is read on a real server:
+// asserts on the real events list. The rollup is read on a real board:
 // a project with `retention: 0` folds every run into its day rollup the moment
 // it is stored (the technique tests/integration/coverage-trend.test.ts uses), read back
 // through `Store#listRollups`.
 import { describe, test, expect, afterEach } from "bun:test";
 import * as AppLogic from "../../public/app-logic.mjs";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
-  bootOn,
+  bootInProcess,
   closeStream,
   eventLine,
   openRun,
@@ -28,14 +28,14 @@ import {
   sendBatch,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -224,14 +224,14 @@ const L_FAIL = eventLine({
 });
 
 /** A project whose every stored run folds straight into its day rollup (retention 0). */
-async function foldingProject(handle: ServerHandle, agentId: string): Promise<string> {
+async function foldingProject(handle: BoardHandle, agentId: string): Promise<string> {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: "folds-at-once", type: "backend", sutRoot: "/tmp/folds-at-once", retention: 0 });
   await register(handle, key, agentId);
   return key;
 }
 
-async function streamThenAbort(handle: ServerHandle, key: string, agentId: string, text: string): Promise<void> {
+async function streamThenAbort(handle: BoardHandle, key: string, agentId: string, text: string): Promise<void> {
   const runId = await openRun(handle, key, agentId, { stack: "bun", tier: "unit" });
   const sent = await sendBatch(handle, runId, { projectKey: key, agentId, from: 0, data: text });
   expect(sent.status, JSON.stringify(sent.body)).toBe(200);

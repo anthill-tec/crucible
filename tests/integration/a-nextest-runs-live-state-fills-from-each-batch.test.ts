@@ -1,5 +1,5 @@
 // The live state of an open nextest run, filled from its stream batch by
-// batch — on a real server (`startServer`, port 0, ":memory:"), read through
+// batch — on a real board (`bootInProcess`, no socket, ":memory:"), read through
 // `Store#runLive` and `GET /api/v2/runs/<runId>/live`:
 //  - each result counts as it lands: `ok` passed, `failed` failed, `ignored`
 //    pending; `completed` all three;
@@ -9,7 +9,7 @@
 //    tests), else the run start's, plus the pending results seen — an ignored
 //    test is outside the listed total; 0 is no total.
 import { describe, test, expect, afterEach } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { RunLive } from "../../src/types.ts";
 import {
   listOf,
@@ -24,9 +24,9 @@ import {
   testOk,
   testStarted,
 } from "../helpers/nextest-harness.ts";
-import { bootOn, getJson, openRun, readyProject, sendBatch, utf8 } from "../helpers/run-stream-harness.ts";
+import { bootInProcess, getJson, openRun, readyProject, sendBatch, utf8 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
@@ -36,14 +36,14 @@ const AGENT = "nextest-live";
 const CRATE = "nxlive";
 
 interface Subject {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   runId: string;
   held: string;
 }
 
 async function subject(opts: { list?: string; startTotal?: number } = {}): Promise<Subject> {
-  const handle = bootOn();
+  const handle = bootInProcess();
   handles.push(handle);
   const key = await readyProject(handle, [AGENT], "nextest-live");
   const runId = await openRun(handle, key, AGENT, {

@@ -12,39 +12,39 @@
 //  - an ill-formed `browser` or `steps` makes its line undecodable, so the
 //    live fill counts it as no completed test and stores no failure for it.
 //
-// SAFETY: every server binds port 0 on ":memory:".
+// SAFETY: every board is in process (no socket) on ":memory:".
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
-  base,
-  bootOn,
+  bootInProcess,
   eventLine,
   openRun,
   readyProject,
   sendBatch,
+  send,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
 
-function dbOf(handle: ServerHandle): Database {
+function dbOf(handle: BoardHandle): Database {
   return (handle.store as unknown as { db: Database }).db;
 }
 
 const AGENT = "live-browser-runner";
 
 /** An open run, streamed one batch of `text`; answers its runId. */
-async function streamingRun(handle: ServerHandle, text: string): Promise<string> {
+async function streamingRun(handle: BoardHandle, text: string): Promise<string> {
   const key = await readyProject(handle, [AGENT], "live-browser");
   const runId = await openRun(handle, key, AGENT, { stack: "bun", framework: "playwright-bdd" });
   const batch = await sendBatch(handle, runId, { projectKey: key, agentId: AGENT, from: 0, data: text });
@@ -52,13 +52,13 @@ async function streamingRun(handle: ServerHandle, text: string): Promise<string>
   return runId;
 }
 
-async function liveRoute(handle: ServerHandle, runId: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base(handle)}/api/v2/runs/${encodeURIComponent(runId)}/live`);
+async function liveRoute(handle: BoardHandle, runId: string): Promise<Record<string, unknown>> {
+  const res = await send(handle, `/api/v2/runs/${encodeURIComponent(runId)}/live`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
 
-function storedBrowsers(handle: ServerHandle, runId: string): Array<string | null> {
+function storedBrowsers(handle: BoardHandle, runId: string): Array<string | null> {
   return dbOf(handle)
     .query<{ browser: string | null }, [string]>(
       `SELECT browser FROM run_live_failures WHERE run_id = ? ORDER BY position`,

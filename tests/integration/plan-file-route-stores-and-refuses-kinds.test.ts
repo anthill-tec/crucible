@@ -14,11 +14,11 @@
 // the authored order (src/store.ts). The append route's side of the same rules
 // is pinned by tests/integration/cycle-append-route-stores-and-refuses-kinds.test.ts.
 //
-// Safety: every server binds port 0 on a ":memory:" store; nothing outside
+// Safety: every board is in process (no socket) on a ":memory:" store; nothing outside
 // the process is read or written.
 import { describe, test, expect, afterEach } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { bootOn, getJson, postJson, readyProject } from "../helpers/run-stream-harness.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, getJson, postJson, readyProject } from "../helpers/run-stream-harness.ts";
 import type { Answer } from "../helpers/run-stream-harness.ts";
 
 const ORCH = "plan-file-kinds-orchestrator";
@@ -38,14 +38,14 @@ interface PlanRow {
   cycles: CycleRow[];
 }
 
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
   handle = undefined;
 });
 
-function fileCycles(h: ServerHandle, key: string, cr: string, cycles: unknown[]): Promise<Answer> {
+function fileCycles(h: BoardHandle, key: string, cr: string, cycles: unknown[]): Promise<Answer> {
   return postJson(h, `/api/v2/projects/${key}/plans`, {
     cr,
     title: `${cr} under test`,
@@ -55,12 +55,12 @@ function fileCycles(h: ServerHandle, key: string, cr: string, cycles: unknown[])
   });
 }
 
-async function storedPlans(h: ServerHandle, key: string): Promise<PlanRow[]> {
+async function storedPlans(h: BoardHandle, key: string): Promise<PlanRow[]> {
   return (await getJson(h, `/api/v2/projects/${key}/plans`)).plans as PlanRow[];
 }
 
 /** The one stored plan for `cr`, read back from the store. */
-async function storedPlanFor(h: ServerHandle, key: string, cr: string): Promise<PlanRow> {
+async function storedPlanFor(h: BoardHandle, key: string, cr: string): Promise<PlanRow> {
   const matches = (await storedPlans(h, key)).filter((p) => p.cr === cr);
   expect(matches.length, `plan for ${cr} is held exactly once`).toBe(1);
   return matches[0]!;
@@ -74,7 +74,7 @@ function orderedPairs(plan: PlanRow): Array<[string, string]> {
 
 describe("POST …/plans stores the kind each filed cycle declares", () => {
   test("a cycle filed with no kind is stored as red-green, read back from the store", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await readyProject(handle, [ORCH], "plan-file-kindless");
     const cr = "CR-FILE-KINDLESS";
 
@@ -85,7 +85,7 @@ describe("POST …/plans stores the kind each filed cycle declares", () => {
   });
 
   test("two different declared kinds in one filing are stored against their own cycles, in the authored order", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await readyProject(handle, [ORCH], "plan-file-two-kinds");
     const cr = "CR-FILE-TWO-KINDS";
 
@@ -104,7 +104,7 @@ describe("POST …/plans stores the kind each filed cycle declares", () => {
   });
 
   test("an unrecognised kind is refused 400 with the route's exact invalid-kind body and stores no plan and no cycle", async () => {
-    handle = bootOn();
+    handle = bootInProcess();
     const key = await readyProject(handle, [ORCH], "plan-file-unknown-kind");
     expect(await storedPlans(handle, key), "the project starts with no plans").toEqual([]);
 

@@ -12,7 +12,7 @@
 // Rows are counted with a direct SQL count through the store's own
 // connection, the way the cascade tests count their tables.
 //
-// SAFETY: every server binds port 0 on ":memory:"; the migrated store is a
+// SAFETY: every board is in process (no socket) on ":memory:"; the migrated store is a
 // file under a fresh OS tmpdir, removed after each test.
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -21,19 +21,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { RUN_STREAM_TABLES } from "../../src/run-stream.ts";
 import { SCHEMA_VERSION, Store } from "../../src/store.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
-  base,
-  bootOn,
+  bootInProcess,
   eventLine,
   openRun,
   postJson,
   readyProject,
   sendBatch,
   utf8,
+  send,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 const scratchDirs: string[] = [];
 const stores: Store[] = [];
 
@@ -54,7 +54,7 @@ const COUNT_ROWS: Record<(typeof RUN_STREAM_TABLES)[number], string> = {
   run_live_failures: "SELECT COUNT(*) AS n FROM run_live_failures WHERE run_id = ?",
 };
 
-function streamRows(handle: ServerHandle, runId: string): Record<string, number> {
+function streamRows(handle: BoardHandle, runId: string): Record<string, number> {
   const db = dbOf(handle.store);
   const out: Record<string, number> = {};
   for (const table of RUN_STREAM_TABLES) {
@@ -80,7 +80,7 @@ const L_FAIL = eventLine({
 });
 
 /** A project with one open run that has streamed one pass and one failure, in two batches. */
-async function streamingProject(handle: ServerHandle, name: string): Promise<{ key: string; runId: string }> {
+async function streamingProject(handle: BoardHandle, name: string): Promise<{ key: string; runId: string }> {
   const agentId = `${name}-streamer`;
   const key = await readyProject(handle, [agentId], name);
   const runId = await openRun(handle, key, agentId, { stack: "bun", tier: "unit" });
@@ -95,13 +95,13 @@ async function streamingProject(handle: ServerHandle, name: string): Promise<{ k
   return { key, runId };
 }
 
-async function archive(handle: ServerHandle, key: string): Promise<void> {
+async function archive(handle: BoardHandle, key: string): Promise<void> {
   const res = await postJson(handle, `/api/v2/projects/${key}/archive`, {});
   expect(res.status, JSON.stringify(res.body)).toBe(200);
 }
 
-async function deleteProject(handle: ServerHandle, key: string): Promise<{ status: number; body: Record<string, unknown> }> {
-  const res = await fetch(`${base(handle)}/api/v2/projects/${key}`, {
+async function deleteProject(handle: BoardHandle, key: string): Promise<{ status: number; body: Record<string, unknown> }> {
+  const res = await send(handle, `/api/v2/projects/${key}`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ userApproved: true }),
@@ -111,7 +111,7 @@ async function deleteProject(handle: ServerHandle, key: string): Promise<{ statu
 
 describe("a project's cascade delete removes its runs' held streams and live state", () => {
   test("DELETE /api/v2/projects/<key> leaves no row of its open streamed run in run_stream_batches, run_live or run_live_failures", async () => {
-    const handle = bootOn();
+    const handle = bootInProcess();
     handles.push(handle);
     const { key, runId } = await streamingProject(handle, "cascade-stream");
     await archive(handle, key);
@@ -127,7 +127,7 @@ describe("a project's cascade delete removes its runs' held streams and live sta
   });
 
   test("another project's streamed run keeps every row of its stream and live state", async () => {
-    const handle = bootOn();
+    const handle = bootInProcess();
     handles.push(handle);
     const doomed = await streamingProject(handle, "cascade-doomed");
     const kept = await streamingProject(handle, "cascade-kept");

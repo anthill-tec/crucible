@@ -24,10 +24,10 @@
 // BEFORE the race: a registration already writes a lifecycle event.
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
 import { resolveLimit } from "../../src/limits.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { ChangeKind, Store } from "../../src/store.ts";
 import {
-  bootOn,
+  bootInProcess,
   closeStream,
   eventLine,
   getJson,
@@ -40,7 +40,7 @@ import {
   utf8,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   setSystemTime();
@@ -66,15 +66,15 @@ const L_END = eventLine({ event: "run-end", total: 2, passed: 1, failed: 1, pend
 const HELD = L_START + L_ONE;
 
 interface Racing {
-  handle: ServerHandle;
+  handle: BoardHandle;
   store: Store;
   key: string;
   runId: string;
 }
 
-/** A real server, a registered agent, an open run holding HELD. */
+/** A real board, a registered agent, an open run holding HELD. */
 async function racingRun(): Promise<Racing> {
-  const handle = bootOn();
+  const handle = bootInProcess();
   handles.push(handle);
   const key = await readyProject(handle, [AGENT], "stream-race");
   const runId = await openRun(handle, key, AGENT, { stack: "bun", tier: "unit" });
@@ -246,7 +246,7 @@ describe("an agent that only streams stays live", () => {
   // agent would tombstone and its run be aborted `agent died` mid-stream.
   test("streaming for twice its tombstone window, the agent's run is never swept, while a sibling that streams nothing is swept `agent died`", () => {
     const store = (() => {
-      const handle = bootOn();
+      const handle = bootInProcess();
       handles.push(handle);
       return handle.store;
     })();
@@ -292,7 +292,7 @@ describe("an agent that only streams stays live", () => {
 describe("a batch moves no agents slice", () => {
   // Pins: the quiet touch done through `touchAgent`, which emits `agents`.
   test("a batch over the route emits no `agents` change, yet moves the agent's lastSeen", async () => {
-    const handle = bootOn();
+    const handle = bootInProcess();
     handles.push(handle);
     const key = await readyProject(handle, [AGENT], "stream-quiet");
     const runId = await openRun(handle, key, AGENT, { tier: "unit" });
@@ -315,7 +315,7 @@ describe("a batch moves no agents slice", () => {
   // Pins: a server-side running line (a `live` or `running` key) added to the
   // agents read — §S4 composes the agent's line in the browser.
   test("GET /api/v2/agents serves a streaming agent with exactly the keys it served before the stream", async () => {
-    const handle = bootOn();
+    const handle = bootInProcess();
     handles.push(handle);
     const key = await readyProject(handle, [AGENT], "stream-agents-read");
     const runId = await openRun(handle, key, AGENT, { tier: "unit" });

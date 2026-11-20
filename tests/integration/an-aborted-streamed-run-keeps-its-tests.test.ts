@@ -1,5 +1,5 @@
-// A streamed run that is aborted keeps what it streamed — on a real server
-// (`startServer`, port 0, ":memory:").
+// A streamed run that is aborted keeps what it streamed — on a real board
+// (`bootInProcess`, no socket, ":memory:").
 //
 // The abort is driven both ways the board settles a run it was not closed on:
 //  - the client's own `POST /api/v2/runs/<runId>/abort`;
@@ -19,9 +19,9 @@ import { describe, test, expect, afterEach } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { shippedLimits } from "../../src/limits.ts";
 import { ABORTED_BEFORE_CLOSE, RUN_STREAM_TABLES } from "../../src/run-stream.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
-  bootOn,
+  bootInProcess,
   closeStream,
   eventLine,
   getJson,
@@ -33,14 +33,14 @@ import {
   utf8,
 } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = bootOn();
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
@@ -90,7 +90,7 @@ interface Liveness {
 }
 
 interface Subject {
-  handle: ServerHandle;
+  handle: BoardHandle;
   key: string;
   agentId: string;
   runId: string;
