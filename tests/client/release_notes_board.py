@@ -46,7 +46,7 @@ these scenarios only. They differ from the server in exactly these ways:
 
 If the server changes how it derives history, these suites stay green against
 the old shape: the bun test that holds the server's derivation is
-`tests/integration/history-by-release-read.test.ts`.
+`tests/unit/history-by-release-read.test.ts`.
 
 Every project directory declares its board in its own `crucible.toml` and is
 checked by `declare_and_require_board`, so no drive can resolve another board.

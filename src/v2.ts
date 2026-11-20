@@ -4761,7 +4761,7 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   // a value that WAS declared and carries no label is a SHAPE complaint whose
   // remedy is the caller's own input — and whose help-less envelope is pinned
   // as parity with the bulk door's identical refusal
-  // (tests/integration/queue-membership-one-rule.test.ts, CR-CRU-104 §S2/AC3).
+  // (tests/unit/queue-membership-one-rule.test.ts, CR-CRU-104 §S2/AC3).
   if (body.release === undefined || body.release === null) {
     return fail(400, RELEASE_REQUIRED, { help: roadmapHints.missingRelease });
   }

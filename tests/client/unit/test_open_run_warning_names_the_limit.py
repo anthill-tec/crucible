@@ -50,7 +50,7 @@ wording without either repeating the other.
 -- Where the SOURCE scan lives ---------------------------------------------
 
 There is exactly ONE scan for a retired name across the shipped tree, and it is
-on the bun side (tests/integration/limits-have-no-environment-layer.test.ts), walking
+on the bun side (tests/unit/limits-have-no-environment-layer.test.ts), walking
 `src/`, `clients/` and `public/` together -- one walker, both stacks, the "no
 seventh walker" discipline CR-CRU-128 §S2 established. It is what catches the
 module comment above `NO_LIFECYCLE_ENV` in clients/bun-crucible.py. This file asserts BEHAVIOUR: what

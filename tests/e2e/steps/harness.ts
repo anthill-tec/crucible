@@ -790,7 +790,7 @@ export async function postGate(
  *  §S1 (e2e) — widened with the CR-CRU-080/CR-CRU-084 "release" ceremony
  *  fields (`crs`, `releasedAt`, `packages`) `src/v2.ts` `handleMilestones`
  *  already reads straight off the body (verified by reading it — see
- *  CR-CRU-173's own tests/integration/history-by-release-read.test.ts's `shipReleaseAt`
+ *  CR-CRU-173's own tests/unit/history-by-release-read.test.ts's `shipReleaseAt`
  *  for the store-level sibling of this same shape), additive and optional so
  *  every existing caller (gates.steps.ts's gap-analysis milestone) is
  *  unaffected. */

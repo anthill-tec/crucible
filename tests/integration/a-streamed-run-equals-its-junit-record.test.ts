@@ -4,7 +4,7 @@
 //
 // For each fixture, on a real board (`bootInProcess`, no socket, ":memory:"):
 //  1. its JUnit reports are posted to `POST /api/v2/runs` as its client sends
-//     them (tests/integration/real-stack-reports-decode-on-the-board.test.ts's way:
+//     them (tests/unit/real-stack-reports-decode-on-the-board.test.ts's way:
 //     `codec: "junit"`, the stack, the report texts, bun's console as `raw`),
 //     and the stored run is read back through `GET /api/v2/events/<id>`;
 //  2. that run's tests are re-expressed here as a `crucible-events` stream —

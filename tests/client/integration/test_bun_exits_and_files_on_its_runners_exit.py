@@ -17,7 +17,7 @@ case — suite `runner`, case `exit <n>` — before it stores the run.
     exits non-zero. A clean runner over a passing report is filed and exits
     exactly as before. The board's half — the `runner / exit N` case it adds
     and counts — is held in bun by
-    `tests/integration/run-ingest-runner-exit.test.ts`.
+    `tests/unit/run-ingest-runner-exit.test.ts`.
 
 `RunnerExitReachesTheIngestTest`
     Against a recording board: what each route's ingest body CARRIES as
@@ -160,7 +160,7 @@ class RunnerExitOnARealBoardTest(_FakeRunnerProject, unittest.TestCase):
     runner whose exit disagrees with its report. The board answers the
     ingest with the `run` block the server answers for that report and exit
     (the runner case counted); the case itself is the server's, held in bun
-    by `tests/integration/run-ingest-runner-exit.test.ts`."""
+    by `tests/unit/run-ingest-runner-exit.test.ts`."""
 
     PROJECT_KEY = "runner-exit-live-half-key"
 

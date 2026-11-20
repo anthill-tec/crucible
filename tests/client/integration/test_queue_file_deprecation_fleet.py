@@ -1,7 +1,7 @@
 """CR-CRU-118 §S3 (fleet half) -- the deprecation notice reaches ALL FIVE
 clients, and the client count itself is asserted.
 
-The route half lives in `tests/integration/queue-file-deprecation.test.ts`: every bulk
+The route half lives in `tests/unit/queue-file-deprecation.test.ts`: every bulk
 queue POST raises a structured deprecation finding naming the three per-CR
 verbs that replace `queue-file` (`cr-plan`, `cr-depends`, `wave-sequence`).
 This file is the other half of the same criterion -- "it reaches all five
@@ -66,7 +66,7 @@ from tests.client.client_fleet_envelope_census_helpers import (
 
 # ── the contract, as the route half pins it ────────────────────────────────
 #
-# One spelling, shared with `tests/integration/queue-file-deprecation.test.ts`. The CR
+# One spelling, shared with `tests/unit/queue-file-deprecation.test.ts`. The CR
 # names the three verbs and the `{code, message}` finding shape; the code and
 # the machine-readable field are chosen ONCE by RED and implemented by GREEN.
 QUEUE_FILE_VERB = "queue-file"

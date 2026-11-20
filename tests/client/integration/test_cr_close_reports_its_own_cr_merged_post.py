@@ -27,11 +27,11 @@ That the board really refuses a post from an agent still bound to the done
 cycle of a closed plan, stores no marker then, and records exactly one marker
 carrying the commit once the poster is unregistered and registered again
 unbound, is the server's half, held in bun by
-`tests/integration/milestone-routes-order-and-refuse-as-clients-read-them
+`tests/unit/milestone-routes-order-and-refuse-as-clients-read-them
 .test.ts`; that a close stores the merge commit by
 `closed-plans-read-carries-merge-and-title-verbatim.test.ts`; and that a close
 over an accepted failing gate keeps its reason by
-`tests/integration/a-close-over-an-accepted-failing-gate-keeps-its-reason
+`tests/unit/a-close-over-an-accepted-failing-gate-keeps-its-reason
 .test.ts` ("stores the reason as given, and the plans read serves it back
 under merge.acceptedFailingGateReason beside the commit", and "a cr-merged
 marker posted with the reason reads back carrying it exactly; one posted

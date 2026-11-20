@@ -6,7 +6,7 @@ for a CR in a non-active wave returns the refusal through the client envelope,
 with the client's own non-zero exit."
 
 Why a client test and not another server test. The refusal is asserted on the
-plans route by tests/integration/wave-single-active.test.ts, but no orchestrator calls that
+plans route by tests/unit/wave-single-active.test.ts, but no orchestrator calls that
 route by hand -- they run `plan-file`, and between the route and the caller sit
 two lossy seams. `http_request` FLATTENS an HTTP error to `"HTTP <code>:
 <body>"`, so the server's structured refusal survives only as text; and

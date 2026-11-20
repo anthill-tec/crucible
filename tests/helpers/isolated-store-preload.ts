@@ -14,7 +14,7 @@
 // resolved nothing on a fresh clone or in CI. Same code, same command, two
 // different caps — green here, red there, surfacing at gate time wearing an
 // unrelated face. C2 found the first instance by measurement
-// (tests/integration/milestone-records-are-queryable-by-type.test.ts ingests 5001 events)
+// (tests/unit/milestone-records-are-queryable-by-type.test.ts ingests 5001 events)
 // and migrated that one suite by hand; nothing stopped the next one.
 //
 // DECLARED, not merely absent: a suite that is isolated only because a file

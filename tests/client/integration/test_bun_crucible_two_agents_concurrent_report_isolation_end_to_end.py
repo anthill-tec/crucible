@@ -11,7 +11,7 @@ to a recording board (`RecordingBoard`) whose request log holds what each
 agent filed, under its own `agentId`, its report read as the board's junit
 codec reads it. The board's half — each agent's run stored and listed with
 its own totals — is held in bun by
-`tests/integration/events-list-keeps-each-agents-own-run-totals.test.ts`
+`tests/unit/events-list-keeps-each-agents-own-run-totals.test.ts`
 ("two agents filing concurrently into one project each read back exactly one
 run with their own (total, passed, failed)").
 **The main test below is expected to PASS on first run.**

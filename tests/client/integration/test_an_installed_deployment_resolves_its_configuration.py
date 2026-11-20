@@ -78,7 +78,7 @@ HOW EACH FAILS IF THE CODE DOES NOTHING:
 
 The cross-runtime half of §S2 -- that the server READS `dirname(store)/
 crucible.toml` -- is already asserted, on the server's own runtime, by
-tests/integration/server-limits-are-configuration.test.ts, in its "the server's
+tests/unit/server-limits-are-configuration.test.ts, in its "the server's
 crucible.toml sits beside its database" test (`serverConfigPath()` is
 `path.join(dirname($CRUCIBLE_DB), "crucible.toml")`) and in the positive
 control of its "a SERVER limit configured in the PROJECT's file" test (a value
@@ -1044,7 +1044,7 @@ class TheInstallerLaysDownTheServersOperatorFileTest(_InstalledDeploymentCase):
         already mirrors (`resolveDbPath`, CR-CRU-043 rule 4).
 
         The READ side is already asserted on the server's own runtime by
-        tests/integration/server-limits-are-configuration.test.ts, in its "the server's
+        tests/unit/server-limits-are-configuration.test.ts, in its "the server's
         crucible.toml sits beside its database" test (the path) and in the
         positive control of its "a SERVER limit configured in the PROJECT's
         file" test (a value written into that file is the value `resolveLimit`

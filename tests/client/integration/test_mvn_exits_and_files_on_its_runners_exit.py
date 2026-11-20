@@ -23,7 +23,7 @@ records no failure, adds one failing case — suite `runner`, case `exit <n>`.
     itself exited 0. A clean build over a passing report is filed and exits
     exactly as before. The board's half — the `runner / exit N` case it adds
     and counts, only over a run that records no failure — is held in bun by
-    `tests/integration/run-ingest-runner-exit.test.ts`.
+    `tests/unit/run-ingest-runner-exit.test.ts`.
 
 `MavenRunnerExitReachesTheIngestTest`
     Against a recording board: what the ingest body CARRIES as `runnerExit`,
@@ -184,7 +184,7 @@ class MavenRunnerExitOnARealBoardTest(_FakeMavenProject, unittest.TestCase):
     ingest with the `run` block the server answers for those reports and
     that exit (a runner case counted over a run with no failure); the case
     itself is the server's, held in bun by
-    `tests/integration/run-ingest-runner-exit.test.ts`."""
+    `tests/unit/run-ingest-runner-exit.test.ts`."""
 
     PROJECT_KEY = "mvn-runner-exit-live-half-key"
 

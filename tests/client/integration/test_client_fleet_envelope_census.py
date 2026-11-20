@@ -2259,7 +2259,7 @@ class Cr092NextVerbAxiConformanceTest(unittest.TestCase):
 # AC7 is the fleet's half of "no dependency flag or argument appears on
 # `cr-plan` or `wave-sequence`" (shapes B and C, both rejected). The server
 # half -- a `dependsOn` in a `cr-plan` body is ignored -- is
-# `tests/integration/cr-depends-envelope.test.ts`'s. Here it is read off each client's
+# `tests/unit/cr-depends-envelope.test.ts`'s. Here it is read off each client's
 # REAL argparse, the same option-string set the roadmap section already
 # collects, so a flag added to the shared registrar OR hand-rolled in one
 # client fails in the same place.
@@ -2331,7 +2331,7 @@ def _get_depends_drives():
 # (`tracks` beside `entries`) instead of re-deriving one. `next` no longer reads
 # the queue: on the server the resolver reads the declared tracks directly, so
 # an unpublished or re-derived track fact cannot arise. Its two server-side
-# behaviours are PORTED to tests/integration/next-route.test.ts (CR-CRU-098 AC12): the
+# behaviours are PORTED to tests/unit/next-route.test.ts (CR-CRU-098 AC12): the
 # blank case is now enforced at WRITE time — "AC6 — a whitespace-only track
 # value is refused at WRITE time and nothing is stored, so it can never become
 # a phantom second lane; …" — and the padded case at the route — "AC6 — a

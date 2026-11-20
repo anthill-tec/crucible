@@ -15,7 +15,7 @@
 // retirement sweep, then deleted outright with tests/archive by CR-CRU-047.
 // tests/integration/plans.test.ts is the surviving exemplar of that harness pattern.)
 // Timestamp fixtures use the SAME raw-db backdating technique as
-// tests/integration/v2-projects-activity.test.ts (Store has no timestamp-override lever
+// tests/unit/v2-projects-activity.test.ts (Store has no timestamp-override lever
 // in its public API — confirmed against src/store.ts) purely to seed
 // deterministic state; every assertion goes through the real HTTP endpoint
 // or a documented public Store method (listRollups/countEvents/hasAgent).
@@ -450,7 +450,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
 
     /** Files a one-cycle plan through the real plans API and activates it, so
      * a `--cycle` binding validates (an ACTIVE cycle of an OPEN plan). Same
-     * HTTP-only fixture shape as tests/integration/agent-cycle-binding.test.ts. */
+     * HTTP-only fixture shape as tests/unit/agent-cycle-binding.test.ts. */
     async function fileAndActivate(key: string): Promise<number> {
       const reg = await postJson("/api/v2/agents/register", {
         projectKey: key,

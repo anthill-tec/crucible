@@ -3,7 +3,7 @@ the bytes its runner wrote — driven end to end against a fake board.
 
 CR-CRU-152 froze one real run per stack under `tests/fixtures/reports/<stack>/`
 with its client's parse beside it (`expected.json`).
-`tests/integration/real-stack-reports-decode-on-the-board.test.ts` proves the board's
+`tests/unit/real-stack-reports-decode-on-the-board.test.ts` proves the board's
 decode of those reports by POSTing them itself. This suite proves the same
 figures through the CLIENT VERB: `bun-crucible.py test`,
 `python-crucible.py test` (unittest and pytest) and `mvn-crucible.py
@@ -37,7 +37,7 @@ reports under the fixture's coverage codec.
 What the board stores from those bytes — the counts, every case's status, the
 distinct-file count and the coverage object of `expected.json` — is the
 server's half, held in bun by
-`tests/integration/real-stack-reports-decode-on-the-board.test.ts` ("stores
+`tests/unit/real-stack-reports-decode-on-the-board.test.ts` ("stores
 the client's total, passed, failed and pending, …", "stores every case with
 the client's status, …", "decodes the real … report to the client's coverage
 object, …", "answers the run's distinct-file count, …") and, for rust's

@@ -10,7 +10,7 @@
 //    JUnit close (CR-CRU-200), beside a view-stream run that takes it;
 //  - the abort: by the abort route, and by the sweep (`agent died` and
 //    `abandoned`, `Store#sweepOpenRuns` driven with a `now` as
-//    tests/integration/an-aborted-streamed-run-keeps-its-tests.test.ts drives it), a
+//    tests/unit/an-aborted-streamed-run-keeps-its-tests.test.ts drives it), a
 //    view-stream run's aborted event carries no tree, no summary and no
 //    `incomplete`, and its held stream is deleted.
 //

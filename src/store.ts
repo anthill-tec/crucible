@@ -2314,7 +2314,7 @@ const GATE_ROWS = recordProjection("gates", "gate");
  * names this one). "Is it still a plannable plan?" and "does it carry a
  * delivered date?" are both true of it in those two senses. That is ambiguous
  * DATA, not an inconsistent model, and it is pinned in
- * `tests/integration/release-before-and-after-delivery.test.ts` so it cannot invert in
+ * `tests/unit/release-before-and-after-delivery.test.ts` so it cannot invert in
  * silence.
  *
  * Retirement is deliberately NOT part of it: a superseded plan is neither a
@@ -6256,7 +6256,7 @@ export class Store {
     // "outstanding" for a target nobody aims at any more — two live plans for
     // one label, the very thing `retired_at` is stamped to prevent. Both
     // halves are pinned together in
-    // `tests/integration/undelivered-release-is-the-plannable-target.test.ts` consumer 5:
+    // `tests/unit/undelivered-release-is-the-plannable-target.test.ts` consumer 5:
     // the dated read answers the live record alone, the unfiltered one answers
     // the predecessor too, still carrying the target it declared.
     if (dates !== undefined && Object.keys(dates).length > 0) {

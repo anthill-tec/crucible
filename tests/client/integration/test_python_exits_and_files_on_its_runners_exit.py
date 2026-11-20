@@ -21,7 +21,7 @@ case — suite `runner`, case `exit <n>` — before it stores the run.
     non-zero and closes no run as a test result. A clean runner over a
     passing stream is filed and exits exactly as before. The board's half —
     the `runner / exit N` case it adds and counts — is held in bun by
-    `tests/integration/run-ingest-runner-exit.test.ts`.
+    `tests/unit/run-ingest-runner-exit.test.ts`.
 
 `PythonRunnerExitReachesTheIngestTest`
     Against a recording board: what the ingest body CARRIES as `runnerExit`,
@@ -165,7 +165,7 @@ class PythonRunnerExitOnARealBoardTest(_FakeInterpreterProject, unittest.TestCas
     runner whose exit disagrees with its report. The board answers the close
     with the `run` block the server answers for that stream and exit (the
     runner case counted); the case itself is the server's, held in bun by
-    `tests/integration/run-ingest-runner-exit.test.ts`."""
+    `tests/unit/run-ingest-runner-exit.test.ts`."""
 
     PROJECT_KEY = "py-runner-exit-live-half-key"
 

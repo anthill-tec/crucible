@@ -805,7 +805,7 @@ class CycleAddBodyWithoutAKindIsUnchangedTest(_BaseCycleAddTest):
 # nothing, the append landing on a re-filed open plan while its aborted
 # sibling keeps exactly its own cycle, a fix needing its verify done — is the
 # server's half, held in bun by
-# `tests/integration/cycle-append-route-stores-and-refuses-kinds.test.ts` and
+# `tests/unit/cycle-append-route-stores-and-refuses-kinds.test.ts` and
 # `cycle-add-fix-only.test.ts`.
 
 #: The server's refusal of a kind `parseCycleInput` (src/v2.ts) does not know.

@@ -37,7 +37,7 @@ fires and every "wire shape" assertion below fails for that reason — the
 intended RED signal.
 
 What is DELIBERATELY NOT asserted here (server-side, not the client's job,
-and left to tests/integration/cr022-story-points.test.ts): whether the value is
+and left to tests/unit/cr022-story-points.test.ts): whether the value is
 refused for landing off the 1-2-3-5-8-13 Fibonacci scale. §S1's ruling —
 "any other value is refused, naming the scale" — matches the codebase's
 existing precedent for value-shape refusals (e.g. `release`'s string-type

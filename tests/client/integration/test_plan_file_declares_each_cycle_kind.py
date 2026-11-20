@@ -79,7 +79,7 @@ FINDINGS recorded by RED, not guessed around:
 
 Tier: INTEGRATION. This module spawns client subprocesses against a fake
 board (`RecordingBoard`); what the STORE holds is the server's half, pinned
-in bun by `tests/integration/plan-file-route-stores-and-refuses-kinds.test.ts`.
+in bun by `tests/unit/plan-file-route-stores-and-refuses-kinds.test.ts`.
 
 RED, measured against `e5d6275`: no client declares `--cycle-kind`, so every
 surface/census test fails, every wire test dies in argparse with
@@ -616,7 +616,7 @@ class SuggestedInvocationTemplatesTeachTheMandatedFormTest(_CycleKindWireTestBas
 # two declared kinds stored against their own cycles in the authored order, an
 # unknown kind refused with the route's exact body and nothing stored — is the
 # server's half, held in bun by
-# `tests/integration/plan-file-route-stores-and-refuses-kinds.test.ts`.
+# `tests/unit/plan-file-route-stores-and-refuses-kinds.test.ts`.
 
 #: The server's refusal of a kind `parseCycleInput` (src/v2.ts) does not know.
 _INVALID_SMOKE = "invalid kind: smoke (expected red-green | verify | fix)"

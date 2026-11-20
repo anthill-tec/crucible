@@ -5,7 +5,7 @@
 //
 // LIFTED, not re-derived — the standing rule this directory already states in
 // tests/helpers/source-scan.ts's own header (CR-CRU-097 §S6). Everything below
-// was file-local to tests/integration/server-limits-are-configuration.test.ts, which
+// was file-local to tests/unit/server-limits-are-configuration.test.ts, which
 // proved it in CR-CRU-131 C1. C2 retires the environment-variable layer, so
 // the six suites that used to drive a limit through `$CRUCIBLE_DEFAULT_RETENTION`,
 // `$CRUCIBLE_RUN_ABANDON_MS` or `$CRUCIBLE_PROJECT_INACTIVE_MS` must configure
@@ -109,7 +109,7 @@ export const BOOTSTRAP_ENV: readonly string[] = [
  *
  * `RETIRED_LIMIT_ENV` drives a scan of `src/`, `clients/` and `public/` that
  * fails on ANY occurrence of a name, prose included
- * (tests/integration/limits-have-no-environment-layer.test.ts) — a limit variable's whole
+ * (tests/unit/limits-have-no-environment-layer.test.ts) — a limit variable's whole
  * defect was that it was a second way to set a number, so naming it at all
  * teaches a mechanism that must not exist. The connection retirement is the
  * opposite: the code that stopped reading these SAYS SO where it used to read
@@ -284,7 +284,7 @@ interface RawDb {
   query(sql: string): QueryHandle;
 }
 
-/** Backdate an event's timestamp column (tests/integration/v2-projects-activity.test.ts's
+/** Backdate an event's timestamp column (tests/unit/v2-projects-activity.test.ts's
  *  convention — Store stamps Date.now() with no override lever). */
 export function backdateEvent(store: Store, eventId: string, msAgo: number): void {
   (store as unknown as { db: RawDb }).db

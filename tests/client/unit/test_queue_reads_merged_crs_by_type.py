@@ -37,7 +37,7 @@ What this file asserts:
     an error, because a release is PUBLISHED before it is reported.
 
 The route SHAPE is the server's to choose (see
-tests/integration/milestone-records-are-queryable-by-type.test.ts, which states the
+tests/unit/milestone-records-are-queryable-by-type.test.ts, which states the
 proposed spelling and why GREEN may overrule it). Nothing here pins a path:
 the assertions are that the request NAMES the type and carries NO window, both
 of which hold whatever the collection ends up being called.

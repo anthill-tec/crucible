@@ -1,10 +1,10 @@
 // CR-CRU-157 AC6–AC8 (C3) — the card, not just the wire: `AgentRow` (public/
 // app.js) renders the agent's own run message during a run; once the server
 // says the agent is idle (the companion server file
-// tests/integration/agent-idle-line-derived-at-read-time.test.ts pins the `idleLine`
+// tests/unit/agent-idle-line-derived-at-read-time.test.ts pins the `idleLine`
 // field's presence rule), the row shows THAT composed line instead of the
 // raw message; and a refused ingest's refusal (the server file
-// tests/integration/ingest-outcome-overwrites-agent-message.test.ts pins its exact text)
+// tests/unit/ingest-outcome-overwrites-agent-message.test.ts pins its exact text)
 // stays visible on the row, never papered over by a stale `running N/M`.
 //
 // Today `AgentRow` renders `agent.message || "—"` unconditionally — it has

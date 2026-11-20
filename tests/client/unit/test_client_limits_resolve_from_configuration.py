@@ -17,7 +17,7 @@ The server's five (`run_abandon_ms`, `project_inactive_ms`, `retention`,
 client resolves a PROJECT DIRECTORY and its `.env` and then posts over HTTP,
 while the server resolves its own database and may be installed on another
 machine entirely. Neither process reads the other's file. The server's half
-lives in tests/integration/server-limits-are-configuration.test.ts.
+lives in tests/unit/server-limits-are-configuration.test.ts.
 
 ── The seam this file is written against ──────────────────────────────────
 

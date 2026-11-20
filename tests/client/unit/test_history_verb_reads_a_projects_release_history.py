@@ -9,7 +9,7 @@ not exist yet, not a fixture bug.
 Spec (docs/changes/CR-CRU-175-the-queue-verb-shows-each-crs-place-in-the-plan.md
 §S4): every client gains a `history` verb over `GET
 /api/v2/projects/<key>/history` (CR-CRU-173/177's read — its wire shape is
-pinned by tests/integration/history-by-release-read.test.ts): one TOON envelope, default
+pinned by tests/unit/history-by-release-read.test.ts): one TOON envelope, default
 columns `release`, `state`, `shippedAt`, `tag`, `crs` (completed count),
 `pending` (pendingCount), `target`; `--fields` ADDS `waves`, `gateRuns`,
 `lastGate`, `verified`, `packages`; `--full` prints every column; `--release
@@ -127,7 +127,7 @@ def _run_main(module, argv):
     return code, out.getvalue(), err.getvalue()
 
 
-# ── fixture: GET …/history's own wire shape (tests/integration/history-by-release-read.test.ts) ──
+# ── fixture: GET …/history's own wire shape (tests/unit/history-by-release-read.test.ts) ──
 
 SHIPPED_GATE_RUN = {
     "runId": "run-hist-1", "outcome": "FAIL", "stopStep": "lint",
