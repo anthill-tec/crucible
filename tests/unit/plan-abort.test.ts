@@ -43,8 +43,8 @@
 // "aborted" status.
 //
 // Harness: reuses the EXACT postJson/patchJson/getJson + createProject +
-// plansPath conventions from tests/integration/cycle-activation-guards.test.ts, and the
-// time-injection + store-reopen technique from tests/integration/checkpoint-stop.test.ts
+// plansPath conventions from tests/unit/cycle-activation-guards.test.ts, and the
+// time-injection + store-reopen technique from tests/unit/checkpoint-stop.test.ts
 // (bun:test's setSystemTime() + a "restart" being a fresh bootInProcess() over
 // the SAME on-disk dbPath) for the sealed-timer assertions.
 
@@ -101,7 +101,7 @@ function removeScratchDirs(): void {
 
 function freshTmpDbPath(): string {
   // NEVER inside the repo — a fresh OS tmpdir per test (same convention as
-  // tests/unit/boot-safety.test.ts / tests/integration/checkpoint-stop.test.ts).
+  // tests/unit/boot-safety.test.ts / tests/unit/checkpoint-stop.test.ts).
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crucible-abort-test-"));
   scratchDirs.push(dir);
   return path.join(dir, "crucible.db");
@@ -147,7 +147,7 @@ function withFixtureAgent(body: unknown): unknown {
 // wall-clock time would otherwise fall outside its lazy-prune liveness
 // window the instant the mocked clock jumps ahead, spuriously 409ing every
 // workflow verb that follows a time jump (same fix as
-// tests/integration/cycle-epochs.test.ts / tests/integration/checkpoint-stop.test.ts). Re-touch
+// tests/unit/cycle-epochs.test.ts / tests/unit/checkpoint-stop.test.ts). Re-touch
 // (re-register) it against the CURRENT (possibly mocked) clock immediately
 // before every mutating call, keyed off the projectKey in the request path.
 async function touchFixtureAgent(handle: BoardHandle, urlPath: string): Promise<void> {

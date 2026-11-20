@@ -23,8 +23,8 @@
 // The finding's existing coverage lives in tests/queue-defaulted-seq-scope.ts
 // (the widening CR's own suite, shipped and not edited — the same ruling
 // tests/integration/queue-registration.test.ts recorded when it faced this choice), in
-// tests/integration/queue-default-into-wave-block.test.ts and in
-// tests/integration/queue-membership-one-rule.test.ts's parity table. Those three CONSUME
+// tests/unit/queue-default-into-wave-block.test.ts and in
+// tests/unit/queue-membership-one-rule.test.ts's parity table. Those three CONSUME
 // the wording as a guard. This CR CHANGES what one of the two causes says and
 // adds the machine discriminator, so it brings its own file, named for the
 // behaviour (the CAUSE a seq finding names) and not for the CR, so it does not

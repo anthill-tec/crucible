@@ -24,7 +24,7 @@
 //     are expected to fail before GREEN.
 //
 // Harness: the exact boot/createProject/plansPath/postJson/patchJson/getJson
-// convention already established in tests/integration/plan-abort.test.ts (handle passed
+// convention already established in tests/unit/plan-abort.test.ts (handle passed
 // explicitly, no shared mutable module state) — same production server via
 // bootInProcess(), :memory: db, no live crucible.db ever touched.
 

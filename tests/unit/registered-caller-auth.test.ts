@@ -21,8 +21,8 @@
 // each is labelled BORN GREEN at the test.
 //
 // Harness: drives the real production router in process (`bootInProcess`) + its real routes, the
-// same pattern as tests/integration/agent-cycle-binding.test.ts (register/heartbeat +
-// the plans/cycles HTTP surface) and tests/integration/checkpoint-stop.test.ts
+// same pattern as tests/unit/agent-cycle-binding.test.ts (register/heartbeat +
+// the plans/cycles HTTP surface) and tests/unit/checkpoint-stop.test.ts
 // (checkpoint/stop routes) — no new mechanism invented here. State-unchanged
 // assertions read back through `handle.store` directly, the same technique
 // agent-cycle-binding.test.ts uses (store.hasAgent / store.listPlans).
@@ -55,7 +55,7 @@ interface PlanFileResponse {
   [key: string]: unknown;
 }
 
-/** Same helper as tests/integration/agent-cycle-binding.test.ts's errorSurface. */
+/** Same helper as tests/unit/agent-cycle-binding.test.ts's errorSurface. */
 function errorSurface(body: ErrResponse): string {
   const help = Array.isArray(body.help) ? body.help.join(" ") : String(body.help ?? "");
   return `${String(body.error ?? "")} ${help}`.toLowerCase();

@@ -4,7 +4,7 @@
 //
 // Baseline (measured against this checkout): `handleAnalyticsBurndown` /
 // `burndown()` answer no `totalPoints` field at all (see
-// tests/integration/release-live-total-points.test.ts's own baseline note), so the HTTP
+// tests/unit/release-live-total-points.test.ts's own baseline note), so the HTTP
 // answer below always reads `totalPoints: undefined`, never the oracle sum
 // computed independently from the SAME store's raw queue rows — a mismatch
 // for the right reason, not a typo.

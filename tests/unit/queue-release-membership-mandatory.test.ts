@@ -77,7 +77,7 @@ import { join } from "node:path";
 import type { BoardHandle } from "../../src/server.ts";
 // `waveSeqBase`/`WAVE_SEQ_STRIDE` are the store's OWN wave-block arithmetic
 // (§S3), consumed rather than re-derived — the precedent
-// tests/integration/queue-default-into-wave-block.test.ts sets. The precedence test below
+// tests/unit/queue-default-into-wave-block.test.ts sets. The precedence test below
 // needs the exact seq that would LEAVE a wave's block.
 import { WAVE_SEQ_STRIDE, waveSeqBase } from "../../src/store.ts";
 import type { QueueEntryInput } from "../../src/store.ts";
@@ -674,7 +674,7 @@ describe("CR-CRU-118 — every live CR names a release", () => {
         // this section would assert a fact belonging to that one and break
         // again on the next addition. The union is pinned WHOLE, at exactly
         // six and with the first five by value, in
-        // tests/integration/queue-file-deprecation.test.ts — so nothing may join the
+        // tests/unit/queue-file-deprecation.test.ts — so nothing may join the
         // vocabulary unasserted.
         expect(
           union.slice(0, SHIPPED_QUEUE_WARNING_CODES.length + 1),

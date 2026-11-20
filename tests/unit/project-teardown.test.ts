@@ -115,7 +115,7 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
 
   /** Raw per-table row counts for `key` — the store exposes no generic count
    * API, so this reaches the private `db` the same way the existing fleet of
-   * tests does (e.g. `tableInfoColumns` in tests/integration/agent-role-rename.test.ts,
+   * tests does (e.g. `tableInfoColumns` in tests/unit/agent-role-rename.test.ts,
    * `rawRoleRow` in tests/unit/event-role-backfill.test.ts):
    * `(store as unknown as { db: Database }).db`. */
   function countRows(key: string): TableCounts {

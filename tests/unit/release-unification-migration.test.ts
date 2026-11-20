@@ -233,7 +233,7 @@ function expectationsFrom(rows: StoredRow[]): Expectation[] {
  * Turn a store into the shape a PRE-§S2 board really has.
  *
  * Built by AGEING what the ordinary door wrote rather than by hand-INSERTing
- * rows, the idiom tests/integration/milestone-dates-migration.test.ts established: a
+ * rows, the idiom tests/unit/milestone-dates-migration.test.ts established: a
  * fixture that could only be produced by a pre-GREEN build would stop testing
  * the migration the moment the migration existed. Every statement here is a
  * no-op against today's build — which already writes this shape — and does

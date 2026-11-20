@@ -12,7 +12,7 @@
 // invalid-kind refusal (src/v2.ts), as `handlePlanFile` applies them to every
 // entry before any write, and `Store#filePlan`'s insert of each parsed kind in
 // the authored order (src/store.ts). The append route's side of the same rules
-// is pinned by tests/integration/cycle-append-route-stores-and-refuses-kinds.test.ts.
+// is pinned by tests/unit/cycle-append-route-stores-and-refuses-kinds.test.ts.
 //
 // Safety: every board is in process (no socket) on a ":memory:" store; nothing outside
 // the process is read or written.

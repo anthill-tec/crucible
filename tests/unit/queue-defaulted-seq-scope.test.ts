@@ -780,7 +780,7 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
 
   // ── AC11 — the WAVE axis is preserved ─────────────────────────────────────
   //
-  // The two shapes are already pinned by tests/integration/roadmap-registration-routes.test.ts
+  // The two shapes are already pinned by tests/unit/roadmap-registration-routes.test.ts
   // "AC23 — a defaulted seq is reported, never silently invented" (the bulk
   // post that ADDS a cr to a wave carrying explicit seq values; cr-plan into a
   // wave whose siblings carry seq values from ANOTHER scale). Those assert the

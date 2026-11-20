@@ -12,7 +12,7 @@
 // the request body at all (`runMeta` / `resolveIngestAttach` in src/v2.ts
 // have no notion of it — an unknown JSON field is simply dropped by
 // `readBody`'s pass-through cast), and neither `events` nor `runs` carries
-// the column (see the schema block appended to tests/integration/store-migration.test.ts
+// the column (see the schema block appended to tests/unit/store-migration.test.ts
 // for the migration proof). Every assertion below fails for exactly that
 // reason — a release silently ignored or a column that does not exist —
 // never a typo.

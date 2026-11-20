@@ -128,7 +128,7 @@ function besideTheDeprecationNotice(warnings: WarningWire[] | undefined): Warnin
 }
 
 /** The store's private `Database`, reached the way tests/integration/agent-lifecycle.test.ts
- *  and tests/integration/v2-projects-activity.test.ts already reach it, to plant a column
+ *  and tests/unit/v2-projects-activity.test.ts already reach it, to plant a column
  *  value NO write path can produce. See the CR-CRU-108 block at the foot of
  *  this file for why a legacy / padded `track` has to be planted. */
 interface RawStatement {
@@ -1862,7 +1862,7 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
   // no raw-`track` seeding idiom, so `plantTrack` below writes the column
   // through the store's private `Database` — the idiom
   // tests/integration/agent-lifecycle.test.ts (`setAgentTimestamps`) and
-  // tests/integration/v2-projects-activity.test.ts already use for exactly this reason.
+  // tests/unit/v2-projects-activity.test.ts already use for exactly this reason.
   // `normalizeTrack` is NOT weakened and no test-only production hook exists.
   describe("CR-CRU-108 §S1 — GET …/queue publishes the tracks it stores", () => {
     const RELEASE = "0.2.0";

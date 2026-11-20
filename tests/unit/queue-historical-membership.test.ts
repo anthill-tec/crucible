@@ -30,7 +30,7 @@
 // of this rule would drift, and the drift would be SILENT — a restore would
 // admit a row the backfill refuses, or the reverse. Cycle 415 pinned the rung
 // against a NARROWED release record from §S2's side
-// (tests/integration/queue-release-membership-mandatory.test.ts, "the derivation is the
+// (tests/unit/queue-release-membership-mandatory.test.ts, "the derivation is the
 // SAME settled-history check §S3a will use"); the anti-drift test at the foot
 // of this file puts the DOOR inside the same pin, driving both against one
 // narrowed record on one board and requiring both answers to move together.

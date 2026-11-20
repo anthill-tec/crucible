@@ -46,7 +46,7 @@
 // pins `warnings[]` by exact set, by length, or POSITIONALLY. Measured
 // 2026-09-10 and reported to GREEN rather than migrated here — and both of
 // the idioms in that report have SINCE MOVED, so read the current pins, not
-// that snapshot: the sibling tests/integration/queue-release-membership-mandatory.test.ts
+// that snapshot: the sibling tests/unit/queue-release-membership-mandatory.test.ts
 // no longer reads §S2's finding as `union[union.length - 1]`, it NAMES the
 // code as `INHERITED_CODE` and records why in that constant's doc comment;
 // and the
