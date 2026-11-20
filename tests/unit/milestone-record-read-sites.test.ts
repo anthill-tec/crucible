@@ -18,7 +18,7 @@
 // ── Where the rest of the table is ────────────────────────────────────────
 //
 //   `GET …/releases`, `GET …/release-proposals`, the pane feed and
-//   `GET …/events/<id>`   -> tests/integration/events-feed-after-records-moved.test.ts
+//   `GET …/events/<id>`   -> tests/unit/events-feed-after-records-moved.test.ts
 //                            (wire reads belong in the wire file)
 //   `cr_merged_crs` + `cmd_queue`
 //                         -> tests/client/unit/test_queue_reads_merged_crs_by_type.py

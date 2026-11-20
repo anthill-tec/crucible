@@ -8,7 +8,7 @@
 // legacy columns are never cleared and the progressive reads still leak
 // `raw`.
 //
-// "Before" vs "after" is built the way tests/integration/store-migration.test.ts builds
+// "Before" vs "after" is built the way tests/unit/store-migration.test.ts builds
 // a pre-upgrade fixture (see its `makePreCycleIdStore`): open a REAL Store to
 // get the current production schema, then walk it back across exactly what
 // the step under test adds — here, drop the five run-detail tables and their

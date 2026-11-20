@@ -26,7 +26,7 @@
 //   The body is found here BY ITS DESCRIPTION — it must name both `cycle_id`
 //   and `backfill` — never by index and never by `MIGRATIONS.length - 1`, both
 //   of which the next CR to append a step is free to move (the convention
-//   tests/integration/gate-retirement.test.ts and tests/unit/roadmap-registration-store.test.ts
+//   tests/unit/gate-retirement.test.ts and tests/unit/roadmap-registration-store.test.ts
 //   already follow). Until that body exists every test below fails on
 //   `backfillStep()`, which is the honest RED reason: the chain never repairs
 //   history.

@@ -13,7 +13,7 @@
 // "is retired now" assertion fails for that reason: the column it reads
 // never moves off NULL.
 //
-// Fixture shape follows tests/integration/store-migration.test.ts's own precedent
+// Fixture shape follows tests/unit/store-migration.test.ts's own precedent
 // (`makePreReleaseStore`): open a REAL Store to get the current production
 // schema (this migration adds no column, so no walk-back is needed), insert
 // rows with a second raw connection, and stamp `user_version` at the
@@ -202,7 +202,7 @@ function fixtureRows(): GateFixtureRow[] {
  * build's own current schema (`Store.open`, so the `gates` table already has
  * every column this migration needs — it adds none), with raw rows inserted
  * through a second connection and `user_version` stamped at the version this
- * build writes today, mirroring `tests/integration/store-migration.test.ts`'s own
+ * build writes today, mirroring `tests/unit/store-migration.test.ts`'s own
  * `makePreReleaseStore` precedent.
  */
 function makeOrphanGateStore(dir: string): string {

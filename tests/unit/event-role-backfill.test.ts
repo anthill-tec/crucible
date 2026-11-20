@@ -26,11 +26,11 @@
 // running post-C1 with historical (pre-057, still-NULL) rows sitting
 // alongside already-declared ones — exactly the mixed state §S4's backfill
 // must reconcile. This is deliberately NOT the pre-C1 (no role column at
-// all) legacy-db convention tests/integration/agent-role-required.test.ts uses for ITS
+// all) legacy-db convention tests/unit/agent-role-required.test.ts uses for ITS
 // migration (that ALTER already shipped and ran; §S4 is a distinct,
 // later migration step against rows the ALTER already created as NULL).
 // Fresh OS tmpdir per test (never inside the repo), same convention as
-// tests/integration/agent-role-required.test.ts / tests/integration/checkpoint-stop.test.ts.
+// tests/unit/agent-role-required.test.ts / tests/unit/checkpoint-stop.test.ts.
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";

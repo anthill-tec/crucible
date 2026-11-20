@@ -28,12 +28,12 @@
 //   the move happens on an ordinary boot and the reporting function is not
 //   live code sitting beside a dead step. This suite finds that step BY ITS
 //   DESCRIPTION, never by index and never by the chain's length, exactly as
-//   tests/integration/gate-retirement.test.ts finds its own.
+//   tests/unit/gate-retirement.test.ts finds its own.
 //
 // 🚨 TWO TABLE NAMES ARE PINNED HERE, AND ONLY HERE: `milestones` and `gates`.
 // A migration is the one place where the destination is the contract — "the
 // rows moved" is unprovable without saying where to. Every OTHER §S1 test
-// (tests/integration/milestone-records-survive-retention.test.ts) is written purely
+// (tests/unit/milestone-records-survive-retention.test.ts) is written purely
 // against behaviour and would pass whatever the tables are called, so if the
 // orchestrator rules different names, this file is the only one that moves.
 //

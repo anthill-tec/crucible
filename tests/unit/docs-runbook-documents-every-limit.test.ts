@@ -528,7 +528,7 @@ function retirementReport(md: string, names: readonly string[]): string[] {
  * chose, reachable by nobody, and it evicted every release this project had
  * ever shipped). Prose recording a deletion is EVIDENCE OF COMPLIANCE, not a
  * violation of it — the distinction the comment over `SHIPPED_TREES` in
- * tests/integration/limits-have-no-environment-layer.test.ts already draws for `docs/`,
+ * tests/unit/limits-have-no-environment-layer.test.ts already draws for `docs/`,
  * and `src` differs from a document only in ADDITIONALLY containing
  * declarations. So the declaration is what is matched, and the lineage stays.
  * (Ruled 2026-09-14; the fifth proxy this CR retires.)

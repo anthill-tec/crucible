@@ -31,7 +31,7 @@
 // same defect from the other side.
 //
 // ── Where the behavioural half of "no read depends on them" lives ──────────
-// tests/integration/milestone-records-survive-retention.test.ts asserts that a VERSIONLESS
+// tests/unit/milestone-records-survive-retention.test.ts asserts that a VERSIONLESS
 // gate, a RETIRED gate and a CONSUMED release-proposal all survive a full roll
 // — the three shapes the two predicates deliberately do NOT protect today. If
 // a read still depended on an exemption, those records would still vanish.

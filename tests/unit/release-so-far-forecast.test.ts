@@ -183,7 +183,7 @@ describe("CR-CRU-161 §S2 — forecast: the release's daily pace, so far", () =>
     // day); the high day alone already meets `remainingPoints`, so a
     // draw's completion day is (to an astronomically negligible tail, see
     // the original week-grained version of this argument in
-    // tests/integration/cr022-forecast-analytics.test.ts) a Geometric(p=0.25) random
+    // tests/unit/cr022-forecast-analytics.test.ts) a Geometric(p=0.25) random
     // variable: true P50 = 3 days, true P80 = 6 days. For N = 1000 draws
     // this is robust for ANY correct seeded PRNG — no exact date is
     // asserted, only that P50 and P80 land on DIFFERENT whole days.

@@ -89,8 +89,8 @@ function normalizeTrack(value: string): string | null {
 // CR-CRU-130 §S2 deleted below: it existed only to reach that read from this
 // file, and no case here calls it any more. The read itself is very much alive
 // — it is the UNDELIVERED half of the release records now — and is exercised
-// in `tests/integration/release-before-and-after-delivery.test.ts` and
-// `tests/integration/undelivered-release-is-the-plannable-target.test.ts`.
+// in `tests/unit/release-before-and-after-delivery.test.ts` and
+// `tests/unit/undelivered-release-is-the-plannable-target.test.ts`.
 
 /**
  * §S2 — THIS CR's own migration body, found by what it declares. Never by
@@ -683,18 +683,18 @@ describe("CR-CRU-091 §S2 — a full replace does not erase a declaration", () =
 //   1. "`targetAt` is accepted for a release-proposal and round-trips as epoch
 //      SECONDS" — the superseded claim is that the type accepting a target is
 //      `release-proposal`. CR-CRU-130 §S1 already made both dates first-class
-//      on EVERY type, and `tests/integration/milestone-dates-are-first-class.test.ts`
+//      on EVERY type, and `tests/unit/milestone-dates-are-first-class.test.ts`
 //      asserts the round-trip per type rather than for this one.
 //   2. "a proposal with ZERO CRs and NO target is legal" — same superseded
 //      premise; absence as a real state is now asserted for every type in that
 //      same file, and for an undelivered `release` specifically in
-//      `tests/integration/release-before-and-after-delivery.test.ts`.
+//      `tests/unit/release-before-and-after-delivery.test.ts`.
 //   3. "a proposal is invisible to `listReleases`, and proposals order among
 //      themselves by version" — the invisibility was derived from the TYPE
 //      NAME, which is exactly what §S2 replaces with delivery. Both halves
 //      survive, re-derived: the two reads split by `deliveredAt` and the
 //      VERSION-ascending order are asserted together in
-//      `tests/integration/release-before-and-after-delivery.test.ts`'s wire-shape case,
+//      `tests/unit/release-before-and-after-delivery.test.ts`'s wire-shape case,
 //      against this project's real population and a scrambled arrival order.
 //   4. "a non-semver label orders DETERMINISTICALLY rather than throwing" —
 //      the comparator is untouched by this CR, but the case can only state its

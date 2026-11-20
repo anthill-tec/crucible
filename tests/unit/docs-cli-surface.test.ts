@@ -16,7 +16,7 @@
 // docs/RUNBOOK.md documents and operators actually run), NOT of the retired bun
 // CLI. Their SUBJECT is untouched by that retirement, so the guard moves rather
 // than dies — the same carve-out CR-CRU-132 §S2 makes for the `help[]` hints in
-// `tests/integration/axi-negotiation.test.ts`.
+// `tests/unit/axi-negotiation.test.ts`.
 //
 // What it guards: the documented command surface must cover every verb the
 // shipped CLI dispatches — derived from the real `_COMMANDS` table in

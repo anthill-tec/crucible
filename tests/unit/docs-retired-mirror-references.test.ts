@@ -473,7 +473,7 @@ describe("§S2/§S4b guard — no docstring/comment in tests/ cites a test_*.py 
     ).toBe(true);
     expect(
       history.some(
-        (h) => h.relPath === join("tests", "integration", "codec-parsepath.test.ts") && h.cited === "v1-sections.test.ts",
+        (h) => h.relPath === join("tests", "unit", "codec-parsepath.test.ts") && h.cited === "v1-sections.test.ts",
       ),
     ).toBe(true);
     // Bound: history hits exist but do not swallow the whole survivor set —

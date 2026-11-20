@@ -44,7 +44,7 @@ function freshStorePath(): string {
   const dir = mkdtempSync(join(tmpdir(), "cr140-schema-"));
   dirs.push(dir);
   const path = join(dir, "crucible.db");
-  // `Store` has no close verb — tests/integration/store-migration.test.ts opens a store
+  // `Store` has no close verb — tests/unit/store-migration.test.ts opens a store
   // and then reads the file back through a second connection exactly so.
   Store.open(path);
   return path;
@@ -140,7 +140,7 @@ describe("CR-CRU-140 §S2 — the schema states which table holds what", () => {
 
   test("this CR introduces no migration: the chain still ends where the stamp says, and no step is attributed to it", () => {
     // A LITERAL `=== 13` is deliberately NOT asserted. This repo ruled on
-    // 2026-09-12 (tests/integration/store-migration.test.ts) that a pinned chain length
+    // 2026-09-12 (tests/unit/store-migration.test.ts) that a pinned chain length
     // describes the world on the day it lands and is falsified by the next
     // CR that legitimately appends a body — a pin that outlives its CR is
     // removed, not re-pinned. What THIS CR claims is narrower and does not

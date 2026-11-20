@@ -14,7 +14,7 @@
 // here, red there, surfacing at gate time wearing an unrelated face.
 //
 // C2 RED found the first instance BY MEASUREMENT rather than by policy:
-// tests/integration/milestone-records-are-queryable-by-type.test.ts ingests 5001 events
+// tests/unit/milestone-records-are-queryable-by-type.test.ts ingests 5001 events
 // and asserts more than 5000 are held, so the moment a 5000-row retention
 // recommendation became resolvable from the repo root it would have capped at
 // EXACTLY 5000 and failed for a reason nothing in its own text mentions. C2
@@ -150,7 +150,7 @@ describe("CR-CRU-131 §S1c — no suite resolves the server's configuration from
     expect(
       configured,
       "the resolved configuration is the very file whose `retention` capped " +
-        "tests/integration/milestone-records-are-queryable-by-type.test.ts at 5000 on one machine and left " +
+        "tests/unit/milestone-records-are-queryable-by-type.test.ts at 5000 on one machine and left " +
         "it uncapped on another",
     ).not.toBe(join(REPO_ROOT, "data", "crucible.toml"));
   });
