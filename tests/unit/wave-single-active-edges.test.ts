@@ -7,7 +7,7 @@
 //       ("a digit-free label numbers 0, exactly as its seq block already
 //       does").
 //
-// WHY THIS FILE EXISTS BESIDE tests/integration/wave-single-active.test.ts. That file is
+// WHY THIS FILE EXISTS BESIDE tests/unit/wave-single-active.test.ts. That file is
 // C1's committed contract — the two REFUSALS and their help. Four ACs were
 // ruled after its RED phase was written and shipped in C1's GREEN with no
 // test naming them, so they are asserted here rather than by reopening a
@@ -39,7 +39,7 @@ import type { QueueEntryInput } from "../../src/store.ts";
 import { waveNumber } from "../../src/store.ts";
 import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
-// ── wire shapes this suite PINS (tests/integration/wave-single-active.test.ts's, so the
+// ── wire shapes this suite PINS (tests/unit/wave-single-active.test.ts's, so the
 //    two files cannot describe the envelope two ways) ──────────────────────
 
 interface QueueEntryWire {

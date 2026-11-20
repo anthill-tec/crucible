@@ -1098,7 +1098,7 @@ function makePreCycleIdStore(dir: string): string {
  * discipline the seam accessors above follow.
  *
  * Located by its DESCRIPTION, the way every later body in this repo is
- * (`tests/integration/gate-retirement.test.ts`, `tests/unit/roadmap-registration-store.test.ts`).
+ * (`tests/unit/gate-retirement.test.ts`, `tests/unit/roadmap-registration-store.test.ts`).
  * An INDEX would be self-fulfilling: `from`/`to` are DERIVED from the position,
  * so `chain[8]` returns a body whose `from`/`to` is 8 -> 9 no matter WHICH body
  * sits there — the "appended at 8 -> 9" claim could never fail again. The

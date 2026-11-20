@@ -17,7 +17,7 @@
 // | `listReleaseProposals`/`listReleases` | src/store.ts                               | 6                   |
 //
 // (`stampProposalRetired` site 1 — retirement-on-ship — is case 2 of
-// tests/integration/release-before-and-after-delivery.test.ts, where the `deliveredAt` it
+// tests/unit/release-before-and-after-delivery.test.ts, where the `deliveredAt` it
 // becomes and the gate job it keeps are asserted together.)
 //
 // ── How each case fails if the code does nothing ──────────────────────────
