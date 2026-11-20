@@ -11,9 +11,11 @@
 //   - the factory resolves nothing: it answers from the store it was handed,
 //     never from `CRUCIBLE_DB` or a `crucible.toml`;
 //   - `stop()` disposes the store and closes every stream the board answered;
-//   - the router runs on the native request classes even when a test has
-//     installed happy-dom's globals, and a handler that throws answers a 500,
-//     as `Bun.serve` does, rather than rejecting;
+//   - a handler that throws answers a 500, as `Bun.serve` does, rather than
+//     rejecting (that the router runs on the native request classes under
+//     happy-dom's globals is proved in
+//     tests/integration/the-in-process-board-runs-on-native-classes-under-happy-dom.test.ts,
+//     since happy-dom's teardown waits on a real timer);
 //   - routes read no origin, so `http://board.invalid` addresses the board.
 //
 // Every store is a scratch file opened with a manual scheduler, so a deferred
@@ -23,7 +25,6 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { codecNames } from "../../src/codecs/index.ts";
 import { resolveLimit } from "../../src/limits.ts";
 import * as server from "../../src/server.ts";
@@ -35,10 +36,6 @@ const createBoard = server.createBoard;
 
 /** The origin every in-process request is addressed to. */
 const ORIGIN = "http://board.invalid";
-
-/** The native classes, captured before any test installs happy-dom's. */
-const NativeRequest = globalThis.Request;
-const NativeResponse = globalThis.Response;
 
 const VERSION = (
   JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
@@ -419,52 +416,6 @@ describe("stopping an in-process board", () => {
 });
 
 describe("an in-process board runs on native classes and answers a throw", () => {
-  test("with happy-dom's globals installed, a route still answers a native Response", async () => {
-    const { board, store } = socketlessBoard();
-    const key = addProject(store, "native-classes");
-    const request = new NativeRequest(`${ORIGIN}/api/v2/projects`);
-
-    GlobalRegistrator.register({ url: `${ORIGIN}/` });
-    let res: Response;
-    try {
-      expect(globalThis.Response).not.toBe(NativeResponse);
-      res = await board.fetch(request);
-    } finally {
-      await GlobalRegistrator.unregister();
-    }
-
-    expect(res instanceof NativeResponse).toBe(true);
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body.ok).toBe(true);
-    expect(projectKeys(body)).toEqual([key]);
-  });
-
-  test("with happy-dom's globals installed, a happy-dom request's JSON body reaches the route", async () => {
-    const { board, store } = socketlessBoard();
-    const key = crypto.randomUUID();
-    const payload = JSON.stringify({ key, name: "from-happy-dom", type: "backend", sutRoot: "/srv/dom" });
-
-    GlobalRegistrator.register({ url: `${ORIGIN}/` });
-    let res: Response;
-    try {
-      const request = new globalThis.Request(`${ORIGIN}/api/v2/projects`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: payload,
-      });
-      expect(request instanceof NativeRequest).toBe(false);
-      res = await board.fetch(request);
-    } finally {
-      await GlobalRegistrator.unregister();
-    }
-
-    expect(res instanceof NativeResponse).toBe(true);
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, changed: true, project: { key, name: "from-happy-dom" } });
-    expect(store.getProject(key)).toMatchObject({ key, name: "from-happy-dom", sutRoot: "/srv/dom" });
-  });
-
   test("a handler that throws answers a 500, never a rejected promise, and the board keeps answering", async () => {
     const { board, store } = socketlessBoard();
     const key = addProject(store, "survives-a-throw");
