@@ -75,6 +75,12 @@ case "${HERMETIC_STAGE:-}" in
     export HOME="$LOG_DIR/home"
     # Each XDG base directory would point past the redirected HOME.
     unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME
+    # The operator's registry variables (direnv exports the root .env into the
+    # shell): the same set the suites drop, ENV_REGISTRY_VARIABLES in
+    # tests/client/__init__.py and tests/helpers/isolated-store-preload.ts.
+    unset CRUCIBLE_PROJECT_KEY CRUCIBLE_PROJECT_NAME WORKFLOW_ORCHESTRATOR \
+        SANDESH_PROJECT SANDESH_ADDRESS PROJECT_TOKEN PROJECT_STACKS \
+        KNOWLEDGE_CATEGORY
 
     if ! unshare --map-current-user --keep-caps -n true 2>"$LOG_DIR/unshare.err"; then
         setup_failure "$EXIT_NAMESPACE" \

@@ -101,10 +101,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
           fetch-depth: 0          # hatch-vcs needs tags for the dynamic version
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.14" # the floor; quoted, or YAML reads a float
       - name: Build crucible-axi sdist + wheel
@@ -120,7 +120,7 @@ jobs:
       # mismatch into an error by default. A single-sided bump therefore fails
       # not here but later, in a publish job that on a tag ref uploads to PyPI.
       # tests/unit/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
-      - uses: actions/upload-artifact@v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: dist
           path: dist/
@@ -128,7 +128,7 @@ jobs:
   # CR-CRU-062 §S1 — the ~1300-test bun suite that gates every CR locally.
   # No event condition (§S0): it must exist in the release run too.
   test-bun:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       # CR-CRU-096 AC26 (measured on the 0.2.0 release, run 34304398429) — the
       # roadmap-visual-grammar suite renders a PRE-CR BASELINE to prove zones 1
@@ -140,22 +140,26 @@ jobs:
       # assertions fail — taking CR-CRU-110's order-independence guard with
       # them, since its child `bun test` includes this very file. The commit is
       # reachable from origin/develop, so history is all that was missing.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
           fetch-depth: 0          # a pinned pre-CR baseline is read with `git show`
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
-          bun-version: "${{ env.BUN_VERSION }}" # CR-CRU-137 §S2 -- declared once, at the head of this file
+          # CR-CRU-137 §S2 -- declared once, at the head of this file
+          bun-version: "${{ env.BUN_VERSION }}"
+          no-cache: true
       # CR-CRU-063 §S1 — uv, not just bun. tests/integration/clients-bun-crucible.test.ts:83
       # spawns the client fleet as ["uv", "run", SCRIPT_PATH, …] (PEP 723,
       # CR-CRU-046 §S3); oven-sh/setup-bun provides bun, not uv. Without this
       # step 98 tests fail with `Executable not found in $PATH: "uv"`
       # (measured on run 31677479804). The maintained, pinned action — a
       # release gate must not depend on an unpinned `curl | sh` network script.
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
+        with:
+          enable-cache: false
       # The bun suite spawns the python client fleet, so this job runs python
       # too, and runs it on the declared floor rather than the image's python.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.14"
       - name: Install dependencies
@@ -185,10 +189,57 @@ jobs:
       # test reads BOTH and fails if they ever drift apart.
       # The suite runs by tier DIRECTORY, unit first: `./tests/<tier>` (the
       # `./` makes it a directory, not a name filter), each on the same budget.
-      - name: Bun suite — unit tier
-        run: bun test --timeout 30000 ./tests/unit
-      - name: Bun suite — integration tier
-        run: bun test --timeout 30000 ./tests/integration
+      # Each tier runs hermetically (scripts/hermetic/README.md): an isolated
+      # network namespace with only `lo`, every capability dropped, an empty
+      # HOME and a tripwire on the board ports. Every step that needs the
+      # network (the installs above, the zizmor audit) runs before it.
+      - name: zizmor audit (no unpinned action, no cache poisoning)
+        run: uvx zizmor@1.32.0 --offline .github/workflows/release.yml
+      # ubuntu-24.04's AppArmor refuses an unprivileged user namespace unless
+      # this is lifted; the wrapper's `unshare` needs one.
+      - name: Allow unprivileged user namespaces (the hermetic wrapper)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The unit tier records every dependency a test takes (the preload), and
+      # its verdict over that log fails on any process, socket or real wait.
+      - name: Bun suite — unit tier (hermetic, dependency hooks recording)
+        run: |
+          scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/bun-unit" -- \
+            env HERMETIC_EVENTS="$RUNNER_TEMP/hermetic/bun-unit/events.tsv" \
+            bun test --timeout 30000 \
+            --preload ./scripts/hermetic/hooks/bun-preload.ts ./tests/unit
+      - name: Bun suite — unit tier verdict (no dependency event)
+        run: |
+          python3 scripts/hermetic/unit-verdict.py \
+            "$RUNNER_TEMP/hermetic/bun-unit/events.tsv"
+      - name: Bun suite — integration tier (hermetic)
+        run: |
+          scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/bun-integration" -- \
+            bun test --timeout 30000 ./tests/integration
+      # A deliberate trip, the proof that a hit fails a step: a probe asks the
+      # board port 3849 and waits for the tripwire's 503. The step passes only
+      # when the wrapper exits with its HIT code (99, never a setup code 90-95)
+      # and the tripwire logged a port=3849 line naming the probe.
+      - name: Hermetic deliberate trip — a probe to 3849 fails the wrapper
+        run: |
+          set +e
+          log="$RUNNER_TEMP/hermetic/trip"
+          url=http://127.0.0.1:3849/hermetic-trip-probe
+          scripts/hermetic/run.sh "$log" -- sh -c '
+            code=$(curl -sS -o /dev/null -w "%{http_code}" "$1")
+            echo "probe answered $code"
+            [ "$code" = 503 ]' probe "$url"
+          status=$?
+          set -e
+          if [ "$status" -ne 99 ]; then
+            echo "::error::the wrapper exited $status, not the HIT code 99"
+            exit 1
+          fi
+          hit='^HIT .* port=3849 .*cmd=.*hermetic-trip-probe'
+          if ! grep -E "$hit" "$log/tripwire.log"; then
+            echo "::error::no port=3849 tripwire line names the probe"
+            exit 1
+          fi
+          echo "deliberate trip: exit 99 and a port=3849 line naming the probe"
 
   # CR-CRU-062 §S2 — the Python client suite. Measured server-free at gap
   # analysis (683/683 with CRUCIBLE_URL pointed at a dead port), so it needs
@@ -197,20 +248,28 @@ jobs:
   # orchestrator's tool and requires a live server to ingest into.
   # No event condition (§S0).
   test-python:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.14"
       # CR-CRU-063 §S1 — tests/client/integration/test_cr046_uv_env_gate.py's setUpClass
       # raises ``RuntimeError: `uv` is not on PATH … Remedy: install uv.``,
       # aborting the whole class (which is why CI discovered 673, not 683).
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
+        with:
+          enable-cache: false
       # CR-CRU-063 §S2 — the project's `dev` extra, CONSUMED from
       # pyproject.toml (which declares it) and never restated here (AC8):
       # tests/client/integration/test_cr040_coverage_tooling.py:172 needs the gate venv's
       # python to run `-m coverage`.
+      # Kept beside the .venv's install below: it is the job's PATH `python3`.
+      # A client the suite launches by its `#!/usr/bin/env python3` shebang
+      # runs on that interpreter, and with no project `.venv` it hands its
+      # tests to the same one (`_resolve_python` in clients/python-crucible.py
+      # falls back to `sys.executable`), so coverage and pytest must be
+      # importable there too. Nothing has yet proven no test takes that path.
       - name: Install the project with its dev extra (pyproject.toml is the declaration)
         run: python3 -m pip install --upgrade '.[dev]'
       # Measured on the 0.4.0 rehearsal (run 43653899622): 147 of this suite's
@@ -231,10 +290,11 @@ jobs:
       #     `.cache/test-suite/m2` (its `.mvn/maven.config` says `-o`), never
       #     on the runner's own maven repository. The suite itself runs with
       #     `.venv/bin/python`, whose dev extra carries `build`.
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
           # CR-CRU-137 §S2 -- declared once, at the head of this file
           bun-version: "${{ env.BUN_VERSION }}"
+          no-cache: true
       - name: Install dependencies (the real board and the bun-side proofs)
         run: bun install --frozen-lockfile
       - name: Install Playwright browsers (the playwright reporter proofs)
@@ -243,7 +303,7 @@ jobs:
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -e '.[dev]'
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f  # v2
         with:
           tool: cargo-nextest,cargo-llvm-cov
       - name: llvm-tools-preview (cargo-llvm-cov reads its profiles with it)
@@ -262,11 +322,33 @@ jobs:
       - name: The suite's own test caches (the one step that needs the network)
         run: scripts/provision-test-caches.sh
       # The suite runs by tier DIRECTORY, unit first, each discovered with the
-      # repo root as top level.
-      - name: Python client suite — unit tier (no server required)
-        run: .venv/bin/python -m unittest discover -s tests/client/unit -t .
-      - name: Python client suite — integration tier (no server required)
-        run: .venv/bin/python -m unittest discover -s tests/client/integration -t .
+      # repo root as top level. Each tier runs hermetically
+      # (scripts/hermetic/README.md): an isolated network namespace with only
+      # `lo`, every capability dropped, an empty HOME and a tripwire on the
+      # board ports. Every step that needs the network runs before it.
+      # ubuntu-24.04's AppArmor refuses an unprivileged user namespace unless
+      # this is lifted; the wrapper's `unshare` needs one.
+      - name: Allow unprivileged user namespaces (the hermetic wrapper)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The unit tier records every dependency a test takes (the hooks, with
+      # the tagging runner naming the running test), and its verdict over that
+      # log fails on any process, socket or real wait.
+      - name: Python client suite — unit tier (hermetic, hooks recording)
+        run: |
+          scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/py-unit" -- \
+            env PYTHONPATH="$PWD/scripts/hermetic/hooks" \
+            HERMETIC_EVENTS="$RUNNER_TEMP/hermetic/py-unit/events.tsv" \
+            .venv/bin/python scripts/hermetic/tagging_runner.py \
+            tests/client/unit
+      - name: Python client suite — unit tier verdict (no dependency event)
+        run: |
+          python3 scripts/hermetic/unit-verdict.py \
+            "$RUNNER_TEMP/hermetic/py-unit/events.tsv"
+      - name: Python client suite — integration tier (hermetic)
+        run: |
+          scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/py-integration" -- \
+            .venv/bin/python -m unittest discover \
+            -s tests/client/integration -t .
 
   # CR-CRU-062 §S3 — the Playwright/BDD end-to-end suite.
   # 🚨 CRUCIBLE_DB is declared HERE explicitly, per CR-CRU-052: isolation is
@@ -279,10 +361,12 @@ jobs:
     env:
       CRUCIBLE_DB: ${{ github.workspace }}/e2e-scratch/data/crucible.db
     steps:
-      - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
-          bun-version: "${{ env.BUN_VERSION }}" # CR-CRU-137 §S2 -- declared once, at the head of this file
+          # CR-CRU-137 §S2 -- declared once, at the head of this file
+          bun-version: "${{ env.BUN_VERSION }}"
+          no-cache: true
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Install Playwright browsers
@@ -316,10 +400,11 @@ jobs:
   pack-server:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
           node-version: "22"
+          package-manager-cache: false
       - name: Pack server package (dry-run) and assert the bin entrypoint ships
         run: |
           PACK_LIST="$(mktemp)"
@@ -342,7 +427,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
           fetch-depth: 0          # need full tag history to detect the tag at HEAD
       - name: Create GitHub Release for version tag at HEAD (idempotent)
@@ -383,7 +468,7 @@ jobs:
     permissions:
       id-token: write           # OIDC trusted publishing (no long-lived token)
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
           fetch-depth: 0          # guard needs origin/master history for the ancestry check
       - name: Guard — tag ref + on-master ancestry
@@ -403,11 +488,11 @@ jobs:
       # mismatch by default, so a mismatched pair breaks the `dist` handoff
       # HERE — in the job that uploads to PyPI — and not in `build`.
       # tests/unit/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1
         # no password / no token — trusted publishing; attestations default-on
 
   publish-testpypi:
@@ -445,10 +530,10 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
           fetch-depth: 0          # hatch-vcs needs tags to derive the version
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.14"
       - name: Version sanity — reject PEP 440 local segment ('+')
@@ -467,11 +552,11 @@ jobs:
       # mismatch by default, so a mismatched pair breaks the `dist` handoff
       # HERE — in the job that uploads to PyPI — and not in `build`.
       # tests/unit/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
           # A RE-RUN of one commit derives the same version it already uploaded,
@@ -490,15 +575,18 @@ jobs:
       id-token: write          # OIDC trusted publishing / provenance attestation
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
           fetch-depth: 0          # guard needs origin/master history for the ancestry check
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
-          bun-version: "${{ env.BUN_VERSION }}" # CR-CRU-137 §S2 -- declared once, at the head of this file
-      - uses: actions/setup-node@v5
+          # CR-CRU-137 §S2 -- declared once, at the head of this file
+          bun-version: "${{ env.BUN_VERSION }}"
+          no-cache: true
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
           node-version: "22"
+          package-manager-cache: false
           registry-url: "https://registry.npmjs.org"
       - name: Guard — tag ref + on-master ancestry
         run: |
@@ -552,13 +640,16 @@ jobs:
         startsWith(github.ref, 'refs/heads/hotfix/')))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
-          bun-version: "${{ env.BUN_VERSION }}" # CR-CRU-137 §S2 -- declared once, at the head of this file
-      - uses: actions/setup-node@v5
+          # CR-CRU-137 §S2 -- declared once, at the head of this file
+          bun-version: "${{ env.BUN_VERSION }}"
+          no-cache: true
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
           node-version: "22"
+          package-manager-cache: false
           registry-url: "https://registry.npmjs.org"
       - name: npm pack dry-run (server package)
         run: npm publish --dry-run --access public

@@ -26,6 +26,7 @@ and browser installs before you call it.
 |---|---|
 | `HOME` | `<log-dir>/home`, recreated empty on every run |
 | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME` | unset, so they fall under the empty `HOME` |
+| `CRUCIBLE_PROJECT_KEY`, `CRUCIBLE_PROJECT_NAME`, `WORKFLOW_ORCHESTRATOR`, `SANDESH_PROJECT`, `SANDESH_ADDRESS`, `PROJECT_TOKEN`, `PROJECT_STACKS`, `KNOWLEDGE_CATEGORY` | unset: the operator's registry variables, the set the suites drop |
 | `PLAYWRIGHT_BROWSERS_PATH` | kept if set, else `<original HOME>/.cache/ms-playwright` |
 | `RUSTUP_HOME` | kept if set, else `<original HOME>/.rustup` |
 | `CARGO_HOME` | kept if set, else `<original HOME>/.cargo` |
