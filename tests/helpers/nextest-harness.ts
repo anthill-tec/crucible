@@ -13,7 +13,6 @@
 import { expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ServerHandle } from "../../src/server.ts";
 import {
   batchesOf,
   openRun,
@@ -23,6 +22,7 @@ import {
   storedEvent,
   type Answer,
   type StoredRun,
+  type Booted,
 } from "./run-stream-harness.ts";
 
 /** The record stream codec a nextest stream is read under. */
@@ -67,7 +67,7 @@ export function testsRoute(runId: string): string {
 
 /** The test list posted to the open run, `data` as given (nextest's own text unless a test sends otherwise). */
 export function postList(
-  handle: ServerHandle,
+  handle: Booted,
   runId: string,
   projectKey: string,
   agentId: string,
@@ -79,7 +79,7 @@ export function postList(
 
 /** `text` sent to the open run under the `nextest` codec, cut at `cuts` (character indices); each batch answered 200. */
 export async function streamNextest(
-  handle: ServerHandle,
+  handle: Booted,
   runId: string,
   projectKey: string,
   agentId: string,
@@ -100,7 +100,7 @@ export async function streamNextest(
 }
 
 /** The close of a nextest run: `POST /api/v2/runs` with the runId, the `nextest` codec, and no report. */
-export function closeNextest(handle: ServerHandle, projectKey: string, agentId: string, runId: string): Promise<Answer> {
+export function closeNextest(handle: Booted, projectKey: string, agentId: string, runId: string): Promise<Answer> {
   return postJson(handle, "/api/v2/runs", { projectKey, agentId, runId, codec: NEXTEST_CODEC });
 }
 
@@ -123,7 +123,7 @@ export interface ClosedNextestRun {
 
 /** A run opened (rust), given its list and its stream, and closed under `nextest`; answers the stored event. */
 export async function closedNextestRun(
-  handle: ServerHandle,
+  handle: Booted,
   agentId: string,
   plan: NextestRunPlan,
 ): Promise<ClosedNextestRun> {

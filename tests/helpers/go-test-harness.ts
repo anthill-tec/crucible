@@ -15,9 +15,8 @@ import { expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { codecs, type DecodedRun } from "../../src/codecs/index.ts";
-import type { ServerHandle } from "../../src/server.ts";
 import type { SuiteNode, TestLeaf } from "../../src/types.ts";
-import { batchesOf, openRun, postJson, readyProject, sendBatch, storedEvent, type Answer, type StoredRun } from "./run-stream-harness.ts";
+import { batchesOf, openRun, postJson, readyProject, sendBatch, storedEvent, type Answer, type StoredRun, type Booted } from "./run-stream-harness.ts";
 
 /** The record stream codec a go run's stream is read under. */
 export const GO_TEST_CODEC = "go-test";
@@ -177,7 +176,7 @@ export function leafOf(tree: readonly SuiteNode[], suite: string, name: string):
 
 /** `text` sent to the open run under `go-test`, cut at `cuts` (character indices); each batch answered 200. */
 export async function streamGoTest(
-  handle: ServerHandle,
+  handle: Booted,
   runId: string,
   projectKey: string,
   agentId: string,
@@ -192,7 +191,7 @@ export async function streamGoTest(
 }
 
 /** The close of a go run: `POST /api/v2/runs` with the runId, the `go-test` codec, and no report. */
-export function closeGoTest(handle: ServerHandle, projectKey: string, agentId: string, runId: string): Promise<Answer> {
+export function closeGoTest(handle: Booted, projectKey: string, agentId: string, runId: string): Promise<Answer> {
   return postJson(handle, "/api/v2/runs", { projectKey, agentId, runId, codec: GO_TEST_CODEC });
 }
 
@@ -205,7 +204,7 @@ export interface ClosedGoTestRun {
 
 /** A run opened (`go`, with the start total when given), its stream sent, and closed under `go-test`. */
 export async function closedGoTestRun(
-  handle: ServerHandle,
+  handle: Booted,
   agentId: string,
   plan: { stream: string; cuts?: readonly number[]; startTotal?: number },
 ): Promise<ClosedGoTestRun> {

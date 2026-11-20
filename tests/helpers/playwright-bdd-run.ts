@@ -5,8 +5,7 @@
 // target. The run-detail view tests mount the production shell against that
 // board (tests/helpers/served-app.ts), so the view draws what the store serves.
 import { expect } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
-import { closeStream, eventLine, openRun, register, sendBatch } from "./run-stream-harness.ts";
+import { closeStream, eventLine, openRun, register, sendBatch, type Booted } from "./run-stream-harness.ts";
 
 export const BDD_AGENT = "bdd-run-view-runner";
 
@@ -43,7 +42,7 @@ export const failingStep = (name: string, message: string): BddStep => ({
 });
 
 /** A frontend project on `handle` with the runner registered; answers its key. */
-export async function bddProject(handle: ServerHandle, name: string): Promise<string> {
+export async function bddProject(handle: Booted, name: string): Promise<string> {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name, type: "frontend", sutRoot: `/tmp/${name}` });
   await register(handle, key, BDD_AGENT);
@@ -83,7 +82,7 @@ function streamOf(scenarios: BddScenario[]): string {
 
 /** Opens, streams and closes a `playwright-bdd` run under `tier`; answers the event it stored. */
 export async function streamBddRun(
-  handle: ServerHandle,
+  handle: Booted,
   key: string,
   scenarios: BddScenario[],
   tier: string,

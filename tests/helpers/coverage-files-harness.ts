@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { coveragePercent } from "../../src/codecs/coverage.ts";
 import type { Store } from "../../src/store.ts";
 import {
-  bootOn,
+  bootInProcess,
   eventLine,
   openRun,
   postJson,
@@ -384,7 +384,7 @@ export interface FileColumns {
 export const PROBE_FILE = { path: "probe/only-here.ts", lf: 41, lh: 30, fnf: 7, fnh: 5 } as const;
 
 async function probeFileColumns(): Promise<FileColumns> {
-  const handle = bootOn();
+  const handle = bootInProcess();
   try {
     const agentId = "column-probe";
     const key = await readyProject(handle, [agentId], "column-probe");
