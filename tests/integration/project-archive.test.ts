@@ -31,10 +31,11 @@
 // register/runs behavior pinned in the second AC (those DO call
 // requireProject, src/v2.ts ~161).
 //
-// Drives the REAL production server (startServer), same harness pattern as
+// Drives the REAL production router in process (`bootInProcess`), same harness pattern as
 // tests/integration/plans.test.ts / tests/integration/v2-stream-paging.test.ts (SSE capture).
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -168,7 +169,7 @@ async function assertNoFrameMatching(
 }
 
 describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -176,7 +177,7 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
   });
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -184,7 +185,7 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function createProject(name: string): Promise<string> {
@@ -247,7 +248,7 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
       "archive → 200, omitted from default projects list, events/agents excluded (empty); " +
         "?archived=true includes it; unarchive → restored everywhere with prior events intact (count equality)",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject("archive-sweep");
 
         // Seed activity BEFORE archiving: 3 events + 1 registered agent.
@@ -330,7 +331,7 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
     );
 
     test("archived project's rollup is absent from GET /api/v2/projects (folded into the omission, not a separate surface)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("archive-rollup");
       await ingestEvent(key);
 
@@ -353,7 +354,7 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
   // ── AC2 — agent API 404 with archived hint; no resurrection ─────────────
   describe("agent API calls against an archived project → 404 with an archived hint (AC2)", () => {
     test("POST /api/v2/agents/register against an archived project → 404, help[] mentions archived, and does NOT unarchive it", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("archived-register");
       await postJson(archivePath(key), {});
 
@@ -387,7 +388,7 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
     });
 
     test("POST /api/v2/runs/parsed against an archived project → 404, help[] mentions archived, and does NOT unarchive it", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("archived-runs");
       await postJson(archivePath(key), {});
 
@@ -419,10 +420,10 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
   // ── SSE change payloads exclude archived-project activity ───────────────
   describe("SSE change payloads (§S1b spec pin — /api/stream)", () => {
     test("archiving a project fires a {type:'projects', projectKey} SSE frame (drives the manager's live badge removal)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("sse-archive-frame");
 
-      const res = await fetch(`http://localhost:${handle.server.port}/api/stream`);
+      const res = await send(handle!, `/api/stream`);
       const reader = res.body!.getReader();
       const sse = new SseReader(reader);
       await nextFrameMatching(sse, (f) => !f.isComment && f.data?.type === "hello", 1000);
@@ -442,11 +443,11 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
     });
 
     test("a blocked (404'd) ingest attempt against an archived project fires NO 'events' SSE frame for it within 300ms", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("sse-archived-blocked");
       await postJson(archivePath(key), {});
 
-      const res = await fetch(`http://localhost:${handle.server.port}/api/stream`);
+      const res = await send(handle!, `/api/stream`);
       const reader = res.body!.getReader();
       const sse = new SseReader(reader);
       await nextFrameMatching(sse, (f) => !f.isComment && f.data?.type === "hello", 1000);
@@ -481,7 +482,7 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
   // the shim (a scope decision, not a RED-agent one).
   describe("v1 shim routes against an archived project (§S1b spec pin)", () => {
     test("POST /api/ingest/parsed against an archived project → 404 {ok:false, error} (shim's existing bare-error shape, no help[])", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("shim-archived");
       await postJson(archivePath(key), {});
 
@@ -518,7 +519,7 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
   // changed:false — NOT a 400.
   describe("archive/unarchive idempotency (design choice — matches the codebase's changed:boolean convention)", () => {
     test("archiving an already-archived project → 200 {ok:true, changed:false}, no-op", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("idempotent-archive");
 
       const first = await postJson(archivePath(key), {});
@@ -534,7 +535,7 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
     });
 
     test("unarchiving a project that was never archived → 200 {ok:true, changed:false}, no-op", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("idempotent-unarchive");
 
       const res = await postJson(unarchivePath(key), {});
@@ -551,7 +552,7 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
     });
 
     test("archive → unarchive → unarchive again is idempotent (second unarchive → changed:false)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("idempotent-round-trip");
 
       await postJson(archivePath(key), {});
@@ -570,7 +571,7 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
   // ── Bad projectKey handling (mirrors requireProject's existing contract) ──
   describe("archive/unarchive against a non-existent project", () => {
     test("POST .../archive for an unknown (but well-formed UUID) key → 404", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const bogusKey = crypto.randomUUID();
 
       const res = await postJson(archivePath(bogusKey), {});
@@ -580,7 +581,7 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
     });
 
     test("POST .../unarchive for an unknown (but well-formed UUID) key → 404", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const bogusKey = crypto.randomUUID();
 
       const res = await postJson(unarchivePath(bogusKey), {});

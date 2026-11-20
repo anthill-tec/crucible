@@ -48,7 +48,7 @@
 //
 // ── WHAT IS SYNTHETIC AND WHAT IS LIVE ─────────────────────────────────────
 //
-// Every fixture board is synthetic and in-memory: booted on an OS-assigned
+// Every fixture board is synthetic and in-memory: booted in process, with no
 // port against an mkdtempSync scratch db, with ids in this suite's own
 // `CR-118H-*` shape, which belongs to no project. The live data/crucible.db
 // and port 3849 are never WRITTEN by anything in this file.
@@ -62,8 +62,9 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { QueueEntryInput } from "../../src/store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 // ── wire shapes this suite PINS ────────────────────────────────────────────
 
@@ -212,7 +213,7 @@ function restoreTable(rows: Row[]): Array<Record<string, unknown>> {
 }
 
 describe("CR-CRU-118 §S3a — historical membership is a derivation, not a plan", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -223,19 +224,15 @@ describe("CR-CRU-118 §S3a — historical membership is a derivation, not a plan
     }
   });
 
-  function boot(): ServerHandle {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru118-historical-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
     return handle;
   }
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   async function post(path: string, body: unknown): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`, {
+    const res = await send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -244,7 +241,7 @@ describe("CR-CRU-118 §S3a — historical membership is a derivation, not a plan
   }
 
   async function get(path: string): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`);
+    const res = await send(handle!, `${path}`);
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 

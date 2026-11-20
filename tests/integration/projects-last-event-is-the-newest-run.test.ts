@@ -24,13 +24,13 @@
 // in-memory store.
 import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import type { Database, Statement } from "bun:sqlite";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { resolveLimit } from "../../src/limits.ts";
 import type { RunEvent, SuiteNode } from "../../src/types.ts";
 import type { CompileReport } from "../../src/codecs/compile.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   setSystemTime();
@@ -46,24 +46,20 @@ function clockAt(seconds: number): void {
   setSystemTime(EPOCH_MS + seconds * 1_000);
 }
 
-function boot(): ServerHandle {
+function boot(): BoardHandle {
   clockAt(0);
-  handle = startServer({ port: 0, dbPath: ":memory:" });
+  handle = bootInProcess();
   return handle;
 }
 
-function base(): string {
-  return `http://127.0.0.1:${handle!.server.port}`;
-}
-
 async function getJson(path: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base()}${path}`);
+  const res = await send(handle!, `${path}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
 
 async function postJson(path: string, body: unknown): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base()}${path}`, {
+  const res = await send(handle!, `${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),

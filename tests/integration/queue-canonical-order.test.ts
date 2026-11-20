@@ -82,7 +82,7 @@
 // container. AC1d pins the total order; AC1b/AC1c pin the warning measurement.
 //
 // Every store here is `:memory:` or an mkdtempSync scratch file, and every
-// server is booted on an OS-assigned port. The live data/crucible.db and port
+// server is booted in process (no port). The live data/crucible.db and port
 // 3849 are never touched.
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -91,7 +91,8 @@ import { join } from "node:path";
 import { Store } from "../../src/store.ts";
 import type { QueueEntryInput } from "../../src/store.ts";
 import type { QueueEntry } from "../../src/types.ts";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 // ── wire shapes (the routes test's, narrowed to what this suite reads) ─────
 
@@ -577,7 +578,7 @@ describe("CR-CRU-095 §S1 — listQueue publishes ONE canonical container order"
 });
 
 describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC8)", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -588,15 +589,15 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
     }
   });
 
-  function boot(): ServerHandle {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru095-order-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
     return handle;
   }
 
   async function send(method: string, path: string, body?: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return boardSend(handle!, `${path}`, {
       method,
       ...(body === undefined
         ? {}

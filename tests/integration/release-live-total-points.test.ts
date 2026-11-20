@@ -36,8 +36,9 @@ import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { QueuePlanInput } from "../../src/store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 function planned<T extends object>(result: T): Exclude<T, { error: string }> {
   if ("error" in result) throw new Error(`plan op refused: ${String((result as { error: string }).error)}`);
@@ -66,7 +67,7 @@ interface BurndownBody {
 }
 
 const scratchDirs: string[] = [];
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   setSystemTime();
@@ -77,20 +78,15 @@ afterEach(() => {
   }
 });
 
-function boot(): ServerHandle {
+function boot(): BoardHandle {
   const dir = mkdtempSync(join(tmpdir(), "release-live-total-"));
   scratchDirs.push(dir);
-  handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+  handle = bootInProcess(join(dir, "crucible.db"));
   return handle;
 }
 
-function base(): string {
-  return `http://localhost:${handle!.server.port}`;
-}
-
 async function getBurndown(key: string, release: string): Promise<{ status: number; body: BurndownBody }> {
-  const res = await fetch(
-    `${base()}/api/v2/projects/${key}/analytics/burndown?release=${encodeURIComponent(release)}`,
+  const res = await send(handle!, `/api/v2/projects/${key}/analytics/burndown?release=${encodeURIComponent(release)}`,
   );
   let body: BurndownBody = {};
   try {

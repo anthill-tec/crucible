@@ -46,13 +46,14 @@
 // one-sided gate are therefore covered, and the AC5 test is not the
 // insensitive pin the earlier claim implied.
 //
-// Every server here is booted on an OS-assigned port against an mkdtempSync
+// Every server here is booted in process (no port) against an mkdtempSync
 // scratch db. The live data/crucible.db and port 3849 are never touched.
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 // ── wire shapes this suite PINS ────────────────────────────────────────────
 
@@ -158,7 +159,7 @@ function defaultedSeqMessage(crs: string[]): string {
 }
 
 describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -169,19 +170,15 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
     }
   });
 
-  function boot(): ServerHandle {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru104-membership-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
     return handle;
   }
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   async function send(method: string, path: string, body?: unknown): Promise<Response> {
-    return fetch(`${base()}${path}`, {
+    return boardSend(handle!, `${path}`, {
       method,
       ...(body === undefined
         ? {}

@@ -8,7 +8,7 @@
 // each block so a reader can tell "route missing" apart from "route wrong".
 //
 // Harness idioms are reused verbatim from the sibling PATCH/teardown/roadmap
-// suites: `startServer({port:0, dbPath})`, fetch-based postJson/patchJson/
+// suites: `bootInProcess(dbPath)`, fetch-based postJson/patchJson/
 // getJson, and (for AC1's restart case) the `boot(dbPath)` — `handle.stop()`
 // — `boot(dbPath)` again technique already proven for a simulated service
 // restart on a file-backed store.
@@ -16,8 +16,9 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import * as storeModule from "../../src/store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -51,7 +52,7 @@ const ORCH = "orchestrator-1";
 const OTHER_ROLE_AGENT = "reporter-1";
 const ROLELESS_AGENT = "legacy-roleless";
 
-const servers: ServerHandle[] = [];
+const servers: BoardHandle[] = [];
 const scratchDirs: string[] = [];
 
 afterEach(() => {
@@ -73,48 +74,48 @@ function freshDbPath(): string {
 }
 
 /** Boots (or "restarts", when reusing a real dbPath) a production server. */
-function boot(dbPath = ":memory:"): ServerHandle {
-  const handle = startServer({ port: 0, dbPath });
+function boot(dbPath = ":memory:"): BoardHandle {
+  const handle = bootInProcess(dbPath);
   servers.push(handle);
   return handle;
 }
 
-async function postJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
+async function postJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
+  return send(handle, `${urlPath}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function patchJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
+async function patchJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
+  return send(handle, `${urlPath}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function getJson(handle: ServerHandle, urlPath: string): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`);
+async function getJson(handle: BoardHandle, urlPath: string): Promise<Response> {
+  return send(handle, `${urlPath}`);
 }
 
-async function deleteJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
+async function deleteJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
+  return send(handle, `${urlPath}`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-async function createProject(handle: ServerHandle, name: string): Promise<string> {
+async function createProject(handle: BoardHandle, name: string): Promise<string> {
   const res = await postJson(handle, "/api/v2/projects", { name });
   const body = (await res.json()) as OkResponse & { project: { key: string } };
   return body.project.key;
 }
 
 async function registerAgent(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
   role: string,
@@ -122,12 +123,12 @@ async function registerAgent(
   return postJson(handle, "/api/v2/agents/register", { projectKey: key, agentId, role });
 }
 
-async function archiveProject(handle: ServerHandle, key: string): Promise<void> {
+async function archiveProject(handle: BoardHandle, key: string): Promise<void> {
   const res = await postJson(handle, `/api/v2/projects/${key}/archive`, {});
   expect(res.status).toBe(200);
 }
 
-async function deleteProject(handle: ServerHandle, key: string): Promise<Response> {
+async function deleteProject(handle: BoardHandle, key: string): Promise<Response> {
   return deleteJson(handle, `/api/v2/projects/${key}`, { userApproved: true });
 }
 
@@ -136,7 +137,7 @@ function metadataPath(key: string): string {
 }
 
 async function getMetadata(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
 ): Promise<{ status: number; body: MetadataResponse | ErrResponse }> {
   const res = await getJson(handle, metadataPath(key));
@@ -144,7 +145,7 @@ async function getMetadata(
 }
 
 async function patchMetadata(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   body: unknown,
 ): Promise<{ status: number; body: MetadataResponse | ErrResponse }> {
@@ -152,7 +153,7 @@ async function patchMetadata(
   return { status: res.status, body: (await res.json()) as MetadataResponse | ErrResponse };
 }
 
-async function findProjectBrief(handle: ServerHandle, key: string): Promise<ProjectBrief | undefined> {
+async function findProjectBrief(handle: BoardHandle, key: string): Promise<ProjectBrief | undefined> {
   const res = await getJson(handle, "/api/v2/projects");
   const body = (await res.json()) as ProjectsListResponse;
   return body.projects.find((p) => p.key === key);
@@ -304,7 +305,7 @@ describe("AC2 (§S2) — ORCHESTRATOR set/unset semantics", () => {
 // ── AC3 (§S2) — refused, with nothing written ────────────────────────────────
 
 describe("AC3 (§S2) — refusals write nothing", () => {
-  async function seedOrchestrated(handle: ServerHandle, name: string): Promise<string> {
+  async function seedOrchestrated(handle: BoardHandle, name: string): Promise<string> {
     const key = await createProject(handle, name);
     await registerAgent(handle, key, ORCH, "ORCHESTRATOR");
     return key;

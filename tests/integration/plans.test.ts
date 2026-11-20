@@ -2,12 +2,13 @@
 // cycle transitions across kinds, plan close + commitBoundary, run linkage
 // tolerance, query filters, SSE change notification, and non-interference
 // with run-event rollups. C1 is server-only — no UI/lens assertions here.
-// Drives the REAL production server (startServer), same harness pattern as
+// Drives the REAL production router in process (`bootInProcess`), same harness pattern as
 // tests/integration/v2-core.test.ts. (History: this line also cited
 // tests/shim-ingest-events.test.ts — archived by CR-CRU-008's shim-retirement
 // sweep, then deleted outright with tests/archive by CR-CRU-047.)
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface ErrResponse {
   ok: false;
@@ -71,7 +72,7 @@ interface EventsListResponse {
 }
 
 describe("cycle-plan API (CR-CRU-011 §S0)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -94,7 +95,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   }
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -102,7 +103,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -110,11 +111,11 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function registerOrchestrator(key: string, agentId: string): Promise<void> {
-    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+    const res = await send(handle!, `/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
@@ -165,7 +166,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   // ── §S0 — file + append ─────────────────────────────────────────────────
   describe("POST /api/v2/projects/<key>/plans — file a plan", () => {
     test("201 with two distinct numeric cycle ids, pending statuses, plan open", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const res = await postJson(plansPath(key), {
@@ -186,7 +187,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("second POST for the same open cr → 400 naming cr", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const first = await postJson(plansPath(key), { cr: "CR-X-1", cycles: [{ label: "a" }] });
@@ -199,7 +200,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("appending a FIX cycle to an open plan whose VERIFY cycle is done returns a new unique id (CR-CRU-165 \u00a7S1/AC1 \u2014 appending requires kind:fix after a done VERIFY)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -242,7 +243,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     }
 
     test("pending -> active -> done succeeds", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const { planId, cycleId } = await fileSingleCycle(key, "CR-T-1");
 
@@ -260,7 +261,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("pending -> done (skipping active) -> 400 naming both states", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const { planId, cycleId } = await fileSingleCycle(key, "CR-T-2");
 
@@ -274,7 +275,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("pending -> skipped succeeds — the one legal shortcut (orchestrator cancels an unnecessary cycle without activating it)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const filed = await postJson(plansPath(key), {
         cr: "CR-T-3",
@@ -295,7 +296,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("pending -> failed (skipping active) -> 400 naming both states — the boundary of the one shortcut", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const { planId, cycleId } = await fileSingleCycle(key, "CR-T-3b");
 
@@ -309,7 +310,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("active -> skipped is now REFUSED (400) — CR-CRU-165 R2 drops this transition; an active cycle ends only done|failed", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const { planId, cycleId } = await fileSingleCycle(key, "CR-T-4");
       await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), { status: "active" });
@@ -322,7 +323,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("active -> failed succeeds", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const { planId, cycleId } = await fileSingleCycle(key, "CR-T-5");
       await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), { status: "active" });
@@ -335,7 +336,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("a GREEN run ingest linked via context.cycleId does NOT change cycle status", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const { planId, cycleId } = await fileSingleCycle(key, "CR-T-6");
       await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), { status: "active" });
@@ -357,7 +358,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   describe("cycle kinds", () => {
     for (const kind of ["red-green", "verify", "fix"] as const) {
       test(`kind:"${kind}" — pending -> active -> done succeeds identically`, async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject();
         const filed = await postJson(plansPath(key), {
           cr: `CR-K-${kind}`,
@@ -384,7 +385,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     }
 
     test("omitted kind defaults to red-green", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const filed = await postJson(plansPath(key), {
         cr: "CR-K-default",
@@ -395,7 +396,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test('kind:"deploy" -> 400 naming kind', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const res = await postJson(plansPath(key), {
         cr: "CR-K-bad",
@@ -410,7 +411,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   // ── §S0 — plan close ─────────────────────────────────────────────────────
   describe("PATCH .../plans/<planId> — close", () => {
     test("closing with a non-terminal cycle -> 400 listing its id", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const filed = await postJson(plansPath(key), {
         cr: "CR-C-1",
@@ -429,7 +430,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("closing after all cycles are terminal succeeds and GET shows closed + merge commit", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const filed = await postJson(plansPath(key), {
         cr: "CR-C-2",
@@ -457,7 +458,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   // ── §S0 — commitBoundary ──────────────────────────────────────────────────
   describe("commitBoundary (closed plans)", () => {
     test("closed plan with linked runs carrying context.git derives full commitBoundary", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const filed = await postJson(plansPath(key), {
         cr: "CR-B-1",
@@ -501,7 +502,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("closed plan with NO linked git context returns ONLY mergeCommit + closedAt (absent, not null)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const filed = await postJson(plansPath(key), {
         cr: "CR-B-2",
@@ -532,7 +533,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   // CR-CRU-024 §S7 supersedes CR-011 §S0's tolerance — Crucible is the source of truth
   describe("run linkage — unknown cycleId refused (§S7)", () => {
     test("a run ingested with a context.cycleId that resolves to no cycle in the project → 400 (ok:false + help), no event stored", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       // File a plan so the project HAS real cycles — the ingested cycleId (999999)
       // still matches none of them, so §S7 refuses the ingest (never stored on trust).
@@ -559,7 +560,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("a planless project's parsed ingest carries NO plan/cycle linkage — the pre-CR-011 payload, additively extended (regression guard)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const res = await postJson("/api/v2/runs/parsed", {
@@ -607,7 +608,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   // ── §S0 — query filters ─────────────────────────────────────────────────
   describe("GET .../plans — query filters", () => {
     test("no filter returns all plans; ?cr= and ?track= filter; track carried verbatim, absent otherwise", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       await postJson(plansPath(key), { cr: "CR-Q-1", cycles: [{ label: "a" }] });
       await postJson(plansPath(key), { cr: "CR-Q-2", track: "track-2", cycles: [{ label: "a" }] });
@@ -636,7 +637,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   // ── §S0 — SSE change notification ──────────────────────────────────────────
   describe("plan mutations emit a store change event", () => {
     test("filing, transitioning, and closing a plan each fire store.onChange for the project", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
       const calls: Array<[string, string | undefined]> = [];
       const unsubscribe = handle.store.onChange((kind, projectKey) => {
@@ -678,7 +679,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   // today, never 400s on a bad type, and never appears in GET.
   describe("POST /api/v2/projects/<key>/plans — optional title (§S6.11)", () => {
     test('a string title is stored and returned VERBATIM on the POST response and on GET /plans', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -697,7 +698,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("omitting title entirely files the plan with NO title field on the POST response or on GET (absent, not null — graceful degradation, §S6.11 id-only root)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -715,7 +716,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("a non-string title -> 400 naming the title field", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const res = await postJson(plansPath(key), {
@@ -729,7 +730,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("an empty-object title -> 400 naming the title field (not silently coerced to string)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const res = await postJson(plansPath(key), {
@@ -763,7 +764,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   // because the plan is open/closed.
   describe("POST /api/v2/projects/<key>/plans — optional orchestrator (§S6 re-baseline, cycle 19)", () => {
     test("a string orchestrator is stored and returned VERBATIM on the POST response and on GET /plans", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -782,7 +783,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("omitting orchestrator entirely files the plan with NO orchestrator field on the POST response or on GET (absent, not null — graceful degradation)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -800,7 +801,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("a non-string orchestrator -> 400 naming the orchestrator field", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const res = await postJson(plansPath(key), {
@@ -814,7 +815,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("an empty-object orchestrator -> 400 naming the orchestrator field (not silently coerced to string)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const res = await postJson(plansPath(key), {
@@ -830,7 +831,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
 
   describe("PATCH .../plans/<planId> — optional orchestrator one-field backfill (§S6 re-baseline, cycle 19)", () => {
     test('PATCH {orchestrator} on an OPEN plan (no "status", no "merge") stores it as a one-field backfill, visible on a subsequent GET, and the plan STAYS open', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -854,7 +855,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("a non-string orchestrator on PATCH -> 400 naming the orchestrator field, plan left unstamped", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -877,7 +878,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("PATCH {orchestrator} on a CLOSED plan -> 400 (the one-field backfill applies to an executing/open plan only)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -913,7 +914,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   // (an object) 400s naming the field, mirroring the §S6.11 `title` pattern.
   describe("POST /api/v2/projects/<key>/plans — wave coercion (RED addendum, cycle 13, gap 3)", () => {
     test('a numeric wave (4) is stored and returned as the STRING "4" on the POST response and on GET', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -934,7 +935,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test('a string wave ("4") is stored and returned UNCHANGED', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -953,7 +954,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("a non-string-non-number wave (an object) -> 400 naming the wave field", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const res = await postJson(plansPath(key), {
@@ -987,7 +988,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   // plan on this path), and `store.ts` has no wave-backfill method at all.
   describe("PATCH .../plans/<planId> — wave one-field backfill (CR-CRU-031 §S1)", () => {
     test('PATCH {wave:"4"} (no status) on an OPEN plan stores it as a one-field backfill, visible on GET, plan STAYS open', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -1009,7 +1010,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("PATCH {wave} (no status) on a CLOSED plan ALSO succeeds and its wave updates — the point of this CR, contrasting with the orchestrator backfill which 400s a closed plan", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -1037,7 +1038,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test('a numeric wave on PATCH coerces to its decimal STRING, matching the POST /plans coercion, on both an OPEN and a CLOSED plan', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       // OPEN
@@ -1077,7 +1078,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("an unknown planId -> 404", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const res = await patchJson(plansPath(key, "/999999"), { wave: "4" });
@@ -1085,7 +1086,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("a non-string-non-number wave (an object) on PATCH -> 400 naming the wave field, plan left unstamped", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -1106,7 +1107,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
 
     test("wave backfill on a closed plan adds NO events, changes NO events-list count, and leaves commitBoundary untouched (rollups/events untouched)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const filed = await postJson(plansPath(key), {
@@ -1155,7 +1156,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
   // ── §S0 — plans are not run events ────────────────────────────────────────
   describe("plans do not affect run-event surfaces", () => {
     test("filing, transitioning, and closing a plan add NO events and change NO events-list count", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject();
 
       const before = await getJson(`/api/v2/events?project=${key}`);
@@ -1257,7 +1258,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       "AC1 a plan filed with release + wave + title registers the cr in the QUEUE — read back off " +
         "GET …/queue carrying the posted release, wave and title, linked to the plan just filed",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject();
         await propose(key, RELEASE);
 
@@ -1296,7 +1297,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       "AC2 the same call answers with `converged` and `entry` beside the plan fields, in cr-plan's " +
         "own shape — the entry IS the queue row the board now holds",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject();
         await propose(key, RELEASE);
 
@@ -1328,7 +1329,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       "AC3 `release` present and `wave` absent: refused 400 in the sentence cr-plan answers for the " +
         "same absence, and NEITHER the queue NOR the plan is written",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject();
         await propose(key, RELEASE);
 
@@ -1361,7 +1362,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       "AC3 `release` present and `title` absent: refused 400 in the sentence cr-plan answers for the " +
         "same absence, and NEITHER the queue NOR the plan is written",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject();
         await propose(key, RELEASE);
 
@@ -1387,7 +1388,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       "AC4 a `release` naming no live proposal and claimed by no recorded release: refused in the " +
         "EXACT declareMembership shape cr-plan returns for the identical input, nothing written",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject();
         // Deliberately NOT proposed — and no release records this cr either.
 
@@ -1425,7 +1426,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       "AC5 a cr whose registration would close a dependency ring: refused in the EXACT " +
         "refuseDependencyCycle shape cr-plan returns, the queue untouched and no plan filed",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject();
         await propose(key, RELEASE);
 
@@ -1475,7 +1476,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       "AC6 REGRESSION PIN — `release` ABSENT files exactly as it does today: the CR-CRU-117/118/119/" +
         "120 fixture shape (cr, title, cycles, wave), no queue write, and no queue keys on the reply",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject();
 
         const filed = await planFile(key, {
@@ -1513,7 +1514,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       "AC7 ATOMICITY — a cr that already has an OPEN plan is refused by the plan half AFTER every " +
         "queue-side check passed, and the queue write that half would have made is NOT left behind",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject();
         await propose(key, RELEASE);
 
@@ -1562,7 +1563,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       "§S3 REGRESSION PIN — `cr-plan` still registers a cr that has NO open plan (the historical-" +
         "backfill shape): the queue row lands, and the standalone verb opens no execution cycle",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject();
         await propose(key, RELEASE);
 

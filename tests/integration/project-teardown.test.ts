@@ -1,5 +1,5 @@
 // CR-CRU-052 §S1 — `DELETE /api/v2/projects/<key>` with a double-gated
-// cascade. Drives the REAL production server (startServer) — the route does
+// cascade. Drives the REAL production router in process (`bootInProcess`) — the route does
 // NOT exist yet in src/v2.ts (RED phase): every DELETE to
 // /api/v2/projects/<key> currently falls through handleV2's dispatch table
 // to server.ts's generic 404 JSON catch-all (`unknown route: DELETE ...`),
@@ -12,7 +12,8 @@
 // Both gates must leave the project and every cascaded row untouched.
 import { describe, test, expect, afterEach, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -58,7 +59,7 @@ interface TableCounts {
 }
 
 describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -66,7 +67,7 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
   });
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -74,7 +75,7 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -82,7 +83,7 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
   }
 
   async function deleteJson(path: string, body?: Record<string, unknown>): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "DELETE",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body ?? {}),
@@ -187,7 +188,7 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
   }
 
   test("cascade completeness — deletes the project row AND every row in events/agents/plans/plan_cycles/rollups, and the response pins the exact deleted counts", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await seedFullCascadeProject("cascade-complete", "cascade-agent");
     await archiveProject(key);
 
@@ -213,7 +214,7 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
   });
 
   test("happy path — archived project + userApproved:true succeeds even with zero dependent rows (empty-cascade case)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject("cascade-empty");
     await archiveProject(key);
 
@@ -228,7 +229,7 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
   });
 
   test("Gate 1 — deleting a NON-archived project is refused with 403, and the project plus every dependent row survives", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await seedFullCascadeProject("cascade-gate1", "gate1-agent");
     // Deliberately NOT archived.
     const before = countRows(key);
@@ -244,7 +245,7 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
   });
 
   test("Gate 2 — deleting an archived project WITHOUT userApproved:true is refused with 409, and the project plus every dependent row survives", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await seedFullCascadeProject("cascade-gate2", "gate2-agent");
     await archiveProject(key);
     const before = countRows(key);
@@ -270,7 +271,7 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
   // delete unreachable), so a nonexistent key can never reach 403/409; it is
   // a definitive 404, never a silent success.
   test("nonexistent key → 404 {ok:false}, never a silent success", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const missingKey = crypto.randomUUID();
 
     const res = await deleteJson(`/api/v2/projects/${missingKey}`, { userApproved: true });
@@ -307,7 +308,7 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
   // without dictating GREEN's SQL, so it is named rather than silently
   // assumed away.
   test("atomicity — a thrown mid-cascade failure leaves NOTHING partially removed (real forced failure, real transaction rollback)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await seedFullCascadeProject("cascade-atomic", "atomic-agent");
     await archiveProject(key);
     const before = countRows(key);
@@ -357,7 +358,7 @@ describe("DELETE /api/v2/projects/<key> — cascade teardown (CR-CRU-052 §S1)",
   });
 
   test("isolation — deleting project A leaves project B's rows (events/agents/plans/plan_cycles/rollups) completely intact", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const keyA = await seedFullCascadeProject("cascade-isolation-a", "isolation-agent-a");
     const keyB = await seedFullCascadeProject("cascade-isolation-b", "isolation-agent-b");
     await archiveProject(keyA);

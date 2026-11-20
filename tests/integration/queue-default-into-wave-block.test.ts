@@ -42,7 +42,7 @@
 // `WAVE_SEQ_STRIDE` (§S3), so this suite consumes the store's one arithmetic
 // rather than re-deriving `waveNumber × WAVE_SEQ_STRIDE`.
 //
-// Every store here is `:memory:`, every server boots on an OS-assigned port
+// Every store here is `:memory:`, every server boots in process (no port)
 // against an mkdtempSync scratch db. The live data/crucible.db and port 3849
 // are never touched.
 import { describe, test, expect, afterEach } from "bun:test";
@@ -51,7 +51,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, WAVE_SEQ_STRIDE, compareQueueOrder, inWaveBlock, waveSeqBase } from "../../src/store.ts";
 import type { QueueEntryInput } from "../../src/store.ts";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 // ── wire shapes (the routes test's, narrowed to what this suite reads) ─────
 
@@ -592,7 +593,7 @@ describe("CR-CRU-095 §S3 — the STORE defaults a seq-less, snapshot-less row i
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wave block", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -603,15 +604,15 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
     }
   });
 
-  function boot(): ServerHandle {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru095-wave-block-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
     return handle;
   }
 
   async function post(path: string, body: unknown): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`http://localhost:${handle!.server.port}${path}`, {
+    const res = await send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -620,7 +621,7 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
   }
 
   async function get(path: string): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`http://localhost:${handle!.server.port}${path}`);
+    const res = await send(handle!, `${path}`);
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 

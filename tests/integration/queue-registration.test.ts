@@ -50,7 +50,7 @@
 // tests/integration/store-migration.test.ts derives every version from schemaVersion()
 // (reads SCHEMA_VERSION) — it pins NO literal — so the two do different jobs.
 //
-// Drives the REAL production server (startServer) — POST/GET
+// Drives the REAL production router in process (`bootInProcess`) — POST/GET
 // /api/v2/projects/<key>/queue do not exist in the route table yet, so every
 // call 404s through the generic catch-all until GREEN wires the route + the
 // queue_entries table. The failures name the MISSING contract (a 404 where a
@@ -62,9 +62,10 @@ import { describe, test, expect, afterEach, afterAll } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { SCHEMA_VERSION } from "../../src/store.ts";
 import * as AppLogic from "../../public/app-logic.mjs";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -279,7 +280,7 @@ async function nextFrameMatching(
 }
 
 describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   /** Every scratch store directory `boot()` made — removed after each test
    *  (and once more after the suite, for any made after a timed-out test's
    *  own teardown already ran), whether the test passed or failed. */
@@ -304,19 +305,15 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
   });
 
   /** An on-disk, per-boot ephemeral store — never data/crucible.db, and the
-   *  server always takes an OS-assigned port (never 3849, the live board). */
-  function boot(): ServerHandle {
+   *  board is in process, with no port (never 3849, the live board). */
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru014-queue-"));
     scratchDirs.push(dir);
-    return startServer({ port: 0, dbPath: join(dir, "crucible.db") });
-  }
-
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
+    return bootInProcess(join(dir, "crucible.db"));
   }
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`${base()}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -324,7 +321,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`${base()}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -332,7 +329,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`${base()}${path}`);
+    return send(handle!, `${path}`);
   }
 
   const ORCH = "orchestrator-1";
@@ -433,7 +430,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
     return (await res.json()) as QueueGetResponse;
   }
 
-  // ── plan-flow helpers (real HTTP, never store.filePlan directly) ─────────
+  // ── plan-flow helpers (the real routes, never store.filePlan directly) ─────────
 
   /** Files a one-cycle OPEN plan for `cr` → the cr's derived status becomes
    *  IN_PROGRESS. Returns the plan + cycle ids. */
@@ -732,7 +729,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         handle = boot();
         const key = await createProject("queue-sse");
 
-        const res = await fetch(`${base()}/api/stream`);
+        const res = await send(handle!, `/api/stream`);
         const reader = res.body!.getReader();
         const sse = new SseReader(reader);
         await nextFrameMatching(sse, (f) => !f.isComment && f.data?.type === "hello", 1000);

@@ -58,7 +58,7 @@
 //
 // ── WHAT IS SYNTHETIC AND WHAT IS LIVE, AND WHY ────────────────────────────
 //
-// Every fixture board is synthetic and in-memory: booted on an OS-assigned
+// Every fixture board is synthetic and in-memory: booted in process, with no
 // port against an mkdtempSync scratch db, with ids in this suite's own
 // `CR-118-*` shape (the sibling convention — `CR-104-HELD`, `CR-104-GHOST` —
 // which carries no project's namespace). The live data/crucible.db and port
@@ -74,7 +74,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 // `waveSeqBase`/`WAVE_SEQ_STRIDE` are the store's OWN wave-block arithmetic
 // (§S3), consumed rather than re-derived — the precedent
 // tests/integration/queue-default-into-wave-block.test.ts sets. The precedence test below
@@ -82,6 +82,7 @@ import { startServer, type ServerHandle } from "../../src/server.ts";
 import { WAVE_SEQ_STRIDE, waveSeqBase } from "../../src/store.ts";
 import type { QueueEntryInput } from "../../src/store.ts";
 import type { QueueLifecycle } from "../../src/types.ts";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 
@@ -297,7 +298,7 @@ function restoreTable(rows: Row[]): Array<Record<string, unknown>> {
 const SHIPPED_COMMIT = "0f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f";
 
 describe("CR-CRU-118 — every live CR names a release", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -308,19 +309,15 @@ describe("CR-CRU-118 — every live CR names a release", () => {
     }
   });
 
-  function boot(): ServerHandle {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru118-membership-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
     return handle;
   }
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   async function send(method: string, path: string, body?: unknown): Promise<Response> {
-    return fetch(`${base()}${path}`, {
+    return boardSend(handle!, `${path}`, {
       method,
       ...(body === undefined
         ? {}

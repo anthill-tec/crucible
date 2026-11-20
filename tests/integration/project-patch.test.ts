@@ -67,13 +67,12 @@
 //    using the same retention-forcing technique as
 //    tests/integration/events.test.ts's "Store — per-project retention override (§S4)".
 //
-// Drives the REAL production server (startServer), same harness pattern as
+// Drives the REAL production router in process (`bootInProcess`), same harness pattern as
 // tests/integration/project-archive.test.ts (SSE capture via SseReader).
 import { describe, test, expect, afterEach } from "bun:test";
 import { setSystemTime } from "bun:test";
-import { startServer } from "../../src/server.ts";
-
-type ServerHandle = ReturnType<typeof startServer>;
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -192,7 +191,7 @@ async function nextFrameMatching(
 }
 
 describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -201,7 +200,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
   });
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -209,7 +208,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -217,7 +216,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function createProject(
@@ -267,10 +266,10 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
       'PATCH {name:"NAI-2"} → 200; GET /api/v2/projects shows name:"NAI-2"; ' +
         "a {type:'projects', projectKey} SSE frame was emitted",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject("original-name");
 
-        const res = await fetch(`http://localhost:${handle.server.port}/api/stream`);
+        const res = await send(handle!, `/api/stream`);
         const reader = res.body!.getReader();
         const sse = new SseReader(reader);
         await nextFrameMatching(sse, (f) => !f.isComment && f.data?.type === "hello", 1000);
@@ -297,7 +296,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
     );
 
     test("PATCH {type:\"frontend\"} on a backend project → 200; GET reflects the new type (editable-field happy path)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("type-flip", { type: "backend" });
 
       const before = await findProject(key);
@@ -313,7 +312,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
     });
 
     test("PATCH {sutRoot:\"/new/sut/root\"} → 200; GET reflects the camelCase sutRoot field (matches POST's existing wire contract)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("sutroot-patch", { sutRoot: "/orig/root" });
 
       const before = await findProject(key);
@@ -329,7 +328,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
 
   describe("AC2 — invalid type / immutable projectKey / unknown field → 400 naming the field; stored project unchanged", () => {
     test('PATCH {type:"desktop"} → 400 naming type; project unchanged', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("ac2-type", { type: "backend", sutRoot: "/orig" });
 
       const res = await patchJson(patchPath(key), { type: "desktop" });
@@ -345,7 +344,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
     });
 
     test('PATCH {projectKey:"other"} → 400 naming projectKey (the key is immutable); project unchanged', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("ac2-projectkey", { type: "backend", sutRoot: "/orig" });
 
       const res = await patchJson(patchPath(key), { projectKey: "other" });
@@ -362,7 +361,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
     });
 
     test('PATCH {foo:1} → 400 naming foo (unknown field); project unchanged', async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("ac2-unknown", { type: "backend", sutRoot: "/orig" });
 
       const res = await patchJson(patchPath(key), { foo: 1 });
@@ -378,7 +377,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
     });
 
     test("an unknown field alongside otherwise-valid fields still 400s naming that field (no partial apply)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("ac2-partial-mix", { type: "backend", sutRoot: "/orig" });
 
       const res = await patchJson(patchPath(key), { name: "should-not-apply", bogus: true });
@@ -398,7 +397,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
       "PATCH {liveness:{t1_ms:120000}} → agent silent 90s reads online (not stale) on the " +
         "patched project; an untouched sibling project's agent at the same silence reads stale (default T1=60s)",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const T0 = 1_700_000_000_000;
         setSystemTime(T0);
 
@@ -435,7 +434,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
         "reads stale, NOT tombstoned (a bug that copies t1_ms into tombstoneAfterMs too would " +
         "incorrectly read tombstoned here)",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const T0 = 1_700_000_000_000;
         setSystemTime(T0);
 
@@ -459,7 +458,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
       "PATCH {retention:2} does not prune existing rows immediately; the NEXT ingest enforces the " +
         "lower cap, leaving only the 2 newest events",
       async () => {
-        handle = startServer({ port: 0, dbPath: ":memory:" });
+        handle = bootInProcess();
         const key = await createProject("retention-patch");
         // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs/parsed now
         // refuses an unregistered agentId (409) — register "a1" ONCE,
@@ -500,7 +499,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
 
   describe("PATCH on an archived project → 404 with the archived hint (consistent with requireProject's existing gate)", () => {
     test("PATCH {name:...} against an archived project → 404, help[] mentions archived; stored project unchanged", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("archived-patch-target", { type: "backend", sutRoot: "/orig" });
 
       const archiveRes = await postJson(`/api/v2/projects/${key}/archive`, {});
@@ -525,7 +524,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
 
   describe("PATCH on an unknown key → 404", () => {
     test("PATCH against a well-formed but non-existent UUID key → 404", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const bogusKey = crypto.randomUUID();
 
       const res = await patchJson(patchPath(bogusKey), { name: "x" });
@@ -538,7 +537,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
 
   describe("empty body PATCH → 200 {ok:true, changed:false} no-op (design choice — matches the codebase's changed:boolean convention)", () => {
     test("PATCH {} → 200, changed:false, project completely unchanged", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("empty-patch", { type: "backend", sutRoot: "/orig" });
 
       const res = await patchJson(patchPath(key), {});
@@ -556,10 +555,10 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
 
   describe("shim untouched (no v1 equivalent)", () => {
     test("PATCH /api/ingest/projects/<key> (v1 path shape) is not a route — 404, not a v1 project-edit success", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("shim-untouched");
 
-      const res = await fetch(`http://localhost:${handle.server.port}/api/ingest/projects/${key}`, {
+      const res = await send(handle!, `/api/ingest/projects/${key}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name: "shim-should-not-edit" }),

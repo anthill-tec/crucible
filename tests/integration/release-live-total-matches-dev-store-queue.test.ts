@@ -31,14 +31,15 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { Store } from "../../src/store.ts";
 import { POPULATED_RELEASE, populateStore } from "../helpers/populated-store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const RELEASE = POPULATED_RELEASE;
 
 const scratchDirs: string[] = [];
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
@@ -145,8 +146,7 @@ describe("§S1 — real-scale: a populated store's own live release total", () =
     const oracleTotals = new Map(projectKeys.map((key) => [key, oracleLiveTotal(dbPath, key, RELEASE)]));
     for (const total of oracleTotals.values()) expect(total).toBeGreaterThan(0);
 
-    handle = startServer({ port: 0, dbPath });
-    const base = `http://localhost:${handle.server.port}`;
+    handle = bootInProcess(dbPath);
 
     // Compared for every LIVE project. An archived project's queue is not
     // served (`listQueue` answers it empty), so its burndown is no measure of
@@ -158,8 +158,7 @@ describe("§S1 — real-scale: a populated store's own live release total", () =
     expect(liveKeys.size).toBeGreaterThan(1);
     let compared = 0;
     for (const projectKey of projectKeys.filter((key) => liveKeys.has(key))) {
-      const res = await fetch(
-        `${base}/api/v2/projects/${projectKey}/analytics/burndown?release=${encodeURIComponent(RELEASE)}`,
+      const res = await send(handle!, `/api/v2/projects/${projectKey}/analytics/burndown?release=${encodeURIComponent(RELEASE)}`,
       );
       expect(res.status).toBe(200);
       const body = (await res.json()) as { totalPoints?: number; committedPoints?: number };

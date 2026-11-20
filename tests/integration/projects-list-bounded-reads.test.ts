@@ -26,12 +26,13 @@ import type { Database, Statement } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { resolveLimit } from "../../src/limits.ts";
 import type { RunEvent, RunSummary } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const scratchDirs: string[] = [];
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   setSystemTime();
@@ -40,10 +41,10 @@ afterEach(() => {
   while (scratchDirs.length > 0) rmSync(scratchDirs.pop()!, { recursive: true, force: true });
 });
 
-function boot(): ServerHandle {
+function boot(): BoardHandle {
   const dir = mkdtempSync(join(tmpdir(), "projects-list-bounded-"));
   scratchDirs.push(dir);
-  handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+  handle = bootInProcess(join(dir, "crucible.db"));
   return handle;
 }
 
@@ -129,12 +130,8 @@ function seed(): void {
   handle!.store.archiveProject(DELTA);
 }
 
-function base(): string {
-  return `http://localhost:${handle!.server.port}`;
-}
-
 async function getText(path: string): Promise<string> {
-  const res = await fetch(`${base()}${path}`);
+  const res = await send(handle!, `${path}`);
   expect(res.status).toBe(200);
   return res.text();
 }

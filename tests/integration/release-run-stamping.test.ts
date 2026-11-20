@@ -21,8 +21,8 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -60,7 +60,7 @@ function parsedBody(overrides: Record<string, unknown> = {}): Record<string, unk
 }
 
 describe("CR-CRU-164 §S1 — release rides run start and every ingest route (server)", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   let dbPath = "";
   let dirs: string[] = [];
 
@@ -77,11 +77,11 @@ describe("CR-CRU-164 §S1 — release rides run start and every ingest route (se
     const dir = freshDir();
     dirs.push(dir);
     dbPath = join(dir, "crucible.db");
-    handle = startServer({ port: 0, dbPath });
+    handle = bootInProcess(dbPath);
   }
 
   async function send(method: string, path_: string, body: unknown): Promise<Response> {
-    return fetch(`http://127.0.0.1:${handle!.server.port}${path_}`, {
+    return boardSend(handle!, `${path_}`, {
       method,
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

@@ -7,7 +7,7 @@
 //  - a project holding only lint records shows no compile verdict at all.
 //
 // Each case is driven through the real board: records are posted to a real
-// server on the compile route (`startServer`, in-memory store), the project's
+// server on the compile route (`bootInProcess`, in-memory store), the project's
 // rollup is read from `GET /api/v2/projects` exactly as the dashboard reads
 // it, and that rollup is handed to `projectStatus` (public/app-logic.mjs) and
 // to the mounted app, whose Project pane renders the status line
@@ -20,10 +20,10 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { projectStatus } from "../../public/app-logic.mjs";
 import { settleDom } from "../helpers/dom-settle";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 const VAN_SRC = readFileSync(path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"), "utf8");
@@ -31,7 +31,7 @@ const VAN_X_SRC = readFileSync(path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.n
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(async () => {
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
@@ -42,18 +42,14 @@ afterEach(async () => {
 
 const ORCHESTRATOR = "status-line-orch";
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
 
-function base(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
-}
-
-async function postJson(handle: ServerHandle, route: string, body: unknown): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base(handle)}${route}`, {
+async function postJson(handle: BoardHandle, route: string, body: unknown): Promise<Record<string, unknown>> {
+  const res = await send(handle, `${route}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -63,14 +59,14 @@ async function postJson(handle: ServerHandle, route: string, body: unknown): Pro
   return answer;
 }
 
-async function getJson(handle: ServerHandle, route: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base(handle)}${route}`);
+async function getJson(handle: BoardHandle, route: string): Promise<Record<string, unknown>> {
+  const res = await send(handle, `${route}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
 
 /** A project with its orchestrator registered (an ingest needs a live caller). */
-async function seedProject(handle: ServerHandle, name: string): Promise<string> {
+async function seedProject(handle: BoardHandle, name: string): Promise<string> {
   // The board is read with the runtime's own fetch, never a page's scripted one.
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
   const key = crypto.randomUUID();
@@ -95,7 +91,7 @@ const CLIPPY_TWO_ERRORS = [
 ].join("\n");
 
 /** Posts a compile record and answers its event id. */
-async function postCompile(handle: ServerHandle, key: string, errors: string): Promise<string> {
+async function postCompile(handle: BoardHandle, key: string, errors: string): Promise<string> {
   const answer = await postJson(handle, "/api/v2/runs/compile", {
     projectKey: key,
     agentId: ORCHESTRATOR,
@@ -107,7 +103,7 @@ async function postCompile(handle: ServerHandle, key: string, errors: string): P
 }
 
 /** Posts a failing clippy lint record (two errors, exit 101) and answers its event id. */
-async function postFailingLint(handle: ServerHandle, key: string): Promise<string> {
+async function postFailingLint(handle: BoardHandle, key: string): Promise<string> {
   const answer = await postJson(handle, "/api/v2/runs/compile", {
     projectKey: key,
     agentId: ORCHESTRATOR,
@@ -124,14 +120,14 @@ async function postFailingLint(handle: ServerHandle, key: string): Promise<strin
 type Rollup = Parameters<typeof projectStatus>[0] & { key: string };
 
 /** The project's rollup exactly as `GET /api/v2/projects` answers it. */
-async function rollupOf(handle: ServerHandle, key: string): Promise<Rollup> {
+async function rollupOf(handle: BoardHandle, key: string): Promise<Rollup> {
   const body = await getJson(handle, "/api/v2/projects");
   const hits = (body.projects as Rollup[]).filter((p) => p.key === key);
   expect(hits.length).toBe(1);
   return hits[0]!;
 }
 
-async function eventsOf(handle: ServerHandle, key: string): Promise<unknown[]> {
+async function eventsOf(handle: BoardHandle, key: string): Promise<unknown[]> {
   const body = await getJson(handle, `/api/v2/events?project=${key}&limit=100`);
   return body.events as unknown[];
 }
@@ -266,7 +262,7 @@ describe("projectStatus never words a lint brief as a compile verdict", () => {
 // ── A lint-only project reads its newest lint record's own words ──────────────
 
 /** Posts a clippy lint record over `errors` with the linter's `runnerExit`; answers its event id. */
-async function postLint(handle: ServerHandle, key: string, errors: string, runnerExit: number): Promise<string> {
+async function postLint(handle: BoardHandle, key: string, errors: string, runnerExit: number): Promise<string> {
   const answer = await postJson(handle, "/api/v2/runs/compile", {
     projectKey: key,
     agentId: ORCHESTRATOR,
@@ -289,7 +285,7 @@ const JUNIT_THREE_PASS = [
 ].join("\n");
 
 /** Posts a green test run of three passing cases on `/api/v2/runs`; answers its event id. */
-async function postGreenTestRun(handle: ServerHandle, key: string): Promise<string> {
+async function postGreenTestRun(handle: BoardHandle, key: string): Promise<string> {
   const answer = await postJson(handle, "/api/v2/runs", {
     projectKey: key,
     agentId: ORCHESTRATOR,

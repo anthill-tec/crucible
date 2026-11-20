@@ -30,7 +30,7 @@
 // the release axis (AC9a): the live board's 66 release-less rows beside 28
 // authored 0.2.0 rows name nobody.
 //
-// Every store here is `:memory:`, every server boots on an OS-assigned port
+// Every store here is `:memory:`, every server boots in process (no port)
 // against an mkdtempSync scratch db. The live data/crucible.db and port 3849
 // are never touched.
 import { describe, test, expect, afterEach } from "bun:test";
@@ -39,7 +39,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, WAVE_SEQ_STRIDE } from "../../src/store.ts";
 import type { QueueEntryInput } from "../../src/store.ts";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 // ── wire shapes (the routes test's, narrowed to what this suite reads) ─────
 
@@ -494,7 +495,7 @@ describe("CR-CRU-095 §S2 — the STORE names a defaulted row beside an authored
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across waves of one release", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -505,15 +506,15 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
     }
   });
 
-  function boot(): ServerHandle {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru095-seq-scope-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
     return handle;
   }
 
   async function post(path: string, body: unknown): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`http://localhost:${handle!.server.port}${path}`, {
+    const res = await send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -522,7 +523,7 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
   }
 
   async function get(path: string): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`http://localhost:${handle!.server.port}${path}`);
+    const res = await send(handle!, `${path}`);
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 

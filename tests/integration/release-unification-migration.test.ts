@@ -50,8 +50,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, SCHEMA_VERSION } from "../../src/store.ts";
 import * as storeModule from "../../src/store.ts";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { populateStore } from "../helpers/populated-store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const ORCH = "cru130-c2-migration";
 
@@ -314,7 +315,7 @@ function ageToPreUnification(db: Database, at: number): void {
 describe("CR-CRU-130 §S2 — two types become one record, and history keeps everything else", () => {
   const scratchDirs: string[] = [];
   const openDbs: Database[] = [];
-  const handles: ServerHandle[] = [];
+  const handles: BoardHandle[] = [];
 
   afterEach(() => {
     while (handles.length > 0) handles.pop()?.stop();
@@ -342,14 +343,14 @@ describe("CR-CRU-130 §S2 — two types become one record, and history keeps eve
     if (at >= 0) openDbs.splice(at, 1);
   }
 
-  function boot(dbPath: string): ServerHandle {
-    const handle = startServer({ port: 0, dbPath });
+  function boot(dbPath: string): BoardHandle {
+    const handle = bootInProcess(dbPath);
     handles.push(handle);
     return handle;
   }
 
-  async function get(handle: ServerHandle, path: string): Promise<AnyBody> {
-    const res = await fetch(`http://localhost:${String(handle.server.port)}${path}`);
+  async function get(handle: BoardHandle, path: string): Promise<AnyBody> {
+    const res = await send(handle, `${path}`);
     return (await res.json()) as AnyBody;
   }
 

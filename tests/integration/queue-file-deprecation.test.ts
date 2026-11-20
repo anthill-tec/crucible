@@ -54,15 +54,16 @@
 // order — lives in THIS file now, in its final test ("the deprecation code
 // joins the QueueWarning union as a SIXTH member…").
 //
-// Every fixture board is synthetic and in-memory — an OS-assigned port, an
+// Every fixture board is synthetic and in-memory — in process (no port), an
 // mkdtempSync scratch db, ids in this suite's own `CR-118D-*` shape. The live
 // board is never touched.
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { QueueEntryInput } from "../../src/store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 
@@ -181,7 +182,7 @@ function bootstrapTable(rows: Row[]): Array<Record<string, unknown>> {
 }
 
 describe("CR-CRU-118 §S3 — the bulk queue route announces that it is deprecated", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -192,19 +193,15 @@ describe("CR-CRU-118 §S3 — the bulk queue route announces that it is deprecat
     }
   });
 
-  function boot(): ServerHandle {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru118-deprecation-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
     return handle;
   }
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   async function post(path: string, body: unknown): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`, {
+    const res = await send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -213,7 +210,7 @@ describe("CR-CRU-118 §S3 — the bulk queue route announces that it is deprecat
   }
 
   async function get(path: string): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`);
+    const res = await send(handle!, `${path}`);
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 

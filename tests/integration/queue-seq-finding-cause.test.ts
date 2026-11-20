@@ -49,7 +49,7 @@
 // wave 5 at seq 81 — outside wave 5's block, which runs (5000, 6000) —
 // alongside CR-CRU-091 at 5019, inside it. Those two ids appear in this file
 // in PROSE only: every fixture id below is invented, every store is a scratch
-// db under mkdtempSync, and every server boots on an OS-assigned port. The
+// db under mkdtempSync, and every server boots in process (no port). The
 // live data/crucible.db and port 3849 are NEVER touched, so no test here can
 // re-author wave 5 (§S3).
 import { describe, test, expect, afterEach } from "bun:test";
@@ -57,7 +57,8 @@ import { CLIENT_SOURCE_DIR } from "../helpers/test-install.ts";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 // ── wire shapes (the queue suites', narrowed to what this file reads) ───────
 
@@ -189,7 +190,7 @@ const CLIENTS_DIR = CLIENT_SOURCE_DIR;
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("CR-CRU-119 — the seq finding names the cause it actually found", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -200,15 +201,15 @@ describe("CR-CRU-119 — the seq finding names the cause it actually found", () 
     }
   });
 
-  function boot(): ServerHandle {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru119-seq-cause-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
     return handle;
   }
 
   async function post(path: string, body: unknown): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`http://localhost:${handle!.server.port}${path}`, {
+    const res = await send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -217,7 +218,7 @@ describe("CR-CRU-119 — the seq finding names the cause it actually found", () 
   }
 
   async function get(path: string): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`http://localhost:${handle!.server.port}${path}`);
+    const res = await send(handle!, `${path}`);
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 

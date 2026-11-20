@@ -46,15 +46,16 @@
 // costs the two consumers nothing.
 //
 // Every store here is `:memory:` or an mkdtemp scratch file, and every server
-// is booted on an OS-assigned port. The live data/crucible.db is never opened
+// is booted in process (no port). The live data/crucible.db is never opened
 // and port 3849 is never touched.
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../../src/store.ts";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { RunEvent } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const ORCH = "orchestrator-1";
 
@@ -308,7 +309,7 @@ describe("CR-CRU-130 §S2 — one record, two points in its life", () => {
 
 describe("CR-CRU-130 §S2 — the two reads keep their wire shapes, at this project's real shape", () => {
   const scratchDirs: string[] = [];
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -316,19 +317,15 @@ describe("CR-CRU-130 §S2 — the two reads keep their wire shapes, at this proj
     while (scratchDirs.length > 0) rmSync(scratchDirs.pop()!, { recursive: true, force: true });
   });
 
-  function boot(): ServerHandle {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru130-c2-wire-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
     return handle;
   }
 
-  function base(): string {
-    return `http://localhost:${String(handle!.server.port)}`;
-  }
-
   async function post(path: string, body: unknown): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`, {
+    const res = await send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -337,7 +334,7 @@ describe("CR-CRU-130 §S2 — the two reads keep their wire shapes, at this proj
   }
 
   async function get(path: string): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`);
+    const res = await send(handle!, `${path}`);
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 
