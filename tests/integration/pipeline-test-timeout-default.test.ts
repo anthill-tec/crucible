@@ -100,36 +100,86 @@ function bunTestInvocations(parsed: ReleaseWorkflow): Array<{ label: string; run
  *  spelling bun honours (`--timeout 30000` / `--timeout=30000`). A list rather
  *  than a single value so "declared exactly once" is assertable. */
 function timeoutFlagValues(tokens: string[]): string[] {
+  return flagValues(tokens, "--timeout");
+}
+
+/** The value(s) one value-taking flag carries in a token list, in either
+ *  spelling (`--flag value` / `--flag=value`). */
+function flagValues(tokens: string[], flag: string): string[] {
   const values: string[] = [];
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i] as string;
-    if (token === "--timeout") {
+    if (token === flag) {
       values.push(tokens[i + 1] ?? "");
       i += 1;
-    } else if (token.startsWith("--timeout=")) {
-      values.push(token.slice("--timeout=".length));
+    } else if (token.startsWith(`${flag}=`)) {
+      values.push(token.slice(flag.length + 1));
     }
   }
   return values;
 }
 
+/** The `bun test` flags that take a separate value: the budget, and the
+ *  preload the hermetic unit tier records its dependencies with. Their values
+ *  are never path arguments. */
+const BUN_TEST_VALUE_FLAGS = new Set(["--timeout", "--preload"]);
+
+/** One `run:` body as the shell reads it: `#` comment lines dropped, line
+ *  continuations joined, split on whitespace. */
+function commandTokens(run: string): string[] {
+  return run
+    .split("\n")
+    .filter((line) => !/^\s*#/.test(line))
+    .join("\n")
+    .replace(/\\\r?\n/g, " ")
+    .trim()
+    .split(/\s+/);
+}
+
+/** Where `test` follows the bun executable in a token list — `bun test`
+ *  inside a wrapper's command, or a bare argv that starts at `test` — or -1. */
+function bunTestAt(tokens: string[]): number {
+  return tokens.findIndex(
+    (token, i) => token === "test" && (i === 0 || /(?:^|\/)bun$/.test(tokens[i - 1] as string)),
+  );
+}
+
 /** The path arguments of one `bun test` command — the tokens after `test`,
- *  less every flag and the value `--timeout` carries. A tier run names its
- *  tier DIRECTORY here (`./tests/<tier>`, the `./` making it a directory and
- *  not a name filter); a whole-suite run names nothing. */
+ *  less every flag and the value `--timeout` or `--preload` carries. Whatever
+ *  precedes `bun test` (the hermetic wrapper, its log directory, its `--`, an
+ *  `env` assignment) is not the test runner's and is skipped. A tier run names
+ *  its tier DIRECTORY here (`./tests/<tier>`, the `./` making it a directory
+ *  and not a name filter); a whole-suite run names nothing. */
 function bunTestPathArgs(tokens: string[]): string[] {
-  const start = tokens.indexOf("test");
+  const start = bunTestAt(tokens);
   const rest = start === -1 ? tokens : tokens.slice(start + 1);
   const paths: string[] = [];
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i] as string;
-    if (token === "--timeout") {
+    if (BUN_TEST_VALUE_FLAGS.has(token)) {
       i += 1;
     } else if (!token.startsWith("-")) {
       paths.push(token);
     }
   }
   return paths;
+}
+
+/** CR-CRU-263's wrapper: `scripts/hermetic/run.sh <log-dir> -- <command…>`. */
+const HERMETIC_WRAPPER = "scripts/hermetic/run.sh";
+/** The bun dependency hook the hermetic unit tier preloads. */
+const BUN_DEPENDENCY_PRELOAD = "./scripts/hermetic/hooks/bun-preload.ts";
+
+/** How one CI `bun test` step runs: through the hermetic wrapper (the wrapper
+ *  first, a log directory, then `--` before `bun test`), and the preloads its
+ *  `bun test` carries. */
+function hermeticShape(tokens: string[]): { wrapped: boolean; preload: string[] } {
+  const bunAt = bunTestAt(tokens) - 1;
+  const separator = tokens.indexOf("--");
+  return {
+    wrapped: tokens[0] === HERMETIC_WRAPPER && separator > 1 && bunAt > separator,
+    preload: flagValues(tokens.slice(bunAt + 1), "--preload"),
+  };
 }
 
 // ── the client's command builder, DRIVEN (not read as text) ────────────────
@@ -238,7 +288,7 @@ function workflowDeclaredTimeoutMs(): number {
   const invocations = bunTestInvocations(parsed);
   expect(invocations.length, "release.yml's test-bun job runs no `bun test` step").toBeGreaterThan(0);
   const figures = invocations.map((invocation) => {
-    const values = timeoutFlagValues(invocation.run.trim().split(/\s+/));
+    const values = timeoutFlagValues(commandTokens(invocation.run));
     expect(
       values.length,
       `release.yml's '${invocation.label}' step carries ${String(values.length)} --timeout flags; ` +
@@ -318,9 +368,10 @@ describe("§S1 the local gate's own invocations carry the project's default per-
 });
 
 describe("§S1 CI runs the suite on the same budget, and the two figures cannot drift apart", () => {
-  test("release.yml's test-bun job runs ./tests/unit then ./tests/integration, each on `bun test --timeout 30000`", () => {
+  test("release.yml's test-bun job runs ./tests/unit then ./tests/integration through the hermetic wrapper, each on `bun test --timeout 30000`, the unit tier with the dependency preload", () => {
     const { parsed } = readReleaseWorkflow();
     const invocations = bunTestInvocations(parsed);
+    const steps = JSON.stringify(invocations.map((i) => `${i.label}: ${i.run.trim()}`));
 
     // POSITIVE — the job runs the suite by tier DIRECTORY: exactly two
     // invocations, the unit directory first, then the integration directory.
@@ -328,20 +379,32 @@ describe("§S1 CI runs the suite on the same budget, and the two figures cannot 
     // `bun test` step added later fails here instead of quietly running on
     // bun's default, while merely RENAMING a step changes nothing about what
     // CI runs and must not redden the suite. The labels are evidence in the
-    // failure message, never the contract.
+    // failure message, never the contract. The wrapper's own arguments and
+    // the preload's file are not tier paths.
     expect(
-      invocations.map((invocation) => bunTestPathArgs(invocation.run.trim().split(/\s+/))),
-      `release.yml's test-bun job runs ${String(invocations.length)} \`bun test\` steps: ` +
-        JSON.stringify(invocations.map((i) => `${i.label}: ${i.run.trim()}`)),
+      invocations.map((invocation) => bunTestPathArgs(commandTokens(invocation.run))),
+      `release.yml's test-bun job runs ${String(invocations.length)} \`bun test\` steps: ${steps}`,
     ).toEqual([["./tests/unit"], ["./tests/integration"]]);
 
     // …and each of them carries the figure exactly once.
     for (const invocation of invocations) {
       expect(
-        timeoutFlagValues(invocation.run.trim().split(/\s+/)),
+        timeoutFlagValues(commandTokens(invocation.run)),
         `release.yml's '${invocation.label}' step runs: ${invocation.run.trim()}`,
       ).toEqual([String(REQUIRED_DEFAULT_TIMEOUT_MS)]);
     }
+
+    // CR-CRU-263 AC1/AC6 — both tiers run through the hermetic wrapper
+    // (`scripts/hermetic/run.sh <log-dir> -- …`), and the unit tier preloads
+    // the bun dependency hook exactly once, so its verdict can be taken over
+    // what it recorded; the integration tier records nothing.
+    expect(
+      invocations.map((invocation) => hermeticShape(commandTokens(invocation.run))),
+      `release.yml's test-bun tier steps must run as \`${HERMETIC_WRAPPER} <log-dir> -- … bun test …\`: ${steps}`,
+    ).toEqual([
+      { wrapped: true, preload: [BUN_DEPENDENCY_PRELOAD] },
+      { wrapped: true, preload: [] },
+    ]);
   });
 
   test("the workflow's --timeout EQUALS the figure the client declares — derived from both files, retyped from neither", () => {

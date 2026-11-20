@@ -9,57 +9,37 @@ them is collected by:
   script and the bun client's own `regression` run: one bare discovery over
   the root;
 * the tier runs, which are declared by path: CI's `test-bun` job runs
-  `bun test --timeout 30000 ./tests/unit` then `./tests/integration`, and the
+  `bun test --timeout 30000 ./tests/unit` (with the hermetic dependency
+  preload) then `./tests/integration`, each through the hermetic wrapper
+  (`scripts/hermetic/run.sh`, CR-CRU-263), and the
   `test:unit` / `test:integration` scripts run the same directories through
   `scripts/run-test-target.ts` (pinned by `pipeline-test-timeout-default`).
   Neither tier directory holds the fixture.
 
 Proved from the discovery itself, cheaply: bun's own discovery is pointed at the
 fixture directory (it searches the directory and runs nothing), and the tier
-directories are read from the workflow. No nested full-suite run.
+directories are read from the workflow's commands (`tests/client/ci_workflow_steps`).
+No nested full-suite run.
 
 Invocation:
     python3 -m unittest tests.client.integration.test_bun_vitest_fixture_stays_out_of_this_repos_suite -v
 """
 
-import shlex
 import shutil
 import subprocess
 import unittest
 from pathlib import Path
 
+from tests.client.ci_workflow_steps import bun_test_steps, bun_tier_paths
 from tests.client.live_run_harness import REPO_ROOT, new_scratch, scrubbed_env
 
 FIXTURE_REL = "tests/fixtures/vitest-project"
 FIXTURE = REPO_ROOT / FIXTURE_REL
 TIMEOUT = 120
-CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 
 
 def _fixture_test_files():
     return sorted(p.name for p in FIXTURE.glob("*.vitest.ts"))
-
-
-def _ci_bun_test_steps():
-    return [line.strip() for line in CI_WORKFLOW.read_text().splitlines()
-            if line.strip().startswith("run: bun test")]
-
-
-def _ci_bun_tier_paths():
-    """Each CI `bun test` step's path arguments, in step order: the tokens
-    after `bun test`, less the flags and the `--timeout` figure."""
-    tiers = []
-    for step in _ci_bun_test_steps():
-        paths, skip_value = [], False
-        for arg in shlex.split(step[len("run:"):])[2:]:
-            if skip_value:
-                skip_value = False
-            elif arg == "--timeout":
-                skip_value = True
-            elif not arg.startswith("-"):
-                paths.append(arg)
-        tiers.append(paths)
-    return tiers
 
 
 def _under(path, root):
@@ -126,21 +106,26 @@ class TheVitestFixtureStaysOutOfThisReposSuiteTest(unittest.TestCase):
     def test_the_unit_and_integration_tier_directories_hold_no_fixture_file(self):
         # The tiers are declared by path, so a tier run collects only the files
         # under its directory, and the fixture lies under neither.
-        tiers = _ci_bun_tier_paths()
+        tiers = bun_tier_paths()
         self.assertEqual(tiers, [["./tests/unit"], ["./tests/integration"]],
                          f"CI's bun test steps must each run one tier directory: "
-                         f"{_ci_bun_test_steps()!r}")
+                         f"{bun_test_steps()!r}")
         for [directory] in tiers:
             self.assertFalse(_under(FIXTURE, REPO_ROOT / directory),
                              f"the tier directory {directory} holds the fixture {FIXTURE_REL}")
 
     def test_ci_runs_bun_test_over_the_unit_then_the_integration_directory(self):
         # CI's bun steps are the two tier directories, each on the declared
-        # budget; another path argument there would be a different collection.
-        steps = _ci_bun_test_steps()
-        self.assertEqual(steps, ["run: bun test --timeout 30000 ./tests/unit",
-                                 "run: bun test --timeout 30000 ./tests/integration"],
-                         f"CI's bun test steps: {steps!r}")
+        # budget and each through the hermetic wrapper (CR-CRU-263), the unit
+        # tier with its dependency preload; another path argument there would
+        # be a different collection.
+        steps = bun_test_steps()
+        self.assertEqual(
+            steps,
+            [(True, "bun test --timeout 30000 --preload ./scripts/hermetic/hooks/bun-preload.ts "
+                    "./tests/unit"),
+             (True, "bun test --timeout 30000 ./tests/integration")],
+            f"CI's bun test steps as (through the hermetic wrapper, command): {steps!r}")
 
 
 if __name__ == "__main__":

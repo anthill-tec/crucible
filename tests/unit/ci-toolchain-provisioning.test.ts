@@ -689,6 +689,20 @@ describe("CR-CRU-137 §S2 — CR-CRU-087's record says what actually shipped", (
 // The matched-pair test is the one deliberately BORN GREEN — like assertions 5
 // and 6 at the head of this file, it is a rail, red only in the half-bumped
 // state it exists to forbid.
+//
+// THE PIN IS A COMMIT SHA (CR-CRU-263 AC5, spec pre-review F9). Every `uses:`
+// is pinned to a full 40-hex commit SHA, with the version that SHA was
+// resolved from in a trailing comment on the same line:
+// `actions/checkout@<40-hex SHA> # v5`. A YAML parser drops the comment, so
+// the version is read from the RAW text's `uses:` lines, matched one for one
+// against the parsed sites. The tables stay keyed on `action@version`, the
+// comment's version: a SHA alone names no version to have measured. A site is
+// an offender when its ref is not a 40-hex SHA, when its line carries no
+// `# <version>` comment, or when one version is pinned to two commits.
+// Measured at the refactor (release.yml at 39cab8ab): every `uses:` is a tag or
+// a branch (`actions/checkout@v5`, `pypa/gh-action-pypi-publish@release/v1` …)
+// with no version comment, so the runtime and exact-pin tests fail on every
+// site; the matched-pair rail stays green (both sides equally unpinned).
 
 /** Runtimes GitHub no longer provides on its runners. An action declaring one
  *  is force-run on Node 24 and annotates every job that uses it — which is the
@@ -750,61 +764,100 @@ const REQUIRED_PINS: Record<string, string> = {
 type UsesSite = {
   /** Where in the workflow it is written, for the failure message. */
   where: string;
-  /** The whole `uses:` value, e.g. `actions/checkout@v4`. */
+  /** The whole `uses:` value as written, e.g. `actions/checkout@<40-hex SHA>`. */
   uses: string;
   /** `actions/checkout` — the part before the first `@`. */
   action: string;
-  /** `v4` — undefined when the step names no ref at all, which is the
-   *  "added later without a pin" case the AC names. */
+  /** The full commit SHA the site pins — undefined when the ref after `@` is
+   *  not a 40-hex commit SHA: a tag or a branch moves under the pin (CR-CRU-263
+   *  AC5), and no ref at all is the "added later without a pin" case. */
+  sha?: string;
+  /** `v5` — the version the SHA pin names, read from the trailing `# <version>`
+   *  comment on the site's own `uses:` line in the RAW text (a YAML parser
+   *  drops comments). Undefined when the line carries no such comment. The
+   *  tables above are keyed on it. */
   ref?: string;
+  /** `actions/checkout@v5` — the action and the version its pin names. */
+  pin: string;
 };
+
+/** A full commit SHA, the only ref that cannot move under a pin. */
+const COMMIT_SHA = /^[0-9a-f]{40}$/;
+
+/** One `uses:` line of the raw workflow text: its value, and the first word of
+ *  its trailing comment. A comment line that merely mentions `uses:` is not
+ *  one. */
+const RAW_USES_LINE = /^\s*(?:-\s+)?uses:\s*(["']?)([^\s"'#]+)\1(?:\s+#\s*(\S+))?.*$/;
+
+function rawUsesLines(raw: string): Array<{ value: string; version?: string }> {
+  return raw.split("\n").flatMap((line) => {
+    const match = RAW_USES_LINE.exec(line);
+    return match ? [{ value: match[2] as string, version: match[3] }] : [];
+  });
+}
 
 /** Every `uses:` occurrence in the workflow, ENUMERATED FROM THE PARSED JOB
  *  GRAPH — job-level (a reusable workflow) and step-level alike. This is the
  *  enumeration the AC requires: an action added to a new job is graded on the
- *  day it is written, with no edit to this file. */
-function usesSites(parsed: ReleaseWorkflow): UsesSite[] {
-  const sites: UsesSite[] = [];
-  const record = (where: string, raw: string): void => {
-    const uses = raw.trim();
-    const at = uses.indexOf("@");
-    const ref = at === -1 ? "" : uses.slice(at + 1).trim();
-    sites.push({
-      where,
-      uses,
-      action: at === -1 ? uses : uses.slice(0, at),
-      ref: ref === "" ? undefined : ref,
-    });
-  };
+ *  day it is written, with no edit to this file. Each site's version comes
+ *  from the raw text's `uses:` lines, which appear in the same document order;
+ *  the two readings are asserted to agree, value for value, before either is
+ *  trusted. */
+function usesSites(parsed: ReleaseWorkflow, raw: string): UsesSite[] {
+  const parsedSites: Array<{ where: string; uses: string }> = [];
   for (const [job, spec] of Object.entries(parsed.jobs ?? {})) {
-    if (typeof spec.uses === "string") record(`job '${job}' uses`, spec.uses);
+    if (typeof spec.uses === "string") parsedSites.push({ where: `job '${job}' uses`, uses: spec.uses.trim() });
     (spec.steps ?? []).forEach((step, index) => {
-      if (typeof step.uses === "string") record(`job '${job}' step [${index}]`, step.uses);
+      if (typeof step.uses === "string") {
+        parsedSites.push({ where: `job '${job}' step [${index}]`, uses: step.uses.trim() });
+      }
     });
   }
-  return sites;
+
+  const lines = rawUsesLines(raw);
+  expect(
+    lines.map((line) => line.value),
+    "release.yml's raw `uses:` lines do not match its parsed `uses:` values one for one, " +
+      "so a version comment cannot be attributed to its site",
+  ).toEqual(parsedSites.map((site) => site.uses));
+
+  return parsedSites.map(({ where, uses }, index) => {
+    const at = uses.indexOf("@");
+    const action = at === -1 ? uses : uses.slice(0, at);
+    const pinned = at === -1 ? "" : uses.slice(at + 1).trim();
+    const ref = lines[index]?.version;
+    return {
+      where,
+      uses,
+      action,
+      sha: COMMIT_SHA.test(pinned) ? pinned : undefined,
+      ref,
+      pin: `${action}@${ref ?? "<no version comment>"}`,
+    };
+  });
 }
 
-/** The one command that re-measures a row of `ACTION_RUNTIMES`. */
+/** The one command that re-measures a row of `ACTION_RUNTIMES`: the action.yml
+ *  at the very commit the site pins. */
 function actionYmlUrl(site: UsesSite): string {
-  return `https://raw.githubusercontent.com/${site.action}/${site.ref ?? "<no ref>"}/action.yml`;
+  return `https://raw.githubusercontent.com/${site.action}/${site.sha ?? site.ref ?? "<no ref>"}/action.yml`;
 }
 
-/** Distinct `uses:` values, each with every site that writes it. */
+/** Distinct pins (`action@version`), each with every site that writes it. */
 function byPin(sites: UsesSite[]): Map<string, UsesSite[]> {
   const grouped = new Map<string, UsesSite[]>();
   for (const site of sites) {
-    const seen = grouped.get(site.uses);
+    const seen = grouped.get(site.pin);
     if (seen) seen.push(site);
-    else grouped.set(site.uses, [site]);
+    else grouped.set(site.pin, [site]);
   }
   return grouped;
 }
 
 describe("CR-CRU-137 §S5 — no workflow action is running on a deprecated runtime", () => {
   test("every `uses:` in release.yml resolves to a ref whose own action.yml declares a supported runtime — an UNRECORDED action fails, it is never skipped", () => {
-    const { parsed } = readReleaseWorkflow();
-    const sites = usesSites(parsed);
+    const { raw, parsed } = readReleaseWorkflow();
+    const sites = usesSites(parsed, raw);
 
     expect(
       sites.length,
@@ -813,22 +866,41 @@ describe("CR-CRU-137 §S5 — no workflow action is running on a deprecated runt
     ).toBeGreaterThan(0);
 
     const offenders: string[] = [];
-    for (const [uses, where] of byPin(sites)) {
+    for (const [pin, where] of byPin(sites)) {
       const first = where[0] as UsesSite;
       const at = `${where.length} site(s): ${where.map((s) => s.where).join(", ")}`;
 
-      if (first.ref === undefined) {
+      // CR-CRU-263 AC5 — a pin is a full commit SHA; a tag or a branch moves.
+      const unpinned = where.filter((site) => site.sha === undefined);
+      if (unpinned.length > 0) {
         offenders.push(
-          `${uses} — names NO ref, so there is no action.yml to read a runtime ` +
-            `from and GitHub resolves whatever the default branch holds today [${at}]`,
+          `${pin} — ${[...new Set(unpinned.map((site) => site.uses))].join(", ")} is not pinned to a full ` +
+            `40-hex commit SHA, so what runs can change under the same text [${at}]`,
         );
         continue;
       }
 
-      const runtime = ACTION_RUNTIMES[uses];
+      if (first.ref === undefined) {
+        offenders.push(
+          `${first.uses} — its \`uses:\` line carries no trailing \`# <version>\` comment, so ` +
+            `there is no version to read a recorded runtime for [${at}]`,
+        );
+        continue;
+      }
+
+      const commits = [...new Set(where.map((site) => site.sha))];
+      if (commits.length > 1) {
+        offenders.push(
+          `${pin} — one version comment names ${String(commits.length)} different commits ` +
+            `(${commits.join(", ")}), so at least one comment is wrong [${at}]`,
+        );
+        continue;
+      }
+
+      const runtime = ACTION_RUNTIMES[pin];
       if (runtime === undefined) {
         offenders.push(
-          `${uses} — UNRECORDED: no row in ACTION_RUNTIMES. Read this ref's own ` +
+          `${pin} — UNRECORDED: no row in ACTION_RUNTIMES. Read this ref's own ` +
             `action.yml (${actionYmlUrl(first)}) and record the using: value it ` +
             `declares [${at}]`,
         );
@@ -837,7 +909,7 @@ describe("CR-CRU-137 §S5 — no workflow action is running on a deprecated runt
 
       if (DEPRECATED_ACTION_RUNTIMES.has(runtime)) {
         offenders.push(
-          `${uses} — its own action.yml declares using: ${runtime}, which GitHub ` +
+          `${pin} — its own action.yml declares using: ${runtime}, which GitHub ` +
             `no longer provides (${actionYmlUrl(first)}) [${at}]`,
         );
       }
@@ -858,8 +930,8 @@ describe("CR-CRU-137 §S5 — no workflow action is running on a deprecated runt
   });
 
   test("every action the workflow uses carries the EXACT pin this repository requires — the action list is read off the workflow, so a ninth action or a silent downgrade fails here with no edit to this test", () => {
-    const { parsed } = readReleaseWorkflow();
-    const sites = usesSites(parsed);
+    const { raw, parsed } = readReleaseWorkflow();
+    const sites = usesSites(parsed, raw);
 
     // Policy may never require a pin the evidence does not support: a
     // REQUIRED_PINS row naming an unmeasured (or measured-deprecated) ref
@@ -888,8 +960,8 @@ describe("CR-CRU-137 §S5 — no workflow action is running on a deprecated runt
         }
         if (site.ref !== required) {
           return (
-            `${site.where}: pinned ${site.uses}, required ${site.action}@${required} ` +
-            `(recorded runtimes: pinned=${ACTION_RUNTIMES[site.uses] ?? "unmeasured"}, ` +
+            `${site.where}: pinned ${site.pin} (${site.uses}), required ${site.action}@${required} ` +
+            `(recorded runtimes: pinned=${ACTION_RUNTIMES[site.pin] ?? "unmeasured"}, ` +
             `required=${ACTION_RUNTIMES[`${site.action}@${required}`] ?? "unmeasured"})`
           );
         }
@@ -911,8 +983,8 @@ describe("CR-CRU-137 §S5 — no workflow action is running on a deprecated runt
   });
 
   test("the two artifact actions move as a MATCHED PAIR — the dist handoff from build to both publish jobs breaks if only one of them is bumped", () => {
-    const { parsed } = readReleaseWorkflow();
-    const sites = usesSites(parsed);
+    const { raw, parsed } = readReleaseWorkflow();
+    const sites = usesSites(parsed, raw);
     const uploads = sites.filter((site) => site.action === "actions/upload-artifact");
     const downloads = sites.filter((site) => site.action === "actions/download-artifact");
 
@@ -930,7 +1002,7 @@ describe("CR-CRU-137 §S5 — no workflow action is running on a deprecated runt
     const atRequired = (group: UsesSite[]): boolean =>
       group.every((site) => site.ref === REQUIRED_PINS[site.action]);
     const pinsOf = (group: UsesSite[]): string =>
-      [...new Set(group.map((site) => site.uses))].join(", ");
+      [...new Set(group.map((site) => site.pin))].join(", ");
 
     expect(
       atRequired(uploads),
@@ -1100,16 +1172,58 @@ function runsProvisioningScript(step: WorkflowStep): boolean {
     .some((line) => /^\s*(?:(?:bash|sh)\s+)?(?:\.\/)?scripts\/provision-test-caches\.sh(?:\s|$)/.test(line));
 }
 
-/** A step that runs the python client suite: a `-m unittest` over
- *  `tests/client` or one of its tier directories. */
-function isPythonSuiteStep(step: WorkflowStep): boolean {
-  const run = step.run;
-  return typeof run === "string" && /-m\s+unittest\b[^\n]*\btests\/client\b/.test(run);
+/** One `run:` body as the shell reads it: `#` comment lines dropped, line
+ *  continuations joined and whitespace collapsed, so a command wrapped over
+ *  several lines reads as one. */
+function shellText(run: string): string {
+  return run
+    .split("\n")
+    .filter((line) => !/^\s*#/.test(line))
+    .join("\n")
+    .replace(/\\\r?\n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-/** The `-s` start directory a python suite step's discovery names. */
+/** CR-CRU-263's wrapper, `scripts/hermetic/run.sh <log-dir> -- <command…>`:
+ *  the log directory and the command it wraps, or undefined when the step does
+ *  not run through the wrapper. */
+function hermeticCommand(run: string): { logDir: string; command: string } | undefined {
+  const match = /^scripts\/hermetic\/run\.sh\s+(.+?)\s+--\s+(.+)$/.exec(shellText(run));
+  return match ? { logDir: match[1] as string, command: match[2] as string } : undefined;
+}
+
+/** A step that runs the python client suite, wrapped or not: a `-m unittest`
+ *  over `tests/client` or one of its tier directories, or CR-CRU-263's tagging
+ *  runner over one. */
+function isPythonSuiteStep(step: WorkflowStep): boolean {
+  const run = step.run;
+  return (
+    typeof run === "string" &&
+    /(?:-m\s+unittest\b|scripts\/hermetic\/tagging_runner\.py\s)[^\n]*\btests\/client\b/.test(shellText(run))
+  );
+}
+
+/** The start directory a python suite step discovers: the `-s` its
+ *  `unittest discover` names, or the tagging runner's one argument (the runner
+ *  discovers it with the repo root as top level itself). */
 function discoveryStartDir(run: string): string | undefined {
-  return /\bdiscover\b[^\n]*?\s-s\s+(\S+)/.exec(run)?.[1];
+  const text = shellText(run);
+  return (
+    /\bdiscover\b.*?\s-s\s+(\S+)/.exec(text)?.[1] ??
+    /scripts\/hermetic\/tagging_runner\.py\s+(\S+)/.exec(text)?.[1]
+  );
+}
+
+/** A shell word with its surrounding quotes removed. */
+function unquoted(word: string): string {
+  return /^(["'])(.*)\1$/.exec(word)?.[2] ?? word;
+}
+
+/** The value an `env NAME=value` assignment in `text` carries, unquoted. */
+function assignedValue(text: string, name: string): string | undefined {
+  const value = new RegExp(`(?:^|\\s)${name}=("[^"]*"|'[^']*'|\\S+)`).exec(text)?.[1];
+  return value === undefined ? undefined : unquoted(value);
 }
 
 /** A step that warms a maven repository: it runs `mvn` itself, or names
@@ -1152,18 +1266,19 @@ describe("CR-CRU-260 AC5 — test-python provisions the suite's own caches, then
     const steps = stepsOf(parsed, "test-python");
 
     // The suite runs by tier DIRECTORY: exactly two steps, unit first, each
-    // discovering its own directory with the repo root as top level.
+    // discovering its own directory with the repo root as top level (the
+    // hermetic unit tier's tagging runner passes `-t .` itself).
     const suite = steps.flatMap((step, index) => (isPythonSuiteStep(step) ? [index] : []));
-    const suiteRuns = suite.map((index) => (steps[index]?.run ?? "").trim());
+    const suiteRuns = suite.map((index) => shellText(steps[index]?.run ?? ""));
     expect(
       suiteRuns.map(discoveryStartDir),
       `release.yml job 'test-python' must run the python client suite as two tier steps, ` +
-        `\`discover -s tests/client/unit -t .\` then \`discover -s tests/client/integration -t .\`.\n` +
+        `\`tagging_runner.py tests/client/unit\` then \`discover -s tests/client/integration -t .\`.\n` +
         `test-python steps:\n${stepInventory(steps)}`,
     ).toEqual(["tests/client/unit", "tests/client/integration"]);
     for (const run of suiteRuns) {
       expect(run, `a python client suite step must keep the repo root as top level: ${run}`).toMatch(
-        /\s-t\s+\.(?:\s|$)/,
+        /\s-t\s+\.(?:\s|$)|scripts\/hermetic\/tagging_runner\.py\s/,
       );
     }
 
@@ -1181,22 +1296,62 @@ describe("CR-CRU-260 AC5 — test-python provisions the suite's own caches, then
     ).toBeLessThan(suite[0] as number);
   });
 
-  test("both python client suite steps run with .venv/bin/python, the interpreter that carries the dev extra", () => {
+  // CR-CRU-263 AC1/AC6 — the two tier steps run through the hermetic wrapper,
+  // and the unit tier runs with the dependency hooks recording (the versioned
+  // tagging runner names the running test for the hook), its verdict taken
+  // over the same event log in a step after it.
+  test("both python client suite steps run hermetically with .venv/bin/python: the unit tier through the tagging runner with the dependency hooks then its verdict, the integration tier by discovery", () => {
     const { parsed } = readReleaseWorkflow();
     const steps = stepsOf(parsed, "test-python");
+    const inventory = `test-python steps:\n${stepInventory(steps)}`;
 
-    const suiteRuns = steps.filter(isPythonSuiteStep).map((step) => (step.run ?? "").trim());
-    expect(suiteRuns.length, `test-python steps:\n${stepInventory(steps)}`).toBe(2);
+    const suite = steps.flatMap((step, index) => (isPythonSuiteStep(step) ? [index] : []));
+    expect(suite.length, inventory).toBe(2);
+    const [unitAt, integrationAt] = suite as [number, number];
+    const unit = hermeticCommand(steps[unitAt]?.run ?? "");
+    const integration = hermeticCommand(steps[integrationAt]?.run ?? "");
+    expect(
+      [unit === undefined, integration === undefined],
+      "release.yml job 'test-python' runs a python client suite tier outside the hermetic " +
+        `wrapper (CR-CRU-263: \`scripts/hermetic/run.sh <log-dir> -- …\`).\n${inventory}`,
+    ).toEqual([false, false]);
 
-    for (const run of suiteRuns) {
-      const interpreter = /(\S+)\s+-m\s+unittest\b/.exec(run)?.[1];
-      expect(
-        interpreter,
-        "release.yml job 'test-python' runs the suite with an interpreter other than " +
-          "`.venv/bin/python` (CR-CRU-260 AC5: the suite runs with the interpreter that carries " +
-          `\`.[dev]\`). Suite step: ${run}`,
-      ).toBe(".venv/bin/python");
-    }
+    // The interpreter is `.venv/bin/python` (CR-CRU-260 AC5: the one that
+    // carries `.[dev]`), and what each tier runs is exact.
+    const unitCommand = /^env\s+(.*?)\s*(\.venv\/bin\/python\s.*)$/.exec(unit?.command ?? "");
+    expect(
+      unitCommand?.[2],
+      `the unit tier must run the tagging runner under the dependency hooks: ${unit?.command ?? ""}`,
+    ).toBe(".venv/bin/python scripts/hermetic/tagging_runner.py tests/client/unit");
+    expect(
+      integration?.command,
+      `the integration tier must run the plain discovery: ${integration?.command ?? ""}`,
+    ).toBe(".venv/bin/python -m unittest discover -s tests/client/integration -t .");
+
+    // The hooks load through PYTHONPATH and record to an event log.
+    const assignments = unitCommand?.[1] ?? "";
+    expect(assignedValue(assignments, "PYTHONPATH") ?? "", `unit tier env: ${assignments}`).toMatch(
+      /\/scripts\/hermetic\/hooks$/,
+    );
+    const events = assignedValue(assignments, "HERMETIC_EVENTS");
+    expect(events, `the unit tier names no HERMETIC_EVENTS log: ${assignments}`).toBeDefined();
+
+    // …and the verdict reads that same log, after the unit tier has run.
+    const verdicts = steps.flatMap((step, index) =>
+      typeof step.run === "string" && shellText(step.run).includes("scripts/hermetic/unit-verdict.py")
+        ? [index]
+        : [],
+    );
+    expect(verdicts.length, `exactly one step takes the unit verdict.\n${inventory}`).toBe(1);
+    const verdictAt = verdicts[0] as number;
+    expect(verdictAt, `the verdict must run after the unit tier.\n${inventory}`).toBeGreaterThan(unitAt);
+    const verdict = /^python3 scripts\/hermetic\/unit-verdict\.py\s+(\S+)$/.exec(
+      shellText(steps[verdictAt]?.run ?? ""),
+    );
+    expect(
+      verdict === null ? undefined : unquoted(verdict[1] as string),
+      `the verdict must be \`python3 scripts/hermetic/unit-verdict.py <the unit tier's HERMETIC_EVENTS>\`.\n${inventory}`,
+    ).toBe(events);
   });
 
   test("test-python's comment block no longer describes a warmed maven repository or ~/.m2", () => {

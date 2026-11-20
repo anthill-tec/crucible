@@ -1108,7 +1108,9 @@ function findJobsRunning062(
   substr: string,
 ): Array<[string, WorkflowJob062]> {
   return Object.entries(jobs).filter(([, job]) =>
-    (job.steps ?? []).some((s) => typeof s.run === "string" && s.run.includes(substr)),
+    (job.steps ?? []).some(
+      (s) => typeof s.run === "string" && s.run.replace(/\\\r?\n/g, " ").replace(/\s+/g, " ").includes(substr),
+    ),
   );
 }
 
@@ -1123,8 +1125,12 @@ function normalizeNeeds062(needs?: string | string[]): string[] {
 // Since CR-CRU-260 AC5 the suite runs on `.venv/bin/python`, the interpreter
 // that carries the dev extra; since CR-CRU-261 it runs by tier directory, and
 // the job is found by its unit-tier step (the integration step follows it).
+// Since CR-CRU-263 the unit tier runs hermetically through the versioned
+// tagging runner (which discovers its start dir with `-t .` itself), wrapped by
+// `scripts/hermetic/run.sh`; the step is matched on the command the wrapper
+// runs, its line continuations joined.
 const BUN_SUITE_CMD = "bun test";
-const PY_SUITE_CMD = ".venv/bin/python -m unittest discover -s tests/client/unit -t .";
+const PY_SUITE_CMD = ".venv/bin/python scripts/hermetic/tagging_runner.py tests/client/unit";
 const E2E_SUITE_CMD = "bun run test:e2e";
 
 describe("§S1/§S2/§S3 release.yml declares bun/python/e2e test jobs", () => {
@@ -1135,7 +1141,7 @@ describe("§S1/§S2/§S3 release.yml declares bun/python/e2e test jobs", () => {
     expect(matches.length).toBe(1);
   });
 
-  test("exactly one job runs the Python suite's unit tier (`.venv/bin/python -m unittest discover -s tests/client/unit -t .`)", () => {
+  test("exactly one job runs the Python suite's unit tier (`.venv/bin/python scripts/hermetic/tagging_runner.py tests/client/unit`)", () => {
     const jobs = parseReleaseWorkflowJobs062();
     const matches = findJobsRunning062(jobs, PY_SUITE_CMD);
     expect(matches.length).toBe(1);

@@ -9,16 +9,20 @@ collected by:
 * this repo's python runs: `python-crucible.py`'s unittest discovery (start dir
   `tests`, `tests/client` or a tier directory, pattern `test_*.py`), the
   `test:client-unit` / `test:client-integration` scripts and CI's python job,
-  which run their tier directory (`.venv/bin/python -m unittest discover -s
-  tests/client/unit -t .`, then `-s tests/client/integration`, pattern
-  `test*.py`). unittest descends only into packages and collects only files
-  matching its pattern;
+  which run their tier directory, each through the hermetic wrapper
+  (CR-CRU-263): `.venv/bin/python scripts/hermetic/tagging_runner.py
+  tests/client/unit` (a unittest discovery with `-t .`), then `-m unittest
+  discover -s tests/client/integration -t .`, both with unittest's default
+  pattern `test*.py`. unittest descends only into packages and collects only
+  files matching its pattern;
 * this repo's bun runs: a bare `bun test` (`test:regression`) and the tier
   runs, declared by path: CI's `./tests/unit` then `./tests/integration`.
 
 Proved from the discovery itself, cheaply: each discovery is pointed at the
 fixture (or a scratch copy of it), with a control proving the probe would
-have seen a file named the way that discovery collects. No nested full-suite
+have seen a file named the way that discovery collects. CI's start dirs and
+tier directories are read from the workflow's commands
+(`tests/client/ci_workflow_steps`). No nested full-suite
 run. The fixture is also proved to be what later tests rely on: a real pytest
 run of a scratch copy gives 1 passed, 1 failed and 1 skipped, and leaves the
 checkout's copy untouched.
@@ -44,12 +48,12 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from tests.client.ci_workflow_steps import bun_tier_paths, python_start_dir, python_suite_steps
 from tests.client.live_run_harness import REPO_ROOT, new_scratch, scrubbed_env
 
 FIXTURE_REL = "tests/fixtures/pytest-project"
 FIXTURE = REPO_ROOT / FIXTURE_REL
 TIMEOUT = 120
-CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 PACKAGE_JSON = REPO_ROOT / "package.json"
 
@@ -58,7 +62,7 @@ PYTHON_TIER_SCRIPTS = {"test:client-unit": "tests/client/unit",
                        "test:client-integration": "tests/client/integration"}
 
 # The patterns this repo's python runs discover with: the python client's
-# default, and unittest's own default (CI's `unittest discover` passes none).
+# default, and unittest's own default (CI's discoveries pass none).
 REPO_PYTHON_PATTERNS = ("test_*.py", "test*.py")
 
 
@@ -81,36 +85,10 @@ def _fixture_tree():
     return sorted(p.relative_to(FIXTURE).as_posix() for p in FIXTURE.rglob("*"))
 
 
-def _ci_python_discovery_steps():
-    """CI's python suite steps, selected by their discovery, whatever
-    interpreter runs them."""
-    return [line.strip() for line in CI_WORKFLOW.read_text().splitlines()
-            if line.strip().startswith("run:") and "-m unittest discover" in line]
-
-
 def _start_dir(command):
     """The `-s` start directory a `unittest discover` command names, or None."""
     args = shlex.split(command)
     return args[args.index("-s") + 1] if "-s" in args[:-1] else None
-
-
-def _ci_bun_tier_paths():
-    """Each CI `bun test` step's path arguments, in step order: the tokens
-    after `bun test`, less the flags and the `--timeout` figure."""
-    steps = [line.strip() for line in CI_WORKFLOW.read_text().splitlines()
-             if line.strip().startswith("run: bun test")]
-    tiers = []
-    for step in steps:
-        paths, skip_value = [], False
-        for arg in shlex.split(step[len("run:"):])[2:]:
-            if skip_value:
-                skip_value = False
-            elif arg == "--timeout":
-                skip_value = True
-            elif not arg.startswith("-"):
-                paths.append(arg)
-        tiers.append(paths)
-    return tiers
 
 
 def _under(path, root):
@@ -245,7 +223,8 @@ class ThePytestFixtureStaysOutOfThisReposPythonRunsTest(_FixtureCase):
         self.assertEqual(declared, PYTHON_TIER_SCRIPTS,
                          f"the python tier scripts must each discover their tier directory: "
                          f"{ {name: scripts.get(name) for name in PYTHON_TIER_SCRIPTS}!r}")
-        ci = [_start_dir(step[len("run:"):]) for step in _ci_python_discovery_steps()]
+        ci = [python_start_dir(command) for _wrapped, command in python_suite_steps()]
+        self.assertEqual(len(ci), 2, f"CI's python suite steps: {python_suite_steps()!r}")
         for start_dir in [*declared.values(), *ci, "tests/client"]:
             with self.subTest(start_dir=start_dir):
                 self.assertIsNotNone(start_dir)
@@ -254,14 +233,16 @@ class ThePytestFixtureStaysOutOfThisReposPythonRunsTest(_FixtureCase):
 
     def test_ci_runs_the_unit_then_the_integration_tests_client_discovery(self):
         # CI's python steps are the discovery the probes above prove, one per
-        # tier directory; another start dir or a pattern argument there would
-        # be a different collection.
-        steps = _ci_python_discovery_steps()
+        # tier directory, each through the hermetic wrapper (CR-CRU-263): the
+        # unit tier through the tagging runner, which discovers its start dir
+        # with `-t .` and unittest's default pattern. Another start dir or a
+        # pattern argument there would be a different collection.
+        steps = python_suite_steps()
         self.assertEqual(
             steps,
-            ["run: .venv/bin/python -m unittest discover -s tests/client/unit -t .",
-             "run: .venv/bin/python -m unittest discover -s tests/client/integration -t ."],
-            f"CI's python test steps: {steps!r}")
+            [(True, ".venv/bin/python scripts/hermetic/tagging_runner.py tests/client/unit"),
+             (True, ".venv/bin/python -m unittest discover -s tests/client/integration -t .")],
+            f"CI's python test steps as (through the hermetic wrapper, command): {steps!r}")
 
 
 class ThePytestFixtureStaysOutOfThisReposBunSuiteTest(_FixtureCase):
@@ -290,7 +271,7 @@ class ThePytestFixtureStaysOutOfThisReposBunSuiteTest(_FixtureCase):
     def test_the_unit_and_integration_tier_directories_hold_no_fixture_file(self):
         # The tiers are declared by path, so a tier run collects only the files
         # under its directory, and the fixture lies under neither.
-        tiers = _ci_bun_tier_paths()
+        tiers = bun_tier_paths()
         self.assertEqual(tiers, [["./tests/unit"], ["./tests/integration"]],
                          f"CI's bun test steps must each run one tier directory: {tiers!r}")
         for [directory] in tiers:

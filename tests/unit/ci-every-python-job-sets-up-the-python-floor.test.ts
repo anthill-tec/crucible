@@ -50,12 +50,18 @@ function isSetupPython(step: WorkflowStep): boolean {
   return typeof step.uses === "string" && /^actions\/setup-python(?:@|$)/.test(step.uses.trim());
 }
 
-// A step that runs python: a python/pip invocation, a `python -m` module, or
-// the bun suite, which spawns the python client fleet through `uv run`.
+// A step that runs python: a python/pip invocation, a `python -m` module, an
+// interpreter named by its path (`.venv/bin/python`), the bun suite, which
+// spawns the python client fleet through `uv run`, or any step through the
+// hermetic wrapper (CR-CRU-263), which starts its tripwire with `python3`.
 function runsPython(step: WorkflowStep): boolean {
   const run = step.run;
   if (typeof run !== "string") return false;
-  return /(?:^|[\s;&|(])(?:python3?(?:\.\d+)?|pip3?)\s/m.test(run) || /\bbun\s+test\b/.test(run);
+  return (
+    /(?:^|[\s;&|(/])(?:python3?(?:\.\d+)?|pip3?)\s/m.test(run) ||
+    /\bbun\s+test\b/.test(run) ||
+    /(?:^|[\s;&|(])(?:\.\/)?scripts\/hermetic\/run\.sh\s/m.test(run)
+  );
 }
 
 function describeStep(step: WorkflowStep, index: number): string {
@@ -64,12 +70,26 @@ function describeStep(step: WorkflowStep, index: number): string {
 }
 
 describe("the step predicates read a workflow as the jobs run it", () => {
-  test("a python, pip or bun-suite run step runs python; a bun install does not", () => {
+  test("a python, pip or bun-suite run step runs python — directly, by a path such as .venv/bin/python, or through the hermetic wrapper; a bun install does not", () => {
     expect(runsPython({ run: "python -m pip install --upgrade build twine" })).toBe(true);
-    expect(runsPython({ run: "python3 -m unittest discover -s tests/client/unit -t ." })).toBe(true);
+    expect(runsPython({ run: ".venv/bin/python -m unittest discover -s tests/client/integration -t ." })).toBe(true);
+    expect(runsPython({ run: "python3 scripts/hermetic/unit-verdict.py \"$PWD/hermetic-logs/py-unit/events.tsv\"" })).toBe(true);
     expect(runsPython({ run: "bun test --timeout 30000 ./tests/unit" })).toBe(true);
+    // CR-CRU-263 — the wrapper starts its tripwire with python3, so a wrapped
+    // step runs python whatever command it wraps.
+    expect(
+      runsPython({
+        run:
+          'scripts/hermetic/run.sh "$PWD/hermetic-logs/py-unit" -- env PYTHONPATH="$PWD/scripts/hermetic/hooks" ' +
+          'HERMETIC_EVENTS="$PWD/hermetic-logs/py-unit/events.tsv" .venv/bin/python scripts/hermetic/tagging_runner.py tests/client/unit',
+      }),
+    ).toBe(true);
+    expect(
+      runsPython({ run: 'scripts/hermetic/run.sh "$PWD/hermetic-logs/trip" -- curl -sS http://127.0.0.1:3849/hermetic-trip-probe' }),
+    ).toBe(true);
     expect(runsPython({ run: "bun install --frozen-lockfile" })).toBe(false);
     expect(runsPython({ run: "bunx playwright install --with-deps chromium webkit" })).toBe(false);
+    expect(runsPython({ run: "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0" })).toBe(false);
     expect(runsPython({ uses: "actions/setup-python@v6" })).toBe(false);
   });
 
