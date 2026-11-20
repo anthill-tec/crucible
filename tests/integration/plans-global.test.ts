@@ -31,10 +31,11 @@
 // exist yet, so every GET returns the generic 404 route-not-found shape
 // instead of {ok:true, plans:[...]}.
 //
-// Drives the REAL production server (startServer), same harness pattern as
+// Drives the REAL production router in process (`bootInProcess`), same harness pattern as
 // tests/integration/plans.test.ts / tests/integration/project-archive.test.ts.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -71,7 +72,7 @@ interface PlansListResponse extends OkResponse {
 }
 
 describe("GET /api/v2/plans — global read, additive (CR-CRU-026 §S3.2)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -89,7 +90,7 @@ describe("GET /api/v2/plans — global read, additive (CR-CRU-026 §S3.2)", () =
   }
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -97,11 +98,11 @@ describe("GET /api/v2/plans — global read, additive (CR-CRU-026 §S3.2)", () =
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function registerOrchestrator(key: string, agentId: string): Promise<void> {
-    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+    const res = await send(handle!, `/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
@@ -131,7 +132,7 @@ describe("GET /api/v2/plans — global read, additive (CR-CRU-026 §S3.2)", () =
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -164,7 +165,7 @@ describe("GET /api/v2/plans — global read, additive (CR-CRU-026 §S3.2)", () =
   // ── empty DB ───────────────────────────────────────────────────────────
 
   test("an empty DB (no projects, no plans) → {ok:true, plans:[]}", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
 
     const res = await getJson("/api/v2/plans");
 
@@ -177,7 +178,7 @@ describe("GET /api/v2/plans — global read, additive (CR-CRU-026 §S3.2)", () =
   // ── all projects, same item shape as the scoped list ─────────────────────
 
   test("returns ALL projects' plans (open + closed), each item identical in shape to the project-scoped list — carrying projectKey", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const keyA = await createProject("global-plans-a");
     const keyB = await createProject("global-plans-b");
 
@@ -219,7 +220,7 @@ describe("GET /api/v2/plans — global read, additive (CR-CRU-026 §S3.2)", () =
   // ── archived-project exclusion ────────────────────────────────────────────
 
   test("archiving a project removes its plans from the global read; unarchiving restores them", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const keyKeep = await createProject("global-plans-keep");
     const keyArchive = await createProject("global-plans-archive");
 
@@ -264,7 +265,7 @@ describe("GET /api/v2/plans — global read, additive (CR-CRU-026 §S3.2)", () =
   // ── method refusal — established sibling-route convention ────────────────
 
   test("POST /api/v2/plans is refused via the SAME convention every unmatched v2 route uses (404 {ok:false, error:\"unknown route: POST /api/v2/plans\"}) — GET-only", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
 
     const res = await postJson("/api/v2/plans", { cr: "CR-SHOULD-NEVER-FILE" });
 

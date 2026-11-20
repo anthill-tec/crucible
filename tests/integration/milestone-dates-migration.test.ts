@@ -40,8 +40,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, SCHEMA_VERSION } from "../../src/store.ts";
 import * as storeModule from "../../src/store.ts";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { populateStore } from "../helpers/populated-store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 /** THE TWO SPELLING DECISIONS, isolated — see the header. */
 const TARGET_COLUMN = "target_at";
@@ -203,7 +204,7 @@ function downgrade(dbPath: string, toVersion: number): void {
 describe("the dates a milestone already held become columns, and history keeps everything else", () => {
   const scratchDirs: string[] = [];
   const openDbs: Database[] = [];
-  const handles: ServerHandle[] = [];
+  const handles: BoardHandle[] = [];
 
   afterEach(() => {
     while (handles.length > 0) handles.pop()?.stop();
@@ -228,19 +229,19 @@ describe("the dates a milestone already held become columns, and history keeps e
     return db;
   }
 
-  function boot(dbPath: string): ServerHandle {
-    const handle = startServer({ port: 0, dbPath });
+  function boot(dbPath: string): BoardHandle {
+    const handle = bootInProcess(dbPath);
     handles.push(handle);
     return handle;
   }
 
-  async function get(handle: ServerHandle, path: string): Promise<AnyBody> {
-    const res = await fetch(`http://localhost:${String(handle.server.port)}${path}`);
+  async function get(handle: BoardHandle, path: string): Promise<AnyBody> {
+    const res = await send(handle, `${path}`);
     return (await res.json()) as AnyBody;
   }
 
   async function recordsOfType(
-    handle: ServerHandle,
+    handle: BoardHandle,
     key: string,
     type: string,
   ): Promise<WireRecord[]> {

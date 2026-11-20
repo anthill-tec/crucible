@@ -20,9 +20,8 @@
 // strict enough that a generic "invalid liveness" message (which never
 // NAMES which pair is out of order) still fails this file.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-
-type ServerHandle = ReturnType<typeof startServer>;
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface OkResponse {
   ok: true;
@@ -47,7 +46,7 @@ interface ProjectsListResponse extends OkResponse {
 }
 
 describe("PATCH /api/v2/projects/<key> — liveness order validation (CR-CRU-174 §S3)", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -55,7 +54,7 @@ describe("PATCH /api/v2/projects/<key> — liveness order validation (CR-CRU-174
   });
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -63,7 +62,7 @@ describe("PATCH /api/v2/projects/<key> — liveness order validation (CR-CRU-174
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -71,7 +70,7 @@ describe("PATCH /api/v2/projects/<key> — liveness order validation (CR-CRU-174
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function createProject(name: string): Promise<string> {
@@ -93,7 +92,7 @@ describe("PATCH /api/v2/projects/<key> — liveness order validation (CR-CRU-174
     "a PATCH whose OWN liveness thresholds are not strictly increasing (t1 300s >= t2 120s) " +
       "is refused 400 naming stale and tombstone, and nothing is stored",
     async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("Order Guard Direct Co");
 
       const res = await patchJson(patchPath(key), {
@@ -117,7 +116,7 @@ describe("PATCH /api/v2/projects/<key> — liveness order validation (CR-CRU-174
       "project's existing override (stored t1=200s + new t3=250s leaves the DEFAULT t2=300s " +
       "stranded above it) is refused 400 naming tombstone and removed, and the new field is not stored",
     async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("Order Guard Merge Co");
 
       // First PATCH: t1=200s alone is valid against the defaults
@@ -150,7 +149,7 @@ describe("PATCH /api/v2/projects/<key> — liveness order validation (CR-CRU-174
   test(
     "a PATCH whose effective thresholds ARE strictly increasing after the merge is accepted and stored",
     async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("Order Guard Good Co");
 
       const res = await patchJson(patchPath(key), {
@@ -173,7 +172,7 @@ describe("PATCH /api/v2/projects/<key> — liveness order validation (CR-CRU-174
   test(
     "effective thresholds that are EQUAL (not strictly increasing) are also refused 400 naming the order",
     async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = await createProject("Order Guard Equal Co");
 
       const res = await patchJson(patchPath(key), {

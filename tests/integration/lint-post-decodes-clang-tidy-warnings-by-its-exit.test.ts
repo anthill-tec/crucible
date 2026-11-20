@@ -11,13 +11,13 @@
 //
 // The input is the real clang-tidy capture under tests/fixtures/lint/ (see its
 // README). Everything is driven through the production HTTP surface
-// (`startServer`, in-memory store) and read back through the event detail and
+// (`bootInProcess`, in-memory store) and read back through the event detail and
 // the events list.
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const CLANG_TIDY_WARNINGS = readFileSync(
   join(import.meta.dir, "../fixtures", "lint", "clang-tidy-warnings.txt"),
@@ -26,20 +26,16 @@ const CLANG_TIDY_WARNINGS = readFileSync(
 const BRACES = "readability-braces-around-statements";
 const BRACES_MESSAGE = "statement should be inside braces";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
-}
-
-function base(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
 }
 
 interface Answered {
@@ -47,8 +43,8 @@ interface Answered {
   body: Record<string, unknown>;
 }
 
-async function postJson(handle: ServerHandle, route: string, body: unknown): Promise<Answered> {
-  const res = await fetch(`${base(handle)}${route}`, {
+async function postJson(handle: BoardHandle, route: string, body: unknown): Promise<Answered> {
+  const res = await send(handle, `${route}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -56,8 +52,8 @@ async function postJson(handle: ServerHandle, route: string, body: unknown): Pro
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
-async function getJson(handle: ServerHandle, route: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${base(handle)}${route}`);
+async function getJson(handle: BoardHandle, route: string): Promise<Record<string, unknown>> {
+  const res = await send(handle, `${route}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }
@@ -65,7 +61,7 @@ async function getJson(handle: ServerHandle, route: string): Promise<Record<stri
 const ORCHESTRATOR = "fixture-orch";
 
 /** A project with its orchestrator registered (an ingest needs a live caller). */
-async function seedProject(handle: ServerHandle): Promise<string> {
+async function seedProject(handle: BoardHandle): Promise<string> {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: `clang-tidy-lint-${key}`, type: "backend", sutRoot: "/tmp/p" });
   const res = await postJson(handle, "/api/v2/agents/register", {
@@ -80,7 +76,7 @@ async function seedProject(handle: ServerHandle): Promise<string> {
 
 /** Post on the compile route as the orchestrator and expect it stored; returns the answer's body. */
 async function postAccepted(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
@@ -106,7 +102,7 @@ interface StoredCompile {
   diagnostics: StoredDiagnostic[];
 }
 
-async function storedCompile(handle: ServerHandle, eventId: string): Promise<StoredCompile> {
+async function storedCompile(handle: BoardHandle, eventId: string): Promise<StoredCompile> {
   const body = await getJson(handle, `/api/v2/events/${eventId}`);
   const event = body.event as Record<string, unknown>;
   expect(event.id).toBe(eventId);
@@ -114,7 +110,7 @@ async function storedCompile(handle: ServerHandle, eventId: string): Promise<Sto
   return event.compile as StoredCompile;
 }
 
-async function listedBrief(handle: ServerHandle, key: string, eventId: string): Promise<Record<string, unknown>> {
+async function listedBrief(handle: BoardHandle, key: string, eventId: string): Promise<Record<string, unknown>> {
   const body = await getJson(handle, `/api/v2/events?project=${key}&limit=100`);
   const hits = (body.events as Record<string, unknown>[]).filter((e) => e.id === eventId);
   expect(hits.length).toBe(1);

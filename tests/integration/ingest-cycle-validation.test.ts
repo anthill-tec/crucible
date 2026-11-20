@@ -37,18 +37,17 @@
 // trust-it-verbatim behavior (an unknown or stale cycleId currently ingests
 // 200 with no complaint).
 //
-// Harness: reuses the EXACT startServer/postJson/getJson/createProject/
+// Harness: reuses the EXACT bootInProcess/postJson/getJson/createProject/
 // plansPath/filePlanAB/activate conventions from tests/integration/plan-abort.test.ts,
 // and the parsedRunBody shape from tests/integration/axi-negotiation.test.ts.
 
 import { describe, test, expect, afterEach } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { hints, cycleHints, authHints } from "../../src/hints.ts";
 import type { RunSummary, SuiteNode } from "../../src/types.ts";
-
-type ServerHandle = ReturnType<typeof startServer>;
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface PlanCyclePayload {
   id: number;
@@ -80,10 +79,10 @@ interface EventsListResponse {
   events: Array<{ id: string; context?: { cycleId?: number; cycle?: string }; [key: string]: unknown }>;
 }
 
-let servers: ServerHandle[] = [];
+let servers: BoardHandle[] = [];
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   servers.push(handle);
   return handle;
 }
@@ -106,32 +105,32 @@ function withFixtureAgent(body: unknown): unknown {
   return body;
 }
 
-async function postJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
+async function postJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
+  return send(handle, `${urlPath}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
-async function patchJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
+async function patchJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
+  return send(handle, `${urlPath}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
-async function getJson(handle: ServerHandle, urlPath: string): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`);
+async function getJson(handle: BoardHandle, urlPath: string): Promise<Response> {
+  return send(handle, `${urlPath}`);
 }
 
-async function registerOrchestrator(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function registerOrchestrator(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const res = await postJson(handle, "/api/v2/agents/register", { projectKey: key, agentId, role: "ORCHESTRATOR" });
   expect(res.status).toBe(200);
 }
 
-async function createProject(handle: ServerHandle): Promise<string> {
+async function createProject(handle: BoardHandle): Promise<string> {
   const res = await postJson(handle, "/api/v2/projects", { name: `ingest-cycle-${crypto.randomUUID()}` });
   const body = (await res.json()) as { ok: true; project: { key: string } };
   await registerOrchestrator(handle, body.project.key, "fixture-orch");
@@ -145,7 +144,7 @@ function plansPath(key: string, suffix = ""): string {
 }
 
 async function filePlanAB(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   cr: string,
 ): Promise<{ planId: number | string; a: number; b: number }> {
@@ -159,7 +158,7 @@ async function filePlanAB(
 }
 
 async function transition(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   planId: number | string,
   cycleId: number,
@@ -200,14 +199,14 @@ function parsedRunBody(overrides: {
 }
 
 async function postParsedRun(
-  handle: ServerHandle,
+  handle: BoardHandle,
   projectKey: string,
   context?: Record<string, unknown>,
 ): Promise<Response> {
   return postJson(handle, "/api/v2/runs/parsed", parsedRunBody({ projectKey, context }));
 }
 
-async function eventsForProject(handle: ServerHandle, key: string): Promise<EventsListResponse["events"]> {
+async function eventsForProject(handle: BoardHandle, key: string): Promise<EventsListResponse["events"]> {
   const res = await getJson(handle, `/api/v2/events?project=${key}`);
   const body = (await res.json()) as EventsListResponse;
   // CR-CRU-056 §S2b fixture-repair: createProject() now registers two

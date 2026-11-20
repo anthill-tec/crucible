@@ -18,15 +18,14 @@
 // reads back its CURRENT success status (200/201) and a freshly
 // materialised agent row, instead of a 409 refusal with no row created.
 //
-// Harness: drives the real production server (startServer) + real HTTP,
+// Harness: drives the real production router in process (`bootInProcess`) + its real routes,
 // the same pattern as tests/integration/agent-cycle-binding.test.ts and
 // tests/integration/checkpoint-stop.test.ts. State checks read `handle.store` directly.
 
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { Store } from "../../src/store.ts";
-
-type ServerHandle = ReturnType<typeof startServer>;
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface ErrResponse {
   ok: false;
@@ -48,24 +47,20 @@ function expectUnregisteredRefusal(res: Response, body: ErrResponse): void {
   expect(errorSurface(body)).toContain("regist");
 }
 
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
   handle = undefined;
 });
 
-function boot(): ServerHandle {
-  handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  handle = bootInProcess();
   return handle;
 }
 
-function base(): string {
-  return `http://localhost:${handle!.server.port}`;
-}
-
 async function postJson(path_: string, body: unknown): Promise<Response> {
-  return fetch(`${base()}${path_}`, {
+  return send(handle!, `${path_}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -73,7 +68,7 @@ async function postJson(path_: string, body: unknown): Promise<Response> {
 }
 
 async function getJson(path_: string): Promise<Response> {
-  return fetch(`${base()}${path_}`);
+  return send(handle!, `${path_}`);
 }
 
 function seedProject(store: Store): string {

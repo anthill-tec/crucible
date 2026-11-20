@@ -31,7 +31,7 @@
 // genuine RED failure against the missing server-stamping/re-validation
 // contract.
 //
-// Harness: drives the REAL production server (startServer) + real HTTP —
+// Harness: drives the REAL production router in process (`bootInProcess`) + its real routes —
 // register/plans/cycles conventions from tests/integration/agent-cycle-binding.test.ts
 // (fileAndActivate/transitionCycle via the real PATCH routes), and the
 // parsedRunBody/postParsedRun/eventsForProject conventions from
@@ -39,11 +39,10 @@
 // path) — no new mechanism invented here.
 
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { Store } from "../../src/store.ts";
 import type { RunSummary, SuiteNode } from "../../src/types.ts";
-
-type ServerHandle = ReturnType<typeof startServer>;
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface ErrResponse {
   ok: false;
@@ -91,15 +90,15 @@ interface PlanFileResponse {
   [key: string]: unknown;
 }
 
-let handle: ServerHandle | undefined;
+let handle: BoardHandle | undefined;
 
 afterEach(() => {
   handle?.stop();
   handle = undefined;
 });
 
-function boot(): ServerHandle {
-  handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  handle = bootInProcess();
   return handle;
 }
 
@@ -114,7 +113,7 @@ function withFixtureAgent(body: unknown): unknown {
 }
 
 async function postJson(path_: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle!.server.port}${path_}`, {
+  return send(handle!, `${path_}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(withFixtureAgent(body)),
@@ -122,7 +121,7 @@ async function postJson(path_: string, body: unknown): Promise<Response> {
 }
 
 async function patchJson(path_: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle!.server.port}${path_}`, {
+  return send(handle!, `${path_}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(withFixtureAgent(body)),
@@ -130,7 +129,7 @@ async function patchJson(path_: string, body: unknown): Promise<Response> {
 }
 
 async function getJson(path_: string): Promise<Response> {
-  return fetch(`http://localhost:${handle!.server.port}${path_}`);
+  return send(handle!, `${path_}`);
 }
 
 function seedProject(store: Store): string {
@@ -152,7 +151,7 @@ const fixtureOrchestratorProjects = new Set<string>();
 
 async function ensureFixtureOrchestrator(key: string): Promise<void> {
   if (fixtureOrchestratorProjects.has(key)) return;
-  const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+  const res = await send(handle!, `/api/v2/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ projectKey: key, agentId: "fixture-orch", role: "ORCHESTRATOR" }),

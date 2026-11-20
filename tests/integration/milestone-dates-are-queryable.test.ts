@@ -34,8 +34,9 @@
 // Fixture cr ids come from the synthetic namespaces the project-namespace
 // tripwire registers (`CR-SHIPPED-*`) — never a real board id.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { Store } from "../../src/store.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const ORCH = "cru130-c1-query";
 
@@ -79,20 +80,16 @@ interface AnyBody {
 }
 
 describe("what is outstanding, and what slipped — milestones answer by date", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function boot(): ServerHandle {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+  function boot(): BoardHandle {
+    handle = bootInProcess();
     return handle;
-  }
-
-  function base(): string {
-    return `http://localhost:${String(handle!.server.port)}`;
   }
 
   function store(): Store {
@@ -100,7 +97,7 @@ describe("what is outstanding, and what slipped — milestones answer by date", 
   }
 
   async function post(path: string, body: unknown): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`, {
+    const res = await send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -139,7 +136,7 @@ describe("what is outstanding, and what slipped — milestones answer by date", 
     key: string,
     params: { type?: string; delivered?: boolean; targetBefore?: number; targetAfter?: number },
   ): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${milestonesQuery(key, params)}`);
+    const res = await send(handle!, `${milestonesQuery(key, params)}`);
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 
@@ -344,7 +341,7 @@ describe("what is outstanding, and what slipped — milestones answer by date", 
       boot();
       const population = await seedPopulation("cru130-no-parameter");
 
-      const res = await fetch(`${base()}/api/v2/projects/${population.key}/milestones`);
+      const res = await send(handle!, `/api/v2/projects/${population.key}/milestones`);
       const body = (await res.json()) as AnyBody;
 
       expect(res.status).toBe(400);

@@ -5,23 +5,23 @@
 // the run opens. `codecs.test`, `codecs.coverage` and `codecs.view` are
 // unchanged: `crucible-events` stays a test codec too.
 //
-// Driven through the real production HTTP surface (`startServer`, in-memory
+// Driven through the real production HTTP surface (`bootInProcess`, in-memory
 // store), and through `codecNames`, the one site both health routes read.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { codecNames, codecs, isRecordStreamCodec } from "../../src/codecs/index.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
 async function health(route: string): Promise<Record<string, unknown>> {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+  const handle = bootInProcess();
   handles.push(handle);
-  const res = await fetch(`http://127.0.0.1:${handle.server.port}${route}`);
+  const res = await send(handle, `${route}`);
   expect(res.status).toBe(200);
   return (await res.json()) as Record<string, unknown>;
 }

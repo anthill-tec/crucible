@@ -117,7 +117,7 @@
 //   each test's purpose — flip to absent only where listing/state IS the
 //   point; otherwise give the release a completed CR.)
 //
-// This file drives the REAL production server (startServer). GET …/history
+// This file drives the REAL production router in process (`bootInProcess`). GET …/history
 // matches no branch in handleV2 (verified by reading src/v2.ts directly —
 // only /releases, /release-proposals, /queue, /milestones, /plans sit under
 // /projects/<key>/), so it falls through to the catch-all 404 today, which
@@ -125,7 +125,8 @@
 // assertion below fails against production as it stands, not from a typo.
 import { describe, test, expect, afterEach, beforeAll, afterAll, setSystemTime } from "bun:test";
 import { Store } from "../../src/store.ts";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 // ── wire shapes this file expects back ──────────────────────────────────────
 
@@ -287,8 +288,8 @@ function fileVerificationRun(store: Store, key: string, agentId: string, release
   return store.recordTestEvent(key, agentId, run, { release }).id;
 }
 
-async function getHistory(handle: ServerHandle, key: string): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}/api/v2/projects/${key}/history`);
+async function getHistory(handle: BoardHandle, key: string): Promise<Response> {
+  return send(handle!, `/api/v2/projects/${key}/history`);
 }
 
 function waveOf(release: HistoryReleaseWire, wave: string): HistoryWaveWire | undefined {
@@ -317,7 +318,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
   // ── envelope + project existence ──────────────────────────────────────────
 
   describe("envelope and project existence", () => {
-    let handle: ServerHandle | undefined;
+    let handle: BoardHandle | undefined;
 
     afterEach(() => {
       handle?.stop();
@@ -326,7 +327,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("an unknown (but UUID-shaped) project answers 404 naming it, exactly like GET …/releases does", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const bogus = crypto.randomUUID();
 
       const res = await getHistory(handle, bogus);
@@ -339,7 +340,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("a project holding no release history at all answers 200 with an empty releases array — never 404", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-empty-project");
 
       const res = await getHistory(handle, key);
@@ -355,7 +356,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
   //    in-progress-unshipped, 0.4.0 excluded, 0.5.0 gated-by-wave-only ──────
 
   describe("a rich board mirroring the spec's own shapes", () => {
-    let handle: ServerHandle;
+    let handle: BoardHandle;
     let key: string;
     let response: HistoryResponse;
     let historyStatus: number;
@@ -367,7 +368,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     const MIN = 60_000;
 
     beforeAll(async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       key = seedProject(handle.store, "history-rich-board");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -705,7 +706,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("the `→ gate` drill-in — GET /api/v2/events/<newest snapshot id> — answers for a RETIRED gate too (today's behaviour, pinned)", async () => {
-      const res = await fetch(`http://localhost:${handle.server.port}/api/v2/events/${run3SealId}`);
+      const res = await send(handle!, `/api/v2/events/${run3SealId}`);
       expect(res.status).toBe(200);
       const body = (await res.json()) as { ok: true; event: { id: string; retiredAt?: number; gate?: unknown } };
       expect(body.ok).toBe(true);
@@ -719,7 +720,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
   //    2026-10-08), nor does different-day shipping ─────────────────────────
 
   describe("one row per release", () => {
-    let handle: ServerHandle | undefined;
+    let handle: BoardHandle | undefined;
 
     afterEach(() => {
       handle?.stop();
@@ -728,7 +729,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("releases shipped the same day are separate rows, each with its own CRs and waves", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-same-day-merge");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -795,7 +796,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("two releases shipped on DIFFERENT calendar days do NOT merge — two separate rows", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-different-day-no-merge");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -828,7 +829,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
   // ── a gate naming neither a release nor a wave (user ruling 2026-10-08) ──────
 
   describe("a gate naming neither a release nor a wave", () => {
-    let handle: ServerHandle | undefined;
+    let handle: BoardHandle | undefined;
 
     afterEach(() => {
       handle?.stop();
@@ -837,7 +838,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("belongs to the first release that shipped at or after it; one sealed after every ship belongs to the lowest unshipped release", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-unnamed-gate");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -903,7 +904,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
   // ── a gate run's decisions summary ────────────────────────────────────────
 
   describe("a gate run's decisions summary", () => {
-    let handle: ServerHandle | undefined;
+    let handle: BoardHandle | undefined;
 
     afterEach(() => {
       handle?.stop();
@@ -911,7 +912,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("a gate run with recorded decisions carries a decisionSummary computed with the SAME counting rules the events list uses (decisions, fixed DISTINCT, added, declined over approved steps only, approvedWithReason)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-decision-summary");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -961,7 +962,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("a gate run with ZERO recorded decisions carries no decisionSummary key at all — absent, never a zeroed object", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-decision-summary-none");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -996,7 +997,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
   //    a release with NO work at all stays excluded \u2500\u2500
 
   describe("release states: planned, in progress, and still-excluded-when-empty (user ruling 2026-10-09)", () => {
-    let handle: ServerHandle | undefined;
+    let handle: BoardHandle | undefined;
 
     afterEach(() => {
       handle?.stop();
@@ -1005,7 +1006,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("CR-CRU-177 re-pin: an unshipped release holding ONLY queued CRs and NOTHING started is NOT listed at all \u2014 the flip of the cycle-637 'planned' ruling; a sibling release whose one CR's plan was merely FILED (never merged) is ALSO not listed \u2014 an open plan is still only 'in-flight', not completed, so it earns the release no row either, and no state anywhere in the response ever reads 'planned'", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-planned-vs-in-progress");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -1031,7 +1032,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("CR-CRU-177: an unshipped release with exactly ONE completed CR alongside queued siblings IS listed, state 'in progress', crCount counting the completed CR only and pendingCount counting the rest", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-one-completed-cr-lists-release");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -1057,7 +1058,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("CR-CRU-177: a shipped release whose record names NO CRs at all is still listed (0.1.1 at gap analysis) \u2014 a shipped release is past regardless of its CR count", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-shipped-no-crs-still-listed");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -1080,7 +1081,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("a declared target release with NO queued CRs and nothing else is STILL not listed at all (user ruling 2026-10-09: a release with no work stays excluded)", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-no-work-still-excluded");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -1099,7 +1100,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
   //    ship timeline (user ruling 2026-10-09) \u2500\u2500
 
   describe("placing a CR no release record and no queue release names (user ruling 2026-10-09)", () => {
-    let handle: ServerHandle | undefined;
+    let handle: BoardHandle | undefined;
 
     afterEach(() => {
       handle?.stop();
@@ -1108,7 +1109,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("an orphan CR's plan closed between two ships lands under the LATER-shipping release; one closed after EVERY ship lands under the LOWEST unshipped release", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-orphan-cr-placement");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -1168,7 +1169,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("a release-less wave (several CRs, none naming any release) is placed as a WHOLE, all its CRs landing under the SAME release", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-release-less-wave");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -1219,7 +1220,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
   //    gets (user ruling 2026-10-09) \u2500\u2500
 
   describe("a runs-only inferred wave whose wave itself names no release (user ruling 2026-10-09)", () => {
-    let handle: ServerHandle | undefined;
+    let handle: BoardHandle | undefined;
 
     afterEach(() => {
       handle?.stop();
@@ -1228,7 +1229,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("a gate run naming a wave NO queue entry ever assigns to any release is NOT dropped \u2014 it lands under the first release that shipped at or after it, else the lowest unshipped release, by the run's OWN time", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-runs-only-wave-no-release");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -1303,7 +1304,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
   //    a plan belongs to no release, wherever the queue files it ------------
 
   describe("withdrawn work that never had a plan belongs to no release, even one the queue files it under", () => {
-    let handle: ServerHandle | undefined;
+    let handle: BoardHandle | undefined;
 
     afterEach(() => {
       handle?.stop();
@@ -1311,7 +1312,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("CR-CRU-177 re-pin: a VOID or SUPERSEDED planless CR filed under a release is neither counted nor listed there; one that HAD a plan stays attributed but, never merged, counts as PENDING not completed; a release holding only withdrawn work is not listed", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-withdrawn-filed-under-release");
       const store = handle.store;
       const agent = "fixture-orchestrator";
@@ -1352,7 +1353,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
   //    timeline rule ---------------------------------------------------------
 
   describe("a gate naming a version that has no release record", () => {
-    let handle: ServerHandle | undefined;
+    let handle: BoardHandle | undefined;
 
     afterEach(() => {
       handle?.stop();
@@ -1361,7 +1362,7 @@ describe("CR-CRU-173 §S2 — GET /api/v2/projects/<key>/history", () => {
     });
 
     test("belongs to the first release that shipped at or after it; one sealed after every ship belongs to the lowest unshipped release; the version it names gets no row of its own", async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
+      handle = bootInProcess();
       const key = seedProject(handle.store, "history-gate-version-without-record");
       const store = handle.store;
       const agent = "fixture-orchestrator";

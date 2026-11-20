@@ -26,12 +26,11 @@
 // Harness: the exact boot/createProject/plansPath/postJson/patchJson/getJson
 // convention already established in tests/integration/plan-abort.test.ts (handle passed
 // explicitly, no shared mutable module state) — same production server via
-// startServer(), :memory: db, no live crucible.db ever touched.
+// bootInProcess(), :memory: db, no live crucible.db ever touched.
 
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-
-type ServerHandle = ReturnType<typeof startServer>;
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface CyclePayload {
   id: number;
@@ -64,10 +63,10 @@ interface ErrResponse {
   [key: string]: unknown;
 }
 
-let servers: ServerHandle[] = [];
+let servers: BoardHandle[] = [];
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   servers.push(handle);
   return handle;
 }
@@ -90,32 +89,32 @@ function withFixtureAgent(body: unknown): unknown {
   return body;
 }
 
-async function postJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
+async function postJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
+  return send(handle, `${urlPath}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
-async function patchJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
+async function patchJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
+  return send(handle, `${urlPath}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
-async function getJson(handle: ServerHandle, urlPath: string): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${urlPath}`);
+async function getJson(handle: BoardHandle, urlPath: string): Promise<Response> {
+  return send(handle, `${urlPath}`);
 }
 
-async function registerOrchestrator(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function registerOrchestrator(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const res = await postJson(handle, "/api/v2/agents/register", { projectKey: key, agentId, role: "ORCHESTRATOR" });
   expect(res.status).toBe(200);
 }
 
-async function createProject(handle: ServerHandle): Promise<string> {
+async function createProject(handle: BoardHandle): Promise<string> {
   const res = await postJson(handle, "/api/v2/projects", { name: `close-guard-${crypto.randomUUID()}` });
   const body = (await res.json()) as { ok: true; project: { key: string } };
   await registerOrchestrator(handle, body.project.key, "fixture-orch");
@@ -127,7 +126,7 @@ function plansPath(key: string, suffix = ""): string {
 }
 
 async function filePlan(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   cr: string,
   labels: string[],
@@ -142,7 +141,7 @@ async function filePlan(
 }
 
 async function transition(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   planId: number | string,
   cycleId: number,
@@ -153,7 +152,7 @@ async function transition(
 }
 
 async function closePlan(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   planId: number | string,
   commit = "abc1234",
@@ -164,7 +163,7 @@ async function closePlan(
   });
 }
 
-async function getPlanByCr(handle: ServerHandle, key: string, cr: string): Promise<PlanRecord> {
+async function getPlanByCr(handle: BoardHandle, key: string, cr: string): Promise<PlanRecord> {
   const res = await getJson(handle, plansPath(key, `?cr=${encodeURIComponent(cr)}`));
   const body = (await res.json()) as PlansListResponse;
   const plan = body.plans.find((p) => p.cr === cr);

@@ -49,15 +49,16 @@
 //
 // ── Safety ─────────────────────────────────────────────────────────────────
 // Every store here is an mkdtempSync scratch file or ":memory:", and every
-// server binds port 0. The live `data/crucible.db` is NEVER opened and the
+// server runs in process (no port). The live `data/crucible.db` is NEVER opened and the
 // dog-food port 3849 is NEVER bound.
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { Store } from "../../src/store.ts";
 import type { SuiteNode } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 type AnyBody = Record<string, unknown>;
 
@@ -76,7 +77,7 @@ const FIXTURE_CAP_BOARD = 120;
 const emptyTree: SuiteNode[] = [];
 
 describe("CR-CRU-129 §S1 — structural records survive a retention sweep that rolls the whole event buffer", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -87,19 +88,15 @@ describe("CR-CRU-129 §S1 — structural records survive a retention sweep that 
     }
   });
 
-  function boot(): ServerHandle {
+  function boot(): BoardHandle {
     const dir = mkdtempSync(join(tmpdir(), "cru129-records-"));
     scratchDirs.push(dir);
-    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    handle = bootInProcess(join(dir, "crucible.db"));
     return handle;
   }
 
-  function base(): string {
-    return `http://localhost:${handle!.server.port}`;
-  }
-
   async function post(path: string, body: unknown): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`, {
+    const res = await send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -108,7 +105,7 @@ describe("CR-CRU-129 §S1 — structural records survive a retention sweep that 
   }
 
   async function get(path: string): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`);
+    const res = await send(handle!, `${path}`);
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 
@@ -131,7 +128,7 @@ describe("CR-CRU-129 §S1 — structural records survive a retention sweep that 
    * derived from this return value, never from `chosen`.
    */
   async function configureCap(key: string, chosen: number): Promise<number> {
-    const patched = await fetch(`${base()}/api/v2/projects/${key}`, {
+    const patched = await send(handle!, `/api/v2/projects/${key}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ retention: chosen }),

@@ -4,15 +4,15 @@
 // failure with no positioned diagnostic (an import cycle) is stored as a
 // failed compile with one error — never `COMPILE OK`.
 //
-// Driven through the real production HTTP surface (`startServer`, an
+// Driven through the real production HTTP surface (`bootInProcess`, an
 // in-memory store), the register and compile routes a client uses; the stored
 // record is read back through `GET /api/v2/events/<id>`. The inputs are the
 // real Go 1.27.3 captures under tests/fixtures/go-build/ (see its README).
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { startServer } from "../../src/server.ts";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 const FIXTURE_DIR = join(import.meta.dir, "../fixtures", "go-build");
 
@@ -20,37 +20,33 @@ function fixture(name: string): string {
   return readFileSync(join(FIXTURE_DIR, name), "utf8");
 }
 
-const handles: ServerHandle[] = [];
+const handles: BoardHandle[] = [];
 
 afterEach(() => {
   while (handles.length > 0) handles.pop()?.stop();
 });
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   handles.push(handle);
   return handle;
 }
 
-function base(handle: ServerHandle): string {
-  return `http://127.0.0.1:${handle.server.port}`;
-}
-
-async function postJson(handle: ServerHandle, route: string, body: unknown): Promise<Response> {
-  return fetch(`${base(handle)}${route}`, {
+async function postJson(handle: BoardHandle, route: string, body: unknown): Promise<Response> {
+  return send(handle, `${route}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-function seedProject(handle: ServerHandle): string {
+function seedProject(handle: BoardHandle): string {
   const key = crypto.randomUUID();
   handle.store.addProject({ key, name: "go-module", type: "backend", sutRoot: "/tmp/go-module" });
   return key;
 }
 
-async function registerAgent(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function registerAgent(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const res = await postJson(handle, "/api/v2/agents/register", {
     projectKey: key,
     agentId,
@@ -80,7 +76,7 @@ interface StoredCompile {
 }
 
 async function postGoCompile(
-  handle: ServerHandle,
+  handle: BoardHandle,
   key: string,
   agentId: string,
   errors: string,
@@ -93,7 +89,7 @@ async function postGoCompile(
   });
   expect(res.status).toBe(200);
   const answer = (await res.json()) as CompileAnswer;
-  const read = await fetch(`${base(handle)}/api/v2/events/${answer.event}`);
+  const read = await send(handle, `/api/v2/events/${answer.event}`);
   expect(read.status).toBe(200);
   const stored = ((await read.json()) as { event: StoredCompile }).event;
   return { answer, stored };

@@ -60,14 +60,15 @@
 //      project that declares nothing.
 //
 // ── Safety ────────────────────────────────────────────────────────────────
-// Every store here is `:memory:` and every server binds port 0; the dog-food
+// Every store here is `:memory:` and every server runs in process (no port); the dog-food
 // port 3849 is never touched, and the operator's dev store is never read.
 // Fixture cr ids come from the REGISTERED synthetic namespaces the
 // project-namespace tripwire allows (`CR-SHIPPED-*`, `CR-AUTH-*`).
 import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Store, migrateMilestoneRecords } from "../../src/store.ts";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 const ORCH = "cru130-c3-definable";
 
@@ -119,20 +120,16 @@ interface AnyBody {
 }
 
 describe("CR-CRU-130 §S4 — reserved types stay reserved; every other type is definable", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function boot(): ServerHandle {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+  function boot(): BoardHandle {
+    handle = bootInProcess();
     return handle;
-  }
-
-  function base(): string {
-    return `http://localhost:${String(handle!.server.port)}`;
   }
 
   function store(): Store {
@@ -148,7 +145,7 @@ describe("CR-CRU-130 §S4 — reserved types stay reserved; every other type is 
     path: string,
     body: unknown,
   ): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`, {
+    const res = await boardSend(handle!, `${path}`, {
       method,
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -161,7 +158,7 @@ describe("CR-CRU-130 §S4 — reserved types stay reserved; every other type is 
   }
 
   async function get(path: string): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`);
+    const res = await boardSend(handle!, `${path}`);
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 

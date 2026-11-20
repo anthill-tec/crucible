@@ -55,9 +55,10 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import type { Store } from "../../src/store.ts";
 import type { RunEvent } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 /** THE TWO SPELLING DECISIONS, isolated — see the header. */
 const TARGET_COLUMN = "target_at";
@@ -108,20 +109,16 @@ interface RawRecordRow {
 }
 
 describe("a milestone carries its dates — every type, both dates, column and payload agreeing", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function boot(): ServerHandle {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+  function boot(): BoardHandle {
+    handle = bootInProcess();
     return handle;
-  }
-
-  function base(): string {
-    return `http://localhost:${String(handle!.server.port)}`;
   }
 
   function store(): Store {
@@ -133,7 +130,7 @@ describe("a milestone carries its dates — every type, both dates, column and p
   }
 
   async function post(path: string, body: unknown): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`, {
+    const res = await send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -142,7 +139,7 @@ describe("a milestone carries its dates — every type, both dates, column and p
   }
 
   async function get(path: string): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`${base()}${path}`);
+    const res = await send(handle!, `${path}`);
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 

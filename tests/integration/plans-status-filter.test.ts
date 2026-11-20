@@ -31,7 +31,8 @@
 // alone — no run ingestion — is enough for store.ts's deriveCommitBoundary to
 // publish a `{mergeCommit, closedAt}` boundary).
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface CyclePayload {
   id: number;
@@ -70,7 +71,7 @@ interface ErrResponse {
 }
 
 describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -91,7 +92,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   }
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -99,7 +100,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   }
 
   async function patchJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -107,11 +108,11 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function registerOrchestrator(key: string, agentId: string): Promise<void> {
-    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+    const res = await send(handle!, `/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
@@ -231,7 +232,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   // ── AC1 (§S1) — exact per-status buckets, no commitBoundary under ?status=open ──
 
   test("?status=open returns EXACTLY the one open plan (closed + aborted excluded)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const board = await buildMixedBoard();
 
     const res = await getJson(scopedPlansPath(board.key, "?status=open"));
@@ -243,7 +244,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   });
 
   test("?status=closed returns EXACTLY the two closed plans (open + aborted excluded)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const board = await buildMixedBoard();
 
     const res = await getJson(scopedPlansPath(board.key, "?status=closed"));
@@ -256,7 +257,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   });
 
   test("?status=aborted returns EXACTLY the one aborted plan (open + closed excluded)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const board = await buildMixedBoard();
 
     const res = await getJson(scopedPlansPath(board.key, "?status=aborted"));
@@ -267,7 +268,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   });
 
   test("?status=open&cr=<cr> returns only that CR's open plan; the same status with a CLOSED cr returns none", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const board = await buildMixedBoard();
 
     const matched = await getJson(
@@ -289,7 +290,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   });
 
   test("the UNFILTERED read carries commitBoundary on both closed plans; the ?status=open read carries NO plan with a commitBoundary — made meaningful by the same board's unfiltered closed plans carrying one", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const board = await buildMixedBoard();
 
     const unfiltered = await getJson(scopedPlansPath(board.key));
@@ -314,7 +315,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   // ── AC2 (§S1) — invalid status -> 400 with help[]; no param -> unchanged today's array ──
 
   test("?status=bogus -> 400 ok:false, help[] names open/closed/aborted", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject(`plans-status-bad-${crypto.randomUUID()}`);
 
     const res = await getJson(scopedPlansPath(key, "?status=bogus"));
@@ -329,7 +330,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   });
 
   test("?status= (empty string) -> 400 ok:false, same help[] contract as any other invalid value", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject(`plans-status-empty-${crypto.randomUUID()}`);
 
     const res = await getJson(scopedPlansPath(key, "?status="));
@@ -343,7 +344,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   });
 
   test("GET …/plans with NO status parameter returns the same plans array it returns today (expected to PASS already — no regression from this CR)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const board = await buildMixedBoard();
 
     const res = await getJson(scopedPlansPath(board.key));
@@ -358,7 +359,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   // ── AC3 (§S2) — `filed` + `lastClosedCr` on every GET …/plans response ──
 
   test("on the mixed board, unfiltered / ?status=open / ?cr=<cr> ALL carry filed:4 and lastClosedCr = the CR closed latest — NOT the CR with the highest planId", async () => {
-    handle = startServer({ port: 0, dbPath: ':memory:' });
+    handle = bootInProcess(':memory:');
     const board = await buildMixedBoard();
 
     // The fixture's separation is explicit and asserted here so a future
@@ -386,7 +387,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   });
 
   test("tie-break: two plans on the SAME board closed at the IDENTICAL closedAt — lastClosedCr is the one with the HIGHER planId, not simply the first/last row found", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject(`plans-status-tie-${crypto.randomUUID()}`);
     const lowPlan = await filePlan(key, "CR-T-TIE-LOW");
     const highPlan = await filePlan(key, "CR-T-TIE-HIGH");
@@ -416,7 +417,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   });
 
   test("an aborted-only board: lastClosedCr is null, filed equals the aborted count (2)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject(`plans-status-aborted-only-${crypto.randomUUID()}`);
     await fileAndAbortPlan(key, "CR-T-ABORTED-ONLY-1");
     await fileAndAbortPlan(key, "CR-T-ABORTED-ONLY-2");
@@ -430,7 +431,7 @@ describe("GET \u2026/plans status filter + filed/lastClosedCr (\u00a7S1/\u00a7S2
   });
 
   test("a project with no plans at all: filed is 0, lastClosedCr is null, plans is []", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const key = await createProject(`plans-status-empty-project-${crypto.randomUUID()}`);
 
     const res = await getJson(scopedPlansPath(key));

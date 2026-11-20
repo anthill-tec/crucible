@@ -19,8 +19,9 @@
 // AC13 — every fixture is synthetic (`CR-NEXTPTR-*`, registered in
 // tests/integration/project-namespace-tripwire.test.ts's SYNTHETIC_NAMESPACES).
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import { MIGRATIONS, SCHEMA_VERSION } from "../../src/store.ts";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 interface AnyBody {
   ok: boolean;
@@ -42,20 +43,20 @@ interface AnyBody {
 }
 
 describe("CR-CRU-098 §S2 — GET /api/v2/projects/<key>/next", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
     handle = undefined;
   });
 
-  function boot(): ServerHandle {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+  function boot(): BoardHandle {
+    handle = bootInProcess();
     return handle;
   }
 
   async function send(method: string, path: string): Promise<{ status: number; body: AnyBody }> {
-    const res = await fetch(`http://localhost:${handle!.server.port}${path}`, { method });
+    const res = await boardSend(handle!, `${path}`, { method });
     return { status: res.status, body: (await res.json()) as AnyBody };
   }
 
@@ -64,7 +65,7 @@ describe("CR-CRU-098 §S2 — GET /api/v2/projects/<key>/next", () => {
   }
 
   async function seed(name: string): Promise<string> {
-    const created = await fetch(`http://localhost:${handle!.server.port}/api/v2/projects`, {
+    const created = await boardSend(handle!, `/api/v2/projects`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name }),

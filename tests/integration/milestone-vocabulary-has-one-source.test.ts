@@ -64,7 +64,7 @@
 // detector reports it, with its file and line.
 //
 // ── Safety ────────────────────────────────────────────────────────────────
-// The only server here is `:memory:` on port 0. The live `data/crucible.db` is
+// The only server here is `:memory:` in process (no port). The live `data/crucible.db` is
 // never opened and port 3849 is never touched. Every other case reads source
 // files off disk and writes nothing.
 import { describe, test, expect, afterEach } from "bun:test";
@@ -72,7 +72,8 @@ import { CLIENT_SOURCE_DIR } from "../helpers/test-install.ts";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { startServer, type ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send as boardSend } from "../helpers/run-stream-harness.ts";
 
 const ORCH = "cru130-c3-one-source";
 
@@ -166,7 +167,7 @@ function report(offenders: readonly Offender[]): string {
 }
 
 describe("CR-CRU-130 §S5 — one vocabulary, read everywhere", () => {
-  let handle: ServerHandle | undefined;
+  let handle: BoardHandle | undefined;
   const scratchDirs: string[] = [];
 
   afterEach(() => {
@@ -180,10 +181,9 @@ describe("CR-CRU-130 §S5 — one vocabulary, read everywhere", () => {
    * channel that publishes it. Nothing in this file types the list.
    */
   async function publishedVocabulary(): Promise<string[]> {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
-    const base = `http://localhost:${String(handle.server.port)}`;
+    handle = bootInProcess();
     const send = async (path: string, body: unknown): Promise<Record<string, unknown>> => {
-      const res = await fetch(`${base}${path}`, {
+      const res = await boardSend(handle!, `${path}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
@@ -291,19 +291,18 @@ describe("CR-CRU-130 §S5 — one vocabulary, read everywhere", () => {
       "type the help describes, because both read the same source",
     async () => {
       const vocabulary = await publishedVocabulary();
-      const base = `http://localhost:${String(handle!.server.port)}`;
-      const created = await fetch(`${base}/api/v2/projects`, {
+      const created = await boardSend(handle!, `/api/v2/projects`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name: "cru130-help-agrees" }),
       });
       const key = ((await created.json()) as { project: { key: string } }).project.key;
-      await fetch(`${base}/api/v2/agents/register`, {
+      await boardSend(handle!, `/api/v2/agents/register`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ projectKey: key, agentId: ORCH, role: "ORCHESTRATOR" }),
       });
-      const res = await fetch(`${base}/api/v2/milestones`, {
+      const res = await boardSend(handle!, `/api/v2/milestones`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ projectKey: key, agentId: ORCH, type: "__nope__" }),

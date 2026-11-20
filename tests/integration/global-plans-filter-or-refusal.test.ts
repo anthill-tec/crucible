@@ -15,7 +15,8 @@
 // of `cr=`/`status=`, violating the "never unfiltered for a filtered query"
 // invariant both cases assert.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface PlanRecord {
   planId: number | string;
@@ -37,7 +38,7 @@ interface ErrResponse {
 }
 
 describe("GET /api/v2/plans — the unscoped read never answers a filtered query with the unfiltered list (CR-CRU-165 N2/AC8)", () => {
-  let handle: ReturnType<typeof startServer> | undefined;
+  let handle: BoardHandle | undefined;
 
   afterEach(() => {
     handle?.stop();
@@ -52,7 +53,7 @@ describe("GET /api/v2/plans — the unscoped read never answers a filtered query
   }
 
   async function postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+    return send(handle!, `${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent(body)),
@@ -60,11 +61,11 @@ describe("GET /api/v2/plans — the unscoped read never answers a filtered query
   }
 
   async function getJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`);
+    return send(handle!, `${path}`);
   }
 
   async function registerOrchestrator(key: string, agentId: string): Promise<void> {
-    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+    const res = await send(handle!, `/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
@@ -110,7 +111,7 @@ describe("GET /api/v2/plans — the unscoped read never answers a filtered query
   }
 
   test("`?cr=<cr>` never returns the unfiltered list — either exactly that cr's plan(s), or a 400 naming the scoped route", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const keyA = await createProject(`global-filter-a-${crypto.randomUUID()}`);
     const keyB = await createProject(`global-filter-b-${crypto.randomUUID()}`);
     await filePlan(keyA, "CR-GLOBAL-FILTER-TARGET");
@@ -122,7 +123,7 @@ describe("GET /api/v2/plans — the unscoped read never answers a filtered query
   });
 
   test("`?status=closed` never returns the unfiltered list — either exactly the closed plans, or a 400 naming the scoped route", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const keyA = await createProject(`global-filter-closed-a-${crypto.randomUUID()}`);
     const keyB = await createProject(`global-filter-closed-b-${crypto.randomUUID()}`);
     await filePlan(keyA, "CR-GLOBAL-FILTER-OPEN");
@@ -134,8 +135,7 @@ describe("GET /api/v2/plans — the unscoped read never answers a filtered query
     const closedPlan = (await closeRes.json()) as { planId: number | string; cycles: { id: number }[] };
     const cycleId = closedPlan.cycles[0]!.id;
     await (async () => {
-      const toActive = await fetch(
-        `http://localhost:${handle!.server.port}/api/v2/projects/${keyB}/plans/${closedPlan.planId}/cycles/${cycleId}`,
+      const toActive = await send(handle!, `/api/v2/projects/${keyB}/plans/${closedPlan.planId}/cycles/${cycleId}`,
         {
           method: "PATCH",
           headers: { "content-type": "application/json" },
@@ -143,8 +143,7 @@ describe("GET /api/v2/plans — the unscoped read never answers a filtered query
         },
       );
       expect(toActive.status).toBe(200);
-      const toDone = await fetch(
-        `http://localhost:${handle!.server.port}/api/v2/projects/${keyB}/plans/${closedPlan.planId}/cycles/${cycleId}`,
+      const toDone = await send(handle!, `/api/v2/projects/${keyB}/plans/${closedPlan.planId}/cycles/${cycleId}`,
         {
           method: "PATCH",
           headers: { "content-type": "application/json" },
@@ -152,8 +151,7 @@ describe("GET /api/v2/plans — the unscoped read never answers a filtered query
         },
       );
       expect(toDone.status).toBe(200);
-      const close = await fetch(
-        `http://localhost:${handle!.server.port}/api/v2/projects/${keyB}/plans/${closedPlan.planId}`,
+      const close = await send(handle!, `/api/v2/projects/${keyB}/plans/${closedPlan.planId}`,
         {
           method: "PATCH",
           headers: { "content-type": "application/json" },
@@ -169,7 +167,7 @@ describe("GET /api/v2/plans — the unscoped read never answers a filtered query
   });
 
   test("with NO filter params, the unscoped read returns EVERY project's plans, exactly as today — no regression from AC8", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
+    handle = bootInProcess();
     const keyA = await createProject(`global-filter-unfiltered-a-${crypto.randomUUID()}`);
     const keyB = await createProject(`global-filter-unfiltered-b-${crypto.randomUUID()}`);
     await filePlan(keyA, "CR-GLOBAL-UNFILTERED-A");

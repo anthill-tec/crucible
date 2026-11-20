@@ -12,9 +12,8 @@
 // Every refusal asserted below currently 200s; the stored-field assertions
 // on the plan and on its newly-skipped cycles currently read undefined.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../../src/server.ts";
-
-type ServerHandle = ReturnType<typeof startServer>;
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
 interface CyclePayload {
   id: number;
@@ -56,10 +55,10 @@ const VALID_FIELDS = {
   specRef: "CR-CRU-165 §G3",
 };
 
-let servers: ServerHandle[] = [];
+let servers: BoardHandle[] = [];
 
-function boot(): ServerHandle {
-  const handle = startServer({ port: 0, dbPath: ":memory:" });
+function boot(): BoardHandle {
+  const handle = bootInProcess();
   servers.push(handle);
   return handle;
 }
@@ -76,24 +75,24 @@ function withFixtureAgent(body: unknown): unknown {
   return body;
 }
 
-async function postJson(handle: ServerHandle, path: string, body: unknown): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${path}`, {
+async function postJson(handle: BoardHandle, path: string, body: unknown): Promise<Response> {
+  return send(handle, `${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
-async function getJson(handle: ServerHandle, path: string): Promise<Response> {
-  return fetch(`http://localhost:${handle.server.port}${path}`);
+async function getJson(handle: BoardHandle, path: string): Promise<Response> {
+  return send(handle, `${path}`);
 }
 
-async function registerOrchestrator(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+async function registerOrchestrator(handle: BoardHandle, key: string, agentId: string): Promise<void> {
   const res = await postJson(handle, "/api/v2/agents/register", { projectKey: key, agentId, role: "ORCHESTRATOR" });
   expect(res.status).toBe(200);
 }
 
-async function createProject(handle: ServerHandle): Promise<string> {
+async function createProject(handle: BoardHandle): Promise<string> {
   const res = await postJson(handle, "/api/v2/projects", { name: `abort-reason-${crypto.randomUUID()}` });
   const body = (await res.json()) as { ok: true; project: { key: string } };
   await registerOrchestrator(handle, body.project.key, "fixture-orch");
@@ -104,18 +103,18 @@ function plansPath(key: string, suffix = ""): string {
   return `/api/v2/projects/${key}/plans${suffix}`;
 }
 
-async function filePlanAB(handle: ServerHandle, key: string, cr: string): Promise<{ planId: number | string; a: number; b: number }> {
+async function filePlanAB(handle: BoardHandle, key: string, cr: string): Promise<{ planId: number | string; a: number; b: number }> {
   const res = await postJson(handle, plansPath(key), { cr, cycles: [{ label: "A" }, { label: "B" }] });
   expect(res.status).toBe(201);
   const body = (await res.json()) as PlanRecord;
   return { planId: body.planId, a: body.cycles[0]!.id, b: body.cycles[1]!.id };
 }
 
-async function abort(handle: ServerHandle, key: string, planId: number | string, body: Record<string, unknown>): Promise<Response> {
+async function abort(handle: BoardHandle, key: string, planId: number | string, body: Record<string, unknown>): Promise<Response> {
   return postJson(handle, plansPath(key, `/${planId}/abort`), body);
 }
 
-async function getPlanByCr(handle: ServerHandle, key: string, cr: string): Promise<PlanRecord> {
+async function getPlanByCr(handle: BoardHandle, key: string, cr: string): Promise<PlanRecord> {
   const res = await getJson(handle, plansPath(key, `?cr=${encodeURIComponent(cr)}`));
   const body = (await res.json()) as PlansListResponse;
   return body.plans.find((p) => p.cr === cr)!;
@@ -183,7 +182,7 @@ describe("POST …/plans/<planId>/abort — abort records a failure too (CR-CRU-
     // Activate A so the fixture also covers the active→failed leg of abort.
     const activateRes = await postJson(handle, plansPath(key, `/${planId}/cycles/${a}/`.replace(/\/$/, "")), {});
     void activateRes; // not used — activation below uses PATCH, kept for clarity of intent only
-    const patchActive = await fetch(`http://localhost:${handle.server.port}${plansPath(key, `/${planId}/cycles/${a}`)}`, {
+    const patchActive = await send(handle, `${plansPath(key, `/${planId}/cycles/${a}`)}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withFixtureAgent({ status: "active" })),
