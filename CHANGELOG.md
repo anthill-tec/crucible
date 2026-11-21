@@ -8,7 +8,7 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each re
 also the body of its [GitHub Release](https://github.com/anthill-tec/crucible/releases).
 Releases before 0.3.0 are described only on GitHub Releases.
 
-## [0.4.0] - 2026-11-14
+## [0.4.0] - 2026-11-21
 
 ### Upgrading
 
@@ -279,8 +279,10 @@ Releases before 0.3.0 are described only on GitHub Releases.
   name no `[client] url` now refuses every verb that must reach the board, with one envelope naming
   each file and why it was passed over, instead of posting to the server's packaged port. The
   shipped `clients/crucible.toml` declares no board; the installer writes the install's. An install
-  with no local server, or an upgraded one whose file never named a board, must declare
-  `[client] url = "http://<host>:<port>"`. A verb that sends nothing still runs.
+  with no local server must declare `[client] url = "http://<host>:<port>"`. An upgraded install whose
+  file never named a board has none until `crucible-axi install` is re-run, which fills it from the
+  local server's port. A verb that sends nothing still runs, and every client's `--help` ends with a
+  "Board:" paragraph naming where its board comes from.
 - **The `junit` readings follow the framework.** pytest's grouping by classname applies to a run of
   framework `pytest` whose report holds one suite named `pytest`, and bun's console reading to a run
   of framework `bun-test`, whatever the run's stack. A close that states no framework reads under the
@@ -343,6 +345,14 @@ Releases before 0.3.0 are described only on GitHub Releases.
   suite is a `python -m unittest discover -s <dir>` script whose `<dir>` ends in a tier the gate
   covers (`unit`, `integration`, …), the gate runs it as that tier's verb, so the board shows its
   run as that tier. Any other start directory still runs as `regression`.
+- **The suites declare their tiers by directory.** `test:client` is replaced by `test:client-unit`
+  and `test:client-integration` (`tests/client/<tier>`), and `test:unit` / `test:integration` run
+  `./tests/unit` and `./tests/integration` by path. The source-text classifier
+  `scripts/test-targets.ts` is gone; a test's tier is the directory that holds it.
+- **The client suite runs offline from its own caches.** Run `scripts/provision-test-caches.sh` once,
+  online, to fill the suite's maven repository under `.cache/test-suite/`; the suite fills its go
+  and uv caches there itself. The `dev` extra now also carries `hatchling` and `hatch-vcs`, so the
+  suite builds its wheels with `--no-isolation`.
 
 ### Removed
 
