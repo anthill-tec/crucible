@@ -1,6 +1,6 @@
 # CR-CRU-263 — CI runs the suites hermetically behind a tripwire
 
-**Status:** PENDING · filed 2026-11-15 (release fix; user ruling 2026-11-15: the leak-census tripwire becomes a
+**Status:** COMPLETED — 2026-11-20 (on release/0.4.0; proven by CI run 44784957054) · filed 2026-11-15 (release fix; user ruling 2026-11-15: the leak-census tripwire becomes a
 standing guard, on this repo's CI now and as a client feature for every project in 0.5.0) · gap analysis 2026-11-20
 (user rulings: the CI run is the proof — no tests of the hermetic scripts; `release/0.4.0` is pushed when this CR needs
 its CI run) · spec pre-review 2026-11-20 (CHANGES, F1–F10 folded)
@@ -75,21 +75,21 @@ git-ignored scratch, and CR-CRU-261 retired the only guard that pinned tier memb
 
 ## Acceptance criteria
 
-- [ ] **AC1 — the jobs are hermetic.** `test-python` and `test-bun` run their suites through `scripts/hermetic/`; the
+- [x] **AC1 — the jobs are hermetic.** `test-python` and `test-bun` run their suites through `scripts/hermetic/`; the
   CI run log shows the wrapper's preamble: only `lo`, no route, `id`, and the dropped capability sets.
-- [ ] **AC2 — a hit fails the job.** The deliberate-trip step passes in the CI run: the wrapper exits with the
+- [x] **AC2 — a hit fails the job.** The deliberate-trip step passes in the CI run: the wrapper exits with the
   verdict's hit code and prints a `port=3849` tripwire line naming the probe.
-- [ ] **AC3 — green.** A CI run on `release/0.4.0` passes `test-python` and `test-bun` hermetically with no tripwire
+- [x] **AC3 — green.** A CI run on `release/0.4.0` passes `test-python` and `test-bun` hermetically with no tripwire
   line and all four tripwire sockets listening throughout.
-- [ ] **AC4 — pins.** The existing pin tests are refactored to the hermetic steps (F9):
+- [x] **AC4 — pins.** The existing pin tests are refactored to the hermetic steps (F9):
   `tests/unit/ci-toolchain-provisioning.test.ts` (`REQUIRED_PINS`/`ACTION_RUNTIMES` read the version from a SHA pin's
   trailing comment in the raw text); `tests/integration/pipeline-test-timeout-default.test.ts` (`bunTestPathArgs` skips
   the wrapper's and hooks' flags); the three python fixture guards (the new step strings);
   `tests/unit/ci-every-python-job-sets-up-the-python-floor.test.ts` (`runsPython` recognises `.venv/bin/python` and
   the wrapper).
-- [ ] **AC5 — the workflow passes zizmor.** The pinned zizmor run reports no `unpinned-uses` and no `cache-poisoning`
+- [x] **AC5 — the workflow passes zizmor.** The pinned zizmor run reports no `unpinned-uses` and no `cache-poisoning`
   finding, before the push and in CI.
-- [ ] **AC6 — the unit tiers stay unit.** In that CI run the unit tier steps run with the hooks and their verdict, and
+- [x] **AC6 — the unit tiers stay unit.** In that CI run the unit tier steps run with the hooks and their verdict, and
   pass; the local per-file run before the push showed zero uncharged events.
 
 ## Non-goals
@@ -99,3 +99,31 @@ git-ignored scratch, and CR-CRU-261 retired the only guard that pinned tier memb
 - Tests of the hermetic scripts (user ruling).
 - Unix sockets other than docker's (a namespace does not cut filesystem sockets); `DOCKER_HOST` covers the one the
   suites use.
+
+## Close-out (2026-11-20)
+
+CI run `44784957054` (`release/0.4.0` at `aa55f386`) is the proof (user ruling: no tests of the hermetic scripts). Its
+publish-testpypi deployment was rejected by the user's ruling; the TestPyPI rehearsal belongs to the release rehearsal.
+
+- **AC1.** Both jobs run their tiers through `scripts/hermetic/run.sh` on `ubuntu-24.04` after
+  `kernel.apparmor_restrict_unprivileged_userns = 0`; every preamble shows only `lo` (`127.0.0.1/8`, `::1/128`), empty
+  `ip route` and `ip -6 route`, `uid=1001(runner)`, `CapEff`/`CapBnd` all zero, `DOCKER_HOST=unix:///nonexistent`.
+  test-python runs on the image's JDK 21 (Temurin 21.0.13; maven 3.10.1).
+- **AC2.** The deliberate-trip step: `VERDICT HIT — 1 connection(s) to a board port`, `HIT … port=3849 … cmd=curl …
+  /hermetic-trip-probe`, the wrapper's status 99, the step green.
+- **AC3.** The tripwire listens on `127.0.0.1:3849 [::1]:3849 127.0.0.1:3850 [::1]:3850` in every tier; bun unit
+  3136/0 (236 files) and integration 2597/0 (215 files); python unit 1917 OK and integration 3876 OK; every tier
+  `VERDICT clean — no tripwire hit`.
+- **AC4.** The four TS pin files and `cr009` 111/111; the three python fixture guards 26/26; the provisioning script's
+  checks 5/5.
+- **AC5.** `uvx zizmor@1.32.0 --offline .github/workflows/release.yml`: no findings, locally and in CI (both
+  `artipacked` and `adhoc-packages` fixed: `persist-credentials: false`; `publish-npm` uses setup-node's bundled npm).
+- **AC6.** `unit-verdict: clean — no dependency event` for both unit tiers; the five install unit tests that read the
+  operator's `XDG_DATA_HOME`/`BUN_INSTALL` and probed :3800 were fixed in RED 981.
+- **CI hardening (FIX 983–985, user rulings).** The cache fill pins its lifecycle plugins and retries only a
+  resolution or transfer failure; every download step is time-limited with one retry; playwright's apt deps run once
+  in their own 30-minute step; the wrapper's socket loop runs with globbing off and its README names the exit-code
+  collision; the bun preload skips only Bun's internal frames.
+- **Gate.** `pre-merge-gate` cycle 985: 5 suites, 14766 passed, 0 failed.
+- **Cycles.** 980 (GREEN, wrapper), 981 (RED + GREEN, pins and workflow), 982 (VERIFY), 983–985 (FIX, CI hardening;
+  985 carried the final VERIFY).
