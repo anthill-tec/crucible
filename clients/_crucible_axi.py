@@ -8707,28 +8707,27 @@ def _drive_axi_run(verb, run_argv, intent, project_dir, agent_id, run,
     `agent_id` (the caller) still names the envelope."""
     axi_verb = " ".join(run_argv[1:3])
     context = fleet_context()
-    try:
-        proc = subprocess.Popen(
-            run_argv,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-    except OSError as e:
-        print(f"{verb}: ERROR: could not launch `no-mistakes {axi_verb}`: {e}",
-              file=sys.stderr)
-        return 1
+    # The tool's output goes where it can never fill (`launched_axi_tool`,
+    # in `_crucible_run.py`).
+    with contextlib.ExitStack() as launch:
+        try:
+            proc, read_output = launch.enter_context(
+                _RUN.launched_axi_tool(run_argv))
+        except OSError as e:
+            print(f"{verb}: ERROR: could not launch `no-mistakes {axi_verb}`: "
+                  f"{e}", file=sys.stderr)
+            return 1
 
-    # Stream the ladder while the run is in flight (`stream_axi_ladder` owns
-    # the cadence, the terminality guard and the ladder dedup). Whether it
-    # actually POSTED is remembered here, because the envelope below states
-    # which gate this exit put on the board and the sealing decision cannot see
-    # the loop.
-    posted_interim = stream_axi_ladder(proc, run_argv[0], intent, project_dir,
-                                       agent_id, context, ops, release,
-                                       heartbeat=run.heartbeat,
-                                       poster_for=run.poster_for,
-                                       observe=on_snapshot)
-
-    out, _err = proc.communicate()
+        # Stream the ladder while the run is in flight (`stream_axi_ladder`
+        # owns the cadence, the terminality guard and the ladder dedup).
+        # Whether it actually POSTED is remembered here, because the envelope
+        # below states which gate this exit put on the board and the sealing
+        # decision cannot see the loop.
+        posted_interim = stream_axi_ladder(
+            proc, run_argv[0], intent, project_dir, agent_id, context, ops,
+            release, heartbeat=run.heartbeat, poster_for=run.poster_for,
+            observe=on_snapshot)
+        out = read_output()
     # Proxy role: relay the axi detail to the caller's OWN stdout. A closed
     # stdout silences the relay, never the run: the seal below still happens.
     if out:

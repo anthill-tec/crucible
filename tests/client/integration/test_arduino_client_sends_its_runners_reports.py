@@ -890,8 +890,10 @@ class NoBoardNoFiguresTest(_ArduinoProject, unittest.TestCase):
 # is re-recorded lower and that module's is added. The pre-flight's refusal
 # of an attributed run with no board declared grows the core. A gate's lone
 # whole-suite run taking the gate's verdict grows the core by its mark and the
-# run module by that verdict.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9081, "_crucible_run.py": 1999,
+# run module by that verdict. A gate drive's launch of no-mistakes moves into
+# the run module, its output sent where it can never fill, so the run module's
+# budget is re-recorded higher and the core's one line lower.
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9080, "_crucible_run.py": 2024,
                               "_crucible_release.py": 266,
                               "_crucible_project.py": 521,
                               "_crucible_lint.py": 399,

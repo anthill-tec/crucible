@@ -29,6 +29,7 @@ import resource
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -1370,6 +1371,30 @@ def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False,
         print(f"[crucible] run log \u2192 {log_path} ({len(out)} bytes)",
               file=sys.stderr)
     return subprocess.CompletedProcess(cmd, returncode, stdout=out)
+
+
+@contextlib.contextmanager
+def launched_axi_tool(argv):
+    """Launch no-mistakes (`argv`) so nothing it writes can block it, and
+    yield `(proc, read_output)`.
+
+    Its stdout goes to an unnamed temporary file, which has no fixed capacity
+    the way a pipe does, and its stderr to `DEVNULL`. `read_output()` waits for
+    the tool and reads the file once from offset 0, as text decoded the way
+    `Popen(text=True)` decodes: the locale encoding, strict errors, universal
+    newlines. The file is closed on every exit, an interrupt included; the
+    tool keeps the caller's process group and is never signalled, killed or
+    waited for here. Creating the file or launching the tool raises `OSError`
+    to the caller (`drive_axi_run` reports it)."""
+    with tempfile.TemporaryFile(mode="w+") as sink:
+        proc = subprocess.Popen(argv, stdout=sink, stderr=subprocess.DEVNULL)
+
+        def read_output():
+            proc.wait()
+            sink.seek(0)
+            return sink.read()
+
+        yield proc, read_output
 
 
 # ── CR-CRU-224 §S2 — the shared stream relay ────────────────────────────────

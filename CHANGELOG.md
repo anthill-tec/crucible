@@ -20,6 +20,12 @@ Releases before 0.3.0 are described only on GitHub Releases.
   failure. A lone run that is filed with no counts now also answers `ok: false`, with a
   `gate-suite-unreported` warning, while its exit stays 0.
 
+### Fixed
+
+- **A gate drive no longer hangs on the tool's own output.** `gate-run` and `gate-respond` no
+  longer hang when no-mistakes prints more than 64 KiB. Its output is read once it exits, and its
+  snapshot is sealed and relayed as before, whatever its size.
+
 ## [0.4.0] - 2026-11-21
 
 ### Upgrading
