@@ -1,6 +1,6 @@
 # CR-CRU-255 — a gate whose only run fails answers not ok
 
-**Status:** PENDING · filed 2026-11-14 (user ruling: raise the candidate CR found at CR-CRU-222's VERIFY 928, Sug4) ·
+**Status:** COMPLETED — 2026-11-21 · filed 2026-11-14 (user ruling: raise the candidate CR found at CR-CRU-222's VERIFY 928, Sug4) ·
 gap analysis 2026-11-21 (`test-reports/work/cr255-gap-analysis.md`); rulings: mechanism (c), the mvn duplicate folded
 in, re-scored 3 → 5 · spec pre-review 2026-11-21 (`test-reports/work/prereview255-report.md`, CHANGES, F1–F12 folded)
 **Type:** fix
@@ -110,7 +110,7 @@ ruling.
 
 ## Acceptance criteria
 
-- [ ] **AC1 — a lone red run fails the gate.** In each of the six clients, take a gate on a project that declares no
+- [x] **AC1 — a lone red run fails the gate.** In each of the six clients, take a gate on a project that declares no
   suites, whose whole-suite run files with one failing test. It answers:
   - `ok: false`;
   - exit 1;
@@ -121,12 +121,12 @@ ruling.
   The test extends the six-client integration fixture in
   `test_the_gate_records_its_outcome_and_a_red_gate_stops_the_close.py`, with one body per client: each client's
   default lone body. Bun's lone red gate is new there.
-- [ ] **AC1b — a lone run cut short fails the gate.** A lone filed run carrying `stream-incomplete` with no failed test
+- [x] **AC1b — a lone run cut short fails the gate.** A lone filed run carrying `stream-incomplete` with no failed test
   answers `ok: false` and exit 1, with one `gate-suite-failed` reading "… FAILED: 0 of N test(s) failed (exit 1)".
   This is proven in one streaming client.
-- [ ] **AC2 — a lone green run passes.** The same gate with a green run answers `ok: true` and exit 0, with no
+- [x] **AC2 — a lone green run passes.** The same gate with a green run answers `ok: true` and exit 0, with no
   `gate-suite-failed`, as today.
-- [ ] **AC3 — a lone unfiled run keeps its answer.** A lone run that the board refuses, or never receives, answers
+- [x] **AC3 — a lone unfiled run keeps its answer.** A lone run that the board refuses, or never receives, answers
   `ok: false` with its `error` and its existing warnings, unchanged:
 
   | Client | Existing warnings |
@@ -136,24 +136,24 @@ ruling.
   | go | `ingest-failed` |
 
   It never carries `gate-suite-failed`.
-- [ ] **AC3b — a lone filed run with no counts fails the gate.** It answers `ok: false` with exactly one
+- [x] **AC3b — a lone filed run with no counts fails the gate.** It answers `ok: false` with exactly one
   `gate-suite-unreported`. In bun, python, mvn, arduino and rust that is the body's existing warning. In go it is the
   added one, worded by `_run_outcome`. This is proven against a fake board that files with no counts.
-- [ ] **AC4 — the composed gate is unchanged.** A gate on a project that declares suites answers exactly as today,
+- [x] **AC4 — the composed gate is unchanged.** A gate on a project that declares suites answers exactly as today,
   green and red. A composed red mvn gate carries exactly one `gate-suite-failed`.
-- [ ] **AC4b — mvn's composed unfiled run.** A composed mvn gate whose whole-suite run is not filed carries exactly
+- [x] **AC4b — mvn's composed unfiled run.** A composed mvn gate whose whole-suite run is not filed carries exactly
   one `gate-suite-unreported` (§S2).
-- [ ] **AC5 — the run verbs are unchanged.** In each of the six clients, `regression` with a red run still answers
+- [x] **AC5 — the run verbs are unchanged.** In each of the six clients, `regression` with a red run still answers
   `ok: true` (filed) and exit 1. These are new pins; none exists today.
-- [ ] **AC5b — the mark is scoped.** A unit test, with no process, socket or wait, proves that the mark:
+- [x] **AC5b — the mark is scoped.** A unit test, with no process, socket or wait, proves that the mark:
   - is set only during `gate_regression`'s lone call;
   - is unset after that call returns, raises, or raises `SystemExit`;
   - is never set on the composed path;
   - is cleared by `forget_ingested_run`.
-- [ ] **AC6 — the shared modules stay within budget.** `_crucible_axi.py` stays at most
+- [x] **AC6 — the shared modules stay within budget.** `_crucible_axi.py` stays at most
   `CORE_LINE_LIMIT − CORE_HEADROOM_LINES` lines. All three `SHARED_MODULE_LINE_BUDGETS` copies (the arduino, mvn and
   rust integration tests) record the new counts of `_crucible_axi.py` and `_crucible_run.py`.
-- [ ] **AC7 — the words.** The CHANGELOG entry and the docstring say what §S3 says.
+- [x] **AC7 — the words.** The CHANGELOG entry and the docstring say what §S3 says.
 
 ## What the 5 points cover
 
@@ -174,3 +174,38 @@ ruling.
 
 - Changing what `ok` means on a run verb.
 - Changing the gate milestone.
+
+## Close-out (2026-11-21)
+
+- **AC1, AC2, AC3, AC3b, AC5.** These are in
+  `tests/client/integration/test_the_gate_records_its_outcome_and_a_red_gate_stops_the_close.py`, using its
+  six-client fixture with real runners against a fake board:
+  - a lone red gate answers `ok: false`, exits 1 and carries one `gate-suite-failed` in the composed gate's words;
+  - a lone green gate answers `ok: true` and exits 0;
+  - an unfiled lone run keeps each client's own warnings, and never gets `gate-suite-failed`;
+  - a run filed with no counts answers `ok: false` with one `gate-suite-unreported`, the one added for go;
+  - `regression` with a red run still answers `ok: true` and exits 1.
+- **AC1b.** In `test_python_every_suite_verb_runs_through_its_own_runner.py`, a lone stream that the board flags
+  `stream-incomplete` reads "FAILED: 0 of N test(s) failed (exit 1)".
+- **AC4 and AC4b.** In `test_mvn_client_sends_its_runners_reports.py`:
+  - the composed gate answers as before;
+  - a composed unfiled mvn run carries one `gate-suite-unreported`. RED reproduced the duplicate.
+- **AC5b.** `tests/client/unit/test_the_gate_marks_its_lone_run_while_it_runs.py` tests `_lone_gate_stack`:
+  - it is set only during the lone call;
+  - it is cleared on return, on raise and on `SystemExit`;
+  - it is never set on the composed path;
+  - `forget_ingested_run` clears it.
+- **AC6.** The core is 9081 lines, 39 under its headroom line. `_crucible_run.py` is 1999 lines. All three budget copies
+  record both figures.
+- **AC7.** The `## [Unreleased]` → `### Upgrading` entry, and `gate_regression`'s docstring ("six gates", the mark).
+- **The change.**
+  - `_crucible_axi.py`: `_lone_gate_stack`, set in a `try/finally` around `gate_regression`'s lone call and cleared by
+    `forget_ingested_run`.
+  - `_crucible_run.py`: `_lone_gate_verdict`, called by `emit_run_axi`, which reuses `_run_outcome`, `_suite_counts`
+    and `_whole_suite_warning`.
+  - `mvn-crucible.py`: `whole_suite_alone` with `name_unfiled`.
+- **Gate.** `pre-merge-gate` at cycle 992 ran 5 suites: 14822 passed, 0 failed.
+- **Cycles.**
+  - 990 (RED + GREEN);
+  - 991 (VERIFY, CHANGES): the new `[Unreleased]` broke two next-release fixture self-checks;
+  - 992 (FIX): by user ruling the self-checks were removed as tests of the tests, and Sug1–5 were applied.
