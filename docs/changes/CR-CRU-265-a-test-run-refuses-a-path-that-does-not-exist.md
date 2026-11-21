@@ -1,6 +1,6 @@
 # CR-CRU-265 — a test run refuses a path that does not exist
 
-**Status:** PENDING · filed 2026-11-20 (release fix; user ruling 2026-11-20: todo #29, from VERIFY 978 Sug2, is fixed in
+**Status:** COMPLETED — 2026-11-21 (on release/0.4.0) · filed 2026-11-20 (release fix; user ruling 2026-11-20: todo #29, from VERIFY 978 Sug2, is fixed in
 0.4.0) · gap analysis 2026-11-20 (SPEC_UPDATE_NEEDED; user rulings: refuse, not warn; a declared script's
 entries stay filters; re-scored 3 → 5) · spec pre-review 2026-11-20 (CHANGES, F1–F10 folded; user rulings: an
 existing non-test file is refused under its own code; duplicate entries are a non-goal)
@@ -65,24 +65,24 @@ failed is never filed as green").
 
 ## Acceptance criteria
 
-- [ ] **AC1 — a missing path refuses the run.** `bun-crucible.py test --tests <existing> <missing>` — without
+- [x] **AC1 — a missing path refuses the run.** `bun-crucible.py test --tests <existing> <missing>` — without
   `--agent`, with `--agent`, and with `--agent --cycle` — runs no runner, opens no run, makes no board request, leaves
   an existing `junit.xml` in the reports directory in place, exits 1, and prints one envelope as the Design pins it,
   with `tests-not-found` naming `<missing>` and only it. The same holds when every entry is missing.
-- [ ] **AC1b — an existing file that is not a test refuses the run.** `test --tests <existing non-test source>` (a file
+- [x] **AC1b — an existing file that is not a test refuses the run.** `test --tests <existing non-test source>` (a file
   whose top-level code writes a sentinel) is refused with `tests-not-a-test-file` naming it; nothing runs and the
   sentinel is absent. An entry naming an existing directory is not refused.
-- [ ] **AC1c — paths resolve against the package directory.** With `[bun] package_dir` declared in the project's
+- [x] **AC1c — paths resolve against the package directory.** With `[bun] package_dir` declared in the project's
   `crucible.toml`, an entry written relative to the project root that does not exist under the package directory is
   refused, and `help[0]` names the package directory.
-- [ ] **AC2a — existing entries reach bun as paths** (integration, fake bun). The `bun test` argv carries `./<file>`
+- [x] **AC2a — existing entries reach bun as paths** (integration, fake bun). The `bun test` argv carries `./<file>`
   for a relative entry, and an entry starting with `./` or `../` and an absolute entry exactly as given.
-- [ ] **AC2b — and run exactly those files** (integration, real bun in a scratch package). `test --tests a.test.ts`
+- [x] **AC2b — and run exactly those files** (integration, real bun in a scratch package). `test --tests a.test.ts`
   beside `sub/xa.test.ts` runs `a.test.ts` alone.
-- [ ] **AC3 — a declared script's entries pass unchanged.** With a marked `test` script, `--tests` entries — including
+- [x] **AC3 — a declared script's entries pass unchanged.** With a marked `test` script, `--tests` entries — including
   one that names no existing path, and an existing relative file, which reaches the script without a `./` prefix —
   reach the script exactly as given, and nothing is refused.
-- [ ] **AC4 — help says it.** `test --help` — the verb's description and its `--tests` line — says that for `bun test`
+- [x] **AC4 — help says it.** `test --help` — the verb's description and its `--tests` line — says that for `bun test`
   the entries are paths relative to the package directory, that a missing entry or a file that is not a test is
   refused, and that a declared script receives them unchanged as its runner's filters.
 
@@ -99,3 +99,23 @@ failed is never filed as green").
   (F7).
 - A marked script with `framework: bun-test`, and the tier verbs' `-- ARGS` passthrough: their entries stay filters,
   as the declared-script ruling says (F8).
+
+## Close-out (2026-11-21)
+
+- **AC1, AC1b, AC1c, AC3, AC4.** `tests/client/unit/test_a_bun_test_run_refuses_an_entry_that_names_no_test.py`
+  drives `cmd_test` in process with a recording transport and a recording spawn: a missing entry and an existing
+  non-test file are refused (`tests-not-found`, `tests-not-a-test-file`) without `--agent`, with it and with
+  `--agent --cycle` — no runner, no board request, the reports directory untouched, exit 1, one envelope; an entry
+  resolves against `[bun] package_dir`, and `help[0]` names it; a directory passes; a declared script receives its
+  entries unchanged; the help's description and `--tests` line say the three things.
+- **AC2a, AC2b.** `tests/client/integration/test_a_bun_test_hands_bun_its_entries_as_paths.py`: the `bun test` argv
+  carries `./<entry>` for a bare relative entry and `./`, `../` and absolute entries as given (fake bun); with the real
+  bun an entry runs its file alone, not a sibling whose path contains its name.
+- **The change.** `clients/bun-crucible.py`: `_refused_test_entries`, `_emit_tests_refused` and `_as_bun_paths`; the
+  check runs in `cmd_test` after the marker check and before bun, the reports directory and the board, and the `./`
+  form reaches both the argv and the pre-scan.
+- **Gate.** `pre-merge-gate` cycle 989: 5 suites, 14786 passed, 0 failed. The first gate (cycle 988), cut by a power
+  failure, had found one guard failure — the new modules' prose named scratch test files the repo lacks — fixed in
+  cycle 989 by rewording that prose.
+- **Cycles.** 986 (RED + GREEN), 987 (VERIFY, READY), 988 (FIX: an unrelated re-indent reverted), 989 (FIX: the
+  gate's finding).
