@@ -1,14 +1,15 @@
 # CR-CRU-258 — a gate drive never stalls on the tool's own output
 
 **Status:** PENDING · filed 2026-11-15 (found by the 0.4.0 release's own no-mistakes run; user ruling: planned into
-0.5.0, so 0.4.0 ships with it)
+0.5.0, so 0.4.0 ships with it) · spec pre-review 2026-11-21 (`test-reports/work/prereview258-report.md`, CHANGES,
+F1–F12 folded)
 **Type:** fix
 **Points:** 2
 **Wave:** 9 (0.5.0)
-**Depends on:** —
+**Depends on:** CR-CRU-255 (its `## [Unreleased]` section and the shared modules' line budgets)
 **Labels:** client, gate, release
-**Design reference:** `test-reports/work/cr258-gap-analysis.md` (D1–D8, approved 2026-11-15); CR-CRU-221 (the
-core's headroom)
+**Design reference:** `test-reports/work/cr258-gap-analysis.md` (D1–D8, approved 2026-11-15; AC6 supersedes D6/D8's
+changelog placement, and D4's headroom premise is stale — see S3); CR-CRU-221 (the core's headroom)
 
 ## Problem
 
@@ -27,42 +28,81 @@ passes 64 KiB, such as a long-lived branch or a review with many or long finding
 
 ## Behaviour
 
-- **S1 — the tool's output is never left to fill.** A drive launches no-mistakes so that nothing it writes can
-  block it:
-  - its stdout goes to a sink with no fixed capacity (an anonymous temporary file), which the drive reads once the
-    tool has exited;
-  - its stderr is discarded (`DEVNULL`), as its content already is.
-- **S2 — everything else is unchanged:**
-  - the poll loop, its cadence and the ladder dedup;
-  - the interim gates and the final seal;
-  - the relay of the tool's snapshot to the caller's stdout;
-  - the envelope;
-  - the SIGINT/SIGTERM trap and the run identity.
-  A final snapshot of any size is decoded and sealed exactly as a small one is now.
-- **S3 — where it lives.** The launch and the read after exit are one helper in `_crucible_run.py`, the module
-  that owns runner launches. `drive_axi_run` calls it, so the core gets shorter. The core keeps CR-CRU-221's
-  headroom (at most `CORE_LINE_LIMIT − CORE_HEADROOM_LINES` lines), and the run module's line budget is
-  re-recorded in each `SHARED_MODULE_LINE_BUDGETS` copy.
+- **S1 — the tool's output is never left to fill.** A drive launches no-mistakes so that nothing it writes can block
+  it.
+  - **stdout** goes to a sink with no fixed capacity: an unnamed temporary file (`tempfile.TemporaryFile`). The drive
+    reads it once, after the tool has exited, from offset 0. It reads it as text, with the same decoding
+    `Popen(text=True)` applies today: the locale encoding, strict errors, and universal newlines.
+  - **stderr** goes to `DEVNULL`. Its content is already discarded on every path today.
+- **S2 — everything else is unchanged.**
+  - These keep working as they do now:
+    - the poll loop, its cadence and the ladder dedup;
+    - the interim gates and the final seal;
+    - the relay of the tool's snapshot to the caller's stdout, once, after exit, verbatim;
+    - the held report;
+    - the envelope;
+    - the SIGINT/SIGTERM trap and the run identity.
+  - A final snapshot of any size is decoded and sealed exactly as a small one is now.
+  - The sink is closed on every exit, interrupts included.
+  - The tool keeps today's process group and session. On an interrupt, the drive never signals, kills or waits for it.
+  - One consequence: once the client has exited, an orphaned tool writes into the unlinked file instead of failing
+    on a broken pipe.
+- **S3 — where it lives.** The launch and the read after exit are one context manager in `_crucible_run.py`, the module
+  that owns runner launches. It:
+  - launches the tool with stdout to the temporary file and stderr to `DEVNULL`;
+  - yields the process and a reader that reads the file once from offset 0;
+  - closes the file on every exit.
+
+  `drive_axi_run` uses it. The ladder stream (`stream_axi_ladder`) stays in the core, called between the launch and
+  the read, because tests patch it on the core. If launching the tool or creating the sink raises `OSError`, the user
+  still gets today's message, ``could not launch `no-mistakes <verb>` ``, and exit 1.
+
+  The move keeps the launches together and frees core headroom. It is no longer forced: the core has 38 lines to
+  spare after CR-CRU-255.
 
 ## Acceptance criteria
 
-- **AC1** — `gate-run`'s `axi run` prints a well-formed final snapshot of at least 256 KiB, then exits. `gate-run`
-  returns on its own within a bounded time, seals the outcome that snapshot states, relays it to its stdout and
-  exits 0.
-- **AC2** — the same for `gate-respond`, whose `axi respond` prints a final snapshot of at least 256 KiB.
-- **AC3** — a tool that writes at least 256 KiB to stderr before a small final snapshot does not stall either drive.
-  Both return and seal as AC1 says.
-- **AC4** — the existing suites for gate-run, gate-respond, the skip declaration, interrupts and the run identity
-  pass unchanged.
-- **AC5** — the core is at most `CORE_LINE_LIMIT − CORE_HEADROOM_LINES` lines. Every `SHARED_MODULE_LINE_BUDGETS`
-  copy records the core's and the run module's new counts.
-- **AC6** — `CHANGELOG.md`'s `## [Unreleased]` section carries a `### Fixed` entry saying that `gate-run` and
-  `gate-respond` no longer hang when no-mistakes prints more than 64 KiB.
+- **AC1 — `gate-run` with a large final snapshot.** `axi run` prints a well-formed final snapshot of at least 256 KiB,
+  then exits. `gate-run`:
+  - returns on its own within the bound;
+  - seals the outcome that snapshot states;
+  - relays the snapshot to its stdout verbatim, exactly once;
+  - exits 0.
+- **AC1b — a held run's large snapshot.** `axi run` prints a held snapshot of at least 256 KiB (a step awaiting
+  approval, with no outcome), then exits. `gate-run`:
+  - returns within the bound;
+  - seals nothing;
+  - prints the held report;
+  - posts the interim it saw;
+  - exits 1.
+- **AC2 — `gate-respond` with a large final snapshot.** `axi respond` prints a final snapshot of at least 256 KiB.
+  `gate-respond`:
+  - records the decision (the envelope's `decision` is an id);
+  - seals;
+  - exits 0.
+- **AC3 — a large stderr does not stall either drive.** The tool writes at least 256 KiB to stderr before a small
+  final snapshot. Both drives return and seal as AC1 and AC2 say. None of those stderr bytes appear in the client's
+  stderr.
+- **AC4 — the existing suites pass unchanged.** These are the suites for gate-run, gate-respond, the skip declaration,
+  the interrupts and the run identity, all listed in the pre-review report's AC4 section.
+- **AC5 — the budgets.**
+  - The core stays at most `CORE_LINE_LIMIT − CORE_HEADROOM_LINES` lines.
+  - Every `SHARED_MODULE_LINE_BUDGETS` copy records the core's and the run module's new counts, measured on develop
+    after CR-CRU-255.
+  - `project-namespace-tripwire.test.ts`'s `PROSE_CITATIONS.clients` count is re-recorded, with its dated note, if
+    it moves.
+- **AC6 — the changelog.** `CHANGELOG.md`'s `## [Unreleased]` section gains a `### Fixed` entry: `gate-run` and
+  `gate-respond` no longer hang when no-mistakes prints more than 64 KiB. This supersedes the gap analysis's D6/D8,
+  because the 0.4.0 section has shipped.
 
-Every new test drives a fake `no-mistakes` on a scratch PATH, never the real one, and runs the client under a
-`subprocess` timeout. On today's code it therefore fails on that timeout and never hangs the suite.
+The new tests go in `tests/client/integration/test_a_gate_drive_never_stalls_on_the_tools_output.py`. That is
+integration tier: they spawn the installed client, through `scrubbed_env` and `drive_verb`, with a fake
+`no-mistakes` in a scratch `bin_dir`, and never the real one. One client is enough, because the drive is shared.
+Each spawn runs under a 60 s `subprocess` timeout, so on today's code a test fails on that timeout and never hangs the
+suite.
 
 ## Non-goals
 
 - Relaying no-mistakes' stderr to the caller. Today it is captured and then dropped, and that does not change.
 - Changing the poll cadence, the interim throttle or the envelope.
+- A hung `axi status`. `poll_axi_snapshot` has no timeout, and that is out of scope.
