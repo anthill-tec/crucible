@@ -1,6 +1,6 @@
 # CR-CRU-258 — a gate drive never stalls on the tool's own output
 
-**Status:** PENDING · filed 2026-11-15 (found by the 0.4.0 release's own no-mistakes run; user ruling: planned into
+**Status:** COMPLETED — 2026-11-22 · filed 2026-11-15 (found by the 0.4.0 release's own no-mistakes run; user ruling: planned into
 0.5.0, so 0.4.0 ships with it) · spec pre-review 2026-11-21 (`test-reports/work/prereview258-report.md`, CHANGES,
 F1–F12 folded)
 **Type:** fix
@@ -106,3 +106,33 @@ suite.
 - Relaying no-mistakes' stderr to the caller. Today it is captured and then dropped, and that does not change.
 - Changing the poll cadence, the interim throttle or the envelope.
 - A hung `axi status`. `poll_axi_snapshot` has no timeout, and that is out of scope.
+
+## Close-out (2026-11-22)
+
+- **AC1, AC1b, AC2, AC3:** `tests/client/integration/test_a_gate_drive_never_stalls_on_the_tools_output.py`. It drives
+  the python client against a fake `no-mistakes` that prints at least 256 KiB, and a `RecordingBoard`.
+  - **AC1:** a final snapshot is sealed and relayed verbatim, once.
+  - **AC1b:** a held snapshot is reported and its interim posted, with no seal.
+  - **AC2:** `gate-respond` records the decision and seals.
+  - **AC3:** 256 KiB on stderr stalls neither drive and none of it is relayed.
+  - All four fail on today's code at the 60 s spawn bound, and pass in about 8 s.
+- **Read-back parity:** `tests/client/integration/test_the_gate_drives_sink_reads_back_what_the_pipe_did.py` (from
+  VERIFY 994's suggestion).
+  - CRLF reads back as the pipe read it.
+  - Undecodable bytes raise what the pipe raised.
+  - An interrupt closes the sink and leaves the tool running.
+- **AC4:** the existing gate-run/gate-respond suites pass unchanged: 498/0 and 64/0.
+- **AC5:** the core is 9080 lines, 40 under its headroom line, and `_crucible_run.py` is 2024 lines. All three budget
+  copies record both, with a growth note. `PROSE_CITATIONS.clients` is unchanged.
+- **AC6:** a `### Fixed` entry under `## [Unreleased]`.
+- **The change:** `launched_axi_tool` in `_crucible_run.py`.
+  - stdout goes to `tempfile.TemporaryFile` and stderr to `DEVNULL`.
+  - The output is read once, after exit, and the sink is closed on every exit.
+  - `_drive_axi_run` enters it through an `ExitStack`, which keeps the launch-error message, and the ladder stays in
+    the core.
+- **Gate:** `pre-merge-gate` cycle 995 ran 5 suites, 14830 passed, 0 failed.
+- **Cycles:**
+  - 993: RED + GREEN.
+  - 994: VERIFY, READY, with four suggestions.
+  - 995: FIX, by user ruling — the docstring wording, and the read-back parity module. Sug3 (the read ends at the
+    tool's exit) and Sug4 (stderr no longer decoded) were noted only.
