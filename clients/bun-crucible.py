@@ -853,8 +853,8 @@ def _emit_target_refused(verb, project_dir, agent_id, detail):
                "help": [f"fix {TARGETS_DECLARATION} in package.json, then "
                         f"re-run {verb}", "status"]},
               _axi_context(project_dir, agent_id=agent_id),
-               [{"code": "target-refused", "detail": detail}],
-               f"[crucible] ERROR: {detail}")
+              [{"code": "target-refused", "detail": detail}],
+              f"[crucible] ERROR: {detail}")
     return 1
 
 
