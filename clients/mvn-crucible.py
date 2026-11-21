@@ -1400,7 +1400,7 @@ def cmd_e2e(args):
     return e2e_rc
 
 
-def cmd_regression(args, verb="regression"):
+def cmd_regression(args, verb="regression", name_unfiled=False):
     """Gated regression run — an opening heartbeat DECLARES the run's identity
     (binding it when `--cycle` is given), and the ingest body is wrapped in an
     anti-ghost silent cleanup (CR-CRU-008 §S4): even a failed/raising run tears
@@ -1410,7 +1410,10 @@ def cmd_regression(args, verb="regression"):
 
     CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
-    must carry ONE document under the GATE's own verb, not the inner one's."""
+    must carry ONE document under the GATE's own verb, not the inner one's.
+
+    `name_unfiled` is set only by a gate whose whole answer is this run: an
+    unfiled run then names its suite unreported, as a composed gate does."""
     # A coverage-only flag on a coverage-free run is refused first, before the
     # project, the board, a lock, docker or maven is touched.
     _axi().refuse_coverage_only_flags(
@@ -1430,11 +1433,12 @@ def cmd_regression(args, verb="regression"):
                 _get, _project_key(project_dir), args.agent,
                 cycle_id=getattr(args, "cycle", None),
                 context=_run_context(), release=getattr(args, "release", None))
-        return _regression_run(args, identity, verb, preflight_warnings)
+        return _regression_run(args, identity, verb, preflight_warnings,
+                               name_unfiled)
 
 
 def _regression_run(args, identity=None, verb="regression",
-                    preflight_warnings=()):
+                    preflight_warnings=(), name_unfiled=False):
     """REGRESSION tier — full reactor suite, coverage-free unless `--coverage`
     adds JaCoCo (the pre-merge gate always asks for it). Sends the surefire +
     failsafe reports (+ every jacoco.csv with coverage) to /api/v2/runs for
@@ -1562,8 +1566,9 @@ def _regression_run(args, identity=None, verb="regression",
                                   _base_url())
                   if gate else None)
     # A gate whose one whole-suite run was not filed cannot say what it
-    # covered: it names that suite unreported, as a composed gate does.
-    if gate:
+    # covered: it names that suite unreported, as a composed gate does. A
+    # composed gate's whole-suite run leaves that to the composition.
+    if name_unfiled:
         preflight_warnings += _axi().whole_suite_unreported_warnings(_STACK, resp)
     _emit_run_axi(verb, resp, project_dir, args.agent, help_steps=help_steps,
                   warnings=preflight_warnings)
@@ -1958,6 +1963,9 @@ def cmd_pre_merge_gate(args):
             dispatch=None,
             whole_suite=lambda: cmd_regression(_gate_regression_args(args),
                                                verb="pre-merge-gate"),
+            whole_suite_alone=lambda: cmd_regression(
+                _gate_regression_args(args), verb="pre-merge-gate",
+                name_unfiled=True),
             context=_axi_context(project_dir, agent_id=args.agent),
             crucible_url=_base_url)
     finally:

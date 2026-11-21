@@ -6487,6 +6487,9 @@ _emitted_run_counts = None
 # The per-suite results a gate's composition reported (`run_gate_suites`), for
 # the outcome milestone to carry; None while no composition ran.
 _gate_suite_results = None
+# The stack of the gate whose lone whole-suite call is running, None otherwise:
+# the filed-run emitter gives that run the gate's verdict (`lone_gate_verdict`).
+_lone_gate_stack = None
 
 
 def forget_ingested_run():
@@ -6494,8 +6497,9 @@ def forget_ingested_run():
     verb dispatch (`run_verb`), so an envelope can only ever state the ingest
     of the invocation it belongs to."""
     global _ingested_run_tier, _ingested_compile
-    global _emitted_run_counts
+    global _emitted_run_counts, _lone_gate_stack
     _ingested_run_tier = AXI_UNSET
+    _lone_gate_stack = None
     _ingested_compile = False
     _refused_ingest_runs.clear()
     _refused_ingest_warnings.clear()
@@ -7506,7 +7510,7 @@ def refuse_unrunnable_scoped_gate(args, *, surface, stack, get, project_key):
 def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
                     context, crucible_url, whole_suite_alone=None,
                     run_suite=None, whole_framework=None, whole_script=None):
-    """§S1/§S2 — the GATE's regression step: the one composition all five gates
+    """§S1/§S2 — the GATE's regression step: the one composition all six gates
     run, so "the gate covers every declared suite" is a property of the fleet
     and not of one client.
 
@@ -7520,9 +7524,14 @@ def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
     answer: its envelope is the gate's, so it names its own run unreported
     when that run was not filed. The composition names it itself, so a
     composed gate takes `whole_suite` and never this one."""
+    global _lone_gate_stack
     suites = declared_gate_suites(args, surface, stack)
     if not suites:
-        return (whole_suite_alone or whole_suite)()
+        _lone_gate_stack = stack
+        try:
+            return (whole_suite_alone or whole_suite)()
+        finally:
+            _lone_gate_stack = None
     return run_gate_suites(suites, stack=stack, verb=verb,
                            whole_suite=whole_suite, dispatch=dispatch,
                            context=context, crucible_url=crucible_url,
