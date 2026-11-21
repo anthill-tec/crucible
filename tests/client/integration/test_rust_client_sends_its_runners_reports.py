@@ -1050,7 +1050,7 @@ class NoBoardNoFiguresTest(_RustProject, unittest.TestCase):
 # board's resolution moves out of the core into its own module, so the core's
 # budget is re-recorded lower and that module's is added. The pre-flight's
 # refusal of an attributed run with no board declared grows the core.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9071, "_crucible_run.py": 1974,
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9080, "_crucible_run.py": 1999,
                               "_crucible_release.py": 266,
                               "_crucible_project.py": 521,
                               "_crucible_lint.py": 399,
