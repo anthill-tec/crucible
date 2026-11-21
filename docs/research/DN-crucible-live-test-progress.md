@@ -1,0 +1,236 @@
+# DN — a run reports its progress test by test
+
+**Status** settled with the user 2026-10-20 · **Lands in** CR-CRU-200 to CR-CRU-203 (0.4.0) · **Applies to** every
+stack; proven first on bun / TypeScript (bun test, Vitest, Playwright), then rust (nextest), python,
+maven, arduino, go.
+
+## What happens today
+
+A run's live progress is a count, not data.
+
+- Each client feeds its runner's console output, line by line, to a shared narrator that counts lines
+  matching one stack-specific pattern (bun's `(pass)`/`(fail)` or ✓/✗, nextest's human result lines,
+  maven's per-class lines). The total comes from the runner's own start line (nextest) or from
+  scanning test sources for `test(`/`it(` calls (bun).
+- A throttled heartbeat carries the text `running N/M · <file>` to the board, which shows it on the
+  agent's card. The board learns no test name, status or failure until the final report arrives.
+- Any runner the pattern does not know narrates nothing: a Vitest run through a declared script
+  (measured), and almost certainly Playwright (unmeasured).
+- Before the clean break (CR-CRU-226), `crucible.rawReport` named the runner's full report that the
+  board decoded (Playwright's JSON, which keeps every Gherkin step JUnit drops). "Raw" misnamed it: it
+  was the most decoded report the run had. It is now refused, and an entry's `stream` replaces it.
+
+## What each runner can stream
+
+| Stack | Runner | Live, structured, per test |
+|---|---|---|
+| bun / TS | `bun test` 1.4 | none: reporters are `junit` (at exit) and `dots`; its console result lines carry each test's name and status |
+| bun / TS | Vitest 5 | a reporter API (`onTestRunStart`, `onTestCaseResult`, `onTestModuleEnd`, `onTestRunEnd`) |
+| bun / TS | Playwright | a reporter API (`onBegin` with the total, `onTestBegin`, `onTestEnd`, `onStepEnd`, `onEnd`) |
+| rust | cargo-nextest 0.9 | native: `--message-format libtest-json` / `libtest-json-plus` (marked experimental) |
+| python | Crucible's own `subtest_runner.py` | ours to emit |
+| go | `go test -json` | native, stable |
+| maven | surefire | none built in (a JUnit Platform listener would be one); console lines per class |
+| arduino | the project's own native harness | the project's own to emit: `crucible-events` under the `CRUCIBLE_STREAM` make contract |
+
+## The design
+
+Three layers, the same for every stack.
+
+1. **Source.** While the runner works, an event stream is written to a file the client names through
+   an environment variable (the mechanism a `crucible.targets` entry's `junit: env:<VAR>` uses), so it never mixes
+   with console output. Where the runner has no structured stream, the source is its console: the
+   client relays the whole console as written, and the board reads the result lines from it
+   (CR-CRU-201's `bun-console` view codec for `bun test`).
+2. **Relay.** The client follows the stream and sends it, in throttled batches, to the run it opened
+   at start. It sends the stream as written; it decodes nothing.
+3. **Board.** The board decodes each batch with the codec the stream declares, keeps the open run's
+   live state (completed of total, current file, every failure as it happens), and pushes it over
+   the live feed.
+
+### The stream is the record (user ruling)
+
+Where a runner streams structured events, the stream file **is** the run's record; no final test
+report is read.
+
+- **Delivery.** The live batches are best-effort, but the stream is written to a file first. At
+  close the client sends whatever the board has not acknowledged, so the board holds the whole file:
+  the record is JUnit's equal, written one test at a time instead of at exit.
+- **Completeness.** A run-end event carries the runner's own totals. The board checks the tests it
+  holds against them; a mismatch flags the run instead of being trusted.
+  nextest's stream has no run-end and no runner totals (measured at CR-CRU-202's gap analysis): a nextest run is
+  checked against the total in the test list its client posts to the open run (`cargo nextest list`, CR-CRU-202 §S7).
+- **Where the stream is console only** (`bun test`, maven's surefire), the console lines give the
+  live view and the JUnit report stays the record: bun's console failures are free text, with no
+  structured message, type or trace.
+- **Coverage** (lcov, coverage.py, JaCoCo, llvm-cov) is known only at exit and stays a final report
+  on every stack.
+- **Playwright:** the shipped reporter streams each scenario as one test, and its Gherkin steps ride
+  inside that scenario's `test-end` (`steps`), so its JSON report is no longer needed. The board's
+  `playwright` codec is retired: a post naming it is refused as an unknown codec, and the runs stored
+  through it are migrated to framework `playwright-bdd` (schema v25), recounted by scenario, their
+  `codec` kept as the record of how each was filed. Neither Playwright config writes a `json` reporter.
+- **The `junit` readings are keyed by framework,** not by the client's stack: pytest's grouping by
+  classname applies to a run of framework `pytest`, and bun's console reading to a run of framework
+  `bun-test`, whatever the stack. A run that states no framework gets neither.
+
+| Source | The record | The live view |
+|---|---|---|
+| Structured stream: Vitest and Playwright (shipped reporters), nextest libtest JSON, go `-json`, the python runner Crucible owns, arduino's harness (the project's own, under `CRUCIBLE_STREAM`) | the stream file | the same stream, as it is written |
+| Console only: `bun test`, maven | the JUnit report | the console result lines, read on the board by a view codec (`bun test`'s by CR-CRU-201's `bun-console`, maven's surefire console by CR-CRU-237's `surefire-console`) |
+
+### Event format (user ruling)
+
+- **One Crucible event shape**, newline-delimited JSON: a run-start event carrying the total when the
+  runner knows it, and a test-end event per test (id, name, file, status, duration, failure). The
+  reporters Crucible ships and the runners Crucible owns emit it directly, decoded on the board by
+  one `crucible-events` codec.
+- **Native streams keep their own codecs:** nextest's libtest JSON, go's `test2json`, bun's console
+  result lines (`bun-console`). Each format is decoded once, on the board.
+
+### Reporters (user ruling)
+
+- The Vitest and Playwright reporters that emit the Crucible shape ship **inside the client
+  install**, beside the clients.
+- The project's config never names a machine path: the client hands the reporter's location to the
+  runner through a variable Crucible fixes, and the project's `vitest.config` / `playwright.config`
+  adds the reporter from that variable when it is set. The same config runs unchanged with no
+  client (CI, a developer's shell).
+
+### Declaration (user ruling: one table per script, clean break)
+
+A bun project declares, per `package.json` script, one table:
+
+```json
+"crucible": {
+  "targets": {
+    "test:e2e":  { "framework": "playwright-bdd", "stream": { "codec": "crucible-events", "path": "env:CRUCIBLE_STREAM" } },
+    "test:unit": { "framework": "bun-test", "junit": "flag", "console": "bun-console", "coverage": "lcov" }
+  }
+}
+```
+
+- **The modality is the script's name** (CR-CRU-225): a project selects its codecs by the testing tools of each
+  test modality it runs (unit, regression, and BDD where needed), and the modality is read from the script's name by
+  the template the client already reads (`test:<tier>`). The table does not restate it.
+- `framework` is required: the test framework the script runs, which the run carries to the board. For bun it is one
+  of `bun-test`, `vitest`, `playwright` and `playwright-bdd`; `pytest`, `unittest`, `nextest`, `surefire`, `go-test`
+  and `arduino-native` are reserved for the other stacks (CR-CRU-225 P1). A script with no entry runs as `bun-test`.
+- `coverage` is optional: the coverage codec the client sends, refused unless the target can produce it (for bun,
+  `lcov` on a `junit: flag` target with framework `bun-test`). Undeclared, it is `lcov`, as before.
+- **Model B writes the table** (the Model B contract): modelb-axi's `init` offers the tools per modality for the
+  selected stacks and writes the table; `migrate` detects a legacy project's tools and older keys, proposes a table
+  and confirms it with the user; `update` brings an older table to the current shape.
+- A target declares **either** a structured `stream` (its record and its live view) **or** a
+  `junit` report (its record), optionally with the `console` codec that reads its live view.
+- `stream` is new: the event codec and how the runner is told where to write the file.
+- `junit` replaced `crucible.reportPath.<script>` (`flag` or `env:<VAR>`).
+- `crucible.rawReport` has no field of its own: its only use, Playwright's step-keeping JSON, is replaced
+  by the stream, so its refusal names `stream`.
+- An undeclared target keeps today's default: `bun test` with the `flag` JUnit report and the bun
+  console view.
+- **Clean break** (CR-CRU-226): a `package.json` declaring `crucible.reportPath`, `crucible.rawReport` or
+  `crucible.testScript`, with or without `crucible.targets`, is refused by `test`, `regression`, every tier verb and
+  `pre-merge-gate`, before anything is posted, as `--phase` was when it became `--role`. The gate refuses it before
+  its tsc step, which would otherwise file a compile result. The refusal (`declaration-refused`) names each key it
+  found beside what replaced it (`junit`, `stream`, the entry marked `"test": true`) and `crucible.targets`, exits
+  non-zero and files nothing. The client keeps no reader of the old keys.
+- **The script `test` runs is a table field** (CR-CRU-226): the entry marked `"test": true`, which replaces
+  `crucible.testScript`. `test`, `regression` and the gate (`pre-merge-gate`) read the marker, and the tier verbs
+  ignore it: `regression` and the gate's whole-suite step run the marked script in place of `bun test`.
+  - `test`, `regression` and the gate each refuse, naming `crucible.targets` and the entry, before anything is
+    posted (the gate before its tsc step): two marked entries (naming both), a marker that is not `true` (an
+    unmarked entry omits the field, so `false` is refused too), and a marked entry whose script is not in `scripts`
+    or whose body is empty.
+  - `test <files>` runs the marked script with the files and the name filter as its passthrough, and the run
+    carries the entry's framework. The filter flag follows the framework: `-t` for `bun-test` and `vitest`,
+    `--grep` for `playwright` and `playwright-bdd`. `test` with no files runs the whole script under the verb
+    `test`, with no tier. With no entry marked, `test` runs `bun test`, unchanged.
+- **The gate runs every declared framework** (CR-CRU-226). `pre-merge-gate` joins each `test:` script with its
+  entry, so each declared suite carries its framework (`bun-test` when it has no entry).
+  - On an unmarked project, a `bun-test` suite is covered by the whole-suite `bun test` run, as before. A suite of
+    any other framework runs in the gate's own process, through its own script, filed under the tier its name names, else `regression`; its
+    row carries its own counts and outcome and the client that ran it, and its counts are added to the gate's totals.
+  - On an unmarked project, when every declared bun suite is of another framework, the whole-suite run is skipped
+    and the envelope's `wholeSuite` says so. A project whose `*.test.ts` files both runners collect is the project's to separate.
+  - `--suites` naming a non-`bun-test` target runs only that target; on an unmarked project, naming a `bun-test`
+    target runs the whole suite and records the `bun-test` targets it covered.
+  - A non-`bun-test` suite that runs on its own measures no coverage and adds no `coverage-not-measured` warning;
+    on an unmarked project the gate's coverage is the `bun-test` code's, as before.
+  - A non-`bun-test` entry whose key is not a `test:` script, or is a `test:` key with no script of that name in
+    `scripts`, is refused by the gate before anything runs, naming it, since the gate could not otherwise see it. The
+    entry marked `"test": true` is exempt: the gate runs it as its whole-suite run. The `e2e` tier stays outside the
+    gate, whatever its framework.
+  - On a marked project, the marked entry's script is the gate's whole-suite run, in place of `bun test`:
+    - a full gate always runs it and never skips it;
+    - it covers only its own suite, when the marked entry is itself a declared suite, and nothing else is assumed
+      to be collected by it;
+    - every other declared bun suite runs on its own, whatever its framework, measuring no coverage;
+    - a marked whole-suite run that cannot take bun's coverage flags (its entry is not `bun-test` with
+      `junit: flag`) measures none and carries one `coverage-not-measured` warning, and a green gate stays
+      `ok: true`;
+    - `--suites` runs only the suites it names: naming the marked script's own suite runs the marked script as the
+      whole-suite run, naming any other suite runs that suite alone and the marked script does not run, and a
+      marked script keyed outside `test:<tier>` (`test`, say) cannot be named.
+  - The other stacks' gates are unchanged: their suites declare no framework of their own. The python gate's
+    tiers state their runner, `pytest` or `unittest`, as each run's framework.
+- The other stacks declare the same three facts in their own place (`crucible.toml` for cargo,
+  python, maven, arduino, go); the vocabulary is the same.
+- **Python unittest declares no stream** (CR-CRU-224 amends this paragraph for that case): its
+  runner is Crucible's own (`clients/subtest_runner.py`), which always writes the
+  `crucible-events` stream to the file `CRUCIBLE_STREAM` names, so there is nothing to declare.
+
+### Totals
+
+The run-start event carries the runner's own total where it has one (Playwright's `onBegin`, go's
+list). nextest's stream states none up front (a binary is announced only when it starts): its total is the test list
+the client posts once cargo has built (CR-CRU-202 §S7, CR-CRU-233). bun keeps its source scan, which already excludes nothing it should
+count.
+
+Vitest's `run-start` states no total (CR-CRU-225 P9): its `onTestRunStart` receives only the files,
+before anything is collected, so the live view shows a count with no total until the run ends.
+
+## Where it lands (user ruling)
+
+In 0.4.0, wave 8, after CR-CRU-152 moves every stack's report decoding onto the board (user ruling:
+split by available number, all in the current wave, the date unchanged). CR-CRU-200 was split by layer at its gap analysis
+(user ruling 2026-10-30): the board's live view first, CR-CRU-223; then the board, CR-CRU-200; then the client,
+CR-CRU-224:
+
+| CR | Lands | Depends on |
+|---|---|---|
+| CR-CRU-223 | the board's live view (storyboard F25, option A): the running card's progress, the live drill-in at `/run/<runId>`, the `RunLive` contract, `Store#runLive`'s signature, the open-run brief's `live` and the `/live` route | — |
+| CR-CRU-200 | the stream route, the `crucible-events` codec, the stream as the record and its completeness check, the body of `Store#runLive` and the change frames that move the live view | 152, 206, 219, 220, 223 |
+| CR-CRU-224 | the python client relays its runner's test stream; proven on the python runner Crucible owns | 200 |
+| CR-CRU-201 | bun's console live view: the board's view-only stream mode and the `bun-console` codec; the JUnit report stays the record (split 2026-10-31, user ruling) | 200, 224 |
+| CR-CRU-225 | the `crucible.targets` table declares each script's framework, record, console and coverage; the run carries its framework; the shipped Vitest reporter streams the Crucible shape | 200, 224, 201 |
+| CR-CRU-228 | the shipped Playwright reporter streams each scenario as a test with its steps; the specification view reads it (split from 225, 2026-11-01, user ruling) | 225 |
+| CR-CRU-226 | the clean break: `crucible.reportPath`, `crucible.rawReport` and `crucible.testScript` refused by every verb and by the gate before its tsc step; `test` runs the entry marked `"test": true`; the gate runs each non-`bun-test` suite in process | 225, 228 |
+| CR-CRU-229 | the `playwright` codec and Playwright's JSON report retire, its stored runs migrate, and the `junit` readings follow the framework (split from 226, 2026-11-04, user ruling) | 226, 228 |
+| CR-CRU-202 | the board decodes nextest's libtest JSON as a rust run's record and live view; an open run takes nextest's test list (its total and binary ids) | 200 |
+| CR-CRU-233 | the rust client streams through nextest on every verb, posts the list, and its JUnit path goes (split from 202, 2026-11-06, user ruling) | 202 |
+| CR-CRU-203 | the arduino runner streams; maven's console live view, through CR-CRU-201's view-only mode | 200, 201 |
+
+Go's stream lands with its client (CR-CRU-195), which therefore also depends on CR-CRU-200.
+
+CR-CRU-226 was split at its gap analysis (user ruling 2026-11-04): it keeps the client's half, and CR-CRU-229 takes
+the board's. CR-CRU-229 retires the `playwright` codec and Playwright's JSON report (`STREAM_KEPT_REPORTS` keeps only
+the JUnit report), migrates the runs stored through the codec, and keys the `junit` readings by framework rather than
+by stack. What a bun project's `regression` runs stays CR-CRU-222's.
+
+What CR-CRU-200 leaves to later CRs (its non-goals):
+
+- Playwright's steps are in the stored run's record, not in the live state (CR-CRU-228, user ruling 3): an open BDD
+  run's live state holds the counts, the current file and the failures, as CR-CRU-200's does for any stream.
+- A stream that only feeds the view, and is never the run's record (`bun-console`, maven's console), is CR-CRU-201's
+  and CR-CRU-203's to define, with its codec.
+
+## Open for CR-CRU-200's gap analysis
+
+- The board's live view — settled (storyboard F25, option A; CR-CRU-223): the running card
+  (`RunningCard`) shows the open run's progress and opens the run detail's live mode (`LiveRunBody`) at
+  `/run/<runId>`, which reads `GET /api/v2/runs/<runId>/live` (`handleRunLive`) through `Store#runLive`.
+- nextest's libtest JSON is marked experimental: measure what it needs to run and how stable it is.
+- How often the relay sends, and what the board keeps of a stream once the final report closes the
+  run.
+- Maven's source: a shipped JUnit Platform listener, or its console lines.

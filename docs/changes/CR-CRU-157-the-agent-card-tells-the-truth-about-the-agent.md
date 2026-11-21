@@ -1,6 +1,6 @@
 # CR-CRU-157 — the agent card tells the truth about the agent
 
-**Type** fix · **Points** 13 (planning game 2026-09-27: 5; 8 on 2026-10-03; re-set at gap analysis 2026-10-05) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-09-27; scope extended 2026-10-01 (live runs for every stack, Sandesh #1412)
+**Type** fix · **Points** 13 (planning game 2026-09-27: 5; 8 on 2026-10-03; re-set at gap analysis 2026-10-05) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** DONE — filed 2026-09-27; scope extended 2026-10-01 (live runs for every stack, Sandesh #1412)
 
 ## Problem
 

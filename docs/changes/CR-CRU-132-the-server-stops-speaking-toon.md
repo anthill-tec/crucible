@@ -1,6 +1,6 @@
 # CR-CRU-132 — the server stops speaking TOON
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** fix
 **Priority:** P3
 **Depends on:** CR-CRU-005, CR-CRU-046

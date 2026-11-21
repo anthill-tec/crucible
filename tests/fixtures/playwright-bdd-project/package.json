@@ -1,0 +1,8 @@
+{
+  "name": "crucible-playwright-bdd-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:bdd": "bunx bddgen && bunx playwright test"
+  }
+}

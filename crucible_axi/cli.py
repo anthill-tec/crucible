@@ -173,6 +173,7 @@ def cmd_install(args) -> int:
     # when an upgrade re-exec'd the live service (CR-CRU-071 AC9), which drops
     # every SSE subscriber and so is never left to be inferred.
     stage_fields = []
+    help_lines: list[str] = []
     for stage in stages:
         fields = {"name": stage["name"], "path": stage["path"]}
         if stage.get("bun"):
@@ -196,10 +197,32 @@ def cmd_install(args) -> int:
             fields["server_config"] = (
                 {"path": install.abbreviate_home(str(written))} if written
                 else {"reason": server_config.get("reason")})
+        # A re-install's fills: each file it filled with the key and the value
+        # written, and each it left alone with why, so the operator reads the
+        # port and the url this machine now carries. Paths are abbreviated
+        # for display only, like `server_config`'s; the stage row keeps them
+        # absolute.
+        for field in ("filled", "notFilled"):
+            if stage.get(field):
+                fields[field] = [
+                    {**entry,
+                     "path": install.abbreviate_home(str(entry["path"]))}
+                    for entry in stage[field]]
+        # The install file left declaring no board: the row names it and
+        # the key, and the help says how to declare one, because a client
+        # with no board declared refuses.
+        board_undeclared = stage.get("boardUndeclared")
+        if board_undeclared:
+            shown = install.abbreviate_home(str(board_undeclared["path"]))
+            fields["boardUndeclared"] = {**board_undeclared, "path": shown}
+            help_lines.append(
+                f"declare {board_undeclared['key']} = "
+                f"\"http://<host>:<port>\" in {shown}, or re-install on a "
+                f"machine with a server")
         stage_fields.append(fields)
     result_fields = {
         "stages": stage_fields,
-        "help": ["status"],
+        "help": ["status", *help_lines],
     }
     axi.emit_axi(
         verb="install",
@@ -390,6 +413,11 @@ def cmd_serve(args) -> int:
         returncode = subprocess.run(argv, env=env).returncode
     except KeyboardInterrupt:
         return 130
+    except OSError as exc:
+        # The binary could not be started (removed, not executable): the same
+        # error line and exit 1 as the two guarded sites above, no envelope.
+        print(f"crucible-axi serve: {exc}", file=sys.stderr)
+        return 1
     return returncode if returncode >= 0 else 128 - returncode
 
 
@@ -399,6 +427,23 @@ _COMMANDS = {
     "uninstall": cmd_uninstall,
 }
 
+#: The commands whose contract is ONE envelope on stdout. `serve` is not one:
+#: its stdout belongs to the server, so it reports its own failures as an
+#: error line on stderr.
+_ENVELOPED_COMMANDS = frozenset({"install", "uninstall"})
+
+
+def _run_enveloped(handler, args) -> int:
+    """Run an enveloped command, reporting an `OSError`/`ValueError` that
+    escapes it through the same `ok:false` envelope it emits, never a
+    traceback."""
+    try:
+        return handler(args)
+    except (OSError, ValueError) as exc:
+        axi = _load_client_module("_crucible_axi")
+        axi.bind_project_dir(args.target_dir)
+        return axi.emit_escaped_failure(args.command, exc)
+
 
 def main(argv=None) -> int:
     parser = _build_parser()
@@ -407,4 +452,6 @@ def main(argv=None) -> int:
     if handler is None:
         parser.print_help()
         return 1
+    if args.command in _ENVELOPED_COMMANDS:
+        return _run_enveloped(handler, args)
     return handler(args)

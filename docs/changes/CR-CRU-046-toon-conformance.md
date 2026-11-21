@@ -1,6 +1,6 @@
 # CR-CRU-046 — Adopt the official TOON libraries on both stacks; retire our hand-written codecs
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (wire-format correctness + dependency adoption)
 **Priority:** P1 — what we emit today is not valid TOON; an official parser silently mis-reads it
 **Depends on:** CR-CRU-005 (the subset serializer), CR-CRU-030 (fleet TOON-AXI + golden fixtures), CR-CRU-009 (`crucible-axi` packaging + client manifest)

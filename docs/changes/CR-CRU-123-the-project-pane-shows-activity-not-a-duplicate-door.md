@@ -1,6 +1,6 @@
 # CR-CRU-123 — the Project pane shows activity, not a duplicate door
 
-**Status:** PENDING (0.2.0 — born mid-release, D4)
+**Status:** DONE (0.2.0 — born mid-release, D4)
 **Type:** feature
 **Priority:** P3
 **Depends on:** none

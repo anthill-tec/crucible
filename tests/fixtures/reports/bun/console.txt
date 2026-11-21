@@ -1,0 +1,70 @@
+bun test v1.4.2 (744846f84)
+
+tests/text.test.ts:
+(pass) shouts [0.05ms]
+4 | test("shouts", () => {
+5 |   expect(shout("hi")).toBe("HI!");
+6 | });
+7 | 
+8 | test("shouts the wrong thing", () => {
+9 |   expect(shout("hi")).toEqual("hi");
+                          ^
+error: expect(received).toEqual(expected)
+
+Expected: "hi"
+Received: "HI!"
+
+      at <anonymous> (/project/tests/text.test.ts:9:23)
+(fail) shouts the wrong thing [0.13ms]
+(pass) whispers after a busy pause [2.77ms]
+(fail) waits longer than its budget [20.01ms]
+  ^ this test timed out after 20ms.
+
+tests/math.test.ts:
+(pass) math > adds two numbers [0.02ms]
+(pass) math > divides evenly [0.03ms]
+ 9 |   test("divides evenly", () => {
+10 |     expect(divide(9, 3)).toBe(3);
+11 |   });
+12 | 
+13 |   test("adds with a wrong expectation", () => {
+14 |     expect(add(2, 2)).toBe(5);
+                           ^
+error: expect(received).toBe(expected)
+
+Expected: 5
+Received: 4
+
+      at <anonymous> (/project/tests/math.test.ts:14:23)
+(fail) math > adds with a wrong expectation [0.05ms]
+(pass) math > clamp > clamps below the range [0.02ms]
+(skip) math > clamp > clamps above the range
+2 |   return a + b;
+3 | }
+4 | 
+5 | export function divide(a: number, b: number): number {
+6 |   if (b === 0) {
+7 |     throw new Error("division by zero");
+                                          ^
+error: division by zero
+      at divide (/project/src/math.ts:7:39)
+      at <anonymous> (/project/tests/math.test.ts:28:5)
+(fail) math > divides by zero and throws [0.03ms]
+27 |   test("divides by zero and throws", () => {
+28 |     divide(1, 0);
+29 |   });
+30 | 
+31 |   test("throws a plain object", () => {
+32 |     throw {};
+                ^
+error
+      at <anonymous> (/project/tests/math.test.ts:32:12)
+(fail) math > throws a plain object [0.03ms]
+(todo) math > multiplies two numbers
+
+ 5 pass
+ 1 skip
+ 1 todo
+ 5 fail
+ 7 expect() calls
+Ran 12 tests across 2 files. [26.00ms]

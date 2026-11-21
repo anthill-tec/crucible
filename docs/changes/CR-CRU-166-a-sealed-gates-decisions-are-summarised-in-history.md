@@ -1,6 +1,6 @@
 # CR-CRU-166 — a sealed gate's decisions are summarised in history
 
-**Type** feature · **Points** 5 (set at gap analysis 2026-10-05) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-162 · **Status** PENDING — filed 2026-10-05
+**Type** feature · **Points** 5 (set at gap analysis 2026-10-05) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-162 · **Status** DONE — filed 2026-10-05
 
 ## Problem
 

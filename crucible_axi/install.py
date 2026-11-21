@@ -28,7 +28,8 @@ only after they exist. Before this, nothing materialised the directory and
 every published path dangled.
 """
 
-from __future__ import annotations
+# pi-lens-ignore: I001 — pi-lens lints with its own ruff configuration, which sets no target version, so ruff files `tomllib` as third-party whatever the declared floor
+from __future__ import annotations  # noqa: I001
 
 import inspect
 import json
@@ -212,10 +213,10 @@ _NO_USER_BUS_REASON = (
 XDG_DATA_HOME_ENV_VAR = "XDG_DATA_HOME"
 _DEFAULT_DATA_HOME_SUFFIX = (".local", "share")
 STORE_DIR_NAME = "crucible"
-# The packaged fleet, exactly (CR-CRU-090 §S1). The five stack clients plus:
+# The packaged fleet, exactly (CR-CRU-090 §S1). The six stack clients plus:
 # `_crucible_axi.py` (the shared AXI envelope) and `toon.py` (the codec) —
-# which the five load BY FILE PATH from their OWN directory, so a clients-only
-# copy lays down five UNRUNNABLE clients — plus `STATUS-CONTRACT.md`, the path
+# which the six load BY FILE PATH from their OWN directory, so a clients-only
+# copy lays down six UNRUNNABLE clients — plus `STATUS-CONTRACT.md`, the path
 # `manifest.build_manifest` publishes as `status`.
 # CR-CRU-138 §S4 — and `crucible.toml`, the distribution's own limit
 # declarations, which belong to this list for exactly the reason `toon.py`
@@ -226,16 +227,45 @@ STORE_DIR_NAME = "crucible"
 # what stops it aliasing the OPERATOR's editable file at `<target-dir>`: that
 # aliasing is what let an operator's edit redefine the build's own
 # recommendations, and what made an ordinary purge crash every verb.
+# And `subtest_runner.py`, the runner `python-crucible.py` spawns BY FILE PATH
+# from its own directory: stdlib unittest with every subtest counted, the run
+# streamed as Crucible events (CR-CRU-224 retired its JUnit reporter).
+# And `_crucible_run.py`, the run and ingest pipeline `_crucible_axi.py` reads
+# BY FILE PATH from its own directory as it loads, so an install that omits it
+# lays down a shared module that cannot load at all.
+# And `_crucible_release.py`, the release notes verb's module, which
+# `_crucible_axi.py` reads by file path from its own directory as it loads, for
+# the same reason.
+# And `_crucible_project.py`, a project's own verbs' module, loaded the same way.
+# And `_crucible_lint.py`, the shared lint runner, loaded the same way.
+# And `_crucible_board.py`, the board a client posts to, loaded the same way.
+# And `reporters/vitest-crucible.ts` and `reporters/playwright-crucible.ts`,
+# the shipped Vitest and Playwright reporters, in the `reporters/` subdirectory the bun client hands a runner as
+# `CRUCIBLE_REPORTERS`; a name may carry a `/`-separated subdirectory, which
+# `run_fleet_stage` creates under the same confinement rule as a file.
+# And `crucible-declaration.schema.json`, the stack-declaration schema a
+# declaration writer reads; `manifest.build_manifest` lists it as
+# `declaration_schema`, its version read from the packaged copy.
 FLEET_FILES = (
     "bun-crucible.py",
     "python-crucible.py",
     "rust-crucible.py",
     "mvn-crucible.py",
     "arduino-crucible.py",
+    "go-crucible.py",
     "_crucible_axi.py",
+    "_crucible_run.py",
+    "_crucible_release.py",
+    "_crucible_project.py",
+    "_crucible_lint.py",
+    "_crucible_board.py",
     "toon.py",
     "STATUS-CONTRACT.md",
     manifest.CONFIG_FILENAME,
+    "subtest_runner.py",
+    "reporters/vitest-crucible.ts",
+    "reporters/playwright-crucible.ts",
+    manifest.DECLARATION_SCHEMA_FILENAME,
 )
 
 # The directory the fleet lands in, under `--target-dir`. `manifest` anchors
@@ -368,7 +398,8 @@ _DEFAULT_LISTENER_HOST = "127.0.0.1"
 # Hosts that name "every interface" rather than a reachable address. A client
 # cannot POST to `http://0.0.0.0:<port>`, so the URL written beside such a bind
 # names the loopback the operator can actually reach.
-_UNSPECIFIED_HOSTS = ("0.0.0.0", "::", "")
+# pi-lens-ignore: S104 — names the every-interface hosts so they can be recognised, never binds one
+_UNSPECIFIED_HOSTS = ("0.0.0.0", "::", "")  # noqa: S104
 
 # The envelope `warnings[]` code an exhausted range fails an install with. A
 # code of its own, not the generic `stage-failed`: `cli` matches on it to decide
@@ -468,32 +499,32 @@ def _resolve_listener(destination: str, source: str) -> dict | None:
     """The listener this machine's server should use, as
     `{"host", "port", "url"}`, or None when nothing declares one.
 
-    THE decision §S1a exists to make, and it has exactly two branches:
+    It has three branches:
 
-    * a file already at `destination` that NAMES a port DECIDES. It is never
-      re-probed, not even while an instance is listening on the port it names —
-      renumbering a running board orphans every client whose own file names the
-      old port.
-    * otherwise the range is read from the file the install RESOLVED (the
-      template it is about to copy) and probed, first bindable port winning.
-      The bounds are data in that file rather than a constant here, so an
-      operator can narrow them and a test can declare its own.
+    * a file already at `destination` that names an integer port DECIDES. It
+      is never re-probed, not even while an instance is listening on the port
+      it names: renumbering a running board orphans every client whose own
+      file names the old port.
+    * a file already at `destination` that names NO integer port (the key is
+      absent, or present with a mistyped value the server does not read)
+      takes the template's own `port`, with no probe. That is the port the
+      provisioned server boots on today, so it is the live one; a probe would
+      move a running board off its port at its next restart.
+    * no file there yet: the range is read from the file the install RESOLVED
+      (the template it is about to copy) and probed, first bindable port
+      winning. The bounds are data in that file rather than a constant here,
+      so an operator can narrow them and a test can declare its own. A
+      template declaring no range is not an error: nothing is probed and its
+      own `port` is what the copy carries.
 
-    The gate is the absence of a CONFIGURED PORT, deliberately, and not the
-    absence of the FILE: a `crucible.toml` that exists but declares no
-    `[server] port` — hand-placed, carried over from an older layout, or
-    written by anything that is not this installer — names nothing to honour,
-    so honouring it means falling through to the template's shipped default.
-    That default is `3849` on a machine whose production instance already holds
-    it, which is the silent fallback §S1a forbids in the one state where it is
-    hardest to notice: the install reports success and the next boot collides.
-
-    A template declaring no range is not an error: nothing is probed and its
-    own `port` is what the copy carries, exactly as before this CR.
+    A template declaring no `port` gives None wherever the answer falls to it.
+    A TOML boolean is not an integer port here, in either file: the server
+    does not read one.
     """
     declared = _config_table(source, manifest.SERVER_TABLE)
+    exists = os.path.lexists(destination)
     configured = (_config_table(destination, manifest.SERVER_TABLE)
-                  if os.path.lexists(destination) else {})
+                  if exists else {})
 
     host = configured.get(manifest.SERVER_HOST_KEY,
                           declared.get(manifest.SERVER_HOST_KEY))
@@ -501,14 +532,17 @@ def _resolve_listener(destination: str, source: str) -> dict | None:
         host = _DEFAULT_LISTENER_HOST
 
     port = configured.get(manifest.SERVER_PORT_KEY)
-    if not isinstance(port, int):
+    configured_port = isinstance(port, int) and not isinstance(port, bool)
+    if not configured_port and exists:
+        port = declared.get(manifest.SERVER_PORT_KEY)
+    elif not configured_port:
         low = declared.get(manifest.SERVER_PORT_RANGE_MIN_KEY)
         high = declared.get(manifest.SERVER_PORT_RANGE_MAX_KEY)
         if isinstance(low, int) and isinstance(high, int):
             port = _first_bindable_port(host, low, high, source)
         else:
             port = declared.get(manifest.SERVER_PORT_KEY)
-    if not isinstance(port, int):
+    if not isinstance(port, int) or isinstance(port, bool):
         return None
     return {"host": host, "port": port, "url": _board_url(host, port)}
 
@@ -546,6 +580,10 @@ def server_config_plan() -> dict:
         listener = _resolve_listener(destination, source)
         if listener is not None:
             plan["listener"] = listener
+            # The rule a url is built by, carried so the stage can build one
+            # for the port the server file names after its fill without
+            # importing this module back.
+            plan["board_url"] = _board_url
         return plan
     return {
         "path": destination,
@@ -809,7 +847,8 @@ def _guarantee_bun(no_bun_bootstrap: bool = False) -> str:
     if bun is None:
         opted_out = _bun_bootstrap_disabled(no_bun_bootstrap)
         if not opted_out:
-            subprocess.run(_BUN_INSTALL_COMMAND, shell=True, check=False)
+            # pi-lens-ignore: python-command-injection, python-subprocess-shell, S602 — runs the fixed constant Bun installer pipe, no caller input reaches it; --no-bun-bootstrap opts out
+            subprocess.run(_BUN_INSTALL_COMMAND, shell=True, check=False)  # noqa: S602
         bun = _resolve_bun_path()
         if bun is None:
             why = ("and the automatic bootstrap is disabled "
@@ -1294,6 +1333,8 @@ def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
         if not os.path.isfile(source):
             raise FileNotFoundError(
                 f"packaged fleet file missing at source: {source}")
+        if _confined_parent_dirs(clients_dir, name):
+            converged = False
         destination = os.path.join(clients_dir, name)
         # §S1's confinement rule, ENFORCED: the copy lands inside
         # `<target-dir>/clients/` and nowhere else. `os.path.isfile` and
@@ -1321,6 +1362,26 @@ def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
         shutil.copymode(source, destination)
         converged = False
     return {"path": clients_dir, "converged": converged}
+
+
+def _confined_parent_dirs(clients_dir: str, name: str) -> bool:
+    """Create the subdirectories a packaged `name` (a `/`-separated path
+    under `clients/`, e.g. `reporters/vitest-crucible.ts`) sits in, confined
+    as its file is: a SYMLINK at one of them is replaced by a real directory
+    and never followed, so nothing lands through it outside the target dir.
+
+    Returns True when a link was replaced, which the stage reports as
+    `converged: False`, exactly as it does for a replaced file link.
+    """
+    replaced = False
+    directory = clients_dir
+    for part in name.split("/")[:-1]:
+        directory = os.path.join(directory, part)
+        if os.path.islink(directory):
+            os.unlink(directory)
+            replaced = True
+        os.makedirs(directory, exist_ok=True)
+    return replaced
 
 
 # Module-level, in-place-mutable stage table (patched by tests via
@@ -1496,6 +1557,21 @@ def run_install(target_dir, stage_runners=None, force=False,
                 "path": str(written) if written else None,
                 "reason": server_config.get("reason"),
             }
+        # What the `[manifest]` stage filled into a file that already existed
+        # (`{path, key, value}`) and what it could not safely touch
+        # (`{path, key, reason}`), each with the ABSOLUTE path, for the same
+        # reason as `server_config`'s: it names the file to look at.
+        for field in ("filled", "notFilled"):
+            entries = result.get(field)
+            if entries:
+                stage[field] = [dict(entry) for entry in entries]
+        # The install file the `[manifest]` stage left declaring no board
+        # (`{path, key}`, the path ABSOLUTE for the same reason): a client
+        # with no board declared refuses, so the operator is told where to
+        # declare one.
+        board_undeclared = result.get("boardUndeclared")
+        if board_undeclared:
+            stage["boardUndeclared"] = dict(board_undeclared)
         # A RESTART is disclosed (CR-CRU-071 AC9): it drops every live SSE
         # subscriber, so an operator watching an upgrade must see that it
         # happened on purpose rather than infer it from a broken stream.

@@ -1,0 +1,79 @@
+=== RUN   TestPass
+--- PASS: TestPass (0.00s)
+=== RUN   TestFailMulti
+    a_test.go:10: first line
+        second line
+        third line
+    a_test.go:11: a log line
+--- FAIL: TestFailMulti (0.00s)
+=== RUN   TestSkip
+    a_test.go:13: not today
+--- SKIP: TestSkip (0.00s)
+=== RUN   TestSubs
+=== RUN   TestSubs/ok
+=== RUN   TestSubs/bad
+    a_test.go:16: sub failed
+=== RUN   TestSubs/skipped
+    a_test.go:17: sub skip reason
+=== RUN   TestSubs/nest
+=== RUN   TestSubs/nest/deep
+=== RUN   TestSubs/nest/deep_bad
+    a_test.go:20: deep failed
+--- FAIL: TestSubs (0.00s)
+    --- PASS: TestSubs/ok (0.00s)
+    --- FAIL: TestSubs/bad (0.00s)
+    --- SKIP: TestSubs/skipped (0.00s)
+    --- FAIL: TestSubs/nest (0.00s)
+        --- PASS: TestSubs/nest/deep (0.00s)
+        --- FAIL: TestSubs/nest/deep_bad (0.00s)
+=== RUN   TestParentFailsBeyond
+=== RUN   TestParentFailsBeyond/ok
+=== NAME  TestParentFailsBeyond
+    a_test.go:25: parent body failure
+--- FAIL: TestParentFailsBeyond (0.00s)
+    --- PASS: TestParentFailsBeyond/ok (0.00s)
+=== RUN   TestParentAllPassSubs
+=== RUN   TestParentAllPassSubs/x
+=== RUN   TestParentAllPassSubs/y
+--- PASS: TestParentAllPassSubs (0.00s)
+    --- PASS: TestParentAllPassSubs/x (0.00s)
+    --- PASS: TestParentAllPassSubs/y (0.00s)
+=== RUN   TestPar1
+=== PAUSE TestPar1
+=== RUN   TestPar2
+=== PAUSE TestPar2
+=== RUN   TestParSubs
+=== RUN   TestParSubs/s0
+=== PAUSE TestParSubs/s0
+=== RUN   TestParSubs/s1
+=== PAUSE TestParSubs/s1
+=== CONT  TestParSubs/s0
+=== CONT  TestParSubs/s1
+--- PASS: TestParSubs (0.00s)
+    --- PASS: TestParSubs/s0 (0.00s)
+    --- PASS: TestParSubs/s1 (0.00s)
+=== CONT  TestPar1
+    a_test.go:31: p1
+--- PASS: TestPar1 (0.00s)
+=== CONT  TestPar2
+    a_test.go:32: p2 fails
+--- FAIL: TestPar2 (0.00s)
+=== RUN   FuzzF
+=== RUN   FuzzF/seed#0
+--- PASS: FuzzF (0.00s)
+    --- PASS: FuzzF/seed#0 (0.00s)
+=== RUN   ExampleHello
+--- PASS: ExampleHello (0.00s)
+=== RUN   ExampleBad
+--- FAIL: ExampleBad (0.00s)
+got:
+nope
+want:
+hello
+FAIL
+FAIL	example.com/mod/pa	0.002s
+=== RUN   ExampleOnly
+--- PASS: ExampleOnly (0.00s)
+PASS
+ok  	example.com/mod/pex	0.002s
+FAIL

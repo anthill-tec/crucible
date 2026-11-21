@@ -1,6 +1,6 @@
 # CR-CRU-052 — Projects can be created but never deleted; seeded fixtures leave permanent dead state
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** feature (missing lifecycle primitive) + patch (test hygiene)
 **Priority:** P1 — six of the nine projects on the live dog-food board are residue, and there is no
 supported way to remove any of them

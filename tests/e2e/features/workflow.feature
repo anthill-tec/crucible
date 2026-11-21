@@ -73,7 +73,7 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
   # capability-conditional rule, not the old per-event cycleId-linkage
   # carve-out — so an unlinked run there now renders a plain card, never a
   # phantom pair (pinned at the unit level in
-  # tests/home-marker-parity.test.ts's "§S3.4 — vestige cleanout" suite).
+  # tests/integration/home-marker-parity.test.ts's "§S3.4 — vestige cleanout" suite).
   # The classic heuristic-marker assertion stays meaningful only on a
   # PLANLESS project (the CR-011 §S0b fallback) — moved here, onto its own
   # dedicated second project, per this file's existing precedent of one

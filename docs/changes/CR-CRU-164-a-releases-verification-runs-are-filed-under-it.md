@@ -1,6 +1,6 @@
 # CR-CRU-164 — a release's verification runs are filed under the release
 
-**Type** feature · **Points** 8 (re-scored at gap analysis 2026-10-07; was 5) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-157 · **Status** PENDING — filed 2026-10-01; amended at gap analysis 2026-10-07 (user-approved)
+**Type** feature · **Points** 8 (re-scored at gap analysis 2026-10-07; was 5) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-157 · **Status** DONE — filed 2026-10-01; amended at gap analysis 2026-10-07 (user-approved)
 
 ## Problem
 

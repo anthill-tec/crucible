@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" failures="1" errors="0" uuid="ec50ef2c-a719-4510-ac70-5f425ddc95f7" timestamp="2026-11-06T23:37:57.203+05:30" time="0.004">
+    <testsuite name="nxshapes::shapes" tests="1" disabled="0" errors="0" failures="1">
+        <testcase name="returns_err" classname="nxshapes::shapes" timestamp="2026-11-06T23:37:57.203+05:30" time="0.003">
+            <failure message="Error: &quot;the result is an error&quot;" type="test failure with exit code 101">Error: &quot;the result is an error&quot;
+test returns_err ... FAILED
+
+failures:
+
+failures:
+    returns_err
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s</failure>
+            <system-out>
+running 1 test
+Error: &quot;the result is an error&quot;
+test returns_err ... FAILED
+
+failures:
+
+failures:
+    returns_err
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err>(stdout and stderr are combined)</system-err>
+        </testcase>
+    </testsuite>
+</testsuites>

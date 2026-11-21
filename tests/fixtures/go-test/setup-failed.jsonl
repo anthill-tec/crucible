@@ -1,0 +1,6 @@
+{"ImportPath":"./...","Action":"build-output","Output":"# ./...\n"}
+{"ImportPath":"./...","Action":"build-output","Output":"pattern ./...: directory prefix . does not contain main module or its selected dependencies\n"}
+{"ImportPath":"./...","Action":"build-fail"}
+{"Time":"2026-11-09T01:38:05.911277259+05:30","Action":"start","Package":"./..."}
+{"Time":"2026-11-09T01:38:05.911393321+05:30","Action":"output","Package":"./...","Output":"FAIL\t./... [setup failed]\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:38:05.91140363+05:30","Action":"fail","Package":"./...","Elapsed":0,"FailedBuild":"./..."}

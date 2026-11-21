@@ -1,6 +1,6 @@
 # CR-CRU-051 — Propagate the run-envelope `files` count to the other four clients
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (fleet parity — gate visibility)
 **Priority:** P2 — an absent signal, not a wrong one; no client misreports today. Wave 4, i.e.
 0.1.0, per the queue's convention (Wave 4 = 0.1.0; only Wave 5 rows carry a 0.2.0 qualifier)

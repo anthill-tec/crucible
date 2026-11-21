@@ -336,15 +336,16 @@ export function workspaceTabs(project) {
 
 /**
  * The BDD tab's index: the BDD-bearing runs among `events`, newest first. A
- * run is BDD-bearing when it is a test run the playwright codec decoded (the
- * codec that produces Gherkin) — a junit unit run carries no specification.
+ * run is BDD-bearing when it is a test run whose framework is
+ * `playwright-bdd`, whatever filed it — a run of any other framework, or of
+ * none, carries no specification.
  * Each row carries only what the index names: when, who, its cycle (null
  * when the run carries none, so the row reads as unbound rather than being
  * hidden or attributed) and its verdict with counts.
  */
 export function bddIndexRows(events) {
   return (events ?? [])
-    .filter((e) => e.kind === "test" && e.codec === "playwright")
+    .filter((e) => e.kind === "test" && e.framework === "playwright-bdd")
     .sort((a, b) => b.timestamp - a.timestamp)
     .map((e) => {
       const cycleId = e.context?.cycleId ?? e.cycleId;
@@ -401,13 +402,52 @@ export function agentRole(agent) {
     : null;
 }
 
+/**
+ * The one place that decides how a project's last run reads and which tone it
+ * carries, so the status line's words and its colour can never disagree.
+ * Each kind is worded as itself: a compile result by its error count (warnings
+ * are never shown), an aborted test run as aborted, and a test run — or a
+ * brief that names no kind — by its ratio. `tone` is "pass", "fail" or null
+ * (no run yet, or an aborted run: neither pass nor fail).
+ *
+ * The line reads as if lint records did not exist: when the last run is a
+ * lint record the newest run that is not one (`lastEventNotLint`) is read
+ * instead; with none, the lint record is worded as lint, never as a compile
+ * verdict.
+ */
+export function projectStatus(project) {
+  let last = project.lastEvent;
+  if (last === null || last === undefined) return { text: "no runs yet", tone: null };
+  const isLint = (e) => typeof e.lint === "string" && e.lint !== "";
+  if (isLint(last)) {
+    const notLint = project.lastEventNotLint;
+    if (notLint !== null && notLint !== undefined) {
+      last = notLint;
+    } else {
+      const rel = relativeTime(last.timestamp, Date.now());
+      const errors = last.errors ?? 0;
+      if (errors === 0) return { text: `lint clean · ${rel}`, tone: "pass" };
+      const noun = errors === 1 ? "lint error" : "lint errors";
+      return { text: `✗ ${errors} ${noun} · ${rel}`, tone: "fail" };
+    }
+  }
+  const rel = relativeTime(last.timestamp, Date.now());
+  if (last.kind === "compile") {
+    const errors = last.errors ?? 0;
+    if (errors === 0) return { text: `✓ compiled · ${rel}`, tone: "pass" };
+    const noun = errors === 1 ? "error" : "errors";
+    return { text: `✗ ${errors} ${noun} · ${rel}`, tone: "fail" };
+  }
+  if (last.status === "aborted") return { text: `⊘ aborted · ${rel}`, tone: null };
+  if (last.failed > 0) {
+    return { text: `✗ ${last.failed} failed of ${last.total} · ${rel}`, tone: "fail" };
+  }
+  return { text: `✓ green · ${last.passed}/${last.total} · ${rel}`, tone: "pass" };
+}
+
 /** Project rollup card sub-label. */
 export function projectRollupLabel(project) {
-  const last = project.lastEvent;
-  if (last === null || last === undefined) return "no runs yet";
-  const rel = relativeTime(last.timestamp, Date.now());
-  if (last.failed > 0) return `✗ ${last.failed} failed of ${last.total} · ${rel}`;
-  return `✓ green · ${last.passed}/${last.total} · ${rel}`;
+  return projectStatus(project).text;
 }
 
 /**
@@ -463,8 +503,10 @@ export function pairTransitions(events) {
   const CYCLE_WINDOW_MS = 24 * 60 * 60 * 1000;
   const stemRaw = (agentId) => String(agentId).replace(/-(RED|GREEN|FIX)$/i, "");
   const stemKey = (agentId) => stemRaw(agentId).toLowerCase();
+  // CR-CRU-200 §S3 — an aborted run's counts are not a verdict: it opens no
+  // streak and closes none.
   const sorted = events
-    .filter((e) => e.kind === "test")
+    .filter((event) => isTestRun(event) && event.status !== "aborted")
     .slice()
     .sort((a, b) => a.timestamp - b.timestamp);
   const markers = [];
@@ -837,6 +879,14 @@ export function timelineRows(events, plans) {
 }
 
 /**
+ * A run is a test run: milestones, gates, registrations and compile results
+ * are events but never runs, so they are never drawn or counted as one.
+ */
+export function isTestRun(e) {
+  return e.kind === "test";
+}
+
+/**
  * §S3 — the history lens tree (pure): Wave → [Track] → CR → Cycle.
  * Declared-plan first — where a plan exists the tree IS the plan; inferred
  * fallback (context.wave + agent stem + context.cycle) where none does;
@@ -844,7 +894,7 @@ export function timelineRows(events, plans) {
  */
 export function workflowLens({ plans, events }) {
   const index = planCycleIndex(plans);
-  const runs = (events ?? []).filter((e) => e.kind === "test");
+  const runs = (events ?? []).filter(isTestRun);
 
   // CR-CRU-013 §S6 — wave labels a qualifying no-mistakes gate has sealed:
   // a `passed` OR `checks-passed` gate event flips the wave to `gated`;
@@ -898,7 +948,6 @@ export function workflowLens({ plans, events }) {
     }
     return waves.get(label);
   };
-  const crAgents = (crRuns) => [...new Set(crRuns.map((r) => r.agentId))];
 
   // Declared: one CR node per plan.
   for (const plan of plans ?? []) {
@@ -936,7 +985,6 @@ export function workflowLens({ plans, events }) {
         done: cycles.filter((c) => c.status === "done").length,
         total: cycles.length,
       },
-      agents: crAgents(cycles.flatMap((c) => c.runs)),
     };
     const wave = waveNode(plan.wave ?? "");
     wave.source = "declared";
@@ -965,7 +1013,10 @@ export function workflowLens({ plans, events }) {
   }
   for (const raw of inferred.values()) {
     const cycles = [...raw.cycleRuns.entries()].map(([label, cycleRuns]) => {
-      const ordered = [...cycleRuns].sort((a, b) => a.timestamp - b.timestamp);
+      // CR-CRU-200 §S3 — an aborted run marks no cycle done and reopens none.
+      const ordered = cycleRuns
+        .filter((run) => run.status !== "aborted")
+        .sort((a, b) => a.timestamp - b.timestamp);
       const last = ordered[ordered.length - 1];
       return {
         label,
@@ -981,7 +1032,6 @@ export function workflowLens({ plans, events }) {
         done: cycles.filter((c) => c.status === "done").length,
         total: cycles.length,
       },
-      agents: crAgents(cycles.flatMap((c) => c.runs)),
     });
   }
 
@@ -1375,7 +1425,7 @@ const ROADMAP_WAVE_ROWS = 5;
 /**
  * §S1 AC5 — the browser's ONE dead-CR rule, a state-based mirror of
  * `isDeadCr` in `src/types.ts` (this module cannot import `src/`, so it keeps
- * this copy, and tests/dead-cr-rule-parity.test.ts holds the two to the same
+ * this copy, and tests/unit/dead-cr-rule-parity.test.ts holds the two to the same
  * answer on every fixture). Dead iff `lifecycle.state` is `VOID` or
  * `SUPERSEDED`; no lifecycle, a `null` one, or a state it does not recognise
  * is live. A null or undefined `entry` is live too: the optional chain answers
@@ -1554,7 +1604,7 @@ export function focusedReleaseView(gate, releases, entries) {
   // The `false` branch is now REACHABLE and asserted rather than reasoned
   // about: a focused release with nothing running carries NO marker on any
   // box, and that is a state, not an error
-  // (tests/roadmap-wave-active-marker.test.ts).
+  // (tests/integration/roadmap-wave-active-marker.test.ts).
   const waves = [];
   const boxOf = new Map();
   for (const entry of members) {
@@ -1750,10 +1800,30 @@ export function focusedReleaseView(gate, releases, entries) {
   };
 }
 
+/**
+ * One rendered compile-diagnostic line, carrying its location only as far as
+ * the diagnostic has it: `file:line:col`, `file:line`, `file`, or (no file)
+ * no location at all, so the line is the message alone. The column is shown
+ * only when `withCol` is set: the drill-in shows it, the card preview omits it.
+ */
+export function diagnosticLine(diag, withCol) {
+  const has = (v) => v !== undefined && v !== null && v !== "";
+  let loc = "";
+  if (has(diag.file)) {
+    loc = String(diag.file);
+    if (has(diag.line)) {
+      loc += `:${diag.line}`;
+      if (withCol && has(diag.col)) loc += `:${diag.col}`;
+    }
+  }
+  return loc === "" ? `${diag.message}` : `${loc} \u2014 ${diag.message}`;
+}
+
 // Bridge for the nomodule app shell (app.js consumes window.CrucibleLogic).
 if (typeof window !== "undefined") {
   window.CrucibleLogic = {
     filterEvents,
+    diagnosticLine,
     relativeTime,
     formatReleaseDate,
     clockTime,
@@ -1775,12 +1845,14 @@ if (typeof window !== "undefined") {
     bareDependencyId,
     DEPENDENCY_ANNOTATION_CAP,
     projectRollupLabel,
+    projectStatus,
     projectActivity,
     orderProjects,
     emptyStates,
     pairTransitions,
     planCycleIndex,
     timelineRows,
+    isTestRun,
     workflowLens,
     gateDecisionSummaryText,
     waveLatestSealedGate,

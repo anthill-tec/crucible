@@ -1,6 +1,6 @@
 # CR-CRU-056 — Agent registration binds its cycle EXPLICITLY; server-side auto-attach guessing is DELETED
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (workflow-model correction: server + client fleet)
 **Priority:** P0 — user escalation 2026-08-01; the board's integrity currently depends on orchestrator hygiene the system does not enforce
 **Depends on:** CR-CRU-036 (§S9 auto-attach — deleted here), CR-CRU-024 (state machine + §S7 cycle-reference validation), CR-CRU-044 (phase as registration data)

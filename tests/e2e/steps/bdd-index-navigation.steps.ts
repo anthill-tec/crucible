@@ -17,7 +17,7 @@
 // SuiteGroup) — so this file declares its OWN two run-detail-scoped steps
 // below rather than reusing ones that assert a surface this CR deletes.
 //
-// TESTIDS ASSERTED (declared in tests/bdd-index.test.ts and this file
+// TESTIDS ASSERTED (declared in tests/integration/bdd-index.test.ts and this file
 // together, since the AC names none): `[data-testid="bdd-index-row"]`
 // (one per BDD-bearing run, `data-run-id` carries the event id), a click
 // navigates via the SAME `/p/<key>/run/<id>` route CR-CRU-016 §S3 already

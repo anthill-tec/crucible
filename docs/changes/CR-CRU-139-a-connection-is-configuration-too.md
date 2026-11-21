@@ -1,6 +1,6 @@
 # CR-CRU-139 — a connection is configuration too
 
-**Type** feature · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-131, CR-CRU-138 · **Status** PENDING
+**Type** feature · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-131, CR-CRU-138 · **Status** DONE
 
 ## Problem
 

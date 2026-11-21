@@ -2,8 +2,11 @@
 // project rollups (PRD §4.2), agent lifecycle verbs (PRD §4.3). Every write
 // response carries `changed: true|false` (§S5). Shares the ONE store instance
 // with the v1 shim — src/server.ts wires handleV2 into its dispatcher.
-import { codecs, parseRunBody } from "./codecs/index.ts";
+import { codecs, isRecordStreamCodec, parseRunBody, parseStreamBody, viewCodecs } from "./codecs/index.ts";
+import type { Codec, IngestWarning } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
+import type { CompileGuards } from "./codecs/compile.ts";
+import { parseNextestList } from "./codecs/nextest.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { resolveLimit } from "./limits.ts";
 import { burndown, forecast, planChanges, seededRandom, velocity } from "./analytics.ts";
@@ -60,19 +63,29 @@ import type {
   CycleStatus,
   GateDecision,
   GateDecisionAction,
+  GateMilestoneFields,
+  GateScope,
+  GateSuiteEntry,
   LivenessConfig,
   PackageRef,
   Plan,
+  PlanMerge,
   Project,
   QueueEntry,
   QueueLifecycle,
   RunContext,
   RunEvent,
+  RunLive,
   RunSchema,
   RunSummary,
   SuiteNode,
   Tier,
 } from "./types.ts";
+
+// The runtime's own web classes, captured as this module loads, so every v2
+// answer is a native Response even while another library's globals are
+// installed (see the matching capture in src/server.ts).
+const { Blob, Request, Response } = globalThis;
 
 export interface V2Deps {
   version: string;
@@ -108,7 +121,13 @@ interface V2Body {
   // §S2 run context (graceful)
   tier?: unknown;
   stack?: unknown;
+  // the framework the run ran under, stored beside its stack
+  framework?: unknown;
   context?: unknown;
+  // the exit code of the runner that produced a run ingest
+  runnerExit?: unknown;
+  // the linter a compile post names, which makes it a lint record
+  lint?: unknown;
   // CR-CRU-011 §S0 — cycle-plan routes
   cr?: unknown;
   // CR-CRU-021 §S6.11 — optional CR title captured at plan filing
@@ -138,12 +157,23 @@ interface V2Body {
   // CR-CRU-081 §S3 — the opt-in that lets a re-post CORRECT an already-held
   // release's provenance instead of replaying it.
   repairProvenance?: unknown;
+  // A `pre-merge-gate` milestone's verdict, counts and failing tests, and a
+  // `cr-merged` milestone's reason for closing over a gate that was not green.
+  outcome?: unknown;
+  passed?: unknown;
+  failed?: unknown;
+  failingTests?: unknown;
+  scope?: unknown;
+  suites?: unknown;
+  acceptedFailingGateReason?: unknown;
   // CR-CRU-008 §S4 — silent unregister + guarded run deletion
   silent?: unknown;
   userApproved?: unknown;
   // CR-CRU-017 §S1 — the OPEN run this ingest closes (optional: no runId is
   // the unchanged single-shot path).
   runId?: unknown;
+  // CR-CRU-200 §S2 — the UTF-8 byte offset a stream batch starts at.
+  from?: unknown;
   // CR-CRU-014 §S1 — the queue full-replace payload.
   entries?: unknown;
   // CR-CRU-091 §S8 — the roadmap-registration verb bodies. `cr`, `title`,
@@ -160,6 +190,8 @@ interface V2Body {
   dependsOn?: unknown;
   /** CR-CRU-022 §S1 — `cr-plan --points`: story points on the Fibonacci scale. */
   points?: unknown;
+  /** A run start's own count of the tests it is about to run. */
+  total?: unknown;
 }
 
 // §S3 — all help[] wording lives in src/hints.ts (one reviewable module).
@@ -211,6 +243,61 @@ async function readBody(req: Request): Promise<V2Body | null> {
     return parsed as V2Body;
   } catch {
     return null;
+  }
+}
+
+/**
+ * The largest ingest body the server reads, in bytes: `ingest_body_bytes`,
+ * resolved from the server's own `crucible.toml` at the point of use. Read per
+ * request, not cached, so an operator's edit holds on the next ingest without a
+ * restart.
+ */
+function ingestBodyBytes(): number {
+  return resolveLimit("ingest_body_bytes");
+}
+
+/**
+ * The body of an ingest route — `/runs`, `/runs/parsed`, `/runs/compile` —
+ * read under `ingest_body_bytes`, resolved live on every request. A body past
+ * it, known by its `Content-Length` or counted as it is read when it arrives
+ * with none, is read to its end and discarded: answering before the client
+ * finishes writing would leave it writing into a socket the board has closed,
+ * and it would see a broken pipe instead of this refusal. The refusal is a
+ * JSON 413 naming the limit and its value. A body within it parses exactly as
+ * `readBody` parses any other.
+ */
+async function readIngestBody(req: Request): Promise<V2Body | null | Response> {
+  const limit = ingestBodyBytes();
+  const refusal = (): Response =>
+    fail(413, `request body exceeds ingest_body_bytes (${limit} bytes)`);
+  if (req.body === null) return readBody(req);
+  const reader = req.body.getReader();
+  const declared = Number(req.headers.get("content-length") ?? Number.NaN);
+  if (Number.isFinite(declared) && declared > limit) {
+    await drain(reader);
+    return refusal();
+  }
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      chunks.length = 0;
+      await drain(reader);
+      return refusal();
+    }
+    chunks.push(value);
+  }
+  return readBody(new Request(req.url, { method: "POST", body: new Blob(chunks) }));
+}
+
+/** Read a body stream to its end, keeping nothing. */
+async function drain(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+  for (;;) {
+    const { done } = await reader.read();
+    if (done) return;
   }
 }
 
@@ -489,8 +576,13 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
   const projects = store.listProjects(archived).map((project) => {
     const agents = store.listAgents(project.key);
     // Bounded reads, never the project's whole event history: the newest
-    // feed row, and each UTC day's newest coverage-bearing run.
+    // feed row (activity), the newest test run or compile result (the last
+    // event shown), and each UTC day's newest coverage-bearing run.
     const last = store.newestEvent(project.key);
+    const lastRun = store.newestRun(project.key);
+    // The status line reads as if lint records did not exist, so the rollup
+    // also carries the newest run that is not a lint record.
+    const lastRunNotLint = lastRun?.lint !== undefined ? store.newestRun(project.key, true) : lastRun;
     const coverageDays = store.listCoverageDays(project.key);
     // §S4 (CR-CRU-001) discards coverage on failed runs, so any stored
     // coverage belongs to a green run — newest one wins.
@@ -542,7 +634,8 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
       agentsOnline: agents.filter((a) => a.liveness !== "tombstoned").length,
       agentsTotal: agents.length,
       // §S0 (CR-CRU-006) — same flattened brief shape as the events list.
-      lastEvent: last !== undefined ? eventBrief(last) : null,
+      lastEvent: lastRun !== undefined ? eventBrief(lastRun) : null,
+      lastEventNotLint: lastRunNotLint !== undefined ? eventBrief(lastRunNotLint) : null,
       latestGreenCoverage: greenCovered?.coverage ?? null,
       // CR-CRU-007 integration AC (§nav table) — the id of that SAME green
       // coverage event, so the client's coverage meter can open its drill-in.
@@ -799,6 +892,9 @@ async function handleAgentUnregister(store: Store, req: Request): Promise<Respon
  * `now − firstSeen` (ticking); tombstoned (never unregistered) →
  * `lastRunTimestamp − firstSeen` (sealed; lastSeen fallback when the agent
  * never ingested a run). Unregistered agents live on the lifecycle event.
+ * `firstSeen` is the agent's latest registration, so a run from before it is
+ * not the agent's last run: the sealed runtime falls back to lastSeen then,
+ * and is never below 0.
  */
 function handleAgentsList(store: Store, req: Request, url: URL): Response {
   const project = url.searchParams.get("project") ?? undefined;
@@ -813,17 +909,39 @@ function handleAgentsList(store: Store, req: Request, url: URL): Response {
   const running = new Set(
     store.listOpenRuns(project).map((run) => `${run.projectKey}\u0000${run.agentId}`),
   );
-  const agents = store.listAgents(project, now).map((agent) => {
+  const listed = store.listAgents(project, now);
+  // The plan lookup — each project's cycle id → the plan holding it, closed
+  // and aborted plans included — built once per read, never once per agent.
+  const planOfCycleByProject = new Map<string, Map<number, Plan>>();
+  for (const projectKey of new Set(listed.map((agent) => agent.projectKey))) {
+    const planOfCycle = new Map<number, Plan>();
+    for (const plan of store.listPlans(projectKey)) {
+      for (const cycle of plan.cycles) planOfCycle.set(cycle.id, plan);
+    }
+    planOfCycleByProject.set(projectKey, planOfCycle);
+  }
+  const agents = listed.map((agent) => {
     const lastRunAt = store.lastRunTimestamp(agent.projectKey, agent.agentId);
     const idle =
       agent.liveness !== "tombstoned" && !running.has(`${agent.projectKey}\u0000${agent.agentId}`);
+    const sealedAt =
+      lastRunAt !== null && lastRunAt >= agent.firstSeen ? lastRunAt : agent.lastSeen;
     return {
       ...agent,
       runtime_ms:
         agent.liveness === "tombstoned"
-          ? (lastRunAt ?? agent.lastSeen) - agent.firstSeen
+          ? Math.max(0, sealedAt - agent.firstSeen)
           : now - agent.firstSeen,
-      ...(idle ? { idleLine: idleLine(agent, lastRunAt, now) } : {}),
+      ...(idle
+        ? {
+            idleLine: idleLine(
+              agent,
+              lastRunAt,
+              now,
+              planOfCycleByProject.get(agent.projectKey) ?? new Map<number, Plan>(),
+            ),
+          }
+        : {}),
     };
   });
   return reply(req, url, { ok: true, agents });
@@ -831,19 +949,36 @@ function handleAgentsList(store: Store, req: Request, url: URL): Response {
 
 /**
  * §S3/R1 — idle is the board's word: an agent with no open run reads
- * `idle · <role> · cycle <id> · last run <message>, <age>` (`no cycle bound` in
- * place of the cycle when it holds no binding), composed here at read time
+ * `idle · <role> · <CR> · cycle <n>/<m> · last run <message>, <age>` — `<CR>`
+ * the bound cycle's plan's CR, `n` the cycle's 1-based place in that plan's
+ * cycle order whatever its status, `m` the plan's cycle count; `cycle #<id>`
+ * when `planOfCycle` holds no plan for the cycle; `no cycle bound` in place
+ * of the cycle when it holds no binding — composed here at read time
  * from its binding and its last run event; the message carries the outcome or
  * refusal the ingest routes wrote (§S2). An agent that never ran says when it
  * was last seen instead. Served as an ADDITIVE `idleLine` — absent while a
  * run is open or the agent is tombstoned — so the raw `message` is untouched.
  */
-function idleLine(agent: LiveAgent, lastRunAt: number | null, now: number): string {
+export function idleLine(
+  agent: LiveAgent,
+  lastRunAt: number | null,
+  now: number,
+  planOfCycle: ReadonlyMap<number, Plan>,
+): string {
   const segments = ["idle"];
   if (agent.role !== undefined) segments.push(agent.role);
-  segments.push(
-    agent.boundCycleId !== undefined ? `cycle ${agent.boundCycleId}` : "no cycle bound",
-  );
+  const cycleId = agent.boundCycleId;
+  if (cycleId === undefined) {
+    segments.push("no cycle bound");
+  } else {
+    const plan = planOfCycle.get(cycleId);
+    const place = plan === undefined ? -1 : plan.cycles.findIndex((c) => c.id === cycleId);
+    if (plan === undefined || place < 0) {
+      segments.push(`cycle #${cycleId}`);
+    } else {
+      segments.push(plan.cr, `cycle ${place + 1}/${plan.cycles.length}`);
+    }
+  }
   segments.push(
     lastRunAt !== null
       ? `last run ${agent.message}, ${relativeAge(lastRunAt, now)}`
@@ -877,14 +1012,71 @@ export const TIERS: ReadonlySet<string> = new Set<Tier>([
   "bdd",
 ]);
 
-/** §S2 — pull the optional {tier, stack, context} trio verbatim, never fabricated. */
-function runMeta(body: V2Body): Pick<RecordEventMeta, "tier" | "stack" | "context"> {
+/** §S2 — pull the optional {tier, stack, framework, context} verbatim, never fabricated. */
+function runMeta(body: V2Body): Pick<RecordEventMeta, "tier" | "stack" | "framework" | "context"> {
   return {
     ...(typeof body.tier === "string" && TIERS.has(body.tier) ? { tier: body.tier as Tier } : {}),
     ...(typeof body.stack === "string" ? { stack: body.stack } : {}),
+    ...(typeof body.framework === "string" ? { framework: body.framework } : {}),
     ...(typeof body.context === "object" && body.context !== null
       ? { context: body.context as RunContext }
       : {}),
+  };
+}
+
+/**
+ * A `stack` or `framework` a run start or ingest states must be a non-empty
+ * string; anything else is refused (400) before anything is stored. Absent is
+ * fine. The board checks no vocabulary: any non-empty framework is stored.
+ */
+function refuseBadStack(body: V2Body, outcome = "run NOT stored"): Response | null {
+  for (const field of ["stack", "framework"] as const) {
+    const value = body[field];
+    if (value === undefined) continue;
+    if (typeof value === "string" && value.length > 0) continue;
+    return fail(400, `${field} must be a non-empty string when present — ${outcome}`);
+  }
+  return null;
+}
+
+/**
+ * A `runnerExit` a run ingest states must be an integer ≥ 0; anything else is
+ * refused (400) before anything is stored. Absent is fine.
+ */
+function refuseBadRunnerExit(body: V2Body): Response | null {
+  const exit = body.runnerExit;
+  if (exit === undefined) return null;
+  if (typeof exit === "number" && Number.isInteger(exit) && exit >= 0) return null;
+  return fail(400, "runnerExit must be a non-negative integer — run NOT stored");
+}
+
+/**
+ * A runner that exited non-zero over a run that records no failure is never
+ * filed as green: the run gains a failing suite `runner` holding one failing
+ * case `exit <n>`, counted in its total and failed. A zero or absent exit, or
+ * a run that already records a failure, leaves the run exactly as posted.
+ * Applied before the run is stored and before its hints are computed, so the
+ * verdict, the stored counts, the coverage discard and the hints all follow.
+ */
+function fileRunnerExit(run: RunSchema, runnerExit: unknown): RunSchema {
+  if (typeof runnerExit !== "number" || runnerExit === 0) return run;
+  if (run.summary.failed > 0) return run;
+  const runner: SuiteNode = {
+    name: "runner",
+    status: "fail",
+    children: [
+      {
+        name: `exit ${runnerExit}`,
+        status: "fail",
+        duration_ms: 0,
+        failure: { message: `the runner exited ${runnerExit} but its report records no failure` },
+      },
+    ],
+  };
+  return {
+    ...run,
+    summary: { ...run.summary, total: run.summary.total + 1, failed: run.summary.failed + 1 },
+    tree: [...run.tree, runner],
   };
 }
 
@@ -1147,15 +1339,48 @@ function evidenceResponse(
   return json({ ...body, help: [...(options.help ?? []), ...hints.readEvidence] }, options.status);
 }
 
-function runResponse(event: RunEvent, summary: RunSummary, help?: string[]): Response {
+/** How many of a run's least covered files an ingest answers. */
+const ANSWERED_COVERAGE_FILES = 10;
+
+/**
+ * An ingest's answer. `files` (the run's distinct-file count) joins the `run`
+ * block when the route computed one; it is never stored. `coverage` joins it
+ * when the route answers the coverage the run kept. A run that kept files
+ * answers how many (`coverageFileCount`) and the first
+ * `ANSWERED_COVERAGE_FILES` of them in their kept order (`coverageFiles`); a
+ * run that kept none has neither key.
+ */
+function runResponse(
+  event: RunEvent,
+  summary: RunSummary,
+  help?: string[],
+  warnings?: IngestWarning[],
+  files?: number,
+  coverage?: Coverage,
+): Response {
+  const kept = event.coverageFiles ?? [];
   return evidenceResponse(
     {
       ok: true,
       changed: true,
       event: event.id,
-      run: summary,
+      run:
+        files !== undefined || coverage !== undefined || kept.length > 0
+          ? {
+              ...summary,
+              ...(files !== undefined ? { files } : {}),
+              ...(coverage !== undefined ? { coverage } : {}),
+              ...(kept.length > 0
+                ? {
+                    coverageFileCount: kept.length,
+                    coverageFiles: kept.slice(0, ANSWERED_COVERAGE_FILES),
+                  }
+                : {}),
+            }
+          : summary,
       verdict: runVerdict(summary),
       ...attachEcho(event),
+      ...(warnings !== undefined ? { warnings } : {}),
     },
     { help },
   );
@@ -1174,6 +1399,12 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
   if (body === null) return fail(400, "malformed JSON body");
   const pk = requireProject(store, body.projectKey);
   if ("fail" in pk) return pk.fail;
+  const badStack = refuseBadStack(body, "run NOT started");
+  if (badStack !== null) return badStack;
+  const { total } = body;
+  if (total !== undefined && (typeof total !== "number" || !Number.isInteger(total) || total < 0)) {
+    return fail(400, "total must be an integer of 0 or more when present — run NOT started");
+  }
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
@@ -1186,6 +1417,7 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
     ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
+    ...(typeof total === "number" ? { total } : {}),
   });
   return json(
     {
@@ -1204,7 +1436,9 @@ async function handleRunStart(store: Store, req: Request): Promise<Response> {
  * that opened a run closes it at once, when it knows nothing will file it.
  * The same caller boundary as `handleRunStart`, the same ownership/state
  * refusals as `resolveRunClose` (400 unknown or another agent's/project's
- * run; 409 a run already settled), and a reason is required (400). Settled
+ * run; 409 a run already settled), and a reason is required (400). The
+ * settled-run 409 keeps its body bare: CR-CRU-200 §S3's `state` and `eventId`
+ * ride only the close and stream routes' refusals, never an abort's. Settled
  * by `Store#abortOpenRun` — the sweep's own store path, one run row and one
  * `status: "aborted"` event — so the timeline and live stream see it as they
  * see a run the server aborted itself.
@@ -1223,13 +1457,200 @@ async function handleRunAbort(store: Store, runId: string, req: Request): Promis
   if (typeof reason !== "string" || reason.trim().length === 0) {
     return fail(400, "reason must be a non-empty string — run NOT aborted");
   }
-  const close = resolveRunClose(store, pk.key, caller.agentId, { ...body, runId }, "run NOT aborted");
+  // Only the runId is passed: an abort states no stack or tier to compare.
+  const close = resolveRunClose(store, pk.key, caller.agentId, { runId }, "run NOT aborted");
   if (close.fail !== undefined) return close.fail;
   if (store.abortOpenRun(runId, reason) === null) {
     return fail(409, `run ${runId} settled before it could be aborted — run NOT aborted`);
   }
   return json({ ok: true, changed: true, runId, status: "aborted", reason });
 }
+
+/** CR-CRU-223 §S1 — the open run's live read: `/api/v2/runs/<runId>/live`. */
+const RUN_LIVE_RE = /^\/api\/v2\/runs\/([^/]+)\/live$/;
+
+/** CR-CRU-200 §S2 — an open run's test stream: `/api/v2/runs/<runId>/stream`. */
+const RUN_STREAM_RE = /^\/api\/v2\/runs\/([^/]+)\/stream$/;
+
+/** What every refusal of the stream route ends with. */
+const STREAM_REFUSED = "nothing stored";
+
+/** The stream codec a batch naming none is read under. */
+const STREAM_CODEC = "crucible-events";
+
+/**
+ * A UTF-16 surrogate standing alone: text no UTF-8 stream can hold. Under the
+ * `u` flag a paired surrogate reads as one astral code point, so only a lone
+ * one is a code point of category Cs.
+ */
+const LONE_SURROGATE = /\p{Cs}/u;
+
+/**
+ * CR-CRU-200 §S2 — POST /api/v2/runs/<runId>/stream {projectKey, agentId,
+ * codec, from, data}: one batch of an open run's test stream, appended at the
+ * UTF-8 byte offset `from` states, answered `200 {ok, runId, held}`.
+ *  - the caller rules of every ingest: `readIngestBody` (413),
+ *    `requireProject` (404), `requireRegisteredCaller` (409);
+ *  - the run rules of `resolveRunClose`: an unknown run or another project's
+ *    or agent's is a 400, a settled one a 409 carrying `state` and `eventId`;
+ *  - the shape: `from` a non-negative integer, `data` a string with no lone
+ *    surrogate, `codec` a stream codec (400);
+ *  - the batch (`Store#appendRunStream`): a codec differing from the run's
+ *    first is a 400, a gap or a differing overlap a 409 carrying `held`, a
+ *    total past `ingest_body_bytes` a 413 carrying `held`.
+ * Every refusal stores nothing.
+ */
+async function handleRunStream(store: Store, runId: string, req: Request): Promise<Response> {
+  const body = await readIngestBody(req);
+  if (body instanceof Response) return body;
+  if (body === null) return fail(400, `malformed JSON body — ${STREAM_REFUSED}`);
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const close = resolveRunClose(store, pk.key, caller.agentId, { runId }, STREAM_REFUSED);
+  if (close.settled !== undefined) return settledStreamRefusal(runId, close.settled);
+  if (close.fail !== undefined) return close.fail;
+  const { from, data } = body;
+  // An absent codec is the stream codec, as an absent one is `junit` on `/runs`.
+  const codec = body.codec === undefined ? STREAM_CODEC : body.codec;
+  if (typeof from !== "number" || !Number.isInteger(from) || from < 0) {
+    return fail(400, `from must be a non-negative integer byte offset — ${STREAM_REFUSED}`);
+  }
+  if (typeof data !== "string") return fail(400, `data must be the stream's text — ${STREAM_REFUSED}`);
+  if (LONE_SURROGATE.test(data)) {
+    return fail(400, `data holds a lone surrogate, which is no UTF-8 text — ${STREAM_REFUSED}`);
+  }
+  // A record stream codec, or a view codec: the batch rules are one and the same.
+  if (typeof codec !== "string" || (!isRecordStreamCodec(codec) && !viewCodecs.has(codec))) {
+    return fail(400, `codec ${String(codec)} is not a stream codec — ${STREAM_REFUSED}`);
+  }
+  const limit = ingestBodyBytes();
+  const outcome = store.appendRunStream(runId, { codec, from, data, limit });
+  if (outcome.ok) return json({ ok: true, runId, held: outcome.held });
+  switch (outcome.refused) {
+    case "settled":
+      return settledStreamRefusal(runId, outcome.run ?? { state: "ended" });
+    case "codec":
+      return fail(
+        400,
+        `codec ${codec} differs from the stream codec ${outcome.codec} this run's first batch fixed — ${STREAM_REFUSED}`,
+      );
+    case "gap":
+      return fail(409, `a batch from ${from} leaves a gap after the ${outcome.held} bytes held — ${STREAM_REFUSED}`, {
+        held: outcome.held,
+      });
+    case "overlap":
+      return fail(409, `a batch from ${from} differs from the bytes held across its overlap — ${STREAM_REFUSED}`, {
+        held: outcome.held,
+      });
+    case "size":
+      return fail(
+        413,
+        `the stream would pass ingest_body_bytes (${limit} bytes) — batch not stored; the run's stream is marked cut`,
+        { held: outcome.held },
+      );
+  }
+}
+
+/** A batch for a run already settled: a 409 carrying its state and the event that settled it. */
+function settledStreamRefusal(runId: string, settled: Pick<RunRecord, "state" | "eventId">): Response {
+  return fail(409, `run ${runId} is already ${settled.state} — a settled run takes no stream; ${STREAM_REFUSED}`, {
+    state: settled.state,
+    ...(settled.eventId !== undefined ? { eventId: settled.eventId } : {}),
+  });
+}
+
+/** An open run's test list: `/api/v2/runs/<runId>/tests`. */
+const RUN_TESTS_RE = /^\/api\/v2\/runs\/([^/]+)\/tests$/;
+
+/** The codec a test list is posted under: nextest's own list, as `cargo nextest list --message-format json` writes it. */
+const TEST_LIST_CODEC = "nextest-list";
+
+/**
+ * POST /api/v2/runs/<runId>/tests {projectKey, agentId, codec: "nextest-list",
+ * data}: an open run's test list, as nextest wrote it, taken once and
+ * answered `200 {ok, runId, total}` — the listed total, the tests whose
+ * `filter-match` is `matches`, which replaces the run start's total.
+ *  - the caller and run rules are the stream route's: `readIngestBody` (413),
+ *    `requireProject` (404), `requireRegisteredCaller` (409), and
+ *    `resolveRunClose` (an unknown run or another agent's a 400, a settled
+ *    one a 409);
+ *  - `codec` other than `nextest-list`, or `data` that is not nextest's test
+ *    list, is a 400;
+ *  - a second list is a 409.
+ * Every refusal stores nothing.
+ */
+async function handleRunTests(store: Store, runId: string, req: Request): Promise<Response> {
+  const body = await readIngestBody(req);
+  if (body instanceof Response) return body;
+  if (body === null) return fail(400, `malformed JSON body — ${STREAM_REFUSED}`);
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const close = resolveRunClose(store, pk.key, caller.agentId, { runId }, STREAM_REFUSED);
+  if (close.settled !== undefined) return settledListRefusal(runId, close.settled);
+  if (close.fail !== undefined) return close.fail;
+  if (body.codec !== TEST_LIST_CODEC) {
+    return fail(400, `codec ${String(body.codec)} is not ${TEST_LIST_CODEC} — ${STREAM_REFUSED}`);
+  }
+  const { data } = body;
+  if (typeof data !== "string") return fail(400, `data must be nextest's test list as its JSON text — ${STREAM_REFUSED}`);
+  let total: number;
+  try {
+    total = parseNextestList(data).total;
+  } catch (cause) {
+    return fail(400, `${cause instanceof Error ? cause.message : String(cause)} — ${STREAM_REFUSED}`);
+  }
+  const outcome = store.takeRunTestList(runId, data, total);
+  if (outcome.ok) return json({ ok: true, runId, total });
+  if (outcome.refused === "held") {
+    return fail(409, `run ${runId} already holds its test list — a run takes one; ${STREAM_REFUSED}`);
+  }
+  // A run gone meanwhile (its project deleted) is unknown, never settled.
+  if (outcome.run === null) return fail(400, `unknown runId: ${runId} — the run is gone; ${STREAM_REFUSED}`);
+  return settledListRefusal(runId, outcome.run);
+}
+
+/** A list for a run already settled: a 409 carrying its state and the event that settled it. */
+function settledListRefusal(runId: string, settled: Pick<RunRecord, "state" | "eventId">): Response {
+  return fail(409, `run ${runId} is already ${settled.state} — a settled run takes no test list; ${STREAM_REFUSED}`, {
+    state: settled.state,
+    ...(settled.eventId !== undefined ? { eventId: settled.eventId } : {}),
+  });
+}
+
+/**
+ * CR-CRU-223 §S1 — GET /api/v2/runs/<runId>/live[?from=<n>]: what the live
+ * drill-in reads.
+ *  - a settled run → `{state: "ended" | "aborted", eventId}`, whatever live
+ *    state is still held, so the view moves to the settled run's detail;
+ *  - an open run with a live state → `{state: "open", live, failures,
+ *    failuresFrom}`, `failures` from index `from` (default 0), oldest first;
+ *  - an open run with no live state, or a run never issued → 404.
+ */
+function handleRunLive(store: Store, runId: string, url: URL): Response {
+  const run = store.getRun(runId);
+  if (run === null) return fail(404, `unknown runId: ${runId}`);
+  if (run.state !== "open") {
+    return json({ ok: true, state: run.state, eventId: run.eventId });
+  }
+  const live = store.runLive(runId);
+  if (live === null) return fail(404, `no live state held for open run ${runId}`);
+  const rawFrom = Number(url.searchParams.get("from") ?? "0");
+  const from = Number.isInteger(rawFrom) && rawFrom > 0 ? rawFrom : 0;
+  return json({
+    ok: true,
+    state: "open",
+    live: liveCounts(live),
+    failures: live.failures.slice(from),
+    failuresFrom: from,
+  });
+}
+
+/** The outcome of a close's refusal: what the closing ingest routes did NOT do. */
+const CLOSE_REFUSED = "run NOT stored";
 
 /**
  * CR-CRU-017 §S1 — the OPTIONAL `runId` seam every ingest route shares.
@@ -1240,7 +1661,10 @@ async function handleRunAbort(store: Store, runId: string, req: Request): Promis
  *  - never issued / another project's / another agent's → 400, nothing stored;
  *  - already ended or aborted → 409, nothing stored (the CR's end/end and
  *    end-after-abort races);
- *  - open → the lifecycle stamp for the ONE event about to be written.
+ *  - open → the lifecycle stamp for the ONE event about to be written, plus
+ *    the stack, tier and framework the start stated (`started`), which the event carries
+ *    when the ingest states none; an ingest stating a different one is refused
+ *    (400), nothing stored and the run left open.
  *
  * `outcome` ends every refusal — what did NOT happen on the calling route
  * (the ingest routes store nothing; `handleRunAbort` aborts nothing).
@@ -1250,11 +1674,14 @@ function resolveRunClose(
   projectKey: string,
   agentId: string,
   body: V2Body,
-  outcome = "run NOT stored",
+  outcome = CLOSE_REFUSED,
 ): {
   fail?: Response;
+  /** The settled run a 409 refused, for a caller that answers its state. */
+  settled?: Pick<RunRecord, "state" | "eventId">;
   runId?: string;
   lifecycle?: { startedAt: number; runtimeMs: number };
+  started?: Pick<RecordEventMeta, "stack" | "tier" | "framework">;
 } {
   if (body.runId === undefined || body.runId === null) return {};
   if (typeof body.runId !== "string" || body.runId.length === 0) {
@@ -1279,19 +1706,48 @@ function resolveRunClose(
     };
   }
   if (run.state !== "open") {
+    // CR-CRU-200 §S3 — a resent close's 409 carries the run's state and the
+    // event that settled it, so a client tells its own lost answer from a
+    // refusal. Only a close's: the abort route's 409 keeps its pre-CR body,
+    // and the stream route answers `settled` with its own refusal.
+    const settled = { state: run.state, ...(run.eventId !== undefined ? { eventId: run.eventId } : {}) };
     return {
       fail: fail(
         409,
         `run ${runId} is already ${run.state} — a settled run cannot be closed twice; ${outcome}`,
+        outcome === CLOSE_REFUSED ? settled : undefined,
       ),
+      settled,
     };
   }
+  const stated = runMeta(body);
+  for (const field of ["stack", "tier", "framework"] as const) {
+    const started = run[field];
+    const ingested = stated[field];
+    if (started !== undefined && ingested !== undefined && started !== ingested) {
+      return {
+        fail: fail(
+          400,
+          `the run started with ${field} '${started}' and this ingest states '${ingested}' — a run cannot change its ${field}; ${outcome}`,
+        ),
+      };
+    }
+  }
   const endedAt = Date.now();
-  return { runId, lifecycle: { startedAt: run.startedAt, runtimeMs: endedAt - run.startedAt } };
+  return {
+    runId,
+    lifecycle: { startedAt: run.startedAt, runtimeMs: endedAt - run.startedAt },
+    started: {
+      ...(run.stack !== undefined ? { stack: run.stack } : {}),
+      ...(run.tier !== undefined ? { tier: run.tier } : {}),
+      ...(run.framework !== undefined ? { framework: run.framework } : {}),
+    },
+  };
 }
 
 async function handleRuns(store: Store, req: Request): Promise<Response> {
-  const body = await readBody(req);
+  const body = await readIngestBody(req);
+  if (body instanceof Response) return body;
   if (body === null) return fail(400, "malformed JSON body");
   const pk = requireProject(store, body.projectKey);
   if ("fail" in pk) return pk.fail;
@@ -1300,9 +1756,22 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   const codec = codecs.get(codecName);
   if (codec === undefined) return fail(400, `unknown codec: ${codecName}`);
 
-  const parsed = await parseRunBody(codec, body, codecName);
-  if ("error" in parsed) return fail(400, parsed.error);
-  const { run } = parsed;
+  const badStack = refuseBadStack(body);
+  if (badStack !== null) return badStack;
+  const badExit = refuseBadRunnerExit(body);
+  if (badExit !== null) return badExit;
+  const badStreamUse = refuseStreamCodecUse(codec, codecName, body);
+  if (badStreamUse !== null) return badStreamUse;
+
+  // The run's effective framework (the ingest's, else its start's) is told to
+  // the codec before it decodes; the run's stack is never a reading's key.
+  const framework = effectiveFramework(store, body);
+  // CR-CRU-200 §S3 — a stream codec closing a run decodes the run's held
+  // stream, at the close and inside its transaction; every other ingest
+  // decodes its body here.
+  const streamed = codec.stream === true;
+  const parsed = streamed ? null : await parseRunBody(codec, body, codecName, framework);
+  if (parsed !== null && "error" in parsed) return fail(400, parsed.error);
 
   // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
   // BEFORE any touchAgent/record — no agent row is created or resurrected);
@@ -1323,33 +1792,170 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   const close = resolveRunClose(store, pk.key, agentId, body);
   if (close.fail !== undefined) return close.fail;
 
-  const event = store.recordTestEvent(pk.key, agentId, run, {
-    codec: codecName,
-    ...runMeta(body),
-    ...(attach.context !== undefined ? { context: attach.context } : {}),
-    // CR-CRU-057 §S1 — the declared role off the same seam read.
-    ...(attach.role !== undefined ? { role: attach.role } : {}),
-    ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
-    ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
-  });
-  // The run is settled by the event that closed it — recorded after the write,
-  // so a failed ingest leaves the run OPEN (and sweepable) rather than lost.
-  if (close.runId !== undefined && close.lifecycle !== undefined) {
-    store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
+  const fileRun = (decoded: { run: RunSchema; warnings: IngestWarning[]; files: number }, incomplete?: string) => {
+    const run = fileRunnerExit(decoded.run, body.runnerExit);
+    const event = store.recordTestEvent(pk.key, agentId, run, {
+      codec: codecName,
+      // The ingest's stack/tier when stated, else the start's.
+      ...close.started,
+      ...runMeta(body),
+      ...(attach.context !== undefined ? { context: attach.context } : {}),
+      // CR-CRU-057 §S1 — the declared role off the same seam read.
+      ...(attach.role !== undefined ? { role: attach.role } : {}),
+      ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
+      ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
+      ...(incomplete !== undefined ? { incomplete } : {}),
+    });
+    // The run is settled by the event that closed it — recorded after the write,
+    // so a failed ingest leaves the run OPEN (and sweepable) rather than lost.
+    if (close.runId !== undefined && close.lifecycle !== undefined) {
+      store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
+    }
+    return { run, event, warnings: decoded.warnings, files: decoded.files };
+  };
+  let filed: ReturnType<typeof fileRun>;
+  if (parsed !== null) {
+    // CR-CRU-200 §S3 — a run that streams its record closes only with its
+    // stream codec.
+    const streamedRun = refuseStreamedRunClose(store, close.runId);
+    if (streamedRun !== null) return streamedRun;
+    filed = fileRun(parsed);
+  } else {
+    // CR-CRU-200 §S3 — the decode, the event, `endRun` and the deletion of the
+    // batches and live state are one transaction that re-reads the run's open
+    // state inside it.
+    const runId = close.runId ?? String(body.runId);
+    const closed = store.closeStreamedRun(runId, (held) => {
+      if (held === null) {
+        return {
+          error: `run ${runId} holds no stream — codec ${codecName} closes a run's held stream; run NOT stored`,
+        };
+      }
+      // The close names the stream codec the run's first batch fixed.
+      if (held.codec !== codecName) {
+        return {
+          error: `run ${runId} streams its record with codec \`${held.codec}\`; close it with that codec, not ${codecName} — run NOT stored`,
+        };
+      }
+      const decoded = parseStreamBody(codec, held, body, codecName, framework);
+      if ("error" in decoded) return decoded;
+      const incomplete = streamIncompleteness(decoded, body.runnerExit, runId);
+      if (typeof incomplete === "object") return incomplete;
+      if (incomplete !== undefined) {
+        decoded.warnings.push({
+          code: "stream-incomplete",
+          detail: `the stream cannot be trusted: ${incomplete} — the run is stored flagged incomplete`,
+        });
+      }
+      return fileRun(decoded, incomplete);
+    });
+    if (closed === null) {
+      const settled = store.getRun(runId);
+      return fail(409, `run ${runId} settled before it could be closed — run NOT stored`, {
+        ...(settled !== null ? { state: settled.state } : {}),
+        ...(settled?.eventId !== undefined ? { eventId: settled.eventId } : {}),
+      });
+    }
+    if ("error" in closed) return fail(400, closed.error);
+    filed = closed;
   }
+  const { run, event, warnings, files } = filed;
   // §S3 — a RED ingest carries the transition hint; §S7 adds the stale note.
+  // Decoded coverage the store discarded (a failing run) says so in help too,
+  // as on the parsed route.
+  const dropped = run.coverage !== undefined && event.coverage === undefined;
   const help = [
     ...(run.summary.failed > 0 ? hints.afterRed : []),
+    ...(dropped ? hints.coverageDropped : []),
     ...(attach.staleHelp ?? []),
   ];
-  return runResponse(event, run.summary, help.length > 0 ? help : undefined);
+  return runResponse(
+    event,
+    run.summary,
+    help.length > 0 ? help : undefined,
+    warnings.length > 0 ? warnings : undefined,
+    files,
+    event.coverage,
+  );
+}
+
+/**
+ * CR-CRU-200 §S1/§S3 — a stream codec is never a report: sent with `data` or
+ * `dataPath` it is refused, and with no `runId` there is no held stream for
+ * it to close (400, nothing stored).
+ */
+function refuseStreamCodecUse(codec: Codec, codecName: string, body: V2Body): Response | null {
+  if (codec.stream !== true) return null;
+  if (body.data !== undefined || body.dataPath !== undefined) {
+    return fail(
+      400,
+      `codec ${codecName} is a stream codec — it closes a run's held stream and is never sent as a report; send no data or dataPath; run NOT stored`,
+    );
+  }
+  if (typeof body.runId !== "string" || body.runId.length === 0) {
+    return fail(400, `codec ${codecName} is a stream codec — it closes an open run's held stream; send its runId; run NOT stored`);
+  }
+  return null;
+}
+
+/**
+ * CR-CRU-200 §S3 — a run holding a stream is closed only with its stream
+ * codec: `/runs` naming another codec, `/runs/parsed` and `/runs/compile`
+ * are refused (400), nothing stored and the run left open. Only a RECORD
+ * stream is held to this: a run holding a view stream closes through its
+ * report as a run with no stream does.
+ */
+function refuseStreamedRunClose(store: Store, runId: string | undefined): Response | null {
+  if (runId === undefined) return null;
+  const codec = store.runStreamCodec(runId);
+  if (codec === null || !isRecordStreamCodec(codec)) return null;
+  return fail(400, `run ${runId} streams its record; close it with codec \`${codec}\` — run NOT stored`);
+}
+
+/** Why a streamed run that held no test is flagged, when its codec states no reason of its own. */
+const NO_TEST_HELD = "no test held";
+
+/**
+ * CR-CRU-200 §S3 — what a stream close stores as `incomplete`: the codec's
+ * reasons. A stream that held no test is filed red, flagged, when the runner
+ * exited above 0 (`fileRunnerExit` files it), and refused otherwise (400,
+ * the run left open for the sweep or the client's abort).
+ */
+function streamIncompleteness(
+  decoded: { run: RunSchema; incomplete?: string },
+  runnerExit: unknown,
+  runId: string,
+): string | undefined | { error: string } {
+  if (decoded.run.summary.total > 0) return decoded.incomplete;
+  if (typeof runnerExit === "number" && runnerExit > 0) return decoded.incomplete ?? NO_TEST_HELD;
+  return {
+    error: `run ${runId} holds no test in its stream and states no runnerExit above 0 — run NOT stored; the run stays open`,
+  };
+}
+
+/**
+ * The framework a run ingest decodes under: the one it states, else the one
+ * the run it closes was started with. A read only: the close itself is
+ * resolved (and refused) later, before anything is written.
+ */
+function effectiveFramework(store: Store, body: V2Body): string | undefined {
+  const stated = runMeta(body).framework;
+  if (stated !== undefined) return stated;
+  if (typeof body.runId !== "string" || body.runId.length === 0) return undefined;
+  return store.getRun(body.runId)?.framework;
 }
 
 async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
-  const body = await readBody(req);
+  const body = await readIngestBody(req);
+  if (body instanceof Response) return body;
   if (body === null) return fail(400, "malformed JSON body");
   const pk = requireProject(store, body.projectKey);
   if ("fail" in pk) return pk.fail;
+
+  const badStack = refuseBadStack(body);
+  if (badStack !== null) return badStack;
+  const badExit = refuseBadRunnerExit(body);
+  if (badExit !== null) return badExit;
 
   if (typeof body.summary !== "object" || body.summary === null) {
     return fail(400, "summary is required");
@@ -1362,16 +1968,19 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   const treeRefusal = invalidSuiteTreeNode(body.tree);
   if (treeRefusal !== null) return fail(400, `${treeRefusal} — run NOT stored`);
 
-  const summary = body.summary as RunSummary;
   const hasCoverage = typeof body.coverage === "object" && body.coverage !== null;
-  const run: RunSchema = {
-    summary,
-    tree: body.tree as SuiteNode[],
-    // §S4 (CR-CRU-001) discard-on-fail is applied by the store; pass coverage through.
-    ...(hasCoverage ? { coverage: body.coverage as Coverage } : {}),
-    // CR-CRU-038 §S2b — run-level raw output; retained even on a failing ingest.
-    ...(typeof body.raw === "string" ? { raw: body.raw } : {}),
-  };
+  const run = fileRunnerExit(
+    {
+      summary: body.summary as RunSummary,
+      tree: body.tree as SuiteNode[],
+      // §S4 (CR-CRU-001) discard-on-fail is applied by the store; pass coverage through.
+      ...(hasCoverage ? { coverage: body.coverage as Coverage } : {}),
+      // CR-CRU-038 §S2b — run-level raw output; retained even on a failing ingest.
+      ...(typeof body.raw === "string" ? { raw: body.raw } : {}),
+    },
+    body.runnerExit,
+  );
+  const summary = run.summary;
 
   // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
   // BEFORE any touchAgent/record — no agent row is created or resurrected);
@@ -1391,10 +2000,14 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   // write so a refused close (400/409) stores nothing.
   const close = resolveRunClose(store, pk.key, agentId, body);
   if (close.fail !== undefined) return close.fail;
+  // CR-CRU-200 §S3 — a run that streams its record closes only with its stream codec.
+  const streamedRun = refuseStreamedRunClose(store, close.runId);
+  if (streamedRun !== null) return streamedRun;
 
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: "parsed",
     ...(typeof body.name === "string" ? { name: body.name } : {}),
+    ...close.started,
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
     // CR-CRU-057 §S1 — the declared role off the same seam read.
@@ -1417,17 +2030,37 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
 }
 
 async function handleRunsCompile(store: Store, req: Request): Promise<Response> {
-  const body = await readBody(req);
+  const body = await readIngestBody(req);
+  if (body instanceof Response) return body;
   if (body === null) return fail(400, "malformed JSON body");
   const pk = requireProject(store, body.projectKey);
   if ("fail" in pk) return pk.fail;
 
-  if (typeof body.errors !== "string" || body.errors.length === 0) {
+  const badStack = refuseBadStack(body);
+  if (badStack !== null) return badStack;
+
+  // A post naming its linter in `lint` files a lint record; any other value
+  // than a non-empty string is refused before anything is stored.
+  const lint = body.lint;
+  if (lint !== undefined && (typeof lint !== "string" || lint.length === 0)) {
+    return fail(400, "lint must be a non-empty string when present — compile NOT stored");
+  }
+  // The linter's exit is read on a lint post only; a compile post's
+  // `runnerExit` is neither validated nor used.
+  let lintExit: number | undefined;
+  if (lint !== undefined) {
+    const badExit = refuseBadRunnerExit(body);
+    if (badExit !== null) return badExit;
+    if (typeof body.runnerExit === "number") lintExit = body.runnerExit;
+  }
+
+  // A lint post that states its exit may be empty: the linter printed nothing.
+  if (typeof body.errors !== "string" || (body.errors.length === 0 && lintExit === undefined)) {
     return fail(400, "errors must be a non-empty string");
   }
 
   const format = typeof body.format === "string" ? body.format : undefined;
-  const report = parseCompile(body.errors, format);
+  const report = fileLinterExit(parseCompile(body.errors, format, lintGuards(lintExit)), lintExit);
   // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
   // BEFORE recordCompileEvent's touchAgent — no row created or resurrected).
   const caller = requireRegisteredCaller(store, pk.key, body);
@@ -1449,21 +2082,27 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   // CR-CRU-017 §S1 — the optional run this compile ingest CLOSES.
   const close = resolveRunClose(store, pk.key, agentId, body);
   if (close.fail !== undefined) return close.fail;
+  // CR-CRU-200 §S3 — a run that streams its record closes only with its stream codec.
+  const streamedRun = refuseStreamedRunClose(store, close.runId);
+  if (streamedRun !== null) return streamedRun;
   const event = store.recordCompileEvent(pk.key, agentId, report, {
     codec: report.format,
+    ...close.started,
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
     ...(attach.role !== undefined ? { role: attach.role } : {}),
     ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
     ...(releaseRef.release !== undefined ? { release: releaseRef.release } : {}),
+    ...(lint !== undefined ? { lint } : {}),
   });
   if (close.runId !== undefined && close.lifecycle !== undefined) {
     store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
   }
+  const noun = lint !== undefined ? "LINT" : "COMPILE";
   const verdict =
     report.errorCount > 0
-      ? `COMPILE FAILED — ${report.errorCount} errors, ${report.warningCount} warnings`
-      : `COMPILE OK — ${report.warningCount} warnings`;
+      ? `${noun} FAILED — ${report.errorCount} errors, ${report.warningCount} warnings`
+      : `${noun} OK — ${report.warningCount} warnings`;
   return evidenceResponse(
     {
       ok: true,
@@ -1474,8 +2113,40 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
       verdict,
     },
     // §S3 — panel-routing reminder after a compile ingest.
-    { help: hints.afterCompile },
+    // A lint record's reminder names the Lint group instead.
+    { help: lint !== undefined ? hints.afterLint : hints.afterCompile },
   );
+}
+
+/**
+ * The decoders' never-clean guards a lint post turns off. `lintExit` is set
+ * only on a lint post that states its linter's exit. Such a post is never
+ * filed clean by mistake (a non-zero exit with no error gains the synthetic
+ * error), so gcc's no-error→raw fallback is off and a warnings-only run keeps
+ * its findings; go's message-only error is off only when the linter exited 0.
+ * A compile post, or a lint post with no stated exit, keeps every guard.
+ */
+function lintGuards(lintExit: number | undefined): CompileGuards {
+  if (lintExit === undefined) return {};
+  return lintExit === 0 ? { gccNoErrorToRaw: false, goMessageOnly: false } : { gccNoErrorToRaw: false };
+}
+
+/**
+ * A linter that exited non-zero over output that records no error is never
+ * filed as clean: the report gains one error naming the exit, with no file and
+ * no code, counted in its error count. A zero or absent exit, or a report that
+ * already holds an error, leaves the report as decoded.
+ */
+function fileLinterExit(report: CompileReport, lintExit: number | undefined): CompileReport {
+  if (lintExit === undefined || lintExit === 0 || report.errorCount > 0) return report;
+  return {
+    ...report,
+    errorCount: report.errorCount + 1,
+    diagnostics: [
+      ...report.diagnostics,
+      { level: "error", message: `the linter exited ${lintExit} but its output records no error` },
+    ],
+  };
 }
 
 // ── CR-CRU-013 §S1+§S4b — gate/milestone event routes ───────────────────────
@@ -1698,6 +2369,128 @@ function epochParam(url: URL, name: string): number | undefined {
  * has to clear (`typeof === "string" && length > 0`), applied to each of the
  * three coordinates, because a half-identified artifact identifies nothing.
  */
+/** A non-empty string, or nothing: the never-coerce rule for a free-text field. */
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** A count: a finite non-negative integer, or nothing. */
+function countOf(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * The fields a `pre-merge-gate` milestone records about the gate beyond its
+ * verdict, counts and failing tests. Health states this list, so a client can
+ * tell a board that keeps them before it posts them.
+ */
+export const GATE_MILESTONE_RECORD_FIELDS = ["scope", "suites"] as const;
+
+/** A gate's scope and suites, each present only when posted and well-formed. */
+interface GateScopeAndSuites {
+  scope?: GateScope;
+  suites?: GateSuiteEntry[];
+}
+
+/** The non-empty strings of a list, or nothing when any member is not a string. */
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  if (!value.every((t: unknown) => typeof t === "string")) return undefined;
+  return value.filter((t: string) => t.length > 0);
+}
+
+/**
+ * One suite entry, keeping only its own keys, or the reason it is ill-formed:
+ * a non-empty `target`, an `outcome` of `pass`/`fail`, `passed` and `failed`
+ * both counts or both absent (absent only on `fail`), and an optional
+ * `failingTests` list of strings whose non-empty members are kept.
+ */
+function gateSuiteEntry(value: unknown, index: number): GateSuiteEntry | string {
+  const at = `suites[${index}]`;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return `${at} must be an object`;
+  }
+  const entry = value as Record<string, unknown>;
+  const target = nonEmptyString(entry.target);
+  if (target === undefined) return `${at}.target must be a non-empty string`;
+  if (entry.outcome !== "pass" && entry.outcome !== "fail") {
+    return `${at}.outcome must be "pass" or "fail"`;
+  }
+  const countsAbsent = entry.passed === undefined && entry.failed === undefined;
+  const passed = countOf(entry.passed);
+  const failed = countOf(entry.failed);
+  if (countsAbsent) {
+    if (entry.outcome !== "fail") return `${at} must state passed and failed when its outcome is "pass"`;
+  } else if (passed === undefined || failed === undefined) {
+    return `${at}.passed and ${at}.failed must both be non-negative integers, or both absent`;
+  }
+  let failingTests: string[] | undefined;
+  if (entry.failingTests !== undefined) {
+    failingTests = stringList(entry.failingTests);
+    if (failingTests === undefined) return `${at}.failingTests must be a list of strings`;
+  }
+  return {
+    target,
+    outcome: entry.outcome,
+    ...(passed !== undefined && failed !== undefined ? { passed, failed } : {}),
+    ...(failingTests !== undefined ? { failingTests } : {}),
+  };
+}
+
+/**
+ * A gate's `scope` and `suites`, or the reason either is ill-formed. Each is
+ * optional, but a posted one is never coerced: `scope` is `full` or `scoped`,
+ * and `suites` is a non-empty list of well-formed entries. A `null` for either
+ * is ill-formed, not absent.
+ */
+function gateScopeAndSuites(body: V2Body): GateScopeAndSuites | string {
+  const out: GateScopeAndSuites = {};
+  if (body.scope !== undefined) {
+    if (body.scope !== "full" && body.scope !== "scoped") return `scope must be "full" or "scoped"`;
+    out.scope = body.scope;
+  }
+  if (body.suites !== undefined) {
+    if (!Array.isArray(body.suites) || body.suites.length === 0) {
+      return "suites must be a non-empty list of suite entries";
+    }
+    const suites: GateSuiteEntry[] = [];
+    for (const [index, value] of body.suites.entries()) {
+      const entry = gateSuiteEntry(value, index);
+      if (typeof entry === "string") return entry;
+      suites.push(entry);
+    }
+    out.suites = suites;
+  }
+  return out;
+}
+
+/**
+ * A `pre-merge-gate` milestone's verdict, counts and failing tests, carried
+ * only when the verdict is a literal `pass`/`fail` and both counts are
+ * well-formed: a half-stated verdict states nothing. `failingTests` keeps its
+ * non-empty string members and is carried only when something failed. The
+ * gate's already-validated scope and suites ride beside the verdict, and are
+ * dropped with it.
+ */
+function gateMilestoneFields(body: V2Body, scoped: GateScopeAndSuites): GateMilestoneFields | undefined {
+  const passed = countOf(body.passed);
+  const failed = countOf(body.failed);
+  if ((body.outcome !== "pass" && body.outcome !== "fail") || passed === undefined || failed === undefined) {
+    return undefined;
+  }
+  const failingTests = Array.isArray(body.failingTests)
+    ? body.failingTests.filter((t: unknown): t is string => typeof t === "string" && t.length > 0)
+    : undefined;
+  return {
+    outcome: body.outcome,
+    passed,
+    failed,
+    ...(failed > 0 && failingTests !== undefined ? { failingTests } : {}),
+    ...(scoped.scope !== undefined ? { scope: scoped.scope } : {}),
+    ...(scoped.suites !== undefined ? { suites: scoped.suites } : {}),
+  };
+}
+
 function isPackageRef(entry: unknown): entry is PackageRef {
   if (typeof entry !== "object" || entry === null) return false;
   const { registry, name, version } = entry as Record<string, unknown>;
@@ -1795,7 +2588,16 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   // accident gets. The route carries the flag; deciding what a repair means
   // stays in the store, next to the dedup it is the exception to.
   const repairProvenance = body.repairProvenance === true;
+  // A gate's scope and suites are refused whole when either is ill-formed,
+  // before anything is recorded: a verdict-bearing field half-stated states
+  // nothing, and storing the rest would read as a different gate.
+  const scoped = gateScopeAndSuites(body);
+  if (typeof scoped === "string") return fail(400, scoped, { help: milestoneHints.gateShape() });
+  const gate = gateMilestoneFields(body, scoped);
+  const acceptedFailingGateReason = nonEmptyString(body.acceptedFailingGateReason);
   const written = store.recordMilestoneEvent(pk.key, agentId, body.type, {
+    ...(gate !== undefined ? { gate } : {}),
+    ...(acceptedFailingGateReason !== undefined ? { acceptedFailingGateReason } : {}),
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(typeof body.commit === "string" ? { commit: body.commit } : {}),
     ...(releasedAt !== undefined ? { releasedAt } : {}),
@@ -2245,16 +3047,25 @@ async function handlePlanClose(
   if (body.status !== "closed") {
     return fail(400, `status must be "closed" to close a plan`, { help: hints.closedPlan });
   }
-  let merge: { commit: string } | undefined;
+  let merge: PlanMerge | undefined;
   if (body.merge !== undefined) {
-    const commit =
+    const stated =
       typeof body.merge === "object" && body.merge !== null
-        ? (body.merge as { commit?: unknown }).commit
-        : undefined;
+        ? (body.merge as { commit?: unknown; acceptedFailingGateReason?: unknown })
+        : {};
+    const commit = stated.commit;
     if (typeof commit !== "string" || commit.length === 0) {
       return fail(400, "merge.commit must be a non-empty string", { help: hints.closedPlan });
     }
-    merge = { commit };
+    // The reason a CR closes over a pre-merge gate that was not green: OPTIONAL,
+    // and when stated it must say something: an empty reason is no reason.
+    const reason = stated.acceptedFailingGateReason;
+    if (reason !== undefined && (typeof reason !== "string" || reason.length === 0)) {
+      return fail(400, "merge.acceptedFailingGateReason must be a non-empty string", {
+        help: hints.closedPlan,
+      });
+    }
+    merge = { commit, ...(reason !== undefined ? { acceptedFailingGateReason: reason } : {}) };
   }
   const plan = store.closePlan(pk.key, planId, merge);
   if ("error" in plan) {
@@ -2575,7 +3386,38 @@ function handleProjectHistory(store: Store, key: string, req: Request, url: URL)
   if (store.getProject(key) === null) {
     return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
   }
-  return reply(req, url, { ok: true, releases: projectHistory(store, key) });
+  return reply(req, url, {
+    ok: true,
+    releases: projectHistory(store, key),
+    acceptedFailingGates: acceptedFailingGates(store.listPlans(key)),
+  });
+}
+
+/** A CR that closed over a pre-merge gate that was not green, and why. */
+interface HistoryAcceptedFailingGate {
+  cr: string;
+  planId: number;
+  commit: string;
+  reason: string;
+  closedAt?: number;
+}
+
+/**
+ * Every CR the project closed over a red pre-merge gate, oldest close first,
+ * with the reason its closer gave. Project-wide rather than per release row: a
+ * CR no release holds yet closed over its gate all the same.
+ */
+function acceptedFailingGates(plans: Plan[]): HistoryAcceptedFailingGate[] {
+  return plans
+    .filter((plan) => plan.status === "closed" && plan.merge?.acceptedFailingGateReason !== undefined)
+    .map((plan) => ({
+      cr: plan.cr,
+      planId: plan.planId,
+      commit: plan.merge!.commit,
+      reason: plan.merge!.acceptedFailingGateReason!,
+      ...(plan.closedAt !== undefined ? { closedAt: plan.closedAt } : {}),
+    }))
+    .sort((a, b) => (a.closedAt ?? 0) - (b.closedAt ?? 0));
 }
 
 function projectHistory(store: Store, key: string): HistoryRelease[] {
@@ -3225,7 +4067,7 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
       // route). `release` and `track` are the values the membership gate
       // VETTED and returned; a property one literal deeper than these would
       // store nothing under its name at all, which the AC11 half of
-      // tests/queue-accepted-field-guard.test.ts now fires on.
+      // tests/unit/queue-accepted-field-guard.test.ts now fires on.
       ...(release !== undefined ? { release } : {}),
       ...(track !== undefined ? { track } : {}),
       ...(lifecycle !== undefined ? { lifecycle } : {}),
@@ -3919,7 +4761,7 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   // a value that WAS declared and carries no label is a SHAPE complaint whose
   // remedy is the caller's own input — and whose help-less envelope is pinned
   // as parity with the bulk door's identical refusal
-  // (tests/queue-membership-one-rule.test.ts, CR-CRU-104 §S2/AC3).
+  // (tests/unit/queue-membership-one-rule.test.ts, CR-CRU-104 §S2/AC3).
   if (body.release === undefined || body.release === null) {
     return fail(400, RELEASE_REQUIRED, { help: roadmapHints.missingRelease });
   }
@@ -4637,7 +5479,8 @@ function handlePlansRoute(
  * shares one all-scalar shape (TOON's uniform-table form applies).
  * CR-CRU-007 §S1 (additive) — optional `context` passthrough (verbatim when
  * stored, key ABSENT when not) + compile-event `errors`/`warnings` counts
- * (test-event briefs carry neither key).
+ * (test-event briefs carry neither key). The event's stored `stack` rides
+ * along when it has one (key ABSENT otherwise).
  */
 function eventBrief(event: RunEvent) {
   const compile = event.kind === "compile" ? (event.compile as CompileReport | undefined) : undefined;
@@ -4676,6 +5519,12 @@ function eventBrief(event: RunEvent) {
     // The release a run verifies, top-level beside `cycleId`; key ABSENT on
     // every event filed under none.
     ...(event.release !== undefined ? { release: event.release } : {}),
+    // The stack the run was made on, as stored; key ABSENT on every event
+    // never told one.
+    ...(event.stack !== undefined ? { stack: event.stack } : {}),
+    // The framework the run ran under, beside its stack; key ABSENT on every
+    // event that states none (milestones and gates among them).
+    ...(event.framework !== undefined ? { framework: event.framework } : {}),
     // CR-CRU-057 §S1 (additive) — the stamped declared role and its
     // provenance; both keys ABSENT on events that carry no stored role, so
     // history renders unclassified rather than guessed.
@@ -4693,6 +5542,8 @@ function eventBrief(event: RunEvent) {
     ...(event.type !== undefined ? { type: event.type } : {}),
     ...(event.label !== undefined ? { label: event.label } : {}),
     ...(event.commit !== undefined ? { commit: event.commit } : {}),
+    // A lint record's linter; key ABSENT on every record posted without one.
+    ...(event.lint !== undefined ? { lint: event.lint } : {}),
     ...(compile !== undefined
       ? {
           errors: compile.errorCount,
@@ -4712,6 +5563,8 @@ function eventBrief(event: RunEvent) {
     ...(event.runtimeMs !== undefined ? { runtime_ms: event.runtimeMs } : {}),
     ...(event.status !== undefined ? { status: event.status } : {}),
     ...(event.abortReason !== undefined ? { abortReason: event.abortReason } : {}),
+    // CR-CRU-200 §S3 — an untrusted stream's reason; key ABSENT on a complete run.
+    ...(event.incomplete !== undefined ? { incomplete: event.incomplete } : {}),
   };
 }
 
@@ -4721,9 +5574,13 @@ function eventBrief(event: RunEvent) {
  * NOT an event brief — an open run has no counts, no duration and no id in the
  * events table, and fabricating those keys is exactly what would let a running
  * card be mistaken for a finished one. `state` is omitted for the same reason
- * it cannot vary: everything here is open by construction.
+ * it cannot vary: everything here is open by construction. CR-CRU-223
+ * §S1 adds `live`, the run's counts so far, nested and never top-level.
  */
-function openRunBrief(run: RunRecord) {
+function openRunBrief(store: Store, run: RunRecord) {
+  // CR-CRU-223 §S1 — `live`, the run's counts so far, only when the board
+  // holds a live state for it; never its failures (the drill-in reads those).
+  const live = store.runLive(run.runId);
   return {
     runId: run.runId,
     projectKey: run.projectKey,
@@ -4731,9 +5588,26 @@ function openRunBrief(run: RunRecord) {
     startedAt: run.startedAt,
     ...(run.tier !== undefined ? { tier: run.tier } : {}),
     ...(run.stack !== undefined ? { stack: run.stack } : {}),
+    ...(run.framework !== undefined ? { framework: run.framework } : {}),
     ...(run.context !== undefined ? { context: run.context } : {}),
+    ...(live !== null ? { live: liveCounts(live) } : {}),
   };
 }
+
+/** CR-CRU-223 §S1 — the wire counts of a live state: its six keys, `total`
+ *  absent when the runner gave none or gave 0, `currentFile` absent with none. */
+function liveCounts(live: RunLive): LiveCountsWire {
+  return {
+    completed: live.completed,
+    ...(live.total !== undefined && live.total > 0 ? { total: live.total } : {}),
+    passed: live.passed,
+    failed: live.failed,
+    pending: live.pending,
+    ...(live.currentFile !== undefined ? { currentFile: live.currentFile } : {}),
+  };
+}
+
+type LiveCountsWire = Omit<RunLive, "failures">;
 
 function handleEventsList(store: Store, req: Request, url: URL): Response {
   const project = url.searchParams.get("project") ?? undefined;
@@ -4785,7 +5659,7 @@ function handleEventsList(store: Store, req: Request, url: URL): Response {
   return reply(req, url, {
     ok: true,
     events: withDecisionSummaries(store, store.listEvents(project, limit)),
-    openRuns: store.listOpenRuns(project).map(openRunBrief),
+    openRuns: store.listOpenRuns(project).map((run) => openRunBrief(store, run)),
   });
 }
 
@@ -4885,7 +5759,16 @@ function gateSteps(gate: unknown): { name: string; findings?: unknown }[] {
  *  Each progressive read asks the store for only what it serves — the suites
  *  rows alone, or one suite's leaves — and neither carries the run's raw
  *  output, which only the full read does; each carries `rawBytes`, its byte
- *  length, when the run has raw output. */
+ *  length, when the run has raw output. `?depth=suites` also carries
+ *  `coverageFileCount` when the run has coverage files.
+ *  ?depth=coverage[&files=<n>] reads an event's coverage files on their own:
+ *  the full read's answer without the tree and the raw output (and without
+ *  `rawBytes`), plus `coverageFileCount`, `coverageFiles` (all in the kept
+ *  order, or the first `n`) and `coverageRoot` — the count and the root the
+ *  whole run's. `files` is ASCII digits with a value of at least 1, the first
+ *  when given twice; anything else is refused with 400 before the store is
+ *  read. `?suite=` takes precedence over `depth`, and `files` is ignored on
+ *  every other read. */
 function handleEventGet(store: Store, id: string, req: Request, url: URL): Response {
   const notFound = (): Response => fail(404, `event not found: ${id}`);
   const suite = url.searchParams.get("suite");
@@ -4903,15 +5786,55 @@ function handleEventGet(store: Store, id: string, req: Request, url: URL): Respo
     const read = store.getEventSuites(id);
     if (read === null) return notFound();
     if (read.suites !== undefined) {
-      return reply(req, url, { ok: true, event: { ...read.event, tree: read.suites, ...rawBytesOf(read) } });
+      return reply(req, url, {
+        ok: true,
+        event: { ...read.event, tree: read.suites, ...rawBytesOf(read), ...coverageFileCountOf(read) },
+      });
     }
     // A run with no tree has no suites to summarise: the full read's answer,
     // still without the raw output.
-    return reply(req, url, { ok: true, event: { ...withGateDecisions(store, read.event), ...rawBytesOf(read) } });
+    return reply(req, url, {
+      ok: true,
+      event: { ...withGateDecisions(store, read.event), ...rawBytesOf(read), ...coverageFileCountOf(read) },
+    });
+  }
+  if (url.searchParams.get("depth") === "coverage") {
+    // Of a `files` given twice the first value counts; it is checked before
+    // the store is read, so a refused one answers 400 whatever the id.
+    const given = url.searchParams.get("files");
+    const limit = given === null ? undefined : coverageFilesLimit(given);
+    if (limit === null) {
+      return fail(400, `files must be a whole number of at least 1 (got ${JSON.stringify(given)})`);
+    }
+    const read = store.getEventCoverage(id, limit);
+    if (read === null) return notFound();
+    const { event: head, ...files } = read;
+    return reply(req, url, { ok: true, event: { ...withGateDecisions(store, head), ...files } });
   }
   const event = store.getEvent(id);
   if (event === null) return notFound();
   return reply(req, url, { ok: true, event: withGateDecisions(store, event) });
+}
+
+/** The `coverageFileCount` key of the `?depth=suites` answer — absent when the run has no coverage files. */
+function coverageFileCountOf(read: { coverageFileCount?: number }): { coverageFileCount?: number } {
+  return read.coverageFileCount !== undefined ? { coverageFileCount: read.coverageFileCount } : {};
+}
+
+/** Digits beyond which a `files` value is no longer an exact number; every such value is above any run's count. */
+const EXACT_DIGITS = 15;
+
+/**
+ * The `files` parameter of the `?depth=coverage` read as a row limit: ASCII
+ * digits alone with a value of at least 1 (`03` is 3), null for anything
+ * else. A value of more digits than a number holds exactly is answered as the
+ * greatest exact integer, so it is never rounded into a smaller limit.
+ */
+function coverageFilesLimit(text: string): number | null {
+  if (!/^[0-9]+$/.test(text)) return null;
+  const digits = text.replace(/^0+/, "");
+  if (digits.length === 0) return null;
+  return digits.length > EXACT_DIGITS ? Number.MAX_SAFE_INTEGER : Number(digits);
 }
 
 /** The `rawBytes` key of a progressive read's answer — absent when the run has no raw output. */
@@ -4975,13 +5898,16 @@ function handleStatus(store: Store, req: Request, url: URL): Response {
   }
   const events = store.listEvents(project, Number.MAX_SAFE_INTEGER);
   const lastTest = events.find((e) => e.kind === "test");
-  const lastCompile = events.find((e) => e.kind === "compile");
+  // A lint record is compile-kind; the newest of each is answered apart.
+  const lastCompile = events.find((e) => e.kind === "compile" && e.lint === undefined);
+  const lastLint = events.find((e) => e.kind === "compile" && e.lint !== undefined);
   return reply(req, url, {
     ok: true,
     status: {
       hasData: events.length > 0,
       lastTest: lastTest !== undefined ? eventBrief(lastTest) : null,
       lastCompile: lastCompile !== undefined ? eventBrief(lastCompile) : null,
+      lastLint: lastLint !== undefined ? eventBrief(lastLint) : null,
     },
   });
 }
@@ -5155,6 +6081,18 @@ export function handleV2(
   if (req.method === "POST" && abortRunId !== undefined) {
     return handleRunAbort(store, decodeURIComponent(abortRunId), req);
   }
+  const streamRunId = RUN_STREAM_RE.exec(pathname)?.[1];
+  if (req.method === "POST" && streamRunId !== undefined) {
+    return handleRunStream(store, decodeURIComponent(streamRunId), req);
+  }
+  const listRunId = RUN_TESTS_RE.exec(pathname)?.[1];
+  if (req.method === "POST" && listRunId !== undefined) {
+    return handleRunTests(store, decodeURIComponent(listRunId), req);
+  }
+  const liveRunId = RUN_LIVE_RE.exec(pathname)?.[1];
+  if (req.method === "GET" && liveRunId !== undefined) {
+    return handleRunLive(store, decodeURIComponent(liveRunId), url);
+  }
   // CR-CRU-013 §S1+§S4b — flat top-level gate/milestone routes (next to
   // /runs, NOT under /projects/).
   if (req.method === "POST" && pathname === "/api/v2/gates") {
@@ -5205,6 +6143,21 @@ function requireHeldProject(store: Store, key: string): Response | null {
   return null;
 }
 
+/**
+ * The analytics reads' key check: the held-project check, then an archived
+ * project is refused with the archived 404 the agent and write routes give.
+ * Kept apart from `requireHeldProject` because the plan pointer shares that
+ * helper and keeps answering an archived project.
+ */
+function requireLiveAnalyticsProject(store: Store, key: string): Response | null {
+  const missing = requireHeldProject(store, key);
+  if (missing !== null) return missing;
+  if (store.isArchived(key)) {
+    return fail(404, `project is archived: ${key}`, { help: hints.archivedProject });
+  }
+  return null;
+}
+
 /** `?release=<label>`, required by the two release-scoped reads. */
 function requireReleaseParam(url: URL): string | { fail: Response } {
   const release = url.searchParams.get("release");
@@ -5230,7 +6183,7 @@ function declaredTarget(store: Store, key: string, release: string): number | un
  * (points per day since its start) + the project-level flow line.
  */
 function handleAnalyticsVelocity(store: Store, key: string, req: Request, url: URL): Response {
-  const missing = requireHeldProject(store, key);
+  const missing = requireLiveAnalyticsProject(store, key);
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
@@ -5251,7 +6204,7 @@ function handleAnalyticsVelocity(store: Store, key: string, req: Request, url: U
 
 /** §S3 — GET …/analytics/burndown?release=: the release's SCRUM burndown. */
 function handleAnalyticsBurndown(store: Store, key: string, req: Request, url: URL): Response {
-  const missing = requireHeldProject(store, key);
+  const missing = requireLiveAnalyticsProject(store, key);
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
@@ -5275,7 +6228,7 @@ function handleAnalyticsBurndown(store: Store, key: string, req: Request, url: U
  * `seed` is TEST-ONLY (DN §7): an integer that makes the draws deterministic.
  */
 function handleAnalyticsForecast(store: Store, key: string, req: Request, url: URL): Response {
-  const missing = requireHeldProject(store, key);
+  const missing = requireLiveAnalyticsProject(store, key);
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;
@@ -5308,7 +6261,7 @@ function handleAnalyticsForecast(store: Store, key: string, req: Request, url: U
  * that predate the record).
  */
 function handleAnalyticsChanges(store: Store, key: string, req: Request, url: URL): Response {
-  const missing = requireHeldProject(store, key);
+  const missing = requireLiveAnalyticsProject(store, key);
   if (missing !== null) return missing;
   const release = requireReleaseParam(url);
   if (typeof release !== "string") return release.fail;

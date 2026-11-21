@@ -1,0 +1,22 @@
+# The three standard rust profiles, in nai's backend pattern: `default` (ad
+# hoc, excluding the docker tier), `ci` (the gate's run, the same exclusion)
+# and `e2e` (only the docker tier). Each writes its JUnit report, which the
+# real-runner tests compare the streamed record against.
+[profile.default]
+default-filter = "not binary(e2e_dock)"
+
+[profile.default.junit]
+path = "junit.xml"
+
+[profile.ci]
+default-filter = "not binary(e2e_dock)"
+slow-timeout = { period = "20s", terminate-after = 3 }
+
+[profile.ci.junit]
+path = "junit.xml"
+
+[profile.e2e]
+default-filter = "binary(e2e_dock)"
+
+[profile.e2e.junit]
+path = "junit.xml"

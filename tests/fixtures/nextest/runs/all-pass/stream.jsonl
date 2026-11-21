@@ -1,0 +1,10 @@
+{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"nxpass","test_binary":"it","kind":"test"}}
+{"type":"test","event":"started","name":"nxpass::it$integration_adds"}
+{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"nxpass","test_binary":"nxpass","kind":"lib"}}
+{"type":"test","event":"started","name":"nxpass::nxpass$tests::adds"}
+{"type":"test","event":"started","name":"nxpass::nxpass$tests::adds_zero"}
+{"type":"test","event":"ok","name":"nxpass::it$integration_adds","exec_time":0.002443381}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":0,"measured":0,"filtered_out":0,"exec_time":0.002443381,"nextest":{"crate":"nxpass","test_binary":"it","kind":"test"}}
+{"type":"test","event":"ok","name":"nxpass::nxpass$tests::adds","exec_time":0.002878942}
+{"type":"test","event":"ok","name":"nxpass::nxpass$tests::adds_zero","exec_time":0.003142244}
+{"type":"suite","event":"ok","passed":2,"failed":0,"ignored":0,"measured":0,"filtered_out":0,"exec_time":0.006021186,"nextest":{"crate":"nxpass","test_binary":"nxpass","kind":"lib"}}

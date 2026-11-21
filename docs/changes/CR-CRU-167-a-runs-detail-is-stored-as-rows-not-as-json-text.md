@@ -1,7 +1,7 @@
 # CR-CRU-167 — a run's detail is stored as rows, not as JSON text
 
 **Type** fix · **Points** 8 (gap analysis 2026-10-06) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-158 ·
-**Status** PENDING — filed 2026-10-06
+**Status** DONE — filed 2026-10-06
 
 ## Problem
 

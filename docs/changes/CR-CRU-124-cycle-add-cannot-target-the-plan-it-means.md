@@ -1,6 +1,6 @@
 # CR-CRU-124 — `cycle-add` cannot target the plan it means
 
-**Status:** PENDING (0.2.0 — born mid-release, D4)
+**Status:** DONE (0.2.0 — born mid-release, D4)
 **Type:** bugfix
 **Priority:** P2
 **Depends on:** CR-CRU-054 (the shared client plan-access layer this CR corrects)

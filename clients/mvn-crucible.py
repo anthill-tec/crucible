@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # dependencies = []
 # ///
 """Maven + Quarkus Crucible CLI — single entry point for orchestrator + the
 java RED/GREEN/FIX/VERIFY agent lifecycle ops AND for running Maven test tiers
-(surefire unit, module reactor, failsafe e2e, full regression with JaCoCo).
+(surefire unit, module reactor, failsafe e2e, full regression — JaCoCo
+coverage opt-in with --coverage).
 Replaces inline python / loose curl so each invocation has a stable command
 signature (one-time permission approval per signature, not per run).
 
@@ -22,9 +23,10 @@ The four test tiers (the differentiation this script encodes):
   e2e         Failsafe integration tests (`*IT.java` / @QuarkusIntegrationTest),
               optionally `-Dnative`. `mvn clean verify` (or `failsafe:integration-
               test` against a prebuilt package). No coverage.
-  regression  Full reactor suite WITH JaCoCo coverage — the orchestrator
-              pre-merge gate. `mvn clean verify` → parse surefire + failsafe +
-              jacoco.csv → /api/v2/runs/parsed. Coverage published ONLY here.
+  regression  Full reactor suite, coverage-free unless --coverage adds JaCoCo.
+              `mvn clean verify` → surefire + failsafe reports (+ jacoco.csv
+              with --coverage) sent to /api/v2/runs for the board to decode.
+              pre-merge-gate always runs it with coverage.
 
 Subcommands:
   register, unregister  Agent lifecycle (heartbeat / remove).
@@ -36,8 +38,9 @@ Subcommands:
   e2e                   mvn clean verify [-Dnative] [-pl m]  (or, with
                         --failsafe-only, mvn failsafe:integration-test). Ingests
                         failsafe (and surefire) results. No coverage. Optional docker.
-  regression            mvn clean verify (whole reactor) → surefire + failsafe +
-                        jacoco coverage → /api/v2/runs/parsed. ORCHESTRATOR gate.
+  regression            mvn clean verify (whole reactor) → surefire + failsafe
+                        (+ jacoco coverage only with --coverage) →
+                        /api/v2/runs.
   auto-ingest           Ingest EXISTING surefire/failsafe reports without running
                         maven (when the caller already ran mvn). Compile fallback.
   docker-up/docker-down docker compose up -d --wait / down -v (compose + services
@@ -50,11 +53,14 @@ Project + Crucible endpoint:
   Maven dir (where mvnw + target live; e.g. a `backend` subdir):
     --maven-dir > $MVN_CRUCIBLE_MAVEN_DIR > CRUCIBLE_MAVEN_DIR in .env > project dir.
   Optional .env keys: CRUCIBLE_MAVEN_DIR, CRUCIBLE_COMPOSE_FILE,
-    CRUCIBLE_DOCKER_SERVICES, CRUCIBLE_BIND_MOUNT_PATHS, CRUCIBLE_COVERAGE_PROFILE.
-  Posts to the board the project's `crucible.toml` declares (`[client] url`,
-  shipped default http://localhost:3849), v2 endpoints ONLY:
-  /api/v2/agents/register|unregister, /api/v2/runs (codec junit),
-  /api/v2/runs/parsed, /api/v2/runs/compile.
+    CRUCIBLE_DOCKER_SERVICES, CRUCIBLE_BIND_MOUNT_PATHS, CRUCIBLE_COVERAGE_PROFILE
+    (read only with regression --coverage, and by pre-merge-gate).
+  Posts to the first `[client] url` declared by the project's crucible.toml,
+  then the install's (with neither declaring one, a verb that must reach the
+  board refuses); v2 endpoints ONLY:
+  /api/v2/agents/register|unregister, /api/v2/runs (codec junit, coverage
+  codec jacoco), /api/v2/runs/compile. Every report travels inline, as its
+  text; the client parses none of them.
 
 Examples:
   # UNIT (targeted RED/GREEN) — one class + ingest
@@ -79,8 +85,9 @@ Examples:
   MVN_CRUCIBLE_PROJECT_DIR=/path/to/repo mvn-crucible.py module --agent X
 """
 
-import argparse
-import csv
+# pi-lens-ignore: I001 — pi-lens lints with its own ruff configuration, which sets no target version, so ruff files `tomllib` as third-party whatever the declared floor
+import argparse  # noqa: I001
+import contextlib
 import glob
 import importlib.util
 import os
@@ -89,6 +96,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 import xml.etree.ElementTree as ET
 
 STALE_THRESHOLD_S = 120
@@ -125,6 +133,7 @@ def _resolve_project_dir(arg_value):
         )
         root = (r.stdout.strip() if r.returncode == 0 and r.stdout.strip()
                 else os.getcwd())
+    root = os.path.abspath(root)
     _axi().bind_project_dir(root)
     return root
 
@@ -210,14 +219,14 @@ def _common_mvn_flags(args):
 def _base_url():
     """CR-CRU-139 §S2 — the BOARD this client posts to, read at the POINT OF
     USE from the fleet's ONE resolver: the project's own `crucible.toml`
-    (`[client] url`), else the install's, else the distribution's shipped
-    declaration.
+    (`[client] url`), else the install's; with neither declaring one it
+    refuses.
 
     A call rather than the module constant this line used to hold. A constant
     bound at import was a setting no edit an operator made could reach, and it
     froze the board for the whole process — so a verb handed a different
     `--project-dir` posted to the previous one's board. `resolve_base_url()` in
-    `_crucible_axi.py` documents the resolution and the environment channel it
+    `_crucible_board.py` documents the resolution and the environment channel it
     retired."""
     return _axi().resolve_base_url()
 
@@ -226,7 +235,7 @@ def _request(method, path, payload=None, timeout=None):
     """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error.
 
     CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
-    (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
+    (`/api/v2/runs`) for a large regression/coverage run can legitimately
     take the server >10s, and a short bound there is a false-negative. The short
     hook-safe bound is applied ONLY on the status/plans read path via `_get`.
 
@@ -313,7 +322,7 @@ def _ops():
         project_key=_project_key, plans_path=_plans_path,
         open_plans=_open_plans, resolve_plan=_resolve_plan_or_emit,
         post_gate=_post_gate, post_milestone=_post_milestone,
-        base_url=_base_url())
+        base_url=_base_url)
 
 
 def _run_context():
@@ -345,57 +354,23 @@ def _open_plans(project_dir):
     return _axi().open_plans(_get, _plans_path(project_dir))
 
 
-def _emit_ingest_axi_resp(verb, resp, project_dir, agent, warnings=None):
-    """Emit the §S1 envelope for a SERVER-parsed ingest (junit-dir path): run fields
-    come from the server response `run`. CR-CRU-050 §S2 — `pending` is printed
-    alongside, so the line always sums. CR-CRU-056 §S3 — the client RESOLVES no
-    cycle: a bound agent's run is server-stamped with its registered cycle (a
-    stale binding gets a 409, surfaced via `error`). C5 — the envelope context
-    ECHOES the attachment the SERVER reported (`context.cycleId` on the ingest
-    response), so the agent sees which cycle absorbed its evidence without a
-    second `GET /api/v2/events`; absent → the key is omitted. CR-CRU-094 §S3 —
-    `warnings` carries the run's pre-flight finding onto the envelope, so the
-    stderr line and `warnings[]` say the same thing."""
-    s = resp.get("run", {}) or {}
-    run = {"passed": s.get("passed"), "failed": s.get("failed"),
-           "pending": s.get("pending", 0), "total": s.get("total")}
-    context = _axi_context(project_dir, agent_id=agent,
-                           cycle_id=_axi().echoed_cycle_id(resp))
-    result_fields = {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])}
-    err = resp.get("error")
-    if err is not None:
-        result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
+def _emit_run_axi(verb, resp, project_dir, agent, *, ok=None, help_steps=None,
+                  warnings=()):
+    """Emit the envelope of a run this client filed through the shared run
+    emitter, `emit_run_axi`: its `run:` block (each figure null when the run
+    was not filed), `help`, the answer's `error` and `warnings[]` after the
+    caller's `warnings`. The context echoes the cycle the board attached the
+    run to.
 
-
-def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
-                             help_steps=None, warnings=None):
-    """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path): run fields
-    come from the client-computed summary. CR-CRU-050 §S2 — `pending` is
-    printed alongside, so the line always sums. CR-CRU-051 §S2 — so is `files`,
-    the distinct-source count from `_parse_junit` (per-CLASS granularity for
-    surefire), so a suite that silently shrinks is visible in the gate output
-    itself. CR-CRU-056 §S3 — no client-
-    resolved cycle; a bound agent's run is server-stamped. C5 — the envelope
-    context ECHOES the attachment the SERVER reported (`context.cycleId` on the
-    ingest response); absent → the key is omitted.
-
-    CR-CRU-058 §S1/§S2 — `help_steps` lets a caller supply the STATE-DERIVED
-    next step for the run it just made (`_axi().run_help`) instead of the canned
-    per-verb `HELP_STEPS` entry, and `warnings` the structured condition behind
-    a run whose evidence never reached the board; both unset keeps today's
-    behaviour exactly."""
-    run = {"passed": summary["passed"], "failed": summary["failed"],
-           "pending": summary.get("pending", 0),
-           "total": summary["total"], "files": files}
-    context = _axi_context(project_dir, agent_id=agent,
-                           cycle_id=_axi().echoed_cycle_id(resp))
-    result_fields = {"run": run,
-                     "help": help_steps or _axi().HELP_STEPS.get(verb, ["status"])}
-    err = resp.get("error")
-    if err is not None:
-        result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
+    `ok` overrides the envelope's verdict (default: the answer's `ok`);
+    `help_steps` is a state-derived next step (`run_help`) in place of the
+    canned per-verb `HELP_STEPS` entry."""
+    return _axi().emit_run_axi(
+        verb, resp,
+        _axi_context(project_dir, agent_id=agent,
+                     cycle_id=_axi().echoed_cycle_id(resp)),
+        _emit_axi, ok=ok, help_steps=help_steps, warnings=warnings,
+        fields={}, coverage=True)
 
 
 # ── §S2b (CR-CRU-008) — in-run progress narration (class granularity) ──────
@@ -450,7 +425,7 @@ def _recognise_class_start(line):
     return _MVN_RUNNING_LINE.search(line.rstrip("\r\n")) is not None
 
 
-def _narrator(project_dir, agent_id, xml_total, identity=None):
+def _narrator(project_dir, agent_id, xml_total, identity=None, poster=None):
     """This client's `RunNarrator`: mvn's recogniser, M as the larger of the
     classes seen and the TEST-*.xml reports on disk (`xml_total`, re-read at
     every post, so M ratchets toward the true total), and a tick through
@@ -459,7 +434,11 @@ def _narrator(project_dir, agent_id, xml_total, identity=None):
 
     M never reads below the classes already seen (they are a floor on the
     total before a single report is on disk). The count is of test CLASSES,
-    and the narration says so: `running N/M classes`, then `ran N/M classes`."""
+    and the narration says so: `running N/M classes`, then `ran N/M classes`.
+
+    On a relayed run (`poster` is its relay's `LandingPoster`) the in-run
+    ticks are not posted while the relay's batches land; the closing count
+    and `ingesting…` are posted either way."""
     def _tick(message):
         resp = _narrate_heartbeat(project_dir, agent_id, message)
         if identity is not None:
@@ -468,17 +447,21 @@ def _narrator(project_dir, agent_id, xml_total, identity=None):
     def _total():
         return max(xml_total(), narrator.count)
 
-    narrator = _axi().RunNarrator(_tick, _recognise_class_start, total=_total,
+    tick = _tick if poster is None else poster.withhold_ticks(_tick)
+    narrator = _axi().RunNarrator(tick, _recognise_class_start, total=_total,
                                   unit="classes")
     return narrator
 
 
-def _start_run(project_dir, agent_id, tier=None, context=None, release=None):
+def _start_run(project_dir, agent_id, tier=None, context=None, release=None,
+               framework=None):
     """Open the run BEFORE maven is spawned, through the shared `open_run`.
     Returns `(run_id, warnings)`; a refusal degrades to a single-shot ingest
-    with a warning naming the fallback."""
+    with a warning naming the fallback. A declared run states its
+    `framework`."""
     return _axi().open_run(_post, _project_key(project_dir), agent_id, _STACK,
-                           tier=tier, context=context, release=release)
+                           tier=tier, context=context, release=release,
+                           framework=framework)
 
 
 def _xml_total_for(maven_dir, module, kinds, reports_dir):
@@ -549,7 +532,7 @@ def _close_gate_identity(project_dir, identity):
 
 
 # --------------------------------------------------------------------------- #
-# Report discovery + parsing (surefire / failsafe JUnit XML, JaCoCo CSV)
+# Report discovery (surefire / failsafe JUnit XML, JaCoCo CSV): paths only
 # --------------------------------------------------------------------------- #
 def _report_dirs(maven_dir, module, kind):
     """Resolve the `<kind>-reports` dirs to read. `kind` is 'surefire' or
@@ -567,6 +550,16 @@ def _report_dirs(maven_dir, module, kind):
 
 def _dirs_with_xml(dirs):
     return [d for d in dirs if os.path.isdir(d) and glob.glob(os.path.join(d, "TEST-*.xml"))]
+
+
+def _ran_nothing(result, dirs):
+    """Whether the runner exited non-zero while the reports in `dirs` hold no
+    results — the shared `ran_nothing` over every `TEST-*.xml` the run wrote.
+    `dirs` holding no report at all is the compile fallback's case, not this."""
+    reports = sorted(path for d in dirs
+                     for path in glob.glob(os.path.join(d, "TEST-*.xml")))
+    return bool(reports) and _axi().ran_nothing(
+        result.returncode, _axi().junit_testcase_count(reports))
 
 
 def _warn_if_stale(dirs):
@@ -594,13 +587,18 @@ def _run_reports_dir(args, project_dir):
 
 
 def _prepare_reports_dir(reports_dir):
-    """Create the run's own reports dir and clear the TEST-*.xml a previous run
-    left there, so only this run's results are read. Nothing else is touched."""
+    """Create the run's own reports dir and clear the TEST-*.xml and the
+    console a previous run left there, so only this run's results are read and
+    only this run's console is relayed. Nothing else is touched."""
     if reports_dir is None:
         return
     os.makedirs(reports_dir, exist_ok=True)
     for stale in glob.glob(os.path.join(reports_dir, "TEST-*.xml")):
         os.remove(stale)
+    console = os.path.join(reports_dir, _CONSOLE_FILE)
+    if os.path.exists(console):
+        with contextlib.suppress(OSError):
+            os.remove(console)
 
 
 def _reports_dir_flags(reports_dir, kinds):
@@ -653,185 +651,59 @@ def _claim_pinned_reports(maven_dir, module, kinds, reports_dir):
     return warnings
 
 
-def _parse_junit(dirs):
-    """Parse all TEST-*.xml across `dirs` into (summary, tree, files). Each
-    file's root is a <testsuite>; testcases with <failure>/<error> → fail,
-    <skipped> → pending.
-
-    CR-CRU-051 §S1 — `files` is the DISTINCT-SOURCE count, mirroring
-    `bun-crucible.py::_parse_junit_file` (the reference). RESOLVED GRANULARITY
-    FOR THIS CLIENT: per-CLASS, not per-file. Surefire/failsafe stamp every
-    `<testcase>` with `classname` (e.g. `com.acme.FooTest`) and do NOT emit a
-    `file` attribute, so what this client reports as "files" is really
-    "distinct test CLASSES" — the format's contract, not a defect, labelled
-    honestly here rather than implying a per-file precision surefire does not
-    give. (In Java the two usually coincide, one public test class per .java,
-    but nested/inner test classes make the count exceed the file count — so
-    "classes" is the accurate word, not "files".) The `file` rung is still
-    checked first so the count upgrades for free if a future reporter stamps
-    it. The chain degrades (file → classname → suite name)
-    instead of collapsing to zero: a constant zero would make a shrinking suite
-    look identical to a healthy one. Counted across ALL `dirs` at once (the
-    surefire + failsafe split), so a class appearing in both is counted once.
-    It rides the printed run envelope only, never the ingest payload
-    (CR-CRU-047 §S2)."""
-    tree_nodes = []
-    total = passed = failed = pending = 0
-    duration_ms = 0
-    files = set()
-    for d in dirs:
-        for xml_file in sorted(glob.glob(os.path.join(d, "TEST-*.xml"))):
-            try:
-                root = ET.parse(xml_file).getroot()
-            except ET.ParseError as e:
-                print(f"[crucible] WARN: unparseable report {xml_file}: {e}",
-                      file=sys.stderr)
-                continue
-            suite_name = root.get("name", os.path.basename(xml_file))
-            children = []
-            suite_fail = False
-            for tc in root.findall("testcase"):
-                source = tc.get("file") or tc.get("classname") or suite_name
-                if source:
-                    files.add(source.replace("\\", "/"))
-                tc_time = int(float(tc.get("time", 0) or 0) * 1000)
-                if tc.find("failure") is not None or tc.find("error") is not None:
-                    status = "fail"
-                    failed += 1
-                    suite_fail = True
-                elif tc.find("skipped") is not None:
-                    status = "pending"
-                    pending += 1
-                else:
-                    status = "pass"
-                    passed += 1
-                total += 1
-                duration_ms += tc_time
-                children.append({
-                    "name": tc.get("name", "?"),
-                    "status": status,
-                    "duration_ms": tc_time,
-                })
-            tree_nodes.append({
-                "name": suite_name,
-                "status": "fail" if suite_fail else "pass",
-                "children": children,
-            })
-    summary = {
-        "total": total, "passed": passed, "failed": failed,
-        "pending": pending, "duration_ms": duration_ms,
-    }
-    # `files` is a SIBLING of `summary`, deliberately not a key inside it:
-    # `summary` IS the /api/v2/runs/parsed payload's summary field verbatim, and
-    # CR-CRU-047 §S2 keeps this count out of the wire.
-    return summary, tree_nodes, len(files)
+def _report_paths(dirs):
+    """Every `TEST-*.xml` in `dirs`: in the order of `dirs`, each directory's
+    reports sorted. These are the reports a run sends, as their text, for the
+    board to decode; the client reads none of them."""
+    return [path for d in dirs
+            for path in sorted(glob.glob(os.path.join(d, "TEST-*.xml")))]
 
 
-def _collect_jacoco(maven_dir):
-    """Sum JaCoCo CSV across the reactor. Prefer the quarkus-jacoco extension
-    output (`target/jacoco-report/jacoco.csv`); fall back to the maven-plugin
-    output (`target/site/jacoco/jacoco.csv`). Returns a coverage dict or None.
+# Where a build leaves its JaCoCo CSV, in preference order: the quarkus-jacoco
+# extension's output, then the maven plugin's.
+_JACOCO_CSVS = ("jacoco-report/jacoco.csv", "site/jacoco/jacoco.csv")
 
-    NOTE: only call this on a FULL GREEN regression — JaCoCo from a partial or
-    failed run is incomplete and must NOT be published.
-    """
-    for rel in ("jacoco-report/jacoco.csv", "site/jacoco/jacoco.csv"):
-        files = sorted(set(
+
+def _jacoco_paths(maven_dir):
+    """The JaCoCo CSVs a coverage run sends: the first of `_JACOCO_CSVS` that
+    exists under any `target/` at or below `maven_dir` (hidden directories
+    excepted, as `glob` excludes them), then every CSV of that name,
+    deduplicated and sorted. The board sums several texts as one; `[]` when
+    the build left none."""
+    for rel in _JACOCO_CSVS:
+        paths = sorted(set(
             glob.glob(os.path.join(maven_dir, "target", rel))
             + glob.glob(os.path.join(maven_dir, "**", "target", rel), recursive=True)
         ))
-        if not files:
-            continue
-        lt = lc = mt = mc = bt = bc = 0
-        for path in files:
-            with open(path) as f:
-                for row in csv.DictReader(f):
-                    lc += int(row.get("LINE_COVERED", 0) or 0)
-                    lt += int(row.get("LINE_MISSED", 0) or 0) + int(row.get("LINE_COVERED", 0) or 0)
-                    mc += int(row.get("METHOD_COVERED", 0) or 0)
-                    mt += int(row.get("METHOD_MISSED", 0) or 0) + int(row.get("METHOD_COVERED", 0) or 0)
-                    bc += int(row.get("BRANCH_COVERED", 0) or 0)
-                    bt += int(row.get("BRANCH_MISSED", 0) or 0) + int(row.get("BRANCH_COVERED", 0) or 0)
-        print(f"[crucible] jacoco: {len(files)} csv file(s) from {rel}",
-              file=sys.stderr)
-        return {
-            "lines": {"total": lt, "covered": lc, "percent": round(lc / lt * 100, 1) if lt else 0},
-            "functions": {"total": mt, "covered": mc, "percent": round(mc / mt * 100, 1) if mt else 0},
-            "branches": {"total": bt, "covered": bc, "percent": round(bc / bt * 100, 1) if bt else 0},
-        }
-    return None
+        if paths:
+            return paths
+    return []
 
 
 # --------------------------------------------------------------------------- #
 # Ingest helpers
 # --------------------------------------------------------------------------- #
-def _ingest_junit_dir(project_dir, agent, report_dir, tier=None, context=None,
-                      run_id=None, release=None):
-    """Fast path: hand a single reports DIR to Crucible's built-in JUnit parser
-    (the v2 junit codec reads a file OR a directory of TEST-*.xml). Returns the
-    parsed response dict (the caller emits the §S1 envelope)."""
-    payload = {
-        "projectKey": _project_key(project_dir),
-        "codec": "junit",
-        "dataPath": report_dir,
-        "agentId": agent,
-    }
-    if tier:
-        payload["tier"] = tier
-    ctx = context if context is not None else _run_context()
-    if ctx:
-        payload["context"] = ctx
-    # The runId of the OPEN run this ingest closes; absent, the single-shot body.
-    if run_id:
-        payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs", payload, release=release)
-    s = resp.get("run", {})
-    print(f"ingest junit: ok={resp.get('ok')} dir={report_dir} "
-          f"passed={s.get('passed')} failed={s.get('failed')} "
-          f"pending={s.get('pending', 0)} total={s.get('total')}",
-          file=sys.stderr)
-    return resp
+JUNIT_CODEC = "junit"
+JACOCO_CODEC = "jacoco"
 
 
-def _ingest_parsed(project_dir, agent, summary, tree, coverage=None, tier=None,
-                   context=None, raw=None, files=None, run_id=None, release=None):
-    """POST a client-parsed run to /api/v2/runs/parsed. Returns the response dict.
-
-    CR-CRU-051 §S2 — `files` (the distinct-source count) is a PRINT-ONLY
-    argument: it is appended to the human-readable count line and is never added
-    to `payload`/`summary`, which go on the wire (CR-CRU-047 §S2)."""
-    payload = {
-        "projectKey": _project_key(project_dir),
-        "agentId": agent,
-        "summary": summary,
-        "tree": tree,
-    }
-    if coverage:
-        payload["coverage"] = coverage
-    if tier:
-        payload["tier"] = tier
-    ctx = context if context is not None else _run_context()
-    if ctx:
-        payload["context"] = ctx
-    # CR-CRU-038 §S2b — the captured runner output rides along as `raw` so the
-    # server-stored run carries real output for the run-detail raw-toggle.
-    if raw:
-        payload["raw"] = raw
-    if run_id:
-        payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
-                              release=release)
-    cov = ""
-    if coverage:
-        cov = (f" lines={coverage['lines']['percent']}% "
-               f"funcs={coverage['functions']['percent']}% "
-               f"branches={coverage['branches']['percent']}%")
-    print(f"ingest parsed: ok={resp.get('ok')} passed={summary['passed']} "
-          f"failed={summary['failed']} pending={summary['pending']} "
-          f"total={summary['total']}"
-          + (f" files={files}" if files is not None else "")
-          + cov, file=sys.stderr)
-    return resp
+def _file_reports(project_dir, agent_id, report_paths, *, raw=None,
+                  coverage_paths=(), tier=None, context=None, run_id=None,
+                  release=None, runner_exit=None, framework=None):
+    """Send a run's surefire/failsafe reports to the board for it to decode:
+    the shared `ingest_reports`, which reads the board's health first and,
+    unless it refuses, makes ONE `POST /api/v2/runs` carrying `codec:
+    "junit"`, every report's text inline, the JaCoCo CSVs as `coverage` when
+    any are given, `raw` and `runnerExit`. This client parses none of them.
+    Returns the board's answer. The stack rides on the body through the
+    shared ingest, and a declared run's `framework` with it."""
+    return _axi().ingest_reports(
+        _post, _get, stack=_STACK, project_key=_project_key(project_dir),
+        agent_id=agent_id, codec=JUNIT_CODEC, report_paths=report_paths,
+        raw=raw, coverage_codec=JACOCO_CODEC if coverage_paths else None,
+        coverage_paths=coverage_paths, tier=tier, context=context,
+        run_id=run_id, release=release, runner_exit=runner_exit,
+        framework=framework)
 
 
 def _ingest_compile(project_dir, agent, output, context=None, run_id=None,
@@ -850,51 +722,14 @@ def _ingest_compile(project_dir, agent, output, context=None, run_id=None,
         payload["context"] = ctx
     if run_id:
         payload["runId"] = run_id
-    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload,
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload, stack=_STACK,
                               release=release)
     print(f"ingest compile: ok={resp.get('ok')} error_lines={err_count}", file=sys.stderr)
     return 0 if resp.get("ok") else 1
 
 
-def _smart_ingest(project_dir, agent, dirs, tier=None, context=None,
-                  pooled=False, run_id=None, release=None):
-    """One reports dir with XML → fast junit-dir path. Many → parse + parsed.
-    None → return None so the caller can run the compile fallback.
-
-    `pooled` — the one dir is the run's own directory, where every reactor
-    module's surefire writes; there, more than one report is more than one
-    source, read as many dirs were before that directory pooled them.
-
-    CR-CRU-058 §S1 — returns the INGEST STATE (`{resp, summary, files}`) rather
-    than a bare bool, so the caller can emit a `run:` block. Those counts are
-    parsed CLIENT-side on BOTH paths: the ingest response carries none when the
-    server could not be reached, and an envelope reporting a real run as empty
-    would be a false negative. Falsy exactly where the old `False` was (None),
-    so every existing truthiness call site reads unchanged."""
-    existing = _dirs_with_xml(dirs)
-    if not existing:
-        return None
-    _warn_if_stale(existing)
-    many_sources = pooled and len(
-        glob.glob(os.path.join(existing[0], "TEST-*.xml"))) > 1
-    if len(existing) == 1 and not many_sources:
-        resp = _ingest_junit_dir(project_dir, agent, existing[0], tier=tier,
-                                 context=context, run_id=run_id,
-                                 release=release)
-        # The junit-dir path ingests the DIR (the server parses it), so the
-        # envelope's own counts come from a client-side parse of the same
-        # reports — for the envelope only, never on the wire (CR-CRU-051 §S2).
-        summary, _tree, files = _parse_junit(existing)
-    else:
-        summary, tree, files = _parse_junit(existing)
-        resp = _ingest_parsed(project_dir, agent, summary, tree, tier=tier,
-                              context=context, files=files, run_id=run_id,
-                              release=release)
-    return {"resp": resp, "summary": summary, "files": files}
-
-
 def _compile_fallback(maven_dir, project_dir, agent, common_flags, run_id=None,
-                      release=None):
+                      release=None, context=None):
     """No test reports → tests didn't compile. Run `mvn clean test-compile` and
     ingest the build output as a compile failure (the RED-as-compile path).
 
@@ -908,8 +743,173 @@ def _compile_fallback(maven_dir, project_dir, agent, common_flags, run_id=None,
           file=sys.stderr)
     result = subprocess.run(cmd, cwd=maven_dir, capture_output=True, text=True)
     output = (result.stdout or "") + (result.stderr or "")
-    return (_ingest_compile(project_dir, agent, output, run_id=run_id,
-                            release=release), output)
+    return (_ingest_compile(project_dir, agent, output, context=context,
+                            run_id=run_id, release=release), output)
+
+
+# --------------------------------------------------------------------------- #
+# The declared console: a `[targets.<tier>]` entry
+# --------------------------------------------------------------------------- #
+#: A project's `[targets.<tier>]` entry for a maven run, field by field, and
+#: the fields a maven entry may not declare (its record is its JUnit reports,
+#: and its coverage follows the verb).
+_CONSOLE_FRAMEWORK = "surefire"
+_CONSOLE_CODEC = "surefire-console"
+_TARGETS_REFUSED_FIELDS = ("junit", "stream", "coverage")
+#: The frameworks other stacks declare in the same `[targets.*]` table: an
+#: entry naming one is another stack's, skipped rather than refused.
+_OTHER_STACKS_FRAMEWORKS = ("nextest", "arduino-native", "unittest", "pytest",
+                            "bun-test", "vitest", "playwright", "playwright-bdd",
+                            "go-test")
+
+
+def _check_console_declaration(args, key):
+    """Read the run's `[targets.<key>]` entry from the project's own
+    `crucible.toml` and, for a declared run with an agent, the board's health,
+    before any board call, `docker-up` or maven. A refusal raises the shared
+    `DeclarationRefused` hard stop. A key already checked on `args` is not
+    checked again, so a body run on behalf of a checked verb reads nothing
+    twice. The health a declared run read is kept on `args`
+    (`console_health`, by key) for the run body's relay."""
+    checked = getattr(args, "console_checked", None) or set()
+    if key in checked:
+        return
+    path = os.path.join(_resolve_project_dir(args.project_dir), "crucible.toml")
+    if _declared_entry(path, key) and getattr(args, "agent", None):
+        health = _get(_axi().INGEST_HEALTH_PATH)
+        refusal = _console_health_refusal(health, key)
+        if refusal is not None:
+            raise _axi().DeclarationRefused(
+                refusal, ["run against a board that reads the console", "status"])
+        args.console_health = {**(getattr(args, "console_health", None) or {}),
+                               key: health}
+    args.console_checked = checked | {key}
+
+
+def _declared_entry(path, key):
+    """Whether the project's `crucible.toml` at `path` declares the maven
+    entry under `key`. No file, no entry, or another stack's entry is
+    undeclared; a file that does not parse, or an entry at fault, raises the
+    `DeclarationRefused` hard stop naming the table and the field."""
+    table = f"[targets.{key}]"
+    help_steps = [f"fix {table} in {path}, then re-run", "status"]
+    try:
+        with open(path, "rb") as handle:
+            declared = tomllib.load(handle)
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as error:
+        raise _axi().DeclarationRefused(
+            f"the project's crucible.toml ({path}) does not parse ({error}), so "
+            f"its {table} entry cannot be read; nothing was run", help_steps) from error
+    targets = declared.get("targets")
+    entry = targets.get(key) if isinstance(targets, dict) else None
+    if entry is None or (isinstance(entry, dict)
+                         and entry.get("framework") in _OTHER_STACKS_FRAMEWORKS):
+        return False
+    fault = _targets_fault(entry)
+    if fault is None:
+        return True
+    field, value = fault
+    raise _axi().DeclarationRefused(
+        f"{table} in {path} declares `{field}` = {value!r}, which a maven run "
+        f"cannot take: a maven run is declared framework = \"{_CONSOLE_FRAMEWORK}\" "
+        f"with console = \"{_CONSOLE_CODEC}\" and nothing else; nothing was run",
+        help_steps)
+
+
+def _targets_fault(entry):
+    """(PURE) The first field of a maven `[targets.*]` entry a run cannot
+    take, as `(field, value)`, or None. Every field is required."""
+    if not isinstance(entry, dict):
+        return "targets", entry
+    for field in _TARGETS_REFUSED_FIELDS:
+        if field in entry:
+            return field, entry[field]
+    if entry.get("framework") != _CONSOLE_FRAMEWORK:
+        return "framework", entry.get("framework")
+    if entry.get("console") != _CONSOLE_CODEC:
+        return "console", entry.get("console")
+    return None
+
+
+def _console_health_refusal(health, key):
+    """(PURE) Why the board whose health is `health` cannot take the console
+    `[targets.<key>]` declares (no `surefire-console` under `codecs.view`), or
+    None. A health that cannot be read is no refusal."""
+    if not isinstance(health, dict) or health.get("ok") is False:
+        return None
+    if _board_reads_console(health):
+        return None
+    version = health.get("version") or "an unstated version"
+    return (f"[targets.{key}] declares console = \"{_CONSOLE_CODEC}\", but the "
+            f"board (version {version}) lists no `{_CONSOLE_CODEC}` under "
+            f"`codecs.view`, so it cannot read the declared console; nothing "
+            f"was run")
+
+
+def _board_reads_console(health):
+    """(PURE) True only when the board's `health` answer lists
+    `surefire-console` in its `codecs.view` list."""
+    codecs = health.get("codecs") if isinstance(health, dict) else None
+    views = codecs.get("view") if isinstance(codecs, dict) else None
+    return isinstance(views, list) and _CONSOLE_CODEC in views
+
+
+# --------------------------------------------------------------------------- #
+# The console relay: a declared run's console, followed to the open run
+# --------------------------------------------------------------------------- #
+#: The file a relayed run's console is written to, in its reports dir, and how
+#: long the relay's `finish` may take once maven exited, and once a signal
+#: interrupted the run.
+_CONSOLE_FILE = "surefire-console.log"
+_CONSOLE_FINISH_SECONDS = 60.0
+_INTERRUPTED_FINISH_SECONDS = 5.0
+
+
+def _relay_post(path, payload, timeout=None):
+    """The relay's poster: one POST bounded by the relay's own `timeout`."""
+    return _request("POST", path, payload, timeout)
+
+
+class _RunConsole:
+    """A run's console, as its `[targets.<key>]` declaration and the health
+    `_check_console_declaration` read decide. A declared run states
+    `framework` (`surefire`); one whose board lists `surefire-console` under
+    `codecs.view` also relays maven's console, written to
+    `<reports dir>/surefire-console.log`, to its open run. An undeclared run,
+    or one with no agent or no open run, is exactly as before."""
+
+    def __init__(self, args, key, reports_dir):
+        healths = getattr(args, "console_health", None) or {}
+        self._health = healths.get(key)
+        self.framework = _CONSOLE_FRAMEWORK if key in healths else None
+        self._path = (os.path.join(reports_dir, _CONSOLE_FILE)
+                      if reports_dir is not None else None)
+        self.poster = None
+        self._relay = None
+
+    def start(self, project_dir, agent_id, run_id):
+        """Start the relay to the open run `run_id`, when this run relays."""
+        if (not run_id or self._path is None or self.framework is None
+                or not _board_reads_console(self._health)):
+            return
+        self.poster = _axi().LandingPoster(_relay_post)
+        self._relay = _axi().StreamRelay(
+            self.poster, _project_key(project_dir), agent_id, run_id,
+            self._path, _CONSOLE_CODEC, _axi()._ingest_body_limit(self._health))
+        self._relay.start()
+
+    def observer(self, narrator):
+        """The shared `console_observer`: the narrator when nothing relays,
+        otherwise a tee writing the console file the relay follows."""
+        return _axi().console_observer(self._relay, self._path, narrator)
+
+    def finish(self, deadline_seconds):
+        """Finish the relay (when one runs) within `deadline_seconds`; a
+        failure is the relay's to say on stderr and never changes the run."""
+        if self._relay is not None:
+            self._relay.finish(deadline_seconds)
 
 
 # --------------------------------------------------------------------------- #
@@ -917,7 +917,9 @@ def _compile_fallback(maven_dir, project_dir, agent, common_flags, run_id=None,
 # --------------------------------------------------------------------------- #
 def _run_surefire_tier(args, goal_extra, label):
     """Shared body for `unit` and `module`: mvn clean test [...], then ingest
-    surefire. On no-reports, compile fallback. Surefire only, NEVER coverage."""
+    surefire. On no-reports, compile fallback. Surefire only, NEVER coverage.
+    The run's `[targets.<label>]` declaration is checked first."""
+    _check_console_declaration(args, label)
     project_dir = _resolve_project_dir(args.project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
@@ -938,94 +940,125 @@ def _surefire_tier_run(args, goal_extra, label, project_dir, identity):
     env = os.environ.copy()
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
+    # The pre-flight every run verb makes, before maven spawns: an unbound run
+    # while the project has an active cycle is refused here. A release run
+    # keeps its own note below and is never refused.
+    preflight_warnings = [] if release else _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None), context=_run_context())
     # §S3 — human narration on stderr; stdout carries the §S1 envelope alone.
     print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     narrator, run_id, run_warnings = None, None, []
-    if args.agent:
-        # The shared run path: narrate class-level progress, and open the run
-        # BEFORE maven is spawned so the board shows it running.
-        narrator = _narrator(project_dir, args.agent,
-                             _xml_total_for(maven_dir, getattr(args, "module", None),
-                                            ("surefire",), reports_dir),
-                             identity)
-        run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
-                                          context=_run_context(),
-                                          release=release)
-        # §S1 — this body makes no pre-flight, so a release run's note rides
-        # ahead of the run's own warnings, where the pre-flight's would.
-        if release:
-            run_warnings = [_axi().release_run_note(release)] + run_warnings
+    console = _RunConsole(args, label, reports_dir)
     # CR-CRU-111 §S4/AC6b — the ONE child this verb spawns, bracketed: a `unit`
     # run that spends its wall clock waiting is measured here and says so in its
     # own envelope. `module` runs this same body and is left alone, because the
     # shared check is scoped to `unit` by the tier it is handed.
     # A signal while the run is open is trapped and the open run disclosed.
+    # The run opens before the `try`, so a signal during its opening reaches
+    # the gated bracket; the relay starts inside it, so any exception after
+    # the relay starts finishes it.
+    if args.agent:
+        # The shared run path: open the run BEFORE maven is spawned so the
+        # board shows it running, relay a declared console to it, and
+        # narrate class-level progress.
+        run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
+                                          context=_run_context(),
+                                          release=release,
+                                          framework=console.framework)
     try:
-        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id):
+        if args.agent:
+            console.start(project_dir, args.agent, run_id)
+            narrator = _narrator(project_dir, args.agent,
+                                 _xml_total_for(maven_dir,
+                                                getattr(args, "module", None),
+                                                ("surefire",), reports_dir),
+                                 identity, console.poster)
+            run_warnings = list(preflight_warnings) + run_warnings
+            # §S1 — a release run's note rides ahead of the run's own
+            # warnings, where the pre-flight's would.
+            if release:
+                run_warnings = [_axi().release_run_note(release)] + run_warnings
+        with _axi().ChildRunTiming() as timing, _axi().abandon_trap(run_id), \
+                console.observer(narrator) as observer:
             result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
-                                 narrator)
+                                 observer)
     except _axi().RunAbandoned as abandoned:
+        # What maven wrote before the signal reaches the board before the run
+        # is aborted.
+        console.finish(_INTERRUPTED_FINISH_SECONDS)
         return _axi().emit_run_abandoned(label, _project_key(project_dir),
                                          args.agent, run_id, abandoned,
                                          run_warnings,
                                          post_fn=_post)
+    except BaseException:
+        console.finish(0)
+        raise
+    # Every exit below closes the run, so the relay is finished first.
+    console.finish(_CONSOLE_FINISH_SECONDS)
     print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
+    runner_exit = _axi().runner_exit_code(result.returncode)
     # The final count, then `ingesting…`, both ahead of the ingest below.
     _axi().close_narration(narrator)
     pinned_warnings = run_warnings + _claim_pinned_reports(
         maven_dir, getattr(args, "module", None), ("surefire",), reports_dir)
-    dirs = _run_read_dirs(maven_dir, getattr(args, "module", None), ("surefire",),
-                          reports_dir)
-    # CR-CRU-056 §S3 — no client-side cycle resolution: a bound agent's run is
-    # server-stamped with its registered cycle.
-    ctx = _run_context()
-    # CR-CRU-008 §S2 tier map: the subcommand name IS the tier (unit/module).
-    # A `module` run over a reactor pools every module's reports in the run's
-    # own directory, so it keeps the many-source parsed ingest it always had.
-    ingested = _smart_ingest(project_dir, args.agent, dirs, tier=label, context=ctx,
-                             pooled=label == "module" and reports_dir is not None,
-                             run_id=run_id, release=release)
-    if ingested:
-        rc = 0
-        # CR-CRU-058 §S1 — the tier verbs reached only a plain-print ingest
-        # helper before this: the run they measured now rides a real envelope,
-        # emitted HERE (the verb), never inside the shared ingest helpers.
-        _emit_tier_run_axi(label, ingested, project_dir, args.agent,
-                           warnings=pinned_warnings
-                           + _axi().unit_run_wall_vs_cpu_warnings(
-                               label, "mvn", timing))
-    else:
+    dirs = _dirs_with_xml(_run_read_dirs(maven_dir, getattr(args, "module", None),
+                                         ("surefire",), reports_dir))
+    if not dirs:
         rc, build_output = _compile_fallback(maven_dir, project_dir,
                                              args.agent, common, run_id=run_id,
                                              release=release)
         _emit_compile_fallback_axi(label, rc, build_output, project_dir,
                                    args.agent, run_warnings)
-    return rc
+        # No report: a runner that exited non-zero exits non-zero whatever
+        # the compile ingest answered.
+        return _axi().verb_exit(runner_exit, {"ok": rc == 0})
+    _warn_if_stale(dirs)
+    if _ran_nothing(result, dirs):
+        return _axi().emit_ran_nothing(
+            label, "surefire reports", result.returncode,
+            getattr(result, "stdout", None) or "", run_id, pinned_warnings,
+            post_fn=_post, project_key=_project_key(project_dir),
+            agent_id=args.agent)
+    # No client-side cycle resolution: a bound agent's run is server-stamped
+    # with its registered cycle. The subcommand name IS the tier.
+    resp = _file_reports(project_dir, args.agent, _report_paths(dirs),
+                         raw=getattr(result, "stdout", None), tier=label,
+                         context=_run_context(), run_id=run_id,
+                         release=release, runner_exit=runner_exit,
+                         framework=console.framework)
+    # The run this body measured rides a real envelope, emitted HERE (the
+    # verb), never inside the shared ingest.
+    _emit_tier_run_axi(label, resp, project_dir, args.agent,
+                       warnings=pinned_warnings
+                       + _axi().unit_run_wall_vs_cpu_warnings(
+                           label, "mvn", timing))
+    # The exit carries the runner's verdict and the filed run's, and a
+    # refused ingest is never green.
+    return _axi().verb_exit(runner_exit, resp)
 
 
-def _emit_tier_run_axi(verb, ingested, project_dir, agent, warnings=()):
-    """CR-CRU-058 §S1 — the `run:` envelope for a test-tier verb, from the
-    ingest state `_smart_ingest` measured. §S2 — `help[]` is derived from the
-    state actually reached (unrecorded run / red run / green run), never a
-    canned per-verb string.
+def _emit_tier_run_axi(verb, resp, project_dir, agent, warnings=()):
+    """The `run:` envelope for a test-tier verb, from the board's answer
+    (`_emit_run_axi`). `help[]` is derived from the state actually reached
+    (unrecorded run / red run / green run), never a canned per-verb string,
+    and a run that was not filed says so (`ingest_failed_warning`) beside the
+    answer's own `error`.
 
-    CR-CRU-111 §S4 — `warnings` carries what the caller found ABOUT THE RUN
-    (the wall-vs-CPU reading it took around its own child) ahead of what this
-    envelope discovers about the ingest, the order `preflight_cycle_warnings`
+    `warnings` carries what the caller found ABOUT THE RUN (the wall-vs-CPU
+    reading it took around its own child) ahead of what this envelope
+    discovers about the ingest, the order `preflight_cycle_warnings`
     established."""
-    resp = ingested["resp"]
-    summary = ingested["summary"]
-    ok = bool(resp.get("ok")) and summary["failed"] == 0
-    _emit_ingest_summary_axi(verb, resp, summary, ingested["files"],
-                             project_dir, agent,
-                             help_steps=_axi().run_help(verb, ok, summary["failed"],
-                                                        _base_url()),
-                             warnings=(list(warnings)
-                                       + ([] if resp.get("ok")
-                                          else [_axi().ingest_failed_warning(
-                                              verb, _base_url())])))
+    failed = _axi().filed_run(resp).get("failed") or 0
+    ok = bool(resp.get("ok")) and failed == 0
+    _emit_run_axi(verb, resp, project_dir, agent, ok=ok,
+                  help_steps=_axi().run_help(verb, ok, failed, _base_url()),
+                  warnings=(list(warnings)
+                            + ([] if resp.get("ok")
+                               else [_axi().ingest_failed_warning(
+                                   verb, _base_url())])))
 
 
 _MVN_CAUSE_JOINER = " · "
@@ -1133,7 +1166,9 @@ def _run_failsafe_tier(args, goals, label):
     Both ingest failsafe (the IT results) AND surefire (the unit tests the
     lifecycle runs on the way to that phase) together, because both were
     produced by this one run; on no reports at all the run is a build failure
-    and takes the compile fallback, like every other tier verb here."""
+    and takes the compile fallback, like every other tier verb here. The
+    run's `[targets.<label>]` declaration is checked first."""
+    _check_console_declaration(args, label)
     project_dir = _resolve_project_dir(args.project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
@@ -1157,31 +1192,50 @@ def _failsafe_tier_run(args, goals, label, project_dir, identity):
     module = getattr(args, "module", None)
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
+    # The pre-flight, as `_surefire_tier_run` makes it, before maven spawns.
+    preflight_warnings = [] if release else _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None), context=_run_context())
     narrator, run_id, run_warnings = None, None, []
+    console = _RunConsole(args, label, reports_dir)
+    # The run opens before the `try`, so a signal during its opening reaches
+    # the gated bracket; the relay starts inside it, so any exception after
+    # the relay starts finishes it.
     if args.agent:
         # The shared run path, as `_run_surefire_tier` walks it.
-        narrator = _narrator(project_dir, args.agent,
-                             _xml_total_for(maven_dir, module,
-                                            ("failsafe", "surefire"), reports_dir),
-                             identity)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=label,
                                           context=_run_context(),
-                                          release=release)
-        # §S1 — the release run's note, as `_run_surefire_tier` carries it.
-        if release:
-            run_warnings = [_axi().release_run_note(release)] + run_warnings
+                                          release=release,
+                                          framework=console.framework)
     try:
-        with _axi().abandon_trap(run_id):
+        if args.agent:
+            console.start(project_dir, args.agent, run_id)
+            narrator = _narrator(project_dir, args.agent,
+                                 _xml_total_for(maven_dir, module,
+                                                ("failsafe", "surefire"),
+                                                reports_dir),
+                                 identity, console.poster)
+            run_warnings = list(preflight_warnings) + run_warnings
+            # §S1 — the release run's note, as `_run_surefire_tier` carries it.
+            if release:
+                run_warnings = [_axi().release_run_note(release)] + run_warnings
+        with _axi().abandon_trap(run_id), console.observer(narrator) as observer:
             result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
-                                 narrator)
+                                 observer)
     except _axi().RunAbandoned as abandoned:
+        console.finish(_INTERRUPTED_FINISH_SECONDS)
         return _axi().emit_run_abandoned(label, _project_key(project_dir),
                                          args.agent, run_id, abandoned,
                                          run_warnings,
                                          post_fn=_post)
+    except BaseException:
+        console.finish(0)
+        raise
+    console.finish(_CONSOLE_FINISH_SECONDS)
     print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
+    runner_exit = _axi().runner_exit_code(result.returncode)
     _axi().close_narration(narrator)
     pinned_warnings = run_warnings + _claim_pinned_reports(
         maven_dir, module, ("failsafe", "surefire"), reports_dir)
@@ -1193,18 +1247,28 @@ def _failsafe_tier_run(args, goals, label, project_dir, identity):
                                              release=release)
         _emit_compile_fallback_axi(label, rc, build_output, project_dir,
                                    args.agent, run_warnings)
-        return rc
+        # No report: the runner's exit decides, never the compile ingest's 0.
+        return _axi().verb_exit(runner_exit, {"ok": rc == 0})
     _warn_if_stale(dirs)
-    summary, tree, files = _parse_junit(dirs)
+    if _ran_nothing(result, dirs):
+        return _axi().emit_ran_nothing(
+            label, "surefire reports", result.returncode,
+            getattr(result, "stdout", None) or "", run_id, pinned_warnings,
+            post_fn=_post, project_key=_project_key(project_dir),
+            agent_id=args.agent)
     # The subcommand name IS the tier, as it is for `unit`/`module`: a tier
     # PARAMETER, never a literal this body asserts about a run it did not name.
-    resp = _ingest_parsed(project_dir, args.agent, summary, tree,
-                          tier=label, files=files, run_id=run_id,
-                          release=release)
-    # CR-CRU-058 §S1 — the run this body measured rides a real envelope.
-    _emit_tier_run_axi(label, {"resp": resp, "summary": summary, "files": files},
-                       project_dir, args.agent, warnings=pinned_warnings)
-    return 0 if summary["failed"] == 0 else 1
+    resp = _file_reports(project_dir, args.agent, _report_paths(dirs),
+                         raw=getattr(result, "stdout", None), tier=label,
+                         context=_run_context(), run_id=run_id,
+                         release=release, runner_exit=runner_exit,
+                         framework=console.framework)
+    # The run this body measured rides a real envelope, as the board filed it.
+    _emit_tier_run_axi(label, resp, project_dir, args.agent,
+                       warnings=pinned_warnings)
+    # The exit carries the runner's verdict and the filed run's, and a
+    # refused ingest is never green.
+    return _axi().verb_exit(runner_exit, resp)
 
 
 def cmd_integration(args):
@@ -1225,6 +1289,12 @@ def cmd_compile(args):
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
     cmd = _mvn_base(maven_dir) + ["clean", "test-compile"] + common
+    # `compile` INGESTS the build output, so it makes the pre-flight every
+    # filing verb makes, before maven spawns.
+    cycle = getattr(args, "cycle", None)
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent, cycle_id=cycle,
+        context=_run_context())
     print(f"[compile] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     result = subprocess.run(cmd, cwd=maven_dir, capture_output=True, text=True)
     output = (result.stdout or "") + (result.stderr or "")
@@ -1234,20 +1304,21 @@ def cmd_compile(args):
     print(f"[compile] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
-    rc = _ingest_compile(project_dir, args.agent, output)
+    rc = _ingest_compile(project_dir, args.agent, output,
+                         context=_axi().cycle_context(_run_context(), cycle))
     ok = result.returncode == 0
     # CR-CRU-058 §S1/§S2 — the compile verb reached only a plain-print ingest
     # helper before this; its envelope names the build outcome, and its help[]
     # the state actually reached (a clean build points at the next verb, a
     # broken one at the errors just ingested).
-    warnings = ([] if rc == 0
-                else [_axi().ingest_failed_warning("compile", _base_url())])
+    warnings = list(preflight_warnings) + (
+        [] if rc == 0 else [_axi().ingest_failed_warning("compile", _base_url())])
     _emit_axi("compile", ok,
               {"exit": result.returncode,
                "help": (_axi().HELP_STEPS["check"] if ok else
-                        [f"fix the compile error(s) ingested to Crucible (and "
-                         f"echoed on stderr), then re-run compile "
-                         f"--agent <agentId>", "status"])},
+                        ["fix the compile error(s) ingested to Crucible (and "
+                         "echoed on stderr), then re-run compile "
+                         "--agent <agentId>", "status"])},
               _axi_context(project_dir, agent_id=args.agent), warnings,
               f"compile: ok={ok} exit={result.returncode}")
     return rc
@@ -1260,23 +1331,33 @@ def _docker_clean_check(maven_dir):
     try:
         r = subprocess.run(["docker", "ps", "--format", "{{.Names}} ({{.Image}})"],
                            capture_output=True, text=True)
-        running = [l for l in r.stdout.splitlines() if l.strip()]
+        running = [line for line in r.stdout.splitlines() if line.strip()]
         if running:
             print(f"[crucible] ⚠ {len(running)} docker container(s) already running before e2e:",
                   file=sys.stderr)
-            for l in running[:15]:
-                print(f"    {l}", file=sys.stderr)
+            for name in running[:15]:
+                print(f"    {name}", file=sys.stderr)
             print("    Confirm these are expected; stale e2e containers can poison the run.",
                   file=sys.stderr)
-    except Exception:
+    except Exception:  # noqa: S110
+        # pi-lens-ignore: python-empty-except, S110 — the docker listing is informational; an absent or failing docker must never stop the e2e run
         pass
 
 
 def cmd_e2e(args):
     """E2E tier — failsafe integration tests (*IT.java / @QuarkusIntegrationTest),
     optionally native. No coverage. Optional docker compose lifecycle."""
+    # The `[targets.e2e]` declaration is checked before any board call or
+    # docker.
+    _check_console_declaration(args, "e2e")
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
+    # Refused before docker is touched; the tier body's own pre-flight carries
+    # the warnings.
+    _axi().refuse_unattributed_run(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        release=getattr(args, "release", None), context=_run_context())
     _docker_clean_check(maven_dir)
 
     docker_up = False
@@ -1330,6 +1411,11 @@ def cmd_regression(args, verb="regression"):
     CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
     `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
     must carry ONE document under the GATE's own verb, not the inner one's."""
+    # A coverage-only flag on a coverage-free run is refused first, before the
+    # project, the board, a lock, docker or maven is touched.
+    _axi().refuse_coverage_only_flags(
+        args, {"coverage_profile": "--coverage-profile"})
+    _check_console_declaration(args, "regression")
     project_dir = _resolve_project_dir(args.project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
@@ -1349,9 +1435,11 @@ def cmd_regression(args, verb="regression"):
 
 def _regression_run(args, identity=None, verb="regression",
                     preflight_warnings=()):
-    """REGRESSION tier — full reactor suite WITH JaCoCo coverage. Orchestrator
-    pre-merge gate. Parses surefire + failsafe + jacoco.csv → /api/v2/runs/parsed.
-    Coverage is published ONLY here, and ONLY when zero failures.
+    """REGRESSION tier — full reactor suite, coverage-free unless `--coverage`
+    adds JaCoCo (the pre-merge gate always asks for it). Sends the surefire +
+    failsafe reports (+ every jacoco.csv with coverage) to /api/v2/runs for
+    the board to decode. A coverage run sends its JaCoCo whether or not it
+    passed; the board discards a red run's.
 
     `identity` is the caller's `GatedRunIdentity` (CR-CRU-056): the narration
     ticks report through it, so a tick that re-creates a pruned row hands this
@@ -1366,10 +1454,16 @@ def _regression_run(args, identity=None, verb="regression",
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
-    # Coverage profile: --coverage-profile or CRUCIBLE_COVERAGE_PROFILE in .env.
-    cov_profile = args.coverage_profile or _read_env(project_dir).get("CRUCIBLE_COVERAGE_PROFILE")
-    if cov_profile:
-        common = common + ["-P", cov_profile]
+    # Coverage is opt-in: without `--coverage` no coverage profile is applied
+    # and no JaCoCo is collected. With it, the profile is --coverage-profile,
+    # else CRUCIBLE_COVERAGE_PROFILE in .env, else none (the build's own
+    # JaCoCo, if any, is collected).
+    with_coverage = getattr(args, "coverage", False)
+    if with_coverage:
+        cov_profile = (args.coverage_profile
+                       or _read_env(project_dir).get("CRUCIBLE_COVERAGE_PROFILE"))
+        if cov_profile:
+            common = common + ["-P", cov_profile]
 
     cmd = _mvn_base(maven_dir) + ["clean", args.goal] + common
     reports_dir = _run_reports_dir(args, project_dir)
@@ -1380,30 +1474,45 @@ def _regression_run(args, identity=None, verb="regression",
     # of the envelope, leaving the stream prose-then-envelope, never a clean
     # single document. Interactive-only now, like `test`/`check`'s equivalents.
     print(f"[regression] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
-    narrator, run_id = None, None
+    narrator, run_id, run_warnings = None, None, []
+    console = _RunConsole(args, "regression", reports_dir)
+    # The run opens before the `try`, so a signal during its opening reaches
+    # the gated bracket; the relay starts inside it, so any exception after
+    # the relay starts finishes it.
     if args.agent:
-        # The shared run path: narrate class-level progress (which also forces
-        # the streaming capture, so result.stdout is populated for a bare
-        # `regression --agent X` and rides along as `raw`), and open the run
-        # BEFORE maven is spawned.
-        narrator = _narrator(project_dir, args.agent,
-                             _xml_total_for(maven_dir, None, ("surefire", "failsafe"),
-                                            reports_dir),
-                             identity)
+        # The shared run path: open the run BEFORE maven is spawned, relay
+        # a declared console to it, and narrate class-level progress (which
+        # also forces the streaming capture, so result.stdout is populated
+        # for a bare `regression --agent X` and rides along as `raw`).
         run_id, run_warnings = _start_run(project_dir, args.agent,
-                                          tier="regression", context=_run_context(),
-                                          release=release)
-        preflight_warnings += run_warnings
+                                          tier="regression",
+                                          context=_run_context(),
+                                          release=release,
+                                          framework=console.framework)
     try:
-        with _axi().abandon_trap(run_id):
+        if args.agent:
+            console.start(project_dir, args.agent, run_id)
+            narrator = _narrator(project_dir, args.agent,
+                                 _xml_total_for(maven_dir, None,
+                                                ("surefire", "failsafe"),
+                                                reports_dir),
+                                 identity, console.poster)
+            preflight_warnings += run_warnings
+        with _axi().abandon_trap(run_id), console.observer(narrator) as observer:
             result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
-                                 narrator)
+                                 observer)
     except _axi().RunAbandoned as abandoned:
+        console.finish(_INTERRUPTED_FINISH_SECONDS)
         return _axi().emit_run_abandoned(verb, _project_key(project_dir),
                                          args.agent, run_id, abandoned,
                                          preflight_warnings,
                                          post_fn=_post)
+    except BaseException:
+        console.finish(0)
+        raise
+    console.finish(_CONSOLE_FINISH_SECONDS)
     print(f"[regression] mvn exit={result.returncode}", file=sys.stderr)
+    runner_exit = _axi().runner_exit_code(result.returncode)
     _axi().close_narration(narrator)
 
     preflight_warnings += _claim_pinned_reports(maven_dir, None, ("surefire", "failsafe"),
@@ -1418,39 +1527,52 @@ def _regression_run(args, identity=None, verb="regression",
                                              release=release)
         _emit_compile_fallback_axi(verb, rc, build_output, project_dir,
                                    args.agent, preflight_warnings)
-        return rc
+        # No report: the runner's exit decides, never the compile ingest's 0.
+        return _axi().verb_exit(runner_exit, {"ok": rc == 0})
 
     _warn_if_stale(dirs)
-    summary, tree, files = _parse_junit(dirs)
-
-    coverage = None
-    if summary["failed"] == 0:
-        coverage = _collect_jacoco(maven_dir)
-        if coverage is None:
-            print("[regression] WARN: no jacoco.csv found — ingesting WITHOUT coverage. "
-                  "Check the quarkus-jacoco extension / --coverage-profile.", file=sys.stderr)
-    else:
-        print(f"[regression] {summary['failed']} failure(s) — NOT publishing coverage "
-              "(JaCoCo from a failing run is incomplete).", file=sys.stderr)
-
-    resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                          tier="regression", context=_run_context(),
-                          raw=getattr(result, "stdout", None), files=files,
-                          run_id=run_id, release=release)
-    ok = bool(resp.get("ok")) and summary["failed"] == 0
+    if _ran_nothing(result, dirs):
+        return _axi().emit_ran_nothing(
+            verb, "surefire reports", result.returncode,
+            getattr(result, "stdout", None) or "", run_id, preflight_warnings,
+            post_fn=_post, project_key=_project_key(project_dir),
+            agent_id=args.agent)
+    report_paths = _report_paths(dirs)
+    # A coverage run sends every JaCoCo CSV the build left, passing or
+    # failing: the board discards a red run's coverage.
+    coverage_paths = _jacoco_paths(maven_dir) if with_coverage else []
+    if with_coverage and not coverage_paths:
+        preflight_warnings.append(_axi().coverage_not_measured_warning(
+            "the build left no jacoco.csv under any target/ (check the "
+            "quarkus-jacoco extension / --coverage-profile)"))
+    resp = _file_reports(project_dir, args.agent, report_paths,
+                         raw=getattr(result, "stdout", None),
+                         coverage_paths=coverage_paths, tier="regression",
+                         context=_run_context(), run_id=run_id,
+                         release=release, runner_exit=runner_exit,
+                         framework=console.framework)
+    exit_code = _axi().verb_exit(runner_exit, resp)
+    ok = exit_code == 0
     # §S2 — a GATE run's next step is derived from the run state it reached
     # (unrecorded / red / green); the plain `regression` verb keeps its canned
-    # HELP_STEPS entry, unchanged.
-    help_steps = (_axi().run_help(verb, ok, summary["failed"], _base_url())
-                  if verb != "regression" else None)
-    _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, args.agent,
-                             help_steps=help_steps, warnings=preflight_warnings)
-    return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
+    # HELP_STEPS entry, unchanged. A run that was not filed has no failure
+    # count, so none is read.
+    gate = verb != "regression"
+    help_steps = (_axi().run_help(verb, ok, _axi().filed_run(resp).get("failed"),
+                                  _base_url())
+                  if gate else None)
+    # A gate whose one whole-suite run was not filed cannot say what it
+    # covered: it names that suite unreported, as a composed gate does.
+    if gate:
+        preflight_warnings += _axi().whole_suite_unreported_warnings(_STACK, resp)
+    _emit_run_axi(verb, resp, project_dir, args.agent, help_steps=help_steps,
+                  warnings=preflight_warnings)
+    return exit_code
 
 
 def cmd_test(args, tier=None):
     """§S2 fleet-uniform test verb — `mvn clean test [-Dtest=…]` → surefire
-    junit-dir ingest (/api/v2/runs). With --agent the result is ingested; a bound
+    reports sent to /api/v2/runs. With --agent the result is ingested; a bound
     agent's run is server-stamped with its registered cycle.
 
     CR-CRU-111 §S2/AC3 — `tier` is the tier the CALLER stated, and the only caller
@@ -1461,8 +1583,10 @@ def cmd_test(args, tier=None):
     stated tier this run claims none, and the server applies its own default.
 
     An ingesting run always has an agent, so its reports sit in ONE directory
-    (the run's own; every module writes there) and ingest via the junit-dir
-    path."""
+    (the run's own; every module writes there), and every report in it is
+    sent inline for the board to decode. `test` reads the `[targets.unit]`
+    declaration, checked first."""
+    _check_console_declaration(args, "unit")
     project_dir = _resolve_project_dir(args.project_dir)
     with _axi().gated_run(project_dir, getattr(args, "agent", None),
                           getattr(args, "cycle", None),
@@ -1493,29 +1617,43 @@ def _test_run(args, tier, project_dir, identity):
         cycle_id=getattr(args, "cycle", None),
         context=_run_context(), release=release)
     print(f"[test] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
-    narrator, run_id = None, None
+    narrator, run_id, run_warnings = None, None, []
+    console = _RunConsole(args, "unit", reports_dir)
+    # The run opens before the `try`, so a signal during its opening reaches
+    # the gated bracket; the relay starts inside it, so any exception after
+    # the relay starts finishes it.
     if args.agent:
         # The shared run path, as `_run_surefire_tier` walks it.
-        narrator = _narrator(project_dir, args.agent,
-                             _xml_total_for(maven_dir, getattr(args, "module", None),
-                                            ("surefire",), reports_dir),
-                             identity)
         run_id, run_warnings = _start_run(project_dir, args.agent, tier=tier,
                                           context=_run_context(),
-                                          release=release)
-        preflight_warnings = list(preflight_warnings) + run_warnings
+                                          release=release,
+                                          framework=console.framework)
     try:
-        with _axi().abandon_trap(run_id):
+        if args.agent:
+            console.start(project_dir, args.agent, run_id)
+            narrator = _narrator(project_dir, args.agent,
+                                 _xml_total_for(maven_dir,
+                                                getattr(args, "module", None),
+                                                ("surefire",), reports_dir),
+                                 identity, console.poster)
+            preflight_warnings = list(preflight_warnings) + run_warnings
+        with _axi().abandon_trap(run_id), console.observer(narrator) as observer:
             result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None),
-                                 narrator)
+                                 observer)
     except _axi().RunAbandoned as abandoned:
+        console.finish(_INTERRUPTED_FINISH_SECONDS)
         return _axi().emit_run_abandoned("test", _project_key(project_dir),
                                          args.agent, run_id, abandoned,
                                          preflight_warnings,
                                          post_fn=_post)
+    except BaseException:
+        console.finish(0)
+        raise
+    console.finish(_CONSOLE_FINISH_SECONDS)
     print(f"[test] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
+    runner_exit = _axi().runner_exit_code(result.returncode)
     _axi().close_narration(narrator)
     preflight_warnings = list(preflight_warnings) + _claim_pinned_reports(
         maven_dir, getattr(args, "module", None), ("surefire",), reports_dir)
@@ -1525,17 +1663,26 @@ def _test_run(args, tier, project_dir, identity):
         # No reports → tests didn't compile. Ingest the build output as compile.
         rc, _ = _compile_fallback(maven_dir, project_dir, args.agent, common,
                                   run_id=run_id, release=release)
-        return rc
+        # The runner's exit decides, never the compile ingest's 0.
+        return _axi().verb_exit(runner_exit, {"ok": rc == 0})
     _warn_if_stale(dirs)
-    ctx = _run_context()
-    resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier=tier, context=ctx,
-                             run_id=run_id, release=release)
-    _emit_ingest_axi_resp("test", resp, project_dir, args.agent,
-                          preflight_warnings)
-    failed = (resp.get("run") or {}).get("failed") or 0
-    if failed and failed > 0:
-        return 1
-    return 0 if resp.get("ok") else 1
+    if _ran_nothing(result, dirs):
+        return _axi().emit_ran_nothing(
+            "test", "surefire reports", result.returncode,
+            getattr(result, "stdout", None) or "", run_id,
+            preflight_warnings, post_fn=_post,
+            project_key=_project_key(project_dir), agent_id=args.agent)
+    resp = _file_reports(project_dir, args.agent, _report_paths(dirs),
+                         raw=getattr(result, "stdout", None), tier=tier,
+                         context=_run_context(), run_id=run_id,
+                         release=release, runner_exit=runner_exit,
+                         framework=console.framework)
+    # The envelope states the run as the board filed it.
+    _emit_run_axi("test", resp, project_dir, args.agent,
+                  warnings=preflight_warnings)
+    # The exit carries the runner's verdict and the filed run's, and a
+    # refused ingest is never green.
+    return _axi().verb_exit(runner_exit, resp)
 
 
 def cmd_check(args):
@@ -1559,7 +1706,9 @@ def cmd_check(args):
     print(f"[check] mvn exit={result.returncode}", file=sys.stderr)
     ok = result.returncode == 0
     if not ok and args.agent:
-        _ingest_compile(project_dir, args.agent, output)
+        _ingest_compile(project_dir, args.agent, output,
+                        context=_axi().cycle_context(
+                            _run_context(), getattr(args, "cycle", None)))
     legacy = f"check: ok={ok} exit={result.returncode}"
     _emit_axi("check", ok,
               {"exit": result.returncode, "help": _axi().HELP_STEPS["check"]},
@@ -1569,42 +1718,44 @@ def cmd_check(args):
 
 
 def cmd_auto_ingest(args):
-    """Ingest EXISTING surefire/failsafe reports without running maven. A bound
-    agent's run is server-stamped with its registered cycle. Compile fallback if
-    no reports exist."""
+    """Ingest EXISTING surefire/failsafe reports without running maven: every
+    module's surefire reports, then every module's failsafe reports, are sent
+    to /api/v2/runs for the board to decode. A bound agent's run is
+    server-stamped with its registered cycle. Compile fallback if no reports
+    exist."""
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
+    ctx = _axi().cycle_context(_run_context(), getattr(args, "cycle", None))
+    # CR-CRU-094 §S3 — this verb's ingest is the furthest from the run that
+    # produced the reports, so an unattributed store here is the hardest to
+    # notice; checked before EITHER branch files — the no-report branch runs
+    # maven and files its compile result.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None), context=ctx)
     su = _dirs_with_xml(_report_dirs(maven_dir, getattr(args, "module", None), "surefire"))
     fs = _dirs_with_xml(_report_dirs(maven_dir, getattr(args, "module", None), "failsafe"))
     dirs = su + fs
     if not dirs:
         print("[auto-ingest] no reports found", file=sys.stderr)
         rc, _ = _compile_fallback(maven_dir, project_dir, args.agent,
-                                  _common_mvn_flags(args))
+                                  _common_mvn_flags(args), context=ctx)
         return rc
     _warn_if_stale(dirs)
-    ctx = _run_context()
-    # CR-CRU-094 §S3 — this verb runs no maven and offers no `--cycle`, so its
-    # ingest is the furthest from the run that produced the reports and an
-    # unattributed store here is the hardest to notice; checked before the POST.
-    preflight_warnings = _axi().preflight_cycle_warnings(
-        _get, _project_key(project_dir), args.agent,
-        cycle_id=getattr(args, "cycle", None), context=ctx)
     # CR-CRU-111 §S2/AC3 — this verb runs NO maven: it ingests surefire/failsafe
     # reports it merely discovered, so it cannot know their tier by construction
-    # and states none on either branch. `--coverage` selects the parsed path, not
-    # a `regression` run: nothing here ran a suite.
-    if len(dirs) == 1 and not args.coverage:
-        resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], context=ctx)
-        _emit_ingest_axi_resp("auto-ingest", resp, project_dir, args.agent,
-                              preflight_warnings)
-    else:
-        summary, tree, files = _parse_junit(dirs)
-        coverage = _collect_jacoco(maven_dir) if (args.coverage and summary["failed"] == 0) else None
-        resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                              context=ctx, files=files)
-        _emit_ingest_summary_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
-                                 warnings=preflight_warnings)
+    # and states none. It ran no runner either, so it sends neither `raw` nor
+    # `runnerExit`. `--coverage` sends the JaCoCo CSVs the build left, passing
+    # or failing: the board discards a red run's.
+    warnings = list(preflight_warnings)
+    coverage_paths = _jacoco_paths(maven_dir) if args.coverage else []
+    if args.coverage and not coverage_paths:
+        warnings.append(_axi().coverage_not_measured_warning(
+            "the build left no jacoco.csv under any target/"))
+    resp = _file_reports(project_dir, args.agent, _report_paths(dirs),
+                         coverage_paths=coverage_paths, context=ctx)
+    _emit_run_axi("auto-ingest", resp, project_dir, args.agent,
+                  warnings=warnings)
     return 0 if resp.get("ok") else 1
 
 
@@ -1647,6 +1798,7 @@ def _clean_stale_bind_mounts(project_dir):
                     )
                     break
         except PermissionError:
+            # pi-lens-ignore: python-empty-except — best-effort hygiene: a bind-mount dir this user cannot list is left as it is and the run goes on
             pass
 
 
@@ -1745,7 +1897,25 @@ def _docker_down(args, project_dir):
 
 def cmd_pre_merge_gate(args):
     """ORCHESTRATOR one-shot: docker-up → regression → docker-down (always)."""
+    # The regression's `[targets.regression]` declaration is checked before
+    # anything else: any board call, docker or maven.
+    _check_console_declaration(args, "regression")
+    # A gate scoped to named suites that cannot run as asked is refused before
+    # anything else.
+    _axi().refuse_unrunnable_scoped_gate(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK, get=_get,
+        project_key=lambda: _project_key(_resolve_project_dir(args.project_dir)))
     project_dir = _resolve_project_dir(args.project_dir)
+    # An unattributed gate is refused before its first step brings the stack up.
+    _axi().refuse_unattributed_run(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        release=getattr(args, "release", None), context=_run_context())
+    # The lint stage comes first: a failing linter starts no container.
+    stopped = _axi().gate_lint_stage(args, project_dir, _ops(), stack=_STACK,
+                                     agent_id=args.agent, verb="pre-merge-gate")
+    if stopped is not None:
+        return stopped
     up_args = argparse.Namespace(
         project_dir=args.project_dir, compose_file=args.compose_file,
         no_wait=True, services=None, all_services=False, maven_dir=args.maven_dir)
@@ -1789,7 +1959,7 @@ def cmd_pre_merge_gate(args):
             whole_suite=lambda: cmd_regression(_gate_regression_args(args),
                                                verb="pre-merge-gate"),
             context=_axi_context(project_dir, agent_id=args.agent),
-            crucible_url=_base_url())
+            crucible_url=_base_url)
     finally:
         # STEP form — the teardown must not put a second document on stdout.
         _docker_down(argparse.Namespace(
@@ -1807,9 +1977,13 @@ def _gate_regression_args(args):
         project_dir=args.project_dir, maven_dir=args.maven_dir, agent=args.agent,
         module=None, also_make=False, update_snapshots=False, native=False,
         profile=None, system_prop=None, goal=args.goal,
-        coverage_profile=args.coverage_profile, log=None,
+        coverage=True, coverage_profile=args.coverage_profile, log=None,
         cycle=getattr(args, "cycle", None),
-        release=getattr(args, "release", None))
+        release=getattr(args, "release", None),
+        # The gate's declaration check, and the health it read, carry over:
+        # the regression it runs reads neither again.
+        console_checked=getattr(args, "console_checked", None),
+        console_health=getattr(args, "console_health", None))
 
 
 # --------------------------------------------------------------------------- #
@@ -1848,7 +2022,8 @@ def cmd_cr_close(args):
     """§S4c — close the resolved OPEN plan and post the cr-merged milestone,
     requiring a live registered caller. CR-CRU-054 §S2 — delegates to the
     shared implementation."""
-    return _axi().cmd_cr_close(args, _resolve_project_dir(args.project_dir), _ops())
+    return _axi().cmd_cr_close(args, _resolve_project_dir(args.project_dir), _ops(),
+                               surface=_TIER_DECLARATION_SURFACE, stack=_STACK)
 
 
 def _resolve_plan_or_emit(verb, project_dir, cr, result_fields, open_only):
@@ -1921,11 +2096,41 @@ def cmd_history(args):
     Delegates to the shared implementation."""
     return _axi().cmd_history(args, _resolve_project_dir(args.project_dir), _ops())
 
+
+def cmd_release_notes(args):
+    """Draft one release's CHANGELOG section from the board (read-only, no
+    --agent). Delegates to the shared implementation."""
+    return _axi().cmd_release_notes(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_runs(args):
+    """List a cycle's or a release's stored test and compile runs
+    (read-only, no --agent). Delegates to the shared implementation."""
+    return _axi().cmd_runs(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_run(args):
+    """Show one stored test or compile run of this project (read-only, no
+    --agent). Delegates to the shared implementation."""
+    return _axi().cmd_run(args, _resolve_project_dir(args.project_dir), _ops())
+
 def cmd_project_meta(args):
     """§S4 — a project's metadata map: a read (GET …/metadata, no
     --agent) or, with --set/--unset, a write (PATCH …/metadata, --agent
     required). Delegates to the shared implementation."""
     return _axi().cmd_project_meta(args, _resolve_project_dir(args.project_dir), _ops())
+
+def cmd_lint(args):
+    """Run the project's declared linter in the project dir and, with
+    --agent, file it as a lint record. Delegates to the shared lint runner."""
+    return _axi().cmd_lint(args, _resolve_project_dir(args.project_dir), _ops(),
+                           stack=_STACK)
+
+def cmd_project_create(args):
+    """Create this project on the board, or find it, by its token. The root
+    is `--project-dir` made absolute, never resolved here. Delegates to the
+    shared implementation."""
+    return _axi().cmd_project_create(args, os.path.abspath(args.project_dir), _ops())
 
 # ── CR-CRU-091 §S3/§S9 — roadmap registration: five thin delegators ────────
 #
@@ -2174,11 +2379,11 @@ def _add_integration_tier_args(p):
     """CR-CRU-111 §S3/AC6 — `integration`'s own flags: the failsafe half of
     maven's lifecycle, without `e2e`'s packaging/docker options (this cell runs
     the ITs; it does not stand the assembled system up)."""
-    p.add_argument("--agent", help="If set, ingest failsafe+surefire results (parsed, no coverage)")
+    p.add_argument("--agent", help="If set, send the failsafe+surefire reports to the board (no coverage)")
 
 
 def _add_e2e_tier_args(p):
-    p.add_argument("--agent", help="If set, ingest failsafe+surefire results (parsed, no coverage)")
+    p.add_argument("--agent", help="If set, send the failsafe+surefire reports to the board (no coverage)")
     p.add_argument("--failsafe-only", action="store_true",
                    help="Run only failsafe:integration-test+verify (package assumed already built, e.g. native)")
     p.add_argument("--with-docker", action="store_true", help="docker compose up/down around the run")
@@ -2213,7 +2418,8 @@ def _read_declared_profile(args, target):
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     pom = os.path.join(maven_dir, "pom.xml")
     try:
-        root = ET.parse(pom).getroot()
+        # pi-lens-ignore: opengrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse, Semgrep:python.lang.security.use-defused-xml-parse.use-defused-xml-parse — parses the project's own pom.xml from the working tree; the clients are stdlib-only
+        root = ET.parse(pom).getroot()  # noqa: S314
     except OSError:
         return None
     except ET.ParseError as error:
@@ -2258,7 +2464,10 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
 def _add_regression_tier_args(p):
     p.add_argument("--agent", required=True, help="Agent id (typically the orchestrator's)")
     p.add_argument("--goal", default="verify", help="Maven goal (default: verify; use test for libs without IT)")
-    p.add_argument("--coverage-profile", help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE)")
+    p.add_argument("--coverage-profile",
+                   help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE). "
+                        "Applies only with --coverage.")
+    _axi().add_regression_coverage_arg(p, "JaCoCo")
     _add_gate_cycle_arg(p)
     _add_run_release_arg(p)
 
@@ -2271,12 +2480,26 @@ def _add_regression_tier_args(p):
 _CLI_DESCRIPTION = (
     "Maven + Quarkus Crucible CLI — one entry point for the orchestrator and for the\n"
     "java RED/GREEN/FIX/VERIFY agent lifecycle, and for running Maven test tiers\n"
-    "(surefire unit, module reactor, failsafe e2e, full regression with JaCoCo) with\n"
-    "the result ingested to Crucible.\n"
+    "(surefire unit, module reactor, failsafe e2e, full regression) with the result\n"
+    "ingested to Crucible. Regression coverage is opt-in: --coverage adds JaCoCo.\n"
     "\n"
     "Tool-specific (Maven / Surefire / Failsafe / JUnit-XML / JaCoCo), never\n"
     "project-specific: the project path and the maven dir are parameterizable,\n"
-    "nothing is hardcoded. Run `<verb> --help` for a verb's own flags."
+    "nothing is hardcoded. Run `<verb> --help` for a verb's own flags.\n"
+    "\n"
+    "A tier's console is declared in the project's own crucible.toml, one\n"
+    "[targets.<tier>] table per tier (unit, module, integration, e2e, bdd,\n"
+    "regression; `test` reads unit):\n"
+    "\n"
+    "    [targets.regression]\n"
+    "    framework = \"surefire\"\n"
+    "    console = \"surefire-console\"\n"
+    "\n"
+    "Both fields are required; junit, stream and coverage are refused, as is a\n"
+    "project file that does not parse, and so is a declared run on a board whose\n"
+    "health lists no surefire-console under codecs.view. Another stack's entry is\n"
+    "skipped. A tier with no entry runs as before.\n"
+    "\n" + _axi().BOARD_CONFIGURATION_HELP
 )
 
 
@@ -2348,7 +2571,8 @@ def main():
     tier_verb = _axi().TierVerb
     _axi().add_tier_verbs(
         sub,
-        dict(unit=tier_verb(
+        # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, which the tier-mirror guard reads as a copy of the tier vocabulary
+        dict(unit=tier_verb(  # noqa: C408
                  cmd_unit,
                  "Runs `mvn clean test -Dtest=<pattern>` and ingests surefire.",
                  (_add_unit_tier_args, _add_gate_cycle_arg, _add_run_release_arg,
@@ -2373,8 +2597,8 @@ def main():
                   _add_mvn_flags, _add_log_arg, _add_reports_arg)),
              regression=tier_verb(
                  cmd_regression,
-                 "Runs the full reactor `mvn clean verify` with JaCoCo "
-                 "coverage, parsed.",
+                 "Runs the full reactor `mvn clean verify`, reports sent; "
+                 "coverage-free unless --coverage adds JaCoCo.",
                  (_add_regression_tier_args, _add_mvn_flags, _add_log_arg,
                   _add_reports_arg))),
         declares=_TIER_DECLARATION_SURFACE,
@@ -2382,6 +2606,7 @@ def main():
 
     co = sub.add_parser("compile", help="mvn clean test-compile → ingest /api/v2/runs/compile (RED compile path).")
     co.add_argument("--agent", help="If set, ingest the build output as a compile result")
+    _axi().add_filing_cycle_arg(co)
     _add_mvn_flags(co)
     _add_project_args(co)
     co.set_defaults(func=cmd_compile)
@@ -2393,7 +2618,9 @@ def main():
                          "a cycle-bound agent's ingests are server-stamped with its registered "
                          "cycle.")
     ai.add_argument("--coverage", action="store_true",
-                    help="Also attach JaCoCo (ONLY valid after a known-green full regression)")
+                    help="Also send the build's JaCoCo CSVs (sent on a red run as on a "
+                         "green one; the board discards a red run's coverage)")
+    _axi().add_filing_cycle_arg(ai)
     _add_mvn_flags(ai)
     _add_project_args(ai)
     ai.set_defaults(func=cmd_auto_ingest)
@@ -2423,7 +2650,14 @@ def main():
     _add_project_args(dd)
     dd.set_defaults(func=cmd_docker_down)
 
-    pmg = sub.add_parser("pre-merge-gate", help="ORCHESTRATOR: docker-up → regression → docker-down.")
+    pmg = sub.add_parser(
+        "pre-merge-gate",
+        help="ORCHESTRATOR: fail-fast lint → docker-up → regression → docker-down.",
+        description="The gate's stages, in order: fail-fast lint → docker-up → regression → "
+                    "docker-down. The lint stage runs the project's [lint] table (mvn "
+                    "checkstyle:check, say); with none it is skipped with a lint-not-declared "
+                    "warning, and a failing lint stops the gate before docker-up, so it starts "
+                    "no container. --skip-lint skips the lint stage.")
     pmg.add_argument("--agent", required=True,
                      help="Agent id to ingest under — REQUIRED. A free-form identifier that "
                           "must already be registered (`register --agent <id> --role <role>`); "
@@ -2435,9 +2669,13 @@ def main():
     pmg.add_argument("--goal", default="verify",
                      help="Maven goal (default: verify; use test for libs without IT)")
     pmg.add_argument("--coverage-profile",
-                     help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE)")
+                     help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE). "
+                          "The gate always measures coverage, so it always applies here; "
+                          "on regression it applies only with --coverage.")
+    _axi().add_skip_lint_arg(pmg)
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
+    _axi().add_gate_suites_arg(pmg)
     _add_project_args(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
@@ -2456,9 +2694,11 @@ def main():
 
     ck = sub.add_parser("check", help="CHECK gate: mvn clean test-compile → ingest /api/v2/runs/compile on failure (§S2).")
     ck.add_argument("--agent", help="If set, ingest the build output as a compile result")
+    _axi().add_filing_cycle_arg(ck)
     _add_mvn_flags(ck)
     _add_project_args(ck)
     ck.set_defaults(func=cmd_check)
+    _axi().add_lint_verb(sub, cmd_lint, add_args=(_add_project_args,))
 
     pf = sub.add_parser("plan-file",
                         help="File a cycle plan; prints the ASSIGNED numeric cycle ids. "
@@ -2471,7 +2711,7 @@ def main():
     _axi().add_plan_file_cycle_kind_arg(pf)
     pf.add_argument(
         "--cycles",
-        help='Legacy comma-split form, REFUSED for filing (§S4a): a filed '
+        help='Legacy comma-split form, REFUSED for filing: a filed '
              'cycle declares its kind, so repeat --cycle with its own '
              '--cycle-kind instead.')
     _add_workflow_agent_arg(
@@ -2507,6 +2747,7 @@ def main():
                              "Requires --agent <registered id> (§S2b).")
     cc.add_argument("--commit", required=True, help="Merge commit sha.")
     cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _axi().add_cr_close_gate_arg(cc)
     _add_workflow_agent_arg(
         cc, extra=" The same id posts the closing cr-merged milestone (§S5).")
     _add_project_args(cc)
@@ -2566,7 +2807,8 @@ def main():
     # ── CR-CRU-081 §S2 — the landing-record READ verb (no --agent) ──
     qv = sub.add_parser("queue",
                         help="Read the registered CR queue (GET …/queue) plus the "
-                             "cr-merged milestone ids as a TOON-AXI table. Read-only.")
+                             "cr-merged milestone ids as a TOON-AXI table. Read-only; "
+                             "--format json writes one JSON object.")
     _add_project_args(qv)
     _axi().add_queue_view_args(qv)
     qv.set_defaults(func=cmd_queue)
@@ -2607,6 +2849,13 @@ def main():
     _add_project_args(pmv)
     pmv.set_defaults(func=cmd_project_meta)
 
+    # A project registers itself on the board, under its own required root.
+    pcv = sub.add_parser("project-create",
+                         help="Create this project on the board, or find it, by its "
+                              "token; print its key (`--write-env` writes it to .env).")
+    _axi().add_project_create_args(pcv)
+    pcv.set_defaults(func=cmd_project_create)
+
     # ── CR-CRU-091 §S3 — roadmap registration (ORCHESTRATOR only). The five
     # subparsers are built by the SHARED registrar so the five clients cannot
     # drift into five different flag surfaces for one verb.
@@ -2627,6 +2876,14 @@ def main():
     # SHARED registrar for the same reason; only this client's project-dir
     # convention is its own. No --agent: `next` is read-only (§S4).
     _axi().add_next_verb(sub, cmd_next, add_args=(_add_project_args,))
+
+    # The stored-run READ verbs, built by the shared registrar; only this
+    # client's project-dir argument is its own. No --agent: both are read-only.
+    _axi().add_run_read_verbs(sub, {"runs": cmd_runs, "run": cmd_run},
+                              add_args=(_add_project_args,))
+    # The release-notes READ verb, built by its module's shared registrar.
+    _axi().add_release_notes_verb(sub, {"release-notes": cmd_release_notes},
+                                  add_args=(_add_project_args,))
 
     # ── CR-CRU-075 §S1 — the queue REGISTRATION verb through the shared
     # registrar, so five clients cannot fork one verb's flag surface. No
@@ -2729,13 +2986,20 @@ def main():
     args = p.parse_args()
     # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
     if getattr(args, "func", None) is None:
-        sys.exit(cmd_dashboard())
+        sys.exit(_axi().run_dashboard(
+            cmd_dashboard,
+            lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None)))))
     # CR-CRU-044 §S5 — dispatch through the shared `run_verb`, which turns an
     # UNDECLARED agent identity into the ok:false hard-stop envelope + a
     # non-zero exit (POSTing nothing) instead of an unhandled traceback.
+    # `project-create` reads no key of its own: its hard stop or escaped
+    # failure carries an empty context.
+    project_key_fn = (None if args.cmd == _axi().PROJECT_CREATE_VERB else
+                      lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None))))
     sys.exit(_axi().run_verb(
-        args.func, args,
-        lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None)))))
+        args.func, args, project_key_fn,
+        ops_fn=_ops,
+        project_dir_fn=lambda a: _resolve_project_dir(getattr(a, "project_dir", None))))
 
 
 if __name__ == "__main__":

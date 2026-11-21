@@ -1,6 +1,6 @@
 # CR-CRU-060 — The e2e harness predates the registered-caller hard stop; 19 scenarios fail against it
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (test-harness contract drift)
 **Priority:** P1 — the e2e suite cannot pass until this is fixed, and it is a release-gate item
 **Depends on:** CR-CRU-056 (registration binds the cycle; `requireRegisteredCaller`), CR-CRU-052

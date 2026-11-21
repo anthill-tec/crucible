@@ -24,23 +24,25 @@ being on `sys.path`; it loads the sibling `clients/toon.py` codec by path the
 same way the clients do.
 """
 
-import argparse
+# pi-lens-ignore: I001 — pi-lens lints with its own ruff configuration, which sets no target version, so ruff files `tomllib` as third-party whatever the declared floor
+import argparse  # noqa: I001
 import collections
 import contextlib
 import datetime
 import functools
+import http.client
 import importlib.util
 import io
 import json
 import os
 import re
-import resource
 import shlex
 import signal
 import subprocess
 import sys
 import time
 import tomllib
+import types
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -124,17 +126,11 @@ def _toon():
 CLIENT_LIMIT_NAMES = ("truncate_field_chars", "error_detail_chars",
                       "roadmap_list_rows")
 
-#: The two TOP-LEVEL tables a client reads out of that one file, and the ONE
-#: field the second carries. `[limits]` is CR-CRU-131's; `[client]` is
-#: CR-CRU-139 §S2's BOARD -- the connection, which is configuration for exactly
-#: the reasons a limit is: bound at import from `$CRUCIBLE_URL` it was a
-#: setting no edit an operator made could reach, and forgetting the export was
-#: silent, landing the run on the default -- the PRODUCTION board on a machine
-#: running two instances. Spelled here rather than at each read so the file's
-#: schema is stated once.
+#: The TOP-LEVEL table a client's limits are read out of that one file.
+#: `[limits]` is CR-CRU-131's; the board's `[client]` table is the board
+#: module's (`_crucible_board.py`). Spelled here rather than at each read so
+#: the file's schema is stated once.
 LIMITS_TABLE = "limits"
-CLIENT_TABLE = "client"
-CLIENT_BOARD_FIELD = "url"
 
 #: §S1 -- the gate steps a project NEVER runs, declared once in the same
 #: file (`[gate] skip = ["pr", "ci"]`) instead of remembered on every
@@ -255,11 +251,11 @@ def shipped_data_path():
         if os.path.isfile(candidate):
             return candidate
     raise RuntimeError(
-        "no shipped limit defaults found at %s. They travel as PACKAGE DATA "
+        f"no shipped limit defaults found at {', '.join(_SHIPPED_DATA_CANDIDATES)}. "
+        "They travel as PACKAGE DATA "
         "beside this module; without them a client can resolve nothing, "
         "because the last resort is a DATA FILE in the distribution rather "
-        "than a number in a resolver."
-        % (", ".join(_SHIPPED_DATA_CANDIDATES),))
+        "than a number in a resolver.")
 
 
 def _shipped_declaration(name, table, path):
@@ -268,23 +264,21 @@ def _shipped_declaration(name, table, path):
     check, and a limit missing its sentence is a number nobody chose."""
     if not isinstance(table, dict):
         raise RuntimeError(
-            "%s declares no `[limits.%s]` table, so this distribution cannot "
-            "say what it enforces" % (path, name))
+            f"{path} declares no `[limits.{name}]` table, so this distribution cannot "
+            "say what it enforces")
     out = {}
     for field in _DOCUMENTED_FIELDS:
         raw = table.get(field)
         if field == "description":
             if not isinstance(raw, str) or not raw:
                 raise RuntimeError(
-                    "%s does not describe `%s`: a limit without a sentence an "
-                    "operator can act on is a number nobody chose"
-                    % (path, name))
+                    f"{path} does not describe `{name}`: a limit without a sentence an "
+                    "operator can act on is a number nobody chose")
         elif not isinstance(raw, int) or isinstance(raw, bool):
             raise RuntimeError(
-                "%s does not declare an integer `%s` for `%s`; that file is "
+                f"{path} does not declare an integer `{field}` for `{name}`; that file is "
                 "this distribution's PACKAGE DATA, so a missing field is a "
-                "broken distribution rather than an operator error"
-                % (path, field, name))
+                "broken distribution rather than an operator error")
         out[field] = raw
     return out
 
@@ -307,32 +301,6 @@ def shipped_limits():
             for name in CLIENT_LIMIT_NAMES}
 
 
-def shipped_board():
-    """§S1c/§S2 -- the BOARD the distribution's own data declares: the last
-    resort of the chain, and the value every deleted `CRUCIBLE_URL` constant
-    defaulted to.
-
-    A DATA FILE rather than a literal here, for §S1c's reason exactly: the
-    address a reader READS in the file they edit and the address the code falls
-    back to must be the same bytes, or the documentation and the behaviour are
-    two copies of one datum. So this raises rather than inventing a default --
-    a distribution whose own data cannot say where it posts is broken in a way
-    no fallback could honestly paper over, which is how `shipped_limits()`
-    already treats a missing declaration."""
-    path = shipped_data_path()
-    with open(path, "rb") as fh:
-        parsed = tomllib.load(fh)
-    table = parsed.get(CLIENT_TABLE)
-    url = table.get(CLIENT_BOARD_FIELD) if isinstance(table, dict) else None
-    if not isinstance(url, str) or not url.strip():
-        raise RuntimeError(
-            "%s declares no `[%s] %s`, so this distribution cannot say which "
-            "board it posts to. The last resort is PACKAGE DATA rather than a "
-            "literal in this module, and there is deliberately no address here "
-            "to fall back to." % (path, CLIENT_TABLE, CLIENT_BOARD_FIELD))
-    return url.strip()
-
-
 def _read_project_config(table=LIMITS_TABLE):
     """One walk of the chain, at the point of use -- never cached.
 
@@ -343,10 +311,10 @@ def _read_project_config(table=LIMITS_TABLE):
     operator should create.
 
     `table` names the TOP-LEVEL table wanted -- `[limits]` for the three a
-    client enforces, `[client]` for CR-CRU-139 §S2's board. ONE walk, because
-    the two settings live in one file and resolve by one rule: a second walk
-    with its own precedence is how a project's file comes to decide one datum
-    and not the other.
+    client enforces, `[gate]` for the skip list. CR-CRU-139's `[client]` is
+    not read through here: it resolves BY TABLE (`resolve_base_url`), so a project
+    file that declares no `url` is passed over for the install's rather than
+    hiding it, while a limit keeps the first file that parses.
 
     `tomllib` is stdlib (3.11+; this repo runs 3.14) and already in the tree at
     `clients/rust-crucible.py`."""
@@ -388,11 +356,11 @@ def _limit_refusal(name, declaration, path):
     offending value, the range it crossed and the setting running instead.
     REFUSED, never clamped -- a clamp leaves the operator's stated intent and
     the running behaviour different with nothing saying so."""
-    return ("[crucible] WARNING: %s sets `%s` to %d, outside the range "
-            "[%d, %d] declared beside it — the value is REFUSED, not clamped, "
-            "so `%s` runs at its recommended %d until the file is corrected."
-            % (path, name, declaration["value"], declaration["min"],
-               declaration["max"], name, declaration["recommended"]))
+    return (f"[crucible] WARNING: {path} sets `{name}` to {declaration['value']:d}, "
+            f"outside the range [{declaration['min']:d}, {declaration['max']:d}] "
+            "declared beside it — the value is REFUSED, not clamped, "
+            f"so `{name}` runs at its recommended {declaration['recommended']:d} "
+            "until the file is corrected.")
 
 
 def _limits_unreadable(candidates):
@@ -402,10 +370,11 @@ def _limits_unreadable(candidates):
     nothing. The order is the answer to "which file would have won", so the
     first name is the one to create."""
     return ("[crucible] WARNING: no readable configuration. Tried, in "
-            "precedence order: %s — none of them reads (absent, or does not "
+            f"precedence order: {', '.join(candidates)} — none of them reads (absent, "
+            "or does not "
             "parse), so every bound this client enforces runs at the value the "
             "build recommends. Create the first of them (or correct its TOML) "
-            "to configure them." % (", ".join(candidates),))
+            "to configure them.")
 
 
 def _effective_limit(name, declaration, path):
@@ -432,47 +401,16 @@ def resolve_limit(name):
     every such string."""
     if name not in CLIENT_LIMIT_NAMES:
         raise ValueError(
-            "`%s` is not a limit a client enforces (%s). A limit is owned by the process "
+            f"`{name}` is not a limit a client enforces "
+            f"({', '.join(CLIENT_LIMIT_NAMES)}). A limit is owned by the process "
             "that ENFORCES it, and the server is not necessarily on this machine — "
             "`run_abandon_ms`, `project_inactive_ms` and `retention` resolve from the "
-            "SERVER's own crucible.toml, never from here."
-            % (name, ", ".join(CLIENT_LIMIT_NAMES)))
+            "SERVER's own crucible.toml, never from here.")
     path, tables = _read_project_config()
     shipped = shipped_limits()[name]
     declaration = (shipped if tables is None
                    else _declared_limit(shipped, tables.get(name)))
     return _effective_limit(name, declaration, path)[0]
-
-
-def resolve_base_url():
-    """CR-CRU-139 §S2 -- the BOARD this client posts to, resolved at the POINT
-    OF USE from the same chain and the same bound project dir `resolve_limit()`
-    reads: the project's own `[client] url`, else the install's, else the
-    distribution's shipped declaration.
-
-    THE ONE PLACE the fleet's board is spelled. It replaces five module
-    constants bound at import from `$CRUCIBLE_URL` (arduino also honoured
-    `$CRUCIBLE_BASE`), which had two defects a limit had already been cured of:
-    a value bound at import is a setting no later state can reach -- a second
-    verb in one process inherits the first one's board -- and a channel that
-    must be EXPORTED is one that fails silently when it is forgotten, landing
-    the run on the shipped default, which on a machine carrying a production
-    instance is the production board.
-
-    Point of use, never cached, for the same reason every limit is re-read: the
-    project dir a verb resolved (`--project-dir` included) is bound before the
-    first request, and a verb given a different project must post to a
-    different project's board.
-
-    A FILE never raises here -- a mistyped or absent `[client]` table falls
-    through to the shipped declaration exactly as a missing limit does, because
-    a client that cannot read a config file must still degrade rather than
-    break."""
-    _, table = _read_project_config(CLIENT_TABLE)
-    url = table.get(CLIENT_BOARD_FIELD) if table else None
-    if isinstance(url, str) and url.strip():
-        return url.strip()
-    return shipped_board()
 
 
 class GateSkipDeclarationError(ValueError):
@@ -604,12 +542,12 @@ def http_request(base_url, method, path, payload=None, timeout=None):
 
     `base_url` is passed in rather than resolved here: the transport's job is
     to make the call, and its callers (every client's own `_request`) read the
-    address from `resolve_base_url()` above at the point of use — one
+    address from `resolve_base_url()` (the board module) at the point of use — one
     resolution, one transport, and a caller free to name a board explicitly
     without this function acquiring a second opinion about where to post.
 
     CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
-    (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
+    (`/api/v2/runs`) for a large regression/coverage run can legitimately
     take the server >10s, and a short bound there is a false-negative. The short
     hook-safe bound is applied ONLY on the status/plans read path via `_get`.
     The bound is passed as a `timeout=` KEYWORD, which the fleet's hook-safety
@@ -622,7 +560,8 @@ def http_request(base_url, method, path, payload=None, timeout=None):
     lift; the other four inherit the fix. A NON-empty body that is not valid
     JSON still raises, unchanged — only the empty case was ever a defect.
     """
-    req = urllib.request.Request(
+    # pi-lens-ignore: S310 — the URL is the Crucible board the client is configured to post to, never caller-chosen input
+    req = urllib.request.Request(  # noqa: S310
         f"{base_url}{path}",
         data=json.dumps(payload).encode() if payload is not None else None,
         headers={"Content-Type": "application/json"},
@@ -634,13 +573,21 @@ def http_request(base_url, method, path, payload=None, timeout=None):
         # context-managed read would consume that double's `__enter__` result
         # instead of the double itself. The explicit close keeps the
         # connection from leaking all the same.
-        response = urllib.request.urlopen(req, timeout=timeout)
+        # pi-lens-ignore: S310 — the URL is the Crucible board the client is configured to post to, never caller-chosen input
+        response = urllib.request.urlopen(req, timeout=timeout)  # noqa: S310
         try:
             body = response.read()
         finally:
             response.close()
+    # pi-lens-ignore: unreachable-except — HTTPError is caught before its base URLError, so both clauses are reached
     except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="replace")
+        try:
+            detail = e.read().decode(errors="replace")
+        except (ConnectionError, http.client.HTTPException) as unreadable:
+            # The status arrived, so the board was reached; only its body was
+            # cut short, and the status is all there is to report.
+            return {"ok": False, "error": f"HTTP {e.code}: <body unreadable: "
+                                          f"{type(unreadable).__name__}>"}
         failure = {"ok": False, "error": f"HTTP {e.code}: {detail}"}
         # CR-CRU-129 §S4 — a client-class status can carry a STRUCTURED answer,
         # not merely a sentence: the release route REFUSES a lossy replay with
@@ -657,10 +604,14 @@ def http_request(base_url, method, path, payload=None, timeout=None):
         if isinstance(body, dict):
             carried = {k: v for k, v in body.items() if k not in ("ok", "error")}
             failure.update(carried)
+            if method != "GET":
+                note_unknown_project_refusal(body)
         return failure
+    # pi-lens-ignore: unreachable-except — URLError follows its subclass HTTPError and precedes the unrelated TimeoutError, so it is reached
     except urllib.error.URLError as e:
         return {"ok": False, "error": f"connection failed: {e.reason} "
-                                      f"(is Crucible running at {base_url}?)"}
+                                      f"(is Crucible running at {base_url}? "
+                                      f"{BOARD_SOURCE})"}
     except TimeoutError:
         # CR-CRU-126 §S3 — the READ-phase timeout, which is the one a SLOW
         # board produces: the connection is accepted, so nothing raises until
@@ -679,8 +630,78 @@ def http_request(base_url, method, path, payload=None, timeout=None):
         # envelope-owning verbs report exactly as they already report an
         # unreachable board.
         return {"ok": False, "error": f"request timed out after {timeout}s "
-                                      f"(is Crucible at {base_url} overloaded?)"}
+                                      f"(is Crucible at {base_url} overloaded? "
+                                      f"{BOARD_SOURCE})"}
+    except (ConnectionError, http.client.HTTPException) as e:
+        # A board that drops the connection while answering: `urllib` wraps
+        # only the request's send in a `URLError`, so a close after reading
+        # (`RemoteDisconnected`), a reset, a body cut short of its length
+        # (`IncompleteRead`) or a status line that is not HTTP
+        # (`BadStatusLine`) arrives here unwrapped. It is answered as an
+        # unreachable board is. A bare `OSError` is still not caught.
+        return {"ok": False, "error": f"{CONNECTION_LOST_PREFIX}{e!r} "
+                                      f"(is Crucible at {base_url} reachable? "
+                                      f"{BOARD_SOURCE})"}
     return json.loads(body) if body else {"ok": True}
+
+
+#: How `http_request` begins the error of a connection the board dropped while
+#: answering: the board may have acted on the request before it dropped.
+CONNECTION_LOST_PREFIX = "connection lost: "
+
+
+# A write the board refused because it holds no project under the key the
+# client sent. The transport above is the one seam every write of every client
+# passes through, so the refusal is NOTED there, once, and `emit_axi` -- the
+# one exit every verb passes through -- reports it: the board's own help[] in
+# place of the verb's usual next steps, and a warning naming the `.env` the
+# key was read from. No client works out or registers a key itself.
+UNKNOWN_PROJECT_CODE = "unknown-project"
+UNKNOWN_PROJECT_ERROR_PREFIX = "unknown project: "
+
+_unknown_project_help = None
+
+
+def note_unknown_project_refusal(body):
+    """Remember the board's own help[] when `body` (a refused write's parsed
+    answer) is the board's `unknown project: <key>` refusal; any other body
+    is left alone."""
+    global _unknown_project_help
+    error = body.get("error")
+    help_steps = body.get("help")
+    if (isinstance(error, str) and error.startswith(UNKNOWN_PROJECT_ERROR_PREFIX)
+            and isinstance(help_steps, list)):
+        _unknown_project_help = list(help_steps)
+
+
+def take_unknown_project_help():
+    """The board's help[] noted for an unknown-project refusal on this
+    invocation, or None -- cleared as it is returned, so one exit's envelope
+    reports it exactly once."""
+    global _unknown_project_help
+    taken, _unknown_project_help = _unknown_project_help, None
+    return taken
+
+
+def forget_unknown_project_refusal():
+    """Clear a noted unknown-project refusal. Called once per verb dispatch
+    (`run_verb`), so a refusal a verb left unreported (it exited without an
+    envelope) is never carried into the next verb of the same process."""
+    global _unknown_project_help
+    _unknown_project_help = None
+
+
+def unknown_project_warning():
+    """The warning an unknown-project refusal carries: the `.env` the key was
+    read from, which is where the operator corrects it."""
+    env_path = (os.path.join(_PROJECT_DIR, ".env") if _PROJECT_DIR
+                else "the project's .env")
+    return {
+        "code": UNKNOWN_PROJECT_CODE,
+        "detail": (f"the board holds no project under the CRUCIBLE_PROJECT_KEY "
+                   f"read from {env_path} -- correct the key there, or register "
+                   f"the project (see help) and put the key it issues there"),
+    }
 
 
 # The reports location every client resolves its run's outputs under. One
@@ -710,7 +731,7 @@ def run_reports_dir(base_dir, reports_arg, agent_id=None):
     `base_dir`."""
     if reports_arg:
         chosen = reports_arg
-    elif reports_dir_is_agents_own(reports_arg, agent_id):
+    elif agent_id and reports_dir_is_agents_own(reports_arg, agent_id):
         chosen = os.path.join(DEFAULT_REPORTS_DIR, agent_id)
     else:
         chosen = DEFAULT_REPORTS_DIR
@@ -763,6 +784,7 @@ def run_context():
     except (OSError, subprocess.CalledProcessError):
         # A non-repo cwd / absent git is not an ingest failure — the run
         # context simply carries no git provenance.
+        # pi-lens-ignore: python-empty-except — no git here is a valid outcome, not an error to handle or re-raise
         pass
     return context
 
@@ -774,18 +796,23 @@ def axi_context(project_key, agent_id=None, cr=None, cycle_id=AXI_UNSET):
     Absent env keys are OMITTED; a supplied `cycle_id=None` is kept as an
     EXPLICIT null (the §S3 orphan signal), never silently dropped.
 
-    §S4 -- and the BOARD, when the verb resolved one that is not the
-    distribution's own declaration. The silent failure this project carries is
+    And the BOARD, when the verb resolved one that is not the machine's own
+    (`_machine_board`). The silent failure this project carries is
     a run reported into the wrong board: removing the export that caused it
     does not make the effect visible, so the envelope names the target at the
-    moment it happens. Named only when it DIFFERS from `shipped_board()`,
-    under the same omit-absent rule every other key here follows -- a key
+    moment it happens. Named only when it DIFFERS from the install's declared
+    `url` (always, when the install declares none), under the
+    same omit-absent rule every other key here follows -- a key
     emitted on every exit carries no signal, because an operator scanning for
     "which board?" would have to read the value on every line to find the one
-    line that differs."""
+    line that differs. With no board declared there is none to name, and this
+    never raises: it builds the refusal's own envelope."""
     ctx = {"projectKey": project_key}
-    board = resolve_base_url()
-    if board != shipped_board():
+    try:
+        board = resolve_base_url()
+    except BoardUndeclared:
+        board = None
+    if board is not None and board != _machine_board():
         ctx["board"] = board
     if agent_id:
         ctx["agentId"] = agent_id
@@ -837,12 +864,18 @@ def axi_object(verb, ok, result_fields, context, warnings):
     """Build the §S1 `axi` object — the ONE place its keys are assembled.
 
     Every encoding `emit_axi` writes (TOON by default, JSON on request) is
-    this same dict, so the two can never carry different keys or values."""
-    axi = {"verb": verb, "ok": ok, "tier": ingested_tier()}
+    this same dict, so the two can never carry different keys or values.
+
+    `events` names the board's event id of every run ingest this invocation
+    filed, in filing order, `[]` when it filed none: the id an orchestrator
+    needs to find the run again. A composed gate states its own list (its
+    local runs' and each dispatched suite's) through `result_fields`."""
+    axi = {"verb": verb, "ok": ok, "tier": ingested_tier(),
+           "events": filed_run_events()}
     axi.update(result_fields)
     axi["context"] = context
     axi["warnings"] = list(warnings) + limit_disclosure_warnings()
-    return axi
+    return _LINT.carry_gate_lint(axi)
 
 
 def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None,
@@ -875,10 +908,21 @@ def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None,
 
     §S8 — `fmt=AXI_FORMAT_JSON` writes the same `axi` object (from
     `axi_object`) as ONE unwrapped JSON object instead; the stderr line is
-    unchanged either way."""
+    unchanged either way.
+
+    A write the board refused as `unknown project: <key>` (noted by
+    `http_request`) makes a failed exit carry the board's own help[] in place
+    of the verb's usual next steps, and a warning naming the `.env` the key
+    was read from."""
     refused = take_refused_ingest_warnings()
-    axi = axi_object(verb, False if refused else ok, result_fields, context,
-                     list(warnings) + refused)
+    ok = False if refused else ok
+    warnings = list(warnings) + refused
+    board_help = take_unknown_project_help()
+    if board_help is not None and not ok:
+        result_fields = {**result_fields, "help": board_help}
+        warnings.append(unknown_project_warning())
+    note_emitted_run_counts(result_fields)
+    axi = axi_object(verb, ok, result_fields, context, warnings)
     if fmt == AXI_FORMAT_JSON:
         envelope = json.dumps(axi, ensure_ascii=False) + "\n"
     else:
@@ -916,7 +960,8 @@ def silence_closed_pipe(name):
     try:
         os.dup2(devnull, stream.fileno())
     except (AttributeError, OSError, ValueError):
-        setattr(sys, name, open(os.devnull, "w"))  # kept open: it IS sys.<name> now
+        # pi-lens-ignore: SIM115 — kept open on purpose: it IS sys.<name> now, for the rest of the process
+        setattr(sys, name, open(os.devnull, "w"))  # noqa: SIM115
     finally:
         os.close(devnull)
 
@@ -1214,7 +1259,7 @@ def truncate_field(value, full=False):
 # binding ON the agent row, and §S3b retired implicit creation. An unconditional
 # cleanup therefore DELETES a caller-owned registration together with its
 # binding, and the next gated run under the same identity ingests unattached.
-# Observed live 2026-08-01 on the :3849 board: `vidushi` registered bound to
+# Observed live 2026-08-01 on the dev board: `vidushi` registered bound to
 # cycle 152; `python-crucible.py regression --agent vidushi` ingested stamped
 # 152 and then ran its cleanup; the immediately following
 # `bun-crucible.py regression --agent vidushi` landed with NO cycle.
@@ -1313,6 +1358,13 @@ GATE_CYCLE_HELP = (
     "`register --cycle`. An agent that ALREADY registered bound needs no "
     "--cycle here: the gated run leaves its registration and binding intact.")
 
+# `--cycle` on a verb that files a result without a gated identity: the
+# result itself carries the cycle, and the agent's registration is untouched.
+FILING_CYCLE_HELP = (
+    "Cycle id to file this result under (an ACTIVE cycle of an OPEN plan; the "
+    "SERVER validates it). Required while the project has an active cycle and "
+    "this agent is bound to none; an agent registered bound needs no --cycle.")
+
 # The ONE `--release` help text for the GATE verbs, so all five clients
 # document the flag identically. OPTIONAL, because a gate on a feature branch
 # gates no release.
@@ -1322,6 +1374,19 @@ GATE_RELEASE_HELP = (
     "or derives it from a branch name. OMIT IT unless the gate really gates a "
     "release: a gate naming one is exempt from pruning until that release "
     "records, and is retired the moment it does.")
+
+# The ONE `--suites` help text for `pre-merge-gate`, so all five clients
+# document the flag identically.
+GATE_SUITES_HELP = (
+    "Scope this gate to the named declared suites: their targets, separated "
+    "by commas, no spaces. The gate runs its first step as every gate "
+    "does, then only those suites; naming a target this client runs itself "
+    "runs its whole suite, which covers every one of its own targets. The "
+    "outcome is recorded as a scoped gate. Refused before anything runs for "
+    "an undeclared or excluded target, an empty, padded or repeated item, "
+    "beside --release, with no cycle (no --cycle and no binding), on a "
+    "board that does not record a gate's scope and suites, and on a project "
+    "that declares no suites. Omit it for a full gate.")
 
 # §S1 — the ONE `--release` help text for the TEST-RUN verbs, so all five
 # clients document the flag identically. Not the gate's text: a gate NAMES the
@@ -1333,6 +1398,28 @@ RUN_RELEASE_HELP = (
     "that release instead of a cycle: the board refuses a release its roadmap "
     "does not declare, and a release beside --cycle or from an agent bound to "
     "a cycle, and then nothing is run or stored. Omit it for a cycle's runs.")
+
+
+# The ONE `--coverage` sentence for every client's `regression`: coverage is
+# opt-in, and a run without the switch measures and files none. Each client
+# follows it with its own coverage tool, in a sentence of its own.
+REGRESSION_COVERAGE_HELP = (
+    "Measure coverage and file it with the run. Without it the whole suite "
+    "runs coverage-free, and no coverage is measured or filed.")
+REGRESSION_COVERAGE_LCOV_HELP = (
+    REGRESSION_COVERAGE_HELP + " With it, the run's lcov coverage is "
+    "measured and is filed with its results.")
+REGRESSION_COVERAGE_PY_HELP = (
+    REGRESSION_COVERAGE_HELP + " With it, the run is under coverage.py and "
+    "its lcov coverage report is sent to /api/v2/runs with its results.")
+REGRESSION_COVERAGE_JACOCO_HELP = (
+    REGRESSION_COVERAGE_HELP + " With it, the build's JaCoCo CSVs are sent "
+    "to /api/v2/runs with its results, on a red run as on a green one; the "
+    "board discards a red run's coverage.")
+REGRESSION_COVERAGE_LLVM_COV_HELP = (
+    REGRESSION_COVERAGE_HELP + " With it, the run is `cargo llvm-cov nextest` "
+    "and its lcov is sent to /api/v2/runs with its results, on a red run as "
+    "on a green one; the board discards a red run's coverage.")
 
 
 # CR-CRU-121 §S2 — the ONE `--release` help text for `plan-file`, so all five
@@ -1531,7 +1618,7 @@ HELP_STEPS = {
     "test": ["cycle-done <id>", "status"],
     "regression": ["cycle-done <id>", "status"],
     "auto-ingest": ["cycle-done <id>", "status"],
-    "check": ["test --agent <agentId>"],
+    "check": ["lint --agent <agentId>", "test --agent <agentId>"],
     "cycle-add": ["cycle-activate <id>"],
     "cycle-skip": CYCLE_SKIP_HELP_STEPS,
     "checkpoint": ["status"],
@@ -1539,6 +1626,7 @@ HELP_STEPS = {
     "abort": ["status"],
     "status": ["cycle-activate <id>"],
     "cr-close": ["status"],
+    "project-create": ["register --agent <id> --role ORCHESTRATOR", "project-meta"],
 }
 
 # §S4 — the `help[]` of `status`'s two empty-board states, told apart by the
@@ -1614,6 +1702,22 @@ GATE_POSTED_INTERIM = "interim"
 # status and reattach". A hold that names no next move strands its caller, and
 # naming a command the tool does not have would strand it further.
 AXI_REATTACH_HELP = "inspect with `axi status` and reattach"
+
+# The step state a decision answers: the run is held at that step until a
+# respond moves it on.
+AXI_AWAITING_APPROVAL = "awaiting_approval"
+
+
+def axi_reattach_help(intent=None, release=None):
+    """The held report's next move, naming the command that reattaches the
+    run: `gate-run --intent <intent>`, plus `--release <label>` when the drive
+    knew one. A drive that does not know the run's intent (a respond) names
+    the flag with a placeholder rather than inventing one."""
+    command = "gate-run --intent " + (shlex.quote(intent) if intent
+                                      else '"<intent>"')
+    if isinstance(release, str) and release:
+        command += f" --release {shlex.quote(release)}"
+    return f"{AXI_REATTACH_HELP} with `{command}`"
 
 # CR-CRU-117 §S2 — what the HUMAN channel says when the poll loop already put
 # an in-flight ladder on the board and the run then held. `NOT SEALED` alone is
@@ -1737,6 +1841,37 @@ def _bound_cycle_id(resp, agent_id):
     return (False, None)
 
 
+def _answered_agent_list(resp):
+    """True when a `GET /api/v2/agents` response is the board's answered list
+    — evidence about every agent it holds, so an id missing from it is held
+    by none and bound to no cycle."""
+    return (isinstance(resp, dict) and bool(resp.get("ok"))
+            and isinstance(resp.get("agents"), list))
+
+
+def _active_cycle_ids(get, project_key):
+    """The ids of the project's ACTIVE cycles, read from its open plans, or
+    `()` when the board did not answer. An unanswered read is not evidence of
+    an active cycle, so it can never turn into a refusal: the run proceeds
+    under the soft `no-cycle` warning, exactly as it did before this read."""
+    try:
+        resp = get(f"{plans_path(project_key)}?status={PLANS_STATUS_OPEN}",
+                   timeout=PREFLIGHT_TIMEOUT_S)
+    except BoardUndeclared:
+        raise  # no board declared is a refusal, never an unanswered read
+    except Exception:  # an unanswered read refuses nothing — see docstring
+        return ()
+    if not isinstance(resp, dict) or not resp.get("ok"):
+        return ()
+    plans = resp.get("plans")
+    if not isinstance(plans, list):
+        return ()
+    return tuple(cycle.get("id") for plan in plans if isinstance(plan, dict)
+                 for cycle in (plan.get("cycles") or [])
+                 if isinstance(cycle, dict) and cycle.get("status") == "active"
+                 and cycle.get("id") is not None)
+
+
 def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
                              context=None, stream=None, release=None):
     """§S3 — the pre-flight attribution check every ingesting run makes BEFORE
@@ -1744,18 +1879,31 @@ def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
     one `{code, detail}`) and prints the same warning's stderr line, so both
     channels are fed from ONE decision.
 
-    Best-effort and NEVER blocking, per AC5: an unreachable board, a timeout,
-    a malformed answer or ANY raised exception yields no warning and the run
+    Best-effort on the board's account: an unreachable board, a timeout, a
+    malformed answer or ANY raised exception yields no warning and the run
     proceeds. `get` is the calling client's own `_get` (its test harnesses
     patch that name), called with the short `PREFLIGHT_TIMEOUT_S` bound.
 
+    The one hard stop is a verdict the board ANSWERED: an agent it holds bound
+    to no cycle — or one its answered agent list does not hold at all, which is
+    bound to none either — no `--cycle`, no `--release`, while the project has
+    an active cycle. That run would be stored with no cycle while one is open,
+    so this raises `UnattributedRunRefused` — before the runner spawns — for
+    `run_verb` to convert. With no active cycle it stays the `no-cycle` warning
+    for an agent the board holds (a run between CRs is project-scoped on
+    purpose), and nothing for one it does not, as before.
+
     §S1 — a run filed under `release` is unattributed to a cycle on purpose:
     the binding is read as for any run, but the verdict is the `release-run`
-    note (`release_run_note`), never `no-cycle`, on either channel.
+    note (`release_run_note`), never `no-cycle`, on either channel, and it is
+    never refused.
     """
     try:
         if not agent_id or not project_key:
             return []
+        # With an agent the run reaches the board, so with none declared it
+        # refuses here, before its runner spawns, however it is attributed.
+        resolve_base_url()
         # `--cycle` supplied, or an explicit `context.cycleId`: the run WILL be
         # attributed, so there is nothing to warn about and nothing to ask.
         if cycle_id is not None:
@@ -1770,14 +1918,53 @@ def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
                   file=stream if stream is not None else sys.stderr)
             return [note]
         known, bound = _bound_cycle_id(resp, agent_id)
-        if not known or bound is not None:
+        if bound is not None or not (known or _answered_agent_list(resp)):
             return []
-        print(no_cycle_line(), file=stream if stream is not None else sys.stderr)
-        return [no_cycle_warning()]
+        active = _active_cycle_ids(get, project_key)
+        if not active:
+            if not known:
+                return []
+            print(no_cycle_line(),
+                  file=stream if stream is not None else sys.stderr)
+            return [no_cycle_warning()]
+    except BoardUndeclared:
+        # No board declared is not an unanswered board: the run refuses here,
+        # before its runner spawns, as `UnattributedRunRefused` does.
+        raise
     except Exception:
         # Attribution is a courtesy; a suite must never become unrunnable
         # because it could not be computed.
         return []
+    # The board answered: an unbound agent, no `--cycle`/`--release`, and an
+    # active cycle on the project. Raised OUTSIDE the courtesy catch above, so
+    # this one verdict is never swallowed into "proceed".
+    raise UnattributedRunRefused(agent_id, active)
+
+
+def refuse_unattributed_run(get, project_key, agent_id, cycle_id=None,
+                            release=None, context=None):
+    """The refusal half of `preflight_cycle_warnings` alone, for the earliest
+    point of a verb whose own pre-flight comes later or not at all: a gate's
+    first step, or the cleanup and docker bring-up a run makes before its
+    runner. Raises `UnattributedRunRefused` on the same verdict; prints and
+    returns nothing otherwise, so the verb's own pre-flight still owns the
+    `no-cycle` warning. A release run is never refused as unattributed, but
+    with an agent it still refuses when no board is declared."""
+    if release:
+        if agent_id and project_key:
+            resolve_base_url()
+        return
+    preflight_cycle_warnings(get, project_key, agent_id, cycle_id=cycle_id,
+                             context=context, stream=io.StringIO())
+
+
+def cycle_context(context, cycle_id):
+    """The run context a verb that opens no gated identity files under when
+    `--cycle` is given: `context` with `cycleId` set, which the board validates
+    and stores the result under. Unchanged without a cycle."""
+    if cycle_id is None:
+        return context
+    return {**(context or {}), "cycleId": cycle_id}
 
 
 # ── CR-CRU-058 §S1/§S2 — the toolchain-gate help/warning vocabulary ────────
@@ -1794,7 +1981,8 @@ def server_unreachable_help(verb, base_url):
     """CR-CRU-058 §S2 — the state-derived `help[]` for a run that produced real
     results but could not record them: pointing at the verb's normal successor
     would walk the orchestrator past a run that was never ingested."""
-    return [f"check the Crucible server is running / reachable at {base_url}, "
+    return [f"check the Crucible server is running / reachable at "
+            f"{board_address(base_url)}, "
             f"then re-run {verb} --agent <agentId>",
             "status"]
 
@@ -1806,7 +1994,8 @@ def ingest_failed_warning(verb, base_url):
     run happened but is NOT recorded. Mirrors `plans_unavailable_warning`."""
     return {
         "code": "ingest-failed",
-        "detail": (f"the {verb} run completed but its ingest to {base_url} "
+        "detail": (f"the {verb} run completed but its ingest to "
+                   f"{board_address(base_url)} "
                    f"did not succeed — the evidence is NOT on the board"),
     }
 
@@ -1849,7 +2038,7 @@ def gate_step_abort_warning(verb, step, detail):
 def _last_non_empty_line(output):
     """The last line of a captured runner stream that carries anything — the
     CAUSE line of a starved run (`ModuleNotFoundError: No module named
-    'xmlrunner'`), which trailing blank/whitespace lines would otherwise hide.
+    'app'`), which trailing blank/whitespace lines would otherwise hide.
     Empty string when the capture holds nothing at all."""
     for line in reversed((output or "").splitlines()):
         stripped = line.strip()
@@ -2255,7 +2444,202 @@ def emit_release_run_refused_hard_stop(verb, refusal, context=None):
     return 1
 
 
-def _hard_stop_context(args, project_key_fn):
+# §S2 — the fifth hard stop: a run that would carry no cycle while the project
+# has an active one. Raised by `preflight_cycle_warnings` (the one pre-flight
+# every client's run verbs make), converted by `run_verb` — so the runner never
+# starts and nothing is ingested.
+
+UNATTRIBUTED_RUN_REFUSED_CODE = "unattributed-run-refused"
+
+
+class UnattributedRunRefused(Exception):
+    """§S2 — raised by `preflight_cycle_warnings` when an agent bound to no
+    cycle starts a run with neither `--cycle` nor `--release` while the
+    project has an active cycle. `help[]` names the active cycle's id."""
+
+    def __init__(self, agent_id, active_cycle_ids):
+        self.agent_id = agent_id
+        self.active_cycle_ids = tuple(active_cycle_ids)
+        named = ", ".join(str(cid) for cid in self.active_cycle_ids)
+        self.detail = (f"the project has an active cycle ({named}) and this run "
+                       f"would carry none: agent {agent_id} is bound to no "
+                       f"cycle and neither --cycle nor --release was given; "
+                       f"refused before the runner started, so nothing ran "
+                       f"and nothing was filed")
+        if len(self.active_cycle_ids) == 1:
+            lever = (f"re-run with --cycle {self.active_cycle_ids[0]} — the "
+                     f"project's active cycle")
+        else:
+            lever = (f"re-run with --cycle <id> naming the cycle this run "
+                     f"belongs to — active cycles: {named}")
+        # The release lever is offered only by a verb that accepts --release
+        # (`help_for`); every verb this refusal covers accepts --cycle.
+        self.release_help = ("or file a release's verification run with "
+                             "--release <label>, which carries no cycle by design")
+        self.help = [
+            lever,
+            "or register the agent bound to that cycle first "
+            "(register --agent <agentId> --cycle <id>), then re-run",
+            self.release_help]
+        super().__init__(self.detail)
+
+    def help_for(self, offers_release):
+        """`help[]` naming only levers the refused verb takes."""
+        return [h for h in self.help
+                if offers_release or h != self.release_help]
+
+
+def emit_unattributed_run_refused_hard_stop(verb, refusal, context=None,
+                                            offers_release=True):
+    """§S2 — emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for a run refused for carrying no cycle, and return the non-zero
+    exit code. Nothing is run, nothing is ingested from this path.
+    `offers_release` is False for a verb with no `--release`, whose help then
+    names no such lever."""
+    emit_axi(verb or "unknown", False,
+             {"error": refusal.detail, "help": refusal.help_for(offers_release)},
+             context or {}, [],
+             legacy_line=(f"error: {UNATTRIBUTED_RUN_REFUSED_CODE} — "
+                          f"{refusal.detail}"))
+    return 1
+
+
+# A gate scoped to named suites that cannot run as asked. Raised by
+# `refuse_unrunnable_scoped_gate` as the gate's first act, converted by
+# `run_verb` before the outcome milestone, so a refusal runs nothing, files
+# nothing and posts no milestone.
+
+SCOPED_GATE_REFUSED_CODE = "scoped-gate-refused"
+
+
+class ScopedGateRefused(Exception):
+    """Raised when `pre-merge-gate --suites` cannot run as asked; `detail`
+    names the cause and `help[]` the next moves."""
+
+    def __init__(self, detail, help_steps):
+        self.detail = detail
+        self.help = list(help_steps)
+        super().__init__(detail)
+
+
+def emit_scoped_gate_refused_hard_stop(verb, refusal, context=None):
+    """Emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for a refused scoped gate, and return the non-zero exit code.
+    Nothing is run, nothing is filed from this path."""
+    emit_axi(verb or GATE_VERB, False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {SCOPED_GATE_REFUSED_CODE} \u2014 {refusal.detail}")
+    return 1
+
+
+# A run narrowed by ill-formed input: a test-file stem or a test-name fragment
+# outside its pattern. Raised by the client before the run's registration
+# heartbeat and run start, converted by `run_verb`, so nothing reaches the
+# board and the runner never starts.
+
+NARROWING_REFUSED_CODE = "narrowing-refused"
+
+
+class NarrowingRefused(Exception):
+    """Raised when a run's narrowing flags are ill-formed; `detail` names the
+    input refused and `help[]` the form it must take."""
+
+    def __init__(self, detail, help_steps):
+        self.detail = detail
+        self.help = list(help_steps)
+        super().__init__(detail)
+
+
+def emit_narrowing_refused_hard_stop(verb, refusal, context=None):
+    """Emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for refused narrowing input, and return the non-zero exit code.
+    Nothing is run, nothing is posted from this path."""
+    emit_axi(verb or "unknown", False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {NARROWING_REFUSED_CODE} \u2014 {refusal.detail}")
+    return 1
+
+
+COVERAGE_FLAG_REFUSED_CODE = "coverage-flag-refused"
+
+
+class CoverageFlagRefused(Exception):
+    """Raised when a coverage-only flag is given to a run that measures no
+    coverage (no `--coverage`); `detail` names the flag and `help[]` the two
+    ways out \u2014 add `--coverage`, or drop the flag."""
+
+    def __init__(self, detail, help_steps):
+        self.detail = detail
+        self.help = list(help_steps)
+        super().__init__(detail)
+
+
+def refuse_coverage_only_flags(args, flags):
+    """Refuse a coverage-only flag given without `--coverage`.
+
+    `flags` maps each coverage-only flag's argparse dest to the flag as typed
+    (e.g. `{"cov_source": "--cov-source"}`). A flag counts as GIVEN when its
+    value is not None \u2014 every coverage-only flag defaults to None, so its
+    absence is detectable. Called as a run's first act, before any board
+    request, lock or runner; with `--coverage` set it does nothing."""
+    if getattr(args, "coverage", False):
+        return
+    given = [flag for dest, flag in flags.items()
+             if getattr(args, dest, None) is not None]
+    if not given:
+        return
+    named = ", ".join(given)
+    raise CoverageFlagRefused(
+        f"{named} applies only with --coverage, and this run measures no "
+        f"coverage; nothing was run",
+        [f"add --coverage to measure coverage with {named}",
+         f"or drop {named} for a coverage-free run"])
+
+
+def emit_coverage_flag_refused_hard_stop(verb, refusal, context=None):
+    """Emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for a coverage-only flag given without `--coverage`, and return
+    the non-zero exit code. Nothing is run, nothing is posted from this path."""
+    emit_axi(verb or "unknown", False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {COVERAGE_FLAG_REFUSED_CODE} \u2014 {refusal.detail}")
+    return 1
+
+
+# A project declaration a client no longer reads (a retired key). Raised by
+# the client before anything is posted, converted by `run_verb`, so a gate
+# refused this way runs nothing and posts no milestone.
+
+DECLARATION_REFUSED_CODE = "declaration-refused"
+
+
+class DeclarationRefused(Exception):
+    """Raised when a project declares what the client refuses; `detail`
+    names the declaration, `help[]` the next moves and `warnings[]` any the
+    envelope carries."""
+
+    def __init__(self, detail, help_steps, warnings=()):
+        self.detail = detail
+        self.help = list(help_steps)
+        self.warnings = list(warnings)
+        super().__init__(detail)
+
+
+def emit_declaration_refused_hard_stop(verb, refusal, context=None):
+    """Emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for a refused declaration, and return the non-zero exit code.
+    Nothing is run, nothing is posted from this path."""
+    emit_axi(verb or "unknown", False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, refusal.warnings,
+             legacy_line=f"error: {DECLARATION_REFUSED_CODE} \u2014 {refusal.detail}")
+    return 1
+
+
+def _hard_stop_context(args, project_key_fn, agent_id=None):
     """The best-effort `context` a hard-stopped verb's envelope carries.
 
     `project_key_fn(args)` is the client's own `.env` key resolver (project-dir
@@ -2266,24 +2650,58 @@ def _hard_stop_context(args, project_key_fn):
     if project_key_fn is None:
         return {}
     try:
-        return axi_context(project_key_fn(args))
+        return axi_context(project_key_fn(args), agent_id=agent_id)
     except Exception:
         return {}
 
 
-def run_verb(func, args, project_key_fn=None):
+ESCAPED_FAILURE_CODE = "verb-failed"
+
+
+def emit_escaped_failure(verb, exc, context=None):
+    """Emit the `ok:false` envelope (stdout) plus the human error line
+    (stderr) for an `OSError`/`ValueError` that escaped a verb's body, and
+    return the non-zero exit code. `error` names the exception's type and
+    message."""
+    detail = f"{type(exc).__name__}: {exc}"
+    emit_axi(verb or "unknown", False,
+             {"error": detail,
+              "help": ["fix the cause this error names, then re-run the verb"]},
+             context or {}, [],
+             legacy_line=f"error: {ESCAPED_FAILURE_CODE} — {detail}")
+    return 1
+
+
+def run_dashboard(cmd_dashboard, project_key_fn=None):
+    """Run a client's no-argument dashboard through `run_verb`, so a failure
+    escaping it is converted exactly as one escaping a verb is. The dashboard
+    IS the `status` view, so its envelope names that verb."""
+    return run_verb(lambda _args: cmd_dashboard(),
+                    argparse.Namespace(cmd="status", project_dir=None),
+                    project_key_fn)
+
+
+def run_verb(func, args, project_key_fn=None, ops_fn=None, project_dir_fn=None):
     """Fleet-uniform subcommand dispatch: run the resolved verb and convert a
     typed hard stop — an undeclared agent identity (§S5), an unresolvable
-    cycle list (CR-CRU-107 §S2) or a tier with no declared target
-    (CR-CRU-111 §S1) — into the `ok:false` envelope and a non-zero exit code
+    cycle list (CR-CRU-107 §S2), a tier with no declared target
+    (CR-CRU-111 §S1), a refused release run, or a run that would carry no
+    cycle while one is active — into the `ok:false` envelope and a non-zero exit code
     instead of an unhandled traceback.
 
     CR-CRU-111 §S5 — a dispatch has ingested nothing YET, so the envelope's
     tier statement starts from `none` here: an invocation may never inherit
-    what an earlier one in the same process put on the board."""
+    what an earlier one in the same process put on the board. Nor may it
+    inherit an unknown-project refusal an earlier one was handed.
+
+    A `pre-merge-gate` that RAN (it returned, pass or fail) then posts its
+    one outcome milestone (`record_gate_outcome`), through the client's own
+    `ops_fn()` and project dir. A gate that a hard stop refused before its
+    runner started ran nothing, so it records nothing."""
     forget_ingested_run()
+    forget_unknown_project_refusal()
     try:
-        return func(args)
+        code = func(args)
     except AgentIdentityRequired:
         return emit_agent_identity_hard_stop(
             getattr(args, "cmd", None), _hard_stop_context(args, project_key_fn))
@@ -2299,6 +2717,62 @@ def run_verb(func, args, project_key_fn=None):
         return emit_release_run_refused_hard_stop(
             getattr(args, "cmd", None), refusal,
             _hard_stop_context(args, project_key_fn))
+    except NarrowingRefused as refusal:
+        return emit_narrowing_refused_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
+    except CoverageFlagRefused as refusal:
+        return emit_coverage_flag_refused_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
+    except ScopedGateRefused as refusal:
+        return emit_scoped_gate_refused_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
+    except DeclarationRefused as refusal:
+        return emit_declaration_refused_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
+    except UnattributedRunRefused as refusal:
+        return emit_unattributed_run_refused_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn, refusal.agent_id),
+            offers_release=hasattr(args, "release"))
+    except BoardUndeclared as refusal:
+        return emit_board_undeclared_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
+    except RunAbandoned as abandoned:
+        # A signal that escaped a gated-run bracket: the bracket already
+        # aborted its open run and removed its identity.
+        return emit_bracket_abandoned(
+            getattr(args, "cmd", None), abandoned,
+            _hard_stop_context(args, project_key_fn, abandoned.agent_id))
+    except (OSError, ValueError) as exc:
+        # After every typed hard stop, never in their place: an I/O or parse
+        # failure the verb's own body let escape is reported, not a traceback.
+        # It is not a refusal, so a gate that died this way still falls
+        # through to its outcome milestone below, as a fail, with no
+        # suites, since the composition did not finish.
+        forget_gate_suite_results()
+        code = emit_escaped_failure(
+            getattr(args, "cmd", None), exc,
+            _hard_stop_context(args, project_key_fn,
+                               getattr(args, "agent", None)))
+    if (getattr(args, "cmd", None) == GATE_VERB and ops_fn is not None
+            and project_dir_fn is not None):
+        try:
+            record_gate_outcome(args, code, project_dir_fn(args), ops_fn())
+        except BoardUndeclared as refusal:
+            # The gate's envelope is out; the tail reports on stderr only.
+            report_board_undeclared(refusal)
+            code = code or 1
+    return code
 
 
 def fleet_context(cr=None):
@@ -2476,11 +2950,14 @@ class ClientOps:
     `module._post` / `module._emit_axi` / `module._agent_id` — the fleet's
     established harness idiom — instead of holding a stale reference captured
     at import time.
+
+    `base_url` may be the client's own resolver, called at each read, so a
+    verb that sends nothing resolves no board.
     """
 
     __slots__ = ("get", "post", "patch", "emit", "context", "agent_id",
                  "project_key", "plans_path", "open_plans", "resolve_plan",
-                 "post_gate", "post_milestone", "base_url")
+                 "post_gate", "post_milestone", "_base_url")
 
     def __init__(self, *, get, post, patch, emit, context, agent_id,
                  project_key, plans_path, open_plans, resolve_plan,
@@ -2497,7 +2974,12 @@ class ClientOps:
         self.resolve_plan = resolve_plan
         self.post_gate = post_gate
         self.post_milestone = post_milestone
-        self.base_url = base_url
+        self._base_url = base_url
+
+    @property
+    def base_url(self):
+        """The board, resolved at this read when a resolver was given."""
+        return self._base_url() if callable(self._base_url) else self._base_url
 
 
 def cmd_status(args, project_dir, ops):
@@ -2714,7 +3196,7 @@ def select_history_fields(rows, extra_fields, full=False):
     plus the requested extras (all five with `full`), in the read's order.
     Without `full` a long text cell is truncated (`truncate_field`)."""
     requested = list(HISTORY_EXTRA_FIELDS) if full else list(extra_fields or [])
-    keys = list(HISTORY_BASE_FIELDS)
+    keys: list[str] = list(HISTORY_BASE_FIELDS)
     for f in requested:
         if f not in keys:
             keys.append(f)
@@ -2733,13 +3215,27 @@ def build_history_gate_rows(release):
             for g in gate_runs]
 
 
-def _history_refusal(emit, ops, project_dir, error, help_steps):
-    """§S4 — the `history` refusal: ok:false, the error naming the bad
-    input, a non-empty `help[]`, no rows; exit 1."""
-    emit(HISTORY_VERB, False, {"error": error, "help": help_steps},
-         ops.context(project_dir), [],
-         f"history: ok=False error={error}")
+def _history_refusal(verb, emit, ops, project_dir, error, help_steps):
+    """§S4 — the `history` refusal, under `verb`'s own name: ok:false, the
+    error naming the bad input, a non-empty `help[]`, no rows; exit 1."""
+    emit(verb, False, {"error": error, "help": help_steps},
+         ops.context(project_dir), [], f"{verb}: ok=False error={error}")
     return 1
+
+
+def _history_label_is_held(ops, project_key, label):
+    """Whether the project holds `label` outside History: named by a queue
+    row's own `release`, or by a live release proposal's own `label`. Read on
+    the refusal path only; a failed read holds nothing, so the refusal stays
+    the plain unknown-release one."""
+    queue = ops.get(f"/api/v2/projects/{project_key}/queue") or {}
+    if queue.get("ok") and any(
+            isinstance(e, dict) and str(e.get("release")) == label
+            for e in queue.get("entries") or []):
+        return True
+    proposals = ops.get(release_proposals_path(project_key)) or {}
+    return bool(proposals.get("ok")) and any(
+        p["label"] == label for p in proposal_candidates(proposals))
 
 
 def cmd_history(args, project_dir, ops):
@@ -2754,7 +3250,7 @@ def cmd_history(args, project_dir, ops):
     resp = ops.get(history_path(ops.project_key(project_dir))) or {}
     if not resp.get("ok"):
         return _history_refusal(
-            emit, ops, project_dir,
+            HISTORY_VERB, emit, ops, project_dir,
             f"could not read the project's history: {resp.get('error')}",
             server_failure_help(resp) or [
                 "check CRUCIBLE_PROJECT_KEY in the project's .env names a "
@@ -2767,8 +3263,14 @@ def cmd_history(args, project_dir, ops):
         release = next((r for r in releases if _history_label(r) == label),
                        None)
         if release is None:
+            if _history_label_is_held(ops, ops.project_key(project_dir), label):
+                return _history_refusal(
+                    HISTORY_VERB, emit, ops, project_dir,
+                    f"release {label} is not in History yet: nothing shipped "
+                    f"and no CR completed",
+                    ["queue --fields release,seq,points,dependsOn"])
             return _history_refusal(
-                emit, ops, project_dir,
+                HISTORY_VERB, emit, ops, project_dir,
                 f"unknown release: {label}",
                 ["history — lists every release label the project holds"])
         rows = build_history_gate_rows(release)
@@ -2789,107 +3291,318 @@ def cmd_history(args, project_dir, ops):
     return 0
 
 
-# ── §S4 — `project-meta`: a project's metadata map, read and written ─────────
+# ── `runs` and `run`: a project's stored runs, read back ────────────────────
+#
+# Two read-only verbs (no --agent), written once here for the five clients.
+# A run is a `test` or a `compile` record; the board's cycle and release lists
+# also carry gate milestones and gate records, which are not runs and are
+# never listed. Each kind reads honestly: a compile record stores no test
+# counts (its brief's four counts are 0, not counts), so a compile row carries
+# `errors`/`warnings` and empty test counts, and a test row the reverse.
 
-PROJECT_META_VERB = "project-meta"
+RUNS_VERB = "runs"
+RUN_VERB = "run"
 
+#: The record kinds that are runs.
+RUN_KINDS = ("test", "compile")
 
-def project_metadata_path(project_key):
-    """§S4 — `…/projects/<key>/metadata`, the one route the verb reads (GET)
-    and writes (PATCH)."""
-    return f"/api/v2/projects/{project_key}/metadata"
+#: The count columns of a test row and of a compile row.
+RUN_TEST_COUNTS = ("passed", "failed", "pending", "total")
+RUN_COMPILE_COUNTS = ("errors", "warnings")
 
+#: The columns of `run`'s diagnostics table.
+RUN_DIAGNOSTIC_COLUMNS = ("level", "file", "line", "code", "message")
 
-def parse_meta_set(raw):
-    """§S4 — the argparse `type=` for one `--set K=V` (PURE): split on the
-    FIRST `=`, so a value may itself hold `=` and commas. A value with no `=`,
-    or an empty key, is refused HERE — by argument parsing, before any request
-    — rather than sent for the server to refuse."""
-    key, sep, value = raw.partition("=")
-    if not sep:
-        raise argparse.ArgumentTypeError(
-            f"--set {raw!r} has no '=': write it as KEY=VALUE")
-    if not key:
-        raise argparse.ArgumentTypeError(
-            f"--set {raw!r} has an empty key before the '=': write it as KEY=VALUE")
-    return key, value
-
-
-def add_project_meta_args(parser):
-    """§S4 — the `--set`/`--unset`/`--format` flags of `project-meta`,
-    registered here so the five clients cannot drift into five flag surfaces.
-    Each client adds its own `--agent` and project-dir flags, as for every
-    other verb."""
-    parser.add_argument(
-        "--set", dest="meta_set", action="append", type=parse_meta_set,
-        default=None, metavar="KEY=VALUE",
-        help="Set one key (split on the FIRST '='); repeatable. A write: "
-             "requires --agent.")
-    parser.add_argument(
-        "--unset", dest="meta_unset", action="append", default=None,
-        metavar="KEY",
-        help="Remove one key; repeatable. A write: requires --agent.")
-    add_status_format_arg(parser)
+RUNS_USAGE = ("runs takes exactly one of --cycle <id> (an integer) or "
+              "--release <label>")
 
 
-def project_meta_refusal_fields(resp, base_url):
-    """§S4 — the result fields of a refused or failed `project-meta` request
-    (PURE): the server's own `help[]` carried verbatim (whether the transport
-    handed back the parsed body or flattened it into `error`), the server's
-    error as the detail, and the reachability step when the call never
-    landed."""
-    resp = resp or {}
-    parsed = server_failure_body(resp) or {}
-    steps = resp.get("help")
-    if isinstance(steps, list) and steps:
-        help_steps = [str(s) for s in steps]
-    else:
-        help_steps = (server_failure_help(resp)
-                      or [f"check the Crucible server is running / reachable "
-                          f"at {base_url}", PROJECT_META_VERB])
-    return {"error": parsed.get("error") or resp.get("error"),
-            "help": help_steps}
+def add_run_read_verbs(sub, funcs, *, parents=(), add_args=()):
+    """Register the `runs` and `run` subparsers on `sub`, once for the fleet.
+
+    The `add_roadmap_verbs` shape: `funcs` maps each verb name to the
+    client's own delegator, `parents` carries a client's shared parent
+    parsers, and `add_args` its read-verb arg adders (its project-dir
+    argument, exactly as it passes them to `add_next_verb`). Both verbs are
+    read-only, so neither takes --agent.
+
+    `--cycle` is a plain string here, not `type=int`: a non-integer cycle is
+    refused by the verb's own envelope (exit 2), never by argparse's bare
+    usage exit."""
+    rs = sub.add_parser(
+        "runs", parents=list(parents),
+        help="List a cycle's or a release's stored test and compile runs → "
+             "GET …/events (newest first). Read-only: no --agent.")
+    rs.add_argument("--cycle",
+                    help="The cycle id (an integer) whose stored runs to "
+                         "list. Give exactly one of --cycle or --release.")
+    rs.add_argument("--release",
+                    help="The release label whose stored runs to list. Give "
+                         "exactly one of --cycle or --release.")
+    rs.add_argument("--fields",
+                    help="Comma-separated columns to NARROW each row to, "
+                         "from: event, kind, tier, codec, stack, passed, "
+                         "failed, pending, total, errors, warnings, agent, "
+                         "cycleId, release.")
+    rs.add_argument("--full", action="store_true",
+                    help="List every run; by default the table is cut at the "
+                         "project's roadmap_list_rows limit (totalCount "
+                         "always states the true number).")
+    for adder in add_args:
+        adder(rs)
+    rs.set_defaults(func=funcs[RUNS_VERB])
+
+    rn = sub.add_parser(
+        "run", parents=list(parents),
+        help="Show one stored test or compile run of this project → GET "
+             "…/events/<id>: its brief, and its per-suite counts and failing "
+             "tests, or its diagnostics. Read-only: no --agent.")
+    rn.add_argument("event_id", metavar="event-id",
+                    help="The board's event id of the run (the `event` "
+                         "column of `runs`).")
+    rn.add_argument("--full", action="store_true",
+                    help="Print every diagnostic of a compile run; by "
+                         "default the table is cut at the project's "
+                         "roadmap_list_rows limit.")
+    rn.add_argument("--files", default="10", metavar="<n>|all",
+                    help="How many of a test run's least covered files "
+                         "--files lists in the `coverage` block: a whole "
+                         "number of at least 1, or `all` (default: 10).")
+    for adder in add_args:
+        adder(rn)
+    rn.set_defaults(func=funcs[RUN_VERB])
 
 
-def cmd_project_meta(args, project_dir, ops):
-    """§S4 — a project's metadata map (a copy of its .env facts).
+def build_run_rows(events):
+    """(PURE) One uniform row per `test`/`compile` record of a board list, in
+    the list's order, carrying every column, in order (event, kind, tier,
+    codec, stack, the four test counts, errors, warnings, agent, cycleId,
+    release): `event` from `id`,
+    `agent` from `agentId`, a value the board lacks None — never invented. A
+    test row's `errors`/`warnings` and a compile row's four test counts are
+    None. Every other record kind is dropped."""
+    rows = []
+    for event in events or []:
+        if not isinstance(event, dict) or event.get("kind") not in RUN_KINDS:
+            continue
+        is_test = event.get("kind") == "test"
+        row = {"event": event.get("id")}
+        for key in ("kind", "tier", "codec", "stack"):
+            row[key] = event.get(key)
+        for key in RUN_TEST_COUNTS:
+            row[key] = event.get(key) if is_test else None
+        for key in RUN_COMPILE_COUNTS:
+            row[key] = None if is_test else event.get(key)
+        row["agent"] = event.get("agentId")
+        row["cycleId"] = event.get("cycleId")
+        row["release"] = event.get("release")
+        rows.append(_LINT.lint_run_row(row, event))
+    return rows
 
-    With no `--set`/`--unset` it READS: exactly one `GET …/metadata`, no
-    `--agent`. With any, it WRITES: the identity is resolved FIRST (a hard stop
-    precedes any request), then exactly one `PATCH …/metadata` carrying
-    `{agentId, set, unset}`; the envelope adds the server's `changed`. Unlike
-    `status`/`landings`, a refused or failed request never degrades: it is
-    ok:false with the server's `help[]` and a non-zero exit. `--format` picks
-    the encoding exactly as for `status` (§S8)."""
+
+def _runs_scope(args):
+    """The one list scope `runs` was given, as `(query, label)` — or
+    `(None, error)` when it was given neither, both, or a non-integer
+    cycle."""
+    cycle = getattr(args, "cycle", None)
+    release = getattr(args, "release", None)
+    if (cycle is None) == (release is None):
+        return None, RUNS_USAGE
+    if release is not None:
+        return {"release": release}, f"release {release}"
+    try:
+        cycle_id = int(str(cycle))
+    except ValueError:
+        return None, f"--cycle {cycle!r} is not an integer: {RUNS_USAGE}"
+    return {"cycleId": str(cycle_id)}, f"cycle {cycle_id}"
+
+
+def _board_unreachable_read_help(verb, base_url):
+    """(PURE) The one step that helps a read verb (`runs`, `run`) whose board
+    could not be read: reach the board, then re-run the verb."""
+    return [f"check the Crucible server is running / reachable "
+            f"at {base_url}, then re-run {verb}"]
+
+
+def cmd_runs(args, project_dir, ops):
+    """List a cycle's or a release's stored test and compile runs (read-only,
+    no --agent): ONE read, `GET /api/v2/events?project=<key>&cycleId=<id>` or
+    `…&release=<label>`, answered as one envelope whose `runs` table holds the
+    runs in the board's order (`build_run_rows`), narrowed by `--fields`, cut
+    at `roadmap_list_rows` unless `--full`, with `totalCount` the true number.
+
+    Neither scope, both, or a non-integer --cycle is refused before any
+    request, exit 2. A failed read is a refusal with no table, exit 1. An
+    unknown cycle or release is an empty table whose help names the project
+    key that was asked about."""
     emit = _status_emitter(args, ops)
-    pairs = getattr(args, "meta_set", None) or []
-    unset = list(getattr(args, "meta_unset", None) or [])
-    write = bool(pairs or unset)
-    agent_id = ops.agent_id(args) if write else None
-    path = project_metadata_path(ops.project_key(project_dir))
-    if write:
-        body = {"agentId": agent_id}
-        if pairs:
-            body["set"] = dict(pairs)
-        if unset:
-            body["unset"] = unset
-        resp = ops.patch(path, body) or {}
-    else:
-        resp = ops.get(path) or {}
-    context = ops.context(project_dir, agent_id=agent_id)
+    scope, label = _runs_scope(args)
+    if scope is None:
+        emit(RUNS_VERB, False,
+             {"error": label,
+              "help": ["runs --cycle <id>", "runs --release <label>"]},
+             ops.context(project_dir), [], f"runs: ok=False error={label}")
+        return EXIT_USAGE
+    key = ops.project_key(project_dir)
+    query = urllib.parse.urlencode({"project": key, **scope})
+    resp = ops.get(f"/api/v2/events?{query}") or {}
     if not resp.get("ok"):
-        fields = project_meta_refusal_fields(resp, ops.base_url)
-        emit(PROJECT_META_VERB, False, fields, context, [],
-             f"project-meta: ok=False error={fields['error']}")
+        error = f"could not read the stored runs of {label}: {resp.get('error')}"
+        emit(RUNS_VERB, False,
+             {"error": error,
+              "help": _board_unreachable_read_help(RUNS_VERB, ops.base_url)},
+             ops.context(project_dir), [], f"runs: ok=False error={error}")
         return 1
-    metadata = resp.get("metadata") or {}
-    fields = {"metadata": metadata}
-    if write:
-        fields["changed"] = bool(resp.get("changed", False))
-    fields["help"] = [PROJECT_META_VERB]
-    emit(PROJECT_META_VERB, True, fields, context, [],
-         f"project-meta: ok=True keys={len(metadata)}"
-         + (f" changed={fields['changed']}" if write else ""))
+    rows, total = roadmap_rows({RUNS_VERB: build_run_rows(resp.get("events"))},
+                               RUNS_VERB, args)
+    help_steps = (["run <event> — one run in full"] if total else
+                  [f"no test or compile run of project {key} is stored for "
+                   f"{label} — check CRUCIBLE_PROJECT_KEY in the project's "
+                   f".env names the project the runs were filed under"])
+    emit(RUNS_VERB, True,
+         {RUNS_VERB: rows, "totalCount": total, "help": help_steps},
+         ops.context(project_dir), [],
+         f"runs: ok=True {label} runs={total}")
+    return 0
+
+
+def _run_brief(event):
+    """(PURE) A stored run's brief, read honestly per kind: a test run's four
+    counts (and its coverage lines percent when stored), a compile run's
+    `errors` and `warnings` and no test counts."""
+    brief = {"event": event.get("id")}
+    for key in ("kind", "tier", "codec", "stack"):
+        brief[key] = event.get(key)
+    if event.get("kind") == "test":
+        summary = event.get("summary") or {}
+        for key in RUN_TEST_COUNTS:
+            brief[key] = summary.get(key)
+    else:
+        compile_record = event.get("compile") or {}
+        brief["errors"] = compile_record.get("errorCount")
+        brief["warnings"] = compile_record.get("warningCount")
+    brief["cycleId"] = event.get("cycleId")
+    brief["release"] = event.get("release")
+    brief["agent"] = event.get("agentId")
+    lines = ((event.get("coverage") or {}).get("lines") or {}).get("percent")
+    if lines is not None:
+        brief["coverageLines"] = lines
+    return _LINT.lint_brief(brief, event)
+
+
+def _run_suite_rows(event):
+    """(PURE) A test run's per-suite counts, one row (name, browser, passed,
+    failed, pending) per top-level suite of its `?depth=suites` tree, in stored order."""
+    rows = []
+    for suite in event.get("tree") or []:
+        counts = suite.get("counts") or {}
+        rows.append({"name": suite.get("name"), "browser": suite.get("browser"),
+                     "passed": counts.get("passed"),
+                     "failed": counts.get("failed"),
+                     "pending": counts.get("pending")})
+    return rows
+
+
+def _run_diagnostic_rows(event):
+    """(PURE) A compile run's diagnostics, one `RUN_DIAGNOSTIC_COLUMNS` row
+    each, in stored order, a missing value None."""
+    return [{key: diagnostic.get(key) for key in RUN_DIAGNOSTIC_COLUMNS}
+            for diagnostic in (event.get("compile") or {}).get("diagnostics") or []
+            if isinstance(diagnostic, dict)]
+
+
+def _run_refusal(emit, ops, project_dir, error, help_steps=None):
+    """The `run` refusal: ok:false naming what was refused, no brief; returns
+    exit 1. Its help points at `runs --cycle` unless the caller names a step
+    that helps more (an unreachable board, which `runs` cannot read either)."""
+    emit(RUN_VERB, False,
+         {"error": error,
+          "help": help_steps or ["runs --cycle <id> — lists the runs this "
+                                 "project stored"]},
+         ops.context(project_dir), [], f"run: ok=False error={error}")
+    return 1
+
+
+def cmd_run(args, project_dir, ops):
+    """Show one stored run of the client's project (read-only, no --agent).
+
+    The record is read with `?depth=suites` (a record with no tree answers
+    with its full read, less the raw output). A test run then reads its
+    failing tests through `_event_failing_tests`, the one reading of them —
+    a second request, because the stored per-suite counts come only from
+    `?depth=suites` and the leaves only from the full record. The envelope
+    carries the brief under `run`, then a test run's `suites` and
+    `failingTests`, or a compile run's `diagnostics` (cut at
+    `roadmap_list_rows` unless `--full`) with their `totalCount`. A test run
+    that kept its coverage file by file is then read a third time, for the
+    files `--files` asks for, and states them in a `coverage` block after
+    `failingTests` (`stored_run_coverage`).
+
+    A `--files` value that is neither `all` nor a whole number of at least 1
+    is refused before any request, exit 2. Refused, exit 1: an id the board
+    does not hold, another project's record (naming both keys), a record that
+    is not a run (naming its kind), and a read that fails — the second and
+    the third included, so a run is never printed with an empty failing list
+    or a file list it could not read."""
+    emit = _status_emitter(args, ops)
+    event_id = args.event_id
+    files_query, files_error = _RUN.run_files_query(getattr(args, "files", "10"))
+    if files_error:
+        _run_refusal(emit, ops, project_dir, files_error, [_RUN.RUN_FILES_USAGE])
+        return EXIT_USAGE
+    path = f"/api/v2/events/{urllib.parse.quote(str(event_id))}"
+    resp = ops.get(f"{path}?depth=suites") or {}
+    if not resp.get("ok"):
+        error = resp.get("error")
+        if str(error).startswith("HTTP 404"):
+            return _run_refusal(emit, ops, project_dir,
+                                f"the board holds no run {event_id}")
+        # An `HTTP <status>` error is an answer the board gave; anything else
+        # is a transport failure (`http_request`), where only reaching the board
+        # helps.
+        unreachable = not str(error).startswith("HTTP ")
+        return _run_refusal(
+            emit, ops, project_dir, f"could not read run {event_id}: {error}",
+            _board_unreachable_read_help(RUN_VERB, ops.base_url)
+            if unreachable else None)
+    event = resp.get("event") or {}
+    key = ops.project_key(project_dir)
+    if event.get("projectKey") != key:
+        return _run_refusal(
+            emit, ops, project_dir,
+            f"{event_id} belongs to project {event.get('projectKey')}, not "
+            f"this client's project {key}")
+    kind = event.get("kind")
+    if kind not in RUN_KINDS:
+        return _run_refusal(
+            emit, ops, project_dir,
+            f"{event_id} is a {kind} record, not a run (a run is a test or a "
+            f"compile record)")
+    brief = _run_brief(event)
+    if kind == "test":
+        failing = _event_failing_tests(ops, event_id, strict=True)
+        if failing is None:
+            return _run_refusal(
+                emit, ops, project_dir,
+                f"could not read the failing tests of run {event_id}")
+        coverage, error = _RUN.stored_run_coverage(ops.get, path, files_query,
+                                                   event, event_id)
+        if error:
+            return _run_refusal(emit, ops, project_dir, error)
+        fields = {RUN_VERB: brief, "suites": _run_suite_rows(event),
+                  "failingTests": failing,
+                  **({"coverage": coverage} if coverage else {})}
+        legacy = (f"run: ok=True {event_id} test passed={brief.get('passed')} "
+                  f"failed={brief.get('failed')}")
+    else:
+        diagnostics = _run_diagnostic_rows(event)
+        fields = {RUN_VERB: brief,
+                  "diagnostics": truncate_rows(
+                      diagnostics, full=bool(getattr(args, "full", False))),
+                  "totalCount": len(diagnostics)}
+        legacy = _LINT.compile_run_line(event_id, brief)
+    emit(RUN_VERB, True, {**fields, "help": ["runs --cycle <id>"]},
+         ops.context(project_dir), [], legacy)
     return 0
 
 
@@ -2945,9 +3658,9 @@ BEFORE_ITS_DEPENDENCY = "before-its-dependency"
 
 
 def add_queue_view_args(parser):
-    """\u00a7S0 \u2014 the `queue` verb's `--fields`/`--full` flags,
-    registered here so the five clients cannot drift into five flag
-    surfaces."""
+    """\u00a7S0 \u2014 the `queue` verb's `--fields`/`--full` flags and its
+    `--format {toon,json}` (through `add_status_format_arg`), registered here
+    so the five clients cannot drift into five flag surfaces."""
     parser.add_argument(
         "--fields",
         help="Comma-separated EXTRA columns to add to the default "
@@ -2957,6 +3670,7 @@ def add_queue_view_args(parser):
         "--full", action="store_true",
         help="Print every column: the default set, the place-in-plan "
              "columns and `warning`.")
+    add_status_format_arg(parser)
 
 
 def queue_late_dependencies(rows):
@@ -2989,7 +3703,7 @@ def select_queue_fields(rows, extra_fields, full=False):
                for f in requested):
         return projected, []
     warnings = []
-    for row, late in zip(projected, queue_late_dependencies(rows)):
+    for row, late in zip(projected, queue_late_dependencies(rows), strict=True):
         named = " ".join(late)
         row[QUEUE_WARNING_FIELD] = (f"before its dependency {named}"
                                     if late else "")
@@ -3077,11 +3791,12 @@ def cmd_queue(args, project_dir, ops):
                        f"{milestones.get('error')}"),
         })
 
-    ops.emit("queue", True,
-             {"queue": rows, "crMerged": merged, "count": len(rows),
-              "help": ["status"]},
-             ops.context(project_dir), warnings,
-             f"queue: ok=True entries={len(rows)} crMerged={len(merged)}")
+    _status_emitter(args, ops)(
+        "queue", True,
+        {"queue": rows, "crMerged": merged, "count": len(rows),
+         "help": ["status"]},
+        ops.context(project_dir), warnings,
+        f"queue: ok=True entries={len(rows)} crMerged={len(merged)}")
     return 0
 
 
@@ -3286,8 +4001,8 @@ def status_namespace(**extra_fields):
 
 
 def add_status_format_arg(parser):
-    """§S8 — the `--format {toon,json}` flag of `status`, its alias `plans`
-    and `landings` (§S9), registered here so the five clients cannot drift
+    """§S8 — the `--format {toon,json}` flag of `status`, its alias `plans`,
+    `landings` (§S9) and `queue`, registered here so the five clients cannot drift
     into five flag surfaces. The no-argument dashboard is not offered it
     (`status_namespace` carries no `format`)."""
     parser.add_argument(
@@ -3297,7 +4012,8 @@ def add_status_format_arg(parser):
 
 
 def _status_emitter(args, ops):
-    """§S8 — the envelope writer `cmd_status` and `cmd_landings` use: the
+    """§S8 — the envelope writer `cmd_status`, `cmd_landings` and
+    `cmd_queue` use: the
     client's own `ops.emit`
     for TOON (today's path, untouched), the shared `emit_axi` in JSON mode for
     `--format json`. A Namespace without `format` (the dashboard's) is TOON."""
@@ -3501,7 +4217,279 @@ def cmd_cycle_add(args, project_dir, ops):
     return 0 if ok else 1
 
 
-def cmd_cr_close(args, project_dir, ops):
+# The flag that closes a CR over a gate that was not green, and its help.
+ACCEPT_FAILING_GATE_HELP = (
+    "Close the CR even though its gate result is not green (or it has none): "
+    "REASON is required, is stored on the plan, and is shown on the "
+    "cr-merged milestone and in History. Without it a red or missing gate "
+    "result refuses the close.")
+ACCEPT_FAILING_GATE_UNUSED_CODE = "accept-failing-gate-unused"
+
+
+def add_cr_close_gate_arg(p):
+    """Declare `--accept-failing-gate` on `cr-close`: the ONE declaration site
+    for the whole fleet, on the `add_plan_file_release_arg` precedent."""
+    p.add_argument("--accept-failing-gate", metavar="REASON",
+                   help=ACCEPT_FAILING_GATE_HELP)
+
+
+# A board event id: `evt-<ms>-<seq>`, its numeric parts in filing order.
+_EVENT_ID_SHAPE = re.compile(r"evt-(\d+)-(\d+)")
+
+
+def _milestone_order(milestone):
+    """Time order for a CR's gate milestones: timestamp, ties broken by id. An
+    event id (`evt-<ms>-<seq>`) compares by its numbers, so `-100` follows
+    `-59`; a numeric id sorts first, and an id of any other shape last, as
+    text, so mixed ids still compare."""
+    ident = milestone.get("id")
+    shaped = (_EVENT_ID_SHAPE.fullmatch(ident) if isinstance(ident, str)
+              else None)
+    if isinstance(ident, (int, float)) and not isinstance(ident, bool):
+        tie = (0, (ident,), "")
+    elif shaped:
+        tie = (1, (int(shaped.group(1)), int(shaped.group(2))), "")
+    else:
+        tie = (2, (), str(ident))
+    return (milestone.get("timestamp") or 0, tie)
+
+
+def gate_milestones(ops, project_key, cr):
+    """`(records, error)`: every `pre-merge-gate` milestone of the CR, oldest
+    first (empty when it has none), or the board's error when the read was not
+    answered."""
+    resp = ops.get(f"/api/v2/projects/{project_key}/milestones"
+                   f"?type={GATE_MILESTONE_TYPE}")
+    if not resp.get("ok"):
+        return [], resp.get("error") or "the board did not answer"
+    mine = [m for m in resp.get("milestones") or []
+            if isinstance(m, dict) and m.get("label") == cr]
+    return sorted(mine, key=_milestone_order), None
+
+
+def _recorded_suite_entries(gate):
+    """The well-formed suite entries a gate milestone carries (none for a gate
+    that recorded no suites)."""
+    suites = gate.get("suites")
+    if not isinstance(suites, list):
+        return []
+    return [e for e in suites if isinstance(e, dict) and e.get("target")]
+
+
+def _is_full_gate(gate):
+    """A full gate: one that says so, or one that records neither a scope nor
+    suites (the shape posted before gates recorded them). A gate with suites
+    and no scope is never one."""
+    scope = gate.get("scope")
+    if scope is not None:
+        return scope == "full"
+    return gate.get("suites") is None
+
+
+class GateVerdict:
+    """What a CR's gate history says about closing it.
+
+    `base` is the latest full gate (None when there is none). `green` is the
+    verdict. On a red per-suite verdict `red` maps each suite still red to the
+    entry that counted for it, and `stopped` is a later gate that failed
+    before composing any suite and that no later gate ran past."""
+
+    __slots__ = ("base", "green", "red", "stopped")
+
+    def __init__(self, base, green, red=None, stopped=None):
+        self.base = base
+        self.green = green
+        self.red = red or {}
+        self.stopped = stopped
+
+
+def judge_gate_history(gates):
+    """The verdict over a CR's gate milestones, oldest first.
+
+    The base is the latest full gate; with none, nothing is green. A base with
+    no suites, or that failed while none of its entries did, is judged by its
+    own outcome. Otherwise each suite the base ran counts its latest result
+    from any gate at or after the base (an entry for a target the base never
+    ran is ignored), and a later gate that failed with no suites (stopped
+    before composing any) keeps the verdict red until a later gate runs past
+    that point. Green when every counted result passes."""
+    base_at = None
+    for index, gate in enumerate(gates):
+        if _is_full_gate(gate):
+            base_at = index
+    if base_at is None:
+        return GateVerdict(None, False)
+    base = gates[base_at]
+    entries = _recorded_suite_entries(base)
+    own_outcome_only = not entries or (
+        base.get("outcome") != GATE_OUTCOME_PASS
+        and not any(e.get("outcome") != GATE_OUTCOME_PASS for e in entries))
+    if own_outcome_only:
+        return GateVerdict(base, base.get("outcome") == GATE_OUTCOME_PASS)
+    latest = {e["target"]: e for e in entries}
+    stopped = None
+    for gate in gates[base_at + 1:]:
+        later = _recorded_suite_entries(gate)
+        if not later and gate.get("suites") is None:
+            if gate.get("outcome") != GATE_OUTCOME_PASS:
+                stopped = gate
+            else:
+                stopped = None
+            continue
+        stopped = None
+        for entry in later:
+            if entry["target"] in latest:
+                latest[entry["target"]] = entry
+    red = {target: entry for target, entry in latest.items()
+           if entry.get("outcome") != GATE_OUTCOME_PASS}
+    return GateVerdict(base, not red and stopped is None, red, stopped)
+
+
+def _gate_cycle(gate):
+    cycle = (gate.get("context") or {}).get("cycleId") if gate else None
+    return cycle if cycle is not None else "<id>"
+
+
+def _gate_refusal_text(cr, verdict, declared, scopable=True):
+    """The refusal's `(error, help)` for a CR whose gate result is not green,
+    or that has no full gate result at all. `declared` is a zero-argument
+    callable answering the gated targets the project declares now, asked only
+    when suites are still red: a scoped re-run is offered when every red suite
+    is still declared, a full gate otherwise. `scopable` is False for a client
+    that cannot enumerate a declaration, so cannot run a scoped gate at all:
+    its help names a full gate, and says that is why."""
+    accept = (f"or close over it deliberately: cr-close --commit <sha> --cr {cr} "
+              f'--accept-failing-gate "<reason>"')
+    gate = verdict.base
+    if gate is None:
+        return (f"cr-close refused: {cr} has no recorded full pre-merge-gate "
+                f"result (a scoped gate counts only after a full one), so "
+                f"nothing says its suite is green; nothing was closed",
+                [f"run a full gate: pre-merge-gate --agent <agentId> --cycle "
+                 f"<id> for {cr}, then re-run cr-close", accept])
+    cycle = _gate_cycle(gate)
+    if verdict.red:
+        described = []
+        for target, entry in verdict.red.items():
+            failing = entry.get("failingTests") or []
+            named = (f"; failing: {', '.join(str(t) for t in failing)}"
+                     if failing else "")
+            described.append(
+                f"`{target}` ({entry.get('outcome')}, {entry.get('failed')} "
+                f"failed, {entry.get('passed')} passed{named})")
+        error = (f"cr-close refused: {cr}'s gate result is red \u2014 still red: "
+                 f"{'; '.join(described)}; nothing was closed")
+        red = list(verdict.red)
+        if not scopable:
+            rerun = (f"this client cannot run a scoped gate; run a full gate: "
+                     f"pre-merge-gate --agent <agentId> --cycle {cycle}, then "
+                     f"cr-close")
+        elif all(target in declared() for target in red):
+            rerun = (f"fix the red suite(s), re-run them: pre-merge-gate "
+                     f"--suites {','.join(red)} --agent <agentId> --cycle "
+                     f"{cycle}, then cr-close")
+        else:
+            rerun = (f"a red suite is no longer declared, so re-run a full "
+                     f"gate: pre-merge-gate --agent <agentId> --cycle {cycle}, "
+                     f"then cr-close")
+        return error, [rerun, accept]
+    if verdict.stopped is not None:
+        stopped = verdict.stopped
+        return (f"cr-close refused: {cr}'s latest pre-merge-gate (milestone "
+                f"{stopped.get('id')}, cycle {_gate_cycle(stopped)}) failed "
+                f"before it ran any suite, so its gate result is red; nothing "
+                f"was closed",
+                [f"fix what stopped it, re-run pre-merge-gate --agent <agentId> "
+                 f"--cycle {_gate_cycle(stopped)}, then cr-close", accept])
+    failing = gate.get("failingTests") or []
+    named = f"; failing: {', '.join(str(t) for t in failing)}" if failing else ""
+    return (f"cr-close refused: the latest full pre-merge-gate for {cr} "
+            f"(milestone {gate.get('id')}, cycle {cycle}) did not pass: outcome "
+            f"{gate.get('outcome')}, {gate.get('failed')} failed, "
+            f"{gate.get('passed')} passed{named}; nothing was closed",
+            [f"fix the {gate.get('failed')} failing test(s), re-run pre-merge-gate "
+             f"--agent <agentId> --cycle {cycle}, then cr-close", accept])
+
+
+class _UnsetFlagsView:
+    """A verb's arguments as the declaration readers see them: a flag this
+    verb does not take reads as unset, so a declaration resolves from the
+    project directory and its configuration exactly as a gate given no such
+    flag resolves it."""
+
+    def __init__(self, args):
+        self._args = args
+
+    def __getattr__(self, name):
+        return getattr(self._args, name, None)
+
+
+def _declared_gated_targets(args, surface, stack):
+    """The gated targets the project declares, read through the same
+    enumeration the gate composes over; empty when the client has no
+    declaration surface it can enumerate."""
+    if surface is None:
+        return frozenset()
+    return frozenset(suite.target for suite in
+                     declared_gate_suites(_UnsetFlagsView(args), surface, stack)
+                     if suite.gated)
+
+
+def gate_close_verdict(args, cr, project_dir, ops, *, surface=None, stack=None):
+    """Decide whether `cr-close` may close `cr`, from its gate result: the
+    verdict `judge_gate_history` reads from every one of its `pre-merge-gate`
+    milestones. Returns `(accepted_reason, warnings, refused)`: `refused` is
+    the exit code of an already-emitted refusal (nothing closed), else None and
+    the close proceeds. A green result closes as before; a red or missing one
+    closes only with `--accept-failing-gate <reason>`, whose reason is
+    returned to be recorded. A reason given over a GREEN result overrides
+    nothing, so it is not recorded and a warning says so. `surface`/`stack`
+    name the client's declaration, read to decide whether the refusal offers
+    a scoped re-run of the red suites."""
+    reason = getattr(args, "accept_failing_gate", None)
+    context = ops.context(project_dir, cr=cr)
+    if reason is not None and not reason.strip():
+        error = "cr-close refused: --accept-failing-gate needs a non-empty reason"
+        ops.emit("cr-close", False,
+                 {"commit": args.commit, "cr": cr, "error": error,
+                  "help": ['cr-close --commit <sha> --accept-failing-gate "<reason>"']},
+                 context, [], f"[crucible] ERROR: {error}")
+        return None, [], 1
+    gates, read_error = gate_milestones(ops, ops.project_key(project_dir), cr)
+    if read_error is not None:
+        error = (f"cr-close refused: could not read {cr}'s pre-merge-gate result "
+                 f"({read_error}); nothing was closed")
+        ops.emit("cr-close", False,
+                 {"commit": args.commit, "cr": cr, "error": error,
+                  "help": [f"check the Crucible server is reachable at {ops.base_url}, "
+                            f"then re-run cr-close"]},
+                 context, [], f"[crucible] ERROR: {error}")
+        return None, [], 1
+    verdict = judge_gate_history(gates)
+    if verdict.green:
+        if reason is None:
+            return None, [], None
+        return None, [{"code": ACCEPT_FAILING_GATE_UNUSED_CODE,
+                       "detail": (f"{cr}'s gate result is green, so there was "
+                                  f"no failing gate to accept; the reason was not "
+                                  f"recorded")}], None
+    if reason is not None:
+        return reason, [], None
+    error, help_steps = _gate_refusal_text(
+        cr, verdict, lambda: _declared_gated_targets(args, surface, stack),
+        scopable=surface is not None and surface.suites is not None)
+    gate = verdict.base
+    fields = {"commit": args.commit, "cr": cr, "error": error}
+    if gate is not None:
+        fields["gate"] = {key: gate.get(key) for key in
+                          ("id", "outcome", "passed", "failed", "failingTests")
+                          if gate.get(key) is not None}
+    fields["help"] = help_steps
+    ops.emit("cr-close", False, fields, context, [], f"[crucible] ERROR: {error}")
+    return None, [], 1
+
+
+def cmd_cr_close(args, project_dir, ops, *, surface=None, stack=None):
     """§S4c — PATCH the resolved OPEN plan closed, then post the `cr-merged`
     milestone.
 
@@ -3535,32 +4523,80 @@ def cmd_cr_close(args, project_dir, ops):
                  ops.context(project_dir), [], legacy)
         return 1
     plan = open_plans[0]
-    resp = ops.patch(f"{ops.plans_path(project_dir)}/{plan['planId']}",
-                     {"status": "closed", "merge": {"commit": args.commit},
-                      "agentId": agent_id})
-    ok = resp.get("ok", False)
     cr_label = plan.get("cr")
-    legacy = (f"cr-close: ok={ok} plan={plan['planId']} cr={cr_label} "
-              f"commit={args.commit}"
-              + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    ops.emit("cr-close", bool(ok),
-             {"plan": plan["planId"], "cr": cr_label, "commit": args.commit,
-              "help": HELP_STEPS["cr-close"]},
-             ops.context(project_dir, cr=cr_label), [], legacy)
+    accepted, warnings, refused = gate_close_verdict(
+        args, cr_label, project_dir, ops, surface=surface, stack=stack)
+    if refused is not None:
+        return refused
+    merge = {"commit": args.commit}
+    if accepted is not None:
+        merge["acceptedFailingGateReason"] = accepted
+    resp = ops.patch(f"{ops.plans_path(project_dir)}/{plan['planId']}",
+                     {"status": "closed", "merge": merge, "agentId": agent_id})
+    ok = resp.get("ok", False)
+    status_tail = (f"plan={plan['planId']} cr={cr_label} commit={args.commit}"
+                   + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    legacy = f"cr-close: ok={ok} {status_tail}"
+    result_fields = {"plan": plan["planId"], "cr": cr_label, "commit": args.commit}
+    if accepted is not None:
+        result_fields["acceptedFailingGateReason"] = accepted
+    result_fields["help"] = HELP_STEPS["cr-close"]
     if not ok:
+        ops.emit("cr-close", False, result_fields,
+                 ops.context(project_dir, cr=cr_label), warnings, legacy)
         return 1
     # §S4c / AC 141 — a SUCCESSFUL close emits a cr-merged milestone marker
     # (label=CR id, the merge commit, env auto-context). Withheld on a failed
     # close: the CR is not actually merged, so no marker fires.
-    ms_resp = ops.post_milestone(
-        project_dir, agent_id, "cr-merged",
-        label=cr_label, commit=args.commit,
-        context=fleet_context(cr=cr_label) or None,
-    )
+    # A close over a gate that was not green says so on the marker too, with
+    # the reason, through the shared builder that carries a type's own fields.
+    if accepted is not None:
+        ms_resp = post_milestone(
+            ops.project_key(project_dir), agent_id, "cr-merged", ops.post,
+            label=cr_label, commit=args.commit,
+            context=fleet_context(cr=cr_label) or None,
+            extra={"acceptedFailingGateReason": accepted})
+    else:
+        ms_resp = ops.post_milestone(
+            project_dir, agent_id, "cr-merged",
+            label=cr_label, commit=args.commit,
+            context=fleet_context(cr=cr_label) or None,
+        )
     print(f"cr-merged: ok={ms_resp.get('ok', False)} cr={cr_label} commit={args.commit}"
           + (f" error={ms_resp.get('error')}" if ms_resp.get("error") else ""),
           file=sys.stderr)
-    return 0
+    # The one envelope follows the post, so a closed CR whose marker the board
+    # refused (or never answered) reads ok: false with the remedy as help[].
+    recorded = bool(ms_resp.get("ok", False))
+    if not recorded:
+        warnings = list(warnings) + [_cr_merged_not_recorded_warning(
+            cr_label, ms_resp.get("error") or "the board did not answer")]
+        result_fields["help"] = cr_merged_remedy_steps(agent_id, cr_label, args.commit)
+    # The human status line states the same ok as the envelope it rides with.
+    ops.emit("cr-close", recorded, result_fields,
+             ops.context(project_dir, cr=cr_label), warnings,
+             f"cr-close: ok={recorded} {status_tail}")
+    return 0 if recorded else 1
+
+
+CR_MERGED_NOT_RECORDED_CODE = "cr-merged-not-recorded"
+
+
+def _cr_merged_not_recorded_warning(cr, board_error):
+    """The warning `cr-close` carries when the plan closed but its `cr-merged`
+    post failed: the CR is closed, its marker is missing, and why."""
+    return {"code": CR_MERGED_NOT_RECORDED_CODE,
+            "detail": (f"{cr} is closed, but its cr-merged milestone is not on "
+                       f"the board: the post failed ({board_error})")}
+
+
+def cr_merged_remedy_steps(agent_id, cr, commit):
+    """The three steps that record a closed CR's missing `cr-merged` marker:
+    drop the (possibly stale) binding, re-register unbound, post the marker."""
+    return [f"unregister --agent {agent_id}",
+            f"register --agent {agent_id} --role ORCHESTRATOR",
+            (f"milestone --type cr-merged --cr {cr} --label {cr} "
+             f"--commit {commit} --agent {agent_id}")]
 
 
 def cycle_transition(args, project_dir, ops, status):
@@ -3683,9 +4719,8 @@ def cmd_cycle_skip(args, project_dir, ops):
 #   * a client's own register/unregister payload helper (`register_fn` /
 #     `unregister_fn`) — bun/python send an `identity.repoPath` and expose
 #     `--display-name`, and bun's helper also serves its gate-run brackets;
-#   * arduino's unique self-registration bootstrap (`pre_register`), its
-#     `report` role floor (`role_default`) and its message convention
-#     (`message_fn`).
+#   * arduino's `report` role floor (`role_default`) and its message
+#     convention (`message_fn`).
 
 AGENT_REGISTER_PATH = "/api/v2/agents/register"
 AGENT_UNREGISTER_PATH = "/api/v2/agents/unregister"
@@ -3697,7 +4732,7 @@ AGENT_UNREGISTER_PATH = "/api/v2/agents/unregister"
 DEFAULT_IDENTITY_SOURCE = "claude-md"
 
 
-def cmd_register(args, project_dir, ops, *, register_fn=None, pre_register=None,
+def cmd_register(args, project_dir, ops, *, register_fn=None,
                  role_default=None, message_fn=None, legacy_format=None):
     """Register / heartbeat. CR-CRU-056 §S1/§S2 — `--cycle` binds the agent to
     an ACTIVE cycle of an OPEN plan; the server validates the binding and
@@ -3708,15 +4743,12 @@ def cmd_register(args, project_dir, ops, *, register_fn=None, pre_register=None,
     CR-CRU-054 §S2b (DN §4 finding #3) — the identity is resolved through the
     fleet's §S5 runtime hard stop, so a missing --agent produces the SAME
     ok:false AXI envelope every other mutating verb emits, not argparse's bare
-    usage error. Resolved FIRST: nothing is posted (and no per-client
-    `pre_register` bootstrap runs) without it.
+    usage error. Resolved FIRST: nothing is posted without it.
 
     CR-CRU-054 §S2b (DN §4 finding #5) — ONE `source` strategy for the fleet:
     the configurable `--source` with a fleet-wide `claude-md` default, never a
     hardcoded value."""
     agent_id = ops.agent_id(args)
-    if pre_register is not None:
-        pre_register(project_dir)
     declared_role = getattr(args, "role", None)
     role = declared_role or role_default
     message = (message_fn(args, declared_role) if message_fn is not None
@@ -3879,7 +4911,7 @@ def plan_file_cycle_entries(args):
             [f"{CYCLE_FLAG_TEMPLATE} — repeat the --cycle/--cycle-kind PAIR "
              f"once per cycle, in the order the cycles run"])
     return [{"label": label, "kind": kind}
-            for label, kind in zip(repeated, kinds)]
+            for label, kind in zip(repeated, kinds, strict=True)]
 
 
 def cmd_plan_file(args, project_dir, ops):
@@ -4313,9 +5345,12 @@ def parse_queue_table(text):
     so the server's `unknownDependencies` join matches the `cr` set.
 
     Raises QueueParseError (naming the CR) for a row whose column count differs
-    from the header's or whose Wave cell has no leading integer."""
+    from the header's or whose Wave cell has no leading integer; (naming the
+    column) for a header with no Title or no Depends-on column; and for text
+    holding no queue table at all, so a caller never posts an empty set to
+    the full-replace endpoint by mistake."""
     header = None
-    idx = {}
+    idx: dict[str, int] = {}
     entries = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -4329,12 +5364,20 @@ def parse_queue_table(text):
             low = [c.lower() for c in cells]
             if "wave" in low and any(c == "cr" or c.startswith("cr ") for c in low):
                 header = cells
-                idx = {
+                found = {
                     "cr": _find_col(cells, "cr"),
                     "title": _find_col(cells, "title"),
                     "depends": _find_col(cells, "depend"),
                     "wave": _find_col(cells, "wave"),
                 }
+                for key, column in (("title", "Title"), ("depends", "Depends on")):
+                    if found[key] is None:
+                        raise QueueParseError(
+                            f"malformed queue table: the header has no {column} "
+                            f"column ({stripped!r})")
+                # The header test above already names a CR and a Wave cell, so
+                # every column is found here; only the found ones are kept.
+                idx = {k: v for k, v in found.items() if v is not None}
             continue
         m = _QUEUE_ROW_RE.match(line)
         if not m:
@@ -4363,6 +5406,10 @@ def parse_queue_table(text):
                     continue
                 deps.append(prefix + tok if re.fullmatch(r"\d+", tok) else tok)
         entries.append({"cr": cr, "title": title, "wave": wave, "dependsOn": deps})
+    if header is None:
+        raise QueueParseError(
+            "no queue table found: no table header names both a CR and a Wave "
+            "column")
     return entries
 
 
@@ -5311,7 +6358,7 @@ def add_queue_file_verb(sub, func, *, parents=(), add_args=()):
 #
 # PROVENANCE: the server DECLARES this vocabulary as the `Tier` union in
 # `src/types.ts`, and that declaration is authoritative. The dict below is the
-# client side's ONLY copy of it: `tests/client/test_client_tier_surface.py`
+# client side's ONLY copy of it: `tests/client/integration/test_client_tier_surface.py`
 # parses that union out by SYMBOL and asserts the two are the same set, so a
 # seventh server-side value fails a test rather than quietly narrowing five
 # clients. Reading `src/types.ts` at client RUNTIME is not the requirement and
@@ -5431,6 +6478,15 @@ _ingested_compile = False
 # the claim above is module state: the ingest and the envelope are one exit.
 _refused_ingest_runs = set()
 _refused_ingest_warnings = []
+# The run ingests this invocation FILED, as the board answered each one
+# (`{event, run, cycleId}`), and the `run` counts its last envelope stated: what
+# a gate's outcome milestone is built from once the gate has finished
+# (`record_gate_outcome`). Module state for the reason the tier claim is.
+_filed_runs = []
+_emitted_run_counts = None
+# The per-suite results a gate's composition reported (`run_gate_suites`), for
+# the outcome milestone to carry; None while no composition ran.
+_gate_suite_results = None
 
 
 def forget_ingested_run():
@@ -5438,10 +6494,28 @@ def forget_ingested_run():
     verb dispatch (`run_verb`), so an envelope can only ever state the ingest
     of the invocation it belongs to."""
     global _ingested_run_tier, _ingested_compile
+    global _emitted_run_counts
     _ingested_run_tier = AXI_UNSET
     _ingested_compile = False
     _refused_ingest_runs.clear()
     _refused_ingest_warnings.clear()
+    _filed_runs.clear()
+    _emitted_run_counts = None
+    forget_gate_suite_results()
+    _LINT.forget_gate_lint()
+
+
+def forget_gate_suite_results():
+    """Drop the per-suite results a composition reported: a gate whose
+    composition never ran, or that a failure escaped, records no suites."""
+    global _gate_suite_results
+    _gate_suite_results = None
+
+
+def filed_run_events():
+    """The board's event id of every run ingest this invocation filed, in
+    filing order, `[]` when it filed none."""
+    return [run["event"] for run in _filed_runs]
 
 
 def take_refused_ingest_warnings():
@@ -5453,7 +6527,7 @@ def take_refused_ingest_warnings():
     return taken
 
 
-def post_ingest(post_fn, path, payload, *, release=None):
+def post_ingest(post_fn, path, payload, *, stack, release=None, framework=None):
     """§S5/AC7 — send a run to the board through the client's own `_post` seam
     and REMEMBER what went out, so `emit_axi` can state the tier of the run it
     ingested without any client deciding that answer for itself.
@@ -5466,26 +6540,83 @@ def post_ingest(post_fn, path, payload, *, release=None):
     none, which §S2/AC3 made the honest answer.
 
     §S1 — `release` (the verb's `--release`) rides as the body's own
-    TOP-LEVEL `release`, on every ingest of a release run and on none other."""
+    TOP-LEVEL `release`, on every ingest of a release run and on none other.
+
+    `stack` (the calling client's own stack, required) rides as the body's
+    TOP-LEVEL `stack` on EVERY ingest sent here — raw, parsed or compile,
+    with or without a runId, whether or not the board accepted a start for
+    the run — so no ingest leaves the board to guess its stack. `framework`
+    (the run's declared test framework) rides beside it when given."""
     global _ingested_run_tier, _ingested_compile
-    if release:
-        payload = {**(payload or {}), "release": release}
+    payload = {**(payload or {}), "stack": stack, **({"framework": framework}
+               if framework else {}), **({"release": release} if release else {})}
     if path in RUN_INGEST_PATHS:
         _ingested_run_tier = (payload or {}).get("tier")
     elif path == COMPILE_INGEST_PATH:
         _ingested_compile = True
-    resp = post_fn(path, payload)
-    # An ingest carrying a runId that the board REFUSED files nothing for the
-    # run this client opened, so the run is closed here, once, through
-    # `abort_run` \u2014 the one seam every client's every ingest passes through.
     run_id = (payload or {}).get("runId")
-    if run_id and not (resp or {}).get("ok") and run_id not in _refused_ingest_runs:
-        _refused_ingest_runs.add(run_id)
-        error = (resp or {}).get("error") or "no reason given"
-        _refused_ingest_warnings.append(abort_run(
-            post_fn, payload.get("projectKey"), payload.get("agentId"), run_id,
-            f"the board refused the ingest that carried it ({error})"))
+    refused = None
+    # Inside a gated bracket the ingest is held: a signal landing on it is
+    # noted, the run is filed (or, refused, aborted) first, and the signal is
+    # raised once that is done, carrying the run it settled.
+    try:
+        with _gated_held():
+            resp = post_fn(path, payload)
+            if run_id:
+                # Filed (or, refused, aborted just below): a gated bracket has
+                # no open run left to abort for it.
+                _settle_gated_run(run_id)
+            # An ingest carrying a runId that the board REFUSED files nothing
+            # for the run this client opened, so the run is closed here, once,
+            # through `abort_run` \u2014 the one seam every client's every ingest
+            # passes through.
+            if (run_id and not (resp or {}).get("ok")
+                    and run_id not in _refused_ingest_runs):
+                _refused_ingest_runs.add(run_id)
+                error = (resp or {}).get("error") or "no reason given"
+                answer_lost = str(error).startswith(CONNECTION_LOST_PREFIX)
+                refused = abort_run(
+                    post_fn, payload.get("projectKey"), payload.get("agentId"),
+                    run_id,
+                    (f"the ingest that carried it got no answer ({error})"
+                     if answer_lost else
+                     f"the board refused the ingest that carried it ({error})"),
+                    answer_lost=answer_lost)
+                _refused_ingest_warnings.append(refused)
+            if path in RUN_INGEST_PATHS:
+                _note_filed_run(resp)
+    except RunAbandoned as abandoned:
+        abandoned.run_id = run_id
+        if refused is not None:
+            _refused_ingest_warnings.remove(refused)
+            abandoned.warnings = [refused]
+        raise
     return resp
+
+
+def _note_filed_run(resp):
+    """Remember one run ingest the board FILED: its event id, the counts it
+    answered with and the cycle it stamped. A refused or unanswered ingest
+    filed nothing, so it is not remembered."""
+    if not isinstance(resp, dict) or not resp.get("ok") or not resp.get("event"):
+        return
+    context = resp.get("context")
+    run = resp.get("run")
+    _filed_runs.append({"event": resp.get("event"),
+                        "run": run if isinstance(run, dict) else {},
+                        "cycleId": (context.get("cycleId")
+                                    if isinstance(context, dict) else None)})
+
+
+def note_emitted_run_counts(result_fields):
+    """Remember the `run` counts an envelope states, so a gate's outcome is
+    read off the very document the gate printed (its totals cover a suite a
+    sibling client ran, which this process never ingested itself)."""
+    global _emitted_run_counts
+    run = (result_fields or {}).get("run")
+    if (isinstance(run, dict) and isinstance(run.get("passed"), int)
+            and isinstance(run.get("failed"), int)):
+        _emitted_run_counts = {"passed": run["passed"], "failed": run["failed"]}
 
 
 def ingested_tier():
@@ -5677,11 +6808,11 @@ _SIBLING_CLIENT_RE = re.compile(
 # The INTERPRETER a stack's suite is driven by, for a declaration that spells
 # the suite out instead of naming that stack's client. Cycle 388 ruling 3: a
 # project's test script must stay runnable with no agent and no ingest, so this
-# repo declares `test:client` as `python3 -m unittest discover -s tests/client
-# -t .` — the FIRST TOKEN identifies the stack, the flags identify the paths,
-# and the GATE does the client dispatch itself. One entry per stack whose
-# declarations take that form; a head that is not here names no stack, and a
-# target that names no stack is the reading client's own.
+# repo declares `test:client-unit` and `test:client-integration` as `python3
+# -m unittest discover -s tests/client/<tier> -t .` — the FIRST TOKEN names
+# the stack, the flags the paths, and the GATE does the client dispatch. One
+# entry per stack whose declarations take that form; a head not here names no
+# stack, and a target that names no stack is the reading client's own.
 STACK_INTERPRETERS = {"python": ("python",)}
 
 
@@ -5725,13 +6856,17 @@ def declaring_stack(command):
 
 def _python_suite_argv(tokens):
     """`python -m unittest discover -s <dir> [-p <pattern>]` → the python
-    client's own `regression` over that SAME discovery.
+    client's own run over that SAME discovery, under the tier its start
+    directory names: a last path component naming a tier the gate covers (one
+    of `TIER_MEANINGS`, neither `regression` nor in `GATE_UNCOVERED_TIERS`)
+    runs that tier's verb, and any other directory runs `regression`.
 
     Nothing is invented: the flags that client takes are the discovery's own
     (CR-CRU-111 ruling 1 — on that stack the declaration IS the invocation), so
     the gate reads the declared paths and hands them to the client that can
-    ingest them. `-t` has no client flag and is dropped: the run's top-level
-    dir is the project dir the client resolves. None when the command declares
+    ingest them. `-t` has no client flag and is dropped, and the python client
+    passes none, so the dispatched run has NO top-level directory: unittest
+    takes the start directory as the top level. None when the command declares
     no discovery this gate can read, which the gate REPORTS against the suite
     rather than skipping."""
     if "unittest" not in tokens:
@@ -5746,14 +6881,19 @@ def _python_suite_argv(tokens):
         if flag is None:
             continue
         argv += [flag, tokens[index + 1]]
-        start_dir = start_dir or flag == "--start-dir"
+        if flag == "--start-dir":
+            start_dir = True
+            tier = os.path.basename(os.path.normpath(tokens[index + 1]))
+            covered = set(TIER_MEANINGS) - {"regression"}
+            if tier in covered - set(GATE_UNCOVERED_TIERS):
+                argv[2] = tier
     return argv if start_dir else None
 
 
 _SUITE_ARGV_BY_STACK = {"python": _python_suite_argv}
 
 
-def sibling_client_argv(stack, command, agent=None, *, release=None):
+def sibling_client_argv(stack, command, agent=None, *, release=None, cycle=None):
     """§S1's DISPATCH — the invocation of `stack`'s OWN client that runs what
     `command` declares, or None when this declaration cannot be dispatched.
 
@@ -5770,7 +6910,12 @@ def sibling_client_argv(stack, command, agent=None, *, release=None):
     which is this one.
 
     §S1 — a gate given `--release` passes it on the same way, and only then,
-    so a release's gate is filed under the release whole."""
+    so a release's gate is filed under the release whole.
+
+    A gate given `--cycle` passes it on the same way, and only then: the
+    dispatched client runs as its own process, after the gate's own bracket
+    removed the identity it bound, so without the flag its run would carry no
+    cycle, and be refused while that cycle is active."""
     try:
         tokens = shlex.split(command or "")
     except ValueError:
@@ -5786,15 +6931,20 @@ def sibling_client_argv(stack, command, agent=None, *, release=None):
         argv += ["--agent", agent]
     if argv and release:
         argv += ["--release", release]
+    if argv and cycle is not None:
+        argv += ["--cycle", str(cycle)]
     return argv
 
 
 # One declared suite of a project: the target, the stack that owns it, the tier
 # it names (None when it names none of the vocabulary — `test:client` is a
 # declared target and not a tier), the command it was declared with, and
-# whether the GATE covers it.
+# whether the GATE covers it. `framework` is the runner a suite declares, set
+# only by a stack whose suites name one (None: the stack's whole-suite run).
 GateSuite = collections.namedtuple(
-    "GateSuite", ("target", "stack", "tier", "command", "gated", "excluded"))
+    "GateSuite",
+    ("target", "stack", "tier", "command", "gated", "excluded", "framework"),
+    defaults=(None,))
 
 GATE_SUITE_FAILED_CODE = "gate-suite-failed"
 GATE_SUITE_UNREPORTED_CODE = "gate-suite-unreported"
@@ -5862,15 +7012,16 @@ def declared_gate_suites(args, surface, stack):
     if reader is None:
         return ()
     suites = []
-    for target, command in reader(args, surface) or ():
+    for target, command, *framework in reader(args, surface) or ():
         named = declared_target_tier(surface, target)
         tier = named if named in TIER_MEANINGS else None
         if tier == "regression":
             continue
-        excluded = GATE_UNCOVERED_TIERS.get(tier)
+        excluded = GATE_UNCOVERED_TIERS.get(tier) if tier is not None else None
         suites.append(GateSuite(target=target, tier=tier, command=command,
                                 stack=declaring_stack(command) or stack,
-                                gated=excluded is None, excluded=excluded))
+                                gated=excluded is None, excluded=excluded,
+                                framework=(framework or [None])[0]))
     return tuple(suites)
 
 
@@ -5962,6 +7113,25 @@ def _whole_suite_warning(code, stack, covered, detail):
             "detail": f"{whole_suite_label(stack)}{covers} {detail}"}
 
 
+def whole_suite_unreported_warnings(stack, response):
+    """The gate's finding on its ONE whole-suite run when that run was not
+    filed, for a gate that composes no declared suites and so emits that
+    run's own envelope: `[]` when the ingest `response` is `ok` and carries
+    the run's counts, else one `gate-suite-unreported` warning, worded as the
+    composed gate words it (`_run_outcome`), so the gate is not green and
+    says it cannot state what it covered."""
+    response = response if isinstance(response, dict) else {}
+    counts = _suite_counts(response)
+    if response.get("ok") and counts is not None:
+        return []
+    error = response.get("error")
+    cause = f": {error}" if error else ""
+    return [_whole_suite_warning(
+        GATE_SUITE_UNREPORTED_CODE, stack, (),
+        f"RAN, and was not filed, so the gate cannot say what it "
+        f"covered{cause}")]
+
+
 def _run_outcome(code, counts, error):
     """What the gate has to SAY about ONE run it made: `(ok, warning code,
     warning detail)`, the detail None for a run that simply passed.
@@ -6000,7 +7170,8 @@ def _adopt_suite_warnings(gate_warnings, envelope):
 
 
 def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
-                    crucible_url, warnings=()):
+                    crucible_url, warnings=(), named=None, run_suite=None,
+                    whole_framework=None, whole_script=None):
     """§S2 — the ADDITIVE composition: this stack's OWN whole-suite regression,
     plus one dispatched run for every declared suite another stack owns, in ONE
     envelope naming them all.
@@ -6008,10 +7179,11 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     Three rules, and only the second adds a run to a project that already had a
     gate:
 
-    1. the invoking stack's whole-suite regression ALWAYS runs (`whole_suite`),
-       unchanged — same argv, same `regression` tier, same `run` block
-       INCLUDING `files`. It is the gate's union BASE, so the union is never
-       smaller than what the gate covered before this CR (AC4);
+    1. the invoking stack's whole-suite regression runs (`whole_suite`)
+       unless rule 4 skips it, and runs unchanged — same argv, same
+       `regression` tier, same `run` block INCLUDING `files`. It is the gate's
+       union BASE, so the union is never smaller than what the gate covered
+       before this CR (AC4);
     2. a declared suite owned by ANOTHER stack is ADDED — one dispatched run
        each, run and ingested by that stack's own client, under its own stack;
     3. a declared target owned by THIS stack is NOT re-run. The whole-suite run
@@ -6024,25 +7196,82 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     never pooled into one total. A run that FAILED, that could not be RUN at
     all, that could not be dispatched, or that reported no counts makes the
     gate NOT ok and is NAMED in `warnings[]`: "a gate that ran a subset reports
-    as a gate that ran a subset"."""
+    as a gate that ran a subset".
+
+    `named` scopes the gate to those declared targets (`--suites`): only they
+    run. Naming an own-stack target runs the whole-suite run, which covers
+    every own-stack target, so all of them are recorded; naming only
+    dispatched targets skips it. Excluded targets are not listed.
+
+    A fourth rule: an own-stack suite whose `framework` is not
+    `whole_framework` (the whole-suite run's) is not collected by that run, so
+    it runs in this process through `run_suite(suite)`, as a suite of its own.
+    When the project declares at least one own-stack suite and every one of
+    them, excluded ones included, is such a suite, the whole-suite run is
+    skipped, and the envelope says so. When `whole_script` names the script
+    the whole-suite run is, that run is never skipped, only that script's
+    suite is covered by it, and every other own-stack suite is `run_suite`'s."""
     rows, gate_warnings = [], list(warnings)
     ok, worst = True, 0
+    scope = GATE_SCOPE_FULL if named is None else GATE_SCOPE_SCOPED
+
+    def own_run(suite):
+        if run_suite is None or suite.stack != stack:
+            return False
+        if whole_script is not None:
+            return suite.target != whole_script
+        return (suite.framework is not None
+                and suite.framework != whole_framework)
+
+    own = [suite for suite in suites if suite.stack == stack]
+    run_whole = whole_script is not None or not (
+        own and all(own_run(suite) for suite in own))
+    extra = {} if run_whole else {"wholeSuite": (
+        f"the whole {stack} suite was skipped: every declared {stack} suite "
+        f"runs under a framework of its own")}
+    if named is not None:
+        run_whole = any(suite.gated and suite.stack == stack
+                        and not own_run(suite)
+                        and suite.target in named for suite in suites)
+        suites = tuple(suite for suite in suites if suite.gated and (
+            suite.target in named or (run_whole and suite.stack == stack
+                                      and not own_run(suite))))
+    # What each gated suite did, in declaration order, for the outcome
+    # milestone: its target, outcome, counts and the events its run filed.
+    results = []
 
     # Rule 1, and FIRST: every own-stack declared target is reported against
     # this run, so its outcome has to be known before they are named.
     covered = tuple(suite.target for suite in suites
-                    if suite.gated and suite.stack == stack)
-    code, out, error = _captured_suite_run(whole_suite)
-    envelope = _suite_envelope(out)
-    whole_counts = _suite_counts(envelope)
-    _adopt_suite_warnings(gate_warnings, envelope)
+                    if suite.gated and suite.stack == stack
+                    and not own_run(suite))
     totals = {"passed": 0, "failed": 0, "pending": 0, "total": 0}
-    totals.update(whole_counts or {})
-    whole_ok, warning_code, detail = _run_outcome(code, whole_counts, error)
-    if not whole_ok:
-        gate_warnings.append(
-            _whole_suite_warning(warning_code, stack, covered, detail))
-        ok, worst = False, worst or (code or 0)
+    whole_counts, whole_outcome, whole_events = None, None, []
+    # One row per run whose envelope stated its coverage, in run order.
+    coverage_runs = []
+    if run_whole:
+        code, out, error = _captured_suite_run(whole_suite)
+        envelope = _suite_envelope(out)
+        _RUN.add_coverage_run(coverage_runs, whole_suite_label(stack), stack,
+                              envelope)
+        whole_counts = _suite_counts(envelope)
+        _adopt_suite_warnings(gate_warnings, envelope)
+        totals.update(whole_counts or {})
+        whole_ok, warning_code, detail = _run_outcome(code, whole_counts,
+                                                      error)
+        if not whole_ok:
+            gate_warnings.append(
+                _whole_suite_warning(warning_code, stack, covered, detail))
+            ok, worst = False, worst or (code or 0)
+        whole_outcome = GATE_OUTCOME_PASS if whole_ok else GATE_OUTCOME_FAIL
+        whole_events = filed_run_events()
+    events = list(whole_events)
+    if run_whole and not covered:
+        # The whole-suite run covered no declared target, and it still ran:
+        # it is represented under the stack's own whole-suite label.
+        results.append(_gate_suite_result(whole_suite_label(stack),
+                                          whole_outcome, whole_counts,
+                                          whole_events))
 
     for suite in suites:
         row = {"suite": suite.target, "stack": suite.stack, "gated": suite.gated}
@@ -6052,53 +7281,78 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
             row["excluded"] = suite.excluded
             rows.append(row)
             continue
-        if suite.stack == stack:
+        if suite.stack == stack and not own_run(suite):
             # Rule 3 — covered by the run that already happened, and SAYING so
             # rather than collecting the same files a second time. The counts
             # are that run's, and they are NOT added to the union again.
             row["coveredBy"] = whole_suite_label(stack)
             row.update(whole_counts or {})
+            row["outcome"] = whole_outcome
             rows.append(row)
+            results.append(_gate_suite_result(suite.target, whole_outcome,
+                                              whole_counts, whole_events))
             continue
         row["client"] = sibling_client(suite.stack)
-        argv, cwd = dispatch(suite) if dispatch else (None, None)
-        if not argv:
+        runner = run_suite if own_run(suite) else None
+        argv, cwd = ((None, None) if runner is not None or not dispatch
+                     else dispatch(suite))
+        filed_before = len(filed_run_events())
+        if runner is not None:
+            # Rule 4 — run here, captured as the whole-suite run is.
+            code, out, error = _captured_suite_run(
+                functools.partial(runner, suite))
+        elif not argv:
+            row["outcome"] = GATE_OUTCOME_FAIL
             rows.append(row)
+            results.append(_gate_suite_result(suite.target, GATE_OUTCOME_FAIL,
+                                              None, []))
             gate_warnings.append(_gate_suite_warning(
                 GATE_SUITE_UNDISPATCHABLE_CODE, suite,
                 f"declares no invocation this gate can dispatch to "
                 f"{sibling_client(suite.stack)}, so it did NOT run"))
             ok, worst = False, worst or 1
             continue
-        print(f"[crucible] {verb}: dispatching `{suite.target}` to "
-              f"{' '.join(argv)}  (cwd={cwd})", file=sys.stderr)
-        try:
-            result = subprocess.run(argv, cwd=cwd, capture_output=True,
-                                    text=True)
-        except OSError as spawn_error:
-            # AC3, the DISPATCHED half of the guard: a declared command whose
-            # first token is not there would otherwise kill the gate
-            # mid-composition, taking the suites that DID run with it.
-            code, out, error = None, "", spawn_error
         else:
-            sys.stderr.write(result.stderr or "")
-            code, out, error = result.returncode, result.stdout or "", None
+            print(f"[crucible] {verb}: dispatching `{suite.target}` to "
+                  f"{' '.join(argv)}  (cwd={cwd})", file=sys.stderr)
+            try:
+                result = subprocess.run(argv, cwd=cwd, capture_output=True,
+                                        text=True)
+            except OSError as spawn_error:
+                # AC3, the DISPATCHED half of the guard: a declared command
+                # whose first token is not there would otherwise kill the gate
+                # mid-composition, taking the suites that DID run with it.
+                code, out, error = None, "", spawn_error
+            else:
+                sys.stderr.write(result.stderr or "")
+                code, out, error = result.returncode, result.stdout or "", None
         envelope = _suite_envelope(out)
+        _RUN.add_coverage_run(coverage_runs, suite.target, suite.stack, envelope)
         counts = _suite_counts(envelope)
         if counts:
             row.update(counts)
             for key, value in counts.items():
                 totals[key] = totals.get(key, 0) + value
-        rows.append(row)
         _adopt_suite_warnings(gate_warnings, envelope)
         suite_ok, warning_code, detail = _run_outcome(code, counts, error)
+        suite_outcome = GATE_OUTCOME_PASS if suite_ok else GATE_OUTCOME_FAIL
+        row["outcome"] = suite_outcome
+        rows.append(row)
+        suite_events = (filed_run_events()[filed_before:] if runner is not None
+                        else _envelope_events(envelope))
+        events.extend(suite_events)
+        results.append(_gate_suite_result(suite.target, suite_outcome,
+                                          counts, suite_events))
         if not suite_ok:
             gate_warnings.append(
                 _gate_suite_warning(warning_code, suite, detail))
             ok = False
         worst = worst or (code or 0)
+    global _gate_suite_results
+    _gate_suite_results = results
     emit_axi(verb, ok,
-             {"run": totals, "suites": rows,
+             {"run": totals, "suites": rows, "events": events, "scope": scope,
+              **extra, **({"coverageRuns": coverage_runs} if coverage_runs else {}),
               "help": run_help(verb, ok, totals["failed"], crucible_url)},
              context, gate_warnings,
              f"{verb}: ok={ok} suites={len(rows)} passed={totals['passed']} "
@@ -6106,8 +7360,152 @@ def run_gate_suites(suites, *, stack, verb, whole_suite, dispatch, context,
     return 0 if ok else (worst or 1)
 
 
+def _envelope_events(envelope):
+    """The event ids a suite's own envelope says its run filed, `[]` when it
+    states none."""
+    events = (envelope or {}).get("events")
+    if not isinstance(events, list):
+        return []
+    return [event for event in events
+            if isinstance(event, (int, str)) and not isinstance(event, bool)]
+
+
+def _gate_suite_result(target, outcome, counts, events):
+    """One gated suite's result as the composition saw it: its target, its
+    outcome, its passed/failed counts (None when the run reported none) and
+    the events its run filed, through which its failing tests are read."""
+    if counts is not None:
+        counts = {"passed": int(counts.get("passed") or 0),
+                  "failed": int(counts.get("failed") or 0)}
+    return {"target": target, "outcome": outcome, "counts": counts,
+            "events": list(events)}
+
+
+# The health answer that says a board records a gate's scope and suites: its
+# `milestones.gate` names both.
+GATE_RECORD_CAPABILITY = ("scope", "suites")
+FULL_GATE_HELP = "or run the full gate: pre-merge-gate without --suites"
+
+
+def scoped_gate_targets(args):
+    """The targets `--suites` names, in the order given, or None for a full
+    gate."""
+    raw = getattr(args, "suites", None)
+    return None if raw is None else tuple(raw.split(","))
+
+
+def _backticked(targets):
+    return ", ".join(f"`{target}`" for target in targets)
+
+
+def refuse_unrunnable_scoped_gate(args, *, surface, stack, get, project_key):
+    """The first act of every client's `pre-merge-gate`: a gate scoped to
+    named suites (`--suites`) that cannot run as asked raises
+    `ScopedGateRefused`, before the unattributed-run refusal and before the
+    gate's first step, so it runs nothing and files nothing. A gate without
+    `--suites` is not checked.
+
+    Refused, each naming its cause: a project that declares no suites (a
+    surface that cannot enumerate a declaration declares none, so that client
+    refuses every `--suites`); a list with an empty, padded or repeated item;
+    `--suites` beside `--release`; a target the project does not declare, or
+    declares excluded; a board whose health could not be read, or does not
+    state that it records a gate's scope and suites; and a gate no cycle resolves for (no `--cycle`,
+    and the agent bound to none). `project_key` is a zero-argument callable,
+    asked only once the board has to be."""
+    targets = scoped_gate_targets(args)
+    if targets is None:
+        return
+    suites = declared_gate_suites(args, surface, stack)
+    if not suites:
+        raise ScopedGateRefused(
+            "this project declares no suites this client can enumerate, so a "
+            "gate scoped with --suites has nothing to name; refused before "
+            "anything ran",
+            ["run the full gate: pre-merge-gate without --suites",
+             f"declare the project's suites \u2014 "
+             f"{declared_tier_surface_line(surface, 'unit')}"
+             if surface.suites is not None else
+             "this client's declaration is its invocation, which names no "
+             "suite to scope to"])
+    gated = tuple(suite.target for suite in suites if suite.gated)
+    excluded = {suite.target for suite in suites if not suite.gated}
+    name_help = (f"name one or more of the declared gated targets: "
+                 f"{_backticked(gated)} \u2014 comma-separated, no spaces")
+    if any(not item.strip() for item in targets):
+        raise ScopedGateRefused(
+            "--suites has an empty item; refused before anything ran",
+            [name_help, FULL_GATE_HELP])
+    padded = [item for item in targets if item != item.strip()]
+    if padded:
+        raise ScopedGateRefused(
+            f"--suites has an item padded with whitespace "
+            f"({', '.join(repr(item) for item in padded)}); refused before "
+            f"anything ran",
+            [name_help, FULL_GATE_HELP])
+    repeated = sorted({item for item in targets if targets.count(item) > 1})
+    if repeated:
+        raise ScopedGateRefused(
+            f"--suites repeats {_backticked(repeated)}: name each suite once; "
+            f"refused before anything ran",
+            [name_help, FULL_GATE_HELP])
+    if getattr(args, "release", None):
+        raise ScopedGateRefused(
+            "--suites is refused beside --release: a release gate runs in "
+            "full; refused before anything ran",
+            ["drop --suites to gate the release in full",
+             "or drop --release to re-run named suites of a cycle's gate"])
+    for item in targets:
+        if item in excluded:
+            raise ScopedGateRefused(
+                f"the project declares `{item}` excluded from the gate, so a "
+                f"gate cannot be scoped to it; refused before anything ran",
+                [name_help, FULL_GATE_HELP])
+        if item not in gated:
+            raise ScopedGateRefused(
+                f"the project does not declare `{item}`, so a gate cannot be "
+                f"scoped to it; refused before anything ran",
+                [name_help, FULL_GATE_HELP])
+    health = get("/api/health")
+    if isinstance(health, dict) and health.get("ok") is False:
+        raise ScopedGateRefused(
+            f"the board's /api/health could not be read "
+            f"({health.get('error') or 'no error was given'}), so nothing "
+            f"shows that it records a gate's scope and suites; refused before "
+            f"anything ran",
+            ["check that the board is reachable and answers /api/health, "
+             "then re-run", FULL_GATE_HELP])
+    milestones = health.get("milestones") if isinstance(health, dict) else None
+    recorded = milestones.get("gate") if isinstance(milestones, dict) else None
+    if not (isinstance(recorded, list)
+            and all(field in recorded for field in GATE_RECORD_CAPABILITY)):
+        raise ScopedGateRefused(
+            "the board does not state that it records a gate's scope and "
+            "suites (its /api/health names no milestones.gate with both), so "
+            "a scoped gate would be recorded as a full one; refused before "
+            "anything ran",
+            ["upgrade the board to one whose /api/health states "
+             "milestones.gate, then re-run", FULL_GATE_HELP])
+    if getattr(args, "cycle", None) is not None:
+        return
+    agent_id = getattr(args, "agent", None)
+    bound = None
+    if agent_id:
+        _known, bound = _bound_cycle_id(
+            get(f"/api/v2/agents?project={project_key()}"), agent_id)
+    if bound is None:
+        raise ScopedGateRefused(
+            "no cycle resolves for this gate: no --cycle was given and the "
+            "agent is bound to none, so its scoped result belongs to no CR; "
+            "refused before anything ran",
+            ["re-run with --cycle <id> naming the cycle this gate belongs to",
+             "or register the agent bound to that cycle first "
+             "(register --agent <agentId> --cycle <id>), then re-run"])
+
+
 def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
-                    context, crucible_url):
+                    context, crucible_url, whole_suite_alone=None,
+                    run_suite=None, whole_framework=None, whole_script=None):
     """§S1/§S2 — the GATE's regression step: the one composition all five gates
     run, so "the gate covers every declared suite" is a property of the fleet
     and not of one client.
@@ -6116,597 +7514,160 @@ def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
     additive rule runs it either way — as the gate's whole answer for a project
     whose declaration this stack cannot enumerate or that declares nothing (it
     IS that project's one suite), and as the union BASE for a project that
-    declares suites, which are added to it and never substituted for it."""
+    declares suites, which are added to it and never substituted for it.
+
+    `whole_suite_alone`, when given, is that same run as the gate's WHOLE
+    answer: its envelope is the gate's, so it names its own run unreported
+    when that run was not filed. The composition names it itself, so a
+    composed gate takes `whole_suite` and never this one."""
     suites = declared_gate_suites(args, surface, stack)
     if not suites:
-        return whole_suite()
+        return (whole_suite_alone or whole_suite)()
     return run_gate_suites(suites, stack=stack, verb=verb,
                            whole_suite=whole_suite, dispatch=dispatch,
-                           context=context, crucible_url=crucible_url)
+                           context=context, crucible_url=crucible_url,
+                           named=scoped_gate_targets(args),
+                           run_suite=run_suite,
+                           whole_framework=whole_framework,
+                           whole_script=whole_script)
 
 
-# ── CR-CRU-111 §S4 — a `unit` run that WAITS says so (AC6b) ───────────────
+# ── the run and ingest pipeline lives in `_crucible_run.py` ─────────────────
 #
-# `unit` is the one tier of the six whose MEANING forbids waiting ("no wait on
-# the clock", `TIER_MEANINGS` above), so a run of it that spends its wall clock
-# not computing has taken a dependency its tier does not name. The check is
-# scoped to that tier alone and it is deliberate: `integration`, `e2e`,
-# `regression` and `bdd` name real elapsed time as a dependency by definition,
-# and a warning there would be noise, not a finding.
-#
-# It WARNS and never refuses. Classification is the project's decision, so the
-# client reports the contradiction rather than vetoing it: `ok` and the exit
-# code are the run's own, untouched, and a check that turned a passing suite
-# red would be a worse defect than the one it detects.
-#
-# The measurement is `resource.getrusage(RUSAGE_CHILDREN)` deltas taken around
-# the client's OWN `subprocess.run` — stdlib, no dependency. Measured
-# discrimination: a sleeping child reads 38.4x, a CPU-bound child 1.00x, and
-# this repo's own unit target 1.09x (17.8 s wall / 16.3 s CPU), so 2x sits ~1.8x
-# above a real unit suite and ~19x below a sleeping one. `RUSAGE_CHILDREN` sums
-# CPU across cores, so a PARALLEL runner reads BELOW 1x and can never
-# false-positive — the asymmetry is the reason this factor is safe.
-#
-# BOUND, stated where the mechanism is: `RUSAGE_CHILDREN` is a per-PROCESS
-# cumulative counter, so a delta taken around one `subprocess.run` is
-# attributable to that child only while the bracketed call spawns exactly ONE.
-# Every `unit` run in the fleet does. Widening this check past `unit` would
-# demand a delta per `subprocess.run` rather than one per verb (a gate that
-# brings a compose stack up spawns two), which is why widening it is not a
-# wording change.
-UNIT_RUN_WALL_EXCEEDS_CPU_CODE = "unit-run-wall-exceeds-cpu"
-
-# The tier the check is scoped to, and the factor §S4 states: wall at or over
-# 2x CPU. Named rather than spelled at the comparison so the one definition the
-# fleet shares is also the one it prints.
-WALL_VS_CPU_TIER = "unit"
-WALL_VS_CPU_FACTOR = 2.0
+# The run pipeline (the wall-versus-CPU reading, narration, the run lifecycle,
+# the ingest, the abandon trap and the runner group) is a sibling module, read
+# by file path from this module's own directory under a name derived from this
+# one's, so each client's core loads a run module of its own. It is loaded here,
+# eagerly, because functions above and below name its classes and functions as
+# globals. Once it has run, it is bound to `_CoreView` over this namespace: a
+# core name it uses is read at call time, so a patch of the core reaches it.
+# The gated-run bookkeeping stays below, beside `gated_run`, which rebinds it.
+# Every name it defines is re-exported here (`_reexport_run_module`), so each
+# is still this module's attribute: a client's `_axi().<name>` is unchanged.
 
 
-class ChildRunTiming:
-    """§S4 — the bracket around a child run: wall seconds, child CPU seconds,
-    and the ratio between them.
+class _CoreView:
+    """A live view of a module's namespace: an attribute read is a lookup in
+    the namespace at that moment, so a patch of the module is seen."""
 
-    Used as a context manager around the ONE `subprocess.run` a test verb makes
-    (`with ChildRunTiming() as timing: result = _run_logged(...)`), so the
-    rusage delta covers that child and nothing else. `wall` and `cpu` are 0.0
-    until the block exits, and never negative: a monotonic clock cannot go
-    backwards, and a rusage counter is cumulative, but clamping costs nothing
-    and keeps a nonsense figure out of a warning.
+    __slots__ = ("_namespace",)
 
-    `ratio` is None when no CPU was measurable at all rather than raising or
-    reporting an infinity — a child that consumed no measurable CPU is the
-    STRONGEST form of the condition this exists to detect, so the division is
-    guarded and the caller words that case for itself."""
+    def __init__(self, namespace):
+        object.__setattr__(self, "_namespace", namespace)
 
-    __slots__ = ("wall", "cpu", "_wall_at", "_cpu_at")
-
-    def __init__(self):
-        self.wall = 0.0
-        self.cpu = 0.0
-        self._wall_at = None
-        self._cpu_at = None
-
-    @staticmethod
-    def _child_cpu():
-        """CPU seconds this process's waited-for children have consumed, user
-        plus system — the whole cost of a child, since a run that spends its
-        time in the kernel is computing just as much as one in user space."""
-        usage = resource.getrusage(resource.RUSAGE_CHILDREN)
-        return usage.ru_utime + usage.ru_stime
-
-    def __enter__(self):
-        self._wall_at = time.monotonic()
-        self._cpu_at = self._child_cpu()
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        self.wall = max(time.monotonic() - self._wall_at, 0.0)
-        self.cpu = max(self._child_cpu() - self._cpu_at, 0.0)
-        return False
-
-    @property
-    def ratio(self):
-        """wall / cpu, or None when no child CPU was measurable."""
-        return self.wall / self.cpu if self.cpu > 0 else None
-
-
-def unit_run_wall_vs_cpu_warnings(tier, client, timing,
-                                  factor=WALL_VS_CPU_FACTOR):
-    """§S4/AC6b — the envelope `warnings[]` fragment for a `unit` run that spent
-    its wall clock waiting: `[]` or exactly one `{code, detail}`, in the shape
-    `preflight_cycle_warnings` returns its finding, so a call site adds it to
-    the warnings it already carries and changes nothing else.
-
-    ONE definition for the fleet: five clients reach this, and a consumer
-    matches on `UNIT_RUN_WALL_EXCEEDS_CPU_CODE`, so `client` (this client's own
-    name — its own fact, like the declaration surface it hands
-    `add_tier_verbs`) is what tells a reader of the board WHICH stack waited.
-
-    `tier` is the tier the caller STATED, so an untiered run (`tier=None`) and
-    every tier but `unit` return `[]` without measuring anything twice. A run
-    with no wall time at all — nothing was bracketed — is not a finding
-    either."""
-    if tier != WALL_VS_CPU_TIER or timing is None or timing.wall <= 0.0:
-        return []
-    if timing.wall < factor * timing.cpu:
-        return []
-    ratio = timing.ratio
-    measured = (f"{ratio:.1f}x" if ratio is not None
-                else "no child CPU was measurable at all")
-    return [{
-        "code": UNIT_RUN_WALL_EXCEEDS_CPU_CODE,
-        "detail": (f"{client} {tier}: this run spent {timing.wall:.3f}s of "
-                   f"wall time against {timing.cpu:.3f}s of child CPU "
-                   f"({measured}, at or over the {factor:g}x mark) — a "
-                   f"{tier} run that spends its time WAITING is taking a "
-                   f"dependency its tier does not name (a process, a socket, "
-                   f"a live service, or the clock itself). Reclassify the "
-                   f"run, or find what it waits on; it is reported either "
-                   f"way, because which tier these tests belong to is the "
-                   f"project's call and not this client's"),
-    }]
-
-
-# \u2500\u2500 THE SHARED RUN PATH \u2014 open, stream live, narrate, finalize \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-#
-# Every suite-running verb of every stack client walks the same four steps,
-# and they live HERE so a stack contributes only the two facts that are its
-# own: how a completed test reads in its runner's output (the `recognise`
-# callable) and its best-known total.
-#
-#   1. `open_run` \u2014 `POST /api/v2/runs/start` BEFORE the suite is spawned, so
-#      the board draws the running card for the whole span.
-#   2. `run_streamed` \u2014 the runner's combined output reaches stderr and the
-#      `--log` file AS IT IS PRODUCED, while the returned capture stays
-#      byte-identical to what a capture-after-exit would have held (the
-#      parsers that read it afterwards see no difference).
-#   3. `RunNarrator` \u2014 throttled `running N/M` heartbeats while in flight.
-#   4. `close_narration` \u2014 the final `ran M/M`, whatever the throttle last
-#      allowed, then `ingesting\u2026` ahead of the ingest POST itself.
-
-RUN_START_PATH = "/api/v2/runs/start"
-# The client's own close of a run it opened and can no longer file: `POST
-# /api/v2/runs/<runId>/abort {projectKey, agentId, reason}`. Filled in per run
-# by `run_abort_path` and posted ONLY by `abort_run`, below.
-RUN_ABORT_PATH = "/api/v2/runs/{run_id}/abort"
-RUN_LIFECYCLE_UNAVAILABLE_CODE = "run-lifecycle-unavailable"
-RUN_LEFT_OPEN_CODE = "run-left-open"
-RUN_ABORTED_CODE = "run-aborted"
-INGESTING_MESSAGE = "ingesting\u2026"
-NARRATION_LABEL_JOINER = " \u00b7 "
-
-
-class RunNarrator:
-    """Throttled in-run `running N[/M]` narration, shared by every stack.
-
-    `post(message)` delivers one heartbeat message; it is best-effort, so any
-    failure it raises is reported once on stderr and never reaches the wrapped
-    run. `recognise(line)` is the stack's own reading of one output line: a
-    bool (is it one completed test/class?) or a `(completed, label)` pair,
-    where a non-None `label` replaces the current file/class shown after the
-    count (`running 1843/2936 \u00b7 roadmap.test.ts`) whether or not that line
-    completed anything.
-
-    `total` is an int or a zero-arg callable re-read at every post; at or below
-    zero it is unknown and the denominator is dropped (`running N`). A known
-    total is clamped to at least the completed count, so M never reads below N.
-    `unit` names what the count counts when it is not tests (mvn's `classes`)
-    and follows the count: `running N/M classes`.
-
-    Throttle: the first update fires once `min_seconds` have passed since the
-    first completion OR `min_completions` have accumulated; each later one
-    needs the same distance past the last POSTED update. `finish()` posts the
-    final count unconditionally and without the label: `ran <counted>/<M>`,
-    what was actually observed over the best-known total, so a run that
-    stopped short never claims the whole suite ran (`ran N/N` when no total
-    was ever known)."""
-
-    def __init__(self, post, recognise, total=0, min_seconds=2.0,
-                 min_completions=10, unit=None):
-        self._post = post
-        self._recognise = recognise
-        self._total = total
-        self._unit_suffix = f" {unit}" if unit else ""
-        self._min_seconds = min_seconds
-        self._min_completions = min_completions
-        self._count = 0
-        self._label = None
-        self._first_seen = None   # monotonic ts of the first completion
-        self._posted_at = None    # monotonic ts of the last posted update
-        self._posted_count = 0
-        self._post_failed = False
-
-    @property
-    def count(self):
-        """Completions observed so far."""
-        return self._count
-
-    def observe(self, line):
-        """Feed one line of the runner's output."""
-        verdict = self._recognise(line)
-        if isinstance(verdict, tuple):
-            completed, label = verdict
-            if label is not None:
-                self._label = label
-        else:
-            completed = verdict
-        if completed:
-            self._completed()
-
-    def finish(self):
-        """Post the final count \u2014 always, with no label: the completions
-        observed over the best-known total (`ran N/M`), or over themselves when
-        no total was ever known (`ran N/N`)."""
-        total = self._resolved_total()
-        final = total if total > 0 else self._count
-        self._deliver(f"ran {self._count}/{final}{self._unit_suffix}")
-
-    def say(self, message):
-        """Post one message outside the throttle, as best-effort as the rest."""
-        self._deliver(message)
-
-    def _resolved_total(self):
-        total = self._total() if callable(self._total) else self._total
-        total = total or 0
-        return max(total, self._count) if total > 0 else 0
-
-    def _completed(self):
-        now = time.monotonic()
-        self._count += 1
-        if self._first_seen is None:
-            self._first_seen = now
-        since = now - (self._posted_at if self._posted_at is not None
-                       else self._first_seen)
-        if (since < self._min_seconds
-                and self._count - self._posted_count < self._min_completions):
-            return
-        total = self._resolved_total()
-        message = (f"running {self._count}/{total}" if total > 0
-                   else f"running {self._count}") + self._unit_suffix
-        if self._label:
-            message += NARRATION_LABEL_JOINER + self._label
-        if self._deliver(message):
-            self._posted_at, self._posted_count = now, self._count
-
-    def _deliver(self, message):
-        """Post `message`; True when it was delivered. Narration must never
-        fail the run it reports on, so a failing post is caught \u2014 and said
-        once on stderr, never silently \u2014 and the next completion retries."""
+    def __getattr__(self, name):
         try:
-            self._post(message)
-        except (Exception, SystemExit) as exc:  # the poster may sys.exit on a refused POST
-            if not self._post_failed:
-                self._post_failed = True
-                print(f"[crucible] WARN: narration heartbeat not delivered "
-                      f"({exc!r}) \u2014 the run continues", file=sys.stderr)
-            return False
-        return True
+            return self._namespace[name]
+        except KeyError:
+            raise AttributeError(name) from None
 
 
-def narration_poster(post_fn, project_key, agent_id, identity=None):
-    """The `post(message)` a client hands its `RunNarrator`: one role-OPTIONAL
-    heartbeat per message (`GatedRunIdentity.PATH`, the body its `open_payload`
-    builds, with no cycle \u2014 a tick never re-declares a binding), so a tick
-    never re-declares nor blanks the role the agent registered with. Under a
-    gated `identity`, every tick's response is observed: a tick that RE-CREATES
-    a pruned row makes that row this run's to clean up (CR-CRU-056)."""
-    body = GatedRunIdentity(agent_id)
-
-    def _post(message):
-        resp = post_fn(GatedRunIdentity.PATH,
-                       body.open_payload(project_key, message=message))
-        if identity is not None:
-            identity.observe(resp)
-        return resp
-    return _post
+def _load_sibling_module(file_name, suffix):
+    """Load `file_name` from this module's own directory as
+    `f"{__name__}{suffix}"`, and bind it to a view of this module's namespace."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), file_name)
+    spec = importlib.util.spec_from_file_location(f"{__name__}{suffix}", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not load the shared module at {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    # Bound after it has run: its own `_core = None` would overwrite a binding
+    # made before.
+    module.__dict__["_core"] = _CoreView(globals())
+    return module
 
 
-def close_narration(narrator):
-    """The run has ended: land the final count, then say the result is being
-    ingested \u2014 in that order, and both BEFORE the ingest POST, so the message
-    follows the run to its end instead of keeping a stale count. Inert without
-    a narrator (a run with no agent narrates nothing)."""
-    if narrator is None:
+def _reexport_run_module(module):
+    """Carry every name `module` defines (its imports and its core view aside)
+    on this module, as the same object: the names this module uses itself by
+    name, then the rest, so a client's `_axi().<name>` reaches each."""
+    global RunAbandoned, abandon_trap, abort_run, emit_bracket_abandoned
+    global narration_poster
+    RunAbandoned = module.RunAbandoned
+    abandon_trap = module.abandon_trap
+    abort_run = module.abort_run
+    emit_bracket_abandoned = module.emit_bracket_abandoned
+    narration_poster = module.narration_poster
+    _reexport_module(module)
+
+
+def _reexport_module(module):
+    """Carry every name `module` defines (its imports and its core view aside)
+    on this module, as the same object, unless this module already has it."""
+    namespace = globals()
+    for name, value in vars(module).items():
+        if (not name.startswith("__") and name != "_core"
+                and not isinstance(value, types.ModuleType)
+                and name not in namespace):
+            namespace[name] = value
+
+
+_RUN = _load_sibling_module("_crucible_run.py", "_run")
+_reexport_run_module(_RUN)
+# The release notes verb's module, loaded and re-exported the same way.
+_reexport_module(_load_sibling_module("_crucible_release.py", "_release"))
+_reexport_module(_load_sibling_module("_crucible_project.py", "_project"))
+# The shared lint runner, loaded the same way; `runs` and `run` read it.
+_reexport_module(_LINT := _load_sibling_module("_crucible_lint.py", "_lint"))
+# The board a client posts to and the refusal when none is declared, loaded
+# the same way; the names this module uses itself are bound by name.
+_BOARD = _load_sibling_module("_crucible_board.py", "_board")
+BOARD_SOURCE = _BOARD.BOARD_SOURCE
+BoardUndeclared = _BOARD.BoardUndeclared
+resolve_base_url = _BOARD.resolve_base_url
+board_address = _BOARD.board_address
+_machine_board = _BOARD._machine_board
+emit_board_undeclared_hard_stop = _BOARD.emit_board_undeclared_hard_stop
+report_board_undeclared = _BOARD.report_board_undeclared
+_reexport_module(_BOARD)
+
+
+# The gated-run bracket in flight in this process (`gated_run`): its trap, and
+# the run `open_run` opened inside it that nothing has filed or closed yet, as
+# `(post_fn, project_key, agent_id, run_id)`. Module state for the same reason
+# the ingest claim is: `open_run` is reached from the bracket's body through
+# each client's own `_start_run`, which carries no trap, and `post_ingest` /
+# `abort_run` settle the run from wherever the client files or closes it.
+_gated_trap = None
+_gated_open_run = None
+
+
+def _gated_held():
+    """The in-flight gated bracket's `held()` span, or an inert one outside a
+    bracket: a step that opens something on the board and learns it did only
+    from the answer runs inside it."""
+    if _gated_trap is None:
+        return contextlib.nullcontext()
+    return _gated_trap.held()
+
+
+def _note_gated_run(post_fn, project_key, agent_id, run_id):
+    """Record the run `open_run` just opened inside the gated bracket, so a
+    signal before it is filed aborts it."""
+    global _gated_open_run
+    if _gated_trap is not None:
+        _gated_open_run = (post_fn, project_key, agent_id, run_id)
+
+
+def _settle_gated_run(run_id):
+    """`run_id` was filed or closed: the gated bracket has nothing left to
+    abort for it."""
+    global _gated_open_run
+    if _gated_open_run is not None and _gated_open_run[3] == run_id:
+        _gated_open_run = None
+
+
+def _abort_gated_run(abandoned):
+    """Close the run the gated bracket's body opened and has not filed, with a
+    reason naming the signal, and record it and its abort's warning on
+    `abandoned`. Inert when no such run is open."""
+    if _gated_open_run is None:
         return
-    narrator.finish()
-    narrator.say(INGESTING_MESSAGE)
-
-
-def run_lifecycle_unavailable_warning(error):
-    """The structured warning for a run start the SERVER refused. Degradation
-    is not failure (the evidence still lands), but it is never SILENT: the
-    caller asked for a measured span and got a single-shot event instead."""
-    return {
-        "code": RUN_LIFECYCLE_UNAVAILABLE_CODE,
-        "detail": (f"could not open a run lifecycle: {error} \u2014 fell back to a "
-                   f"single-shot ingest, so this run is stored with the "
-                   f"tool-reported duration_ms only (no startedAt, no "
-                   f"server-computed runtime_ms)"),
-    }
-
-
-def run_left_open_warning(run_id, cause):
-    """The structured warning for a run this client OPENED and then could not
-    close. It names the settlement path precisely, because the alternative
-    reading \u2014 "the run was lost" \u2014 is wrong and would send an operator hunting
-    for a missing event. ONE wording for the fleet, built only by `abort_run`:
-    an exit that files nothing first posts the client's own abort, and this
-    warning rides its envelope when that abort itself failed (the board refused
-    it, or could not be reached), so the server's own sweep still settles it."""
-    # THE DETAIL NAMES NO CR AND NO ROUTE (CR-CRU-097 AC3a). This string is
-    # emitted to the user in the AXI envelope on ANY project's board, so it
-    # states what settles the run \u2014 the server's own auto-abort \u2014 and nothing
-    # about our backlog. The lineage lives here: the client-side abort route
-    # CR-CRU-017 \u00a7S2 designed now exists and `abort_run` posts it first; this
-    # warning means that post did not settle the run.
-    return {
-        "code": RUN_LEFT_OPEN_CODE,
-        "detail": (f"{cause} \u2014 run {run_id} was never closed by an ingest, "
-                   f"and the client's abort of it was not accepted (refused, "
-                   f"or the board could not be reached), so the server "
-                   f"settles it with its own auto-abort \u2014 reason `agent "
-                   f"died` as soon as this agent tombstones, else `abandoned` "
-                   f"once the run is older than the `run_abandon_ms` limit "
-                   f"the server resolves from the crucible.toml beside its "
-                   f"database. The run is abandoned, not lost"),
-    }
-
-
-def run_left_open_help():
-    """CR-CRU-048's rule \u2014 the state actually reached is "an open run is being
-    settled by the server", so the next action is to WATCH that settlement and
-    then re-run, never the verb's normal successor."""
-    return ["status", "re-run the verb to record a fresh run"]
-
-
-def run_aborted_warning(run_id, reason):
-    """The structured warning for a run this client OPENED, could not file, and
-    closed itself: the board settled it `aborted` with `reason`, so nothing is
-    left open for the server's sweep."""
-    return {
-        "code": RUN_ABORTED_CODE,
-        "detail": (f"run {run_id} was aborted: {reason} \u2014 nothing was "
-                   f"ingested for it"),
-    }
-
-
-def run_abort_path(run_id):
-    """`RUN_ABORT_PATH` for ONE run."""
-    return RUN_ABORT_PATH.format(run_id=urllib.parse.quote(str(run_id), safe=""))
-
-
-def abort_run(post_fn, project_key, agent_id, run_id, reason):
-    """Close a run this client opened and can no longer file: ONE `POST
-    /api/v2/runs/<runId>/abort {projectKey, agentId, reason}` through the
-    client's own `post_fn`, `reason` naming the exit that reached it.
-
-    Returns the ONE warning that exit's envelope carries for the run:
-    `run-aborted` when the board settled it, else `run-left-open` (the abort
-    was refused or never reached the board, so the server's own sweep still
-    settles the run). The fleet's every abort goes through here."""
-    resp = post_fn(run_abort_path(run_id),
-                   {"projectKey": project_key, "agentId": agent_id,
-                    "reason": reason}) or {}
-    if resp.get("ok"):
-        print(f"[crucible] run {run_id} aborted: {reason}", file=sys.stderr)
-        return run_aborted_warning(run_id, reason)
-    error = resp.get("error") or "the board did not settle it"
-    print(f"[crucible] WARN: the abort of run {run_id} was not accepted "
-          f"({error}) \u2014 it is left to the server's auto-abort", file=sys.stderr)
-    return run_left_open_warning(
-        run_id, f"{reason} (the abort answered: {error})")
-
-
-def no_report_left_open_warnings(run_id, artifact, *, post_fn, project_key,
-                                 agent_id):
-    """The run-closing step a suite verb takes when its runner produced no
-    `artifact`, so nothing will ever file the run it opened: `abort_run`'s one
-    warning, or `[]` when no run was opened (a single-shot run leaves nothing
-    on the board to settle)."""
-    if not run_id:
-        return []
-    return [abort_run(
-        post_fn, project_key, agent_id, run_id,
-        f"the runner produced no {artifact}, so there was nothing to ingest")]
-
-
-class RunAbandoned(Exception):
-    """SIGINT/SIGTERM arrived while a WRAPPED run was in flight. Carries the
-    signal number so the verb exits on the conventional 128+signum."""
-
-    def __init__(self, signum):
-        super().__init__(f"run abandoned on {signal.Signals(signum).name}")
-        self.signum = signum
-
-
-class AbandonTrap:
-    """The live state of one `abandon_trap`: its signal handler, and `held()`,
-    the span a trapped signal must not cut in half.
-
-    A step that creates something on the board and only
-    learns it did from the board's ANSWER (the run identity's opening
-    heartbeat) cannot be abandoned between the two: the board already holds
-    the row, the client has no record of it, and the closing bracket removes
-    nothing. A slow runner widens exactly that gap. Inside `held()` a signal
-    is noted, not raised; it is raised as `RunAbandoned` the moment the span
-    ends, once the step has recorded what it created. An untrapped run never
-    installs the handler, so `held()` is then inert."""
-
-    def __init__(self):
-        self._holding = 0
-        self._pending = None
-
-    def handle(self, signum, _frame):
-        if self._holding:
-            if self._pending is None:
-                self._pending = signum
-            return
-        raise RunAbandoned(signum)
-
-    @contextlib.contextmanager
-    def held(self):
-        self._holding += 1
-        try:
-            yield
-        finally:
-            self._holding -= 1
-            if not self._holding and self._pending is not None:
-                signum, self._pending = self._pending, None
-                raise RunAbandoned(signum)
-
-
-@contextlib.contextmanager
-def abandon_trap(run_id):
-    """Trap SIGINT/SIGTERM for as long as `run_id` names an OPEN run, turning
-    the signal into a `RunAbandoned` the verb can report on. Outside a wrapped
-    run (`run_id` None) this is inert and the default disposition stands \u2014
-    there is nothing open to disclose. Yields the `AbandonTrap`, whose
-    `held()` defers the signal across a step that must not be cut in half.
-
-    The previous handlers are always restored, so the trap can never outlive
-    the run it guards. A non-main thread cannot install handlers at all
-    (`ValueError`); that is not a reason to fail a test run, so the wrap simply
-    proceeds untrapped. The runner itself is reaped by `run_streamed`, which
-    kills it before the exception propagates."""
-    trap = AbandonTrap()
-    if run_id is None:
-        yield trap
-        return
-
-    previous = {}
-    try:
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            previous[sig] = signal.signal(sig, trap.handle)
-    except ValueError:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
-        yield trap
-        return
-    try:
-        yield trap
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
-
-
-def emit_run_abandoned(verb, project_key, agent_id, run_id, abandoned,
-                       warnings=None, *, post_fn):
-    """The signal path's ONLY output: the run it opened is closed through
-    `abort_run` (reason naming the signal), then one ok:false envelope names
-    the signal and the run, aborted or \u2014 when that abort failed \u2014 left to
-    the server's auto-abort. Called from the verb's `except`, so the abort
-    lands BEFORE a gated run's closing identity tombstone in its `finally`.
-    Returns the exit code, 128+signum.
-
-    CR-CRU-094 \u00a7S3 \u2014 `warnings` are the findings this run had ALREADY
-    accumulated when the signal landed (the pre-flight `no-cycle` among them).
-    The envelope here is built from a literal, so without them this one exit
-    would print a warning on stderr and omit it from `warnings[]`; the
-    two-channel guarantee holds on EVERY exit or on none."""
+    post_fn, project_key, agent_id, run_id = _gated_open_run
     signame = signal.Signals(abandoned.signum).name
-    closing = abort_run(post_fn, project_key, agent_id, run_id,
-                        f"{signame} interrupted the wrapped run")
-    settled = ("aborted" if closing["code"] == RUN_ABORTED_CODE
-               else "left open for the server's auto-abort")
-    emit_axi(
-        verb, False,
-        {"runId": run_id, "signal": signame, "help": run_left_open_help()},
-        axi_context(project_key, agent_id=agent_id),
-        list(warnings or []) + [closing],
-        f"{verb}: ok=False \u2014 {signame} interrupted the run; run {run_id} "
-        f"{settled}")
-    return 128 + abandoned.signum
-
-
-def open_run(post_fn, project_key, agent_id, stack, tier=None, context=None,
-             *, release=None):
-    """Open the run BEFORE the suite is spawned. Returns `(run_id, warnings)`.
-
-    A refusal degrades to single-shot with a warning naming the fallback. An
-    `ok` answer that carries no runId is a server that simply did not open one
-    (nothing failed, so there is nothing to report): the ingest is then the
-    unchanged single-shot POST.
-
-    \u00a7S1 \u2014 `release` rides the start body's TOP-LEVEL `release`, and a
-    refused release run raises `ReleaseRunRefused` instead of degrading: its
-    single-shot ingest would carry the same release and be refused in turn."""
-    payload = {"projectKey": project_key, "agentId": agent_id, "stack": stack}
-    if tier:
-        payload["tier"] = tier
-    if context:
-        payload["context"] = context
-    if release:
-        payload["release"] = release
-    resp = post_fn(RUN_START_PATH, payload) or {}
-    run_id = resp.get("runId")
-    if run_id:
-        print(f"[crucible] run started: {run_id}", file=sys.stderr)
-        return run_id, []
-    if resp.get("ok"):
-        return None, []
-    error = resp.get("error") or "the server opened no run"
-    if release:
-        raise ReleaseRunRefused(release, error)
-    print(f"[crucible] WARN: run lifecycle unavailable ({error}) \u2014 "
-          f"single-shot ingest", file=sys.stderr)
-    return None, [run_lifecycle_unavailable_warning(error)]
-
-
-def run_streamed(cmd, cwd, env, log_path, narrator=None, capture=False):
-    """Run `cmd`, streaming its combined stdout+stderr LIVE: every line goes to
-    stderr and to `log_path` as the runner produces it, and to `narrator` for
-    progress. Returns a `CompletedProcess` whose `stdout` is the whole capture,
-    byte-identical to a capture-after-exit (the parsers read it unchanged).
-
-    stdout stays the client's envelope channel, so the echo is on stderr. With
-    neither a log nor a narrator there is nothing to tee, and the runner
-    inherits stdio \u2014 unless the caller reads the capture anyway (`capture`: a
-    no-report fallback that ingests the runner's own words), in which case the
-    run is teed exactly as above. An interruption of the read (a signal trap
-    raising through it) reaps the runner before it propagates, so no orphan is
-    left behind."""
-    if not log_path and narrator is None and not capture:
-        return subprocess.run(cmd, cwd=cwd, env=env)
-    lines = []
-    with contextlib.ExitStack() as stack:
-        log = None
-        if log_path:
-            try:
-                log = stack.enter_context(open(log_path, "w"))
-            except OSError as e:
-                print(f"[crucible] WARN: could not write run log to {log_path}: {e}",
-                      file=sys.stderr)
-        proc = stack.enter_context(subprocess.Popen(
-            cmd, cwd=cwd, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            bufsize=1,
-        ))
-        stream = proc.stdout
-        assert stream is not None  # stdout=PIPE always yields a stream
-        echo = True
-        try:
-            for line in stream:
-                lines.append(line)
-                # \u00a7S3 \u2014 a closed stderr ends the echo, never
-                # the run: the capture and the log keep going.
-                if echo:
-                    echo = write_to_pipe("stderr", line)
-                if log is not None:
-                    log.write(line)
-                    log.flush()
-                if narrator is not None:
-                    narrator.observe(line)
-        except BaseException:
-            proc.kill()
-            proc.wait()
-            raise
-        returncode = proc.wait()
-    out = "".join(lines)
-    if log is not None:
-        print(f"[crucible] run log \u2192 {log_path} ({len(out)} bytes)",
-              file=sys.stderr)
-    return subprocess.CompletedProcess(cmd, returncode, stdout=out)
+    abandoned.run_id = run_id
+    abandoned.warnings = [abort_run(post_fn, project_key, agent_id, run_id,
+                                    f"{signame} interrupted the wrapped run")]
 
 
 def remove_agent_silent(project_dir, agent_id, ops):
@@ -6789,14 +7750,63 @@ def gated_run(project_dir, agent_id, cycle_id, message, *, open_fn, close_fn):
 
     `open_fn` / `close_fn` are the CLIENT's own `_open_gate_identity` /
     `_close_gate_identity` delegators, so the bracket's two board touches stay
-    the patchable seams in the client module, exactly as before."""
+    the patchable seams in the client module, exactly as before.
+
+    With an agent, SIGINT/SIGTERM are trapped for the WHOLE bracket
+    (`abandon_trap`), and the identity is opened inside the trap's `held()`,
+    as `drive_axi_run`'s run identity is. A signal that escapes the body \u2014
+    landing anywhere a verb's own runner trap does not cover \u2014 aborts the
+    run `open_run` opened inside the bracket (when it opened one and nothing
+    has filed it), removes the identity, and propagates as `RunAbandoned`
+    carrying both, for `run_verb` to report on 128+signum. The ingest
+    (`post_ingest`) runs inside the same `held()`: a signal landing on it lets
+    the ingest file the run, then propagates naming that filed run. The
+    identity's removal runs inside `held()` too, so a signal never cuts it
+    short: when the exit's interrupted envelope is already printed or owed,
+    a signal landing on the removal is dropped; on an otherwise-normal exit
+    it propagates as `RunAbandoned` naming the identity. Without an agent the
+    default disposition stands."""
+    global _gated_trap, _gated_open_run
+    if not agent_id:
+        try:
+            yield None
+        finally:
+            close_fn(project_dir, None)
+        return
     identity = None
+    with abandon_trap(agent_id) as trap:
+        outer = (_gated_trap, _gated_open_run)
+        _gated_trap, _gated_open_run = trap, None
+        try:
+            with trap.held():
+                identity = open_fn(project_dir, agent_id, cycle_id, message)
+            yield identity
+        except RunAbandoned as abandoned:
+            trap.reported = True
+            _abort_gated_run(abandoned)
+            abandoned.agent_id = agent_id
+            raise
+        finally:
+            try:
+                _close_gated_identity(trap, project_dir, identity, agent_id,
+                                      close_fn)
+            finally:
+                _gated_trap, _gated_open_run = outer
+
+
+def _close_gated_identity(trap, project_dir, identity, agent_id, close_fn):
+    """The gated bracket's closing step: remove the identity inside the
+    trap's `held()`, so a signal landing on it lets the removal finish. That
+    signal then ends the exit with its one envelope — unless the exit has
+    already reported a signal, when it is dropped."""
     try:
-        if agent_id:
-            identity = open_fn(project_dir, agent_id, cycle_id, message)
-        yield identity
-    finally:
-        close_fn(project_dir, identity)
+        with trap.held():
+            close_fn(project_dir, identity)
+    except RunAbandoned as late:
+        if trap.reported:
+            return
+        late.agent_id = agent_id
+        raise
 
 
 def post_gate(project_key, agent_id, gate, post_fn, context=None, release=None):
@@ -6823,7 +7833,7 @@ def post_gate(project_key, agent_id, gate, post_fn, context=None, release=None):
 def post_milestone(project_key, agent_id, mtype, post_fn,
                    label=None, commit=None, context=None,
                    released_at=None, crs=None, packages=None,
-                   repair_provenance=False):
+                   repair_provenance=False, extra=None):
     """POST a workflow milestone (§S4b). Absent label/commit/context keys are
     OMITTED rather than sent as nulls.
 
@@ -6859,7 +7869,193 @@ def post_milestone(project_key, agent_id, mtype, post_fn,
         payload["repairProvenance"] = True
     if context:
         payload["context"] = context
+    # A type's own fields (a gate's verdict and counts, a close's override
+    # reason) ride verbatim beside the generic ones; absent when not given.
+    if extra:
+        payload.update(extra)
     return post_fn("/api/v2/milestones", payload)
+
+
+# The gate verb, and the milestone type its outcome is recorded under: the
+# record `cr-close` reads before it will close a CR.
+GATE_VERB = "pre-merge-gate"
+GATE_MILESTONE_TYPE = "pre-merge-gate"
+# pi-lens-ignore: S105 — "pass" is the gate outcome the board records, not a credential
+GATE_OUTCOME_PASS = "pass"  # noqa: S105
+GATE_OUTCOME_FAIL = "fail"
+# A gate that ran every declared suite.
+GATE_SCOPE_FULL = "full"
+GATE_SCOPE_SCOPED = "scoped"
+
+
+def head_commit(project_dir):
+    """The HEAD commit sha of the repo at `project_dir`, or None when it is not
+    a git checkout (or git is absent): a gate outside a repo has no head commit
+    to record, and its milestone then carries none."""
+    try:
+        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project_dir,
+                                capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"[crucible] no head commit at {project_dir}: {exc}", file=sys.stderr)
+        return None
+    return result.stdout.strip() or None
+
+
+def _gate_cycle_id(args, filed_runs, ops, project_key):
+    """The cycle a gate ran under: its `--cycle`, else the cycle the board
+    stamped on a run it filed, else the agent's registered binding. None when
+    none of the three names one (a release gate, or a gate between CRs)."""
+    cycle_id = getattr(args, "cycle", None)
+    if cycle_id is not None:
+        return cycle_id
+    for run in filed_runs:
+        if run.get("cycleId") is not None:
+            return run["cycleId"]
+    known, bound = _bound_cycle_id(ops.get(f"/api/v2/agents?project={project_key}"),
+                                   getattr(args, "agent", None))
+    return bound if known else None
+
+
+def _cycle_cr(ops, project_key, cycle_id):
+    """The CR whose plan holds `cycle_id`, read off the project's plans; None
+    when the board does not answer or holds no such cycle."""
+    resp = ops.get(plans_path(project_key))
+    for plan in (resp.get("plans") if resp.get("ok") else None) or []:
+        if not isinstance(plan, dict):
+            continue
+        for cycle in plan.get("cycles") or []:
+            if isinstance(cycle, dict) and cycle.get("id") == cycle_id:
+                return plan.get("cr")
+    return None
+
+
+def _gate_counts(filed_runs):
+    """`(passed, failed)` for the gate: the totals its own envelope stated,
+    else the sum of the runs it filed."""
+    if _emitted_run_counts is not None:
+        return _emitted_run_counts["passed"], _emitted_run_counts["failed"]
+    passed = sum(int(run["run"].get("passed") or 0) for run in filed_runs)
+    failed = sum(int(run["run"].get("failed") or 0) for run in filed_runs)
+    return passed, failed
+
+
+def _failing_tests(ops, filed_runs):
+    """Every failing test of the runs the gate filed, named `suite > test`,
+    read back from the board's own parse of each failing run."""
+    names = []
+    for run in filed_runs:
+        if not run["run"].get("failed"):
+            continue
+        names.extend(_event_failing_tests(ops, run["event"]) or [])
+    return names
+
+
+def _event_failing_tests(ops, event_id, *, strict=False):
+    """The failing tests of ONE filed run, named `suite > test`, read back from
+    the board's own parse of it through its event id.
+
+    A failed read yields no names; with `strict` it yields None instead, so a
+    caller that must not mistake an unread run for a run with no failing tests
+    (`cmd_run`) can refuse."""
+    resp = ops.get(f"/api/v2/events/{urllib.parse.quote(str(event_id))}") or {}
+    if strict and not resp.get("ok"):
+        return None
+    event = resp.get("event") if resp.get("ok") else None
+    names = []
+    for suite in (event or {}).get("tree") or []:
+        for leaf in suite.get("children") or []:
+            if leaf.get("status") == "fail":
+                names.append(f"{suite.get('name')} > {leaf.get('name')}")
+    return names
+
+
+def _gate_suite_entries(ops, results):
+    """The milestone's `suites`: one entry per gated suite the composition
+    reported, in its order. A failing entry names its failing tests, read
+    through the events its run filed; a suite with no counts to show (it could
+    not run, be dispatched or report) carries none."""
+    entries = []
+    for result in results:
+        entry = {"target": result["target"], "outcome": result["outcome"]}
+        if result["counts"] is not None:
+            entry.update(result["counts"])
+        if result["outcome"] == GATE_OUTCOME_FAIL:
+            entry["failingTests"] = [
+                name for event_id in result["events"]
+                for name in _event_failing_tests(ops, event_id) or []]
+        entries.append(entry)
+    return entries
+
+
+def _union(lists):
+    """Every name of `lists`, once each, in first-seen order."""
+    seen = []
+    for names in lists:
+        for name in names:
+            if name not in seen:
+                seen.append(name)
+    return seen
+
+
+def record_gate_outcome(args, code, project_dir, ops):
+    """Post the ONE `pre-merge-gate` milestone a finished gate owes, pass or
+    fail, a gate stopped by its fail-fast step included: the CR its cycle's plan
+    belongs to (`label`, and `context.cr`), the head commit, the cycle, the
+    outcome, the passed/failed counts and, on a failure, the failing tests.
+
+    It runs AFTER the gate's own envelope, so it reports on stderr only and
+    never on stdout. The gate's identity bracket has already closed, so it
+    opens the same kind of identity for the one post and removes it again only
+    when it created it. A gate with no `--agent` has no caller to post as."""
+    agent_id = getattr(args, "agent", None)
+    if not agent_id:
+        print("[crucible] pre-merge-gate: no --agent, so no pre-merge-gate "
+              "milestone was posted and cr-close will find no result",
+              file=sys.stderr)
+        return None
+    project_key = ops.project_key(project_dir)
+    filed_runs = list(_filed_runs)
+    cycle_id = _gate_cycle_id(args, filed_runs, ops, project_key)
+    cr = _cycle_cr(ops, project_key, cycle_id) if cycle_id is not None else None
+    passed, failed = _gate_counts(filed_runs)
+    # A gate that exited non-zero did not pass, and nor did one whose suite
+    # failed tests though its exit was 0 (a gate that keeps going past test
+    # failures to finish its coverage run exits 0).
+    fields = {"outcome": GATE_OUTCOME_FAIL if code or failed else GATE_OUTCOME_PASS,
+              "passed": passed, "failed": failed,
+              "scope": (GATE_SCOPE_FULL if scoped_gate_targets(args) is None
+                        else GATE_SCOPE_SCOPED)}
+    # The suites the composition ran, each with its own result; a gate that
+    # composed none records none.
+    entries = (_gate_suite_entries(ops, _gate_suite_results)
+               if _gate_suite_results else None)
+    if entries:
+        fields["suites"] = entries
+    if failed:
+        fields["failingTests"] = (
+            _union(entry.get("failingTests") or [] for entry in entries)
+            if entries else _failing_tests(ops, filed_runs))
+    context = fleet_context(cr=cr)
+    if cycle_id is not None:
+        context["cycleId"] = cycle_id
+    identity = GatedRunIdentity(agent_id)
+    identity.observe(ops.post(identity.PATH, identity.open_payload(
+        project_key, message="posting the pre-merge-gate outcome")))
+    try:
+        resp = post_milestone(project_key, agent_id, GATE_MILESTONE_TYPE, ops.post,
+                              label=cr, commit=head_commit(project_dir),
+                              context=context or None, extra=fields)
+    finally:
+        if identity.should_remove:
+            ops.post(AGENT_UNREGISTER_PATH, {"agentId": agent_id,
+                                             "projectKey": project_key,
+                                             "silent": True})
+    print(f"pre-merge-gate milestone: ok={resp.get('ok', False)} "
+          f"outcome={fields['outcome']} cr={cr} cycle={cycle_id} "
+          f"passed={passed} failed={failed}"
+          + (f" error={resp.get('error')}" if resp.get("error") else ""),
+          file=sys.stderr)
+    return resp
 
 
 def add_plan_file_release_arg(p):
@@ -6933,6 +8129,22 @@ def add_gate_cycle_arg(p):
     p.add_argument("--cycle", type=int, help=GATE_CYCLE_HELP)
 
 
+def add_gate_suites_arg(p):
+    """Declare `--suites` on `pre-merge-gate`: the ONE declaration site for
+    the whole fleet, so all five clients spell the flag and its help
+    identically. Checked by `refuse_unrunnable_scoped_gate` before the gate
+    runs anything."""
+    p.add_argument("--suites", metavar="TARGETS", dest="suites",
+                   help=GATE_SUITES_HELP)
+
+
+def add_filing_cycle_arg(p):
+    """`--cycle` on a verb that files a result without opening a gated
+    identity (check/compile/auto-ingest/clippy): the cycle the result is filed
+    under, which the board validates."""
+    p.add_argument("--cycle", type=int, help=FILING_CYCLE_HELP)
+
+
 def add_gate_release_arg(p):
     """Declare `--release` on a GATE verb (gate-run/gate-report): the label of
     the release this gate gates, posted as the event's top-level `version`.
@@ -6947,6 +8159,51 @@ def add_run_release_arg(p):
     the whole fleet, with its OWN help (`RUN_RELEASE_HELP`) \u2014 a gate names
     the release it gates, a run is filed under one."""
     p.add_argument("--release", help=RUN_RELEASE_HELP)
+
+
+def _add_lcov_coverage_arg(p):
+    p.add_argument("--coverage", action="store_true",
+                   help=REGRESSION_COVERAGE_LCOV_HELP)
+
+
+def _add_coverage_py_coverage_arg(p):
+    p.add_argument("--coverage", action="store_true",
+                   help=REGRESSION_COVERAGE_PY_HELP)
+
+
+def _add_jacoco_coverage_arg(p):
+    p.add_argument("--coverage", action="store_true",
+                   help=REGRESSION_COVERAGE_JACOCO_HELP)
+
+
+def _add_llvm_cov_coverage_arg(p):
+    p.add_argument("--coverage", action="store_true",
+                   help=REGRESSION_COVERAGE_LLVM_COV_HELP)
+
+
+# Each coverage tool's `--coverage` declaration. A help text is a module
+# constant, never assembled from a parameter, so every flag's help reads
+# whole from source.
+_REGRESSION_COVERAGE_DECLARERS = {
+    "lcov": _add_lcov_coverage_arg,
+    "coverage.py": _add_coverage_py_coverage_arg,
+    "JaCoCo": _add_jacoco_coverage_arg,
+    "llvm-cov": _add_llvm_cov_coverage_arg,
+}
+
+
+def add_regression_coverage_arg(p, tool):
+    """Declare `--coverage` on a client's `regression`: the one switch that
+    makes the run measure coverage. Every client states the same sentence
+    (`REGRESSION_COVERAGE_HELP`), then names its own stack's coverage `tool`
+    (`lcov`, `coverage.py`, `JaCoCo` or `llvm-cov`) in a sentence of its
+    own."""
+    declare = _REGRESSION_COVERAGE_DECLARERS.get(tool)
+    if declare is None:
+        raise ValueError(
+            f"no --coverage declaration for coverage tool {tool!r}; known: "
+            f"{', '.join(sorted(_REGRESSION_COVERAGE_DECLARERS))}")
+    declare(p)
 
 
 def add_gate_respond_verb(sub, func, *, parents=(), add_args=()):
@@ -7198,7 +8455,7 @@ def poll_axi_snapshot(no_mistakes_path):
 
 def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
                       context, ops, release=None, heartbeat=None,
-                      poster_for=None):
+                      poster_for=None, observe=None):
     """§S8/CR-CRU-117 §S2 — poll `axi status` while `proc` is alive and POST one
     INTERIM gate per DISTINCT ladder. Returns True when at least one interim
     gate reached the board: the fact the envelope states and the sealing
@@ -7220,7 +8477,9 @@ def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
     long as this loop drives the run (`drive_axi_run`). `poster_for(decoded)`,
     when given, answers the id each snapshot posts under in place of
     `agent_id` (`DrivenRunIdentity.poster_for`, which opens the run identity
-    at the run's first snapshot)."""
+    at the run's first snapshot). `observe(decoded)`, when given, is handed
+    every snapshot a poll decoded, so a verb that judges the run after it
+    exits can read the last one (`LastStreamedSnapshot`)."""
     last_poll = None
     last_ladder = None
     posted_interim = False
@@ -7231,6 +8490,8 @@ def stream_axi_ladder(proc, no_mistakes_path, intent, project_dir, agent_id,
             if heartbeat is not None:
                 heartbeat(GATE_RUN_DRIVING_MESSAGE)
             decoded = poll_axi_snapshot(no_mistakes_path)
+            if decoded is not None and observe is not None:
+                observe(decoded)
             if decoded is not None and axi_snapshot_in_flight(decoded):
                 ladder = axi_ladder_identity(decoded)
                 if ladder != last_ladder:
@@ -7281,7 +8542,8 @@ def gate_run_result_fields(outcome, resolved, release, posted_interim, held,
 
 
 def unsealed_run_report(exit_code, resolved, detail, held, posted_interim, *,
-                        verb="gate-run", axi_verb="axi run"):
+                        verb="gate-run", axi_verb="axi run", intent=None,
+                        release=None):
     """§S3/CR-CRU-117 §S2 — the caller-facing report for an exit that SEALED
     nothing: the stderr lines and the legacy one-liner, built from ONE list of
     facts so the two channels cannot drift apart.
@@ -7293,7 +8555,8 @@ def unsealed_run_report(exit_code, resolved, detail, held, posted_interim, *,
 
     `verb` and `axi_verb` name the proxy verb and the no-mistakes call it drove
     (`gate-run` over `axi run`, `gate-respond` over `axi respond`), so the one
-    report serves every verb `drive_axi_run` runs."""
+    report serves every verb `drive_axi_run` runs. `intent` and `release` are
+    what the reattach move names (`axi_reattach_help`)."""
     said = (f"the run is still in flight — `{axi_verb}` resolved no outcome"
             if held else
             f"the run resolved {resolved!r}, which is in no pass family "
@@ -7304,7 +8567,7 @@ def unsealed_run_report(exit_code, resolved, detail, held, posted_interim, *,
     if detail:
         rest.append(f"the run said: {detail}")
     if held:
-        rest.append(AXI_REATTACH_HELP)
+        rest.append(axi_reattach_help(intent, release))
     lines = [f"{verb}: NOT SEALED: {said}"] + [f"{verb}: {r}" for r in rest]
     legacy = (f"{verb}: ok=False sealed=nothing exit={exit_code} — "
               + "; ".join([said] + rest))
@@ -7358,12 +8621,12 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
 
     return drive_axi_run("gate-run", run_argv, intent, project_dir, agent_id,
                          ops, release=release, skip=skip,
-                         skip_source=skip_source)
+                         skip_source=skip_source, reattach_intent=intent)
 
 
 def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
                   release=None, skip=(), skip_source=ENVELOPE_TIER_NONE,
-                  on_final=None):
+                  on_final=None, on_snapshot=None, reattach_intent=None):
     """G1 — the ONE launch/stream/seal body every axi PROXY verb runs.
 
     `gate-run` drives `no-mistakes axi run` and `gate-respond` drives
@@ -7383,6 +8646,12 @@ def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
     and reports that instead; `fields` are added to the envelope (and to the
     legacy line, in order); `ok` False fails an exit that would otherwise
     pass. With no `on_final`, the exit is exactly the seal-or-held one.
+    `on_snapshot(decoded)`, when given, sees every snapshot the poll loop
+    decoded (`stream_axi_ladder`'s `observe`), before `on_final` is asked.
+
+    `reattach_intent` is the run's own intent, named by a held exit's
+    reattach move with the drive's `release` (`axi_reattach_help`); a verb
+    that does not know it leaves it None and the move names a placeholder.
 
     Every snapshot, interim and seal, posts under the run's OWN identity,
     `<caller>\u00b7gate\u00b7<run>` (`gate_run_identity`, `DrivenRunIdentity`): named
@@ -7401,7 +8670,9 @@ def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
                 return _drive_axi_run(verb, run_argv, intent, project_dir,
                                       agent_id, run, ops, release=release,
                                       skip=skip, skip_source=skip_source,
-                                      on_final=on_final)
+                                      on_final=on_final,
+                                      on_snapshot=on_snapshot,
+                                      reattach_intent=reattach_intent)
             finally:
                 run.close()
     except RunAbandoned as abandoned:
@@ -7419,7 +8690,8 @@ def drive_axi_run(verb, run_argv, intent, project_dir, agent_id, ops, *,
 
 
 def _drive_axi_run(verb, run_argv, intent, project_dir, agent_id, run,
-                   ops, *, release, skip, skip_source, on_final):
+                   ops, *, release, skip, skip_source, on_final,
+                   on_snapshot=None, reattach_intent=None):
     """`drive_axi_run`'s body, inside the run-identity bracket: every gate it
     posts is posted as `run.poster_for(snapshot)` (the run identity), while
     `agent_id` (the caller) still names the envelope."""
@@ -7443,7 +8715,8 @@ def _drive_axi_run(verb, run_argv, intent, project_dir, agent_id, run,
     posted_interim = stream_axi_ladder(proc, run_argv[0], intent, project_dir,
                                        agent_id, context, ops, release,
                                        heartbeat=run.heartbeat,
-                                       poster_for=run.poster_for)
+                                       poster_for=run.poster_for,
+                                       observe=on_snapshot)
 
     out, _err = proc.communicate()
     # Proxy role: relay the axi detail to the caller's OWN stdout. A closed
@@ -7511,7 +8784,9 @@ def _drive_axi_run(verb, run_argv, intent, project_dir, agent_id, run,
         lines, legacy = unsealed_run_report(proc.returncode, resolved,
                                             final_decoded.get("error"),
                                             held, posted_interim,
-                                            verb=verb, axi_verb=axi_verb)
+                                            verb=verb, axi_verb=axi_verb,
+                                            intent=reattach_intent,
+                                            release=release)
         for line in lines:
             print(line, file=sys.stderr)
         ops.emit(verb, False, result_fields, envelope_context, [],
@@ -7601,19 +8876,106 @@ def axi_run_id(decoded):
     return run_id if isinstance(run_id, str) and run_id else None
 
 
-def gate_decision_recorder(decision, project_dir, agent_id, ops):
+def awaited_approval(decoded, step=None):
+    """The `(run id, step)` a status read names as awaiting approval -- the
+    decision point a respond answers -- or `(None, None)` when it names no
+    run or no such step. With `step`, only that step counts; without it, the
+    first step awaiting approval is the one answered."""
+    run_id = axi_run_id(decoded) if isinstance(decoded, dict) else None
+    if run_id is None:
+        return None, None
+    for s in decoded["run"].get("steps") or []:
+        name = s.get("step") if isinstance(s, dict) else None
+        if (name and str(s.get("status")) == AXI_AWAITING_APPROVAL
+                and (step is None or name == step)):
+            return run_id, name
+    return None, None
+
+
+def axi_step_status(decoded, run_id, step):
+    """The status a snapshot gives `step` of run `run_id`, or None when it
+    does not say: no ladder, no such step, or a ladder of another run."""
+    run = decoded.get("run") if isinstance(decoded, dict) else None
+    if not isinstance(run, dict):
+        return None
+    named = run.get("id")
+    if named and named != run_id:
+        return None
+    for s in run.get("steps") or []:
+        if isinstance(s, dict) and s.get("step") == step:
+            return str(s.get("status") or "")
+    return None
+
+
+class LastStreamedSnapshot:
+    """The last snapshot a drive's poll loop decoded (`drive_axi_run`'s
+    `on_snapshot`), kept for a verb that judges the run once it exits."""
+
+    def __init__(self):
+        self.decoded = None
+
+    def observe(self, decoded):
+        self.decoded = decoded
+
+
+def awaited_step_moved_on(run_id, step, answer, streamed, no_mistakes_path):
+    """Did the respond move `step` of run `run_id` past awaiting approval?
+    True (accepted), False (refused: it is still awaiting), or None when no
+    snapshot says.
+
+    Judged by the step's OWN status, never by whether the respond's answer
+    names a run: an elapsed wait and a refusal both answer with no run. The
+    answer and the drive's last streamed snapshot settle it when either shows
+    the step moved on; otherwise one more `axi status` read decides, since a
+    snapshot streamed while the respond was still starting can predate the
+    decision."""
+    for seen in (answer, streamed):
+        status = axi_step_status(seen, run_id, step)
+        if status is not None and status != AXI_AWAITING_APPROVAL:
+            return True
+    status = axi_step_status(poll_axi_snapshot(no_mistakes_path), run_id, step)
+    if status is None:
+        return None
+    return status != AXI_AWAITING_APPROVAL
+
+
+def gate_decision_recorder(decision, project_dir, agent_id, ops, *,
+                           awaited=(None, None), streamed=None,
+                           no_mistakes_path=None):
     """G6 — `drive_axi_run`'s `on_final` for `gate-respond`: record the
-    decision once the tool has ACCEPTED it, which is when its snapshot names
-    the run it acted on. Whether that run then resolved or its wait elapsed
-    does not matter — an elapsed wait is not a failed run. A snapshot naming
-    no run is a refusal (AC5): reported, and nothing is recorded."""
+    decision once the tool has ACCEPTED it. Whether that run then resolved or
+    its wait elapsed does not matter — an elapsed wait is not a failed run.
+    A refusal is reported, and nothing is recorded.
+
+    `awaited` is the `(run id, step)` the status read before the respond named
+    as awaiting approval (`awaited_approval`). When it names one, the decision
+    is judged by that step's own status afterwards (`awaited_step_moved_on`,
+    reading `streamed`'s last snapshot and `no_mistakes_path`): moved on is
+    accepted and recorded against that run, whether or not the respond's
+    answer named it; still awaiting is refused. Otherwise, or when no snapshot
+    says, the answer decides: one naming the run it acted on is accepted, one
+    naming no run is refused."""
+    awaited_run, awaited_step = awaited
+
     def record(decoded):
         if decoded is None:
             return ("no-mistakes answered with no snapshot, so it took no "
                     "decision", {"decision": ENVELOPE_TIER_NONE}, False)
         run_id = axi_run_id(decoded)
+        said = decoded.get("error")
+        if awaited_run is not None:
+            moved_on = awaited_step_moved_on(
+                awaited_run, awaited_step, decoded,
+                streamed.decoded if streamed is not None else None,
+                no_mistakes_path)
+            if moved_on is False:
+                return ((f"no-mistakes recorded no decision — step "
+                         f"{awaited_step!r} is still awaiting approval"
+                         + (f": {said}" if said else "")),
+                        {"decision": ENVELOPE_TIER_NONE}, False)
+            if moved_on:
+                run_id = awaited_run
         if run_id is None:
-            said = decoded.get("error")
             return (("no-mistakes recorded no decision — its answer names no "
                      "run" + (f": {said}" if said else "")),
                     {"decision": ENVELOPE_TIER_NONE}, False)
@@ -7661,11 +9023,21 @@ def cmd_gate_respond(args, project_dir, no_mistakes_path, ops):
                  f"not launched: {e}")
         return 1
 
+    # One status read BEFORE the respond names the run and the step awaiting
+    # approval: the step the decision answers when `--step` is omitted, and
+    # the step whose own status judges it once the respond exits.
+    awaited = awaited_approval(poll_axi_snapshot(nm), args.step)
+    if awaited[1] is not None and "step" not in decision:
+        decision["step"] = awaited[1]
+    streamed = LastStreamedSnapshot()
+
     run_argv = [nm, "axi", "respond"] + gate_respond_argv(args)
     return drive_axi_run(
         "gate-respond", run_argv, f"respond: {args.action}", project_dir,
-        agent_id, ops,
-        on_final=gate_decision_recorder(decision, project_dir, agent_id, ops))
+        agent_id, ops, on_snapshot=streamed.observe,
+        on_final=gate_decision_recorder(decision, project_dir, agent_id, ops,
+                                        awaited=awaited, streamed=streamed,
+                                        no_mistakes_path=nm))
 
 
 def _decode_axi_snapshot(snapshot):

@@ -7,7 +7,7 @@
 // CR-CRU-043; see `spawnServer` below.
 import { expect } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -21,7 +21,7 @@ const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
 /**
  * A port the kernel has just confirmed is free, then released — the e2e mirror
  * of the bun suites' `freePorts()`
- * (tests/server-listener-is-configuration.test.ts) and the python suites'
+ * (tests/integration/server-listener-is-configuration.test.ts) and the python suites'
  * `_free_port()`.
  *
  * F10 used a FIXED 39878, which is a standing appointment with a collision: it
@@ -113,13 +113,27 @@ for (const signal of ["exit", "SIGINT", "SIGTERM"] as const) {
 // throws between the spawn and its kill step leaves the child holding its port
 // for every scenario after it. The last step's own `finally` only covers a
 // scenario that reached that step. This hook covers the ones that did not.
+/**
+ * Every scratch directory a scenario made, removed with its children at the
+ * end of that scenario — passed or failed — and once more when the run ends.
+ */
+const scratchDirs = new Set<string>();
+
+function removeScratchDirs(): void {
+  for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true });
+  scratchDirs.clear();
+}
+
+process.on("exit", removeScratchDirs);
+
 After(() => {
   killAllSpawned();
+  removeScratchDirs();
 });
 
 function spawnServer(scratchCwd: string, port: number): ChildProcess {
   declareListener(scratchCwd, port);
-  const child = spawn("bun", ["run", SERVER_ENTRY], {
+  const child = spawn("bun", ["run", "--no-env-file", SERVER_ENTRY], {
     cwd: scratchCwd,
     env: {
       ...process.env,
@@ -135,6 +149,7 @@ function spawnServer(scratchCwd: string, port: number): ChildProcess {
 Step("a standalone Crucible server is running on its own port", async ({ world, $testInfo }) => {
   $testInfo.setTimeout(90_000);
   const scratchCwd = mkdtempSync(path.join(tmpdir(), "crucible-e2e-f10-"));
+  scratchDirs.add(scratchCwd);
   // Allocated once and carried in the world: the restart below must bind the
   // SAME port, because the page under test is already pointed at it.
   const port = await freePort();

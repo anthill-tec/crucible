@@ -1,6 +1,6 @@
 # CR-CRU-147 — a voided CR is not queued work, and its row says so
 
-**Type** fix · **Points** 8 · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-091, CR-CRU-078 · **Status** PENDING
+**Type** fix · **Points** 8 · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-091, CR-CRU-078 · **Status** DONE
 
 > **Gap analysis 2026-09-25 — measured, with seven user rulings (1–3 at gap analysis, 4–7 during the cycles).**
 >

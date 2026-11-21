@@ -1,6 +1,6 @@
 # CR-CRU-059 — The registration identity contract: rename `phase` → `role` fleet-wide, and validate `identity.source`
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (naming correction + server input validation)
 **Priority:** P1 — the API contradicts the project's own ontology, and a documented enum is unenforced
 **Depends on:** CR-CRU-044 (introduced the field), CR-CRU-054 (found the source drift), CR-CRU-056 (registration is now the binding act), CR-CRU-057 (put the field on events)

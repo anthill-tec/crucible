@@ -1,0 +1,12 @@
+{
+  "rules": {
+    "unchecked-throwing-call-python": {
+      "disable": ["unchecked-throwing-call-python"],
+      "reason": "Off for every Python file in the project. In the shipped clients, run_verb (the dispatch every verb and the no-argument dashboard exits through) and crucible_axi.cli.main convert an OSError or ValueError that escapes a verb into the ok:false envelope, so an unguarded open/makedirs/remove/move/listdir is already reported rather than a traceback; a local try at each call would only duplicate that seam. In test code a raising call fails its test loudly, which is the report it needs, and wants no envelope."
+    },
+    "unchecked-numeric-parse-python": {
+      "disable": ["unchecked-numeric-parse-python"],
+      "reason": "Off for every Python file in the project. In the shipped clients, a ValueError from an int()/float() parse of a report's numbers escapes to run_verb (or crucible_axi.cli.main for the installer), which reports it as the ok:false envelope naming the exception's type and message, so no parse needs its own try. In test code a raising parse fails its test loudly, which is the report it needs, and wants no envelope."
+    }
+  }
+}

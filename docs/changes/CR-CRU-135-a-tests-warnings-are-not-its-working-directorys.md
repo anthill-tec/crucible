@@ -1,6 +1,6 @@
 # CR-CRU-135 — a test's warnings are not its working directory's
 
-**Type** fix · **Wave** 6 (0.2.0) · **Depends on** CR-CRU-030, CR-CRU-131 · **Status** PENDING
+**Type** fix · **Wave** 6 (0.2.0) · **Depends on** CR-CRU-030, CR-CRU-131 · **Status** DONE
 
 ## Problem
 

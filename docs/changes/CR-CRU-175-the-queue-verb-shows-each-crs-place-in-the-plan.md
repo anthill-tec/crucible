@@ -1,7 +1,7 @@
 # CR-CRU-175 — the queue verb shows each CR's place in the plan
 
 **Type** fix · **Points** 8 (re-scored 5 → 8 at gap analysis 2026-10-09, user ruling) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-173, CR-CRU-177 ·
-**Status** PENDING — filed 2026-10-08 (user ruling: 0.3.0, after CR-CRU-173)
+**Status** DONE — filed 2026-10-08 (user ruling: 0.3.0, after CR-CRU-173)
 
 ## Problem
 

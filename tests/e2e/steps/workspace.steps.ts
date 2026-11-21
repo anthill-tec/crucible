@@ -33,7 +33,7 @@ Step(
     }
     // else: no tombstoned agent reachable via HTTP seeding — tolerated, see
     // the original F9 test's LIMITATION note (tombstone path stays covered
-    // by tests/liveness.test.ts + the livenessGlyph unit tests).
+    // by tests/integration/liveness.test.ts + the livenessGlyph unit tests).
   },
 );
 

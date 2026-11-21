@@ -32,7 +32,7 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 | Base URL | `http://localhost:3849` (override: `CRUCIBLE_BASE`) | every script/skill; the v1 `arduino-crucible.py` base-URL constant (successor: `_base_url` in `clients/arduino-crucible.py`) |
 | Content type | `application/json` both directions | all clients |
 | Success shape | `{"ok": true, ...}` — clients branch on `resp.ok` | `_ingest_rustc_stderr` in `clients/rust-crucible.py` etc. |
-| Error shape | `{"ok": false, "error": "<actionable message>"}` | `_ingest_parsed` in `clients/bun-crucible.py` prints `resp['error']`; skills: "Read error responses — they tell you exactly what's wrong" |
+| Error shape | `{"ok": false, "error": "<actionable message>"}` | the shared `ingest_reports` in `clients/_crucible_run.py` prints `resp['error']` on its ingest line; skills: "Read error responses — they tell you exactly what's wrong" |
 | Project key type | **UUID string, mandatory** — non-UUID rejected with HTTP 400 | crucible-report-java/bun Rules: "`projectKey` must be a valid UUID — string keys are rejected with 400" |
 | Client env contract | `CRUCIBLE_PROJECT_KEY` (+ `CRUCIBLE_PROJECT_NAME` for arduino) read from the SUT project's `.env` | all scripts' `_project_key()`; `arduino-crucible.py:_load_env` |
 
@@ -41,11 +41,11 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 | # | Endpoint | Method | Purpose | Evidence |
 |---|---|---|---|---|
 | 1 | `/api/projects` | GET | List projects, optional `?name=` filter | all skill endpoint tables |
-| 2 | `/api/projects/add` | POST | Register a project (idempotent for clients: duplicate key → 400, ignored) | `_ensure_project` in `clients/arduino-crucible.py` |
+| 2 | `/api/projects/add` | POST | Register a project (idempotent for clients: duplicate key → 400, ignored) | the v1 arduino client's self-registration helper (since removed) |
 | 3 | `/api/agents/heartbeat` | POST | Register agent + heartbeat (same endpoint for both) | all clients |
 | 4 | `/api/agents/remove` | POST | Unregister agent | all clients |
 | 5 | `/api/agents` | GET | List agents, optional `?projectKey=` | skill tables |
-| 6 | `/api/ingest` | POST | Raw ingest — server parses (format `junit`, `data` or `dataPath`) | `_ingest_junit_axi` in `clients/rust-crucible.py`, `_ingest_junit_dir` in `clients/mvn-crucible.py` |
+| 6 | `/api/ingest` | POST | v1 raw ingest — server parses (format `junit`, `data` or `dataPath`); the clients no longer send this shape | v1 shape: crucible-register table ("format + data or dataPath"). Today the rust, java, python and bun clients send their reports inline to `/api/v2/runs` through `ingest_reports` in `clients/_crucible_run.py`; rust no longer posts a report path |
 | 7 | `/api/ingest/parsed` | POST | Pre-parsed ingest (summary + tree + optional coverage) | all clients |
 | 8 | `/api/ingest/compile` | POST | Compile/import failure ingest (errors text, optional format) | all clients |
 | 9 | `/api/ingest/clear` | POST | Clear ingested state for a project | skill tables |
@@ -61,12 +61,13 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 {"key": "<uuid>", "name": "<display name>", "sut_root": "/abs/path/to/project"}
 ```
 - `sut_root` is snake_case (only snake_case field in the API — preserve verbatim).
-- Duplicate key → HTTP 400; `arduino-crucible.py:_ensure_project` deliberately ignores it
-  ("Idempotent self-registration; a pre-existing project returns 400 (ignored)").
+- Duplicate key → HTTP 400; the v1 arduino client self-registered through a helper (since
+  removed) that deliberately ignored it ("Idempotent self-registration; a pre-existing
+  project returns 400 (ignored)").
 - Projects are otherwise created in the dashboard (crucible-report-python: "there is no
   create endpoint — projects are made in the Crucible dashboard" — outdated w.r.t.
   `/api/projects/add`, but proves dashboard-side creation existed).
-- Example key format: `019c9ff7-222f-7ae5-9121-2ae549e4d97a` (UUIDv7).
+- Example key format: `019c9ff7-222f-7ae5-9121-2ae549e4d97a` (UUIDv7). <!-- gitleaks:allow -->
 
 ### 3.2 `POST /api/agents/heartbeat`
 ```json
@@ -112,12 +113,13 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 - `dataPath` may be a **file** or a **directory** — directory means all `TEST-*.xml` inside
   (crucible-report-java: "directory is preferred for surefire").
 - Response: `{"ok": true, "summary": {"total": N, "passed": N, "failed": N, ...}}` —
-  clients print `passed/failed/total` from it (`_ingest_junit_axi` in `clients/rust-crucible.py`).
+  clients print `passed/failed/total` from it (`_print_ingest_line` in `clients/_crucible_run.py`).
 - JUnit semantics (mirrors every client-side parser): testcase with `<failure>` or
   `<error>` → fail; `<skipped>` → pending; else pass. `time` attr (seconds) → duration_ms.
   Root may be `<testsuites>` or a bare `<testsuite>`.
 - Historical parser quirk (the v1 `python-crucible.py`'s parsed-ingest path, later `_ingest_parsed_dir`;
-  successor: `_parse_junit_dir` in `clients/python-crucible.py`): "the server-side format=junit parser
+  successor: the board's `junit` codec, `parseJunit` in `src/codecs/junit.ts`, which decodes the
+  reports the python client sends to `/api/v2/runs`): "the server-side format=junit parser
   historically labeled leaves" with class-qualified names — v2 leaf name = testcase `name`
   attr, suite node = testsuite `name` attr.
 
@@ -139,8 +141,8 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 ```
 - `coverage` optional; `branches` optional within it (rust/bun send lines+functions only;
   java/vscode add branches).
-- `name` (run label) optional — arduino sends the project name (`_run_native_tests_body` in
-  `clients/arduino-crucible.py`).
+- `name` (run label) optional — no client sends it now: arduino, the last client on this route,
+  sends its reports inline to `/api/v2/runs` (`_file_reports` in `clients/arduino-crucible.py`).
 - **Server safety net: coverage on a failing run is DISCARDED** — crucible-report-java:
   "Crucible's `recordEvent` discards coverage on failing runs as a safety net". (Client
   discipline: coverage only on full green regression.)
@@ -149,8 +151,13 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 ```json
 {"projectKey": "<uuid>", "agentId": "<id>", "format": "rustc", "errors": "<raw compiler output>"}
 ```
-- `format` values sent: `rustc` (rust), `python` (python), `typescript` (bun),
-  **absent** (mvn, arduino, vscode) — so format is OPTIONAL; absent implies javac/generic.
+- `format` values sent: `rustc` (rust — `_ingest_rustc_stderr` and `cmd_auto_ingest` in
+  `clients/rust-crucible.py`), `python` (python — `_ingest_compile` in
+  `clients/python-crucible.py`), `typescript` (bun — `_ingest_compile` in
+  `clients/bun-crucible.py`), `gcc` (arduino — `_ingest_compile` in
+  `clients/arduino-crucible.py`), **absent** (mvn — `_ingest_compile` in
+  `clients/mvn-crucible.py`; vscode, per its skill, with no client in this repo) — so format
+  is OPTIONAL; absent implies javac/generic.
 - Server parses errors into structured per-file entries; raw text kept as fallback:
   - java: `[ERROR] /path/File.java:[line,col] message` (crucible-report-java §Compile Failure)
   - rustc: `error[EXXXX]:` blocks with ` --> path:line:col`
@@ -176,11 +183,11 @@ read the PRD and `docs/RUNBOOK.md`; for lineage, read this and check the CR that
 
 | Client | Stack | Calls |
 |---|---|---|
-| `rust-crucible.py` | Rust/nextest/llvm-cov | heartbeat, remove, ingest (junit dataPath), ingest/compile (rustc), ingest/parsed (+coverage) |
-| `mvn-crucible.py` | Java/surefire/failsafe/JaCoCo | heartbeat (identity), remove, ingest (junit dir dataPath), ingest/parsed (+branches coverage), ingest/compile (no format) |
-| `python-crucible.py` | pytest/unittest/coverage.py | heartbeat, remove, ingest (junit), ingest/parsed, ingest/compile (python) |
-| `bun-crucible.py` | bun test/lcov | heartbeat (identity+repoPath), remove, ingest/parsed, ingest/compile (typescript) |
-| `arduino-crucible.py` | native g++/arduino-cli | **projects/add**, heartbeat, remove, ingest/parsed, ingest/compile (no format) |
+| `rust-crucible.py` | Rust/nextest/llvm-cov | heartbeat, remove, ingest (`/api/v2/runs`, reports inline: `junit` + `lcov`), ingest/compile (rustc) |
+| `mvn-crucible.py` | Java/surefire/failsafe/JaCoCo | heartbeat (identity), remove, ingest (`/api/v2/runs`, reports inline: `junit` + `jacoco`), ingest/compile (no format) |
+| `python-crucible.py` | pytest/unittest/coverage.py | heartbeat, remove, ingest (`/api/v2/runs`, reports inline: `junit` + `lcov`), ingest/compile (python) |
+| `bun-crucible.py` | bun test/lcov | heartbeat (identity+repoPath), remove, ingest (`/api/v2/runs`, reports inline), ingest/compile (typescript) |
+| `arduino-crucible.py` | native g++/arduino-cli | heartbeat, remove, ingest (`/api/v2/runs`, reports inline: `junit` + `lcov`), ingest/compile (gcc) |
 | `hw-crucible.py` | (21-line shim) | delegates |
 | skills `crucible-report-*` | all stacks | curl/urllib/fetch equivalents of the above + events delete/clear/list |
 | skill `crucible-register` / `agent-protocol` / `heartbeat.sh` | lifecycle | heartbeat, remove |
@@ -204,7 +211,7 @@ RED→GREEN→regression dog-food cycle of this repo executed end-to-end through
 the UPGRADED clients (`clients/*-crucible.py`) against a server with the v1
 routes removed — evidenced by the C7 full-suite run (819/819) ingested via
 `clients/bun-crucible.py` on `/api/v2/*` only, and by
-`tests/timeline-dogfood-linkage.test.ts`.
+`tests/integration/timeline-dogfood-linkage.test.ts`.
 
 Removed from `src/server.ts`: every legacy `/api/*` route handler catalogued
 in §2-§3 — `POST /api/ingest`, `/api/ingest/parsed`, `/api/ingest/compile`,

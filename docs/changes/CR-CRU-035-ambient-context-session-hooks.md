@@ -1,6 +1,6 @@
 # CR-CRU-035 — Ambient-context read-path contract (AXI principle 7) — coordinated Crucible↔Model-B
 
-**Status:** PENDING — **RE-SCOPED 2026-07-22 after Model-B coordination (Sandesh msg
+**Status:** DONE — **RE-SCOPED 2026-07-22 after Model-B coordination (Sandesh msg
 1333→1334).** Crucible ships NO hook installer and NO client `setup` command. Crucible's
 side of AXI principle 7 is the **read-path contract only**: a stable, versioned `status`
 envelope + tolerant/bounded behavior so Model-B's generated session hook can surface the

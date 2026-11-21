@@ -1,6 +1,6 @@
 # CR-CRU-131 — a limit is configuration, everywhere
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** fix
 **Priority:** P3
 **Depends on:** CR-CRU-129, CR-CRU-130

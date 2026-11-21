@@ -1,0 +1,24 @@
+{"Time":"2026-11-09T01:37:19.66939125+05:30","Action":"start","Package":"example.com/tfy"}
+{"Time":"2026-11-09T01:37:19.67236388+05:30","Action":"run","Package":"example.com/tfy","Test":"TestAssert"}
+{"Time":"2026-11-09T01:37:19.67240538+05:30","Action":"output","Package":"example.com/tfy","Test":"TestAssert","Output":"=== RUN   TestAssert\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:37:19.672425739+05:30","Action":"output","Package":"example.com/tfy","Test":"TestAssert","Output":"    t_test.go:10: \n","OutputType":"error"}
+{"Time":"2026-11-09T01:37:19.672428634+05:30","Action":"output","Package":"example.com/tfy","Test":"TestAssert","Output":"        \tError Trace:\t/tmp/cr195-review/tfy/t_test.go:10\n","OutputType":"error-continue"}
+{"Time":"2026-11-09T01:37:19.672432151+05:30","Action":"output","Package":"example.com/tfy","Test":"TestAssert","Output":"        \tError:      \tNot equal: \n","OutputType":"error-continue"}
+{"Time":"2026-11-09T01:37:19.672435527+05:30","Action":"output","Package":"example.com/tfy","Test":"TestAssert","Output":"        \t            \texpected: 1\n","OutputType":"error-continue"}
+{"Time":"2026-11-09T01:37:19.672437591+05:30","Action":"output","Package":"example.com/tfy","Test":"TestAssert","Output":"        \t            \tactual  : 2\n","OutputType":"error-continue"}
+{"Time":"2026-11-09T01:37:19.672439635+05:30","Action":"output","Package":"example.com/tfy","Test":"TestAssert","Output":"        \tTest:       \tTestAssert\n","OutputType":"error-continue"}
+{"Time":"2026-11-09T01:37:19.67244214+05:30","Action":"output","Package":"example.com/tfy","Test":"TestAssert","Output":"        \tMessages:   \tnumbers differ\n","OutputType":"error-continue"}
+{"Time":"2026-11-09T01:37:19.6724525+05:30","Action":"output","Package":"example.com/tfy","Test":"TestAssert","Output":"--- FAIL: TestAssert (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:37:19.672454975+05:30","Action":"fail","Package":"example.com/tfy","Test":"TestAssert","Elapsed":0}
+{"Time":"2026-11-09T01:37:19.672460054+05:30","Action":"run","Package":"example.com/tfy","Test":"TestRequire"}
+{"Time":"2026-11-09T01:37:19.67246297+05:30","Action":"output","Package":"example.com/tfy","Test":"TestRequire","Output":"=== RUN   TestRequire\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:37:19.672539185+05:30","Action":"output","Package":"example.com/tfy","Test":"TestRequire","Output":"    t_test.go:11: \n","OutputType":"error"}
+{"Time":"2026-11-09T01:37:19.672549385+05:30","Action":"output","Package":"example.com/tfy","Test":"TestRequire","Output":"        \tError Trace:\t/tmp/cr195-review/tfy/t_test.go:11\n","OutputType":"error-continue"}
+{"Time":"2026-11-09T01:37:19.672552872+05:30","Action":"output","Package":"example.com/tfy","Test":"TestRequire","Output":"        \tError:      \tReceived unexpected error:\n","OutputType":"error-continue"}
+{"Time":"2026-11-09T01:37:19.672556408+05:30","Action":"output","Package":"example.com/tfy","Test":"TestRequire","Output":"        \t            \tfoo broke\n","OutputType":"error-continue"}
+{"Time":"2026-11-09T01:37:19.672558743+05:30","Action":"output","Package":"example.com/tfy","Test":"TestRequire","Output":"        \tTest:       \tTestRequire\n","OutputType":"error-continue"}
+{"Time":"2026-11-09T01:37:19.672564323+05:30","Action":"output","Package":"example.com/tfy","Test":"TestRequire","Output":"--- FAIL: TestRequire (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:37:19.67256768+05:30","Action":"fail","Package":"example.com/tfy","Test":"TestRequire","Elapsed":0}
+{"Time":"2026-11-09T01:37:19.672571116+05:30","Action":"output","Package":"example.com/tfy","Output":"FAIL\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:37:19.672762312+05:30","Action":"output","Package":"example.com/tfy","Output":"FAIL\texample.com/tfy\t0.003s\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:37:19.672777671+05:30","Action":"fail","Package":"example.com/tfy","Elapsed":0.003}

@@ -1,0 +1,139 @@
+{
+  "stack": "bun",
+  "reports": [
+    "junit.xml"
+  ],
+  "coverage": {
+    "codec": "lcov",
+    "reports": [
+      "lcov.info"
+    ]
+  },
+  "raw": "console.txt",
+  "client": {
+    "summary": {
+      "total": 12,
+      "passed": 5,
+      "failed": 5,
+      "pending": 2,
+      "duration_ms": 22
+    },
+    "tree": [
+      {
+        "name": "tests/text.test.ts",
+        "status": "fail",
+        "children": [
+          {
+            "name": "shouts",
+            "status": "pass",
+            "duration_ms": 0
+          },
+          {
+            "name": "shouts the wrong thing",
+            "status": "fail",
+            "duration_ms": 0,
+            "failure": {
+              "message": "expect(received).toEqual(expected)\n\nExpected: \"hi\"\nReceived: \"HI!\"",
+              "trace": "AssertionError: expect(received).toEqual(expected)\n\nExpected: \"hi\"\nReceived: \"HI!\"\n\n      at tests/text.test.ts:9:23",
+              "type": "AssertionError"
+            }
+          },
+          {
+            "name": "whispers after a busy pause",
+            "status": "pass",
+            "duration_ms": 2
+          },
+          {
+            "name": "waits longer than its budget",
+            "status": "fail",
+            "duration_ms": 20,
+            "failure": {
+              "message": "test timed out",
+              "type": "TimeoutError"
+            }
+          }
+        ]
+      },
+      {
+        "name": "math",
+        "status": "fail",
+        "children": [
+          {
+            "name": "adds two numbers",
+            "status": "pass",
+            "duration_ms": 0
+          },
+          {
+            "name": "divides evenly",
+            "status": "pass",
+            "duration_ms": 0
+          },
+          {
+            "name": "adds with a wrong expectation",
+            "status": "fail",
+            "duration_ms": 0,
+            "failure": {
+              "message": "expect(received).toBe(expected)\n\nExpected: 5\nReceived: 4",
+              "trace": "AssertionError: expect(received).toBe(expected)\n\nExpected: 5\nReceived: 4\n\n      at tests/math.test.ts:14:23",
+              "type": "AssertionError"
+            }
+          },
+          {
+            "name": "divides by zero and throws",
+            "status": "fail",
+            "duration_ms": 0,
+            "failure": {
+              "message": "division by zero",
+              "trace": "Error: division by zero\n      at divide (src/math.ts:7:39)\n      at tests/math.test.ts:28:5",
+              "type": "Error"
+            }
+          },
+          {
+            "name": "throws a plain object",
+            "status": "fail",
+            "duration_ms": 0,
+            "failure": {
+              "message": "error",
+              "trace": "error\n      at tests/math.test.ts:32:12",
+              "type": "Error"
+            }
+          },
+          {
+            "name": "multiplies two numbers",
+            "status": "pending",
+            "duration_ms": 0
+          }
+        ]
+      },
+      {
+        "name": "clamp",
+        "status": "pass",
+        "children": [
+          {
+            "name": "clamps below the range",
+            "status": "pass",
+            "duration_ms": 0
+          },
+          {
+            "name": "clamps above the range",
+            "status": "pending",
+            "duration_ms": 0
+          }
+        ]
+      }
+    ],
+    "files": 2,
+    "coverage": {
+      "lines": {
+        "total": 15,
+        "covered": 12,
+        "percent": 80.0
+      },
+      "functions": {
+        "total": 6,
+        "covered": 4,
+        "percent": 66.7
+      }
+    }
+  }
+}

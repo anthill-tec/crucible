@@ -14,8 +14,9 @@
 #
 # CR-CRU-062 §S0-§S4 — CI runs the gates. Three test jobs carry the suites that
 # gate every CR locally:
-#   - test-bun        : `bun test`
-#   - test-python     : the client suite, server-free (`unittest discover`)
+#   - test-bun        : `bun test` over ./tests/unit, then ./tests/integration
+#   - test-python     : the client suite, server-free (`unittest discover`
+#                       over tests/client/unit, then tests/client/integration)
 #   - test-e2e        : Playwright/BDD, with CRUCIBLE_DB declared explicitly
 # §S5 adds one more job on the same unconditional cadence:
 #   - pack-server     : `npm pack --dry-run` on the npm server artifact
@@ -76,7 +77,7 @@ permissions:
 #
 # WHY IT PINS AT ALL (CR-CRU-136): setup-bun with no `bun-version` installs
 # LATEST, so every timing budget and reporter-format assumption in the suite
-# (most sharply tests/help-surface-order-independence.test.ts) silently
+# (most sharply tests/integration/help-surface-order-independence.test.ts) silently
 # re-opened on every run. It bit exactly that way: local 1.3.14 double-escaped
 # the junit `classname` attribute, CI's newer bun single-escapes it (Zig -> Rust
 # test runner rewrite), and a guard parsing the escaped form went red on CI
@@ -100,15 +101,26 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
+          persist-credentials: false
           fetch-depth: 0          # hatch-vcs needs tags for the dynamic version
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
-          python-version: "3.x"
+          python-version: "3.14" # the floor; quoted, or YAML reads a float
+      # A step that downloads is time-limited, and its download is retried
+      # once: each attempt runs under `timeout`, and a failed or hung attempt
+      # gets one more (the same shape on every download step below).
       - name: Build crucible-axi sdist + wheel
+        timeout-minutes: 15
         run: |
-          python -m pip install --upgrade build twine
+          attempt=1
+          until timeout 5m python -m pip install --upgrade build twine
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::pip install failed; attempt $attempt of 2"
+          done
           python -m build
           twine check dist/*
       # CR-CRU-137 §S5 — MATCHED PAIR with actions/download-artifact in
@@ -118,8 +130,8 @@ jobs:
       # major's direct (unzipped) uploads — it also turns an artifact hash
       # mismatch into an error by default. A single-sided bump therefore fails
       # not here but later, in a publish job that on a tag ref uploads to PyPI.
-      # tests/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
-      - uses: actions/upload-artifact@v7.0.1
+      # tests/unit/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: dist
           path: dist/
@@ -127,7 +139,7 @@ jobs:
   # CR-CRU-062 §S1 — the ~1300-test bun suite that gates every CR locally.
   # No event condition (§S0): it must exist in the release run too.
   test-bun:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       # CR-CRU-096 AC26 (measured on the 0.2.0 release, run 34304398429) — the
       # roadmap-visual-grammar suite renders a PRE-CR BASELINE to prove zones 1
@@ -139,21 +151,42 @@ jobs:
       # assertions fail — taking CR-CRU-110's order-independence guard with
       # them, since its child `bun test` includes this very file. The commit is
       # reachable from origin/develop, so history is all that was missing.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
+          persist-credentials: false
           fetch-depth: 0          # a pinned pre-CR baseline is read with `git show`
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
-          bun-version: "${{ env.BUN_VERSION }}" # CR-CRU-137 §S2 -- declared once, at the head of this file
-      # CR-CRU-063 §S1 — uv, not just bun. tests/clients-bun-crucible.test.ts:83
+          # CR-CRU-137 §S2 -- declared once, at the head of this file
+          bun-version: "${{ env.BUN_VERSION }}"
+          no-cache: true
+      # CR-CRU-063 §S1 — uv, not just bun. tests/integration/clients-bun-crucible.test.ts:83
       # spawns the client fleet as ["uv", "run", SCRIPT_PATH, …] (PEP 723,
       # CR-CRU-046 §S3); oven-sh/setup-bun provides bun, not uv. Without this
       # step 98 tests fail with `Executable not found in $PATH: "uv"`
       # (measured on run 31677479804). The maintained, pinned action — a
       # release gate must not depend on an unpinned `curl | sh` network script.
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
+        with:
+          enable-cache: false
+      # The bun suite spawns the python client fleet, so this job runs python
+      # too, and runs it on the declared floor rather than the image's python.
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.14"
+      # Each download step: every attempt under `timeout`, one retry, and a
+      # step limit above both attempts. Run 44730247029's browser install hung
+      # here for over 40 minutes; the same command took 62 s in test-python.
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        timeout-minutes: 12
+        run: |
+          attempt=1
+          until timeout 5m bun install --frozen-lockfile
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::bun install failed; attempt $attempt of 2"
+          done
       # CR-CRU-112 §S1 (measured on the 0.2.0 release, run 34303803078) — this
       # job runs `bun test`, which collects the WHOLE suite: 2102 tests across
       # 154 files, including the Chromium integration tier. Only `test-e2e`
@@ -166,10 +199,28 @@ jobs:
       # rule); skipping the browser suite here instead would be a gate that
       # cannot see, which is the defect this CR exists to close. Same command
       # as test-e2e's, deliberately — one provisioning idiom, not two.
+      # The browsers' system packages come through apt, which takes dpkg's
+      # lock: one attempt under the step limit, never retried, since a killed
+      # apt can leave the lock and a half-configured package behind. The
+      # browser download after it keeps its timed retry. The step normally
+      # takes 1-2 minutes; its limit is 30 because a slow Ubuntu mirror was
+      # seen serving its ~126 MB at about 40 KB/s (run 44770330869, where
+      # test-python's step hit a 10-minute limit).
+      - name: Playwright's system packages (apt, for the browsers below)
+        timeout-minutes: 30
+        run: bunx playwright install-deps chromium webkit
       - name: Install Playwright browsers (the suite includes the Chromium tier)
         # CR-CRU-018 (DN decision 13): WebKit beside Chromium. This job runs
         # the whole `bun test` suite; the phone band asserts BOTH engines.
-        run: bunx playwright install --with-deps chromium webkit
+        timeout-minutes: 25
+        run: |
+          attempt=1
+          until timeout 10m bunx playwright install chromium webkit
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::the browser install failed; attempt $attempt of 2"
+          done
       # CR-CRU-137 §S1 — the suite's default per-test budget is this project's
       # own figure, not bun's 5000 ms: two content assertions failed THIS job on
       # wall clock alone (5.1 s, 6.2 s) on trees whose suites were green.
@@ -177,8 +228,59 @@ jobs:
       # flag is the only honoured channel, and CI does not shell through
       # `clients/bun-crucible.py` — so the figure is named in both places, and a
       # test reads BOTH and fails if they ever drift apart.
-      - name: Bun suite
-        run: bun test --timeout 30000
+      # The suite runs by tier DIRECTORY, unit first: `./tests/<tier>` (the
+      # `./` makes it a directory, not a name filter), each on the same budget.
+      # Each tier runs hermetically (scripts/hermetic/README.md): an isolated
+      # network namespace with only `lo`, every capability dropped, an empty
+      # HOME and a tripwire on the board ports. Every step that needs the
+      # network (the installs above, the zizmor audit) runs before it.
+      - name: zizmor audit (no unpinned action, no cache poisoning)
+        run: uvx zizmor@1.32.0 --offline .github/workflows/release.yml
+      # ubuntu-24.04's AppArmor refuses an unprivileged user namespace unless
+      # this is lifted; the wrapper's `unshare` needs one.
+      - name: Allow unprivileged user namespaces (the hermetic wrapper)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The unit tier records every dependency a test takes (the preload), and
+      # its verdict over that log fails on any process, socket or real wait.
+      - name: Bun suite — unit tier (hermetic, dependency hooks recording)
+        run: |
+          scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/bun-unit" -- \
+            env HERMETIC_EVENTS="$RUNNER_TEMP/hermetic/bun-unit/events.tsv" \
+            bun test --timeout 30000 \
+            --preload ./scripts/hermetic/hooks/bun-preload.ts ./tests/unit
+      - name: Bun suite — unit tier verdict (no dependency event)
+        run: |
+          python3 scripts/hermetic/unit-verdict.py \
+            "$RUNNER_TEMP/hermetic/bun-unit/events.tsv"
+      - name: Bun suite — integration tier (hermetic)
+        run: |
+          scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/bun-integration" -- \
+            bun test --timeout 30000 ./tests/integration
+      # A deliberate trip, the proof that a hit fails a step: a probe asks the
+      # board port 3849 and waits for the tripwire's 503. The step passes only
+      # when the wrapper exits with its HIT code (99, never a setup code 90-95)
+      # and the tripwire logged a port=3849 line naming the probe.
+      - name: Hermetic deliberate trip — a probe to 3849 fails the wrapper
+        run: |
+          set +e
+          log="$RUNNER_TEMP/hermetic/trip"
+          url=http://127.0.0.1:3849/hermetic-trip-probe
+          scripts/hermetic/run.sh "$log" -- sh -c '
+            code=$(curl -sS -o /dev/null -w "%{http_code}" "$1")
+            echo "probe answered $code"
+            [ "$code" = 503 ]' probe "$url"
+          status=$?
+          set -e
+          if [ "$status" -ne 99 ]; then
+            echo "::error::the wrapper exited $status, not the HIT code 99"
+            exit 1
+          fi
+          hit='^HIT .* port=3849 .*cmd=.*hermetic-trip-probe'
+          if ! grep -E "$hit" "$log/tripwire.log"; then
+            echo "::error::no port=3849 tripwire line names the probe"
+            exit 1
+          fi
+          echo "deliberate trip: exit 99 and a port=3849 line naming the probe"
 
   # CR-CRU-062 §S2 — the Python client suite. Measured server-free at gap
   # analysis (683/683 with CRUCIBLE_URL pointed at a dead port), so it needs
@@ -187,30 +289,186 @@ jobs:
   # orchestrator's tool and requires a live server to ingest into.
   # No event condition (§S0).
   test-python:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
-          python-version: "3.x"
-      # CR-CRU-063 §S1 — tests/client/test_cr046_uv_env_gate.py's setUpClass
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.14"
+      # CR-CRU-063 §S1 — tests/client/integration/test_cr046_uv_env_gate.py's setUpClass
       # raises ``RuntimeError: `uv` is not on PATH … Remedy: install uv.``,
       # aborting the whole class (which is why CI discovered 673, not 683).
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
+        with:
+          enable-cache: false
       # CR-CRU-063 §S2 — the project's `dev` extra, CONSUMED from
       # pyproject.toml (which declares it) and never restated here (AC8):
-      # tests/client/test_cr040_coverage_tooling.py:172 needs the gate venv's
+      # tests/client/integration/test_cr040_coverage_tooling.py:172 needs the gate venv's
       # python to run `-m coverage`.
+      # Kept beside the .venv's install below: it is the job's PATH `python3`.
+      # A client the suite launches by its `#!/usr/bin/env python3` shebang
+      # runs on that interpreter, and with no project `.venv` it hands its
+      # tests to the same one (`_resolve_python` in clients/python-crucible.py
+      # falls back to `sys.executable`), so coverage and pytest must be
+      # importable there too. Nothing has yet proven no test takes that path.
+      # Each download step below: every attempt under `timeout`, one retry,
+      # and a step limit above both attempts.
       - name: Install the project with its dev extra (pyproject.toml is the declaration)
-        run: python3 -m pip install --upgrade '.[dev]'
-      # CR-CRU-063 §S2 — tests/client/test_crucible_axi_wheel_packaging.py:121
-      # raises ``RuntimeError: no interpreter on this machine can `import
-      # build``` — the same package the `build` job already installs; that
-      # asymmetry is the bug.
-      - name: Install build (wheel-packaging suite imports it)
-        run: python3 -m pip install --upgrade build
-      - name: Python client suite (no server required)
-        run: python3 -m unittest discover -s tests/client -t .
+        timeout-minutes: 12
+        run: |
+          attempt=1
+          until timeout 5m python3 -m pip install --upgrade '.[dev]'
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::pip install failed; attempt $attempt of 2"
+          done
+      # Measured on the 0.4.0 rehearsal (run 43653899622): 147 of this suite's
+      # tests drive the REAL toolchains they prove, and this job had none of
+      # them, so it has failed since 2026-10-28. The job that runs a tier owns
+      # that tier's toolchain (CR-CRU-112 §S1's rule, as test-bun does):
+      #   - bun and the repo's node_modules: the real board is
+      #     `bun run src/server.ts`, and the bun, vitest and playwright
+      #     proofs run bun itself;
+      #   - the repo's own `.venv` with the dev extra: the python runner,
+      #     subtest and coverage proofs drive `.venv/bin/python`;
+      #   - cargo-nextest and cargo-llvm-cov (with llvm-tools-preview): the
+      #     rust real-runner proofs, coverage runs included;
+      #   - arduino-cli, named through ARDUINO_CLI: the arduino client's
+      #     `check` and `lint` drive it;
+      #   - the suite's own caches, filled by scripts/provision-test-caches.sh
+      #     (CR-CRU-260): the surefire fixture runs OFFLINE on the suite's
+      #     `.cache/test-suite/m2` (its `.mvn/maven.config` says `-o`), never
+      #     on the runner's own maven repository. The suite itself runs with
+      #     `.venv/bin/python`, whose dev extra carries `build`.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
+        with:
+          # CR-CRU-137 §S2 -- declared once, at the head of this file
+          bun-version: "${{ env.BUN_VERSION }}"
+          no-cache: true
+      - name: Install dependencies (the real board and the bun-side proofs)
+        timeout-minutes: 12
+        run: |
+          attempt=1
+          until timeout 5m bun install --frozen-lockfile
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::bun install failed; attempt $attempt of 2"
+          done
+      # apt takes dpkg's lock: one attempt, never retried; 30 minutes for a
+      # slow mirror, though it normally takes 1-2 (see test-bun).
+      - name: Playwright's system packages (apt, for the browsers below)
+        timeout-minutes: 30
+        run: bunx playwright install-deps chromium webkit
+      - name: Install Playwright browsers (the playwright reporter proofs)
+        timeout-minutes: 25
+        run: |
+          attempt=1
+          until timeout 10m bunx playwright install chromium webkit
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::the browser install failed; attempt $attempt of 2"
+          done
+      - name: The repo's own .venv, with the dev extra
+        timeout-minutes: 12
+        run: |
+          uv venv .venv --python 3.14
+          attempt=1
+          until timeout 5m uv pip install --python .venv/bin/python -e '.[dev]'
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::uv pip install failed; attempt $attempt of 2"
+          done
+      # An action, so no shell retry: the step limit alone.
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f  # v2
+        timeout-minutes: 10
+        with:
+          tool: cargo-nextest,cargo-llvm-cov
+      - name: llvm-tools-preview (cargo-llvm-cov reads its profiles with it)
+        timeout-minutes: 12
+        run: |
+          attempt=1
+          until timeout 5m rustup component add llvm-tools-preview
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::rustup component add failed; attempt $attempt of 2"
+          done
+      # A pinned release archive, not an action: arduino/setup-arduino-cli's
+      # newest major (v2) still declares node20 (CR-CRU-137 §S5).
+      # The archive is downloaded to a file and then unpacked, so a retried
+      # download never feeds tar a half-read stream.
+      - name: arduino-cli 1.5.1, named for the arduino client
+        timeout-minutes: 12
+        env:
+          ARCHIVE: arduino-cli_1.5.1_Linux_64bit.tar.gz
+        run: |
+          dir="$RUNNER_TEMP/arduino-cli"
+          mkdir -p "$dir"
+          attempt=1
+          until curl -fsSL --max-time 300 -o "$dir/$ARCHIVE" \
+              "https://downloads.arduino.cc/arduino-cli/$ARCHIVE"
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::arduino-cli download failed; attempt $attempt of 2"
+          done
+          tar xzf "$dir/$ARCHIVE" -C "$dir" arduino-cli
+          echo "ARDUINO_CLI=$dir/arduino-cli" >> "$GITHUB_ENV"
+      # The surefire fixture compiles with `release 21`, and the runner's
+      # default JDK is older (run 44750449794: "release version 21 not
+      # supported"). ubuntu-24.04 ships a JDK 21 and names it in
+      # JAVA_HOME_21_X64; every later step runs on it. No action, no download.
+      # The fill step's log opens with `java -version` and maven's own version
+      # report, both read on that PATH.
+      - name: JDK 21, the image's own (the surefire fixture's release)
+        run: |
+          jdk="${JAVA_HOME_21_X64:-}"
+          if [ -z "$jdk" ] || [ ! -x "$jdk/bin/java" ]; then
+            echo "::error::JAVA_HOME_21_X64 names no JDK 21 (value: '$jdk')"
+            exit 1
+          fi
+          echo "JAVA_HOME=$jdk" >> "$GITHUB_ENV"
+          echo "$jdk/bin" >> "$GITHUB_PATH"
+      # The script retries its own maven fill once (with -U), and only after
+      # a resolution or transfer failure; any other failure fails at once.
+      # The step limit covers both attempts.
+      - name: The suite's own test caches (the one step that needs the network)
+        timeout-minutes: 20
+        run: scripts/provision-test-caches.sh
+      # The suite runs by tier DIRECTORY, unit first, each discovered with the
+      # repo root as top level. Each tier runs hermetically
+      # (scripts/hermetic/README.md): an isolated network namespace with only
+      # `lo`, every capability dropped, an empty HOME and a tripwire on the
+      # board ports. Every step that needs the network runs before it.
+      # ubuntu-24.04's AppArmor refuses an unprivileged user namespace unless
+      # this is lifted; the wrapper's `unshare` needs one.
+      - name: Allow unprivileged user namespaces (the hermetic wrapper)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The unit tier records every dependency a test takes (the hooks, with
+      # the tagging runner naming the running test), and its verdict over that
+      # log fails on any process, socket or real wait.
+      - name: Python client suite — unit tier (hermetic, hooks recording)
+        run: |
+          scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/py-unit" -- \
+            env PYTHONPATH="$PWD/scripts/hermetic/hooks" \
+            HERMETIC_EVENTS="$RUNNER_TEMP/hermetic/py-unit/events.tsv" \
+            .venv/bin/python scripts/hermetic/tagging_runner.py \
+            tests/client/unit
+      - name: Python client suite — unit tier verdict (no dependency event)
+        run: |
+          python3 scripts/hermetic/unit-verdict.py \
+            "$RUNNER_TEMP/hermetic/py-unit/events.tsv"
+      - name: Python client suite — integration tier (hermetic)
+        run: |
+          scripts/hermetic/run.sh "$RUNNER_TEMP/hermetic/py-integration" -- \
+            .venv/bin/python -m unittest discover \
+            -s tests/client/integration -t .
 
   # CR-CRU-062 §S3 — the Playwright/BDD end-to-end suite.
   # 🚨 CRUCIBLE_DB is declared HERE explicitly, per CR-CRU-052: isolation is
@@ -223,16 +481,43 @@ jobs:
     env:
       CRUCIBLE_DB: ${{ github.workspace }}/e2e-scratch/data/crucible.db
     steps:
-      - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
-          bun-version: "${{ env.BUN_VERSION }}" # CR-CRU-137 §S2 -- declared once, at the head of this file
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
+        with:
+          # CR-CRU-137 §S2 -- declared once, at the head of this file
+          bun-version: "${{ env.BUN_VERSION }}"
+          no-cache: true
+      # Each download step: every attempt under `timeout`, one retry, and a
+      # step limit above both attempts.
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        timeout-minutes: 12
+        run: |
+          attempt=1
+          until timeout 5m bun install --frozen-lockfile
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::bun install failed; attempt $attempt of 2"
+          done
+      # apt takes dpkg's lock: one attempt, never retried; 30 minutes for a
+      # slow mirror, though it normally takes 1-2 (see test-bun).
+      - name: Playwright's system packages (apt, for the browsers below)
+        timeout-minutes: 30
+        run: bunx playwright install-deps chromium webkit
       - name: Install Playwright browsers
         # CR-CRU-018 (DN decision 13) — the `webkit-iphone` project runs here
         # natively; Ubuntu runners provision WebKit directly.
-        run: bunx playwright install --with-deps chromium webkit
+        timeout-minutes: 25
+        run: |
+          attempt=1
+          until timeout 10m bunx playwright install chromium webkit
+          do
+            [ "$attempt" -lt 2 ] || exit 1
+            attempt=$((attempt + 1))
+            echo "::warning::the browser install failed; attempt $attempt of 2"
+          done
       - name: E2E suite
         run: bun run test:e2e
 
@@ -260,10 +545,13 @@ jobs:
   pack-server:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
           node-version: "22"
+          package-manager-cache: false
       - name: Pack server package (dry-run) and assert the bin entrypoint ships
         run: |
           PACK_LIST="$(mktemp)"
@@ -286,8 +574,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
+          persist-credentials: false
           fetch-depth: 0          # need full tag history to detect the tag at HEAD
       - name: Create GitHub Release for version tag at HEAD (idempotent)
         env:
@@ -302,7 +591,20 @@ jobs:
             echo "release exists for $TAG — nothing to do"
             exit 0
           fi
-          gh release create "$TAG" --generate-notes
+          # The release notes are the tag's own CHANGELOG.md section (Keep a
+          # Changelog: `## [X.Y.Z] - YYYY-MM-DD` up to the next `## [`), written
+          # on the release branch before `finish`, printed by the one extractor
+          # scripts/release-notes.sh that `finish` also reads them through. A
+          # tag with no section still gets a release (it is what fires the
+          # publishes), with GitHub's generated notes and a warning naming the
+          # missing section.
+          NOTES="$(mktemp)"
+          if scripts/release-notes.sh "$TAG" > "$NOTES"; then
+            gh release create "$TAG" --title "$TAG" --notes-file "$NOTES"
+          else
+            echo "::warning::CHANGELOG.md has no [$TAG] section — the release carries GitHub's generated notes instead"
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
 
   publish-pypi:
     # CR-CRU-062 §S4 — the gate: build PLUS all three suites. Extends the
@@ -314,8 +616,9 @@ jobs:
     permissions:
       id-token: write           # OIDC trusted publishing (no long-lived token)
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
+          persist-credentials: false
           fetch-depth: 0          # guard needs origin/master history for the ancestry check
       - name: Guard — tag ref + on-master ancestry
         run: |
@@ -333,12 +636,12 @@ jobs:
       # major's direct (unzipped) uploads and errors on an artifact hash
       # mismatch by default, so a mismatched pair breaks the `dist` handoff
       # HERE — in the job that uploads to PyPI — and not in `build`.
-      # tests/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
-      - uses: actions/download-artifact@v8.0.1
+      # tests/unit/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1
         # no password / no token — trusted publishing; attestations default-on
 
   publish-testpypi:
@@ -376,9 +679,13 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
+          persist-credentials: false
           fetch-depth: 0          # hatch-vcs needs tags to derive the version
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.14"
       - name: Version sanity — reject PEP 440 local segment ('+')
         run: |
           python -m pip install --upgrade build
@@ -394,12 +701,12 @@ jobs:
       # major's direct (unzipped) uploads and errors on an artifact hash
       # mismatch by default, so a mismatched pair breaks the `dist` handoff
       # HERE — in the job that uploads to PyPI — and not in `build`.
-      # tests/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
-      - uses: actions/download-artifact@v8.0.1
+      # tests/unit/ci-toolchain-provisioning.test.ts holds the rail that forbids it.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
           # A RE-RUN of one commit derives the same version it already uploaded,
@@ -418,15 +725,25 @@ jobs:
       id-token: write          # OIDC trusted publishing / provenance attestation
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
+          persist-credentials: false
           fetch-depth: 0          # guard needs origin/master history for the ancestry check
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
         with:
-          bun-version: "${{ env.BUN_VERSION }}" # CR-CRU-137 §S2 -- declared once, at the head of this file
-      - uses: actions/setup-node@v5
+          # CR-CRU-137 §S2 -- declared once, at the head of this file
+          bun-version: "${{ env.BUN_VERSION }}"
+          no-cache: true
+      # Trusted publishing needs npm >= 11.5.1. It comes from the npm that
+      # setup-node's Node release bundles, not from a global install: Node
+      # v24.22.3 (LTS "Krypton") bundles npm 11.19.1, per the `npm` field of
+      # https://nodejs.org/dist/index.json. The Node version is exact, so a
+      # new npm never arrives unreviewed on release day; a bump is a
+      # deliberate edit here, re-checked against that index.
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
-          node-version: "22"
+          node-version: "24.22.3"
+          package-manager-cache: false
           registry-url: "https://registry.npmjs.org"
       - name: Guard — tag ref + on-master ancestry
         run: |
@@ -458,8 +775,22 @@ jobs:
       # gate) is retired; a trusted publisher works under npm's most
       # restrictive "disallow bypass-2fa tokens" account setting, and
       # --provenance draws its identity from the same OIDC token.
-      - name: Upgrade npm (>= 11.5.1 for OIDC trusted publishing)
-        run: npm install -g npm@latest
+      # Trusted publishing needs npm >= 11.5.1: the bundled npm (see the
+      # setup-node step) is asserted here, so a Node pin whose npm is too old
+      # fails loudly before the publish rather than inside it.
+      - name: Assert the bundled npm is >= 11.5.1 (OIDC trusted publishing)
+        run: |
+          MIN_NPM="11.5.1"
+          NPM_VERSION="$(npm --version)"
+          LOWEST="$(printf '%s\n' "$MIN_NPM" "$NPM_VERSION" \
+            | sort -V | head -n 1)"
+          if [ "$LOWEST" != "$MIN_NPM" ]; then
+            MSG="npm $NPM_VERSION < $MIN_NPM (OIDC trusted publishing)"
+            MSG="$MSG; pin a Node whose bundled npm is >= $MIN_NPM"
+            echo "::error::$MSG"
+            exit 1
+          fi
+          echo "npm $NPM_VERSION >= $MIN_NPM"
       - name: Publish server to npm via OIDC trusted publisher
         run: npm publish --provenance --access public
 
@@ -480,13 +811,18 @@ jobs:
         startsWith(github.ref, 'refs/heads/hotfix/')))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
         with:
-          bun-version: "${{ env.BUN_VERSION }}" # CR-CRU-137 §S2 -- declared once, at the head of this file
-      - uses: actions/setup-node@v5
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
+        with:
+          # CR-CRU-137 §S2 -- declared once, at the head of this file
+          bun-version: "${{ env.BUN_VERSION }}"
+          no-cache: true
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
           node-version: "22"
+          package-manager-cache: false
           registry-url: "https://registry.npmjs.org"
       - name: npm pack dry-run (server package)
         run: npm publish --dry-run --access public

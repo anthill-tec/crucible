@@ -1,6 +1,6 @@
 # CR-CRU-142 — the orchestrator's own copy resolves its own package, not the install it just wrote
 
-**Type** hotfix · **Wave** 7 (0.2.2) · **Depends on** — · **Status** PENDING
+**Type** hotfix · **Wave** 7 (0.2.2) · **Depends on** — · **Status** DONE
 
 ## Problem
 

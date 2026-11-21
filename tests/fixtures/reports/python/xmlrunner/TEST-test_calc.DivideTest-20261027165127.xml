@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="test_calc.DivideTest-20261027165127" tests="4" file="test_calc.py" time="0.001" timestamp="2026-10-27T16:51:27" failures="0" errors="1" skipped="0">
+	<testcase classname="test_calc.DivideTest" name="test_divides_evenly" time="0.000" timestamp="2026-10-27T16:51:27" file="tests/test_calc.py" line="19"/>
+	<testcase classname="test_calc.DivideTest" name="test_parity_of_several (n=2)" time="0.000" timestamp="0001-01-01T00:00:00" file="tests/test_calc.py" line="25"/>
+	<testcase classname="test_calc.DivideTest" name="test_parity_of_several (n=3)" time="0.000" timestamp="2026-10-27T16:51:27" file="tests/test_calc.py" line="25"/>
+	<testcase classname="test_calc.DivideTest" name="test_divides_by_zero_and_errors" time="0.000" timestamp="2026-10-27T16:51:27" file="tests/test_calc.py" line="22">
+		<error type="ZeroDivisionError" message="division by zero"><![CDATA[Traceback (most recent call last):
+  File "/project/tests/test_calc.py", line 23, in test_divides_by_zero_and_errors
+    divide(1, 0)
+    ~~~~~~^^^^^^
+  File "/project/pkg/calc.py", line 7, in divide
+    raise ZeroDivisionError("division by zero")
+ZeroDivisionError: division by zero
+]]></error>
+	</testcase>
+</testsuite>

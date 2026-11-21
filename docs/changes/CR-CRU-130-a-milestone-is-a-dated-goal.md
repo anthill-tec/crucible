@@ -1,6 +1,6 @@
 # CR-CRU-130 — a milestone is a dated goal, and its type is definable
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-074, CR-CRU-091, CR-CRU-129

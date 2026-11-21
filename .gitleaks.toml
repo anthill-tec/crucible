@@ -1,0 +1,42 @@
+# gitleaks configuration for this repository.
+#
+# It keeps every default rule and disables none. It allows only two things:
+#
+# * Fixture labels under tests/. The tests name runs, cycles and agents with
+#   made-up hyphen-joined labels (for example `cr022-points-key`) that the
+#   generic-api-key rule takes for keys. A finding is let through only when the
+#   rule is generic-api-key, the file is under a tests/ directory AND the whole
+#   secret is a label: two or more segments joined by single hyphens, each a
+#   word of 1-16 letters of one case (optionally followed by 1-3 digits and up
+#   to 3 more letters of that case) or a bare number of 1-3 digits. A real key,
+#   a token with an underscore, a long or mixed-case segment, or a UUID does
+#   not have that shape and is still reported, in tests/ as anywhere else.
+# * The gitignored run output (test-reports/, __pycache__/), which is never
+#   committed and only repeats what the sources hold.
+#
+# No UUID is allowed here; an identifier documented on purpose carries an
+# inline gitleaks:allow on its own line instead. Paths are matched unanchored
+# to the root, as a scan with an absolute --source reports absolute paths.
+# The regexes stay in the syntax Go RE2 and Python's re share.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Fixture labels under tests/"
+condition = "AND"
+paths = ['''(?:^|/)tests/''']
+regexTarget = "secret"
+regexes = [
+  '''^(?:[a-z]{1,16}(?:[0-9]{1,3}[a-z]{0,3})?|[A-Z]{1,16}(?:[0-9]{1,3}[A-Z]{0,3})?|[0-9]{1,3})(?:-(?:[a-z]{1,16}(?:[0-9]{1,3}[a-z]{0,3})?|[A-Z]{1,16}(?:[0-9]{1,3}[A-Z]{0,3})?|[0-9]{1,3}))+$''',
+]
+
+[[allowlists]]
+description = "Gitignored run output"
+paths = [
+  '''(?:^|/)test-reports/''',
+  '''(?:^|/)__pycache__/''',
+]

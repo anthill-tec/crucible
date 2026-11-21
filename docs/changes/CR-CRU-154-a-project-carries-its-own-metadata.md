@@ -1,7 +1,7 @@
 # CR-CRU-154 — a project carries its own metadata
 
 **Type** feature · **Points** 8 · **Wave** 7 (0.3.0), before CR-CRU-149 (user ruling 2026-09-26) ·
-**Depends on** CR-CRU-091, CR-CRU-130, CR-CRU-150 · **Status** PENDING — filed 2026-09-26
+**Depends on** CR-CRU-091, CR-CRU-130, CR-CRU-150 · **Status** DONE — filed 2026-09-26
 
 ## Problem
 

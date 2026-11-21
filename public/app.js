@@ -103,6 +103,16 @@
     if (state.route.roadmap === true) state.workspaceTab = "Roadmap";
     runsTabFollows(state.route);
 
+    // Bumped on every wholesale replacement of `state.openRuns` and of
+    // `state.agents`. A binding subscribes only to the fields it read when it
+    // last ran, so one that read an absent key (a run's `live`, an agent's
+    // `idleLine`), or a run list that did not yet hold its run, is left
+    // subscribed to nothing a later read changes. The agent card's line and
+    // its streaming mark read these counters too, so every replacement
+    // re-evaluates them whatever they read before.
+    const openRunsReplaced = van.state(0);
+    const agentsReplaced = van.state(0);
+
     // CR-CRU-022 §S5 — the analytics reads (DN-crucible-analytics §10). Velocity
     // (the release's pace so far), burndown and forecast all belong to the
     // FOCUSED release; burndown + forecast are held as one pair keyed by that
@@ -438,6 +448,8 @@
           slices.has("events") ? refetchEvents() : null,
           slices.has("health") ? refetchHealth() : null,
         ]);
+        // CR-CRU-223 §S3 — an open live drill-in reads what finished since.
+        if (slices.has("events") && !scopeMoved()) await refetchLive();
         if (slices.has("events") && !scopeMoved()) {
           if (state.runsRelease !== null) await refetchReleaseRuns();
           await refetchPlans();
@@ -456,6 +468,47 @@
         refreshStale = null;
         refetch(next);
       }
+    }
+
+    // CR-CRU-223 §S3 — the live drill-in's read: GET /api/v2/runs/<runId>/live
+    // ?from=<n>, n the failures already shown. An answer that lands after the
+    // route has moved off this drill-in (closed, Back, settled) is discarded.
+    // `ended` / `aborted` settles the drill-in; an open answer is applied.
+    async function readLive(body) {
+      const runId = body.runId;
+      const from = body.failures.val.length;
+      let answer;
+      try {
+        answer = await getJson(`/api/v2/runs/${encodeURIComponent(runId)}/live?from=${from}`);
+      } catch (err) {
+        // Nothing shown yet: say why; otherwise keep the last-known live view.
+        if (body.counts.val === null && openDetailBody === body) {
+          body.loadError.val = `live run unavailable — ${String(err)}`;
+        }
+        return;
+      }
+      if (state.route.overlay !== runId || openDetailBody !== body) return;
+      if (answer.state === "ended" || answer.state === "aborted") settleLive(answer.eventId);
+      else if (answer.state === "open") body.apply(answer);
+    }
+
+    // A refresh's live read: only while a live drill-in is open.
+    async function refetchLive() {
+      const runId = state.route.overlay;
+      if (!isLiveRunId(runId) || openDetailKey !== runId || openDetailBody?.live !== true) return;
+      await readLive(openDetailBody);
+    }
+
+    // CR-CRU-223 §S3 — the run settled: the drill-in REPLACES its history entry
+    // with the settled run's /run/<eventId> (so Back never returns to a dead
+    // live view) and the run detail opens on that event.
+    function settleLive(eventId) {
+      if (typeof eventId !== "string" || eventId.length === 0) return;
+      openDetailKey = undefined;
+      openDetailBody = null;
+      const path = location.pathname.replace(/\/run\/[^/]+\/?$/, `/run/${encodeURIComponent(eventId)}`);
+      history.replaceState(null, "", path + location.search);
+      state.route = L.routeParse(path);
     }
 
     // A slice read landed: the server answered.
@@ -482,6 +535,7 @@
       try {
         const agents = await getJson("/api/v2/agents");
         vanX.replace(state.agents, () => agents.agents ?? []);
+        agentsReplaced.val += 1;
         markSynced();
       } catch {
         // Keep the last-known agents visible.
@@ -517,7 +571,36 @@
         // settled cards can never disagree about a run, because one response
         // carries both. A server without the field degrades to no running
         // cards, never to a stale one.
-        vanX.replace(state.openRuns, () => events.openRuns ?? []);
+        // Every open run is held with a `live` slot: the board omits `live`
+        // until a run's first batch lands, and a binding that reads an absent
+        // key subscribes to nothing, so the agent row and the running card
+        // would never follow the first batch. An empty slot (null) reads as
+        // "no batch yet" everywhere, and it also clears the counts a settled
+        // run left in the slot a new run now takes. The same holds one level
+        // down: a run's `live` omits its total and its current file until the
+        // runner gives them, so each is held empty (null) too, and an answer
+        // that first adds either reaches the row and the card even when the
+        // done count has not moved. An empty total or file reads as absent.
+        // A run's cycle is held the same way: its `context` carries a
+        // `cycleId` slot (null when the board serves none), so the active
+        // cycle's span names a run whose cycle a later read first serves.
+        // Only `context.cycleId` is read from an open run, and null reads as
+        // no cycle.
+        vanX.replace(state.openRuns, () =>
+          (events.openRuns ?? []).map((run) => ({
+            ...run,
+            context: { ...run.context, cycleId: run.context?.cycleId ?? null },
+            live:
+              run.live === undefined || run.live === null
+                ? null
+                : {
+                    ...run.live,
+                    total: run.live.total ?? null,
+                    currentFile: run.live.currentFile ?? null,
+                  },
+          })),
+        );
+        openRunsReplaced.val += 1;
         markSynced();
       } catch {
         // Keep the last-known feed visible.
@@ -564,6 +647,9 @@
       setIfChanged(historyReleases, {
         projectKey,
         releases: Array.isArray(body.releases) ? body.releases : [],
+        // Every CR the project closed over a red pre-merge gate, with the
+        // reason its closer gave — shown on that CR's row.
+        acceptedFailingGates: Array.isArray(body.acceptedFailingGates) ? body.acceptedFailingGates : [],
       });
     }
     // Whichever way the Workflow tab opens — its tab, the landing, a jump
@@ -910,6 +996,11 @@
     // site; a per-site copy would be a second source of the same signal.
     const Spinner = () => span({ "data-testid": "spinner", class: "app-spinner" });
 
+    // The run detail's loading line: the spinner beside its words. A run's
+    // page shows it while its detail is read, and a run's coverage file table
+    // shows the same line while its files are read.
+    const RunLoadingLine = () => div({ class: "app-empty" }, Spinner(), " loading run detail…");
+
     // Shared app logo — the workspace top bar renders the SAME element/class/
     // text as home (§S5 fidelity #6).
     const Logo = () =>
@@ -1002,10 +1093,14 @@
           // binding, deliberately not hoisted beside `busy` above: both would
           // satisfy the AC today (the rows rebuild on every poll), but only
           // the binding re-runs when the `openRuns` slice itself changes.
-          class: () =>
-            `app-agent-row app-card app-agent-subrow${glyph.tombstone ? " tombstoned" : ""}${
+          // Reading `openRunsReplaced` re-evaluates the mark on every
+          // replacement of the open-run slice, whatever the join read before.
+          class: () => {
+            void openRunsReplaced.val;
+            return `app-agent-row app-card app-agent-subrow${glyph.tombstone ? " tombstoned" : ""}${
               state.selectedAgent === agent.agentId ? " on" : ""
-            }${isStreamingAgent(agent) ? " app-agent-streaming" : ""}`,
+            }${isStreamingAgent(agent) ? " app-agent-streaming" : ""}`;
+          },
           onclick: () => {
             state.selectedAgent =
               state.selectedAgent === agent.agentId ? null : agent.agentId;
@@ -1017,28 +1112,71 @@
           glyph.tombstone
             ? span("⚰ ")
             : span({ class: `app-dot ${busy ? "r" : glyph.cls}` }),
-          agent.identity?.displayName ?? agent.agentId,
+          // The name, the runtime and the last-seen line each re-read on every
+          // replacement of the agents, so a key the agent's record did not
+          // hold when the card was built is shown once a read serves it.
+          () => {
+            void agentsReplaced.val;
+            return agent.identity?.displayName ?? agent.agentId;
+          },
         ),
         // Between runs the server serves the agent's composed idle line (role,
         // binding, last run and its age); while a run is open it serves none,
-        // and the row reads the agent's own message.
-        span({ class: "app-agent-msg" }, agent.idleLine ?? (agent.message || "—")),
+        // and the row reads the agent's own message. CR-CRU-200 §S4 — while
+        // the agent's newest live-carrying open run streams, the row reads its
+        // `running …` line instead, re-read as `events` frames move the slice.
+        span(
+          { class: "app-agent-msg" },
+          // Reading both counters re-evaluates the line on every replacement
+          // of the open-run slice and of the agents, so a key the records did
+          // not hold when the line last ran is still read once it arrives.
+          // A line whose text is unchanged keeps its node, so its hover title
+          // and a selection in it survive the frame.
+          (dom) => {
+            void openRunsReplaced.val;
+            void agentsReplaced.val;
+            const line = agentLiveLine(agent) ?? agent.idleLine ?? (agent.message || "—");
+            return keepSameLine(dom, line);
+          },
+        ),
         // CR-CRU-011 §S2 — server-computed runtime: live rows tick with each
         // refetched runtime_ms; tombstoned rows render the sealed value.
-        typeof agent.runtime_ms === "number"
-          ? span(
-              { "data-testid": "agent-runtime", class: "app-card-meta" },
-              fmtDuration(agent.runtime_ms),
-            )
-          : null,
+        // An absent runtime or last seen binds an empty text node, never null:
+        // a binding that returns null drops its node for good.
+        () => {
+          void agentsReplaced.val;
+          return typeof agent.runtime_ms === "number"
+            ? span(
+                { "data-testid": "agent-runtime", class: "app-card-meta" },
+                fmtDuration(agent.runtime_ms),
+              )
+            : "";
+        },
         // Small last-seen / died-ago line (card-meta family).
-        glyph.tombstone
-          ? span({ class: "app-card-meta" }, `died ${glyph.diedAgo}`)
-          : agent.lastSeen !== undefined
-            ? span({ class: "app-card-meta" }, `seen ${rel(agent.lastSeen)}`)
-            : null,
+        () => {
+          void agentsReplaced.val;
+          return glyph.tombstone
+            ? span({ class: "app-card-meta" }, `died ${glyph.diedAgo}`)
+            : agent.lastSeen !== undefined
+              ? span({ class: "app-card-meta" }, `seen ${rel(agent.lastSeen)}`)
+              : "";
+        },
       );
     };
+
+    // The card's line as its binding returns it: the node it already shows
+    // when the new line reads the same — the same running line, or the same
+    // text — else the new line (a running-line element, or text).
+    function keepSameLine(dom, line) {
+      if (typeof line === "string") {
+        return dom?.nodeType === 3 && dom.data === line ? dom : line;
+      }
+      return dom?.nodeType === 1 &&
+        dom.classList.contains("app-agent-live") &&
+        dom.textContent === line.textContent
+        ? dom
+        : line;
+    }
 
     // ── §S1 (CR-CRU-007) — run card anatomy ─────────────────────────────
     function fmtDuration(ms) {
@@ -1135,7 +1273,22 @@
     // `N/N` pass-green / `F ✗ of N` fail-red / compile `E errors` fail-red
     // when E>0 and pass-green when clean (compile cards NEVER show a
     // test-ratio shape; the amber compile pill is retired).
+    // A lint record is a compile-kind event carrying the linter's name.
+    const isLintRecord = (e) =>
+      e.kind === "compile" && typeof e.lint === "string" && e.lint !== "";
+
     const RatioPill = (e) => {
+      if (isLintRecord(e)) {
+        // A lint record's pill says lint, never a bare error count.
+        const errors = e.errors ?? 0;
+        return span(
+          {
+            "data-testid": "ratio-pill",
+            class: `app-pill ${errors > 0 ? "app-ratio-fail" : "app-ratio-pass"}`,
+          },
+          errors === 1 ? "1 lint error" : errors > 0 ? `${errors} lint errors` : "lint clean",
+        );
+      }
       if (e.kind === "compile") {
         const errors = e.errors ?? 0;
         return span(
@@ -1188,7 +1341,7 @@
               .map((d) =>
                 div(
                   { "data-testid": "diag-line", class: "app-diag-line" },
-                  `${d.file}:${d.line} — ${d.message}`,
+                  L.diagnosticLine(d, false),
                 ),
               ),
           )
@@ -1278,7 +1431,7 @@
           span({
             "data-testid": "icon-glyph",
             class: "app-icon-mask",
-            "data-kind": e.kind === "compile" ? "compile" : "test",
+            "data-kind": isLintRecord(e) ? "lint" : e.kind === "compile" ? "compile" : "test",
           }),
         ),
         div(
@@ -1287,7 +1440,10 @@
             { class: "app-evt-line" },
             span({ class: "app-agent-id" }, e.agentId),
             span({ "data-testid": "tier-badge", class: "app-pill app-tier-badge" }, e.tier),
-            e.codec !== undefined && e.codec !== null
+            // A lint card names its linter where a run names its codec.
+            isLintRecord(e)
+              ? span({ "data-testid": "lint-tool", class: "app-pill app-codec-badge" }, e.lint)
+              : e.codec !== undefined && e.codec !== null
               ? span(
                   { "data-testid": "codec-badge", class: "app-pill app-codec-badge" },
                   // §S4 F7 — the +lcov suffix marks a coverage-bearing
@@ -1325,18 +1481,47 @@
         () => fmtCycleTimer(runTickNow.val - startedAt),
       );
 
+    // CR-CRU-223 §S1 — a live state's done-of-total: `412/1280`, or `412 done`
+    // when the runner gave no total (or gave 0), shared by the running card
+    // and the live drill-in's header.
+    const liveHasTotal = (live) => typeof live.total === "number" && live.total > 0;
+    const liveCountText = (live) =>
+      liveHasTotal(live) ? `${live.completed}/${live.total}` : `${live.completed} done`;
+
+    // CR-CRU-223 §S2 — the progress bar at completed/total, clamped at 100 %
+    // (a runner can finish more tests than it announced); none without a total.
+    const RunningProgress = (live) =>
+      liveHasTotal(live)
+        ? div(
+            { "data-testid": "running-progress", class: "app-running-progress" },
+            div({
+              "data-testid": "running-progress-fill",
+              class: "app-running-progress-fill",
+              style: `width:${Math.min(100, (live.completed / live.total) * 100)}%;`,
+            }),
+          )
+        : null;
+
     // §S3 — the open run's card: pulsing, elapsed timer off the SERVER's
-    // `startedAt`, and NOT CLICKABLE (user rule). "Not clickable" is enforced
-    // where it cannot drift: there is NO `onclick` handler at all, so no
-    // drill-in exists to fire, and the card's own class carries the default
-    // cursor. It resolves in place because the next refetch drops this run from
-    // `state.openRuns` in the same tick the settled event enters `state.events`.
-    const RunningCard = (run) =>
-      div(
+    // `startedAt`. CR-CRU-223 §S2 narrows CR-CRU-017's "not clickable" rule to
+    // a run with NO live state: that card has NO `onclick` handler at all, so
+    // no drill-in exists to fire, and its class carries the default cursor. A
+    // run whose brief carries `live` shows its progress — the failures so far
+    // beside the agent id, the bar, then done of total, the current file and
+    // the timer on one line — and opens its live drill-in at /run/<runId>
+    // with the pointer cursor (`app-evt-running-live`). Either resolves in
+    // place because the next refetch drops this run from `state.openRuns` in
+    // the same tick the settled event enters `state.events`. A live card's
+    // progress line ends, after the timer, in F25's faint `› open` hint; the
+    // card's own click opens the drill-in, so the hint carries no handler.
+    const RunningCard = (run) => {
+      const live = run.live !== undefined && run.live !== null ? run.live : null;
+      return div(
         {
           "data-testid": "running-card",
           "data-run-id": run.runId,
-          class: "app-evt app-evt-running",
+          class: `app-evt app-evt-running${live !== null ? " app-evt-running-live" : ""}`,
+          ...(live !== null ? { onclick: () => openDrillin(run.runId) } : {}),
         },
         span(
           eventIconProps(run),
@@ -1354,14 +1539,29 @@
             run.tier !== undefined && run.tier !== null
               ? span({ "data-testid": "tier-badge", class: "app-pill app-tier-badge" }, run.tier)
               : null,
+            live !== null && live.failed > 0
+              ? span({ "data-testid": "running-failed", class: "app-running-failed" }, `${live.failed} ✗`)
+              : null,
           ),
-          div(
-            { class: "app-evt-line app-card-meta" },
-            span({ "data-testid": "running-label", class: "app-running-label" }, "running…"),
-            RunningElapsed(run.startedAt),
-          ),
+          live !== null ? RunningProgress(live) : null,
+          live !== null
+            ? div(
+                { class: "app-evt-line app-card-meta app-running-line" },
+                span({ "data-testid": "running-count", class: "app-running-count" }, liveCountText(live)),
+                live.currentFile !== undefined && live.currentFile !== null
+                  ? span({ "data-testid": "running-file", class: "app-running-file" }, live.currentFile)
+                  : null,
+                RunningElapsed(run.startedAt),
+                span({ "data-testid": "running-open-hint", class: "app-running-open-hint" }, "› open"),
+              )
+            : div(
+                { class: "app-evt-line app-card-meta" },
+                span({ "data-testid": "running-label", class: "app-running-label" }, "running…"),
+                RunningElapsed(run.startedAt),
+              ),
         ),
       );
+    };
 
     // §S3 — the ABORTED run's card: struck/grey, carrying the reason, and
     // clickable (its drill-in shows that reason plus whatever partial context
@@ -1441,6 +1641,42 @@
       return state.openRuns.some(
         (run) =>
           run.projectKey === state.route.projectKey && run.agentId === agent.agentId,
+      );
+    }
+
+    // CR-CRU-200 §S4 — the agent's line while it streams, composed here from
+    // `state.openRuns`: the newest open run of the agent in this project that
+    // carries `live` (a newer run without it is passed over) gives the line as
+    // an element of parts reading `running <done of total> · <currentFile>`, the
+    // separator and file parts absent without one. Nothing (null) when no such
+    // run is open, and the row reads its own line.
+    //
+    // The line is drawn in parts so the count stays whole and a file too long
+    // for the card is clipped from its start behind a `…` (its name stays in
+    // view); the file part carries the whole path as its hover title, and its
+    // text stays the whole path, so the line still reads the full file.
+    function agentLiveLine(agent) {
+      let newest = null;
+      for (const run of state.openRuns) {
+        if (run.projectKey !== state.route.projectKey || run.agentId !== agent.agentId) continue;
+        if (run.live === undefined || run.live === null) continue;
+        if (newest === null || run.startedAt > newest.startedAt) newest = run;
+      }
+      if (newest === null) return null;
+      const live = newest.live;
+      const file = typeof live.currentFile === "string" && live.currentFile !== "" ? live.currentFile : null;
+      return span(
+        { class: "app-agent-live" },
+        span({ class: "app-agent-live-count" }, `running ${liveCountText(live)}`),
+        file === null
+          ? null
+          : [
+              span({ class: "app-agent-live-sep" }, " · "),
+              span(
+                { class: "app-agent-live-file", title: file },
+                span({ class: "app-agent-live-path" }, file),
+              ),
+            ],
       );
     }
 
@@ -1749,15 +1985,11 @@
     // unlinked runs / planless projects keep the heuristic byte-identical.
     // CR-CRU-013 §S4b — `surface` ("home" | "workspace") scopes gate/merge to
     // compact on home, and milestone-entries to workspace only.
-    function runFeed(events, surface, openRuns = visibleOpenRuns()) {
+    // It draws settled history only and takes no open runs: those are drawn by
+    // `RunningCards`, so no caller can make the timeline read them.
+    function runFeed(events, surface) {
       const home = surface === "home";
       const rows = [];
-      // CR-CRU-017 §S3 — a run that is happening NOW belongs at the head of a
-      // newest-first feed, above every settled row. They live outside
-      // `timelineRows` on purpose: an open run has no event, so it takes part in
-      // no transition pair, no declared span and no rollup — it is a card, not
-      // history.
-      for (const run of openRuns) rows.push(RunningCard(run));
       for (const row of L.timelineRows(events, state.plans)) {
         if (row.kind === "marker") rows.push(TransitionMarkerRow(row.marker));
         else if (row.kind === "cycle-span-open") rows.push(CycleSpanOpenRow(row.cycle, row.plan));
@@ -1783,11 +2015,29 @@
       return rows;
     }
 
+    // The running cards live in a container of their own, beside the timeline,
+    // that stays in place while runs open, stream and close: a streamed batch
+    // changes only the container's contents, so the timeline (which reads no
+    // open run) is never re-rendered and no sibling of it is replaced. With no
+    // run open the container holds what `idle` draws (the empty state), and
+    // while `hidden` holds it holds nothing.
+    // CR-CRU-017 §S3 — a run that is happening NOW belongs at the head of a
+    // newest-first feed, above every settled row. Open runs live outside
+    // `timelineRows` on purpose: an open run has no event, so it takes part in
+    // no transition pair, no declared span and no rollup — it is a card, not
+    // history.
+    // CR-CRU-017 §S3 — a live run is content: while one is running the feed
+    // has something to show, so the "no runs yet" face yields to it — `idle`
+    // is drawn only while no run is open (the no-projects face is unaffected —
+    // there is no project to run under).
+    const RunningCards = (idle, hidden = () => false) =>
+      div({ class: "app-running-cards" }, () => {
+        if (hidden()) return span();
+        const open = visibleOpenRuns();
+        return open.length > 0 ? div(open.map((run) => RunningCard(run))) : idle();
+      });
+
     const EmptyState = () => {
-      // CR-CRU-017 §S3 — a live run is content: while one is running the feed
-      // has something to show, so the "no runs yet" face must yield to it (the
-      // no-projects face is unaffected — there is no project to run under).
-      if (visibleOpenRuns().length > 0) return null;
       const empty = L.emptyStates({ projects: state.projects, events: state.events });
       if (empty === null) return null;
       return div(
@@ -1820,6 +2070,14 @@
     // (retired from the body's FailuresFooter). Absent for headers with no
     // body handle (the visible home band); the drill-in suites scope the
     // controls to the overlay's inhead copy / the workspace header.
+    // CR-CRU-223 §S3 — the live drill-in's header:
+    // `← · Run detail · live · <done of total> · <passed> ✓ <failed> ✗`, with
+    // `<pending> ⏭` when above zero, following each live read.
+    const LiveHeadContent = (body) => [
+      button({ class: "app-chip", onclick: () => closeDetail() }, () => backChipLabel()),
+      span({ class: "app-rail-title" }, () => body.title()),
+    ];
+
     const DetailHeadContent = (eventId, controls) => [
       button({ class: "app-chip", onclick: () => closeDetail() }, () => backChipLabel()),
       span({ class: "app-rail-title" }, `Run detail · ${eventId}`),
@@ -1894,7 +2152,11 @@
           ),
           () =>
             state.backendUp ? span() : span({ class: "app-synced" }, syncedStamp()),
-          () => EmptyState() ?? div(runFeed(visibleEvents(), "home")),
+          RunningCards(() => EmptyState() ?? span()),
+          () => {
+            const runs = visibleEvents();
+            return runs.length === 0 ? span() : div(runFeed(runs, "home"));
+          },
         ),
       );
 
@@ -1910,13 +2172,21 @@
     // body. closeDetail() clears it so a reopen builds fresh.
     let openDetailKey;
     let openDetailBody = null;
+    // CR-CRU-223 §S3 — an open run's id (`run-` prefix; an event id never
+    // carries it) opens the run detail in its LIVE mode (`LiveRunBody`).
     const detailBodyFor = (eventId) => {
       if (openDetailBody === null || openDetailKey !== eventId) {
         openDetailKey = eventId;
-        openDetailBody = RunDetailBody(eventId);
+        openDetailBody = isLiveRunId(eventId) ? LiveRunBody(eventId) : RunDetailBody(eventId);
       }
       return openDetailBody;
     };
+
+    // The detail header for either mode: the live one names its counts.
+    const DetailHead = (eventId) =>
+      isLiveRunId(eventId)
+        ? LiveHeadContent(detailBodyFor(eventId))
+        : DetailHeadContent(eventId, detailBodyFor(eventId).headerControls);
 
     // CR-CRU-016 §S1 header-always-visible — with a detail open, home pins
     // the detail header ABOVE the timeline pane's scroller in its own band;
@@ -1931,10 +2201,7 @@
                 // CR-CRU-038 §S3 — thread the SHARED body's headerControls
                 // into the VISIBLE band (failure-jump + raw-toggle sit beside
                 // the density chip here, not only in the hidden inhead copy).
-                DetailHeadContent(
-                  state.route.overlay,
-                  detailBodyFor(state.route.overlay).headerControls,
-                ),
+                DetailHead(state.route.overlay),
               )
             : "",
         Timeline(),
@@ -2627,17 +2894,23 @@
             }),
             div({ class: "app-pane-controls" }, DensityToggle()),
           ),
+          // The release filter shows settled runs only, so no running card.
+          // CR-CRU-017 §S3 — a project whose FIRST run is still running has
+          // no events yet, and "no runs yet" would be a lie: the run is right
+          // there. The empty state is therefore about having nothing at all,
+          // open or settled.
+          RunningCards(
+            () =>
+              visibleEvents().length === 0
+                ? div({ class: "app-empty" }, "no runs yet — ingest a run to light the forge")
+                : span(),
+            () => state.runsRelease !== null,
+          ),
           () => {
             const filtered = ReleaseRunsFeed();
             if (filtered !== null) return filtered;
             const runs = visibleEvents();
-            // CR-CRU-017 §S3 — a project whose FIRST run is still running has
-            // no events yet, and "no runs yet" would be a lie: the run is right
-            // there. The empty state is therefore about having nothing at all,
-            // open or settled.
-            return runs.length === 0 && visibleOpenRuns().length === 0
-              ? div({ class: "app-empty" }, "no runs yet — ingest a run to light the forge")
-              : div(runFeed(runs, "workspace"));
+            return runs.length === 0 ? span() : div(runFeed(runs, "workspace"));
           },
         ),
       );
@@ -2702,7 +2975,7 @@
       const runs = L.filterEvents(held.events, activeFilters()).filter((e) => e.kind !== "lifecycle");
       return runs.length === 0
         ? div({ class: "app-empty" }, `no runs filed under ${release}`)
-        : div(runFeed(runs, "workspace", []));
+        : div(runFeed(runs, "workspace"));
     }
 
     const WorkspaceRuns = () =>
@@ -2944,15 +3217,12 @@
 
     // §S5.2 (f) — the latest-run status line carries the universal status
     // palette (pass-green when passing / fail-red when failing), never only
-    // neutral dim ink.
+    // neutral dim ink. Its tone comes from the same decision as its words: a
+    // compile result with errors is a failure, a clean one a pass, and an
+    // aborted run is neither.
     const ProjectStatusLine = (project) => {
-      const last = project.lastEvent;
-      const statusCls =
-        last === null || last === undefined
-          ? ""
-          : last.failed > 0
-            ? " app-ratio-fail"
-            : " app-ratio-pass";
+      const { tone } = L.projectStatus(project);
+      const statusCls = tone === null ? "" : ` app-ratio-${tone}`;
       return div(
         {
           "data-testid": "project-status-line",
@@ -3363,10 +3633,157 @@
         () => VelocityCard(),
       );
 
+    // ── A run's coverage files ──────────────────────────────────────────
+    // One table lists a run's coverage file by file, on the Coverage tab and
+    // on the run's own page. What a surface shows of a run is that run's
+    // state, kept here by event id: the files read, whether every file was
+    // asked for, a read in flight, a failure. A surface drawn again for the
+    // same run finds the state and reads nothing.
+    //
+    // A state's value is one of:
+    //   { phase: "loading" }                       the first read is in flight
+    //   { phase: "failed" }                        the first read failed
+    //   { phase: "ready", count, root, stack, files, more }
+    // where `more` is the read of every file: "idle", "loading" or "failed".
+    const COVERAGE_FILES_OPENING = 50;
+    const COVERAGE_FILES_FAILED = "could not read this run's files";
+    const coverageFiles = new Map();
+
+    // What a read of a run's files answered, or null when the answer does not
+    // carry them (an answer without the file keys).
+    const coverageFilesAnswer = (body) => {
+      const ev = body !== null && typeof body === "object" ? body.event : undefined;
+      if (ev === undefined || ev === null || typeof ev !== "object") return null;
+      if (typeof ev.coverageFileCount !== "number" || !Array.isArray(ev.coverageFiles)) return null;
+      return {
+        count: ev.coverageFileCount,
+        root: typeof ev.coverageRoot === "string" ? ev.coverageRoot : "",
+        stack: ev.stack,
+        files: ev.coverageFiles,
+      };
+    };
+
+    // Read a run's files: its first 50, or every one of them when `all`. The
+    // answer is the run's; one that arrives after the run's state was dropped
+    // is discarded.
+    async function readCoverageFiles(eventId, all) {
+      let entry = coverageFiles.get(eventId);
+      if (entry === undefined) {
+        entry = van.state({ phase: "loading" });
+        coverageFiles.set(eventId, entry);
+      } else if (all) {
+        entry.val = { ...entry.val, more: "loading" };
+      } else {
+        entry.val = { phase: "loading" };
+      }
+      let answer = null;
+      try {
+        const limit = all ? "" : `&files=${COVERAGE_FILES_OPENING}`;
+        const res = await fetch(
+          `/api/v2/events/${encodeURIComponent(eventId)}?depth=coverage${limit}`,
+        );
+        if (res.ok === true) answer = coverageFilesAnswer(await res.json());
+      } catch {
+        // A read that never answered is a failed read: the table says so.
+        answer = null;
+      }
+      if (coverageFiles.get(eventId) !== entry) return;
+      if (answer !== null) entry.val = { phase: "ready", ...answer, more: "idle" };
+      else if (all) entry.val = { ...entry.val, more: "failed" };
+      else entry.val = { phase: "failed" };
+    }
+
+    // A file's name as its row shows it: without the directories every file
+    // of the run shares, and with a break opportunity (a zero-width space)
+    // after each `/` for the media that wrap it. Where the name stays on one
+    // line the opportunity is never taken.
+    const coverageFileName = (path, root) => {
+      const name = root !== "" && path.startsWith(root) ? path.slice(root.length) : path;
+      return name.replace(/\/(?=.)/g, "/\u200B");
+    };
+
+    const CoverageFileRow = (file, root) => {
+      const lines = file.lines;
+      const fns = file.functions;
+      return div(
+        { "data-testid": "coverage-file-row", class: "app-coverage-file", title: file.path },
+        span(
+          { class: "app-coverage-file-name" },
+          span({ class: "app-coverage-file-path" }, coverageFileName(file.path, root)),
+        ),
+        span({ class: "app-coverage-file-lines" }, `${lines.covered}/${lines.total}`),
+        div(
+          { class: "app-meter app-coverage-file-meter" },
+          div({ class: "app-meter-fill", style: `width:${lines.percent}%;` }),
+        ),
+        span({ class: "app-coverage-file-percent" }, `${lines.percent}%`),
+        span(
+          { class: "app-coverage-file-functions" },
+          fns !== undefined && fns !== null ? `${fns.covered}/${fns.total} · ${fns.percent}%` : "",
+        ),
+      );
+    };
+
+    const CoverageNoFiles = () =>
+      div({ class: "app-card-meta app-coverage-no-files" }, "no per-file coverage for this run");
+
+    // The table of a run's files, drawn from the run's state: the loading
+    // line while the first read is in flight, the failure line when it
+    // failed, one line for a run that kept no file, and otherwise the heading,
+    // the rows and, while files are left to list, the control that lists them.
+    const CoverageFilesBody = (eventId) => {
+      const s = coverageFiles.get(eventId)?.val;
+      if (s === undefined || s.phase === "loading") return RunLoadingLine();
+      if (s.phase === "failed") return div({ class: "app-empty" }, COVERAGE_FILES_FAILED);
+      if (s.count === 0) return CoverageNoFiles();
+      return div(
+        { "data-testid": "coverage-files", class: "app-coverage-files" },
+        div({ class: "app-rail-title app-coverage-files-title" }, `Files · ${s.count}`),
+        div(
+          { class: "app-coverage-file app-coverage-file-head" },
+          span({ class: "app-coverage-file-name" }, s.stack === "mvn" ? "class" : "file"),
+          span("lines"),
+          span(),
+          span(),
+          span({ class: "app-coverage-file-functions" }, "functions"),
+        ),
+        s.files.map((file) => CoverageFileRow(file, s.root)),
+        s.more === "loading"
+          ? RunLoadingLine()
+          : [
+              s.more === "failed" ? div({ class: "app-empty" }, COVERAGE_FILES_FAILED) : null,
+              s.files.length < s.count
+                ? button(
+                    {
+                      "data-testid": "coverage-files-show-all",
+                      class: "app-chip app-coverage-files-all",
+                      onclick: () => readCoverageFiles(eventId, true),
+                    },
+                    `show all ${s.count}`,
+                  )
+                : null,
+            ],
+      );
+    };
+
+    // The run whose files the Coverage tab last showed. When the project's
+    // latest coverage run moves on, the tab no longer shows the older run:
+    // its state is dropped, and with it any read of it still in flight.
+    let coverageTabEventId = null;
+    const coverageTabFiles = (eventId) => {
+      if (coverageTabEventId !== null && coverageTabEventId !== eventId) {
+        coverageFiles.delete(coverageTabEventId);
+      }
+      coverageTabEventId = eventId;
+      if (!coverageFiles.has(eventId)) readCoverageFiles(eventId, false);
+      return () => CoverageFilesBody(eventId);
+    };
+
     // §S5.5 (user defect 2026-07-15) — the Coverage tab renders the real
     // latest-green-coverage panel: lines + functions meter rows and a
     // `view run` control opening the latest coverage event's drill-in (same
     // wiring as the §nav coverage-meter click). Gating unchanged.
+    // Beneath them, the table of that run's files.
     const CoveragePanelBody = () => {
       const p = currentProject();
       const cov = p?.latestGreenCoverage;
@@ -3404,6 +3821,7 @@
                   "view run",
                 )
               : null,
+            eventId !== undefined && eventId !== null ? coverageTabFiles(eventId) : null,
           ),
         ),
       );
@@ -3428,10 +3846,28 @@
             }),
           ),
           () => {
-            const compiles = visibleEvents().filter((e) => e.kind === "compile");
-            return compiles.length === 0
-              ? div({ class: "app-empty" }, "no compile events yet")
-              : div(compiles.map(EventCard));
+            // Compile records and lint records sit in their own groups,
+            // compile first; a group with no records is not drawn.
+            const records = visibleEvents().filter((e) => e.kind === "compile");
+            if (records.length === 0) return div({ class: "app-empty" }, "no compile events yet");
+            const groups = [
+              { key: "compile", name: "Compile", cards: records.filter((e) => !isLintRecord(e)) },
+              { key: "lint", name: "Lint", cards: records.filter(isLintRecord) },
+            ];
+            return div(
+              groups
+                .filter((g) => g.cards.length > 0)
+                .map((g) =>
+                  div(
+                    { "data-testid": "compile-group", "data-group": g.key, class: "app-compile-group" },
+                    div(
+                      { "data-testid": "compile-group-heading", class: "app-compile-group-heading" },
+                      `${g.name} · ${g.cards.length}`,
+                    ),
+                    g.cards.map(EventCard),
+                  ),
+                ),
+            );
           },
         ),
       );
@@ -3440,11 +3876,6 @@
     // the detail (via WorkspaceBody); the tab stays "Compile".
     const CompilePanel = () =>
       div({ class: greyed("app-center") }, CompileFeed());
-
-    // The codec (src/codecs/playwright.ts) emits one suite node PER SCENARIO
-    // named "<Feature title> › <Scenario title>"; the run detail's spec view
-    // (specFeaturesOf) splits the feature half off at this separator.
-    const BDD_SEP = " › ";
 
     // CR-CRU-097 §S1/§S4 — the empty state states the CAPABILITY, not the
     // plan: it names no CR and no release version, because a backlog is the
@@ -5756,7 +6187,7 @@
         .filter(
           (e) =>
             e.projectKey === state.route.projectKey &&
-            e.kind !== "lifecycle" &&
+            L.isTestRun(e) &&
             e.context?.cycleId === cycleId,
         )
         .sort((a, b) => a.timestamp - b.timestamp);
@@ -5814,10 +6245,14 @@
         ),
         span({ class: "app-agent-id" }, e.agentId),
         " ",
-        span(
-          { class: e.failed > 0 ? "app-ratio-fail" : "app-ratio-pass" },
-          `${e.passed}/${e.total}`,
-        ),
+        // An aborted run never reached a verdict: it says so, uncoloured,
+        // instead of a ratio it never had.
+        isAbortedRun(e)
+          ? span({ class: "app-card-meta" }, "aborted")
+          : span(
+              { class: e.failed > 0 ? "app-ratio-fail" : "app-ratio-pass" },
+              `${e.passed}/${e.total}`,
+            ),
       );
 
     // CR-CRU-017 §S3 — the same inline entry for a run that is STILL RUNNING:
@@ -6034,7 +6469,10 @@
     // gate conflated the two and lied — a cycle earns the pruned verdict only
     // AFTER a click's anchor-fetch comes back empty (state.anchorFeedback),
     // never at static render time.
-    const CycleToRunsBadge = (cycleId) => {
+    // The pill and the phone band's row are one control in two shapes: `tag`,
+    // `testid`, `baseClass` and `content` vary; the navigation and the pruned
+    // dim below are shared.
+    const CycleToRunsControl = (cycleId, tag, testid, baseClass, content) => {
       const live = cycleId !== undefined && cycleId !== null;
       // §S3 (VERIFY 1B) — a cycle earns the DIM/pruned state ONLY after its
       // own click's anchor-fetch confirmed the boundary is truly gone
@@ -6058,12 +6496,10 @@
       //   dims that exact detached node so its own click reflects the pruned
       //   outcome immediately.
       const pruned = live && state.prunedCycles.includes(cycleId);
-      return span(
+      return tag(
         {
-          "data-testid": "cycle-to-runs",
-          class: pruned
-            ? "app-pill app-cycle-to-runs app-pill-dim"
-            : "app-pill app-cycle-to-runs",
+          "data-testid": testid,
+          class: pruned ? `${baseClass} app-pill-dim` : baseClass,
           "aria-disabled": pruned ? "true" : "false",
           title: pruned ? PRUNED_PILL_REASON : "Jump to this cycle's Runs boundary",
           ...(pruned ? { "aria-label": PRUNED_PILL_REASON } : {}),
@@ -6079,9 +6515,24 @@
             revealDeclaredMarker(cycleId, 0, false, ev.currentTarget);
           },
         },
-        "→ Runs",
+        content,
       );
     };
+
+    const CycleToRunsBadge = (cycleId) =>
+      CycleToRunsControl(cycleId, span, "cycle-to-runs", "app-pill app-cycle-to-runs", "→ Runs");
+
+    // At the phone band `→ Runs` leaves the history line and ends the line's
+    // expanded runs as a row of its own, a full-width touch target that
+    // navigates and dims exactly as the pill does.
+    const CycleToRunsRow = (cycleId) =>
+      CycleToRunsControl(
+        cycleId,
+        div,
+        "cycle-to-runs-row",
+        "app-cycle-to-runs-row",
+        span({ class: "app-pill" }, "→ Runs"),
+      );
 
     // CR-CRU-025 §S2 — the inverse of `revealDeclaredMarker`: after the
     // one-rule tab swap to Workflow, the target cycle row re-renders
@@ -6670,8 +7121,13 @@
     // CR-CRU-020 §S2.1 — history cycle rows own a DISTINCT toggle level for
     // their linked runs (collapsed by default); done + active rows are the
     // expandable ones. Inferred cycles carry no id — key on cr + label.
+    // At the phone band every line with a runs boundary expands (failed and
+    // skipped too), since the Runs pill is never on the line there.
     const LensCycleRow = (cycle, crName) => {
-      const expandable = cycle.status === "done" || cycle.status === "active";
+      const phone = isPhoneBand();
+      const expandable = phone
+        ? cycleHasRunsBoundary(cycle)
+        : cycle.status === "done" || cycle.status === "active";
       const key = lensKey("cycle", cycle.id ?? `${crName}:${cycle.label}`);
       // §S3 — history rows show the SAME sealed `doneAt − activatedAt`
       // timer as the active section (null when timestamps predate C4).
@@ -6706,8 +7162,9 @@
           // CR-CRU-025 §S1/§S0 / CR-CRU-120 §S2 — the Runs-boundary badge, a
           // SEPARATE node from the existing `cycle-toggle` drill-down glyph,
           // on every row whose cycle could have runs. The SAME shared
-          // predicate as `CycleRow`, called identically.
-          ...(cycleHasRunsBoundary(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
+          // predicate as `CycleRow`, called identically. At the phone band
+          // the pill moves into the expanded runs as their last row.
+          ...(cycleHasRunsBoundary(cycle) ? (phone ? [] : [" ", CycleToRunsBadge(cycle.id)]) : []),
           // CR-CRU-021 §S6 #8 — collapsed rows hint at their linked runs.
           expandable
             ? () =>
@@ -6726,17 +7183,30 @@
         expandable
           ? () => {
               if (!lensOpen(key)) return "";
+              // The phone band's Runs row ends the expanded runs, decided by
+              // the same shared predicate as the pill on the line.
+              const toRunsRow = phone && cycleHasRunsBoundary(cycle) ? CycleToRunsRow(cycle.id) : null;
               return cycle.status === "done"
                 ? div(
                     { "data-testid": "cycle-span-closed", class: "app-cycle-span-closed" },
                     cycle.runs.map(LinkedRunRow),
+                    toRunsRow,
                   )
-                : cycle.runs.length > 0
-                  ? div({ class: "app-cycle-runs" }, cycle.runs.map(LinkedRunRow))
+                : cycle.runs.length > 0 || toRunsRow !== null
+                  ? div({ class: "app-cycle-runs" }, cycle.runs.map(LinkedRunRow), toRunsRow)
                   : "";
             }
           : null,
       );
+    };
+
+    // The reason a CR closed over a red pre-merge gate, from the held
+    // `/history` read, or null when it closed over none.
+    const acceptedFailingGateReason = (cr) => {
+      const held = historyReleases.val;
+      if (held === null || held.projectKey !== state.route.projectKey) return null;
+      const accepted = (held.acceptedFailingGates ?? []).filter((entry) => entry.cr === cr);
+      return accepted.length > 0 ? accepted[accepted.length - 1].reason : null;
     };
 
     const LensCrGroup = (node) => {
@@ -6788,6 +7258,15 @@
                 ),
               ]
             : null,
+          () => {
+            const reason = acceptedFailingGateReason(node.cr);
+            return reason === null
+              ? ""
+              : span(
+                  { "data-testid": "cr-accepted-failing-gate", class: "app-cr-accepted-failing-gate" },
+                  ` · closed over a red gate: ${reason}`,
+                );
+          },
           ...(node.source === "declared" ? planChangeSummary(node) : []),
         ),
         () =>
@@ -7132,7 +7611,7 @@
       const shown = new Set([...crs, ...tracks.flatMap((t) => t.crs)].map((node) => node.cr));
       const untracked = wire.crs
         .filter((cr) => !shown.has(cr) && !plans.some((plan) => plan.cr === cr))
-        .map((cr) => ({ cr, source: "unplanned", cycles: [], rollup: { done: 0, total: 0 }, agents: [] }));
+        .map((cr) => ({ cr, source: "unplanned", cycles: [], rollup: { done: 0, total: 0 } }));
       return {
         wave: wire.wave,
         source: drawn?.source ?? "declared",
@@ -7285,12 +7764,15 @@
       // vertical scroll AND sources §S4.4 virtualization (onscroll).
       // CR-CRU-038 §S3 — build the body FIRST so the header can mount its
       // failure-jump + raw-toggle controls (wired to this body's state).
-      const detailBody = RunDetailBody(eventId);
+      // CR-CRU-223 §S3 — an open run's live body is the shared cached one, so
+      // a re-render keeps what the live reads have filled in.
+      const live = isLiveRunId(eventId);
+      const detailBody = live ? detailBodyFor(eventId) : RunDetailBody(eventId);
       return div(
         { "data-testid": "run-overlay", class: "app-drillin app-inpane app-detail-col" },
         div(
           { class: "app-drillin-head app-top" },
-          ...DetailHeadContent(eventId, detailBody.headerControls),
+          ...(live ? LiveHeadContent(detailBody) : DetailHeadContent(eventId, detailBody.headerControls)),
         ),
         div(
           { "data-testid": "workspace-runs", class: greyed("app-center") },
@@ -7401,6 +7883,114 @@
     // suite-row + leaf-row nodes stay well under 200 at any leaf count.
     const VIRT_ROW_HEIGHT = 28;
     const VIRT_WINDOW = 120;
+    // CR-CRU-223 §S3 — a live failure row's fixed height (name line + message
+    // line), which drives its window exactly as VIRT_ROW_HEIGHT drives a tree's.
+    const LIVE_ROW_HEIGHT = 40;
+
+    /** CR-CRU-223 §S3 — an open run's id carries the `run-` prefix; an event id never does. */
+    function isLiveRunId(id) {
+      return typeof id === "string" && id.startsWith("run-");
+    }
+
+    // A live failure's one explaining line: its message's first line, else its type.
+    const liveFailureLine = (f) =>
+      typeof f.message === "string" && f.message.length > 0 ? f.message.split("\n")[0] : (f.type ?? "");
+
+    const LiveFailureRow = (f) =>
+      div(
+        { "data-testid": "live-failure-row", class: "app-live-failure" },
+        div(
+          { class: "app-live-failure-head" },
+          span({ class: "app-live-glyph" }, "✗"),
+          span({ "data-testid": "live-failure-name", class: "app-live-failure-name" }, f.name),
+          // The project a Playwright test ran under: one test failing in two
+          // browsers reads as two rows. A failure stated with none draws none.
+          typeof f.browser === "string" && f.browser.length > 0
+            ? span({ class: "app-live-failure-browser app-card-meta" }, `· ${f.browser}`)
+            : null,
+          span({ class: "app-live-failure-file" }, f.file),
+        ),
+        div({ "data-testid": "live-failure-message", class: "app-live-failure-message" }, liveFailureLine(f)),
+      );
+
+    // CR-CRU-223 §S3 — the run detail's LIVE mode, for an open run: every
+    // failure so far, oldest first, through the same VIRT_WINDOW windowing as
+    // the run detail's tree, then ONE passed row with its count (it does not
+    // expand). Filled by `readLive` — on open, and on each refresh after it.
+    const LiveRunBody = (runId) => {
+      const counts = van.state(null);
+      const failures = van.state([]);
+      const loadError = van.state(null);
+      const windowStart = van.state(0);
+
+      const title = () => {
+        const c = counts.val;
+        if (c === null) return "Run detail · live";
+        const pending = c.pending > 0 ? ` ${c.pending} ⏭` : "";
+        return `Run detail · live · ${liveCountText(c)} · ${c.passed} ✓ ${c.failed} ✗${pending}`;
+      };
+
+      // An open answer: the counts replace the held ones, and the failures
+      // from `failuresFrom` replace what is held from there on (an answer
+      // repeating rows already shown never shows them twice).
+      const apply = (answer) => {
+        const from = typeof answer.failuresFrom === "number" ? answer.failuresFrom : 0;
+        const held = failures.val;
+        if (from <= held.length) {
+          failures.val = held.slice(0, from).concat(Array.isArray(answer.failures) ? answer.failures : []);
+        }
+        if (answer.live !== null && typeof answer.live === "object") counts.val = answer.live;
+        loadError.val = null;
+      };
+
+      const body = div({ class: "app-drillin-body app-live-body" }, () => {
+        const c = counts.val;
+        if (c === null) {
+          return loadError.val !== null
+            ? div({ class: "app-empty" }, loadError.val)
+            : div({ class: "app-empty" }, Spinner(), " loading live run…");
+        }
+        const list = failures.val;
+        const total = list.length;
+        const start = Math.max(0, Math.min(windowStart.val, Math.max(0, total - VIRT_WINDOW)));
+        const end = Math.min(total, start + VIRT_WINDOW);
+        return div(
+          div(
+            { "data-testid": "live-failure-list", class: "app-live-failures" },
+            div({ class: "app-virt-spacer", style: `height:${start * LIVE_ROW_HEIGHT}px;` }),
+            list.slice(start, end).map(LiveFailureRow),
+            div({ class: "app-virt-spacer", style: `height:${(total - end) * LIVE_ROW_HEIGHT}px;` }),
+          ),
+          div({ "data-testid": "live-passed-row", class: "app-live-passed" }, `✓ ${c.passed} passed`),
+        );
+      });
+
+      // The pane scroller moves the window, as the tree's handlePaneScroll does.
+      const handlePaneScroll = (e) => {
+        const pane = e.target;
+        if (pane === null || pane === undefined) return;
+        const list = pane.querySelector('[data-testid="live-failure-list"]');
+        if (list === null) return;
+        const into = (pane.scrollTop ?? 0) - (list.offsetTop ?? 0);
+        const start = Math.max(0, Math.floor(into / LIVE_ROW_HEIGHT));
+        if (windowStart.val !== start) windowStart.val = start;
+      };
+
+      const handle = {
+        live: true,
+        runId,
+        counts,
+        failures,
+        loadError,
+        apply,
+        title,
+        body,
+        handlePaneScroll,
+        headerControls: [],
+      };
+      void readLive(handle);
+      return handle;
+    };
 
     // "A scenario's identity is (name, browser)": a playwright scenario run
     // under two browsers is two same-named nodes, each with its own steps, so
@@ -7411,9 +8001,11 @@
         ? `${suite.name} [${suite.browser}]`
         : suite.name;
 
-    // A playwright run's detail opens as a SPECIFICATION (feature →
-    // scenario → step). Every other codec keeps the plain test tree.
-    const isSpecRun = (d) => d?.kind === "test" && d?.codec === "playwright";
+    // A test run of framework playwright-bdd opens as a SPECIFICATION
+    // (feature → scenario → step): one suite per feature and browser, a
+    // test per scenario, its Gherkin steps under it. Every other run keeps
+    // the plain test tree.
+    const isSpecRun = (d) => d?.kind === "test" && d?.framework === "playwright-bdd";
 
     // On open, the first feature (failures-first order) shows its failing
     // scenarios plus its first SPEC_FIRST_OPEN scenarios; the rest of its
@@ -7465,6 +8057,7 @@
       };
       const openStacks = van.state({}); // spec runs: leaf key -> true while its stack shows
       const showRaw = van.state(false);
+      const coverageOpen = van.state(false); // the run's coverage files are unfolded
       // The run's raw output text: the suite reads carry only its byte length
       // (`rawBytes`), so the text is read with the full read the first time
       // the raw panel opens, and kept from then on. Null until it arrives.
@@ -7478,7 +8071,11 @@
       // replaced node would go with it.
       const located = van.state(null);
       let locatedTimer = null;
-      let jumpPos = 0; // failures-footer jump cursor
+      let jumpPos = -1; // failure-jump cursor: the walk index it last opened
+      // The failure-jump's own walk: how many presses it has made, how many
+      // failing leaves it holds once loaded, and where it last landed. Row
+      // clicks never touch it, so the label speaks for the jump alone.
+      const jumpWalk = van.state({ presses: 0, total: 0, pos: -1 });
 
       // §S4.0 FINAL — purely tier-contextual presentation.
       const presentationOf = (ev) =>
@@ -7560,9 +8157,8 @@
         );
         const byTitle = new Map();
         for (const node of tree) {
-          const name = typeof node.name === "string" ? node.name : "";
-          const cut = name.indexOf(BDD_SEP);
-          const title = cut < 0 ? "" : name.slice(0, cut);
+          // A suite IS its feature, whole, never split.
+          const title = typeof node.name === "string" ? node.name : "";
           if (!byTitle.has(title)) byTitle.set(title, []);
           byTitle.get(title).push({ node, failing: failing.has(suiteKeyOf(node)) });
         }
@@ -7571,11 +8167,14 @@
             ...entries.filter((e) => e.failing),
             ...entries.filter((e) => !e.failing),
           ];
+          // A feature counts its scenarios over every browser's suite.
+          const sum = (k) => scenarios.reduce((n, e) => n + (e.node.counts?.[k] ?? 0), 0);
           return {
             title,
             scenarios,
-            failed: scenarios.filter((e) => e.failing).length,
-            passed: scenarios.filter((e) => e.node.status === "pass").length,
+            failed: sum("failed"),
+            passed: sum("passed"),
+            browsers: new Set(scenarios.map((e) => e.node.browser)).size,
           };
         });
         const ordered = [
@@ -7586,25 +8185,26 @@
         return ordered;
       }
 
-      // Progressive expansion: the first feature (failures-first) unfolds and
-      // reads its failing scenarios plus its first SPEC_FIRST_OPEN; every
-      // other failing feature unfolds and reads its failing scenarios; every
-      // other all-green feature stays folded. Nothing else is read until it
-      // scrolls into view (loadScrolledScenarios) or is clicked.
+      // Progressive expansion: every failing feature opens, then the first
+      // SPEC_FIRST_OPEN features (failures-first); an open feature reads each
+      // of its browsers' suites, which answer its scenarios and steps. Every
+      // other feature stays folded and unread until it is clicked.
       function openProgressively(d) {
-        const initial = [];
         specFeaturesOf(d).forEach((feature, i) => {
-          featureOpenState(feature.title).val = i === 0 || feature.failed > 0;
-          feature.scenarios.forEach((entry, j) => {
-            if (entry.failing || (i === 0 && j < SPEC_FIRST_OPEN)) initial.push(entry.node);
-          });
+          if (feature.failed > 0 || i < SPEC_FIRST_OPEN) openFeature(feature);
         });
-        for (const node of initial) void loadSuite(node);
       }
 
-      function toggleFeature(title) {
-        const open = featureOpenState(title);
-        open.val = !open.val;
+      // Unfold a feature, reading its suites as it opens.
+      function openFeature(feature) {
+        featureOpenState(feature.title).val = true;
+        for (const entry of feature.scenarios) void loadSuite(entry.node);
+      }
+
+      function toggleFeature(feature) {
+        const open = featureOpenState(feature.title);
+        if (open.val) open.val = false;
+        else openFeature(feature);
       }
 
       // A heat-cell reveal first opens the feature holding its scenario:
@@ -7618,22 +8218,7 @@
           f.scenarios.some((entry) => suiteKeyOf(entry.node) === suiteName),
         );
         if (feature === undefined) return;
-        featureOpenState(feature.title).val = true;
-      }
-
-      // A folded scenario row of an unfolded feature reads its steps once it
-      // is in (or has passed through) the pane's viewport.
-      function loadScrolledScenarios(pane, d) {
-        const paneTop = pane.getBoundingClientRect().top;
-        const view = pane.clientHeight ?? 0;
-        const byKey = new Map((d.tree ?? []).map((s) => [suiteKeyOf(s), s]));
-        for (const row of pane.querySelectorAll('[data-testid="suite-row"][data-suite-key]')) {
-          const key = row.getAttribute("data-suite-key");
-          if (leavesOf(key) !== undefined || suiteLoading.val[key] === true) continue;
-          if (row.getBoundingClientRect().top - paneTop > view) continue;
-          const node = byKey.get(key);
-          if (node !== undefined) void loadSuite(node);
-        }
+        openFeature(feature);
       }
 
       // F4 — a failed leaf's failure box: inline (no click) in Detail until
@@ -7646,18 +8231,13 @@
         return focused === key;
       }
 
-      // One leaf row (+ its failure box when visible). §S3 failure-box
+      // The failure box of the failure keyed `key`. §S3 failure-box
       // degradation (user defect 2026-07-15): the box NEVER renders empty —
       // message → else failure.type → else `test failed`; when the message
       // is absent a dim reporter note is appended; the trace block renders
-      // only when a trace exists.
-      const LeafRows = (suiteName, leaf, presentation) => {
-        const key = `${suiteName}::${leaf.name}`;
-        const failed = leaf.status === "fail";
-        // A spec run's failing step carries its message AT the step, inside
-        // its own row, always shown; its stored stack sits behind `stack ▸`.
-        const spec = isSpecRun(detail.val);
-        const failure = leaf.failure ?? null;
+      // only when a trace exists. A spec run's box keeps its stored stack
+      // behind `stack ▸`.
+      const FailureBox = (key, failure, spec) => {
         const hasMessage =
           typeof failure?.message === "string" && failure.message.length > 0;
         const hasType = typeof failure?.type === "string" && failure.type.length > 0;
@@ -7673,7 +8253,52 @@
               { class: "app-failure-note" },
               "no failure detail captured by the reporter",
             );
+        if (!spec) {
+          return div(
+            { "data-testid": "failure-box", class: "app-failure-box" },
+            div({ class: "app-failure-message" }, messageLine),
+            noteLine,
+            hasTrace ? div({ class: "app-failure-trace" }, failure.trace) : null,
+          );
+        }
         const stackOpen = openStacks.val[key] === true;
+        return div(
+          { "data-testid": "failure-box", class: "app-failure-box app-step-failure" },
+          div({ class: "app-failure-message" }, messageLine),
+          noteLine,
+          hasTrace
+            ? button(
+                {
+                  "data-testid": "stack-toggle",
+                  class: "app-chip app-stack-toggle",
+                  onclick: (e) => {
+                    e.stopPropagation();
+                    const next = { ...openStacks.val };
+                    if (next[key] === true) delete next[key];
+                    else next[key] = true;
+                    openStacks.val = next;
+                  },
+                },
+                stackOpen ? "stack ▾" : "stack ▸",
+              )
+            : null,
+          hasTrace && stackOpen
+            ? pre(
+                { "data-testid": "stack-trace", class: "app-failure-trace app-stack-trace" },
+                failure.trace,
+              )
+            : null,
+        );
+      };
+
+      // One leaf row (+ its failure box when visible).
+      const LeafRows = (suiteName, leaf, presentation) => {
+        const key = `${suiteName}::${leaf.name}`;
+        const failed = leaf.status === "fail";
+        // A spec run's failing step carries its message AT the step, inside
+        // its own row, always shown.
+        const spec = isSpecRun(detail.val);
+        const failure = leaf.failure ?? null;
         const nodes = [
           div(
             {
@@ -7684,8 +8309,9 @@
                 focusedLeaf.val = key;
               },
             },
-            // A spec run's step line stays the verbatim Gherkin the codec
-            // stored: its glyph and duration are CSS-drawn from attributes.
+            // A spec run's step line stays the verbatim Gherkin stored for its
+            // playwright-bdd scenario: its glyph and duration are CSS-drawn
+            // from attributes.
             spec
               ? span(
                   { class: "app-leaf-name", "data-glyph": drillinLeafGlyph(leaf.status) },
@@ -7698,46 +8324,11 @@
                   "data-duration": fmtDuration(leaf.duration_ms ?? 0),
                 })
               : span({ class: "app-card-meta" }, fmtDuration(leaf.duration_ms ?? 0)),
-            spec && failed
-              ? div(
-                  { "data-testid": "failure-box", class: "app-failure-box app-step-failure" },
-                  div({ class: "app-failure-message" }, messageLine),
-                  noteLine,
-                  hasTrace
-                    ? button(
-                        {
-                          "data-testid": "stack-toggle",
-                          class: "app-chip app-stack-toggle",
-                          onclick: (e) => {
-                            e.stopPropagation();
-                            const next = { ...openStacks.val };
-                            if (next[key] === true) delete next[key];
-                            else next[key] = true;
-                            openStacks.val = next;
-                          },
-                        },
-                        stackOpen ? "stack ▾" : "stack ▸",
-                      )
-                    : null,
-                  hasTrace && stackOpen
-                    ? pre(
-                        { "data-testid": "stack-trace", class: "app-failure-trace app-stack-trace" },
-                        failure.trace,
-                      )
-                    : null,
-                )
-              : null,
+            spec && failed ? FailureBox(key, failure, true) : null,
           ),
         ];
         if (!spec && failed && failureBoxVisible(key, presentation)) {
-          nodes.push(
-            div(
-              { "data-testid": "failure-box", class: "app-failure-box" },
-              div({ class: "app-failure-message" }, messageLine),
-              noteLine,
-              hasTrace ? div({ class: "app-failure-trace" }, failure.trace) : null,
-            ),
-          );
+          nodes.push(FailureBox(key, failure, false));
         }
         return nodes;
       };
@@ -7877,7 +8468,8 @@
         const sep = target.indexOf(":");
         const kind = target.slice(0, sep);
         const key = target.slice(sep + 1);
-        const selector = kind === "leaf" ? '[data-testid="leaf-row"]' : '[data-testid="suite-row"]';
+        // A leaf key sits on a leaf row, or on a scenario row (ScenarioGroup).
+        const selector = kind === "leaf" ? "[data-leaf-key]" : '[data-testid="suite-row"]';
         const attr = kind === "leaf" ? "data-leaf-key" : "data-suite-key";
         const findRow = () => {
           for (const row of (pane ?? document).querySelectorAll(selector)) {
@@ -7944,12 +8536,15 @@
             // CR-016 one-box focus model), so the click takes the user
             // straight to that failure instead of just unfolding the tree.
             // A green or pending cell reveals the suite's own (now expanded)
-            // row; a red one reveals that failing leaf.
+            // row; a red one reveals that failing leaf. A spec run draws no
+            // suite row: its green or pending cell reveals the suite's first
+            // scenario's row.
             const pane = paneOf(e);
             unfoldFeatureOf(suiteName);
             await loadSuite(suite);
             const leaves = leavesOf(suiteName) ?? [];
-            const failIdx = status === "fail" ? leaves.findIndex((l) => l.status === "fail") : -1;
+            const failAt = status === "fail" ? leaves.findIndex((l) => l.status === "fail") : -1;
+            const failIdx = failAt < 0 && isSpecRun(detail.val) && leaves.length > 0 ? 0 : failAt;
             if (failIdx < 0) {
               reveal(`suite:${suiteName}`, pane);
               return;
@@ -8075,6 +8670,11 @@
         const keys = failingLeafKeys(d);
         if (keys.length === 0) return;
         jumpPos = (jumpPos + 1) % keys.length;
+        jumpWalk.val = {
+          presses: jumpWalk.val.presses + 1,
+          total: keys.length,
+          pos: jumpPos,
+        };
         const target = keys[jumpPos];
         const sep = target.indexOf("::");
         const suiteName = target.slice(0, sep);
@@ -8087,6 +8687,8 @@
             [`${suiteName}::${leaf.failure.message}`]: true,
           };
         }
+        // A scenario row mounts only in an unfolded feature.
+        unfoldFeatureOf(suiteName);
         focusedLeaf.val = target;
         // CR-CRU-034 §S1 — DEFER **and CONVERGE** the row scroll until AFTER
         // VanJS has actually finished re-rendering. Setting focusedLeaf/
@@ -8111,7 +8713,7 @@
         // target row (block:"start") into the SAME bounded pane-scroll
         // viewport, exactly once.
         const findTargetRow = () => {
-          const rows = document.querySelectorAll('[data-testid="leaf-row"]');
+          const rows = document.querySelectorAll("[data-leaf-key]");
           for (const r of rows) {
             if (r.getAttribute("data-leaf-key") === target) return r;
           }
@@ -8180,6 +8782,19 @@
         })();
       }
 
+      // The failure-jump label: the failures the walk has not yet opened —
+      // the run's failed count before the first press, then the walk's own
+      // failing-leaf count — and, once every one has been opened, the place
+      // in walk order of the failure the walk has open.
+      const moreFailures = (n) => `▸ ${n} more failure${n === 1 ? "" : "s"}`;
+      function failureJumpLabel(failed) {
+        const walk = jumpWalk.val;
+        if (walk.presses === 0) return moreFailures(failed);
+        const unopened = walk.total - walk.presses;
+        if (unopened > 0) return moreFailures(unopened);
+        return `▸ failure ${walk.pos + 1} of ${walk.total}`;
+      }
+
       // CR-CRU-038 §S3 — the failure-jump + raw-toggle relocate to the drill-in
       // HEADER (siblings of the density chip via DetailHeadContent's `controls`
       // slot); the FailuresFooter that used to carry them in the body is
@@ -8202,7 +8817,7 @@
               class: "app-chip app-drillin-headchip",
               onclick: () => jumpToNextFailure(d),
             },
-            `▸ ${failed - 1} more failures`,
+            () => failureJumpLabel(failed),
           );
         },
         () => {
@@ -8219,6 +8834,16 @@
               },
             },
             "toggle raw output",
+          );
+        },
+        // CR-CRU-200 §S3 — a run whose stream could not be trusted states why,
+        // in the fail colour, beside an aborted run's abort banner.
+        () => {
+          const d = detail.val;
+          if (d === null || typeof d.incomplete !== "string") return "";
+          return span(
+            { "data-testid": "run-incomplete", class: "app-run-incomplete" },
+            `incomplete — ${d.incomplete}`,
           );
         },
       ];
@@ -8282,10 +8907,10 @@
       // ▾/▸), failures first; a folded feature mounts none of its scenarios.
       // Each feature is its own binding on its own open state, so a fold
       // replaces that feature's nodes alone.
-      const SpecFeatures = (d, presentation, density) =>
-        specFeaturesOf(d).map((feature) => () => FeatureGroup(feature, presentation, density));
+      const SpecFeatures = (d, presentation) =>
+        specFeaturesOf(d).map((feature) => () => FeatureGroup(feature, presentation));
 
-      const FeatureGroup = (feature, presentation, density) => {
+      const FeatureGroup = (feature, presentation) => {
         const open = featureOpenState(feature.title).val;
         const status = feature.failed > 0 ? "fail" : "pass";
         return div(
@@ -8301,7 +8926,7 @@
             {
               "data-testid": "feature-heading",
               class: `app-feature-heading app-tree-line ${status}`,
-              onclick: () => toggleFeature(feature.title),
+              onclick: () => toggleFeature(feature),
             },
             span({ "data-testid": "feature-toggle", class: "app-tree-toggle" }, open ? "▾" : "▸"),
             span(
@@ -8317,11 +8942,60 @@
           open
             ? div(
                 { class: "app-feature-scenarios" },
-                feature.scenarios.map((entry) =>
-                  SuiteBinding(entry.node, presentation, density),
+                feature.scenarios.map((entry) => () =>
+                  ScenarioRows(entry.node, feature.browsers > 1, presentation),
                 ),
               )
             : null,
+        );
+      };
+
+      // The scenario shape: one browser's suite of a feature, read whole by
+      // its ?suite=&browser= read — each scenario (failing first) with its
+      // steps. A binding per suite, reading only that suite's state.
+      const ScenarioRows = (node, namesBrowser, presentation) => {
+        const key = suiteKeyOf(node);
+        const scenarios = leavesOf(key);
+        if (scenarios === undefined) return div({ class: "app-empty" }, Spinner());
+        const ordered = [
+          ...scenarios.filter((s) => s.status === "fail"),
+          ...scenarios.filter((s) => s.status !== "fail"),
+        ];
+        const browser = namesBrowser ? node.browser : null;
+        return div(ordered.map((s) => ScenarioGroup(key, s, browser, presentation)));
+      };
+
+      // One scenario row and its steps. The row is a leaf of its suite, keyed
+      // `<suiteKey>::<scenario>` as a leaf row is, so the heat-strip reveal and
+      // the failure jump reach it, and a click focuses the scenario. A scenario
+      // that failed with no failing step (a Before hook) carries its own
+      // failure box below its row, shown as a leaf's box is (failureBoxVisible).
+      const ScenarioGroup = (key, scenario, browser, presentation) => {
+        const steps = scenario.steps ?? [];
+        const leafKey = `${key}::${scenario.name}`;
+        const ownFailure = scenario.status === "fail" && !steps.some((s) => s.status === "fail");
+        return div(
+          { class: "app-suite-group" },
+          div(
+            {
+              "data-testid": "suite-row",
+              "data-suite-key": key,
+              "data-leaf-key": leafKey,
+              class: `app-suite-row app-tree-line ${scenario.status}${located.val === `leaf:${leafKey}` ? ` ${LOCATE_BLINK_CLASS}` : ""}`,
+              onclick: () => {
+                focusedLeaf.val = leafKey;
+              },
+            },
+            span({ class: "app-suite-name" }, `${drillinLeafGlyph(scenario.status)} ${scenario.name}`),
+            browser === null || browser === undefined
+              ? null
+              : span({ class: "app-suite-browser app-card-meta" }, `· ${browser}`),
+            span({ class: "app-card-meta" }, fmtDuration(scenario.duration_ms ?? 0)),
+          ),
+          ownFailure && failureBoxVisible(leafKey, presentation)
+            ? FailureBox(leafKey, scenario.failure ?? null, true)
+            : null,
+          steps.map((step) => LeafRows(`${key} › ${scenario.name}`, step, presentation)),
         );
       };
 
@@ -8329,8 +9003,51 @@
       // module/integration) renders the plain tree; Density (regression/e2e)
       // adds the status chips (F4½), heat-strip (§S4.2), failure digest
       // (§S4.3) and failures-float folding (§S4.1). Virtualization (§S4.4)
-      // applies in BOTH presentations. A playwright run draws the same suites
+      // applies in BOTH presentations. A playwright-bdd run draws the same suites
       // grouped under their features (SpecFeatures), under its byline.
+      // The run's coverage, above its test tree: one line with its percents
+      // and how many files it has, folded when the page opens. A click unfolds
+      // the run's file table beneath the line, reading the files the first
+      // time (and again after a read that failed); a second click folds it. A
+      // run that kept coverage and no file shows its percents and says so,
+      // with nothing to unfold; a run with no coverage shows nothing.
+      const RunCoverage = (d) => {
+        const lines = d.coverage?.lines;
+        if (lines === undefined || lines === null) return null;
+        const fns = d.coverage.functions;
+        const count = typeof d.coverageFileCount === "number" ? d.coverageFileCount : 0;
+        const words = [`lines ${lines.percent}%`];
+        if (fns !== undefined && fns !== null) words.push(`functions ${fns.percent}%`);
+        if (count === 0) {
+          return [
+            div(
+              { "data-testid": "run-coverage", class: "app-run-coverage" },
+              span({ class: "app-run-coverage-title" }, "Coverage"),
+              ` · ${words.join(" · ")}`,
+            ),
+            CoverageNoFiles(),
+          ];
+        }
+        words.push(`${count} ${count === 1 ? "file" : "files"}`);
+        const toggle = () => {
+          const opening = !coverageOpen.val;
+          const kept = coverageFiles.get(eventId);
+          if (opening && (kept === undefined || kept.val.phase === "failed")) {
+            readCoverageFiles(eventId, false);
+          }
+          coverageOpen.val = opening;
+        };
+        return [
+          button(
+            { "data-testid": "run-coverage", class: "app-run-coverage", onclick: toggle },
+            span({ class: "app-tree-toggle" }, () => (coverageOpen.val ? "▾" : "▸")),
+            span({ class: "app-run-coverage-title" }, "Coverage"),
+            ` · ${words.join(" · ")}`,
+          ),
+          () => (coverageOpen.val ? CoverageFilesBody(eventId) : ""),
+        ];
+      };
+
       const TestBody = (d) => {
         const presentation = presentationOf(d);
         const density = presentation === "Density";
@@ -8338,10 +9055,11 @@
         return div(
           { class: "app-drillin-tree" },
           spec ? RunByline(d) : null,
+          RunCoverage(d),
           density ? StatusChips(d) : null,
           density ? HeatStrip(d) : null,
           spec
-            ? SpecFeatures(d, presentation, density)
+            ? SpecFeatures(d, presentation)
             : (d.tree ?? []).map((suite) => SuiteBinding(suite, presentation, density)),
           // CR-CRU-038 §S2/§S3 — the failure-jump + raw-toggle moved to the
           // header; only the raw <pre> OUTPUT stays in the body scroller,
@@ -8369,6 +9087,8 @@
         const warningCount = compile.warningCount ?? 0;
         const format = compile.format ?? "compile";
         const hasRaw = typeof compile.raw === "string" && compile.raw.length > 0;
+        // A lint record shows each finding's rule code and its own empty line.
+        const lint = typeof d.lint === "string" && d.lint !== "";
         const groups = new Map();
         for (const diag of compile.diagnostics ?? []) {
           const file = diag.file ?? "(unknown file)";
@@ -8384,10 +9104,14 @@
                 errorCount > 0 ? "app-ratio-fail" : "app-ratio-pass"
               }`,
             },
-            `${format} · ${errorCount} errors · ${warningCount} warnings`,
+            // A lint record is headed by its tool, never by the decoder it went through.
+            `${lint ? `${d.lint} lint` : format} · ${errorCount} errors · ${warningCount} warnings`,
           ),
           groups.size === 0
-            ? div({ class: "app-empty" }, "clean compile — no diagnostics")
+            ? div(
+                { class: "app-empty" },
+                lint ? "clean lint — no findings" : "clean compile — no diagnostics",
+              )
             : [...groups.entries()].map(([file, lines]) =>
                 div(
                   { "data-testid": "diag-group", class: "app-diag-group" },
@@ -8398,7 +9122,10 @@
                         "data-testid": "diag-line",
                         class: `app-diag-line app-diag-${diag.level}`,
                       },
-                      `${file}:${diag.line}:${diag.col} — ${diag.message}`,
+                      lint && typeof diag.code === "string" && diag.code !== ""
+                        ? span({ "data-testid": "diag-code", class: "app-chip app-diag-code" }, diag.code)
+                        : null,
+                      L.diagnosticLine(diag, true),
                     ),
                   ),
                 ),
@@ -8457,10 +9184,6 @@
           }
         }
         if (next !== null) suiteWindow.val = next;
-        // A spec run's folded scenarios read their steps as they scroll
-        // into view.
-        const d = detail.val;
-        if (d !== null && isSpecRun(d)) loadScrolledScenarios(pane, d);
       };
 
       // CR-CRU-017 §S3 — an aborted run's drill-in leads with WHY it was
@@ -8491,7 +9214,7 @@
           // CR-CRU-122 §S2 — the ?depth=suites fetch is still in flight: the
           // words stay, the spinner joins them (plain text alone read as a
           // stalled surface, not as work in progress).
-          return div({ class: "app-empty" }, Spinner(), " loading run detail…");
+          return RunLoadingLine();
         if (d.kind === "gate") return GateBody(d);
         if (d.kind === "compile") return CompileBody(d);
         return d.status === "aborted"
@@ -8520,10 +9243,7 @@
       const detailBody = detailBodyFor(eventId);
       return div(
         { "data-testid": "run-overlay", class: "app-drillin app-inpane" },
-        div(
-          { class: "app-drillin-inhead" },
-          DetailHeadContent(eventId, detailBody.headerControls),
-        ),
+        div({ class: "app-drillin-inhead" }, DetailHead(eventId)),
         // CR-CRU-023 §S1 — same shared pane-content wrapper as the
         // workspace's WorkspaceRunDetail form: the run detail is one of the
         // seven floored pane surfaces wherever it renders. Post CR-CRU-029

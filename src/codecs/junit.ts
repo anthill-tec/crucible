@@ -2,7 +2,14 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { RunSchema, RunSummary, SuiteNode, TestLeaf } from "../types.ts";
+import type { RunSummary, SuiteNode, TestLeaf } from "../types.ts";
+import {
+  BunConsoleFailureReader,
+  BunLoadErrorReader,
+  parseBunConsoleFailures,
+  parseBunLoadErrors,
+} from "./bun-console.ts";
+import type { DecodedRun } from "./index.ts";
 
 interface XmlElement {
   name: string;
@@ -115,33 +122,105 @@ function toDurationMs(time: string | undefined): number {
   return Number.isFinite(seconds) ? Math.round(seconds * 1000) : 0;
 }
 
+/** A failure's message is cut to this many characters. */
+const MESSAGE_LIMIT = 1000;
+/** A failure's trace is cut to this many characters. */
+const TRACE_LIMIT = 8000;
+
+/** The value when it holds more than whitespace, else undefined. */
+export function nonBlank(value: string | undefined): string | undefined {
+  return value !== undefined && value.trim().length > 0 ? value : undefined;
+}
+
+/** A suite or case name; a missing or blank one is `?`. */
+function nameOf(el: XmlElement): string {
+  return nonBlank(el.attrs["name"]) ?? "?";
+}
+
+/** A failure's parts as a report or a stream states them, each optional. */
+export interface FailureParts {
+  message?: string;
+  type?: string;
+  trace?: string;
+}
+
+/**
+ * A failure as the board stores it: the message is the non-blank `message`,
+ * trimmed, else the first non-blank line of the trace, cut to
+ * `MESSAGE_LIMIT`; the trace is the trimmed trace, cut to `TRACE_LIMIT`; the
+ * type is the non-blank `type`. Each part is present only when non-empty.
+ * JUnit's `toFailure` and the `crucible-events` codec both read through it.
+ */
+export function failureOf(parts: FailureParts): NonNullable<TestLeaf["failure"]> {
+  const trace = (parts.trace ?? "").trim();
+  const firstLine = trace.split("\n").find((line) => line.trim().length > 0)?.trim();
+  const message = nonBlank(parts.message)?.trim() ?? firstLine;
+  const type = nonBlank(parts.type);
+  return {
+    ...(message !== undefined ? { message: message.slice(0, MESSAGE_LIMIT) } : {}),
+    ...(type !== undefined ? { type } : {}),
+    ...(trace.length > 0 ? { trace: trace.slice(0, TRACE_LIMIT) } : {}),
+  };
+}
+
+/** A suite's status from its leaves: `fail` when one failed, else `pass`. */
+export function suiteStatus(children: readonly TestLeaf[]): SuiteNode["status"] {
+  return children.some((c) => c.status === "fail") ? "fail" : "pass";
+}
+
+/** A `<failure>` / `<error>` element, read through `failureOf`. */
+function toFailure(failureEl: XmlElement): NonNullable<TestLeaf["failure"]> {
+  return failureOf({
+    message: failureEl.attrs["message"],
+    type: failureEl.attrs["type"],
+    trace: failureEl.text,
+  });
+}
+
 function toLeaf(testcase: XmlElement): TestLeaf {
   const failureEl = testcase.children.find((c) => c.name === "failure" || c.name === "error");
   const skipped = testcase.children.some((c) => c.name === "skipped");
   const leaf: TestLeaf = {
-    name: testcase.attrs["name"] ?? "",
+    name: nameOf(testcase),
     status: failureEl !== undefined ? "fail" : skipped ? "pending" : "pass",
     duration_ms: toDurationMs(testcase.attrs["time"]),
   };
-  if (failureEl !== undefined) {
-    const trace = failureEl.text.trim();
-    const firstLine = trace.split("\n").find((line) => line.trim().length > 0);
-    leaf.failure = {
-      message: failureEl.attrs["message"] ?? firstLine?.trim() ?? "test failed",
-      ...(failureEl.attrs["type"] !== undefined ? { type: failureEl.attrs["type"] } : {}),
-      ...(trace.length > 0 ? { trace } : {}),
-    };
-  }
+  if (failureEl !== undefined) leaf.failure = toFailure(failureEl);
   return leaf;
 }
 
-function toSuite(testsuite: XmlElement): SuiteNode {
-  const children = testsuite.children.filter((c) => c.name === "testcase").map(toLeaf);
-  return {
-    name: testsuite.attrs["name"] ?? "",
-    status: children.some((c) => c.status === "fail") ? "fail" : "pass",
-    children,
-  };
+function toNode(name: string, cases: XmlElement[]): SuiteNode {
+  const children = cases.map(toLeaf);
+  return { name, status: suiteStatus(children), children };
+}
+
+function casesOf(testsuite: XmlElement): XmlElement[] {
+  return testsuite.children.filter((c) => c.name === "testcase");
+}
+
+/**
+ * The file a case is counted under: its non-empty `file`, else its non-empty
+ * `classname`, else its suite's name, with `\` read as `/`.
+ */
+function fileOf(testcase: XmlElement, suiteName: string): string {
+  const file =
+    nonBlank(testcase.attrs["file"]) ?? nonBlank(testcase.attrs["classname"]) ?? suiteName;
+  return file.replace(/\\/g, "/");
+}
+
+/**
+ * pytest's report grouped by class: one node per non-empty `classname` in
+ * first-seen order; a case with none joins the node `pytest`.
+ */
+function groupByClassname(cases: XmlElement[]): SuiteNode[] {
+  const groups = new Map<string, XmlElement[]>();
+  for (const testcase of cases) {
+    const key = nonBlank(testcase.attrs["classname"]) ?? "pytest";
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [testcase]);
+    else group.push(testcase);
+  }
+  return [...groups].map(([name, grouped]) => toNode(name, grouped));
 }
 
 function summarize(tree: SuiteNode[]): RunSummary {
@@ -160,17 +239,12 @@ function summarize(tree: SuiteNode[]): RunSummary {
 
 /**
  * CR-CRU-003 — recursive `.//testsuite` semantics (bun `--reporter=junit`
- * nests suites): a suite node's children are its DIRECT testcases; nested
- * <testsuite> elements become their own tree nodes; empty wrapper suites
- * that only hold nested suites are skipped.
+ * nests suites): every <testsuite> holding testcases directly, at any depth,
+ * in document order; a suite holding none is not collected.
  */
-function collectSuites(testsuite: XmlElement, out: SuiteNode[]): void {
-  const nested = testsuite.children.filter((c) => c.name === "testsuite");
-  const hasDirectCases = testsuite.children.some((c) => c.name === "testcase");
-  if (hasDirectCases || nested.length === 0) {
-    out.push(toSuite(testsuite));
-  }
-  for (const inner of nested) {
+function collectSuites(testsuite: XmlElement, out: XmlElement[]): void {
+  if (casesOf(testsuite).length > 0) out.push(testsuite);
+  for (const inner of testsuite.children.filter((c) => c.name === "testsuite")) {
     collectSuites(inner, out);
   }
 }
@@ -192,7 +266,12 @@ function collectRawOutput(el: XmlElement, out: string[]): void {
   }
 }
 
-export function parseJunit(xml: string): RunSchema {
+/**
+ * One JUnit reading for every stack: a node per suite holding testcases, the
+ * distinct files its cases name, and — when `framework` is `pytest` and the
+ * report's only suite is named `pytest` — its cases grouped by classname.
+ */
+export function parseJunit(xml: string, framework?: string): DecodedRun {
   const root = parseXml(xml);
   let suites: XmlElement[];
   if (root.name === "testsuites") {
@@ -202,20 +281,75 @@ export function parseJunit(xml: string): RunSchema {
   } else {
     throw new Error(`malformed JUnit XML: unexpected root element <${root.name}>`);
   }
-  const tree: SuiteNode[] = [];
+  const holders: XmlElement[] = [];
   for (const suite of suites) {
-    collectSuites(suite, tree);
+    collectSuites(suite, holders);
   }
+  const files = new Set<string>();
+  for (const holder of holders) {
+    const suiteName = nameOf(holder);
+    for (const testcase of casesOf(holder)) files.add(fileOf(testcase, suiteName));
+  }
+  const isPytest = framework === "pytest" && suites.length === 1 && suites[0]!.attrs["name"] === "pytest";
+  const tree = isPytest
+    ? groupByClassname(holders.flatMap(casesOf))
+    : holders.map((holder) => toNode(nameOf(holder), casesOf(holder)));
   const rawParts: string[] = [];
   collectRawOutput(root, rawParts);
-  const result: RunSchema = { summary: summarize(tree), tree };
+  const result: DecodedRun = { summary: summarize(tree), tree, files: [...files] };
   if (rawParts.length > 0) result.raw = rawParts.join("\n");
   return result;
 }
 
-export async function parseJunitPath(path: string): Promise<RunSchema> {
+/**
+ * The run's raw output read into its failing cases. Under framework `bun-test` only, a
+ * failing case whose failure carries no message takes its message and trace
+ * from bun's console in `raw`, by its name; a case the console does not
+ * explain keeps its type-only failure. Each file bun names under
+ * `# Unhandled error between tests` gets one failing case `?`, in that file's
+ * suite, else in a new suite named by the path appended to the tree. Under any
+ * other framework, or none, the tree is left as it is.
+ *
+ * Returns the paths of the files read as having failed to load, in bun's order.
+ */
+export function readJunitRawOutput(tree: SuiteNode[], raw: string, framework?: string): string[] {
+  if (framework !== "bun-test" || raw.length === 0) return [];
+  // The record reads the console by the shared readers the live view reads it by.
+  const details = parseBunConsoleFailures(raw, new BunConsoleFailureReader());
+  for (const suite of tree) {
+    for (const leaf of suite.children) {
+      if (leaf.status !== "fail" || leaf.failure?.message !== undefined) continue;
+      const detail = Object.hasOwn(details, leaf.name) ? details[leaf.name] : undefined;
+      if (detail !== undefined) leaf.failure = { ...leaf.failure, ...detail };
+    }
+  }
+  const loadErrors = parseBunLoadErrors(raw, new BunLoadErrorReader());
+  for (const [path, failure] of Object.entries(loadErrors)) {
+    const leaf: TestLeaf = { name: "?", status: "fail", duration_ms: 0, failure: { ...failure } };
+    const suite = tree.find((s) => s.name === path);
+    if (suite === undefined) {
+      tree.push({ name: path, status: "fail", children: [leaf] });
+    } else {
+      suite.children.push(leaf);
+      suite.status = "fail";
+    }
+  }
+  return Object.keys(loadErrors);
+}
+
+/**
+ * A report file, or a directory of `TEST-*.xml` read in file-name order and
+ * merged into one run. A malformed file in a directory is skipped and named
+ * (by its file name) to `onSkip`; when no file decodes the read is refused.
+ * Each file is read under the run's `framework`.
+ */
+export async function parseJunitPath(
+  path: string,
+  onSkip?: (report: string, error: string) => void,
+  framework?: string,
+): Promise<DecodedRun> {
   if (statSync(path).isFile()) {
-    return parseJunit(readFileSync(path, "utf-8"));
+    return parseJunit(readFileSync(path, "utf-8"), framework);
   }
   const files = readdirSync(path)
     .filter((f) => f.startsWith("TEST-") && f.endsWith(".xml"))
@@ -224,13 +358,31 @@ export async function parseJunitPath(path: string): Promise<RunSchema> {
     throw new Error(`no TEST-*.xml files found in ${path}`);
   }
   const tree: SuiteNode[] = [];
+  const rawParts: string[] = [];
+  const caseFiles = new Set<string>();
+  const skipped: string[] = [];
+  let decodedCount = 0;
   for (const file of files) {
     const full = join(path, file);
+    let report: DecodedRun;
     try {
-      tree.push(...parseJunit(readFileSync(full, "utf-8")).tree);
+      report = parseJunit(readFileSync(full, "utf-8"), framework);
     } catch (err) {
-      console.warn(`skipping malformed JUnit file ${full}: ${String(err)}`);
+      const error = err instanceof Error ? err.message : String(err);
+      skipped.push(`${file}: ${error}`);
+      if (onSkip !== undefined) onSkip(file, error);
+      else console.warn(`skipping malformed JUnit file ${full}: ${error}`);
+      continue;
     }
+    decodedCount += 1;
+    tree.push(...report.tree);
+    for (const caseFile of report.files ?? []) caseFiles.add(caseFile);
+    if (report.raw !== undefined) rawParts.push(report.raw);
   }
-  return { summary: summarize(tree), tree };
+  if (decodedCount === 0) {
+    throw new Error(`no TEST-*.xml file in ${path} could be decoded (${skipped.join("; ")})`);
+  }
+  const result: DecodedRun = { summary: summarize(tree), tree, files: [...caseFiles] };
+  if (rawParts.length > 0) result.raw = rawParts.join("\n");
+  return result;
 }

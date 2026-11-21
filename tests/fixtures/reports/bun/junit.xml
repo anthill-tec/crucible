@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="12" assertions="7" failures="5" skipped="2" time="0.026142404">
+  <testsuite name="tests/text.test.ts" file="tests/text.test.ts" tests="4" assertions="3" failures="2" skipped="0" time="0.023618741" hostname="host">
+    <testcase name="shouts" classname="" time="0.000055" file="tests/text.test.ts" line="4" assertions="1" />
+    <testcase name="shouts the wrong thing" classname="" time="0.00013" file="tests/text.test.ts" line="8" assertions="1">
+      <failure type="AssertionError" message="expect(received).toEqual(expected)&#10;&#10;Expected: &quot;hi&quot;&#10;Received: &quot;HI!&quot;&#10;">AssertionError: expect(received).toEqual(expected)&#10;&#10;Expected: &quot;hi&quot;&#10;Received: &quot;HI!&quot;&#10;&#10;      at tests/text.test.ts:9:23&#10;</failure>
+    </testcase>
+    <testcase name="whispers after a busy pause" classname="" time="0.002768" file="tests/text.test.ts" line="12" assertions="1" />
+    <testcase name="waits longer than its budget" classname="" time="0.020008" file="tests/text.test.ts" line="21" assertions="0">
+      <failure type="TimeoutError" message="test timed out" />
+    </testcase>
+  </testsuite>
+  <testsuite name="tests/math.test.ts" file="tests/math.test.ts" tests="8" assertions="4" failures="3" skipped="2" time="0.00065007" hostname="host">
+    <testsuite name="math" file="tests/math.test.ts" line="4" tests="8" assertions="4" failures="3" skipped="2" time="0" hostname="host">
+      <testcase name="adds two numbers" classname="math" time="0.000019" file="tests/math.test.ts" line="5" assertions="1" />
+      <testcase name="divides evenly" classname="math" time="0.000028" file="tests/math.test.ts" line="9" assertions="1" />
+      <testcase name="adds with a wrong expectation" classname="math" time="0.000047" file="tests/math.test.ts" line="13" assertions="1">
+        <failure type="AssertionError" message="expect(received).toBe(expected)&#10;&#10;Expected: 5&#10;Received: 4&#10;">AssertionError: expect(received).toBe(expected)&#10;&#10;Expected: 5&#10;Received: 4&#10;&#10;      at tests/math.test.ts:14:23&#10;</failure>
+      </testcase>
+      <testsuite name="clamp" file="tests/math.test.ts" line="17" tests="2" assertions="1" failures="0" skipped="1" time="0" hostname="host">
+        <testcase name="clamps below the range" classname="clamp &gt; math" time="0.000025" file="tests/math.test.ts" line="18" assertions="1" />
+        <testcase name="clamps above the range" classname="clamp &gt; math" time="0" file="tests/math.test.ts" line="22" assertions="0">
+          <skipped />
+        </testcase>
+      </testsuite>
+      <testcase name="divides by zero and throws" classname="math" time="0.000035" file="tests/math.test.ts" line="27" assertions="0">
+        <failure type="Error" message="division by zero">Error: division by zero&#10;      at divide (src/math.ts:7:39)&#10;      at tests/math.test.ts:28:5&#10;</failure>
+      </testcase>
+      <testcase name="throws a plain object" classname="math" time="0.000025" file="tests/math.test.ts" line="31" assertions="0">
+        <failure type="Error">error&#10;      at tests/math.test.ts:32:12&#10;</failure>
+      </testcase>
+      <testcase name="multiplies two numbers" classname="math" time="0" file="tests/math.test.ts" line="35" assertions="0">
+        <skipped message="TODO" />
+      </testcase>
+    </testsuite>
+  </testsuite>
+</testsuites>

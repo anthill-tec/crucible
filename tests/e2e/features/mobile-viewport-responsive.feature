@@ -160,7 +160,7 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
   # one, per CR-CRU-022's own gap-analysis coupling note and its \u00a7S5 AC block's
   # last bullet. RED phase, re-confirmed in this pass: `grep -a` over `public/`
   # for `roadmap-progress` / `analytics-pane` / `burndown-chart` returns ZERO
-  # hits (same baseline tests/cr022-analytics-ui.test.ts's header records), so
+  # hits (same baseline tests/integration/cr022-analytics-ui.test.ts's header records), so
   # every assertion below currently has no code path producing it \u2014 the
   # release band, the pane and its chart do not exist at any viewport yet, let
   # alone a phone-specific collapse of them.
@@ -217,3 +217,152 @@ Feature: CR-CRU-018 §S1/§S2/§S3 — phone-band responsive layout
     When I tap the roadmap release band
     Then the analytics pane shows the verified-runs chip reading "verified · 2 runs ↗"
 
+  # The phone band's history cycle line keeps every tap. Its `→ Runs` pill is
+  # not on the line here — WebKit, like Safari under a real finger, moves a
+  # tap's click onto a clickable node near the touch, so a pill beside a
+  # narrow gap steals the tap — and `→ Runs` instead ends the expanded runs as
+  # a row of its own. The label is long enough to wrap under the phone width,
+  # which is when the line's empty space narrows to thin gaps; the scenario
+  # fails if it does not wrap. Every gap wider than 0 px, the label and the
+  # timer are each tapped open and tapped closed, each point proven by
+  # elementFromPoint before its tap.
+  Scenario: at the phone band a history cycle line whose label wraps carries no → Runs, and a tap in each of its gaps, on its label and on its timer opens its runs on Workflow and a second tap closes them
+    Given a project named "MOB Line Taps Project" is registered
+    And an orchestrator "mob-orch-taps" is registered on that project
+    And a release "0.173.637" is proposed for that project
+    And a cycle plan is filed for cr "MOB-TAPS" with a cycle labelled "c1 a phone history cycle line whose label is long enough to wrap onto a second line"
+    And cycle 1 of that plan is activated
+    And a fail(2/5) run linked to that cycle is ingested for agent "mob-taps-red"
+    And a pass(5/5) run linked to that cycle is ingested for agent "mob-taps-green"
+    And cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "mobtaps1"
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    And I select the "History" sub-tab
+    And I expand the cr group for "MOB-TAPS"
+    Then the history cycle line for that cycle wraps its label onto more than one line
+    And the closed history cycle line for that cycle shows no → Runs
+    And tapping the history cycle line for that cycle in each of its gaps, on its label and on its timer opens its runs on Workflow and a second tap closes them
+
+  # The `→ Runs` row that ends a phone history line's expanded runs is a
+  # full-width touch target, and it navigates as the pill does: to the Runs
+  # tab, with the cycle's declared boundary scrolled into view and blinking.
+  # The filler runs sit above the boundary in the newest-first feed, so the
+  # boundary is in view only because the tap scrolled it there.
+  Scenario: at the phone band a history cycle line's expanded runs end with a → Runs row at least 44px tall and their full width, and a tap on it shows the Runs tab with the boundary in view
+    Given a project named "MOB Runs Row Project" is registered
+    And an orchestrator "mob-orch-row" is registered on that project
+    And a release "0.173.637" is proposed for that project
+    And a cycle plan is filed for cr "MOB-ROW" with a cycle labelled "c1 phone row"
+    And cycle 1 of that plan is activated
+    And a fail(2/5) run linked to that cycle is ingested for agent "mob-row-red"
+    And a pass(5/5) run linked to that cycle is ingested for agent "mob-row-green"
+    And cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "mobrow01"
+    And 20 filler passing runs are ingested on that project
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    And I select the "History" sub-tab
+    And I expand the cr group for "MOB-ROW"
+    Then the closed history cycle line for that cycle shows no → Runs
+    When I tap the label of the history cycle line for that cycle
+    Then the expanded runs for that cycle end with the → Runs row
+    And the → Runs row for that cycle measures at least 44px tall and the expanded runs' full width
+    When I tap the → Runs row for that cycle
+    Then the "Runs" tab is selected
+    And the declared marker for that cycle sits inside the viewport and blinks
+
+  # The `→ Runs` pill is a touch target on touch media. At the phone band it
+  # stays on Now's cycle line (only History's line gives it up for the
+  # expanded runs' row), so on this coarse-pointer profile Now's pill must
+  # be at least 44px tall. The page is first proven to match
+  # `(pointer: coarse)`, so the floor is measured where it applies.
+  Scenario: at the phone band on a coarse pointer Now's active cycle line carries a → Runs pill that is at least 44px tall
+    Given a project named "MOB Now Pill Project" is registered
+    And an orchestrator "mob-orch-nowpill" is registered on that project
+    And a release "0.173.637" is proposed for that project
+    And a cycle plan is filed for cr "MOB-NOWPILL" with a cycle labelled "c1 now pill"
+    And cycle 1 of that plan is activated
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    And I select the "Now" sub-tab
+    Then the page matches the coarse-pointer media query
+    And Now's → Runs pill for that cycle is at least 44px tall
+
+  # The touch floor must not cost the pill its shape: on this coarse-pointer
+  # profile Now's pill is at least 44px tall with horizontal padding on each
+  # side of at least half that height, so it still reads as a pill. The page
+  # is first proven to match
+  # `(pointer: coarse)`, so the shape is measured where the floor applies.
+  Scenario: at the phone band on a coarse pointer Now's active cycle line carries a → Runs pill that is at least 44px tall with horizontal padding on each side of at least half that height
+    Given a project named "MOB Now Pill Shape Project" is registered
+    And an orchestrator "mob-orch-nowshape" is registered on that project
+    And a release "0.173.637" is proposed for that project
+    And a cycle plan is filed for cr "MOB-NOWSHAPE" with a cycle labelled "c1 now pill shape"
+    And cycle 1 of that plan is activated
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    And I select the "Now" sub-tab
+    Then the page matches the coarse-pointer media query
+    And Now's → Runs pill for that cycle is at least 44px tall with horizontal padding on each side of at least half that height
+
+
+  # CR-CRU-223 — an open run with a live state on the phone band. The run is
+  # real (POST /api/v2/runs/start); only its two live reads are stubbed
+  # (run-live-mock.ts), because the live state is filled by CR-CRU-200. At
+  # 390px the card keeps its failure count and timer in view and truncates its
+  # file on the one line it shares with the count, ends that line with F25's
+  # `› open` hint after the timer without pushing either out of the card, the
+  # card keeps the 44px touch floor, and the live drill-in fills the viewport.
+  Scenario: CR-CRU-223 — at the phone band a running card with a live state keeps its failure count and timer in view, truncates its file, and opens a live drill-in that fills the viewport
+    Given a project named "MOB Live Run Project" is registered
+    And an online agent "mob-live-runner" with message "streaming run" is registered on that project
+    And a run is started for agent "mob-live-runner" on that project
+    And the board holds a live state for that run: 412 of 1280 finished in "tests/integration/relay/a_rather_long_directory_name/test_relay_acknowledges_every_batch.py" with 3 failures
+    And the viewport is 390x844
+    When I open the workspace for that project
+    And I click the "Runs" workspace tab
+    Then a running card for "mob-live-runner" becomes visible within 2 seconds
+    And that running card's open hint "› open" follows its timer on the same line, inside the card
+    And that running card's failure count and timer stay inside the card
+    And that running card's file truncates on one line beside its count
+    And that running card is at least 44px tall
+    And the page body does not scroll horizontally
+    When I open that running card's live drill-in
+    Then the URL is the live drill-in of that run in the workspace
+    And the run overlay is visible
+    And the live drill-in's header reads "live · 412/1280 · 409 ✓ 3 ✗"
+    And the live drill-in lists the failures "test_acks_each_batch", "test_close_sends_the_rest" and "test_run_end_totals" in order
+    And the run overlay's bounding box spans at least 95% of the viewport height
+    And the page body does not scroll horizontally
+
+  Scenario: at the phone band a coverage file row draws its functions beneath the file's name, and the coverage file table stays inside its pane
+    Given a project named "MOB Coverage Files Project" is registered
+    And a green run whose coverage report names one very long file and two short ones is ingested for agent "mob-cov-files-agent"
+    When I open the workspace for that project
+    And I click the "Coverage" workspace tab
+    Then the coverage file table lists 3 files
+    And every coverage file row draws its functions figure beneath its file's name
+    And the coverage file table is no wider than its pane
+    And the page body does not scroll horizontally
+
+  Scenario: at the phone band on touch a long coverage file name is drawn whole, without the directory its files share, wrapped after a slash
+    Given a project named "MOB Coverage Names Project" is registered
+    And a green run whose coverage report names one very long file and two short ones is ingested for agent "mob-cov-names-agent"
+    When I open the workspace for that project
+    And I click the "Coverage" workspace tab
+    Then the coverage file table lists 3 files
+    And the long coverage file name is drawn whole, without the directory its files share
+    And the long coverage file name is wrapped over more than one line, breaking only after a "/"
+    And the long coverage file's row carries its whole name as its title
+
+  Scenario: at the phone band on touch a run page's coverage file line and its show all control are at least 44px tall
+    Given a project named "MOB Coverage Fold Project" is registered
+    And a green run whose coverage report names 60 files is ingested for agent "mob-cov-fold-agent"
+    When I open the run overlay directly at its cold URL under the workspace
+    Then the run overlay is visible
+    And the run's coverage line is at least 44px tall
+    When I tap the run's coverage line
+    Then the coverage file table lists 50 files
+    And the coverage file table's show all control is at least 44px tall
+    And the coverage file table is no wider than its pane

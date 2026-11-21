@@ -5,77 +5,57 @@
 // lives in src/v2.ts. The retired contract is archived in
 // tests/archive/v1-contract.test.ts.
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SHIPPED_DATA_FILE, limitDisclosures, serverConfigPath } from "./limits.ts";
+import {
+  SHIPPED_DATA_FILE,
+  limitDisclosures,
+  resolveLimit,
+  serverConfigPath,
+  shippedLimits,
+} from "./limits.ts";
+import {
+  resolveStore,
+  type ResolveDbPathOpts,
+  type StoreResolution,
+} from "./store-path.ts";
 import { Store, defaultRetention, RETENTION_DISPOSABLE_KINDS } from "./store.ts";
-import { handleV2 } from "./v2.ts";
+import { GATE_MILESTONE_RECORD_FIELDS, handleV2 } from "./v2.ts";
+import { codecNames } from "./codecs/index.ts";
+
+// The runtime's own web classes, captured as this module loads. The router
+// builds every answer, URL and stream on these, so a caller that later
+// installs another library's globals (happy-dom's, in a shell test) still gets
+// native objects back — and a request built on that library's classes is
+// rebuilt on these before any route reads it.
+const { AbortController, Headers, ReadableStream, Request, Response, URL } = globalThis;
 
 const pkg = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 ) as { version: string };
 
+/**
+ * Bun's own request-body bound: twice `ingest_body_bytes`' declared `max`.
+ * Every value an operator can set live sits beneath it, so an oversized ingest
+ * is always refused by the board's own JSON 413 (`readIngestBody` in
+ * src/v2.ts), never by Bun's empty one.
+ */
+export function maxRequestBodySize(): number {
+  return 2 * shippedLimits().ingest_body_bytes!.max;
+}
+
+export {
+  resolveStore,
+  type ResolveDbPathOpts,
+  type StoreResolution,
+  type StoreRule,
+} from "./store-path.ts";
+
 export interface StartServerOpts {
   port?: number;
   hostname?: string;
   dbPath?: string;
-}
-
-/** CR-CRU-043 §S1-§S3 — inputs to the DB path resolver (all defaulted). */
-export interface ResolveDbPathOpts {
-  /** Base directory for the rule-3 `./data/crucible.db` probe; defaults to `process.cwd()`. */
-  cwd?: string;
-  /** Environment to read `CRUCIBLE_DB` / `XDG_DATA_HOME` / `HOME` from; defaults to `process.env`. */
-  env?: NodeJS.ProcessEnv;
-  /** An explicit path (including `":memory:"`), which outranks everything else. */
-  dbPath?: string;
-}
-
-/** CR-CRU-068 §S1 — which of the four cascade rules picked the store. */
-export type StoreRule = "explicit" | "CRUCIBLE_DB" | "cwd-data" | "user-data";
-
-/** CR-CRU-068 §S1 — a resolved store path together with the rule that matched. */
-export interface StoreResolution {
-  path: string;
-  rule: StoreRule;
-}
-
-/**
- * CR-CRU-043 §S1-§S3 — resolve the store path, first match wins:
- *   1. explicit `opts.dbPath` (returned verbatim, `":memory:"` included);
- *   2. `CRUCIBLE_DB`;
- *   3. an ALREADY-EXISTING `<cwd>/data/crucible.db` — adopt only, never created here,
- *      which is what keeps the live dog-food instance in use from the repo root;
- *   4. `<XDG_DATA_HOME or <HOME>/.local/share>/crucible/crucible.db`.
- *
- * CR-CRU-068 §S1 — reports WHICH rule matched alongside the path, so a surprising
- * store is explicable instead of merely observable. Rule 3 is CWD-relative, so the
- * same binary opens a different database depending on where it was launched from.
- *
- * Pure: computes a string and never touches the filesystem beyond the rule-3
- * existence probe. The `HOME` fallback deliberately reads `env.HOME` rather than
- * `os.homedir()` — Bun caches `HOME` at process startup, so `os.homedir()` cannot
- * observe an injected env and the contract would be untestable.
- */
-export function resolveStore(opts?: ResolveDbPathOpts): StoreResolution {
-  if (opts?.dbPath !== undefined) {
-    return { path: opts.dbPath, rule: "explicit" };
-  }
-  const env = opts?.env ?? process.env;
-  const fromEnv = env.CRUCIBLE_DB;
-  if (fromEnv !== undefined && fromEnv !== "") {
-    return { path: fromEnv, rule: "CRUCIBLE_DB" };
-  }
-  const cwd = opts?.cwd ?? process.cwd();
-  const cwdDb = path.join(cwd, "data", "crucible.db");
-  if (existsSync(cwdDb)) {
-    return { path: cwdDb, rule: "cwd-data" };
-  }
-  const xdg = env.XDG_DATA_HOME;
-  const dataHome =
-    xdg !== undefined && xdg !== "" ? xdg : path.join(env.HOME ?? "", ".local", "share");
-  return { path: path.join(dataHome, "crucible", "crucible.db"), rule: "user-data" };
 }
 
 /**
@@ -210,8 +190,9 @@ function err(status: number, error: string): Response {
   return json({ ok: false, error }, status);
 }
 
-/** CR-CRU-004 §S3 — SSE stream: hello frame, store-change frames, keep-alives. */
-function handleStream(store: Store, req: Request): Response {
+/** CR-CRU-004 §S3 — SSE stream: hello frame, store-change frames, keep-alives.
+ *  `signal` aborts when the client goes away or the board stops. */
+function handleStream(store: Store, signal: AbortSignal): Response {
   const encoder = new TextEncoder();
   let unsubscribe: (() => void) | undefined;
   let keepAlive: ReturnType<typeof setInterval> | undefined;
@@ -241,7 +222,7 @@ function handleStream(store: Store, req: Request): Response {
         send(`: keep-alive ${Date.now()}\n\n`);
       }, 15_000);
       // reader.cancel() from a fetch client surfaces as request abort here.
-      req.signal.addEventListener("abort", () => {
+      signal.addEventListener("abort", () => {
         cleanup();
         try {
           controller.close();
@@ -318,6 +299,155 @@ async function handleStatic(url: URL): Promise<Response> {
   });
 }
 
+export interface CreateBoardOpts {
+  /** The store the board answers from; the board disposes it on `stop`. */
+  store: Store;
+  /** Where that store came from, as both health routes disclose it. */
+  storeResolution: StoreResolution;
+  /** The bound listener, read each time health answers; `null` for a board
+   *  with no socket, which never invents a port. */
+  listener: () => ListenerResolution | null;
+}
+
+/** A board's request router over one store, with or without a socket. */
+export interface BoardHandle {
+  store: Store;
+  /** Answers one request exactly as the served board does. Never rejects: a
+   *  handler that throws answers 500. */
+  fetch(req: Request): Promise<Response>;
+  /** Aborts every request still held (an open `/api/stream`), then disposes
+   *  the store, once. */
+  stop(): void;
+}
+
+/** A request built on another library's classes, rebuilt on the native ones. */
+async function nativeRequest(
+  req: Pick<Request, "url" | "method" | "headers" | "arrayBuffer">,
+): Promise<Request> {
+  if (req instanceof Request) return req;
+  const headers = new Headers();
+  req.headers.forEach((value, name) => headers.append(name, value));
+  const body = req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer();
+  return new Request(req.url, { method: req.method, headers, body });
+}
+
+/**
+ * The board's router over an explicit store. It resolves nothing itself — no
+ * store path, no listener, no environment variable: the caller supplies all
+ * three. `startServer` serves its `fetch`; a test calls it in process.
+ */
+export function createBoard(opts: CreateBoardOpts): BoardHandle {
+  const { store, storeResolution, listener } = opts;
+  const startedAt = Date.now();
+  const held = new Set<AbortController>();
+  let stopped = false;
+
+  // Shared by GET /api/health and GET /api/v2/health (§S1 health parity).
+  const healthPayload = () => {
+    const bound = listener();
+    return {
+      ok: true,
+      status: "healthy",
+      version: pkg.version,
+      uptime_s: (Date.now() - startedAt) / 1000,
+      counts: {
+        projects: store.listProjects().length,
+        agents: store.listAgents().length,
+        events: store.countEvents(),
+      },
+      // CR-CRU-068 §S1 — one site, so /api/health and /api/v2/health cannot drift.
+      // CR-CRU-071 §S1 — the same site carries the schema version and what this
+      // boot migrated, so an in-place upgrade is visible without shell forensics.
+      store: {
+        path: storeResolution.path,
+        rule: storeResolution.rule,
+        schemaVersion: store.schemaVersion,
+        migration: store.migration,
+      },
+      // CR-CRU-139 §S1 — the second thing this boot resolved, at the SAME single
+      // site, so the listener cannot drift between the two health routes either.
+      listener: bound === null ? null : { ...bound },
+      // The names this board decodes, read off the codec registries, so a client
+      // can tell a board that predates server-side decoding before it sends.
+      codecs: codecNames(),
+      // What a gate milestone records beyond its verdict, so a client can tell
+      // a board that keeps a gate's scope and suites before it posts them.
+      milestones: { gate: [...GATE_MILESTONE_RECORD_FIELDS] },
+      // The ingest body bound, resolved per request like every limit, so a client
+      // can refuse a body the board would refuse before it sends a byte of it.
+      limits: { ingest_body_bytes: resolveLimit("ingest_body_bytes") },
+    };
+  };
+
+  const route = (req: Request, url: URL, signal: AbortSignal): Response | Promise<Response> => {
+    // CR-CRU-008 §S4 — the v1 shim is RETIRED: no legacy /api/* routes
+    // remain except /api/health and /api/stream below; everything else
+    // falls through to the generic 404 JSON catch-all.
+    if (req.method === "GET" && url.pathname === "/api/health") {
+      return Response.json(healthPayload());
+    }
+    // CR-CRU-004 §S3 — SSE change stream.
+    if (req.method === "GET" && url.pathname === "/api/stream") {
+      return handleStream(store, signal);
+    }
+    // CR-CRU-004 §S1 — clean v2 surface, same store instance the retired
+    // shim used.
+    if (url.pathname === "/api/v2" || url.pathname.startsWith("/api/v2/")) {
+      const v2 = handleV2(store, req, url, { version: pkg.version, healthPayload });
+      if (v2 !== null) {
+        return v2;
+      }
+    }
+    // §S2 — API error paths are always JSON {ok:false, error}.
+    if (url.pathname.startsWith("/api/")) {
+      return err(404, `unknown route: ${req.method} ${url.pathname}`);
+    }
+    // CR-CRU-006 §S1/§S2 — static SPA shell for every non-API GET.
+    if (req.method === "GET") {
+      return handleStatic(url);
+    }
+    return new Response("Not Found", { status: 404 });
+  };
+
+  return {
+    store,
+    async fetch(incoming: Request): Promise<Response> {
+      // One controller per request, aborted when the request's own signal
+      // aborts or the board stops; it is held only while the answer may still
+      // be streaming (an open `/api/stream`).
+      const controller = new AbortController();
+      const release = (): void => {
+        held.delete(controller);
+      };
+      controller.signal.addEventListener("abort", release, { once: true });
+      if (incoming.signal.aborted) controller.abort();
+      else incoming.signal.addEventListener("abort", () => controller.abort(), { once: true });
+      let streaming = false;
+      try {
+        const req = await nativeRequest(incoming);
+        const url = new URL(req.url);
+        streaming = req.method === "GET" && url.pathname === "/api/stream" && !controller.signal.aborted;
+        if (streaming) held.add(controller);
+        return await route(req, url, controller.signal);
+      } catch (error) {
+        // Answered as `Bun.serve` answers a throwing handler: logged, and a 500.
+        console.error(error);
+        streaming = false;
+        return new Response(null, { status: 500 });
+      } finally {
+        if (!streaming) release();
+      }
+    },
+    stop(): void {
+      if (stopped) return;
+      stopped = true;
+      for (const controller of [...held]) controller.abort();
+      held.clear();
+      store.dispose();
+    },
+  };
+}
+
 export function startServer(opts?: StartServerOpts): ServerHandle {
   // CR-CRU-043 §S1-§S3 — no CWD-relative default: explicit opts, then CRUCIBLE_DB,
   // then an existing ./data/crucible.db, then the user data directory.
@@ -329,7 +459,6 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
     mkdirSync(path.dirname(dbPath), { recursive: true });
   }
   const store = Store.open(dbPath);
-  const startedAt = Date.now();
 
   // CR-CRU-139 §S1 — and the listener, through the same three-layer shape, by
   // the PURE resolver that binds nothing.
@@ -348,30 +477,8 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
   // is a property of the call sites rather than of this code.
   let listenerResolution: ListenerResolution = resolvedListener;
 
-  // Shared by GET /api/health and GET /api/v2/health (§S1 health parity).
-  const healthPayload = () => ({
-    ok: true,
-    status: "healthy",
-    version: pkg.version,
-    uptime_s: (Date.now() - startedAt) / 1000,
-    counts: {
-      projects: store.listProjects().length,
-      agents: store.listAgents().length,
-      events: store.countEvents(),
-    },
-    // CR-CRU-068 §S1 — one site, so /api/health and /api/v2/health cannot drift.
-    // CR-CRU-071 §S1 — the same site carries the schema version and what this
-    // boot migrated, so an in-place upgrade is visible without shell forensics.
-    store: {
-      path: storeResolution.path,
-      rule: storeResolution.rule,
-      schemaVersion: store.schemaVersion,
-      migration: store.migration,
-    },
-    // CR-CRU-139 §S1 — the second thing this boot resolved, at the SAME single
-    // site, so the listener cannot drift between the two health routes either.
-    listener: { ...listenerResolution },
-  });
+  // The health routes disclose the BOUND listener, read when they answer.
+  const board = createBoard({ store, storeResolution, listener: () => listenerResolution });
 
   const server = Bun.serve({
     // CR-CRU-139 §S1 — the listener is CONFIGURATION: an explicit argument,
@@ -385,36 +492,8 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
     // §S3 — SSE connections are long-lived and quiet between 15s keep-alives;
     // Bun's default 10s idleTimeout would reset them mid-stream.
     idleTimeout: 0,
-    async fetch(req: Request): Promise<Response> {
-      const url = new URL(req.url);
-      // CR-CRU-008 §S4 — the v1 shim is RETIRED: no legacy /api/* routes
-      // remain except /api/health and /api/stream below; everything else
-      // falls through to the generic 404 JSON catch-all.
-      if (req.method === "GET" && url.pathname === "/api/health") {
-        return Response.json(healthPayload());
-      }
-      // CR-CRU-004 §S3 — SSE change stream.
-      if (req.method === "GET" && url.pathname === "/api/stream") {
-        return handleStream(store, req);
-      }
-      // CR-CRU-004 §S1 — clean v2 surface, same store instance the retired
-      // shim used.
-      if (url.pathname === "/api/v2" || url.pathname.startsWith("/api/v2/")) {
-        const v2 = handleV2(store, req, url, { version: pkg.version, healthPayload });
-        if (v2 !== null) {
-          return v2;
-        }
-      }
-      // §S2 — API error paths are always JSON {ok:false, error}.
-      if (url.pathname.startsWith("/api/")) {
-        return err(404, `unknown route: ${req.method} ${url.pathname}`);
-      }
-      // CR-CRU-006 §S1/§S2 — static SPA shell for every non-API GET.
-      if (req.method === "GET") {
-        return handleStatic(url);
-      }
-      return new Response("Not Found", { status: 404 });
-    },
+    maxRequestBodySize: maxRequestBodySize(),
+    fetch: board.fetch,
   });
 
   // CR-CRU-139 §S1 — the correction promised above: the bound socket replaces
@@ -434,8 +513,11 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
     store,
     storeResolution,
     listenerResolution,
+    // CR-CRU-200 §S4 — the board's shutdown disposes its store, so no
+    // deferred live frame fires after the board has stopped.
     stop: () => {
       server.stop(true);
+      board.stop();
     },
   };
 }

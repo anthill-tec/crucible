@@ -1,0 +1,520 @@
+"""A `pre-merge-gate` whose suite ran but could not be filed names that suite
+unreported, states no figures for it, and is not green — end to end, against
+a board that goes away.
+
+With no board there are no figures: a run whose ingest cannot reach the board,
+or whose health read before the ingest cannot, is not filed, and a gate that
+counts that run cannot say what it covered. It names the suite
+`gate-suite-unreported`, never `gate-suite-failed` (nothing was filed to have
+failed), states no counts for it, and exits non-zero.
+
+Both gate shapes, for each of three clients:
+
+  - **bun, a declared suite** — `package.json` declares `test:unit` (an
+    own-stack target the whole-suite run covers), so the gate composes;
+  - **bun, no declared suite** — the gate's one whole-suite regression IS the
+    gate, and emits that run's own envelope;
+  - **python, no declared suite** — python's surface enumerates no
+    declaration (`suites=None`), so this is the only shape python's own gate
+    has;
+  - **python, a declared suite** — the one way a python suite is a DECLARED
+    suite: a bun project's `test:python` script invoking the python client,
+    which bun's gate dispatches to it;
+  - **rust, no declared suite** — no `.config/nextest.toml`: the gate's one
+    whole-suite regression IS the gate;
+  - **rust, a declared suite** — `.config/nextest.toml` declares a `unit`
+    profile (an own-stack target the whole-suite run covers), so the gate
+    composes.
+
+The board is a recording stand-in (`RecordingBoard`) per test, answering in
+the server's shapes (its health stating `milestones.gate`, as
+`src/server.ts`'s does). The client reaches it through a transparent
+forwarding proxy (`RecordingProxy`) that every request passes through
+untouched, so the run is opened, registered and (where it is) filed on that
+board. The ONE thing the proxy adds is the board going away at a chosen
+moment, between two requests of one client:
+
+  - **unreachable at the health read** — the fake runner, while the suite is
+    running, has the proxy stop listening; the ingest's health read and
+    everything after it find nothing at the address (connection refused);
+  - **unreachable at the ingest** — the fake runner arms the proxy; the next
+    health read is forwarded and answered, and the proxy stops listening
+    before answering it, so the `POST /api/v2/runs` that follows finds
+    nothing at the address. A streamed python unittest run (CR-CRU-224) may
+    close with no health read first: its close, the `POST /api/v2/runs`, is
+    then where the proxy stops, never forwarding it.
+
+Invocation:
+    python3 clients/python-crucible.py test \
+        --tests tests.client.integration.test_gate_names_an_unfiled_suite_unreported_end_to_end
+"""
+
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+
+from tests.client import TEST_INSTALL_CLIENTS
+from tests.client.client_fleet_envelope_census_helpers import declare_and_require_board
+from tests.client.fake_nextest import private_fake_prelude
+from tests.client.gate_names_an_unfiled_suite_unreported_end_to_end_helpers import (
+    _CUT,
+    _FAKE_BUN,
+    _FAKE_PYTHON,
+    _SCRUBBED,
+    GREEN_LCOV,
+)
+from tests.client.live_run_harness import RecordingBoard, load_toon, scrubbed_env
+from tests.client.real_board import DROP, RecordingProxy
+
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
+BUN_CLIENT = CLIENTS_DIR / "bun-crucible.py"
+PYTHON_CLIENT = CLIENTS_DIR / "python-crucible.py"
+RUST_CLIENT = CLIENTS_DIR / "rust-crucible.py"
+TIMEOUT = 180
+TOON = load_toon()
+
+HEALTH_PATHS = ("/api/health", "/api/v2/health")
+CUT_NOW = "/__proxy__/cut-now"
+CUT_AFTER_HEALTH = "/__proxy__/cut-after-health"
+COUNT_KEYS = ("passed", "failed", "pending", "total", "files")
+
+
+# The stream file a streamed unittest run's runner is handed (CR-CRU-224).
+STREAM_FILE = "crucible-events.ndjson"
+GREEN_NEXTEST_JUNIT = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<testsuites name="nextest-run" tests="1" failures="0" errors="0">\n'
+    '  <testsuite name="green" tests="1" disabled="0" errors="0" '
+    'failures="0">\n'
+    '    <testcase name="tests::passes" classname="green" time="0.001">'
+    '</testcase>\n'
+    '  </testsuite>\n'
+    '</testsuites>\n')
+
+
+# `cargo`'s stand-in: a streamed run's calls are answered by
+# `tests/client/fake_nextest.py` (the version, the list, `llvm-cov show-env`,
+# `llvm-cov report` writing GREEN_LCOV), and its streamed `nextest run`
+# streams the one passing `green` test, makes the cut FAKE_CARGO_CUT names
+# and exits 0. Otherwise anything but a run naming `nextest` (the gate's
+# `cargo clean`) exits 0; a `nextest` run (bare, or under `llvm-cov`) writes
+# GREEN_NEXTEST_JUNIT to `target/nextest/<-P profile>/junit.xml`, GREEN_LCOV to
+# its `--output-path` when given one, makes the cut FAKE_CARGO_CUT names, and
+# exits 0.
+_FAKE_CARGO = ("import os as _nx_os\n"
+               f"_nx_os.environ.setdefault('FAKE_LCOV', {GREEN_LCOV!r})\n"
+               + private_fake_prelude(
+                   "[fake_nextest.case('tests::passes', crate='green', binary='green')]",
+                   streamed=False) + r'''
+import os
+import sys
+import urllib.request
+
+CUT_VAR = "FAKE_CARGO_CUT"
+JUNIT, LCOV = ''' + repr((GREEN_NEXTEST_JUNIT, GREEN_LCOV)) + r'''
+_nx_streamed = fake_nextest.streamed_run(_nx_args, _nx_cases)
+if _nx_streamed is not None:
+    cut = os.environ.get(CUT_VAR)
+    if cut:
+        urllib.request.urlopen(cut, timeout=60).read()
+    sys.exit(_nx_streamed)
+
+def write(path, text):
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "w") as handle:
+        handle.write(text)
+
+argv = sys.argv[1:]
+if "nextest" not in argv:
+    sys.exit(0)
+profile = "default"
+lcov = None
+for i, arg in enumerate(argv):
+    if arg == "-P" and i + 1 < len(argv):
+        profile = argv[i + 1]
+    if arg == "--output-path" and i + 1 < len(argv):
+        lcov = argv[i + 1]
+write(os.path.join(os.getcwd(), "target", "nextest", profile, "junit.xml"), JUNIT)
+if lcov:
+    write(os.path.join(os.getcwd(), lcov), LCOV)
+sys.stdout.write("    Starting 1 test across 1 binary\n"
+                 "        PASS [   0.001s] green tests::passes\n")
+sys.stdout.flush()
+''' + _CUT + r'''
+sys.exit(0)
+''')
+
+
+def _gate_board():
+    """A recording board whose health states, as the server's does, that it
+    records a gate's scope and suites (`milestones.gate`, `src/server.ts`)."""
+    board = RecordingBoard()
+    health = board.default_health()
+    health["milestones"] = {"gate": ["scope", "suites"]}
+    board.script_health(health)
+    return board
+
+
+def _cut_proxy(upstream):
+    """A `RecordingProxy` to the board that forwards every request, byte
+    for byte, until it is told to stop listening: at once (`CUT_NOW`), or once
+    armed (`CUT_AFTER_HEALTH`) at the run's filing: just before it answers
+    the next health read, or, when a `POST /api/v2/runs` comes first (a
+    streamed run's close, CR-CRU-224, which need read no health first), on
+    that POST, which it never forwards. Once it has stopped, its address
+    refuses every connection, as a board that has gone away does.
+    Returns the proxy and `forwarded_after_control`: every path it forwarded
+    once a control path reached it."""
+    proxy = RecordingProxy(upstream, timeout=120)
+    forwarded_after_control = []
+    lock = threading.Lock()
+    state = {"controlled": False, "armed": False}
+
+    def intercept(method, path, _body):
+        if path == CUT_NOW:
+            with lock:
+                state["controlled"] = True
+            proxy.stop_listening()
+            return 200, b'{"ok":true}'
+        if path == CUT_AFTER_HEALTH:
+            with lock:
+                state["armed"] = True
+                state["controlled"] = True
+            return 200, b'{"ok":true}'
+        if method == "POST" and path.split("?")[0] == "/api/v2/runs":
+            with lock:
+                armed, state["armed"] = state["armed"], False
+            if armed:
+                proxy.stop_listening()
+                return DROP
+        with lock:
+            if state["controlled"]:
+                forwarded_after_control.append(path)
+        return None
+
+    def after(method, path, _status):
+        if method == "GET" and path.split("?")[0] in HEALTH_PATHS:
+            with lock:
+                armed, state["armed"] = state["armed"], False
+            if armed:
+                proxy.stop_listening()
+
+    proxy.intercept, proxy.after = intercept, after
+    return proxy, forwarded_after_control
+
+
+def _envelope(stdout):
+    try:
+        decoded = TOON.decode(stdout)
+    except ValueError:
+        return None
+    return decoded.get("axi") if isinstance(decoded, dict) else None
+
+
+def _codes(envelope):
+    return [w.get("code") for w in (envelope or {}).get("warnings") or []
+            if isinstance(w, dict)]
+
+
+def _warnings_coded(envelope, code):
+    return [w for w in (envelope or {}).get("warnings") or []
+            if isinstance(w, dict) and w.get("code") == code]
+
+
+def _figures(block):
+    """The integer counts a `run:` block or a `suites[]` row states."""
+    block = block if isinstance(block, dict) else {}
+    return {k: block[k] for k in COUNT_KEYS
+            if isinstance(block.get(k), int) and not isinstance(block.get(k), bool)}
+
+
+def _write_executable(path, body):
+    Path(path).write_text("#!" + sys.executable + "\n" + body, encoding="utf-8")
+    os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR | stat.S_IRUSR)
+    return path
+
+
+class _GateAgainstABoardThatGoesAway(unittest.TestCase):
+    """A scratch project on a board of its own, reached through a
+    `_cut_proxy`; both fake runners; and the gate's envelope. Defines no test
+    of its own."""
+
+    def setUp(self):
+        self.board = _gate_board()
+        self.addCleanup(self.board.close)
+        self.base = self.board.url
+        self.scratch = tempfile.mkdtemp(prefix="gate-unreported-")
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.key = f"gate-unreported-{os.path.basename(self.scratch)}-key"
+        self.proxy, self.forwarded_after_control = _cut_proxy(self.base)
+        self.addCleanup(self.proxy.close)
+        self.project = os.path.join(self.scratch, "project")
+        os.makedirs(os.path.join(self.project, "tests"))
+        Path(self.project, ".env").write_text(f"CRUCIBLE_PROJECT_KEY={self.key}\n")
+        declare_and_require_board(self.project, self.proxy.url, "a gate's client")
+        self.fake_bun = _write_executable(os.path.join(self.scratch, "fake_bun.py"),
+                                          _FAKE_BUN)
+        self.fake_python = _write_executable(
+            os.path.join(self.scratch, "fake_python.py"), _FAKE_PYTHON)
+        self.bin_dir = os.path.join(self.scratch, "bin")
+        os.makedirs(self.bin_dir)
+        _write_executable(os.path.join(self.bin_dir, "cargo"), _FAKE_CARGO)
+
+    def manifest(self, scripts=None):
+        manifest = {"name": "gate-unreported", "private": True}
+        if scripts:
+            manifest["scripts"] = scripts
+        Path(self.project, "package.json").write_text(json.dumps(manifest, indent=2))
+
+    def cut(self, when):
+        return self.proxy.url + {"health": CUT_NOW, "ingest": CUT_AFTER_HEALTH}[when]
+
+    def env(self, **fake):
+        env = scrubbed_env(None, **fake)
+        for key in _SCRUBBED + ("FAKE_BUN_CUT", "FAKE_PYTHON_CUT", "FAKE_CARGO_CUT",
+                                "FAKE_PYTHON_STREAM_CAPTURE"):
+            if key not in fake:
+                env.pop(key, None)
+        return env
+
+    def bun_gate(self, agent, **fake):
+        return self._drive(BUN_CLIENT, [
+            "pre-merge-gate", "--agent", agent, "--skip-check",
+            "--bun", self.fake_bun, "--project-dir", self.project,
+            "--package-dir", self.project, "--reports", "reports"], **fake)
+
+    def python_gate(self, agent, **fake):
+        return self._drive(PYTHON_CLIENT, [
+            "pre-merge-gate", "--agent", agent, "--skip-check",
+            "--python", self.fake_python, "--project-dir", self.project,
+            "--reports", "reports"], **fake)
+
+    def _drive(self, client, argv, path_prefix=None, **fake):
+        env = self.env(**fake)
+        if path_prefix:
+            env["PATH"] = path_prefix + os.pathsep + env.get("PATH", "")
+        return subprocess.run([sys.executable, str(client), *argv],
+                              cwd=self.project, env=env,
+                              capture_output=True, text=True, timeout=TIMEOUT,
+                              check=False)
+
+    def rust_gate(self, agent, **fake):
+        """The rust gate, its clippy step skipped and its disk guard and
+        reclaim kept off the host, over the fake `cargo` first on PATH."""
+        return self._drive(RUST_CLIENT, [
+            "pre-merge-gate", "--agent", agent, "--skip-clippy",
+            "--min-free-g", "0", "--keep-target", "--project-dir", self.project],
+            path_prefix=self.bin_dir, **fake)
+
+    def declare_nextest_profile(self, tier):
+        """A `.config/nextest.toml` declaring `<tier>` whole: the profile and
+        the junit sub-table that makes nextest write its report."""
+        config = Path(self.project, ".config", "nextest.toml")
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(f'[profile.{tier}]\n[profile.{tier}.junit]\n'
+                          f'path = "junit.xml"\n', encoding="utf-8")
+
+    @staticmethod
+    def diagnostics(result):
+        return (f"exit={result.returncode} stdout={result.stdout!r} "
+                f"stderr={result.stderr[-3000:]!r}")
+
+    def assert_the_cut_landed(self, when, result):
+        """Fixture sanity: the proxy was told to go away, and (for the ingest
+        cut) the run's filing reached it after it was armed: a health read
+        answered by the board, or the `POST /api/v2/runs` it cut."""
+        paths = [p for _m, p in self.proxy.requests]
+        control = {"health": CUT_NOW, "ingest": CUT_AFTER_HEALTH}[when]
+        self.assertIn(control, paths, f"the fake runner made its cut; "
+                                      f"requests={paths!r} {self.diagnostics(result)}")
+        after = paths[paths.index(control) + 1:]
+        if when == "ingest":
+            self.assertTrue(any(p in HEALTH_PATHS or p == "/api/v2/runs" for p in after),
+                            f"the run's filing reached the armed proxy; "
+                            f"requests={paths!r} {self.diagnostics(result)}")
+        self.assertNotIn("/api/v2/runs", self.forwarded_after_control,
+                         f"no ingest reached the board after the cut; "
+                         f"requests={paths!r} {self.diagnostics(result)}")
+
+    def stream_capture(self):
+        """Where the fake python records the `CRUCIBLE_STREAM` it was handed."""
+        return os.path.join(self.scratch, "stream-capture.txt")
+
+    def assert_the_runner_was_handed_a_stream(self, result):
+        """CR-CRU-224 §S3: a unittest run with `--agent` hands its runner
+        `CRUCIBLE_STREAM`, naming `<reports dir>/crucible-events.ndjson`."""
+        capture = Path(self.stream_capture())
+        handed = capture.read_text(encoding="utf-8") if capture.exists() else None
+        self.assertEqual(os.path.basename(handed or ""), STREAM_FILE,
+                         f"the python runner was handed CRUCIBLE_STREAM={handed!r}; "
+                         f"{self.diagnostics(result)}")
+
+    def assert_unreported_and_not_green(self, result, *, names=None):
+        envelope = _envelope(result.stdout)
+        where = f"envelope={envelope!r} {self.diagnostics(result)}"
+        self.assertIsNotNone(envelope, f"stdout is one TOON envelope; {where}")
+        envelope = envelope or {}
+        self.assertEqual(envelope.get("verb"), "pre-merge-gate", where)
+        self.assertIs(envelope.get("ok"), False, f"the gate is not green; {where}")
+        self.assertNotEqual(result.returncode, 0, f"the gate exits non-zero; {where}")
+        unreported = _warnings_coded(envelope, "gate-suite-unreported")
+        self.assertEqual(len(unreported), 1,
+                         f"the gate names the one suite it could not file "
+                         f"`gate-suite-unreported`, once; {where}")
+        if names is not None and unreported:
+            self.assertIn(names, unreported[0].get("detail") or "",
+                          f"the warning names the unfiled suite; {where}")
+        self.assertNotIn("gate-suite-failed", _codes(envelope),
+                         f"a run that was never filed did not fail; {where}")
+        return envelope
+
+
+class BunGateWithADeclaredSuiteEndToEndTest(_GateAgainstABoardThatGoesAway):
+    """`test:unit` declared: the gate composes, and its whole-suite run,
+    which covers `test:unit`, is the suite it could not file."""
+
+    def drive(self, when, agent):
+        self.manifest({"test:unit": "bun test"})
+        result = self.bun_gate(agent, FAKE_BUN_CUT=self.cut(when))
+        self.assert_the_cut_landed(when, result)
+        envelope = self.assert_unreported_and_not_green(result, names="test:unit")
+        rows = [r for r in envelope.get("suites") or []
+                if isinstance(r, dict) and r.get("suite") == "test:unit"]
+        self.assertEqual(len(rows), 1, f"envelope={envelope!r}")
+        self.assertEqual(_figures(rows[0] if rows else {}), {},
+                         f"the gate states no figures for the unfiled suite; "
+                         f"envelope={envelope!r}")
+
+    def test_bun_gate_with_a_declared_suite_whose_ingest_finds_no_board_names_it_unreported(self):
+        self.drive("ingest", "bun-gate-declared-ingest-gone")
+
+    def test_bun_gate_with_a_declared_suite_whose_health_read_finds_no_board_names_it_unreported(self):
+        self.drive("health", "bun-gate-declared-health-gone")
+
+
+class BunGateWithNoDeclaredSuiteEndToEndTest(_GateAgainstABoardThatGoesAway):
+    """No `test:*` script: the gate's one whole-suite regression is the gate,
+    and its envelope is that run's own."""
+
+    def drive(self, when, agent):
+        self.manifest()
+        result = self.bun_gate(agent, FAKE_BUN_CUT=self.cut(when))
+        self.assert_the_cut_landed(when, result)
+        envelope = self.assert_unreported_and_not_green(result, names="bun")
+        self.assertEqual(_figures(envelope.get("run")), {},
+                         f"the gate states no figures for the unfiled suite; "
+                         f"envelope={envelope!r}")
+
+    def test_bun_gate_with_no_declared_suite_whose_ingest_finds_no_board_names_it_unreported(self):
+        self.drive("ingest", "bun-gate-whole-ingest-gone")
+
+    def test_bun_gate_with_no_declared_suite_whose_health_read_finds_no_board_names_it_unreported(self):
+        self.drive("health", "bun-gate-whole-health-gone")
+
+
+class PythonGateWithNoDeclaredSuiteEndToEndTest(_GateAgainstABoardThatGoesAway):
+    """Python's own gate: its surface declares no suites, so its one
+    whole-suite regression is the gate."""
+
+    def drive(self, when, agent):
+        result = self.python_gate(agent, FAKE_PYTHON_CUT=self.cut(when),
+                                  FAKE_PYTHON_STREAM_CAPTURE=self.stream_capture())
+        self.assert_the_runner_was_handed_a_stream(result)
+        self.assert_the_cut_landed(when, result)
+        envelope = self.assert_unreported_and_not_green(result, names="python")
+        self.assertEqual(_figures(envelope.get("run")), {},
+                         f"the gate states no figures for the unfiled suite; "
+                         f"envelope={envelope!r}")
+
+    def test_python_gate_whose_ingest_finds_no_board_names_its_suite_unreported(self):
+        self.drive("ingest", "python-gate-whole-ingest-gone")
+
+    def test_python_gate_whose_health_read_finds_no_board_names_its_suite_unreported(self):
+        self.drive("health", "python-gate-whole-health-gone")
+
+
+class DeclaredPythonSuiteDispatchedByTheBunGateEndToEndTest(
+        _GateAgainstABoardThatGoesAway):
+    """A `test:python` script invoking the python client is a declared python
+    suite; bun's gate dispatches it. Bun's own whole suite is filed (the cut
+    is the python runner's alone), so the python suite is the one unfiled."""
+
+    def drive(self, when, agent):
+        command = (f"{sys.executable} {PYTHON_CLIENT} regression "
+                   f"--python {self.fake_python} --project-dir {self.project} "
+                   f"--reports reports-python")
+        self.manifest({"test:python": command})
+        result = self.bun_gate(agent, FAKE_PYTHON_CUT=self.cut(when),
+                               FAKE_PYTHON_STREAM_CAPTURE=self.stream_capture())
+        self.assert_the_runner_was_handed_a_stream(result)
+        self.assert_the_cut_landed(when, result)
+        envelope = self.assert_unreported_and_not_green(result, names="test:python")
+        rows = [r for r in envelope.get("suites") or []
+                if isinstance(r, dict) and r.get("suite") == "test:python"]
+        self.assertEqual(len(rows), 1, f"envelope={envelope!r}")
+        self.assertEqual(rows[0].get("stack") if rows else None, "python",
+                         f"envelope={envelope!r}")
+        self.assertEqual(_figures(rows[0] if rows else {}), {},
+                         f"the gate states no figures for the unfiled suite; "
+                         f"envelope={envelope!r}")
+
+    def test_bun_gate_dispatching_a_python_suite_whose_ingest_finds_no_board_names_it_unreported(self):
+        self.drive("ingest", "bun-gate-python-ingest-gone")
+
+    def test_bun_gate_dispatching_a_python_suite_whose_health_read_finds_no_board_names_it_unreported(self):
+        self.drive("health", "bun-gate-python-health-gone")
+
+
+class RustGateWithNoDeclaredSuiteEndToEndTest(_GateAgainstABoardThatGoesAway):
+    """No `.config/nextest.toml`: the rust gate's one whole-suite regression
+    is the gate, and its envelope is that run's own."""
+
+    def drive(self, when, agent):
+        result = self.rust_gate(agent, FAKE_CARGO_CUT=self.cut(when))
+        envelope = self.assert_unreported_and_not_green(result, names="rust")
+        self.assert_the_cut_landed(when, result)
+        self.assertEqual(_figures(envelope.get("run")), {},
+                         f"the gate states no figures for the unfiled suite; "
+                         f"envelope={envelope!r}")
+
+    def test_rust_gate_with_no_declared_suite_whose_ingest_finds_no_board_names_it_unreported(self):
+        self.drive("ingest", "rust-gate-whole-ingest-gone")
+
+    def test_rust_gate_with_no_declared_suite_whose_health_read_finds_no_board_names_it_unreported(self):
+        self.drive("health", "rust-gate-whole-health-gone")
+
+
+class RustGateWithADeclaredSuiteEndToEndTest(_GateAgainstABoardThatGoesAway):
+    """A `unit` nextest profile declared: the gate composes, and its
+    whole-suite run, which covers `unit`, is the suite it could not file."""
+
+    def drive(self, when, agent):
+        self.declare_nextest_profile("unit")
+        result = self.rust_gate(agent, FAKE_CARGO_CUT=self.cut(when))
+        envelope = self.assert_unreported_and_not_green(result, names="unit")
+        self.assert_the_cut_landed(when, result)
+        rows = [r for r in envelope.get("suites") or []
+                if isinstance(r, dict) and r.get("suite") == "unit"]
+        self.assertEqual(len(rows), 1, f"envelope={envelope!r}")
+        self.assertEqual(_figures(rows[0] if rows else {}), {},
+                         f"the gate states no figures for the unfiled suite; "
+                         f"envelope={envelope!r}")
+
+    def test_rust_gate_with_a_declared_suite_whose_ingest_finds_no_board_names_it_unreported(self):
+        self.drive("ingest", "rust-gate-declared-ingest-gone")
+
+    def test_rust_gate_with_a_declared_suite_whose_health_read_finds_no_board_names_it_unreported(self):
+        self.drive("health", "rust-gate-declared-health-gone")
+
+
+if __name__ == "__main__":
+    unittest.main()

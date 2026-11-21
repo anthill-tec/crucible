@@ -1,6 +1,6 @@
 # CR-CRU-162 — a gate decision is recorded, not lost in the tool's logs
 
-**Type** feature · **Points** 8 (planning game 2026-10-03; confirmed at gap analysis 2026-10-05) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** PENDING — filed 2026-10-01
+**Type** feature · **Points** 8 (planning game 2026-10-03; confirmed at gap analysis 2026-10-05) · **Wave** 7 (0.3.0) · **Depends on** — · **Status** DONE — filed 2026-10-01
 
 ## Problem
 

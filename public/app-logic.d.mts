@@ -1,8 +1,8 @@
 // CR-CRU-006 §S3/§S4 — declarations for app-logic.mjs. Sibling .d.mts so the
 // test import (`../public/app-logic.mjs`) typechecks via module resolution:
-// public/ stays outside the tsconfig include set, and the ambient
-// `declare module` in tests/app-logic.d.ts is inert for relative specifiers
-// (TS ignores relative ambient module names). Mirrors that contract exactly.
+// public/ stays outside the tsconfig include set. It is the only declaration:
+// the ambient `declare module` mirror the tests once kept was inert for relative
+// specifiers (TS ignores relative ambient module names) and is retired.
 
 export interface CrucibleEventBrief {
   id: string;
@@ -11,6 +11,8 @@ export interface CrucibleEventBrief {
   kind: string;
   tier?: string;
   codec?: string;
+  /** The run's test framework, when its filer named one (e.g. `playwright-bdd`). */
+  framework?: string;
   timestamp: number;
   total: number;
   passed: number;
@@ -94,13 +96,26 @@ export interface OrderableProjectLike {
   lastActivity: number;
 }
 
+export interface ProjectRunBriefLike {
+  kind?: string;
+  status?: string;
+  lint?: string;
+  total: number;
+  passed: number;
+  failed: number;
+  errors?: number;
+  timestamp: number;
+}
+
 export interface ProjectRollupLike {
-  lastEvent?: {
-    total: number;
-    passed: number;
-    failed: number;
-    timestamp: number;
-  } | null;
+  lastEvent?: ProjectRunBriefLike | null;
+  /** The newest run that is not a lint record; read when `lastEvent` is one. */
+  lastEventNotLint?: ProjectRunBriefLike | null;
+}
+
+export interface ProjectStatus {
+  text: string;
+  tone: "pass" | "fail" | null;
 }
 
 // CR-CRU-007 §S2 — RED→GREEN transition markers (= Cycles), pure pairing.
@@ -383,6 +398,8 @@ export declare function routeParse(pathname: string): RouteState;
 
 export declare function workspaceTabs(project: WorkspaceProjectLike): WorkspaceTab[];
 
+export declare function projectStatus(project: ProjectRollupLike): ProjectStatus;
+
 export declare function projectRollupLabel(project: ProjectRollupLike): string;
 
 export declare function projectActivity(
@@ -398,6 +415,9 @@ export declare function emptyStates(state: EmptyStateInput): EmptyStateResult | 
 export declare function pairTransitions<T extends TransitionEventLike>(
   events: T[],
 ): Array<TransitionMarker<T>>;
+
+/** A run is a test run; every other event kind is never drawn or counted as one. */
+export declare function isTestRun(e: { kind: string }): boolean;
 
 // CR-CRU-011 C4 — §S0b timeline plan integration + §S3 history lens (pure).
 export interface LensRunLike {
@@ -498,7 +518,6 @@ export interface LensCrNode<E extends LensRunLike> {
   specRef?: string;
   cycles: Array<LensCycleNode<E>>;
   rollup: { done: number; total: number };
-  agents: string[];
 }
 
 export interface LensWaveNode<E extends LensRunLike> {

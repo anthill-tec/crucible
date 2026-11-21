@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report.xsd" version="3.0.2" name="com.acme.app.GreeterTest" time="0.05" tests="2" errors="0" skipped="1" failures="0">
+  <properties/>
+  <testcase name="greetsByName" classname="com.acme.app.GreeterTest" time="0.023"/>
+  <testcase name="greetsOnlyOnTuesdays" classname="com.acme.app.GreeterTest" time="0.0">
+    <skipped type="org.opentest4j.TestAbortedException"><![CDATA[org.opentest4j.TestAbortedException: Assumption failed: not Tuesday
+	at org.junit.jupiter.api.Assumptions.throwAssumptionFailed(Assumptions.java:321)
+	at org.junit.jupiter.api.Assumptions.assumeTrue(Assumptions.java:120)
+	at com.acme.app.GreeterTest.greetsOnlyOnTuesdays(GreeterTest.java:16)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1604)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1604)
+]]></skipped>
+  </testcase>
+</testsuite>

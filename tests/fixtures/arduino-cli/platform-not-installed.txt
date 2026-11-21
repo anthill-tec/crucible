@@ -1,0 +1,3 @@
+Error during build: Platform 'nosuch:core' not found: platform not installed
+Platform nosuch:core is not found in any known index
+Maybe you need to add a 3rd party URL?

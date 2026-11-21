@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.14"
 # dependencies = []
 # ///
 """arduino-crucible.py — Arduino-firmware stack script (global, like bun/rust-crucible.py).
 
 Runs native host tests / firmware compile and reports to Crucible via the v2 API
-(the board the project's `crucible.toml` declares as `[client] url`, shipped
-default http://localhost:3849). Mirrors the bun/rust/python/mvn
-`.env` + /api/v2/* ingest pattern, extended with per-subproject self-registration:
-identity from the SUBPROJECT's .env (CRUCIBLE_PROJECT_KEY + CRUCIBLE_PROJECT_NAME),
-agent `Vidushi - <NAME>`.
+(the first `[client] url` declared by the project's crucible.toml, then the
+install's; with neither declaring one, a verb that must reach the board
+refuses). Mirrors the bun/rust/python/mvn
+`.env` + /api/v2/* ingest pattern: identity from the SUBPROJECT's .env
+(CRUCIBLE_PROJECT_KEY only, as the other four clients read it). The client never
+registers a project: a key the board does not hold is refused by the board, and
+that refusal is reported with the board's own help[].
 
 CR-CRU-030 §S1/§S2: every AXI verb prints a clients/toon.py-encoded envelope
 `{"axi": {verb, ok, <result fields>, context, warnings}}` on STDOUT (the machine
@@ -40,12 +42,15 @@ more (CR-CRU-139 §S2): it is declared in the project's `crucible.toml`.
 CR-CRU-044 §S5 — the agent identity comes from `--agent` ONLY: no env var supplies
 one, and there is no fallback. A verb that would POST under an agentId without a
 declared identity HARD-STOPS (ok:false, non-zero exit) rather than inventing one.
-$AGENT_ID is set FROM `--agent` for child processes; it is not an identity source,
-and neither is $WORKFLOW_ROLE (that is the track lane, reported as context.track).
+$AGENT_ID is handed FROM `--agent` to the child processes this client spawns, in
+their own environment; it is never exported into this process's environment and
+never read as an identity source, and neither is $WORKFLOW_ROLE (that is the
+track lane, reported as context.track).
 
 Subcommands:
   register, unregister  Agent lifecycle (TDD roles bind a cycle with --cycle).
-  test                  Run native host tests (`make junit`) → /api/v2/runs/parsed.
+  test                  Run native host tests (`make junit`) → /api/v2/runs, its
+                        TEST-*.xml sent inline for the board to decode.
                         The RED/GREEN workhorse for this stack.
   check                 arduino-cli compile → /api/v2/runs/compile on failure. Gate.
   plan-file             File a cycle plan → the assigned NUMERIC cycle ids.
@@ -60,15 +65,17 @@ Subcommands:
   gate-run / gate-report / milestone
                         Fleet gate + milestone verbs (§S8).
 """
-import argparse
+# pi-lens-ignore: I001 — pi-lens lints with its own ruff configuration, which sets no target version, so ruff files `tomllib` as third-party whatever the declared floor
+import argparse  # noqa: I001
 import glob
 import importlib.util
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
+import tomllib
 
 ARDUINO_CLI = os.environ.get(
     "ARDUINO_CLI", "/opt/arduino-ide/resources/app/lib/backend/resources/arduino-cli")
@@ -99,6 +106,9 @@ def _project_dir(args):
 
 
 def _load_env(pd):
+    """The project key from the SUBPROJECT's `.env`. Only CRUCIBLE_PROJECT_KEY
+    is read, as the other four clients read it; a `.env` that still carries
+    CRUCIBLE_PROJECT_NAME keeps working, and that line is ignored."""
     path = os.path.join(pd, ".env")
     env = {}
     with open(path) as fh:
@@ -110,19 +120,15 @@ def _load_env(pd):
             env[k.strip()] = v.strip().strip('"').strip("'")
     # The SUBPROJECT's .env is authoritative for the key (matches the rest of
     # the fleet — python/rust/bun/mvn read only the project .env): an empty or
-    # absent .env key is a missing one, never filled from the ambient env. The
-    # name keeps its ambient fallback.
+    # absent .env key is a missing one, never filled from the ambient env.
     key = env.get("CRUCIBLE_PROJECT_KEY", "").strip()
-    name = env.get("CRUCIBLE_PROJECT_NAME") or os.environ.get("CRUCIBLE_PROJECT_NAME")
     if not key:
         sys.exit(f"[crucible] CRUCIBLE_PROJECT_KEY not set in {path}")
-    if not name:
-        sys.exit(f"[crucible] CRUCIBLE_PROJECT_NAME not set in {path}")
-    return key, name
+    return key
 
 
 def _project_key(pd):
-    return _load_env(pd)[0]
+    return _load_env(pd)
 
 
 # ── HTTP transport seam (mocked in-process by the client test harnesses) ─────
@@ -131,13 +137,13 @@ def _project_key(pd):
 def _base_url():
     """CR-CRU-139 §S2 — the BOARD this client posts to, read at the POINT OF
     USE from the fleet's ONE resolver: the project's own `crucible.toml`
-    (`[client] url`), else the install's, else the distribution's shipped
-    declaration.
+    (`[client] url`), else the install's; with neither declaring one it
+    refuses.
 
     A call rather than the module constant this line used to hold — and this
     client held the worst of the five, a constant with a SECOND environment
     name behind it, so the board could be aimed from either of two channels
-    and a reader had to know both. `resolve_base_url()` in `_crucible_axi.py`
+    and a reader had to know both. `resolve_base_url()` in `_crucible_board.py`
     documents the resolution and the environment channels it retired."""
     return _axi().resolve_base_url()
 
@@ -146,7 +152,7 @@ def _request(method, path, payload=None, timeout=None):
     """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error.
 
     CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
-    (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
+    (`/api/v2/runs`) for a large regression/coverage run can legitimately
     take the server >10s, and a short bound there is a false-negative. The short
     hook-safe bound is applied ONLY on the status/plans read path via `_get`.
 
@@ -158,8 +164,8 @@ def _request(method, path, payload=None, timeout=None):
     return _axi().http_request(_base_url(), method, path, payload, timeout)
 
 
-def _post(path, payload):
-    return _request("POST", path, payload)
+def _post(path, payload, timeout=None):
+    return _request("POST", path, payload, timeout=timeout)
 
 
 def _get(path, timeout=10):
@@ -233,7 +239,7 @@ def _ops():
         project_key=_project_key, plans_path=_plans_path,
         open_plans=_open_plans, resolve_plan=_resolve_plan_or_emit,
         post_gate=_post_gate, post_milestone=_post_milestone,
-        base_url=_base_url())
+        base_url=_base_url)
 
 
 # ── run context (declared cycle linkage) ─────────────────────────────────────
@@ -268,147 +274,65 @@ def _open_plans(project_dir):
     return _axi().open_plans(_get, _plans_path(project_dir))
 
 
-def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
-                             help_steps=None, warnings=None):
-    """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path).
-    CR-CRU-051 §S2 — `files` (the distinct-source count from `_parse_junit`,
-    per-FILE when the native harness stamps `file=`, else per-class/per-suite)
-    rides alongside the test counts so a suite that silently shrinks is visible
-    in the gate output itself.
-    CR-CRU-056 §S3 — the client RESOLVES no cycle: a bound agent's run is
-    server-stamped with its registered cycle (a stale binding gets a 409,
-    surfaced via `error`). C5 — the envelope context ECHOES the attachment the
-    SERVER reported (`context.cycleId` on the ingest response), so the agent
-    sees which cycle absorbed its evidence without a second
-    `GET /api/v2/events`; absent → the key is omitted.
+def _emit_run_axi(verb, resp, project_dir, agent, *, ok=None, help_steps=None,
+                  warnings=()):
+    """Emit the envelope of a run this client filed through the shared run
+    emitter, `emit_run_axi`: its `run:` block (each figure null when the run
+    was not filed), `help`, the answer's `error` and `warnings[]` after the
+    caller's `warnings`. The context echoes the cycle the board attached the
+    run to.
 
-    CR-CRU-058 §S2 — `help_steps` lets a GATE caller supply the STATE-DERIVED
-    next step for the run it just made (`_axi().run_help`), instead of the
-    canned per-verb `HELP_STEPS` entry; unset keeps today's behaviour exactly.
-    CR-CRU-094 §S3 — `warnings` carries the run's pre-flight finding onto the
-    envelope, so the stderr line and `warnings[]` say the same thing."""
-    run = {"passed": summary["passed"], "failed": summary["failed"],
-           "pending": summary.get("pending", 0),
-           "total": summary["total"], "files": files}
-    context = _axi_context(project_dir, agent_id=agent,
-                           cycle_id=_axi().echoed_cycle_id(resp))
-    result_fields = {"run": run,
-                     "help": help_steps or _axi().HELP_STEPS.get(verb, ["status"])}
-    err = resp.get("error")
-    if err is not None:
-        result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
+    `ok` overrides the envelope's verdict (default: the answer's `ok`);
+    `help_steps` is a state-derived next step (`run_help`) in place of the
+    canned per-verb `HELP_STEPS` entry."""
+    return _axi().emit_run_axi(
+        verb, resp,
+        _axi_context(project_dir, agent_id=agent,
+                     cycle_id=_axi().echoed_cycle_id(resp)),
+        _emit_axi, ok=ok, help_steps=help_steps, warnings=warnings,
+        fields={}, coverage=True)
 
 
-# ── project self-registration + JUnit parsing ────────────────────────────────
+# ── the run's reports, sent for the board to decode ──────────────────────────
+
+JUNIT_CODEC = "junit"
+LCOV_CODEC = "lcov"
 
 
-def _ensure_project(key, name, pd):
-    """Idempotent self-registration; a pre-existing key returns 200 {changed:false}."""
-    _post("/api/v2/projects", {"key": key, "name": name, "sutRoot": pd})
-
-
-def _parse_junit(path):
-    """JUnit (the native harness shape) -> (summary, tree, files) for
-    /api/v2/runs/parsed.
-
-    CR-CRU-051 §S1 — `files` is the DISTINCT-SOURCE count for THIS report,
-    mirroring `bun-crucible.py::_parse_junit_file` (the reference). RESOLVED
-    GRANULARITY FOR THIS CLIENT: per-FILE **when the native g++ harness stamps
-    `file=` on its testcases**, degrading to per-CLASS (`classname`) and then to
-    per-SUITE otherwise — arduino is the one client in the fleet whose emitter
-    MAY carry a real `file` attribute, so it is checked first, but the value is
-    only as precise as the harness that produced the XML. The chain never
-    collapses to zero: a constant zero would make a shrinking suite look
-    identical to a healthy one. It rides the printed run envelope only, never
-    the ingest payload (CR-CRU-047 §S2)."""
-    root = ET.parse(path).getroot()
-    suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
-    total = passed = failed = pending = 0
-    tree = []
-    files = set()
-    for suite in suites:
-        children, sfail = [], 0
-        for tc in suite.findall("testcase"):
-            source = tc.get("file") or tc.get("classname") or suite.get("name")
-            if source:
-                files.add(source.replace("\\", "/"))
-            bad = tc.find("failure") is not None or tc.find("error") is not None
-            total += 1
-            # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase is PENDING, never
-            # passed. Order matters: failure/error first, then skipped, then
-            # pass. A skip does NOT fail its suite. Mirrors `_parse_junit` in
-            # `clients/mvn-crucible.py`.
-            if bad:
-                status = "fail"
-                failed += 1
-                sfail += 1
-            elif tc.find("skipped") is not None:
-                status = "pending"
-                pending += 1
-            else:
-                status = "pass"
-                passed += 1
-            children.append({"name": tc.get("name", "?"),
-                             "status": status, "duration_ms": 0})
-        tree.append({"name": suite.get("name", "native"),
-                     "status": "fail" if sfail else "pass", "children": children})
-    summary = {"total": total, "passed": passed, "failed": failed,
-               "pending": pending, "duration_ms": 0}
-    # `files` is a SIBLING of `summary`, deliberately not a key inside it:
-    # `summary` IS the /api/v2/runs/parsed payload's summary field verbatim, and
-    # CR-CRU-047 §S2 keeps this count out of the wire.
-    return summary, tree, len(files)
-
-
-def _collect_lcov(path):
-    """Sum an lcov `.info` file's LF/LH (lines) and FNF/FNH (functions) into a
-    Crucible coverage object. Returns None when the file is absent (a --coverage
-    run with no coverage output ingests WITHOUT coverage rather than fabricating)."""
-    if not os.path.exists(path):
-        return None
-    lf = lh = ff = fh = 0
-    with open(path) as f:
-        for line in f:
-            if line.startswith("LF:"):
-                lf += int(line[3:].strip() or 0)
-            elif line.startswith("LH:"):
-                lh += int(line[3:].strip() or 0)
-            elif line.startswith("FNF:"):
-                ff += int(line[4:].strip() or 0)
-            elif line.startswith("FNH:"):
-                fh += int(line[4:].strip() or 0)
-    return {
-        "lines": {"total": lf, "covered": lh,
-                  "percent": round(lh / lf * 100, 1) if lf else 0},
-        "functions": {"total": ff, "covered": fh,
-                      "percent": round(fh / ff * 100, 1) if ff else 0},
-    }
+def _file_reports(project_dir, agent_id, report_paths, *, raw=None,
+                  coverage_paths=(), tier=None, context=None, run_id=None,
+                  release=None, runner_exit=None):
+    """Send a run's native JUnit reports to the board for it to decode: the
+    shared `ingest_reports`, which reads the board's health first and, unless
+    it refuses, makes ONE `POST /api/v2/runs` carrying `codec: "junit"`, each
+    report's text inline, the lcov as `coverage` when any is given, `raw` and
+    `runnerExit`. This client parses none of them. Returns the board's answer.
+    The stack rides on the body through the shared ingest."""
+    return _axi().ingest_reports(
+        _post, _get, stack=_STACK, project_key=_project_key(project_dir),
+        agent_id=agent_id, codec=JUNIT_CODEC, report_paths=report_paths,
+        raw=raw, coverage_codec=LCOV_CODEC if coverage_paths else None,
+        coverage_paths=coverage_paths, tier=tier, context=context,
+        run_id=run_id, release=release, runner_exit=runner_exit)
 
 
 def _ingest_compile(project_dir, key, agent_id, errors, context=None):
-    """Ingest an arduino-cli compile failure to /api/v2/runs/compile (with run context)."""
-    payload = {"projectKey": key, "agentId": agent_id, "errors": errors}
+    """Ingest an arduino-cli compile failure to /api/v2/runs/compile (with run context).
+
+    arduino-cli's build output is GCC's diagnostics, so the payload names its
+    format `gcc` rather than leaving the board to guess."""
+    payload = {"projectKey": key, "agentId": agent_id, "format": "gcc",
+               "errors": errors}
     ctx = context if context is not None else _run_context()
     if ctx:
         payload["context"] = ctx
-    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload)
+    resp = _axi().post_ingest(_post, "/api/v2/runs/compile", payload, stack=_STACK)
     print(f"[crucible] compile FAILED -> /api/v2/runs/compile (ok={resp.get('ok')})",
           file=sys.stderr)
     return resp
 
 
 # ── Agent lifecycle ──────────────────────────────────────────────────────────
-
-
-def _ensure_project_registered(project_dir):
-    """arduino's UNIQUE registration bootstrap (DN §3): this client self-registers
-    its project before the agent row is posted, reading the subproject `.env` for
-    the CRUCIBLE_PROJECT_NAME the other four clients never need. Handed to the
-    shared `cmd_register` as its `pre_register` hook — it runs only AFTER the §S5
-    identity hard stop, so an undeclared identity still posts nothing."""
-    key, name = _load_env(project_dir)
-    _ensure_project(key, name, project_dir)
 
 
 def _register_message(args, role):
@@ -434,12 +358,10 @@ def cmd_register(args):
     CR-CRU-054 §S2b — delegates to the shared implementation, which owns the
     §S5 runtime identity hard stop (DN §4 finding #3) and the documented-enum
     `--source` strategy (finding #5).
-    arduino's project self-registration, its `report` role floor (a defensive
-    floor for a hand-built Namespace — §S3 makes `--role` REQUIRED on the
-    subparser), its message convention and its legacy line stay per-client
-    PARAMETERS."""
+    arduino's `report` role floor (a defensive floor for a hand-built
+    Namespace — §S3 makes `--role` REQUIRED on the subparser), its message
+    convention and its legacy line stay per-client PARAMETERS."""
     return _axi().cmd_register(args, _project_dir(args), _ops(),
-                               pre_register=_ensure_project_registered,
                                role_default="report",
                                message_fn=_register_message,
                                legacy_format=REGISTER_LEGACY_FORMAT)
@@ -480,6 +402,184 @@ def _close_gate_identity(project_dir, identity):
                                       remove_fn=_remove_agent_silent)
 
 
+# ── The declared stream: a `[targets."<dir>/<target>"]` entry ───────────────
+
+
+#: A project's `[targets."<dir>/<target>"]` entry for an arduino run, field
+#: by field, and the fields an arduino entry may not declare (its record is
+#: its stream, and its coverage follows the verb).
+_STREAM_FRAMEWORK = "arduino-native"
+_STREAM_CODEC = "crucible-events"
+_TARGETS_STREAM = {"codec": _STREAM_CODEC, "path": "env:CRUCIBLE_STREAM"}
+_TARGETS_REFUSED_FIELDS = ("junit", "console", "coverage")
+#: The frameworks other stacks declare in the same `[targets.*]` table: an
+#: entry naming one is another stack's, skipped rather than refused.
+_OTHER_STACKS_FRAMEWORKS = ("nextest", "surefire", "unittest", "pytest",
+                            "bun-test", "vitest", "playwright", "playwright-bdd",
+                            "go-test")
+#: The stream file `make` is handed in CRUCIBLE_STREAM, in the run's own
+#: reports dir, and how long the relay may take to finish once `make` exited
+#: and once a signal interrupted the run.
+_STREAM_FILE = "crucible-events.ndjson"
+_STREAM_FINISH_SECONDS = 60.0
+_INTERRUPTED_FINISH_SECONDS = 5.0
+
+
+def _declared_key(args, target):
+    """(PURE) The run's `[targets.*]` key: the native dir (`--dir`, relative to
+    the project dir) joined by `/` to the make target."""
+    sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/").strip("/")
+    return f"{sub}/{target}"
+
+
+def _check_stream_declaration(args, target, coverage):
+    """Read the run's `[targets.*]` entry from the project's own
+    `crucible.toml` and, for a declared run with an agent, the board's health,
+    before any board call, compile or `make`. A refusal raises the shared
+    `DeclarationRefused` hard stop. Otherwise the run's key (None when it is
+    undeclared) and the health read are kept on `args`, so a body run on
+    behalf of an already-checked verb checks nothing again."""
+    if getattr(args, "stream_checked", False):
+        return
+    pd = _project_dir(args)
+    key = _declared_key(args, target)
+    path = os.path.join(pd, "crucible.toml")
+    declared = _declared_entry(path, key)
+    health = None
+    if declared and getattr(args, "agent", None):
+        health = _get(_axi().INGEST_HEALTH_PATH)
+        refusal = _stream_health_refusal(health, coverage)
+        if refusal is not None:
+            raise _axi().DeclarationRefused(
+                refusal, ["run against a board that takes the stream", "status"])
+    args.stream_checked = True
+    args.stream_key = key if declared else None
+    args.stream_health = health
+
+
+def _declared_entry(path, key):
+    """Whether the project's `crucible.toml` at `path` declares the arduino
+    entry under `key`. No file, no entry, or another stack's entry is
+    undeclared; a file that does not parse, or an entry at fault, raises the
+    `DeclarationRefused` hard stop naming the table and the field."""
+    table = f'[targets."{key}"]'
+    help_steps = [f"fix {table} in {path}, then re-run", "status"]
+    try:
+        with open(path, "rb") as handle:
+            declared = tomllib.load(handle)
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as error:
+        raise _axi().DeclarationRefused(
+            f"the project's crucible.toml ({path}) does not parse ({error}), so "
+            f"its {table} entry cannot be read; nothing was run", help_steps) from error
+    targets = declared.get("targets")
+    entry = targets.get(key) if isinstance(targets, dict) else None
+    if entry is None or (isinstance(entry, dict)
+                         and entry.get("framework") in _OTHER_STACKS_FRAMEWORKS):
+        return False
+    fault = _targets_fault(entry)
+    if fault is None:
+        return True
+    field, value = fault
+    raise _axi().DeclarationRefused(
+        f"{table} in {path} declares `{field}` = {value!r}, which an arduino "
+        f"run cannot take: an arduino run is declared framework = "
+        f"\"{_STREAM_FRAMEWORK}\" with stream = {{ codec = "
+        f"\"{_TARGETS_STREAM['codec']}\", path = \"{_TARGETS_STREAM['path']}\" }} "
+        f"and nothing else; nothing was run", help_steps)
+
+
+def _targets_fault(entry):
+    """(PURE) The first field of an arduino `[targets.*]` entry a run cannot
+    take, as `(field, value)`, or None. Every field is required."""
+    if not isinstance(entry, dict):
+        return "targets", entry
+    for field in _TARGETS_REFUSED_FIELDS:
+        if field in entry:
+            return field, entry[field]
+    if entry.get("framework") != _STREAM_FRAMEWORK:
+        return "framework", entry.get("framework")
+    stream = entry.get("stream")
+    if not isinstance(stream, dict):
+        return "stream", stream
+    for field, wanted in _TARGETS_STREAM.items():
+        if stream.get(field) != wanted:
+            return f"stream.{field}", stream.get(field)
+    return None
+
+
+def _stream_health_refusal(health, coverage):
+    """(PURE) Why the board whose health is `health` cannot take a declared
+    arduino run (no `crucible-events` under `codecs.stream`, or, for a
+    `coverage` run, no `lcov` coverage codec), or None. A health that cannot
+    be read is no refusal."""
+    if not isinstance(health, dict) or health.get("ok") is False:
+        return None
+    version = health.get("version") or "an unstated version"
+    codecs = health.get("codecs")
+    codecs = codecs if isinstance(codecs, dict) else {}
+    streams = codecs.get("stream")
+    if not isinstance(streams, list) or _STREAM_CODEC not in streams:
+        return (f"the board (version {version}) lists no `{_STREAM_CODEC}` under "
+                f"`codecs.stream`, so it takes no declared arduino stream; "
+                f"nothing was run")
+    kept = codecs.get("coverage")
+    if coverage and not (isinstance(kept, list) and "lcov" in kept):
+        return (f"the board (version {version}) does not decode `lcov` reports: "
+                f"a declared coverage run files its lcov with its stream; "
+                f"nothing was run")
+    return None
+
+
+def _stream_env(make_env, own_dir, agent_id):
+    """The declared run's stream file, emptied, set as CRUCIBLE_STREAM in
+    `make_env`; with no agent the variable is removed and None answered, so
+    the harness writes nothing."""
+    if not agent_id:
+        make_env.pop("CRUCIBLE_STREAM", None)
+        return None
+    stream_path = os.path.join(own_dir, _STREAM_FILE)
+    with open(stream_path, "w", encoding="utf-8"):
+        pass
+    make_env["CRUCIBLE_STREAM"] = stream_path
+    return stream_path
+
+
+def _finish_relay(relay, deadline_seconds):
+    """Finish a declared run's relay within `deadline_seconds`, answering the
+    bytes of the stream the board holds; no relay holds nothing."""
+    if relay is None:
+        return 0
+    held, _stopped = relay.finish(deadline_seconds)
+    return held
+
+
+def _stream_not_held_warning(key):
+    """The one warning of a declared run the board holds no `test-end` of,
+    filed from its TEST-*.xml instead."""
+    detail = (f"the declared target `{key}` streamed no test-end the board holds "
+              f"(its {_STREAM_FILE} is empty, or the relay stopped); the run is "
+              f"filed from its TEST-*.xml")
+    print(f"[crucible] WARN: {detail}", file=sys.stderr)
+    return {"code": "declared-stream-not-held", "detail": detail}
+
+
+def _append_run_end(stream_path, reports):
+    """Append the client's `run-end` to a stream that holds a `test-end`,
+    stating the totals of the run's own `TEST-*.xml`. A stream holding none,
+    or a run that wrote no readable report, gets no `run-end`."""
+    if not reports or not _axi().stream_counts(stream_path)[0]:
+        return
+    totals = _axi().junit_totals(reports)
+    if totals is None:
+        return
+    total, passed, failed, pending = totals
+    with open(stream_path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"event": "run-end", "total": total, "passed": passed,
+                                 "failed": failed, "pending": pending}) + "\n")
+
+
 # ── Toolchain: native host tests + arduino-cli compile ───────────────────────
 
 
@@ -506,27 +606,43 @@ def _narrator(pd, agent_id, identity=None):
         _recognise_completion)
 
 
-def _start_run(pd, agent_id, tier=None, context=None, release=None):
-    """Open the run BEFORE `make` is spawned, through the shared `open_run`.
+def _start_run(pd, agent_id, tier=None, context=None, release=None, framework=None):
+    """Open the run BEFORE `make` is spawned, through the shared `open_run`,
+    stating the declared `framework` when there is one.
     Returns `(run_id, warnings)`; a refusal degrades to a single-shot ingest
     with a warning naming the fallback."""
     return _axi().open_run(_post, _project_key(pd), agent_id, _STACK,
-                           tier=tier, context=context, release=release)
+                           tier=tier, context=context, release=release,
+                           framework=framework)
 
 
-def _run_native_tests(args, verb, tier, want_coverage, target="junit"):
+def _run_native_tests(args, verb, tier, want_coverage, target="junit",
+                      name_unfiled=False):
     """§S2/§S3 fleet-uniform native-test workhorse — run native host tests
-    (`make <target>`) → parse → /api/v2/runs/parsed under the given `tier`; a
+    (`make <target>`) → their TEST-*.xml sent to /api/v2/runs, for the board
+    to decode, under the given `tier`; a
     bound agent's run is server-stamped with its registered cycle (CR-CRU-056
     §S3). `unit`/`test` ride tier `unit`; `regression` rides tier `regression`
-    and, with `want_coverage`, attaches lcov coverage from
-    `<native_dir>/coverage/lcov.info`. A gated run (agent set) opens with a
+    and, with `want_coverage`, sends the lcov from
+    `<native_dir>/coverage/lcov.info` as its coverage report. A gated run (agent set) opens with a
     heartbeat that DECLARES the run's identity (binding it when `--cycle` is
     given) and wraps the body in an anti-ghost silent cleanup (CR-CRU-008 §S4):
     even a failed/raising run tears that identity down via the v2 silent
     unregister, and never touches the retired /api/agents/remove shim.
     CR-CRU-056 — the cleanup fires ONLY for an identity this run created; a
-    caller who registered BEFORE the run keeps its registration and binding."""
+    caller who registered BEFORE the run keeps its registration and binding.
+
+    Ill-formed narrowing input is refused first, before the registration
+    heartbeat and run start, so a refused run reaches the board not at all.
+
+    `name_unfiled` is set when this run IS the gate's whole answer (a gate
+    that composes no declared suites): its envelope then names the run
+    unreported when it was not filed. A composing gate names it itself.
+
+    The run's `[targets.*]` declaration is checked next, before any board
+    call (`_check_stream_declaration`)."""
+    _refuse_ill_formed_narrowing(args)
+    _check_stream_declaration(args, target, want_coverage)
     pd = _project_dir(args)
     preflight_warnings = []
     # Open under the SAME id the run will ingest under. The body
@@ -553,7 +669,8 @@ def _run_native_tests(args, verb, tier, want_coverage, target="junit"):
                 cycle_id=getattr(args, "cycle", None),
                 context=_run_context(), release=getattr(args, "release", None))
         return _run_native_tests_body(args, verb, tier, want_coverage, pd,
-                                      preflight_warnings, target, identity)
+                                      preflight_warnings, target, identity,
+                                      name_unfiled=name_unfiled)
 
 
 def _run_reports_dir(args, pd):
@@ -574,24 +691,95 @@ def _coverage_dir(native_dir, own_dir):
     return os.path.join(own_dir or native_dir, "coverage")
 
 
-def _make_reports_env(own_dir, want_coverage):
-    """The documented `make` contract: REPORTS_DIR (and, on a coverage run,
+# A test-file stem: no path, no extension.
+_STEM_RE = re.compile(r"[A-Za-z0-9_-]+")
+# One comma-separated test-name fragment, optionally ending in `*`.
+_NAME_ELEMENT_RE = re.compile(r"[A-Za-z0-9_]+\*?")
+_STEM_HINT = ("give a stem, not a path or file name: `--tests test_motor "
+              "test_pid`, each matching [A-Za-z0-9_-]+")
+_NAME_HINT = ("`--name` takes comma-separated test-name fragments: "
+              "`--name stall,limit`, each matching [A-Za-z0-9_]+ with an "
+              "optional trailing *")
+_TESTS_HELP = ("run only these test files, by stem (test_motor), resolved "
+               "against the Makefile under --dir; handed to `make` as TESTS "
+               "(see the make contract in --help)")
+_NAME_HELP = ("run only the tests whose name or file contains one of these "
+              "comma-separated fragments; handed to `make` as TEST_NAME "
+              "(Unity's -f; see the make contract in --help)")
+
+
+def _add_narrowing_args(p):
+    """The two flags that narrow a native run: `--tests` (the files) and
+    `--name` (Unity's name filter). Only `test` and `unit` take them."""
+    p.add_argument("--tests", nargs="+", help=_TESTS_HELP)
+    p.add_argument("--name", help=_NAME_HELP)
+
+
+def _refuse_ill_formed_narrowing(args):
+    """Raise the typed `narrowing-refused` hard stop for a stem outside
+    [A-Za-z0-9_-]+ (a path or an extension), an empty `--name`, or a `--name`
+    element outside [A-Za-z0-9_]+ with an optional trailing `*`. A verb
+    without the flags is never refused here."""
+    for stem in getattr(args, "tests", None) or ():
+        if not _STEM_RE.fullmatch(stem):
+            raise _axi().NarrowingRefused(
+                f"--tests {stem!r} is not a test-file stem; nothing ran and "
+                f"nothing was filed", [_STEM_HINT])
+    name = getattr(args, "name", None)
+    if name is None:
+        return
+    for element in name.split(","):
+        if not _NAME_ELEMENT_RE.fullmatch(element):
+            raise _axi().NarrowingRefused(
+                f"--name {name!r} holds the fragment {element!r}, which is not "
+                f"a test-name fragment; nothing ran and nothing was filed",
+                [_NAME_HINT])
+
+
+def _make_reports_env(own_dir, want_coverage, args=None):
+    """The environment every native `make` run gets. The client owns TESTS
+    and TEST_NAME: both are removed, then set only from this run's own
+    `--tests` (the stems, space-separated) and `--name` (verbatim), so a
+    variable exported in the shell never narrows a run.
+
+    The documented `make` contract: REPORTS_DIR (and, on a coverage run,
     COVERAGE_DIR) point at the run's own directory, overriding any ambient
     value. That directory is created and its previous TEST-*.xml / lcov.info
-    cleared first. None without an own directory: `make` then runs with the
-    inherited environment, as before."""
+    cleared first. Without an own directory neither is set and `make` keeps
+    its own `reports/` and `coverage/`, as before."""
+    env = os.environ.copy()
+    env.pop("TESTS", None)
+    env.pop("TEST_NAME", None)
+    tests = getattr(args, "tests", None)
+    if tests:
+        env["TESTS"] = " ".join(tests)
+    name = getattr(args, "name", None)
+    if name is not None:
+        env["TEST_NAME"] = name
     if own_dir is None:
-        return None
+        return env
     os.makedirs(own_dir, exist_ok=True)
     stale = glob.glob(os.path.join(own_dir, "TEST-*.xml"))
     stale += glob.glob(os.path.join(_coverage_dir(None, own_dir), "lcov.info"))
     for path in stale:
         os.remove(path)
-    env = os.environ.copy()
     env["REPORTS_DIR"] = own_dir
     if want_coverage:
         env["COVERAGE_DIR"] = _coverage_dir(None, own_dir)
     return env
+
+
+def _child_env(args, env=None):
+    """The environment for a child this client spawns: `env` (else a copy of
+    this process's), with AGENT_ID set to `--agent` when one was given. This
+    process's own environment is never written. None when there is neither a
+    base env nor an `--agent`, so the child simply inherits."""
+    agent = getattr(args, "agent", None)
+    if not agent:
+        return env
+    child = dict(env) if env is not None else os.environ.copy()
+    child["AGENT_ID"] = agent
+    return child
 
 
 def _move_ignored_outputs(native_dir, own_dir, want_coverage):
@@ -633,8 +821,85 @@ def _ignored_contract_warning(variable, native_dir, fixed, moved_to):
                       f"run writes there directly."}
 
 
+#: The extensions of a native test source, whose stem a case's `classname`
+#: must name before the case is judged against `--tests`.
+_TEST_SOURCE_EXTENSIONS = (".c", ".cpp", ".ino")
+
+
+def _test_source_stems(native_dir):
+    """The stems of every test source (`.c`, `.cpp`, `.ino`) in the directory
+    tree under `native_dir`."""
+    stems = set()
+    for _root, _dirs, files in os.walk(native_dir):
+        for filename in files:
+            stem, extension = os.path.splitext(filename)
+            if extension in _TEST_SOURCE_EXTENSIONS:
+                stems.add(stem)
+    return stems
+
+
+def _ignored_narrowing_warnings(args, cases, native_dir):
+    """Judge the cases a narrowed run produced against the flags it was given,
+    and return one warning per narrowing variable the Makefile ignored, each
+    also printed to stderr so a run that emits no envelope still shows it.
+
+    TESTS (from `--tests`) was ignored when a case's file stem names a test
+    source (`<stem>.c`, `.cpp` or `.ino`) under `native_dir` and is not among
+    the stems. A case with no readable file stem, or whose stem names no test
+    source there (a constant `classname` such as `native`), is not judged.
+    TEST_NAME (from `--name`) was ignored when a case's name and file stem
+    contain no element's part before `*` — Unity's `-f` also matches the
+    source file's path, so a whole file run because its stem matched is
+    honoured; an element that is just `*` matches every case.
+
+    `cases` is the shared reader's (`junit_case_sources`): `None` when a
+    report could not be read, and then nothing is judged."""
+    if cases is None:
+        return []
+    warnings = []
+    stems = getattr(args, "tests", None)
+    if stems:
+        sources = _test_source_stems(native_dir)
+        unasked = []
+        for _name, stem in cases:
+            if (stem is not None and stem in sources and stem not in stems
+                    and stem not in unasked):
+                unasked.append(stem)
+        if unasked:
+            print(f"[crucible] WARN: the Makefile ignored TESTS ({' '.join(stems)}): "
+                  f"it ran cases of {', '.join(unasked)}", file=sys.stderr)
+            warnings.append({
+                "code": "makefile-ignored-tests",
+                "detail": f"the Makefile ignored TESTS={' '.join(stems)!r}: it ran "
+                          f"cases of {', '.join(unasked)}, which were not asked "
+                          f"for. Honour TESTS in the Makefile (`TESTS ?=`) so a "
+                          f"narrowed run builds only those test files."})
+    name = getattr(args, "name", None)
+    if name is not None:
+        elements = name.split(",")
+        prefixes = [element.split("*", 1)[0] for element in elements]
+        unmatched = next(
+            (case for case, stem in cases
+             if not any(prefix in case or (stem is not None and prefix in stem)
+                        for prefix in prefixes)),
+            None)
+        if unmatched is not None:
+            print(f"[crucible] WARN: the Makefile ignored TEST_NAME "
+                  f"({', '.join(elements)}): it ran {unmatched}, which matches "
+                  f"none of them", file=sys.stderr)
+            warnings.append({
+                "code": "makefile-ignored-test-name",
+                "detail": f"the Makefile ignored TEST_NAME={name!r}: it ran "
+                          f"{unmatched}, whose name and file stem contain none "
+                          f"of {', '.join(elements)}. Hand TEST_NAME to the "
+                          f"Unity runner as -f \"$(TEST_NAME)\" so a narrowed "
+                          f"run runs only the matching tests."})
+    return warnings
+
+
 def _run_native_tests_body(args, verb, tier, want_coverage, pd,
-                           preflight_warnings=(), target="junit", identity=None):
+                           preflight_warnings=(), target="junit", identity=None,
+                           *, name_unfiled=False):
     """CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight
     finding, decided BEFORE the runner spawned; it rides every envelope this
     body can emit, ahead of whatever the run itself discovers.
@@ -651,23 +916,36 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
     preflight_warnings = list(preflight_warnings)
     # §S1 — the release this run is filed under (None: a cycle's run).
     release = getattr(args, "release", None)
-    key, name = _load_env(pd)
+    # The project key is checked before `make` spawns.
+    _load_env(pd)
     # CR-CRU-044 §S5 — a run with no `--agent` INGESTS NOTHING (see the
     # no-ingest early return below), so it needs no declared identity; the id is
     # REQUIRED only on the POSTing path, resolved there. Never fabricated either way.
     agent_id = _axi().optional_agent_id(args)
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
-    _ensure_project(key, name, pd)
     own_dir = _run_reports_dir(args, pd)
-    make_env = _make_reports_env(own_dir, want_coverage)
-    narrator, run_id = None, None
+    make_env = _child_env(args, _make_reports_env(own_dir, want_coverage, args))
+    narrowed = bool(getattr(args, "tests", None)) or getattr(args, "name", None) is not None
+    # A declared target's stream file is emptied and handed to `make`; the run
+    # states the declared framework, and the relay's stream-counted heartbeat
+    # stands in for Unity's narrator.
+    stream_key = getattr(args, "stream_key", None)
+    stream_path = _stream_env(make_env, own_dir, agent_id) if stream_key else None
+    narrator, run_id, relay = None, None, None
     if agent_id:
-        narrator = _narrator(pd, agent_id, identity)
-        run_id, run_warnings = _start_run(pd, agent_id, tier=tier,
-                                          context=_run_context(),
-                                          release=release)
+        if stream_key is None:
+            narrator = _narrator(pd, agent_id, identity)
+        run_id, run_warnings = _start_run(
+            pd, agent_id, tier=tier, context=_run_context(), release=release,
+            framework=_STREAM_FRAMEWORK if stream_key else None)
         preflight_warnings += run_warnings
+        if stream_path and run_id:
+            key = _project_key(pd)
+            relay, narrator = _axi().start_stream_relay(
+                _post, _axi().narration_poster(_post, key, agent_id, identity), key,
+                agent_id, run_id, stream_path, _STREAM_CODEC,
+                _axi()._ingest_body_limit(getattr(args, "stream_health", None)))
     # CR-CRU-111 §S4/AC6b — the ONE child this body spawns, bracketed: a `unit`
     # run that spends its wall clock waiting says so in its own envelope. The
     # untiered `test` verb and `regression` run this same body and are left
@@ -681,15 +959,32 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                                       getattr(args, "log", None), narrator,
                                       capture=True)
     except _axi().RunAbandoned as abandoned:
+        # The tests the harness wrote before the signal reach the board
+        # before the run is aborted.
+        _finish_relay(relay, _INTERRUPTED_FINISH_SECONDS)
         return _axi().emit_run_abandoned(verb, _project_key(pd), agent_id, run_id,
                                          abandoned, preflight_warnings,
                                          post_fn=_post)
+    except BaseException:
+        _finish_relay(relay, 0)
+        raise
     # A Makefile that ignored REPORTS_DIR/COVERAGE_DIR wrote to its own fixed
     # dirs: its output is moved into the run's own directory, and said so.
     preflight_warnings += _move_ignored_outputs(native_dir, own_dir, want_coverage)
     reports_dir = own_dir or os.path.join(native_dir, "reports")
     reports = sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml")))
-    if not reports:
+    # A declared run's `run-end` is appended before the relay's last flush.
+    # A run whose stream the board holds is closed from it; one whose board
+    # holds no `test-end` is filed from its TEST-*.xml, and said so.
+    held = 0
+    if relay is not None:
+        _append_run_end(stream_path, reports)
+        held = _finish_relay(relay, _STREAM_FINISH_SECONDS)
+        if not held:
+            narrator = None
+            if reports and not narrowed:
+                preflight_warnings.append(_stream_not_held_warning(stream_key))
+    if not reports and not held:
         # CR-CRU-064 §S4 — was `sys.exit(<message>)`, which wrote the message to
         # stderr and exited 1 with EMPTY stdout. The runner's own output already
         # reached stderr live, and the message and exit code are preserved
@@ -708,87 +1003,101 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd,
                       project_key=_project_key(pd), agent_id=agent_id),
                   message)
         return 1
-    summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
-    tree = []
-    files = 0
-    for junit in reports:
-        s, t, f = _parse_junit(junit)
-        # CR-CRU-050 §S1 — `pending` MUST be carried forward here too; without
-        # it the per-file parse fix is silently undone by the aggregation and
-        # the envelope still reports pending=0.
-        for k in ("total", "passed", "failed", "pending"):
-            summary[k] += s[k]
-        # CR-CRU-051 §S1 — same trap for `files`: without this the count is
-        # whatever the LAST report happened to hold. Summed per report rather
-        # than de-duplicated across reports, because `make junit` emits one
-        # TEST-*.xml per native test binary and their sources are disjoint; a
-        # harness that repeated a source across reports would over-count.
-        files += f
-        tree.extend(t)
+    # A Makefile that ignored TESTS or TEST_NAME is named, before the
+    # ran-nothing check so the warning rides every envelope this run emits.
+    # Its cases are read through the shared reader; unreadable, none is judged.
+    if narrowed and reports:
+        preflight_warnings += _ignored_narrowing_warnings(
+            args, _axi().junit_case_sources(reports), native_dir)
+    total = _axi().junit_testcase_count(reports)
+    # A narrowed run whose reports hold zero cases ran nothing whatever
+    # `make`'s exit: Unity with a `-f` that matches nothing exits 0. So does a
+    # narrowed declared run whose stream the board holds no `test-end` of.
+    if not held and (_axi().ran_nothing(run.returncode, total)
+                     or (narrowed and (total == 0 or relay is not None))):
+        return _axi().emit_ran_nothing(
+            verb, "TEST-*.xml", run.returncode, run.stdout or "", run_id,
+            preflight_warnings, post_fn=_post, project_key=_project_key(pd),
+            agent_id=agent_id)
 
-    coverage = None
+    # The lcov is sent passing or failing: the board discards a red run's
+    # coverage. A coverage run that left none is filed with no coverage, and
+    # says so.
+    coverage_paths = []
     if want_coverage:
-        coverage = _collect_lcov(os.path.join(_coverage_dir(native_dir, own_dir),
-                                              "lcov.info"))
-        if coverage is None:
-            print(f"[crucible] WARN: --coverage set but no lcov at "
-                  f"{_coverage_dir(native_dir, own_dir)}/lcov.info — ingesting WITHOUT coverage",
-                  file=sys.stderr)
+        lcov = os.path.join(_coverage_dir(native_dir, own_dir), "lcov.info")
+        if os.path.exists(lcov):
+            coverage_paths = [lcov]
+        else:
+            preflight_warnings.append(_axi().coverage_not_measured_warning(
+                f"the native run wrote no lcov at {lcov}"))
 
-    if not args.agent and not os.environ.get("AGENT_ID"):
-        # No ingest requested — just report the run outcome.
-        print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
-              f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
-              f"{files} files",
-              file=sys.stderr)
-        return 1 if summary["failed"] else 0
+    runner_exit = _axi().runner_exit_code(run.returncode)
+    if not args.agent:
+        # No ingest requested: the run says how many testcases it ran and
+        # exits with the runner's exit, which the make contract requires to be
+        # non-zero when a test binary fails. A report that could not be read
+        # was already warned about by the count above, so it is not read
+        # again, and the count is said to be unknown.
+        if total is None:
+            ran = "an unknown number of testcases (a report could not be counted)"
+        else:
+            ran = (f"{total} testcases "
+                   f"({_axi().junit_non_skipped_count(reports)} not skipped)")
+        print(f"[crucible] ran {ran}; runner exit {runner_exit}", file=sys.stderr)
+        # With no envelope, `coverage-not-measured` reaches no one: a coverage
+        # run that found no lcov says so here, naming where it looked.
+        if want_coverage and not coverage_paths:
+            print(f"[crucible] WARN: --coverage set but no lcov at {lcov} "
+                  f"\u2014 the run measured no coverage", file=sys.stderr)
+        return runner_exit
 
     # §S5 — past this point the run IS ingested under an agentId, so the
     # identity must be DECLARED (hard stop when it is not).
     agent_id = _agent_id(args)
-    payload = {"projectKey": key, "name": name, "agentId": agent_id,
-               "summary": summary, "tree": tree}
-    # CR-CRU-111 §S2/AC3 — the tier rides ONLY when the caller stated one (a
-    # verb whose own name is the tier). A `tier: None` key is not the same
-    # thing as no key: the field would be on the wire, asserting emptiness
-    # where the honest body asserts nothing and lets the server's default
-    # apply.
-    if tier is not None:
-        payload["tier"] = tier
-    if coverage:
-        payload["coverage"] = coverage
-    context = _run_context()
-    if context:
-        payload["context"] = context
-    # CR-CRU-038 §S2b — the captured make-junit output rides along as `raw` so
-    # the server-stored run carries real output for the run-detail raw-toggle.
-    raw = run.stdout or ""
-    if raw:
-        payload["raw"] = raw
-    # The runId of the OPEN run this ingest closes; absent, the single-shot body.
-    if run_id:
-        payload["runId"] = run_id
-    # The final count, then `ingesting…`, both ahead of the ingest below.
-    _axi().close_narration(narrator)
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload,
-                              release=release)
-    print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
-          f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
-          f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
-    # CR-CRU-058 §S2 — a GATE run's next step is derived from the run state it
-    # reached (unrecorded / red / green); the plain test verbs keep their canned
-    # HELP_STEPS entry, unchanged.
-    ok = bool(resp.get("ok")) and summary["failed"] == 0
-    help_steps = (_axi().run_help(verb, ok, summary["failed"], _base_url())
+    # The captured `make` output rides as `raw`, and `make`'s exit as
+    # `runnerExit`, so the board files a runner that failed over a clean
+    # report as failed. The tier rides only when the caller stated one.
+    if held:
+        # The stream-counted final count, then `ingesting…`, then the close.
+        count, end_total, stated, _ran = _axi().stream_counts(stream_path)
+        if narrator is not None:
+            narrator.say(f"ran {count}/{_axi()._narrated_total(count, end_total, stated)}")
+            narrator.say(_axi().INGESTING_MESSAGE)
+        resp = _axi().close_stream(
+            _post, stack=_STACK, project_key=_project_key(pd), agent_id=agent_id,
+            run_id=run_id, codec=_STREAM_CODEC, raw=run.stdout or None,
+            coverage_codec=LCOV_CODEC if coverage_paths else None,
+            coverage_paths=coverage_paths, tier=tier, context=_run_context(),
+            release=release, runner_exit=runner_exit, framework=_STREAM_FRAMEWORK)
+    else:
+        # The final count, then `ingesting…`, both ahead of the ingest below.
+        _axi().close_narration(narrator)
+        resp = _file_reports(pd, agent_id, reports, raw=run.stdout or None,
+                             coverage_paths=coverage_paths, tier=tier,
+                             context=_run_context(), run_id=run_id,
+                             release=release, runner_exit=runner_exit)
+    # The exit carries the runner's verdict and the filed run's, and a refused
+    # ingest is never green. A run that was not filed has no failure count.
+    exit_code = _axi().verb_exit(runner_exit, resp)
+    # A GATE run's next step is derived from the run state it reached
+    # (unrecorded / red / green); the plain test verbs keep their canned
+    # HELP_STEPS entry.
+    help_steps = (_axi().run_help(verb, exit_code == 0,
+                                  _axi().filed_run(resp).get("failed"),
+                                  _base_url())
                   if verb == "pre-merge-gate" else None)
-    _emit_ingest_summary_axi(verb, resp, summary, files, pd, agent_id,
-                             help_steps=help_steps,
-                             warnings=(preflight_warnings
-                                       + _axi().unit_run_wall_vs_cpu_warnings(
-                                           tier, "arduino", timing)))
-    if summary["failed"]:
-        return 1
-    return 0 if resp.get("ok") else 1
+    warnings = (preflight_warnings
+                + _axi().unit_run_wall_vs_cpu_warnings(tier, "arduino", timing))
+    if not resp.get("ok"):
+        warnings.append(_axi().ingest_failed_warning(verb, _base_url()))
+    # A gate whose one whole-suite run was not filed cannot say what it
+    # covered: it names that suite unreported, as a composed gate does.
+    if name_unfiled:
+        warnings += _axi().whole_suite_unreported_warnings(_STACK, resp)
+    _emit_run_axi(verb, resp, pd, agent_id, help_steps=help_steps,
+                  warnings=warnings)
+    return exit_code
 
 
 def cmd_test(args):
@@ -815,8 +1124,9 @@ def cmd_unit(args):
 
 def cmd_regression(args):
     """§S3 fleet-uniform `regression` verb — full native suite → tier
-    `regression`; with `--coverage`, attach lcov coverage from
-    `<native_dir>/coverage/lcov.info` (uniform with bun/python/mvn/rust)."""
+    `regression`; with `--coverage`, send the lcov at
+    `<native_dir>/coverage/lcov.info` as its coverage report (uniform with
+    bun/python/mvn/rust)."""
     return _run_native_tests(args, "regression", "regression", bool(getattr(args, "coverage", False)))
 
 
@@ -849,22 +1159,23 @@ def _compile_run(args, pd):
     so the envelope-owning verbs that run it (`check`/`compile` via
     `_compile_gate`, and `pre-merge-gate`'s fail-fast step 0) each put exactly
     ONE document on stdout. Returns `{exit, ok, agent_id}`; its caller emits."""
-    key, name = _load_env(pd)
+    key = _load_env(pd)
     # CR-CRU-044 §S5 — the gate only INGESTS when an identity was declared, so
     # the id is optional here (omitted from the envelope context when absent)
     # and REQUIRED only on the ingest branch below. Never fabricated either way.
     agent_id = _axi().optional_agent_id(args)
-    _ensure_project(key, name, pd)
     run = subprocess.run(
         [ARDUINO_CLI, "compile", "--fqbn", FQBN,
          "--build-path", os.path.join(pd, "build"), pd],
-        capture_output=True, text=True)
+        capture_output=True, text=True, env=_child_env(args))
     ok = run.returncode == 0
     if not ok:
         errors = re.sub(r"\x1b\[[0-9;]*m", "", (run.stdout + run.stderr).strip())
-        if args.agent or os.environ.get("AGENT_ID"):
+        if args.agent:
             agent_id = _agent_id(args)
-            _ingest_compile(pd, key, agent_id, errors)
+            _ingest_compile(pd, key, agent_id, errors,
+                            context=_axi().cycle_context(
+                                _run_context(), getattr(args, "cycle", None)))
         else:
             sys.stderr.write(errors + "\n")
     else:
@@ -891,7 +1202,7 @@ def cmd_auto_ingest(args):
     agent's run is server-stamped with its registered cycle. Uniform with
     bun/python/mvn/rust."""
     pd = _project_dir(args)
-    key, name = _load_env(pd)
+    key = _load_env(pd)
     agent_id = _agent_id(args)
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
@@ -912,43 +1223,26 @@ def cmd_auto_ingest(args):
                   [_axi().no_report_warning("auto-ingest", "TEST-*.xml", 1, "")],
                   message)
         return 1
-    _ensure_project(key, name, pd)
-    summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
-    tree = []
-    files = 0
-    for junit in reports:
-        s, t, f = _parse_junit(junit)
-        # CR-CRU-050 §S1 — carry `pending` through the aggregation too.
-        for k in ("total", "passed", "failed", "pending"):
-            summary[k] += s[k]
-        # CR-CRU-051 §S1 — and `files`, per the same aggregation trap.
-        files += f
-        tree.extend(t)
     # CR-CRU-111 §S2/AC3 — NO tier: this verb runs no tests at all. It ingests
     # TEST-*.xml files it merely FOUND under `--reports`, so it cannot know
     # what dependency that run took — the DICT-KEY spelling of the unearned
     # stamp, and AC3's own named worse case. AC13's "every test ingest carries
     # a tier" governs the runs this client RUNS, never the reports it finds.
-    payload = {"projectKey": key, "name": name, "agentId": agent_id,
-               "summary": summary, "tree": tree}
-    context = _run_context()
-    if context:
-        payload["context"] = context
+    # It ran no runner either, so it sends neither `raw` nor `runnerExit`.
+    context = _axi().cycle_context(_run_context(), getattr(args, "cycle", None))
     # CR-CRU-094 §S3 — this verb invokes no toolchain and offers no `--cycle`,
     # so its ingest is the furthest from the run that produced the reports and
     # an unattributed store here is the hardest to notice; before the POST.
     preflight_warnings = _axi().preflight_cycle_warnings(
         _get, key, agent_id, cycle_id=getattr(args, "cycle", None),
         context=context)
-    resp = _axi().post_ingest(_post, "/api/v2/runs/parsed", payload)
-    print(f"[crucible] auto-ingest -> '{name}': {summary['passed']}/{summary['total']} passed, "
-          f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
-          f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
-    _emit_ingest_summary_axi("auto-ingest", resp, summary, files, pd, agent_id,
-                             warnings=preflight_warnings)
-    if summary["failed"]:
-        return 1
-    return 0 if resp.get("ok") else 1
+    resp = _file_reports(pd, agent_id, reports, context=context or None)
+    _emit_run_axi("auto-ingest", resp, pd, agent_id,
+                  warnings=preflight_warnings + (
+                      [] if resp.get("ok") else [_axi().ingest_failed_warning(
+                          "auto-ingest", _base_url())]))
+    failed = _axi().filed_run(resp).get("failed")
+    return 0 if (resp.get("ok") and not failed) else 1
 
 
 def cmd_pre_merge_gate(args):
@@ -956,9 +1250,23 @@ def cmd_pre_merge_gate(args):
     `regression --coverage`. On compile failure the compile-failure event is
     posted and regression is SKIPPED (non-zero exit); on compile success the
     regression run posts the tier:'regression' event with coverage attached."""
+    # The regression's `[targets.*]` declaration is checked before anything
+    # else, the compile included; then a gate scoped to named suites that
+    # cannot run as asked is refused.
+    _check_stream_declaration(args, "junit", True)
+    _axi().refuse_unrunnable_scoped_gate(
+        args, surface=_TIER_DECLARATION_SURFACE, stack=_STACK, get=_get,
+        project_key=lambda: _project_key(_project_dir(args)))
     pd = _project_dir(args)
+    # The gate files from its first step on (a failing compile files a compile
+    # result), so an unattributed gate is refused before that step.
+    _axi().refuse_unattributed_run(
+        _get, _project_key(pd), _axi().optional_agent_id(args),
+        cycle_id=getattr(args, "cycle", None),
+        release=getattr(args, "release", None), context=_run_context())
     if not getattr(args, "skip_check", False):
-        check_args = argparse.Namespace(agent=args.agent, project_dir=args.project_dir)
+        check_args = argparse.Namespace(agent=args.agent, project_dir=args.project_dir,
+                                        cycle=getattr(args, "cycle", None))
         # The STEP form (no envelope of its own) — this gate owns stdout.
         state = _compile_run(check_args, pd)
         if not state["ok"]:
@@ -982,11 +1290,19 @@ def cmd_pre_merge_gate(args):
                       f"pre-merge-gate: ok=False exit={state['exit']} — "
                       f"aborted at the arduino-cli compile step")
             return state["exit"] or 1
+    # The lint stage follows compile: a failing linter stops the gate here.
+    stopped = _axi().gate_lint_stage(args, pd, _ops(), stack=_STACK,
+                                     agent_id=_axi().optional_agent_id(args),
+                                     verb="pre-merge-gate")
+    if stopped is not None:
+        return stopped
     reg_args = argparse.Namespace(
         agent=args.agent, project_dir=args.project_dir,
         dir=getattr(args, "dir", None), coverage=True,
         cycle=getattr(args, "cycle", None),
-        release=getattr(args, "release", None))
+        release=getattr(args, "release", None),
+        stream_checked=True, stream_key=args.stream_key,
+        stream_health=args.stream_health)
     # CR-CRU-112 §S1/§S2 — ADDITIVE: this client's own native regression always
     # runs, and every declared target it covers is a SUBSET of that run rather
     # than a replacement for it, so the gate's `suites[]` names them beside it.
@@ -1001,8 +1317,12 @@ def cmd_pre_merge_gate(args):
         dispatch=None,
         whole_suite=lambda: _run_native_tests(reg_args, "pre-merge-gate",
                                               "regression", True),
+        # With no declared suite that run IS the gate: its envelope names it
+        # unreported when it was not filed (the composition names it itself).
+        whole_suite_alone=lambda: _run_native_tests(
+            reg_args, "pre-merge-gate", "regression", True, name_unfiled=True),
         context=_axi_context(pd, agent_id=args.agent),
-        crucible_url=_base_url())
+        crucible_url=_base_url)
 
 
 # ── CR-CRU-030 §S4/§S6/§S7/§S8 — plan / cycle / status / gate verbs ──────────
@@ -1041,7 +1361,8 @@ def cmd_cr_close(args):
     """§S4c — close the resolved OPEN plan and post the cr-merged milestone,
     requiring a live registered caller. CR-CRU-054 §S2 — delegates to the
     shared implementation."""
-    return _axi().cmd_cr_close(args, _project_dir(args), _ops())
+    return _axi().cmd_cr_close(args, _project_dir(args), _ops(),
+                               surface=_TIER_DECLARATION_SURFACE, stack=_STACK)
 
 
 def _resolve_plan_or_emit(verb, project_dir, cr, result_fields, open_only):
@@ -1114,11 +1435,40 @@ def cmd_history(args):
     Delegates to the shared implementation."""
     return _axi().cmd_history(args, _project_dir(args), _ops())
 
+
+def cmd_release_notes(args):
+    """Draft one release's CHANGELOG section from the board (read-only, no
+    --agent). Delegates to the shared implementation."""
+    return _axi().cmd_release_notes(args, _project_dir(args), _ops())
+
+
+def cmd_runs(args):
+    """List a cycle's or a release's stored test and compile runs
+    (read-only, no --agent). Delegates to the shared implementation."""
+    return _axi().cmd_runs(args, _project_dir(args), _ops())
+
+
+def cmd_run(args):
+    """Show one stored test or compile run of this project (read-only, no
+    --agent). Delegates to the shared implementation."""
+    return _axi().cmd_run(args, _project_dir(args), _ops())
+
 def cmd_project_meta(args):
     """§S4 — a project's metadata map: a read (GET …/metadata, no
     --agent) or, with --set/--unset, a write (PATCH …/metadata, --agent
     required). Delegates to the shared implementation."""
     return _axi().cmd_project_meta(args, _project_dir(args), _ops())
+
+def cmd_lint(args):
+    """Run the project's declared linter in the project dir and, with
+    --agent, file it as a lint record. Delegates to the shared lint runner."""
+    return _axi().cmd_lint(args, _project_dir(args), _ops(), stack=_STACK)
+
+def cmd_project_create(args):
+    """Create this project on the board, or find it, by its token. The root
+    is `--project-dir` made absolute: `_project_dir`, which exits on a
+    missing `.env`, is never called. Delegates to the shared implementation."""
+    return _axi().cmd_project_create(args, os.path.abspath(args.project_dir), _ops())
 
 # ── CR-CRU-091 §S3/§S9 — roadmap registration: five thin delegators ────────
 #
@@ -1323,8 +1673,7 @@ def _add_native_dir_arg(p):
 
 
 def _add_native_coverage_arg(p):
-    p.add_argument("--coverage", action="store_true",
-                   help="attach lcov coverage from <native_dir>/coverage/lcov.info")
+    _axi().add_regression_coverage_arg(p, "lcov")
 
 
 # CR-CRU-111 §S3/AC6a — WHERE this stack declares a tier, in one line, carried
@@ -1405,6 +1754,74 @@ _TIER_DECLARATION_SURFACE = _axi().DeclaredTierSurface(
 )
 
 
+# The ROOT help's description, printed as written (RawDescriptionHelpFormatter)
+# so the make contract keeps one variable per line and its Makefile snippet
+# keeps its shape.
+_CLI_DESCRIPTION = (
+    "Arduino-firmware Crucible stack script: runs a project's native host tests\n"
+    "through its own Makefile (`make junit`) and ingests the JUnit result to\n"
+    "Crucible; `check` compiles the sketch with arduino-cli.\n"
+    "Run `<verb> --help` for a verb's own flags.\n"
+    "\n"
+    "The make contract: the variables a native run hands the Makefile under --dir.\n"
+    "REPORTS_DIR   set only when the run has its own reports directory (--agent\n"
+    "              or --reports): write the JUnit TEST-*.xml there. Unset, the\n"
+    "              Makefile's own default applies. A Makefile that ignores it\n"
+    "              writes to its own reports/; the client moves that output in\n"
+    "              and warns.\n"
+    "COVERAGE_DIR  set only on a coverage run with its own reports directory: the\n"
+    "              directory to write lcov.info to; ignored, it is moved in and\n"
+    "              warned about the same way.\n"
+    "TESTS         the space-separated test-file stems given to --tests: build and\n"
+    "              run only those test binaries. Declare it with `TESTS ?=`, so the\n"
+    "              value from the environment wins over the Makefile's default (a\n"
+    "              plain `TESTS =` would override it).\n"
+    "TEST_NAME     the comma-separated names given to --name: hand it to each test\n"
+    "              binary, quoted, as Unity's -f, which runs the tests whose name\n"
+    "              or file contains one of them. The binaries must be built with\n"
+    "              UNITY_USE_COMMAND_LINE_ARGS and from a runner that parses its\n"
+    "              options (the Unity runner generator's cmdline_args option).\n"
+    "TESTS and TEST_NAME are never inherited from the shell: the client sets each\n"
+    "from its own flag or removes it.\n"
+    "`make <target>` exits non-zero when a test binary fails, as the loop below\n"
+    "does: a run without --agent exits with make's exit. For example:\n"
+    "\n"
+    "    REPORTS_DIR ?= reports\n"
+    "    COVERAGE_DIR ?= coverage\n"
+    "    TESTS ?= $(basename $(notdir $(wildcard test_*.c)))\n"
+    "    for t in $(TESTS); do \\\n"
+    "      ./build/$$t $(if $(TEST_NAME),-f \"$(TEST_NAME)\") || exit 1; done\n"
+    "\n"
+    "One JUnit report per test file, named TEST-<stem>.xml, is recommended; a\n"
+    "combined report also works, as the client reads each case's classname.\n"
+    "A Makefile that ignores TESTS or TEST_NAME is named in a warning. A case's\n"
+    "classname is judged against --tests only when it names a test source\n"
+    "(<stem>.c, .cpp or .ino) under --dir; any other classname is not judged.\n"
+    "\n"
+    "A declared target streams its tests. The project's crucible.toml declares\n"
+    "it under its native dir (--dir, relative to --project-dir) joined by / to\n"
+    "the make target:\n"
+    "\n"
+    "    [targets.\"tests/native/junit\"]\n"
+    "    framework = \"arduino-native\"\n"
+    "    stream = { codec = \"crucible-events\", path = \"env:CRUCIBLE_STREAM\" }\n"
+    "\n"
+    "CRUCIBLE_STREAM  set for a declared target on a run with --agent: the absolute\n"
+    "              path of <REPORTS_DIR>/crucible-events.ndjson, emptied before\n"
+    "              make spawns. The harness opens it in append mode and, as each\n"
+    "              test ends, writes its line in one write and flushes after it\n"
+    "              (several binaries, possibly under make -j, append to it):\n"
+    "    {\"event\":\"test-end\",\"suite\":\"…\",\"name\":\"…\",\"status\":\"pass|fail|pending\",\n"
+    "     \"duration_ms\":…,\"failure\":{\"message\":\"…\"}}\n"
+    "              status is pass, fail or pending (Unity's IGNORE is pending).\n"
+    "              The harness writes no run-start and no run-end: the client\n"
+    "              appends the run-end from the run's TEST-*.xml, which the\n"
+    "              harness still writes. When the variable is unset, the harness\n"
+    "              writes nothing to it.\n"
+    "\n" + _axi().BOARD_CONFIGURATION_HELP
+)
+
+
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--agent",
@@ -1416,18 +1833,21 @@ def main():
     common.add_argument("--project-dir",
                         help="subproject dir with .env + tests/native "
                              "(default: $ARDUINO_CRUCIBLE_PROJECT_DIR or CWD)")
-    p = argparse.ArgumentParser(description="Arduino-firmware Crucible stack script")
+    p = argparse.ArgumentParser(
+        description=_CLI_DESCRIPTION,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     # §S14 — subcommand is OPTIONAL: a bare invocation falls through to the
     # no-arg live dashboard, never argparse's required-subcommand error.
     sub = p.add_subparsers(dest="cmd", required=False)
 
     t = sub.add_parser("test", parents=[common],
-                       help="run native host tests (make junit) -> /api/v2/runs/parsed (§S2)")
+                       help="run native host tests (make junit) -> /api/v2/runs (§S2)")
     t.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     _add_gate_cycle_arg(t)
     _add_run_release_arg(t)
     _add_reports_arg(t)
     _add_log_arg(t)
+    _add_narrowing_args(t)
     t.set_defaults(func=cmd_test)
 
     # ── CR-CRU-111 §S1 — the SIX tier verbs, from the fleet's own registrar ─
@@ -1442,16 +1862,18 @@ def main():
     tier_verb = _axi().TierVerb
     _axi().add_tier_verbs(
         sub,
-        dict(unit=tier_verb(
+        # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, which the tier-mirror guard reads as a copy of the tier vocabulary
+        dict(unit=tier_verb(  # noqa: C408
                  cmd_unit,
                  "Runs the native host tests (`make junit`) under --dir -> "
-                 "/api/v2/runs/parsed.",
+                 "/api/v2/runs.",
                  (_add_native_dir_arg, _add_gate_cycle_arg,
-                  _add_run_release_arg, _add_reports_arg, _add_log_arg)),
+                  _add_run_release_arg, _add_reports_arg, _add_log_arg,
+                  _add_narrowing_args)),
              regression=tier_verb(
                  cmd_regression,
                  "Runs the full native suite under --dir -> "
-                 "/api/v2/runs/parsed; --coverage attaches lcov.",
+                 "/api/v2/runs; --coverage sends the lcov.",
                  (_add_native_dir_arg, _add_native_coverage_arg,
                   _add_gate_cycle_arg, _add_run_release_arg, _add_reports_arg,
                   _add_log_arg))),
@@ -1463,23 +1885,36 @@ def main():
     ai.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     ai.add_argument("--reports",
                     help="reports dir holding TEST-*.xml (default <native_dir>/reports)")
+    _axi().add_filing_cycle_arg(ai)
     ai.set_defaults(func=cmd_auto_ingest)
 
     ck = sub.add_parser("check", parents=[common],
                         help="arduino-cli compile -> /api/v2/runs/compile on failure")
+    _axi().add_filing_cycle_arg(ck)
     ck.set_defaults(func=cmd_check)
+    _axi().add_lint_verb(sub, cmd_lint, add_args=(_add_project_dir_arg,))
 
     cpl = sub.add_parser("compile", parents=[common],
                          help="arduino-cli compile -> /api/v2/runs/compile on failure (§S3)")
+    _axi().add_filing_cycle_arg(cpl)
     cpl.set_defaults(func=cmd_compile)
 
     pmg = sub.add_parser("pre-merge-gate", parents=[common],
-                         help="fail-fast compile -> regression --coverage (§S3)")
+                         help="fail-fast compile -> lint -> regression --coverage",
+                         description="The gate's stages, in order: fail-fast arduino-cli "
+                                     "compile -> lint -> regression --coverage over the native "
+                                     "host tests. The lint stage runs the project's [lint] "
+                                     "table (clang-tidy, say); with none it is skipped with a "
+                                     "lint-not-declared warning, and a failing lint stops the "
+                                     "gate before the tests. --skip-lint skips the lint stage; "
+                                     "--skip-check skips the compile stage only, never lint.")
     pmg.add_argument("--dir", default="tests/native", help=_DIR_HELP)
     pmg.add_argument("--skip-check", action="store_true",
                      help="skip the fail-fast arduino-cli compile step")
+    _axi().add_skip_lint_arg(pmg)
     _add_gate_cycle_arg(pmg)
     _add_run_release_arg(pmg)
+    _axi().add_gate_suites_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     r = sub.add_parser("register", parents=[common],
@@ -1520,7 +1955,7 @@ def main():
     _axi().add_plan_file_cycle_kind_arg(pf)
     pf.add_argument(
         "--cycles",
-        help='Legacy comma-split form, REFUSED for filing (§S4a): a filed '
+        help='Legacy comma-split form, REFUSED for filing: a filed '
              'cycle declares its kind, so repeat --cycle with its own '
              '--cycle-kind instead.')
     pf.add_argument("--wave", help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
@@ -1547,6 +1982,7 @@ def main():
                              "Requires --agent <registered id> (§S2b).")
     cc.add_argument("--commit", required=True, help="Merge commit sha.")
     cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _axi().add_cr_close_gate_arg(cc)
     cc.set_defaults(func=cmd_cr_close)
 
     cad = sub.add_parser("cycle-add", parents=[common],
@@ -1593,7 +2029,8 @@ def main():
     # ── CR-CRU-081 §S2 — the landing-record READ verb (no --agent) ──
     qv = sub.add_parser("queue", parents=[common],
                         help="Read the registered CR queue (GET …/queue) plus the "
-                             "cr-merged milestone ids as a TOON-AXI table. Read-only.")
+                             "cr-merged milestone ids as a TOON-AXI table. Read-only; "
+                             "--format json writes one JSON object.")
     _axi().add_queue_view_args(qv)
     qv.set_defaults(func=cmd_queue)
 
@@ -1633,6 +2070,13 @@ def main():
     _add_project_dir_arg(pmv)
     pmv.set_defaults(func=cmd_project_meta)
 
+    # A project registers itself on the board, under its own required root.
+    pcv = sub.add_parser("project-create",
+                         help="Create this project on the board, or find it, by its "
+                              "token; print its key (`--write-env` writes it to .env).")
+    _axi().add_project_create_args(pcv)
+    pcv.set_defaults(func=cmd_project_create)
+
     # ── CR-CRU-091 §S3 — roadmap registration (ORCHESTRATOR only). The five
     # subparsers are built by the SHARED registrar so the five clients cannot
     # drift into five different flag surfaces for one verb.
@@ -1654,6 +2098,15 @@ def main():
     # client's own. No --agent: `next` is read-only (§S4), so `common` (which
     # bundles --agent) is deliberately NOT the parent here.
     _axi().add_next_verb(sub, cmd_next, add_args=(_add_project_dir_arg,))
+
+    # The stored-run READ verbs, built by the shared registrar; only this
+    # client's project-dir argument is its own. No --agent: both are read-only.
+    _axi().add_run_read_verbs(sub, {"runs": cmd_runs, "run": cmd_run},
+                              add_args=(_add_project_dir_arg,))
+    # The release-notes READ verb, built by its module's shared registrar; no
+    # --agent, so `common` is not its parent.
+    _axi().add_release_notes_verb(sub, {"release-notes": cmd_release_notes},
+                                  add_args=(_add_project_dir_arg,))
 
     # ── CR-CRU-075 §S1 — the queue REGISTRATION verb, shared registrar for the
     # same reason: one verb, one flag surface across five clients. Like `next`
@@ -1746,16 +2199,20 @@ def main():
     ms.set_defaults(func=cmd_milestone)
 
     args = p.parse_args()
-    if getattr(args, "agent", None):
-        os.environ["AGENT_ID"] = args.agent
     # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
     if getattr(args, "func", None) is None:
-        sys.exit(cmd_dashboard())
+        sys.exit(_axi().run_dashboard(
+            cmd_dashboard, lambda a: _project_key(_project_dir(a))))
     # CR-CRU-044 §S5 — dispatch through the shared `run_verb`, which turns an
     # UNDECLARED agent identity into the ok:false hard-stop envelope + a
     # non-zero exit (POSTing nothing) instead of an unhandled traceback.
+    # `project-create` reads no key of its own: its hard stop or escaped
+    # failure carries an empty context.
+    project_key_fn = (None if args.cmd == _axi().PROJECT_CREATE_VERB else
+                      lambda a: _project_key(_project_dir(a)))
     sys.exit(_axi().run_verb(
-        args.func, args, lambda a: _project_key(_project_dir(a))) or 0)
+        args.func, args, project_key_fn,
+        ops_fn=_ops, project_dir_fn=_project_dir) or 0)
 
 
 if __name__ == "__main__":

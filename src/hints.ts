@@ -22,6 +22,7 @@ export const hints: Record<
   | "roleRequired"
   | "afterRed"
   | "afterCompile"
+  | "afterLint"
   | "readEvidence"
   | "unknownProject"
   | "archivedProject"
@@ -53,7 +54,7 @@ export const hints: Record<
   /** GET /api/v2 — orientation for a fresh agent. */
   orientation: [
     "POST /api/v2/projects {name, key?, type?, sutRoot?} — create a project (key auto-generated when omitted)",
-    "GET /api/v2/projects — projects with rollups (agentsOnline, agentsTotal, lastEvent, latestGreenCoverage)",
+    "GET /api/v2/projects — projects with rollups (agentsOnline, agentsTotal, lastEvent — the newest test run or compile result, lastEventNotLint — the newest run that is not a lint record, latestGreenCoverage)",
     "POST /api/v2/agents/register {projectKey, agentId, role} — register an agent (role: RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report)",
     cycleEvidence,
     "GET /api/v2/health — service health",
@@ -85,6 +86,10 @@ export const hints: Record<
   /** After a compile ingest. */
   afterCompile: [
     "compile events route to the compile panel — ingest the next test run to update the run verdict",
+  ],
+  /** After a lint ingest (a compile post naming its linter). */
+  afterLint: [
+    "lint records route to the Lint group on the Compile tab — post the next lint run after fixing its findings",
   ],
   /** 404/400 unknown project — the call that fixes it. */
   unknownProject: [
@@ -395,6 +400,13 @@ export const milestoneHints = {
     `${type} is a RESERVED milestone type — the server derives ${derives} from that exact name, so a project can neither declare, shadow nor remove it`,
     "nothing was declared: re-send PATCH /api/v2/projects/<key> {milestoneTypes: […]} without the reserved name — the whole declaration is refused, so a legitimate type beside it is not left half-applied",
     "a reserved type stays recordable by every project — it never has to be declared to be used",
+  ],
+  /** A gate milestone whose `scope` or `suites` is ill-formed: nothing was recorded. */
+  gateShape: (): string[] => [
+    "nothing was recorded: the whole milestone is refused when its scope or suites is ill-formed",
+    "a well-formed scope and suites are welcome: scope is \"full\" or \"scoped\"; suites is a non-empty list of {target, outcome, passed?, failed?, failingTests?}",
+    "each entry: target a non-empty string; outcome \"pass\" or \"fail\"; passed and failed both non-negative integers, or both absent (only on \"fail\"); failingTests a list of strings",
+    "either may be left out (suites may come without scope), but neither may be null",
   ],
 };
 

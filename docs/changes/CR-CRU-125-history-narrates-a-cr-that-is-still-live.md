@@ -1,6 +1,6 @@
 # CR-CRU-125 — History narrates a CR that is still live
 
-**Status:** PENDING (0.2.0 — born mid-release, D4)
+**Status:** DONE (0.2.0 — born mid-release, D4)
 **Type:** bugfix
 **Priority:** P2
 **Depends on:** CR-CRU-020 (the history lens whose filter this corrects)

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="test_debounce" tests="5" failures="1" skipped="1" time="0.002724">
+    <testcase name="test_stays_low_without_input" classname="test_debounce" file="test/test_debounce.cpp" line="38" time="0.000000"/>
+    <testcase name="test_settles_high_after_the_window" classname="test_debounce" file="test/test_debounce.cpp" line="39" time="0.000000"/>
+    <testcase name="test_rejects_a_short_glitch" classname="test_debounce" file="test/test_debounce.cpp" line="40" time="0.000021">
+      <failure message="Expected 0 Was 1" type="assertion">../../test/test_debounce.cpp:21: Expected 0 Was 1
+  ASSERT_EQ_INT(0, debounce_update(&amp;d, true, 40))</failure>
+    </testcase>
+    <testcase name="test_long_press_detection" classname="test_debounce" file="test/test_debounce.cpp" line="41" time="0.000002">
+      <skipped message="long press not implemented"/>
+    </testcase>
+    <testcase name="test_bounces_for_a_while" classname="test_debounce" file="test/test_debounce.cpp" line="42" time="0.002700"/>
+  </testsuite>
+</testsuites>

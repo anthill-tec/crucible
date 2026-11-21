@@ -1,6 +1,6 @@
 # CR-CRU-049 — Harden `mvn-crucible.py` narration: real-format fixtures + pinned output mode
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (client robustness + test fidelity)
 **Priority:** P2 — the CR-047 defect class survives in the mvn narration TEST, not in the client
 **Depends on:** CR-CRU-008 (§S2b in-run progress narration), CR-CRU-047 (establishes the defect class)

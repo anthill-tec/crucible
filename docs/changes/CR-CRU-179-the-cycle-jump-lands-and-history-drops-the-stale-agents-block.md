@@ -1,7 +1,7 @@
 # CR-CRU-179 — the cycle jump lands, and History drops the stale agents block
 
 **Type** fix (patch CR) · **Points** 3 (confirmed at gap analysis 2026-10-09) · **Wave** 7 (0.3.0) ·
-**Depends on** CR-CRU-178 · **Status** PENDING — filed 2026-10-09 (user report and rulings)
+**Depends on** CR-CRU-178 · **Status** DONE — filed 2026-10-09 (user report and rulings)
 
 ## Problem
 

@@ -29,7 +29,7 @@
 //     the plain regression gate was reporting). `bunfig.toml`'s
 //     `pathIgnorePatterns` is NOT an available fix: CR-CRU-047 §S1 forbids a
 //     permanently-excluded `tests/` directory, and
-//     `tests/suite-integrity.test.ts` (out of this agent's scope) asserts
+//     `tests/integration/suite-integrity.test.ts` (out of this agent's scope) asserts
 //     `bunfig.toml` carries no such key at all. Renamed instead — to
 //     `ephemeral.contract.ts` / `non-ephemeral.contract.ts` — since neither
 //     substring matches bun's discovery rule, so plain `bun test` no longer
@@ -72,7 +72,7 @@
 // config fails to even LOAD today (a genuine collection-level RED, sanctioned
 // by the RED-phase rules: "a compile/collection error... counts as RED").
 import { defineConfig } from "@playwright/test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +93,12 @@ const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
 // now sets is what makes the declaration below the file the child reads,
 // rather than the repo's own.
 const SCRATCH_CWD = mkdtempSync(path.join(tmpdir(), "crucible-e2e-ephemeral-"));
+// The scratch directory belongs to the process that loaded this config and
+// goes when that process ends — on a passing run, a failing run, or a bare
+// load of this module (each loading process removes its own).
+process.on("exit", () => {
+  rmSync(SCRATCH_CWD, { recursive: true, force: true });
+});
 writeFileSync(
   path.join(SCRATCH_CWD, "crucible.toml"),
   `[server]\nhost = "127.0.0.1"\nport = ${String(E2E_PORT)}\n`,
@@ -120,7 +126,7 @@ export default defineConfig({
     baseURL: `http://localhost:${E2E_PORT}`,
   },
   webServer: {
-    command: `bun run ${SERVER_ENTRY}`,
+    command: `bun run --no-env-file ${SERVER_ENTRY}`,
     cwd: SCRATCH_CWD,
     env: { CRUCIBLE_DB: ":memory:" },
     port: E2E_PORT,

@@ -1,6 +1,6 @@
 # CR-CRU-053 — Test files still point readers at the retired `~/.claude/scripts` client mirror
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (documentation hazard — comments/docstrings + one guard test)
 **Priority:** P2 — no code is wrong; the risk is that an agent orienting itself is walked into a
 known failure mode

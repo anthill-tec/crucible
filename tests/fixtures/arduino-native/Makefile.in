@@ -1,0 +1,36 @@
+# The native host Makefile of the arduino client's end-to-end tests, per the
+# client's make contract. `@TARGET@` is replaced with the make target the
+# native dir runs (`junit`, or `junit-<tier>` for a declared tier).
+#
+# Every test binary runs in order. A binary that FAILED (exit 1) lets the
+# next one run; a binary that died (any other exit, e.g. 139 on SIGSEGV)
+# stops the loop, so later binaries never run. The recipe exits non-zero
+# when any binary did not pass.
+#
+# On a coverage run (COVERAGE_DIR set) it writes a fixed lcov.info there,
+# unless NATIVE_NO_LCOV is set.
+
+CXX ?= g++
+REPORTS_DIR ?= reports
+COVERAGE_DIR ?=
+BUILD_DIR ?= build
+TESTS ?= $(basename $(notdir $(wildcard test_*.cpp)))
+
+.PHONY: @TARGET@
+
+@TARGET@: $(addprefix $(BUILD_DIR)/,$(TESTS))
+	@mkdir -p $(REPORTS_DIR)
+	@status=0; for t in $(TESTS); do \
+	  REPORTS_DIR=$(REPORTS_DIR) ./$(BUILD_DIR)/$$t; rc=$$?; \
+	  if [ $$rc -gt 1 ]; then exit $$rc; fi; \
+	  if [ $$rc -ne 0 ]; then status=1; fi; \
+	done; \
+	if [ -n "$(COVERAGE_DIR)" ] && [ -z "$$NATIVE_NO_LCOV" ]; then \
+	  mkdir -p $(COVERAGE_DIR) && \
+	  printf 'TN:\nSF:src/widget.cpp\nFN:3,widget_draw\nFNDA:4,widget_draw\nFNF:1\nFNH:1\nDA:3,4\nDA:4,4\nDA:5,0\nDA:6,4\nLF:4\nLH:3\nend_of_record\n' > $(COVERAGE_DIR)/lcov.info; \
+	fi; \
+	exit $$status
+
+$(BUILD_DIR)/%: %.cpp crucible_native.h
+	@mkdir -p $(BUILD_DIR)
+	$(CXX) -std=c++17 -O0 -o $@ $<

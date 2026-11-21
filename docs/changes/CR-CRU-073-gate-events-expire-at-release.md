@@ -3,7 +3,7 @@
 - **Type**: bugfix
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 013, 071 (migration chain for the `retired_at` marker), 074 (the release-completion signal)
-- **Status**: PENDING (0.2.0)
+- **Status**: DONE (0.2.0)
 
 ## Problem
 

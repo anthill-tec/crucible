@@ -13,7 +13,7 @@
 // honest way to exercise any of these contracts, not a shortcut.
 //
 // Contract shapes this file invents for GREEN (documented, not dictated —
-// mirrors tests/project-teardown.test.ts's precedent of pinning an
+// mirrors tests/unit/project-teardown.test.ts's precedent of pinning an
 // RED-authored shape in comments so GREEN has one target to match):
 //
 //   - harness.ts exports `export const E2E_PORT = 39_877;` — single source

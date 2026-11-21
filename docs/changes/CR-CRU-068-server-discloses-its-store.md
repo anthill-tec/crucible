@@ -3,7 +3,7 @@
 - **Type**: bugfix
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 043, 066
-- **Status**: PENDING (0.2.0)
+- **Status**: DONE (0.2.0)
 
 ## Problem
 

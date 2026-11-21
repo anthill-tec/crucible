@@ -23,12 +23,12 @@
 // probe and the user-level fallback, so no cwd, HOME or XDG_DATA_HOME value
 // can route this suite at a real database. The scratch `cwd` is KEPT and the
 // scratch DB lives inside it, so rules 2 and 3 name the same file and agree
-// rather than diverge. `tests/e2e/teardown-contracts/crucible-db-isolation.test.ts`
+// rather than diverge. `tests/unit/crucible-db-isolation.test.ts`
 // feeds this config's real `webServer.env` through the real `resolveDbPath`
 // and asserts the result is neither the user-level nor the XDG path.
-import { defineConfig, devices } from "@playwright/test";
+import { defineConfig, devices, type ReporterDescription } from "@playwright/test";
 import { defineBddConfig } from "playwright-bdd";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,7 +71,7 @@ import { webkitEngineAvailable } from "./tests/e2e/steps/webkit-docker-preflight
 // The webkit-iphone project is ENDPOINT-GATED (user-approved ruling): it
 // collects its feature only when a WebKit engine exists for this run, CI's
 // native install or the Docker endpoint (`webkitEngineAvailable`, the one
-// predicate tests/e2e-suite-reaches-the-board.test.ts shares). A plain
+// predicate tests/integration/e2e-suite-reaches-the-board.test.ts shares). A plain
 // local `bun run test:e2e` therefore runs Chromium only instead of failing
 // on an engine this host cannot launch.
 const webkitAvailable = webkitEngineAvailable({
@@ -82,6 +82,15 @@ const webkitAvailable = webkitEngineAvailable({
 const REPO_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
 const SCRATCH_CWD = mkdtempSync(path.join(tmpdir(), "crucible-e2e-"));
+// The scratch directory (and the run's database inside it) belongs to the
+// process that loaded this config, and goes when that process ends — on a
+// passing run, a failing run, or a bare load of this module. Every process
+// that loads the config (the runner and each worker) makes its own, so each
+// removes its own; the runner's, which the webServer uses, is removed only
+// once Playwright has stopped that server and is itself exiting.
+process.on("exit", () => {
+  rmSync(SCRATCH_CWD, { recursive: true, force: true });
+});
 // CR-CRU-052 §S5 — the per-run database, named explicitly rather than left to
 // be resolved. A real FILE (not `:memory:`) deliberately: the webServer is a
 // separate long-lived process, so either would survive across requests within a
@@ -119,6 +128,33 @@ const testDir = defineBddConfig({
   steps: "tests/e2e/steps/*.ts",
 });
 
+// The run's record is the Crucible event stream. `package.json`'s
+// `crucible.targets` entry for `test:e2e` declares a `playwright-bdd` target
+// streamed in `crucible-events`, and the bun client hands the runner the
+// directory of its shipped reporters in CRUCIBLE_REPORTERS. The Crucible
+// reporter (`playwright-crucible.ts` in that directory) is added only when
+// the variable is set: a bare `bun run test:e2e` names no machine path and
+// runs unchanged.
+//
+// The `junit` reporter is kept beside it. It reads its path from the variable
+// Playwright itself reads (PLAYWRIGHT_JUNIT_OUTPUT_NAME); an explicit
+// `outputFile` would win over the variable, so a hardcoded path here would
+// stop the client moving the file. For a stream target the client points it
+// into the run's own reports dir (`_stream_target_run`,
+// clients/bun-crucible.py). The default keeps a bare run writing it under
+// `test-reports/`.
+const crucibleReporters = process.env["CRUCIBLE_REPORTERS"];
+const reporters: ReporterDescription[] = [
+  ["list"],
+  [
+    "junit",
+    {
+      outputFile: process.env.PLAYWRIGHT_JUNIT_OUTPUT_NAME ?? "test-reports/junit.xml",
+    },
+  ],
+];
+if (crucibleReporters) reporters.push([`${crucibleReporters}/playwright-crucible.ts`]);
+
 export default defineConfig({
   testDir,
   // Single logical suite (4 features / 19 scenarios), run serially: F1
@@ -128,44 +164,7 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   timeout: 30_000,
-  // "junit" additionally feeds the Crucible auto-ingest path
-  // (`bun-crucible.py auto-ingest`), which reads test-reports/junit.xml.
-  //
-  // CR-CRU-133 §S2 — `package.json`'s `crucible.reportPath` DECLARES that this
-  // target takes its report path from PLAYWRIGHT_JUNIT_OUTPUT_NAME, and
-  // playwright's junit reporter prefers an explicit `outputFile` OVER that
-  // variable — so a hardcoded path here would make the declaration a lie and
-  // the client could never move the file this suite writes. The default is
-  // kept for a bare `bun run test:e2e`, which is unaffected.
-  //
-  // CR-CRU-015 §S2 — and the RAW report the SERVER decodes. The JUnit XML has
-  // no notion of a `test.step`, so every Gherkin step this suite executes is
-  // already gone by the time that file is written; playwright's own JSON
-  // report keeps them, and `src/codecs/playwright.ts` (registered as the
-  // `"playwright"` codec) turns them back into the feature → scenario → step
-  // tree. `package.json`'s `crucible.rawReport` DECLARES that this target
-  // takes that report's path from PLAYWRIGHT_JSON_OUTPUT_NAME, so the path is
-  // read from the environment for exactly the reason the junit reporter above
-  // reads one: playwright's json reporter prefers an explicit `outputFile`
-  // OVER the variable, and a hardcoded path here would make the declaration a
-  // lie. The default keeps a bare `bun run test:e2e` writing beside the XML.
-  reporter: [
-    ["list"],
-    [
-      "junit",
-      {
-        outputFile:
-          process.env.PLAYWRIGHT_JUNIT_OUTPUT_NAME ?? "test-reports/junit.xml",
-      },
-    ],
-    [
-      "json",
-      {
-        outputFile:
-          process.env.PLAYWRIGHT_JSON_OUTPUT_NAME ?? "test-reports/playwright.json",
-      },
-    ],
-  ],
+  reporter: reporters,
   use: {
     baseURL: process.env.CRUCIBLE_E2E_BASE_URL ?? `http://localhost:${PORT}`,
     trace: "retain-on-failure",
@@ -255,7 +254,7 @@ export default defineConfig({
     // `chromium` main body nor the other mobile project ever double-runs a
     // scenario. Both `grepInvert: /@empty-db/` per the CR's own ordering
     // note: a project that swept up the F1 empty-db precondition a second
-    // time would both red tests/e2e-suite-dependency-graph.test.ts's "the
+    // time would both red tests/unit/e2e-suite-dependency-graph.test.ts's "the
     // ordering precondition runs exactly once" invariant AND seed the
     // "empty" database ahead of that second run. Both `dependencies` on
     // `chromium-empty-db` (never on `chromium`) for the same reason every
@@ -322,7 +321,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `bun run ${SERVER_ENTRY}`,
+    command: `bun run --no-env-file ${SERVER_ENTRY}`,
     cwd: SCRATCH_CWD,
     // CR-CRU-052 §S5 — Playwright spawns this command with
     // `{...process.env, ...env}` (verified in playwright/lib/plugins/

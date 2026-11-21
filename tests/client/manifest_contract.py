@@ -54,8 +54,16 @@ Not named `test_*`, so unittest discovery never collects it as a suite.
 #: closed. It is declared just below in `CONDITIONAL_MANIFEST_KEYS` and
 #: asserted against that condition -- owed in the provisioned case, refused
 #: with a stated reason in the other.
+#:
+#: `declaration_schema` joined with the shipped declaration schema: the fleet
+#: file `<install>/clients/crucible-declaration.schema.json` that states every
+#: stack's Crucible declaration for writers outside the clients. Published as
+#: `{"path", "version"}`, the version read from the packaged source copy the
+#: fleet stage lays down. Declared UNCONDITIONALLY, like `shipped_config`: the
+#: fleet stage lays it down on every install.
 EXPECTED_MANIFEST_KEYS = frozenset({
     "version", "clients", "status", "config", "shipped_config",
+    "declaration_schema",
 })
 
 #: The manifest's CONDITIONAL top-level keys, with the condition each is

@@ -5,7 +5,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 
 **Design contract:** [../research/PRD-crucible-v2.md](../research/PRD-crucible-v2.md)
 **Evidence base:** [../research/DN-crucible-api-reconstruction.md](../research/DN-crucible-api-reconstruction.md)
-**Target release:** 0.4.0
+**Target release:** 0.5.0
 
 | CR | Title | Type | Status | Depends on | Wave |
 |---|---|---|---|---|---|
@@ -158,22 +158,92 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-150](CR-CRU-150-status-shows-the-work-in-flight.md) | `status` shows the work in flight, not the project's history | feature | COMPLETED (0.3.0) | 030, 035, 094 | 7 (0.3.0) |
 | [CR-CRU-154](CR-CRU-154-a-project-carries-its-own-metadata.md) | a project carries its own metadata | feature | COMPLETED (0.3.0) | 091, 130, 150 | 7 (0.3.0) |
 | [CR-CRU-155](CR-CRU-155-each-test-run-keeps-its-reports-to-itself.md) | each test run keeps its reports to itself | fix | COMPLETED (0.3.0) | — | 7 (0.3.0) |
-| [CR-CRU-156](CR-CRU-156-the-velocity-card-sits-below-vitals.md) | the Velocity card sits below Vitals | fix | PENDING | — | 7 (0.3.0) |
-| [CR-CRU-159](CR-CRU-159-a-heat-strip-click-brings-its-test-into-view.md) | a heat-strip click brings its test into view | fix | PENDING | — | 7 (0.3.0) |
-| [CR-CRU-163](CR-CRU-163-a-project-declares-the-gate-steps-it-never-runs.md) | a project declares which gate steps it never runs | feature | PENDING | — | 7 (0.3.0) |
-| [CR-CRU-165](CR-CRU-165-a-plan-grows-only-by-fix-cycles-and-a-skip-is-a-recorded-failure.md) | a plan grows only by FIX cycles, and a skipped cycle is a recorded failure | feature | PENDING | — | 7 (0.3.0) |
-| [CR-CRU-162](CR-CRU-162-a-gate-decision-is-recorded.md) | a gate decision is recorded, not lost in the tool's logs | feature | PENDING | — | 7 (0.3.0) |
-| [CR-CRU-157](CR-CRU-157-the-agent-card-tells-the-truth-about-the-agent.md) | the agent card tells the truth about the agent | fix | PENDING | — | 7 (0.3.0) |
-| [CR-CRU-158](CR-CRU-158-a-runs-detail-stays-responsive-while-agents-run.md) | a run's detail stays responsive while agents run | fix | PENDING | 157 | 7 (0.3.0) |
-| [CR-CRU-161](CR-CRU-161-velocity-follows-the-flow-not-the-calendar.md) | velocity follows the flow, not the calendar | feature | PENDING | 158 | 7 (0.3.0) |
-| [CR-CRU-160](CR-CRU-160-the-burndown-fills-its-pane-and-draws-f16s-projection.md) | the burndown fills its pane and draws F16's projection | fix | PENDING | 161 | 7 (0.3.0) |
-| [CR-CRU-164](CR-CRU-164-a-releases-verification-runs-are-filed-under-it.md) | a release's verification runs are filed under the release | feature | PENDING | 157 | 7 (0.3.0) |
-| [CR-CRU-151](CR-CRU-151-a-run-says-which-stack-produced-it.md) | a run says which stack produced it, and the board keeps it | fix | PENDING | 112 | 8 (0.4.0) |
-| [CR-CRU-153](CR-CRU-153-the-arduino-stacks-compile-errors-are-decoded.md) | the arduino stack's compile errors are decoded | feature | PENDING | — | 8 (0.4.0) |
-| [CR-CRU-152](CR-CRU-152-each-stacks-reports-are-decoded-on-the-server.md) | each stack's reports are decoded on the server | feature | PENDING | 151 | 8 (0.4.0) |
+| [CR-CRU-156](CR-CRU-156-the-velocity-card-sits-below-vitals.md) | the Velocity card sits below Vitals | fix | COMPLETED | — | 7 (0.3.0) |
+| [CR-CRU-159](CR-CRU-159-a-heat-strip-click-brings-its-test-into-view.md) | a heat-strip click brings its test into view | fix | COMPLETED | — | 7 (0.3.0) |
+| [CR-CRU-163](CR-CRU-163-a-project-declares-the-gate-steps-it-never-runs.md) | a project declares which gate steps it never runs | feature | COMPLETED | — | 7 (0.3.0) |
+| [CR-CRU-165](CR-CRU-165-a-plan-grows-only-by-fix-cycles-and-a-skip-is-a-recorded-failure.md) | a plan grows only by FIX cycles, and a skipped cycle is a recorded failure | feature | COMPLETED | — | 7 (0.3.0) |
+| [CR-CRU-162](CR-CRU-162-a-gate-decision-is-recorded.md) | a gate decision is recorded, not lost in the tool's logs | feature | COMPLETED | — | 7 (0.3.0) |
+| [CR-CRU-157](CR-CRU-157-the-agent-card-tells-the-truth-about-the-agent.md) | the agent card tells the truth about the agent | fix | COMPLETED | — | 7 (0.3.0) |
+| [CR-CRU-158](CR-CRU-158-a-runs-detail-stays-responsive-while-agents-run.md) | a run's detail stays responsive while agents run | fix | COMPLETED | 157 | 7 (0.3.0) |
+| [CR-CRU-161](CR-CRU-161-velocity-and-the-forecast-follow-the-release-so-far.md) | velocity follows the flow, not the calendar | feature | COMPLETED | 158 | 7 (0.3.0) |
+| [CR-CRU-160](CR-CRU-160-the-burndown-fills-its-pane-and-draws-f16s-projection.md) | the burndown fills its pane and draws F16's projection | fix | COMPLETED | 161 | 7 (0.3.0) |
+| [CR-CRU-164](CR-CRU-164-a-releases-verification-runs-are-filed-under-it.md) | a release's verification runs are filed under the release | feature | COMPLETED | 157 | 7 (0.3.0) |
+| [CR-CRU-181](CR-CRU-181-the-client-says-what-really-happened-to-a-gate-decision.md) | the client says what really happened to a gate decision and a release | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-184](CR-CRU-184-a-test-run-interrupted-before-its-runner-starts-leaves-nothing-behind.md) | a test run interrupted outside its runner leaves nothing behind | fix | COMPLETED | 181 | 8 (0.4.0) |
+| [CR-CRU-185](CR-CRU-185-a-run-under-a-key-no-project-holds-is-refused.md) | a run under a key no project holds is refused, by every client | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-186](CR-CRU-186-a-test-run-leaves-nothing-behind.md) | a test run leaves nothing behind | fix | COMPLETED | 184 | 8 (0.4.0) |
+| [CR-CRU-188](CR-CRU-188-a-migration-proof-does-not-read-an-aged-live-store.md) | a gate measures the code, a red gate stops the merge, and the clients are lint-clean | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-189](CR-CRU-189-every-subtest-is-counted-pass-or-fail.md) | every subtest is counted, pass or fail | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-191](CR-CRU-191-the-clients-are-clean-under-pi-lens.md) | the clients are clean under pi-lens | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-190](CR-CRU-190-the-0.4.0-follow-ups-list.md) | the 0.4.0 follow-ups list | fix | COMPLETED | 184 | 8 (0.4.0) |
+| [CR-CRU-192](CR-CRU-192-a-projects-coverage-config-decides-what-is-measured.md) | a project's coverage config decides what is measured | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-193](CR-CRU-193-a-runs-coverage-is-shown-file-by-file.md) | a run's coverage is shown file by file | feature | COMPLETED | 152 | 8 (0.4.0) |
+| [CR-CRU-194](CR-CRU-194-a-bun-projects-own-runner-runs-a-targeted-test.md) | a bun project's own runner runs a targeted test, and no project is anyone's default | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-195](CR-CRU-195-a-go-project-reports-to-the-board-through-its-own-client.md) | a Go project reports to the board through its own client | feature | COMPLETED | 152, 200 | 8 (0.4.0) |
+| [CR-CRU-196](CR-CRU-196-a-go-project-declares-its-tiers-with-build-tags.md) | a Go project declares its tiers with build tags | feature | COMPLETED | 195 | 8 (0.4.0) |
+| [CR-CRU-197](CR-CRU-197-the-python-client-runs-a-pytest-project.md) | the python client runs a pytest project | feature | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-198](CR-CRU-198-the-python-floor-is-3.14-and-the-scans-report-what-matters.md) | the python floor is 3.14, and the lint and secrets scans report what matters | maintenance | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-199](CR-CRU-199-a-lint-finding-reaches-the-board-as-a-marked-compile-record.md) | a lint finding reaches the board as a marked compile record, and shows as its own group | feature | COMPLETED | — | 13 (0.4.0) |
+| [CR-CRU-253](CR-CRU-253-the-client-modules-type-check-clean-and-installer-tests-stay-off-the-shipped-ports.md) | the client modules type-check clean, and the installer tests stay off the shipped ports | maintenance | COMPLETED | — | 3 (0.4.0) |
+| [CR-CRU-254](CR-CRU-254-each-stacks-lint-runs-through-its-client.md) | each stack's lint runs through its client, and the gate runs it after check | feature | COMPLETED | 199, 253 | 13 (0.4.0) |
+| [CR-CRU-256](CR-CRU-256-a-filed-lint-run-is-named-in-its-envelopes-events.md) | a filed lint run is named in its envelope's events | fix | COMPLETED | 254 | 8 (0.4.0) |
+| [CR-CRU-257](CR-CRU-257-the-doc-tests-read-the-changelog-section-being-written.md) | the doc tests read the changelog section being written | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-259](CR-CRU-259-a-client-with-no-board-declared-refuses.md) | a client with no board declared refuses | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-260](CR-CRU-260-the-client-suite-runs-from-its-own-install-and-owns-its-caches.md) | the client suite runs from its own install and owns its caches | fix | COMPLETED | 259 | 8 (0.4.0) |
+| [CR-CRU-261](CR-CRU-261-the-suites-declare-their-tiers-by-directory.md) | the suites declare their tiers by directory | fix | COMPLETED | 260 | 8 (0.4.0) |
+| [CR-CRU-262](CR-CRU-262-a-live-board-is-kept-for-feature-level-tests.md) | a live board is kept for feature-level tests | fix | COMPLETED | 261 | 8 (0.4.0) |
+| [CR-CRU-263](CR-CRU-263-ci-runs-the-suites-hermetically-behind-a-tripwire.md) | CI runs the suites hermetically behind a tripwire | fix | COMPLETED | 262, 264 | 8 (0.4.0) |
+| [CR-CRU-264](CR-CRU-264-a-bun-route-test-reaches-the-board-in-process.md) | a bun route test reaches the board in process | fix | COMPLETED | 262 | 8 (0.4.0) |
+| [CR-CRU-265](CR-CRU-265-a-test-run-refuses-a-path-that-does-not-exist.md) | a test run refuses a path that does not exist | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-255](CR-CRU-255-a-gate-whose-only-run-fails-answers-not-ok.md) | a gate whose only run fails answers not ok | fix | PENDING | — | 9 (0.5.0) |
+| [CR-CRU-200](CR-CRU-200-an-open-run-takes-its-test-stream-and-shows-it-live.md) | an open run takes its test stream and shows it live | feature | COMPLETED | 152, 206 | 8 (0.4.0) |
+| [CR-CRU-201](CR-CRU-201-a-bun-project-streams-its-tests-declared-in-one-table.md) | a bun project streams its tests, declared in one table per script | feature | COMPLETED | 200 | 8 (0.4.0) |
+| [CR-CRU-202](CR-CRU-202-a-rust-run-streams-its-tests-through-nextest.md) | a rust run streams its tests through nextest | feature | COMPLETED | 200 | 8 (0.4.0) |
+| [CR-CRU-203](CR-CRU-203-the-arduino-runner-streams-and-maven-shows-its-console-live.md) | the arduino runner streams its tests, and maven shows its console live | feature | COMPLETED | 200 | 8 (0.4.0) |
+| [CR-CRU-187](CR-CRU-187-a-release-drafts-its-notes-from-the-board.md) | a release drafts its notes from the board | feature | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-182](CR-CRU-182-a-phone-tap-on-a-history-cycle-line-opens-its-runs.md) | a phone tap on a history cycle line opens its runs, not `→ Runs` | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-183](CR-CRU-183-finish-refuses-a-release-with-no-notes.md) | `finish` refuses a release with no notes, and its report skips voided CRs | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-151](CR-CRU-151-a-run-says-which-stack-produced-it.md) | a run says which stack produced it, and the board keeps it | fix | COMPLETED | 112 | 8 (0.4.0) |
+| [CR-CRU-153](CR-CRU-153-the-arduino-stacks-compile-errors-are-decoded.md) | the arduino stack's compile errors are decoded | feature | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-152](CR-CRU-152-each-stacks-reports-are-decoded-on-the-server.md) | each stack's reports are decoded on the server | feature | COMPLETED | 151, 205 | 8 (0.4.0) |
+| [CR-CRU-205](CR-CRU-205-a-waiting-client-is-recognised-by-its-system-call.md) | a waiting client is recognised by its system call, not a kernel function name | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-207](CR-CRU-207-an-ingest-is-bounded.md) | an ingest is bounded: its body size and the output a run keeps | feature | COMPLETED | 152 | 8 (0.4.0) |
+| [CR-CRU-208](CR-CRU-208-a-runner-that-failed-is-never-filed-as-green.md) | a runner that failed is never filed as green | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-210](CR-CRU-210-a-scoped-re-run-after-a-red-gate-closes-the-cr-suite-by-suite.md) | a scoped re-run after a red gate closes the CR, suite by suite | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-213](CR-CRU-213-a-milestone-is-never-drawn-as-a-run.md) | a milestone is never drawn as a run | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-214](CR-CRU-214-no-test-writes-to-the-live-board.md) | no test writes to the live board | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-211](CR-CRU-211-an-arduino-agent-runs-only-its-own-native-tests.md) | an arduino agent runs only its own native tests | feature | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-212](CR-CRU-212-every-clients-regression-runs-the-whole-suite-without-coverage-unless-asked.md) | every client's regression runs the whole suite without coverage unless asked | feature | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-204](CR-CRU-204-the-bun-and-python-clients-send-their-reports.md) | the bun and python clients send their runners' reports and parse nothing | feature | COMPLETED | 152, 207, 208 | 8 (0.4.0) |
+| [CR-CRU-206](CR-CRU-206-the-maven-rust-and-arduino-clients-send-their-reports.md) | the maven, rust and arduino clients send their runners' reports and parse nothing | feature | COMPLETED | 204, 208 | 8 (0.4.0) |
+| [CR-CRU-209](CR-CRU-209-repeated-runs-on-the-active-cycle-fold-into-one-chip.md) | repeated runs on the active cycle fold into one chip | fix | PENDING | — | 9 (0.5.0) |
 
 ## Deferred — post-0.2.0
 
+- 2026-10-28 — **the python client cannot discover with a top-level directory** (CR-CRU-214's VERIFY, V1):
+  `test --start-dir tests/client` runs unittest discovery with no `-t`, so the `tests/client` package —
+  and its isolation from the live project — is imported only incidentally (the guard then fails closed).
+  A declared script's `-t .` does not reach the gate's run: the gate's python translation
+  (`_python_suite_argv`) drops `-t`, so the dispatched run has no top-level directory either, and the
+  gate's tier verbs (`unit`, `integration`, … from a `tests/client/<tier>` start directory, CR-CRU-261)
+  are dispatched under the same shape. A `--top-level-dir` flag (or `-t` defaulting to the
+  project root for a start dir beneath it) would change discovery for every python project: a candidate CR.
+- 2026-10-28 — **the e2e ingest counts Gherkin steps, not tests** (CR-CRU-213's VERIFY, V4): the bun
+  client's `e2e` run of the Playwright/bddgen suite files 1404 cases where Playwright reports 121 tests,
+  so the board's e2e figures do not match the runner's own summary. A candidate fix in the playwright
+  decoding (or the client's report choice).
+- 2026-10-28 — **mvn `auto-ingest` with no report on disk prints no envelope** (found by CR-CRU-210's
+  RED census): it exits 1 after falling back to a compile capture, with nothing machine-readable on
+  stdout. Every other path of every client emits one envelope. A candidate patch CR.
+- 2026-10-28 — **pre-existing pyright findings** in `tests/client/test_client_limits_resolve_from_configuration.py`
+  (an `assertIn` container typed `Any | None`, around lines 751/754; pi-lens reports 53). They predate
+  CR-CRU-207 (`git diff develop` showed its only change there was the limit list). A test-hygiene cleanup.
+- 2026-10-27 — **for CR-CRU-204's and CR-CRU-206's gap analyses** (found building CR-CRU-152's real
+  fixtures). (a) A bun test file that fails to load leaves no testcase in bun's JUnit report, so a run
+  ingested from the report undercounts (42 failed where bun counted 43); once the clients parse
+  nothing, the board's figures are the only figures. (b) nextest 0.9.130 writes no testcase for an
+  `#[ignore]`d test, so the rust client's comment that it emits `<skipped/>` is wrong at that version.
+  (c) surefire 3.5.4 ignored `-Dsurefire.reportsDirectory`, and failsafe also writes under `target/`.
 - 2026-09-18 — *resolved:* the `test-targets.ts` wait-blindness became **CR-CRU-144**; the BDD
   run-identity gap became a §S3 AC and shipped in CR-CRU-015 (cycle C3). Both entries deleted per
   the register's own rule — memory holds only what the repo does not yet track.

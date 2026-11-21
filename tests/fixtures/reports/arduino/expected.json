@@ -1,0 +1,121 @@
+{
+  "stack": "arduino",
+  "reports": [
+    "reports/TEST-test_debounce.xml",
+    "reports/TEST-test_ring_esp32.xml",
+    "reports/TEST-test_ring_uno.xml"
+  ],
+  "coverage": {
+    "codec": "lcov",
+    "reports": [
+      "lcov.info"
+    ]
+  },
+  "client": {
+    "summary": {
+      "total": 13,
+      "passed": 8,
+      "failed": 2,
+      "pending": 3,
+      "duration_ms": 0
+    },
+    "tree": [
+      {
+        "name": "test_debounce",
+        "status": "fail",
+        "children": [
+          {
+            "name": "test_stays_low_without_input",
+            "status": "pass",
+            "duration_ms": 0
+          },
+          {
+            "name": "test_settles_high_after_the_window",
+            "status": "pass",
+            "duration_ms": 0
+          },
+          {
+            "name": "test_rejects_a_short_glitch",
+            "status": "fail",
+            "duration_ms": 0
+          },
+          {
+            "name": "test_long_press_detection",
+            "status": "pending",
+            "duration_ms": 0
+          },
+          {
+            "name": "test_bounces_for_a_while",
+            "status": "pass",
+            "duration_ms": 0
+          }
+        ]
+      },
+      {
+        "name": "test_ring_esp32",
+        "status": "fail",
+        "children": [
+          {
+            "name": "test_pops_what_was_pushed",
+            "status": "pass",
+            "duration_ms": 0
+          },
+          {
+            "name": "test_refuses_a_push_when_full",
+            "status": "pass",
+            "duration_ms": 0
+          },
+          {
+            "name": "test_holds_four_bytes",
+            "status": "fail",
+            "duration_ms": 0
+          },
+          {
+            "name": "test_wraps_around_twice",
+            "status": "pending",
+            "duration_ms": 0
+          }
+        ]
+      },
+      {
+        "name": "test_ring_uno",
+        "status": "pass",
+        "children": [
+          {
+            "name": "test_pops_what_was_pushed",
+            "status": "pass",
+            "duration_ms": 0
+          },
+          {
+            "name": "test_refuses_a_push_when_full",
+            "status": "pass",
+            "duration_ms": 0
+          },
+          {
+            "name": "test_holds_four_bytes",
+            "status": "pass",
+            "duration_ms": 0
+          },
+          {
+            "name": "test_wraps_around_twice",
+            "status": "pending",
+            "duration_ms": 0
+          }
+        ]
+      }
+    ],
+    "files": 3,
+    "coverage": {
+      "lines": {
+        "total": 32,
+        "covered": 31,
+        "percent": 96.9
+      },
+      "functions": {
+        "total": 6,
+        "covered": 6,
+        "percent": 100.0
+      }
+    }
+  }
+}

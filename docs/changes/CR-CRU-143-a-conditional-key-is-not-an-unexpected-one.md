@@ -1,6 +1,6 @@
 # CR-CRU-143 — a conditional key is not an unexpected one
 
-**Type** hotfix · **Wave** 7 (0.2.2) · **Depends on** CR-CRU-138 · **Status** PENDING
+**Type** hotfix · **Wave** 7 (0.2.2) · **Depends on** CR-CRU-138 · **Status** DONE
 
 ## Problem
 

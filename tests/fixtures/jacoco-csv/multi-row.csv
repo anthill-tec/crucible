@@ -1,0 +1,6 @@
+GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED
+scratch-shop,com.acme.shop,Basket,12,48,2,6,3,17,3,9,1,7
+scratch-shop,com.acme.shop,Basket.Line,0,21,0,2,0,6,0,4,0,3
+scratch-shop,com.acme.shop,Currency,4,0,0,0,2,0,0,0,0,0
+scratch-shop,,Launcher,9,5,1,1,4,2,2,1,1,1
+scratch-shop,com.acme.shop.tax,Rate,30,0,4,0,8,0,5,0,3,0

@@ -1,0 +1,4 @@
+# example.com/iface/shape
+shape/shape.go:11:14: cannot use Square{} (value of struct type Square) as Area value in variable declaration: Square does not implement Area (wrong type for method Area)
+		have Area() float64
+		want Area(int) float64

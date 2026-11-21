@@ -1,6 +1,6 @@
 # CR-CRU-136 — a classname is decoded, not guessed
 
-**Type** fix · **Wave** 6 (0.2.0) · **Depends on** CR-CRU-133 · **Status** PENDING
+**Type** fix · **Wave** 6 (0.2.0) · **Depends on** CR-CRU-133 · **Status** DONE
 
 ## Problem
 

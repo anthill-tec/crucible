@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "crucible-axi"
 dynamic = ["version"]
 description = "Crucible install orchestrator — ships the *-crucible.py client fleet and stages server/manifest sub-installers behind one TOON-AXI envelope"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 license = "GPL-3.0-only"
 dependencies = []
 authors = [{ name = "Antony John" }]
@@ -14,12 +14,16 @@ keywords = ["crucible", "axi", "orchestration", "model-b", "testing"]
 classifiers = [
   "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Operating System :: POSIX",
 ]
+
+[project.urls]
+Homepage = "https://github.com/anthill-tec/crucible"
+Source = "https://github.com/anthill-tec/crucible"
+Changelog = "https://github.com/anthill-tec/crucible/blob/master/CHANGELOG.md"
+"Release Notes" = "https://github.com/anthill-tec/crucible/releases"
+Issues = "https://github.com/anthill-tec/crucible/issues"
 
 [project.optional-dependencies]
 # The toolchain `python-crucible.py` DRIVES, declared in exactly one place
@@ -29,36 +33,52 @@ classifiers = [
 #   coverage               — the pre-merge / regression coverage gate
 #                            (CR-CRU-040 §S1); coverage.py is the only
 #                            supported coverage path for this client.
-#   unittest-xml-reporting — the JUnit-XML producer EVERY `test` /
-#                            `regression` / `pre-merge-gate` run shells out to
-#                            (`python -m xmlrunner`, python-crucible.py:442).
-#                            Absent, no TEST-*.xml is produced and the run
-#                            dies with `No module named 'xmlrunner'`. Named
-#                            demanders (CR-CRU-063 §S3, run 31726344668):
-#                            test_cr039_regression_discovery.py:177,
-#                            test_python_crucible_axi.py:1085 and :1129,
-#                            test_toolchain_verb_envelopes.py:430 and :514.
-#                            4.x is required, not merely preferred: it stamps
-#                            each <testcase> with `file=`, which is what makes
-#                            `_parse_junit_dir`'s `files` count per-FILE rather
-#                            than degrading to per-CLASS (python-crucible.py:456).
 #   build                  — the PEP 517 frontend the packaging contracts
-#                            build a real wheel with. Fail-fast, never
-#                            skipped: `setUpClass` RAISES when no reachable
-#                            interpreter can `import build`, because a silent
+#                            build a real wheel with, as
+#                            `sys.executable -m build --wheel --no-isolation`:
+#                            the suite's OWN interpreter, offline, no other
+#                            interpreter tried. Fail-fast, never skipped:
+#                            `setUpClass` RAISES, naming this extra, when
+#                            `importlib.util.find_spec` cannot find `build`,
+#                            `hatchling` or `hatch_vcs`, because a silent
 #                            skip is how a packaging defect stays invisible.
-#                            Reachability is the operative word — under
-#                            `uv run`, `sys.executable`, `which("python3")`
-#                            and `sys.base_prefix` all resolve to the venv or
-#                            the uv-managed interpreter, so a `build` present
-#                            only in the SYSTEM python is not reachable and
-#                            the gate correctly reports it missing. Named
-#                            demanders: test_cr046_uv_env_gate.py:174,
-#                            test_crucible_axi_wheel_packaging.py:121, and
-#                            test_shipped_limits_ship_as_package_data.py:125
+#                            Named demanders (each `_build_modules_gap`):
+#                            test_cr046_uv_env_gate.py,
+#                            test_crucible_axi_wheel_packaging.py, and
+#                            test_shipped_limits_ship_as_package_data.py
 #                            (three classes — CR-CRU-131 §S1c's travel,
 #                            one-datum and version-skew proofs).
-dev = ["coverage>=7", "unittest-xml-reporting>=4", "build>=1"]
+#   hatchling              — the build backend `[build-system]` names. With
+#                            `--no-isolation` no isolated environment
+#                            downloads it, so the suite's interpreter carries
+#                            it; same demanders and floor as `[build-system]`.
+#   hatch-vcs              — the version source plugin `[build-system]` names
+#                            (`[tool.hatch.version] source = "vcs"`); carried
+#                            here for the same offline build, same demanders.
+#   pytest                 — the second runner the python client drives, for
+#                            a project declaring `[python] runner = "pytest"`
+#                            in its own crucible.toml or a run passing
+#                            `--runner pytest`. The client's own suite proves
+#                            that path against a real pytest on a committed
+#                            fixture project (tests/fixtures/pytest-project),
+#                            so the suite's interpreter must import it; a test
+#                            that needs it FAILS, never skips, when it is
+#                            absent. 9.x is the line the client's pytest
+#                            invocation was measured on. Named demanders:
+#                            test_python_runner_is_declared_by_the_project.py
+#                            and
+#                            test_pytest_fixture_stays_out_of_this_repos_suite.py.
+#   ruff                   — this project's linter. Both named demanders run
+#                            it as `python -m ruff` from the suite's own
+#                            interpreter, never a ruff found on PATH, so the
+#                            version is one within the range declared here.
+#                            test_the_client_fleet_is_typed_lean_and_lint_clean.py
+#                            runs the project's rule set, the one
+#                            `[tool.ruff.lint]` below declares;
+#                            test_the_run_pipeline_lives_in_its_own_shared_module.py
+#                            runs `--select F` on the two shared modules.
+dev = ["coverage>=7", "build>=1", "pytest>=9", "ruff>=0.16,<0.17",
+       "hatchling>=1.27", "hatch-vcs>=0.4"]
 
 [project.scripts]
 crucible-axi = "crucible_axi.cli:main"
@@ -76,8 +96,19 @@ packages = ["crucible_axi"]
 # resolve every limit with no git checkout present (CR-CRU-131 §S1c).
 #
 # The mapping is RECURSIVE and must stay so: `clients/crucible.toml` is the
-# fleet's last resort and the file `[manifest]` copies to `<target-dir>` for the
-# operator to edit, so narrowing this to the `*.py` fleet would ship an
-# orchestrator whose clients have nothing to fall back to.
+# fleet's last resort for its LIMITS (it declares no board) and the file
+# `[manifest]` copies to `<target-dir>` for the operator to edit, so narrowing
+# this to the `*.py` fleet would ship clients with no limits to fall back to.
 [tool.hatch.build.targets.wheel.force-include]
 "clients" = "crucible_axi/clients"
+
+# What this repo's own coverage gate measures: the orchestrator package and the
+# client fleet it ships. Declared here so the python client passes no --source.
+[tool.coverage.run]
+source = ["crucible_axi", "clients"]
+
+# The project's own ruff rule set, so `ruff check` reads the same rules on any
+# machine rather than whatever set the installed ruff defaults to: ruff's
+# classic defaults (import, statement and syntax errors, and pyflakes).
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

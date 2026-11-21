@@ -1,6 +1,6 @@
 # CR-CRU-009 — Release 0.1.0: distro-agnostic installer + multi-harness skill bundle
 
-**Status:** PENDING — **RE-SCOPED 2026-07-22.** Supersedes the original vendored
+**Status:** DONE — **RE-SCOPED 2026-07-22.** Supersedes the original vendored
 `install.sh` bundle: v0.1.0 ships a **distro-agnostic, staged installer** — a Python
 (PyPI) primary orchestrator installed via **`uv`**, delegating to stack-appropriate
 sub-installers (`npx` for the bun/node server, the **Vercel Skills** CLI for the

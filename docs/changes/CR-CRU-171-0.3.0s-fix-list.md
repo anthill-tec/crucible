@@ -1,7 +1,7 @@
 # CR-CRU-171 — 0.3.0's fix list: the clients
 
 **Type** fix · **Points** 5 (re-scored at gap analysis 2026-10-08, when the page issues moved to CR-CRU-174; was 13 provisional) · **Wave** 7 (0.3.0) · **Depends on** none ·
-**Status** PENDING — filed 2026-10-07; amended and split at gap analysis 2026-10-08 (user-approved): the page issues are CR-CRU-174
+**Status** DONE — filed 2026-10-07; amended and split at gap analysis 2026-10-08 (user-approved): the page issues are CR-CRU-174
 
 ## Problem
 

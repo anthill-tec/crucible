@@ -27,7 +27,7 @@ SHARED — the classification tracks OBSERVABLE BEHAVIOUR, not prose.
 | **DRIFTED** 🚨 | 8 | see §4 — read this section first |
 
 27 + 1 + 6 + 8 = 42. Every name partitions into exactly one category (asserted by
-`tests/client/test_cr054_fleet_inventory.py`). `cmd_register` sits in DRIFTED, not
+`tests/client/unit/test_cr054_fleet_inventory.py`). `cmd_register` sits in DRIFTED, not
 PARAMETERISED — it has a real behavioral inconsistency (§4 finding #3), and the
 source-label question (§4 finding #5) is a second, related issue on the SAME function,
 not grounds for a second bucket.
@@ -195,7 +195,7 @@ avoids this entirely.
 **Verdict: arduino's handling is the more defensive/correct one; the other four share a latent
 crash-on-empty-body bug.** Low probability (the Crucible server always returns a JSON body today)
 but a real inconsistency between five otherwise-identical HTTP helpers, and the same class of
-finding as CR-050's `<skipped/>` precedent (`_parse_junit` in `clients/mvn-crucible.py`) — the CORRECT behavior sat in the
+finding as CR-050's `<skipped/>` precedent (the maven client's JUnit parse, since retired) — the CORRECT behavior sat in the
 client everyone assumed was just "the odd one out."
 
 ## §1 — SHARED (27) — lifts as-is, cosmetic differences only
@@ -247,9 +247,9 @@ double-counted here.)
 | `cmd_auto_ingest` | 13–38 lines across the fleet: junit-if-present vs. `cargo check` stderr vs. coverage-tool invocation — the exact per-toolchain fallback chain named in the CR's own Non-goals |
 | `cmd_check` | Compile/lint-gate invocation is 100% toolchain-specific (`tsc`, `py_compile`, `cargo check`, mvn compile, arduino-cli compile via arduino's own `_compile_gate` tier helper — arduino's `cmd_check` is a 4-line delegator to it) |
 | `cmd_pre_merge_gate` | Confirmed by full-body read: mvn runs a docker-up/regression/docker-down bracket; rust runs a workspace clippy gate then `cmd_workspace_regression`; bun/python/arduino run a check-then-regression pair, each with a `Namespace` shaped by that stack's OWN `cmd_check`/`cmd_regression` signature. No shared shape survives past "run a fail-fast pre-step, then run regression." |
-| `cmd_test` | 4–75 lines: `bun test` vs. pytest/unittest+xmlrunner vs. cargo-nextest vs. maven surefire vs. arduino's native-tier delegator (`_run_native_tests(args, "test", "unit", False)`) |
+| `cmd_test` | 4–75 lines: `bun test` vs. pytest (JUnit) / unittest (Crucible's own runner, its `crucible-events` stream relayed to the open run since CR-CRU-224) vs. cargo-nextest vs. maven surefire vs. arduino's native-tier delegator (`_run_native_tests(args, "test", "unit", False)`) |
 | `main` | 183–452 lines: argparse subcommand wiring is inherently per-toolchain (different flag sets per verb per stack) |
-| `_project_key` | arduino delegates to its own `_load_env(pd)` — which ALSO reads `CRUCIBLE_PROJECT_NAME` (needed for arduino's unique `_ensure_project`/`POST /api/projects/add` self-registration, per DN-crucible-api-reconstruction.md §4) and additionally falls back to the ambient environment when the `.env` file lacks a key. bun/rust/mvn/python's `_project_key` is a strict single-key `.env`-only read with `sys.exit` on absence. Real, justified divergence tied to arduino's unique bootstrap responsibility — not a candidate for a shared PARAMETERISED lift without also lifting `_load_env`/`_ensure_project`, which is out of this CR's 42. |
+| `_project_key` | arduino delegates to its own `_load_env(pd)`, which — like bun/rust/mvn/python's `_project_key` — is a strict single-key `.env`-only read of `CRUCIBLE_PROJECT_KEY` with `sys.exit` on absence (a leftover `CRUCIBLE_PROJECT_NAME` line is ignored). A client never registers a project on meeting an unknown key; `project-create` is the one explicit verb that does. A project is registered by an explicit act — the board's "+ Add project" form, `POST /api/v2/projects`, or a client's `project-create` verb — which issues the key the project's `.env` carries. The only remaining divergence is arduino's routing through its own `_load_env` — not a candidate for a shared PARAMETERISED lift without also lifting `_load_env`, which is out of this CR's 42. |
 
 ## Functions I could not confidently classify
 

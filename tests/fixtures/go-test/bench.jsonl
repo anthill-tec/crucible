@@ -1,0 +1,22 @@
+{"Time":"2026-11-09T02:10:00.655702709+05:30","Action":"start","Package":"example.com/mod/pbench"}
+{"Time":"2026-11-09T02:10:00.657099893+05:30","Action":"run","Package":"example.com/mod/pbench","Test":"TestPass"}
+{"Time":"2026-11-09T02:10:00.657131052+05:30","Action":"output","Package":"example.com/mod/pbench","Test":"TestPass","Output":"=== RUN   TestPass\n","OutputType":"frame"}
+{"Time":"2026-11-09T02:10:00.657148425+05:30","Action":"output","Package":"example.com/mod/pbench","Test":"TestPass","Output":"--- PASS: TestPass (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-09T02:10:00.657153214+05:30","Action":"pass","Package":"example.com/mod/pbench","Test":"TestPass","Elapsed":0}
+{"Time":"2026-11-09T02:10:00.657828011+05:30","Action":"output","Package":"example.com/mod/pbench","Output":"goos: linux\n"}
+{"Time":"2026-11-09T02:10:00.657835405+05:30","Action":"output","Package":"example.com/mod/pbench","Output":"goarch: amd64\n"}
+{"Time":"2026-11-09T02:10:00.657838581+05:30","Action":"output","Package":"example.com/mod/pbench","Output":"pkg: example.com/mod/pbench\n"}
+{"Time":"2026-11-09T02:10:00.657841927+05:30","Action":"output","Package":"example.com/mod/pbench","Output":"cpu: AMD Ryzen 9 5900X 12-Core Processor            \n"}
+{"Time":"2026-11-09T02:10:00.657846857+05:30","Action":"run","Package":"example.com/mod/pbench","Test":"BenchmarkX"}
+{"Time":"2026-11-09T02:10:00.657849802+05:30","Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkX","Output":"=== RUN   BenchmarkX\n","OutputType":"frame"}
+{"Time":"2026-11-09T02:10:00.657852207+05:30","Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkX","Output":"BenchmarkX\n"}
+{"Time":"2026-11-09T02:10:00.658374873+05:30","Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkX","Output":"BenchmarkX-24       \t       2\t        90.50 ns/op\n"}
+{"Time":"2026-11-09T02:10:00.658383319+05:30","Action":"run","Package":"example.com/mod/pbench","Test":"BenchmarkLogs"}
+{"Time":"2026-11-09T02:10:00.658386155+05:30","Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkLogs","Output":"=== RUN   BenchmarkLogs\n","OutputType":"frame"}
+{"Time":"2026-11-09T02:10:00.658388449+05:30","Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkLogs","Output":"BenchmarkLogs\n"}
+{"Time":"2026-11-09T02:10:00.658589092+05:30","Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkLogs","Output":"    b_test.go:7: bench says\n"}
+{"Time":"2026-11-09T02:10:00.658920333+05:30","Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkLogs","Output":"    b_test.go:7: bench says\n"}
+{"Time":"2026-11-09T02:10:00.658927457+05:30","Action":"output","Package":"example.com/mod/pbench","Test":"BenchmarkLogs","Output":"BenchmarkLogs-24    \t       2\t      9108 ns/op\n"}
+{"Time":"2026-11-09T02:10:00.658931174+05:30","Action":"output","Package":"example.com/mod/pbench","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-11-09T02:10:00.659057575+05:30","Action":"output","Package":"example.com/mod/pbench","Output":"ok  \texample.com/mod/pbench\t0.003s\n"}
+{"Time":"2026-11-09T02:10:00.659067774+05:30","Action":"pass","Package":"example.com/mod/pbench","Elapsed":0.003}

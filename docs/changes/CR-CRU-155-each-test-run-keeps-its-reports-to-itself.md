@@ -1,7 +1,7 @@
 # CR-CRU-155 — each test run keeps its reports to itself
 
 **Type** fix · **Points** 8 · **Wave** 7 (0.3.0), after CR-CRU-149 (user ruling 2026-09-27) ·
-**Depends on** — · **Status** PENDING — filed 2026-09-27 (user's special permission to file mid-run)
+**Depends on** — · **Status** DONE — filed 2026-09-27 (user's special permission to file mid-run)
 
 ## Problem
 

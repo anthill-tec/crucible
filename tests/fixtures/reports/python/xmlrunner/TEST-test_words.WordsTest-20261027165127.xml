@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="test_words.WordsTest-20261027165127" tests="3" file="test_words.py" time="0.000" timestamp="2026-10-27T16:51:27" failures="0" errors="0" skipped="1">
+	<testcase classname="test_words.WordsTest" name="test_initials" time="0.000" timestamp="2026-10-27T16:51:27" file="tests/test_words.py" line="10"/>
+	<testcase classname="test_words.WordsTest" name="test_shouts" time="0.000" timestamp="2026-10-27T16:51:27" file="tests/test_words.py" line="7"/>
+	<testcase classname="test_words.WordsTest" name="test_shouts_in_turkish" time="0.000" timestamp="2026-10-27T16:51:27" file="tests/test_words.py" line="13">
+		<skipped type="skip" message="platform without locale support"/>
+	</testcase>
+</testsuite>

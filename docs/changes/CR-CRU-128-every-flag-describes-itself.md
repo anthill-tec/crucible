@@ -1,6 +1,6 @@
 # CR-CRU-128 — every flag describes itself
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch
 **Priority:** P3
 **Depends on:** CR-CRU-030, CR-CRU-075, CR-CRU-127

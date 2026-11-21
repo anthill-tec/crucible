@@ -1,6 +1,6 @@
 # CR-CRU-061 — Bare-SemVer tags, and the npm version DERIVED from the tag instead of hand-bumped
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** patch (release machinery)
 **Priority:** P0 — blocks the 0.1.0 release; the tag format must be settled before the first tag exists
 **Depends on:** CR-CRU-041 (release mechanism: `release.sh`, `release.yml`, composite lockstep)

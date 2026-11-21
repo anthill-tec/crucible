@@ -4,16 +4,16 @@ Feature: the BDD section renders an ingested run's Gherkin
   — feature title, scenario titles, ordered step text and per-step outcomes —
   at the storyboard compliance bar, not a smoke check."
 
-  This scenario drives the REAL server through the same route a wrapped client
-  uses (POST /api/v2/runs with `codec: "playwright"`, so the SERVER's own
-  registry codec decodes the report — §S2's ruling) and then asserts the SPA's
-  own DOM on the BDD tab. Nothing is stubbed into the page: the Gherkin this
+  This scenario drives the REAL server through the same routes the bun client
+  streams a playwright-bdd run through (the run opened, its `crucible-events`
+  stream posted, the run closed) and then asserts the SPA's own DOM on the BDD
+  tab. Nothing is stubbed into the page: the Gherkin this
   scenario reads back is the Gherkin the server stored.
 
   The project is seeded as `frontend` deliberately — `workspaceTabs`
   (public/app-logic.mjs) disables the BDD tab on every other project type, so
   a default-typed fixture could never reach this surface. That gate is asserted
-  from the other side in tests/bdd-section.test.ts.
+  from the other side in tests/integration/bdd-section.test.ts.
 
   # MIGRATED (CR-CRU-145 \u00a7S4, orchestrator ruling at C3 GREEN): the BDD tab is
   # now an index, so this scenario opens the run FROM that index and asserts the

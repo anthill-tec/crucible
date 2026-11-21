@@ -1,7 +1,7 @@
 # CR-CRU-169 — a plan read is cheap, so analytics need no cache
 
 **Type** fix · **Points** 5 (confirmed at gap analysis 2026-10-07) · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-158 ·
-**Status** PENDING — filed 2026-10-06; amended at gap analysis 2026-10-07 (user-approved)
+**Status** DONE — filed 2026-10-06; amended at gap analysis 2026-10-07 (user-approved)
 
 ## Problem
 

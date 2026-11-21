@@ -124,17 +124,25 @@ who reads the install output therefore knows which file to edit without
 guessing.
 
 When the board runs on another machine, that file lives on THAT machine — these
-three limits cannot be set from a project checkout, and an install here writes
+five limits cannot be set from a project checkout, and an install here writes
 nothing for a board over there. The distribution's own copy,
 `src/crucible.toml`, is package data replaced wholesale on upgrade and is
 **not** the file you edit.
 
+Every recommendation below is the value the server ran at before its limits
+became configuration, except `raw_output_chars`: a run's captured output used
+to be stored whole, so a server with no operator file now caps it at
+`2000000` characters. `GET /api/health` advertises the `ingest_body_bytes`
+it runs at under `limits`, so a client can refuse an oversized body before
+sending it.
 
 | Limit | Description | Recommended | Min | Max |
 |---|---|---|---|---|
 | `run_abandon_ms` | Milliseconds an OPEN run may live before the sweep settles it as `abandoned`. Raise it when a legitimate suite runs longer than the deadline; lower it to clear ghost runs off the board sooner. | `1800000` (30 minutes) | `60000` (1 minute) | `86400000` (24 hours) |
 | `project_inactive_ms` | Milliseconds of silence after which a project with no live agent reads INACTIVE on the board's project list. Raise it to keep occasional projects visible; lower it to retire finished ones from the default view sooner. | `3600000` (1 hour) | `300000` (5 minutes) | `2592000000` (30 days) |
 | `retention` | Events kept per project for projects that declare no `retention` of their own. NOTE the documented exception: with NO crucible.toml at all there is NO cap and the boot banner names the uncapped projects — this number applies only once the table exists. | `5000` | `10` | `1000000` |
+| `ingest_body_bytes` | Bytes of request body the server reads on an ingest route, and the most a run's test stream may hold — a stream's total. A larger body is drained and refused with a JSON 413 naming this limit, and a batch that would take a stream past it is refused the same way. Raise it when a project's reports, captured output or streams legitimately exceed it; lower it to refuse oversized ingests sooner. | `134217728` (128 MiB, Bun's default the server ran at before) | `1048576` (1 MiB) | `1073741824` (1 GiB) |
+| `raw_output_chars` | Characters of captured runner output a run stores; longer output keeps its first and last halves around a line naming how much was cut. Raise it to keep more of long logs; lower it to save store space. | `2000000` | `10000` | `50000000` |
 
 ### The project's limits — in the project directory
 
@@ -231,9 +239,9 @@ gone — nothing reads them, and exporting one changes nothing:
 
 Four more carried the **connection** — the server's listener and the clients'
 board. They are gone for the same reason and one sharper: a limit left to its
-default behaves as documented, whereas a forgotten connection export fails
-*silently*, landing a run on the default board, which on a machine carrying a
-production instance is the production board:
+default behaves as documented, whereas a forgotten connection export used to
+fail *silently*, landing a run on the packaged default port, which on a machine
+carrying a production instance was the production board:
 
 - `$CRUCIBLE_PORT` is RETIRED and no longer read; declare `port` in the
   `[server]` table of the server's own file instead.
@@ -267,6 +275,35 @@ test-run rollup *before* deletion, so what it contributed to that day's totals
 survives pruning, while a `lifecycle` event contributes nothing to a rollup and
 is simply pruned. Rollups and active-cycle state are untouched.
 
+**Lint records count like compile records.** A lint run is filed as a
+`compile` event marked with its linter, so lint records count toward the
+retention cap, fold into the daily rollup and count in a release's run count
+exactly as compile records do. Nothing about retention changes for them.
+
+**A run's coverage files go with the run.** A green run filed with a coverage
+report keeps the report's files with it, one row per file, and retention
+removes them with the run, as it removes the run's tree. Nothing caps the
+files of one run: a project of thousands of files stores that many rows per
+coverage run, for as long as retention holds the run. The ingest answer names
+only the first 10 files of the run, and the board's file table opens on the
+first 50; both state the run's whole file count.
+
+**Only the files inside the run's tree are kept.** A coverage file whose name
+climbs out of the run's tree, a relative name such as `../../tmp/x/c.mjs`
+that starts with `..` once each `<name>/..` pair is cancelled, is not kept.
+The run's `lines` and `functions` totals are the sums the report states, less
+the counters of the files left out. A name that starts with `/` or a drive
+letter is kept, since the board does not know the project's root. A report
+whose every file lies outside the run's tree keeps no coverage, and the ingest
+answers one `coverage-dropped` warning.
+
+**A client reads them back.** A run that kept coverage states a `coverage`
+block in its client's envelope: its lines and functions percents, its file
+count and its 10 least covered files. `run <event-id> --files <n>|all` lists a
+stored run's files in the same block: the `n` least covered, 10 by default, or
+every file with `all`. A gate composed of several runs states each run's block
+as a row of `coverageRuns`, under the run's suite and stack.
+
 **Precedence.** A project's own `retention` overrides the `[limits.retention]`
 value in the server's file, and it does so for that project alone. Set it with
 a PATCH on the project:
@@ -299,7 +336,7 @@ once the table exists.
 ```sh
 curl -fsSL http://127.0.0.1:3849/api/health
 # → {"ok":true,"status":"healthy","version":"…","uptime_s":…,
-#    "store":{"path":"…","rule":"…","schemaVersion":20,"migration":null},
+#    "store":{"path":"…","rule":"…","schemaVersion":25,"migration":null},
 #    "counts":{…}}
 ```
 
@@ -337,14 +374,62 @@ via `POST /api/v2/runs/start` and not yet settled. Reading `runs` to find out
 what an agent filed finds nothing and has already produced one false
 accusation (CR-CRU-140).
 
+## Lint
+
+Every client has a `lint` verb. It runs the linter a project declares in a `[lint]` table of its
+`crucible.toml` and, given an agent id, files the output on the compile route as a lint record. The linter's exit
+is the verdict.
+
+```toml
+[lint]
+command = ["ruff", "check", "--output-format", "concise", "."]
+format = "ruff"
+```
+
+- `command` is required: a non-empty list of non-empty strings, run in the project directory (bun: its package
+  directory). A first word holding a `/`, such as `.venv/bin/ruff`, resolves against that directory; any other is
+  looked up on PATH. A command that is not found is refused, naming it.
+- `format` is optional: the board's decoder for the output (`ruff`, `clippy`, `go vet`, `gcc` and so on).
+- `name` is optional: the linter's name on the board. Without it the record is marked with `format`, else the
+  basename of the command's first word (`ruff` for `.venv/bin/ruff`).
+- A malformed table is refused, naming its file, before anything runs.
+
+**The defaults.** With no `[lint]`, rust runs `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+(with `CARGO_BUILD_JOBS`, as its gate always has), and go runs `go vet ./...` in each module. python, bun, maven
+and arduino have no default: their `lint` answers `skipped: not-declared`. A declared `command` replaces a default.
+
+**The gate.** Each client's `pre-merge-gate` runs a fail-fast lint stage: after `check` in python and bun, after
+`compile` in arduino, and first in rust, go and maven (before docker-up, so a lint failure starts no container). A
+failing lint stops the gate at `stage: lint` with a `lint-gate-abort` warning. With nothing declared and no default
+the gate goes on with a `lint-not-declared` warning. `--skip-lint` skips the stage (rust keeps `--skip-clippy` as
+its alias); `--skip-check` never skips lint.
+
+**Warning: the install's table is inherited.** The table resolves as `[gate]` does: the project's own
+`crucible.toml` first, then the install's, the first file that parses winning. A project file without `[lint]`
+hides the install's. But a project with no file of its own inherits an install-wide `[lint]`, whatever its stack,
+and that table replaces the stack's default: a rust project would run the install's ruff instead of clippy. Declare
+`[lint]` per project, not in the install's file.
+
+**This checkout's own table.** Crucible's root `crucible.toml` is git-ignored operator state, so a new checkout adds
+the table itself, beside its `[client]` url:
+
+```toml
+[lint]
+command = ["ruff", "check", "--output-format", "concise", "clients", "crucible_axi", "tests"]
+format = "ruff"
+```
+
+The ruff rule set itself is the tracked `pyproject.toml`'s. The gate then lints the checkout's python before its
+tests.
+
 ## Schema versions and migration
 
 The store carries its schema version in `PRAGMA user_version`, and the server
 reports it as `store.schemaVersion` on both health routes and at startup:
 
 ```
-[crucible] store /path/to/crucible.db (rule: cwd-data, schema v20)
-[crucible] migrated store schema v0 -> v20 (pre-upgrade backup: /path/to/crucible.db.pre-upgrade-1787213052079)
+[crucible] store /path/to/crucible.db (rule: cwd-data, schema v25)
+[crucible] migrated store schema v0 -> v25 (pre-upgrade backup: /path/to/crucible.db.pre-upgrade-1787213052079)
 ```
 
 - **Migration is automatic and transactional.** Each step's schema change and
@@ -386,11 +471,59 @@ provisioned server move in lockstep; on an already-current machine it reports
   within the constraint the tool was installed under, so a tool installed as
   `crucible-axi==X` reports nothing-to-upgrade forever. The installer uses
   `uv tool install --upgrade`, which ignores that pin. Measured against uv
-  0.11.8.
+  0.11.8. To upgrade by hand, name the python too, after the package name:
+
+  ```sh
+  uv tool install --upgrade crucible-axi --python 3.14
+  ```
+
+  uv keeps a tool environment's interpreter across `--upgrade`, so an
+  environment on an older python would stay on the newest release that python
+  allows; `--python 3.14` makes uv rebuild it on 3.14. The installer says so
+  before it rebuilds one, naming the python the environment ran.
 - The server half follows because the `server` stage counts as converged only
   when the installed server is exactly the new release's pinned version.
 - A systemd `--user` unit is refreshed by the same run, so the daemon is the new
   version rather than a new binary behind an old process.
+- A re-install fills a missing `[client] url` into the install's `crucible.toml`
+  and a missing `[server] port` into the server's, never overwrites one that is
+  set, and names what it filled: the `[manifest]` stage lists each filled file
+  with its key and value under `filled`, and each file it left alone with the
+  reason under `notFilled`. The port filled is the one the server boots on
+  today, never a probed one. An install that leaves that file with no
+  `[client] url` (no server on this machine, or a fill it could not make)
+  names the file and the key under `boardUndeclared`, and its `help` says to
+  declare `[client] url = "http://<host>:<port>"` there, because a client with
+  no board declared refuses.
+- The `[fleet]` stage overwrites the stack-declaration schema at
+  `<target-dir>/clients/crucible-declaration.schema.json`, and the `[manifest]`
+  stage lists it in `crucible-clients.json` under the `declaration_schema` key
+  as `{path, version}`, the version read from the packaged copy. A declaration
+  writer finds the schema through that key.
+- The `[fleet]` stage also lays down the Go client beside the other five, and the manifest lists it under `clients.go`. Its `test`,
+  `regression` and `pre-merge-gate` need go 1.24 or later on `PATH`; an older
+  go, or none, is refused before anything runs.
+- The Go client's `check` compiles the module (`go build ./...`), and
+  `check --tests` compiles every package and test file without running a test
+  or a vet check; a failing compile filed under an agent id is one compile run
+  of format `go`. `--coverage` on `test` and `regression` sends each module's
+  coverprofile as `go-coverprofile`: statement coverage on the run's `lines`
+  axis. A board whose health does not list `go-coverprofile` refuses the run
+  before it opens. The client adds no `-coverpkg`; set
+  `GOFLAGS=-coverpkg=./...` to measure across packages.
+- The Go client's tiers are declared by build tag: `//go:build <tier>` in a
+  `_test.go` file that declares a test. The tier verbs `unit`, `module`,
+  `integration`, `e2e` and `bdd` run only the tests the tier's tag adds, never
+  an untagged test, into one run filed under its tier. A tier no module
+  declares is refused, and so is a tier test whose name is also declared in a
+  test file the untagged build compiles. `regression` runs the untagged tests
+  and then every declared tier's tests. The `pre-merge-gate` runs each
+  declared tier as a suite with its own row, filed under that tier, beside the
+  `untagged` row (the whole run), filed under `regression`; `e2e` is listed
+  and excluded. `check --tests` also compiles each declared tier's test
+  files under its tag. A module whose `go.mod` `go list` rejects has
+  `regression` and the gate refused (`declaration-refused`), not run red, even
+  in a project that declares no tier.
 
 ### Upgrading TO 0.2.1 — re-run the install, do not stop at the package
 
@@ -436,9 +569,11 @@ Facts worth knowing when it misbehaves:
   bearing: the published `crucible-server` bin is a shim that spawns `bun`
   itself, and a unit inherits no shell PATH. Without it the service dies
   `status=127` (`spawn bun ENOENT`) in a `Restart=on-failure` loop.
-- **Only the `CRUCIBLE_*` vars that were set at install time are forwarded**, so
-  change the port or store by re-running `crucible-axi install` with the new
-  values (it rewrites the unit only when the text actually changes).
+- **Only `CRUCIBLE_DB`, when it was set at install time, is forwarded.** Change
+  the store by re-running `crucible-axi install` with the new value (it
+  rewrites the unit only when the text actually changes). Change the port in
+  the `[server]` table of the server's own `crucible.toml` (see "The listener"
+  below), then `systemctl --user restart crucible-server`.
 - **`systemctl --user stop` is a clean stop**, not a failure: the server
   checkpoints active cycles on SIGTERM and exits, and the unit reports
   `Result=success`.
@@ -459,9 +594,9 @@ curl -fsSL https://raw.githubusercontent.com/anthill-tec/crucible/master/install
 
 A plain uninstall reverses **program artifacts only** — the user-scoped server
 package and its `crucible-server` symlink (`bun remove -g`, using the same
-absolute Bun the install resolved). Stage order is `server`, `config`, `store`:
-destructive last, so a failing step can never leave data gone and the program
-installed.
+absolute Bun the install resolved). Stage order is `unit`, `server`, `config`,
+`store`: the service first, destructive last, so a failing step can never leave
+data gone and the program installed.
 
 Kept by default, and named with their paths in the envelope:
 
@@ -482,7 +617,7 @@ The python suites under `tests/client/` drive the **real** installer: it writes
 files, and two of its stages would otherwise run `bun add -g` and
 `systemctl --user enable --now`. The suite that exercises the whole install-then-
 resolve path is
-`tests/client/test_an_installed_deployment_resolves_its_configuration.py`.
+`tests/client/integration/test_an_installed_deployment_resolves_its_configuration.py`.
 
 They are safe to run directly, and safer still under `bwrap` — the script below
 passes `--dev-bind / /`, `--tmpfs "$HOME"`, a read-only re-exposure of bun,
@@ -497,11 +632,15 @@ scripts/sandboxed-install-tests.sh              # the install-touching suites
 Run directly, each suite pins `$HOME`, `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME` and
 `$BUN_INSTALL` into a temporary root, stubs those two stages, and asserts
 afterwards that this machine's real `~/.crucible`, `~/.local/share/crucible` and
-`~/.config/systemd/user` did not move. That is what CI runs:
+`~/.config/systemd/user` did not move. This command runs both tiers:
 
 ```sh
 python3 -m unittest discover -s tests/client -t .
 ```
+
+CI runs the same two directories as separate steps, `tests/client/unit` then
+`tests/client/integration`, each with the repo's `.venv/bin/python` inside the
+hermetic wrapper (`scripts/hermetic/README.md`).
 
 Those two layers protect you from code that plays by the rules. A hardcoded
 path, an `expanduser` evaluated before the environment is patched, or a
@@ -515,13 +654,16 @@ scripts/sandboxed-install-tests.sh -k ''        # the whole directory
 ```
 
 **The bare command is narrow on purpose.** `--unshare-net` is part of the
-isolation, and several suites under `tests/client/` legitimately reach the
-network (`python -m build --wheel` resolves pypi.org; the uv, cargo and docker
-gates reach their own registries). Wrapping the whole directory therefore
-reports dozens of failures that say nothing about the code, so with no arguments
-the script targets the install-touching suites — which is what the sandbox
-exists for. `-k ''` widens to everything, and those network-dependent suites
-will fail when you do.
+isolation, but once `scripts/provision-test-caches.sh` has run, no suite needs
+the network: the suite's caches live under `.cache/test-suite/`, inside the
+checkout the sandbox keeps bound. What the sandbox takes away is your home:
+`--tmpfs "$HOME"` hides everything under it except bun's prefix, which is
+re-exposed read-only, and the script sets `PATH` to that bun and the system
+directories only. A toolchain kept under your home (rustup and cargo,
+arduino-cli's data, Playwright's browsers) is out of reach inside the sandbox,
+so with no arguments the script targets the install-touching suites — which is
+what the sandbox exists for. `-k ''` widens to everything, and the suites that
+drive a toolchain kept under your home can fail when you do.
 
 The script is the documented command; read it for the exact invocation. Each
 part of its isolation carries its own guarantee:
@@ -599,19 +741,35 @@ crucible-axi serve
 
 ### The board — `[client]`, in the project's own file
 
-Where the clients post is the project's own setting, declared in the
-`crucible.toml` of the project directory they run in, beside the `.env` they
-already read:
+Where the clients post is `[client] url`, read from a chain of two steps: the
+`crucible.toml` of the project directory they run in (beside the `.env` they
+already read), then the install's `crucible.toml`. The first file that declares
+a non-empty `url` wins. A file with no `url` — no `[client]` table, a missing,
+empty or non-string `url`, or a file that does not parse — is passed over for
+the next, so a project file that declares only `[gate] skip` reaches the board
+its install names. The installer writes the install's, naming the board it set
+up, for example:
 
 ```toml
 [client]
-url = "http://localhost:3849"
+url = "http://127.0.0.1:3850"
 ```
 
-That is the shipped default too. The value is re-read at the point of use, so
-an edit takes effect on the next verb with nothing restarted and nothing
-exported — and a verb that resolves a board other than the shipped one names
-it as `context.board` in its own envelope, so a run that landed somewhere
+When neither file declares one, a client refuses every verb that must reach
+the board: one `ok: false` envelope naming each file and why it was passed
+over, and nothing sent. A verb that sends nothing (`--help`, or a run that files
+nothing on the board) still runs. To fix it, re-run the
+installer, or declare `[client] url` in the project's own `crucible.toml`. An
+install with no local server must declare it. An upgraded install whose file
+never named a board has none until `crucible-axi install` is re-run: the re-run
+fills it from the local server's port, and the install output names the file
+under `boardUndeclared` whenever it leaves the file without one.
+
+The value is re-read at the point of use, so an edit takes effect on the next
+verb with nothing restarted and nothing exported — and a verb that resolves a
+board other than the machine's own names it as `context.board` in its own
+envelope: the board is named when it differs from the install's declared
+`url`, and always when the install declares none. A run that landed somewhere
 unexpected is legible in the output of the command that sent it.
 
 ### A development board beside a production one

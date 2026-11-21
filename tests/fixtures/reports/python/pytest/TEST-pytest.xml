@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="2" tests="10" time="0.510" timestamp="2026-10-27T16:51:39.839686+05:30" hostname="host"><testcase classname="ptests.test_numbers" name="test_adds_floats" file="ptests/test_numbers.py" line="13" time="0.000"><skipped type="pytest.skip" message="not ready yet">/project/ptests/test_numbers.py:14: not ready yet</skipped></testcase><testcase classname="ptests.test_numbers" name="test_adds_two_numbers" file="ptests/test_numbers.py" line="5" time="0.037" /><testcase classname="ptests.test_numbers" name="test_adds_with_a_wrong_expectation" file="ptests/test_numbers.py" line="9" time="0.001"><failure message="assert 4 == 5&#10; +  where 4 = add(2, 2)">def test_adds_with_a_wrong_expectation():
+&gt;       assert add(2, 2) == 5
+E       assert 4 == 5
+E        +  where 4 = add(2, 2)
+
+ptests/test_numbers.py:11: AssertionError</failure></testcase><testcase classname="ptests.test_numbers.TestDivide" name="test_divides_by_zero_and_errors" file="ptests/test_numbers.py" line="22" time="0.000"><failure message="ZeroDivisionError: division by zero">self = &lt;test_numbers.TestDivide object at 0x7f1fc386ed50&gt;
+
+    def test_divides_by_zero_and_errors(self):
+&gt;       divide(1, 0)
+
+ptests/test_numbers.py:24: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+a = 1, b = 0
+
+    def divide(a, b):
+        if b == 0:
+&gt;           raise ZeroDivisionError("division by zero")
+E           ZeroDivisionError: division by zero
+
+pkg/calc.py:7: ZeroDivisionError</failure></testcase><testcase classname="ptests.test_numbers.TestDivide" name="test_parity[3-odd]" file="ptests/test_numbers.py" line="25" time="0.001" /><testcase classname="ptests.test_numbers.TestDivide" name="test_parity[2-even]" file="ptests/test_numbers.py" line="25" time="0.001" /><testcase classname="ptests.test_numbers.TestDivide" name="test_divides_evenly" file="ptests/test_numbers.py" line="19" time="0.000" /><testcase classname="ptests.test_text" name="test_initials" file="ptests/test_text.py" line="14" time="0.000" /><testcase classname="ptests.test_text.TestShout" name="test_shouts" file="ptests/test_text.py" line="6" time="0.000" /><testcase classname="ptests.test_text.TestShout" name="test_shouts_lowercase" file="ptests/test_text.py" line="9" time="0.001"><skipped type="pytest.xfail" message="known casing bug" /></testcase></testsuite></testsuites>

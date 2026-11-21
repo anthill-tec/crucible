@@ -1,6 +1,6 @@
 # CR-CRU-126 — a plan read scans every event, once per plan
 
-**Status:** PENDING (0.2.0 — born mid-release, D4)
+**Status:** DONE (0.2.0 — born mid-release, D4)
 **Type:** bugfix
 **Priority:** P1 — the only P1 in the queue
 **Depends on:** none

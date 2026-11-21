@@ -1,7 +1,7 @@
 # CR-CRU-174 — 0.3.0's fix list: the page
 
 **Type** fix · **Points** 13 (set at CR-CRU-171's gap analysis, 2026-10-08) · **Wave** 7 (0.3.0) · **Depends on** none ·
-**Status** PENDING — split out of CR-CRU-171 at its gap analysis, 2026-10-08 (user ruling)
+**Status** DONE — split out of CR-CRU-171 at its gap analysis, 2026-10-08 (user ruling)
 
 ## Problem
 

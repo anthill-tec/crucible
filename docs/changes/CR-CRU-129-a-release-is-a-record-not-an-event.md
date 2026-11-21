@@ -1,6 +1,6 @@
 # CR-CRU-129 — a milestone is a record, not an event
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** fix
 **Priority:** P1
 **Depends on:** CR-CRU-074, CR-CRU-080, CR-CRU-081, CR-CRU-086, CR-CRU-091

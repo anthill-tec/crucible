@@ -1,7 +1,7 @@
 # CR-CRU-146 — the history cycle row looks clickable and is not
 
 **Type** fix · **Points** 2 · **Wave** 7 (0.3.0) · **Depends on** CR-CRU-020, CR-CRU-021,
-CR-CRU-018 · **Status** PENDING
+CR-CRU-018 · **Status** DONE
 
 > **Gap analysis 2026-09-25 — most of this CR shipped in CR-CRU-018** (DN-crucible-responsive-model
 > decision 11, merged `85bca00`). One `CycleLine` builder (`public/app.js`) now puts the ONE toggle

@@ -55,7 +55,7 @@ around two commitments:
   to v2 + AXI idioms, and the shim retires once the fleet is migrated. A gh-axi-style
   **`crucible-axi` npx CLI** wraps the v2 API for agents.
 - **UI stack (decided 2026-07-14):** hybrid — **VanJS 1.5 + VanX 0.6** drive the
-  reactive DOM; **Tailwind 4 browser runtime + DaisyUI 5** supply styling/components
+  reactive DOM; **Tailwind 4's generated theme and base reset, as a static vendored stylesheet, + DaisyUI 5** supply styling/components
   (all vendored, no CDN/build step — the same environment lavish-axi uses, verified
   from its source via opensrc). The forge palette ships as a custom DaisyUI theme.
   Single page, served by the same process. Dashboard backbone: **A + B hybrid** —
@@ -134,11 +134,21 @@ One ingest call = one immutable event on the project's timeline.
 | `tree` | suite→test nodes (`name`, `status: pass|fail|pending`, `duration_ms`); failed leaves additionally carry `failure: {message, type?, trace?}` (v2 — v1 stored no failure detail; codecs preserve the tool's assertion message + stack trace for the UI run drill-in) | test events |
 | `tier` | `"unit"` \| `"module"` \| `"integration"` \| `"e2e"` \| `"regression"` \| `"bdd"` | v2 — sent by upgraded clients so the UI represents them differently: unit/module/integration share tools per stack; e2e is a different approach; `bdd` only on frontend projects. Legacy default `unit`. |
 | `stack` | `"rust"` \| `"java"` \| `"python"` \| `"ts"` \| `"arduino"` \| … | v2 — which stack produced the run |
-| `codec` | `"junit"` \| `"playwright"` \| `"rustc"` \| `"javac"` \| `"python"` \| `"tsc"` \| … | v2 — which codec normalized it; drives stack-aware rendering (the set follows the supported stacks, §4.4) |
-| `coverage` | `{lines, functions, branches?}` each `{total, covered, percent}` | only on fully-green runs — server discards otherwise (v1 safety net) |
+| `framework` | string? — `"bun-test"` \| `"vitest"` \| `"playwright"` \| `"playwright-bdd"` for bun; `"pytest"` \| `"unittest"` for python, its runner; `"nextest"`, `"surefire"`, `"go-test"`, `"arduino-native"` reserved for the other stacks | CR-CRU-225 (migration v23) — which test framework ran it, as the run's target declares (§4.4); stored beside `stack` on the event and the run. The python client states its runner, `pytest` or `unittest`, on every run it files. The runs filed through the retired codec carry `playwright-bdd` (migration v25). The framework decides the `junit` readings and the specification view (§4.4). The board takes any non-empty string; a close that states none inherits its start's. A run stored before v23, or sent by a client that states none, has none |
+| `codec` | `"junit"` \| `"crucible-events"` \| `"rustc"` \| `"javac"` \| `"python"` \| `"tsc"` \| `"gcc"` \| … | v2 — which codec normalized it (the set follows the supported stacks, §4.4). A run stored through the retired Playwright JSON codec keeps that codec as the record of how it was filed; no run is filed with it now |
+| `coverage` | `{lines, functions?, branches?}` each `{total, covered, percent}` | only on fully-green runs — server discards otherwise (v1 safety net). A run filed with a coverage report also keeps the report's per-file list (`coverageFiles`: each file's name, `lines` and optional `functions`), least covered first; it is read on its own, through the events API, and is never part of this field |
 | `compile` | `{format, errorCount, warningCount, errors: [{file?, line?, col?, code?, message, level}], raw}` | compile events |
 | `name` | string? | optional run label |
 | `context` | `{git?: {branch, commit}, wave?: string, orchestrator?: "mainline" \| "track-N"}` | v2 (decided 2026-07-14) — ties runs to the exact commit and, in Model-B projects, distinguishes a track's check-run from Mainline's regression on the same timeline. **Every field optional — graceful degradation is a hard requirement**: lightweight projects send no context and the API/UI must never require or fabricate it. |
+
+**A streamed run (CR-CRU-200).** An open run may take its test stream instead of one report: batches of `crucible-events`
+lines (the JSON-lines codec, one `run-start`, a `test-end` per test, one `run-end`) are posted to
+`POST /api/v2/runs/<runId>/stream`, and the board holds them, filling the run's live state as each batch lands. The run's
+close (`POST /api/v2/runs` with `runId`, `codec: "crucible-events"` and no report) decodes the whole held stream into this
+one event, as a report would be decoded. An abort or the sweep decodes only a RECORD stream: a held `crucible-events`
+stream is decoded into its aborted event, and a run holding a view stream (CR-CRU-201, `bun-console`) is aborted as a run
+with no stream, with no tree, no summary and no `incomplete`. Either way the held batches and the live state are then
+deleted.
 
 ### 3.4 Ingest state
 Per (`projectKey`, `type ∈ unit|bdd`): pointer to the latest test event + latest compile
@@ -156,11 +166,12 @@ actually landed:
 
 | Field | Type | Notes |
 |---|---|---|
-| `type` | project-declared string | see below; `release` and `cr-merged` are reserved |
+| `type` | project-declared string | see below; `release`, `cr-merged` and `pre-merge-gate` are reserved |
 | `label` | string | the version, the CR id, or the project's own name for the goal |
 | `targetAt` | epoch seconds? | when it is DUE. Absent = undated, a legitimate state |
 | `deliveredAt` | epoch seconds? | when it was MET. Absent = outstanding |
 | `commit`, `crs`, `packages` | | a release's provenance — what shipped, and the CRs it bundled |
+| `outcome`, `passed`, `failed`, `failingTests`, `scope`, `suites` | | a `pre-merge-gate`'s verdict, counts and failing tests; `scope` (`full`/`scoped`) and `suites`, one entry per suite it ran — target, outcome, counts, failing tests (CR-CRU-210) |
 | `retired_at` | epoch ms? | "no longer the live record" — a superseded predecessor, or a gate its release retired |
 
 The two dates are what make a milestone answerable: what is due, what is outstanding,
@@ -168,14 +179,13 @@ what slipped and by how long. Absence is never zero — an undated milestone tha
 due-at-epoch would be permanently overdue.
 
 **The TYPE is definable (CR-CRU-130).** A project declares the milestone types it
-records, as project configuration. Two are RESERVED because the SERVER derives behaviour
-from them and a project redefining them would be redefining the server: `release` (the
-releases/proposals reads, `crs` membership → the queue's `COMPLETED_UNTRACKED`,
-provenance repair, the roadmap strip) and `cr-merged` (the landing evidence the release
-ceremony's provenance reads). Everything else is the project's own vocabulary, stored
-under its own name, queryable by type, and rendered as itself. An UNDECLARED type is
-refused and the refusal says how to declare it — open is not unvalidated, because a typo
-must not silently become a new category.
+records, as project configuration. Three are RESERVED because the SERVER derives behaviour from
+them and a project redefining them would be redefining the server: `release` (the releases/proposals
+reads, `crs` membership → the queue's `COMPLETED_UNTRACKED`, provenance repair, the roadmap strip),
+`cr-merged` (the landing evidence the release ceremony's provenance reads) and `pre-merge-gate` (the
+gate verdict `cr-close` judges, suite by suite). Everything else is the project's own vocabulary,
+stored under its own name, queryable by type, and rendered as itself. An UNDECLARED type is refused
+and the refusal says how to declare it — open is not unvalidated: a typo must not become a category.
 
 **Release is the KEY type**, and it is three things at once, per
 `DN-crucible-wave-track-release.md`: a dated goal, a CONTAINER of the CRs that
@@ -207,13 +217,17 @@ All 13 endpoints, payloads, response shapes, and behavioral invariants cataloged
 requirements verbatim. Highlights that are easy to get wrong:
 
 - `projectKey` must be a valid UUID → HTTP 400 `{ok:false, error}` otherwise.
-- `POST /api/projects/add` with an existing key → HTTP 400 (clients rely on this for
-  idempotent self-registration).
+- `POST /api/projects/add` with an existing key → HTTP 400. A project is registered by
+  an explicit act: the board's "+ Add project" form, `POST /api/v2/projects`, or a
+  client's `project-create` verb. A client never registers a project on meeting an
+  unknown key, and `project-create` is the one client verb that creates one. Every
+  client, arduino included, reads only `CRUCIBLE_PROJECT_KEY` from the project's `.env`, and only
+  `project-create --write-env` writes it.
 - Heartbeat `identity` is optional and preserved when omitted; **top-level `displayName`/
   `source` are tolerated but ignored**.
 - `/api/ingest` `dataPath` accepts a file OR a directory (all `TEST-*.xml` inside).
 - Coverage arriving with `summary.failed > 0` is discarded server-side.
-- `/api/ingest/compile` `format` is optional (`rustc|java|python|typescript`, absent ⇒
+- `/api/ingest/compile` `format` is optional (`rustc|java|python|typescript|gcc`, absent ⇒
   auto-detect, fall back to raw).
 - Every mutating response is `{ok:true,…}`; every error carries an actionable `error`
   string (clients print it).
@@ -222,8 +236,12 @@ requirements verbatim. Highlights that are easy to get wrong:
 - `POST /api/projects/add` — v1 fields + optional `type` (§3.1); key optional in v2
   (server generates UUIDv7 and returns it) for dashboard-driven creation.
 - Dashboard can create, rename, and re-type projects.
-- `GET /api/projects` returns `{ok, projects:[…]}` with per-project rollups (agent count,
-  last event, latest green coverage) so the dashboard renders from one call.
+- `GET /api/projects` returns `{ok, projects:[…]}` with per-project rollups (agent count, last run —
+  the newest test run or compile result, latest green coverage) so the dashboard renders from one call.
+- The rollup's `lastEvent` is the newest run, a lint record included (§4.5.1). Beside it, `lastEventNotLint` is the
+  brief of the newest run that is not a lint record, or null. The project's status line reads `lastEventNotLint`
+  when `lastEvent` is a lint record, so a lint run never sets its `✓ compiled` / `✗ N errors` verdict. A project
+  whose runs are all lint records shows the lint record's own wording: `✗ N lint errors` or `lint clean`.
 
 ### 4.3 Agent lifecycle
 - Heartbeat upserts the agent, bumps `lastSeen`, applies §3.2 identity semantics.
@@ -236,31 +254,237 @@ the BDD/Playwright runtime was never fully realized. v2 replaces "parsers" with 
 registry** translating each tool's native output into one **canonical RunSchema**
 (summary + suite/case tree + coverage + compile diagnostics, tool-agnostic):
 
-- Codecs at parity: `junit` (with exactly the client parsers' semantics — failure/error →
-  fail, skipped → pending, `time`s → duration_ms, `testsuites` or bare `testsuite` root,
-  file-or-directory `dataPath`, inline `data`), `rustc`, `javac`, `python`, `tsc`.
-- New codecs: `playwright` (JSON reporter — feature → scenario → step, browser, trace
-  links). Adding a stack = adding a codec; no core changes.
+- `junit` reads every supported stack's report by one rule (CR-CRU-152): failure/error → fail, skipped
+  → pending, `time` → rounded ms, any nesting, a list of reports or a `dataPath` directory; a pytest
+  report is grouped by class for a run of framework `pytest`, and bun's console detail read for a run of framework
+  `bun-test`, whatever the stack (below). Also `rustc`, `javac`, `python`, `tsc`.
+- Compile codecs added since: `gcc` (GCC/g++ diagnostics and link errors, as the arduino stack's
+  `arduino-cli compile` reports them).
+- Adding a stack = adding a codec; no core changes. The `playwright` codec, which read Playwright's JSON
+  reporter, is retired (below).
 - **Codecs follow the supported stacks' reporting strategies** (corrected 2026-09-24, codec audit).
   The five stacks (bun, python, maven, rust, arduino) all report test results as JUnit XML (bun
   `--reporter=junit`, `xmlrunner`, surefire, `cargo nextest`, the native g++ harness), so `junit`
-  serves them all; `playwright` serves frontend e2e. `vitest`, `tap` and a separate `nextest` codec,
-  listed here before, are **not needed**: no supported stack emits those formats (nextest writes
-  JUnit). A codec is added when a supported stack's report needs one. Measured gaps against this
+  serves them all (python unittest has streamed `crucible-events` instead since CR-CRU-224, below); frontend e2e streams `crucible-events` through the shipped Playwright reporter. `vitest` and `tap` codecs,
+  listed here before, are **not needed**: no supported stack emits those formats. nextest's own libtest JSON stream is
+  decoded by the `nextest` record stream codec (CR-CRU-202, below). A codec is added when a supported stack's report needs one. Measured gaps against this
   section are filed as CR-CRU-151 (stack stamp), CR-CRU-152 (per-stack reports decoded on the server)
   and CR-CRU-153 (the arduino stack's g++ compile output).
-- Every event is stamped with `stack` + `codec` (+ tool version) so the UI renders
-  stack-aware views (§4.11) and BDD becomes first-class for frontend projects.
-- Parsed path: accept summary/tree/coverage as-is (validate shape, don't recompute).
-- Both paths record a `kind:"test"` event and return `{ok, summary}`.
+- Every event is stamped with `stack` + `codec` so the UI renders stack-aware views (§4.11); a tool
+  version is not stamped. Coverage codecs: `lcov`, `jacoco` and `go-coverprofile`, rounded as the
+  clients' Python `round`. `go-coverprofile` (CR-CRU-239) stores Go's statement coverage on `lines`:
+  covered statements over all statements, a block listed more than once counted once, and no
+  `functions` axis, which is why `functions` is optional on the run. Each coverage codec also reads
+  the report file by file, and the board keeps the files with the run: for `lcov` a file is one
+  `SF:` record, named as the report writes it; for `jacoco` it is one CSV row, a class named
+  `PACKAGE.CLASS`, since the CSV names no source file; for `go-coverprofile` it is one file of the
+  profile's blocks, with lines and no functions. A name stated more than once is one file, so the
+  files' counters sum to the run's totals.
+- A coverage file whose name climbs out of the run's tree is not kept. A name climbs out when it is
+  relative and, read with `/` and `\` both as separators, empty and `.` segments dropped and each
+  `<name>/..` pair cancelled, its first segment is `..`. A name that starts with `/`, or with a drive
+  letter and `:`, is absolute and kept: the board does not know the project's root. The decoder
+  judges each file once its texts are joined, and the run's `lines` and `functions` totals are the
+  sums the report states, less the counters of the files left out, each percent taken from what
+  remains; `branches` is unchanged. A block whose every file climbs out keeps no coverage and is
+  dropped with one `coverage-dropped` warning; a block that keeps a file says nothing of the files
+  it left out.
+- Parsed path (`/runs/parsed`): the route older clients post to — summary/tree/coverage taken as-is.
+- Both paths record a `kind:"test"` event and answer `{ok, run}`; `/runs` adds `files` and `coverage`,
+  and, when the run kept coverage files, `coverageFileCount` (how many) and `coverageFiles` (the
+  first 10, least covered first). `/runs/parsed` keeps coverage totals only.
+- Record stream codecs (CR-CRU-200): `crucible-events` decodes a JSON-lines test stream by JUnit's own failure and
+  suite-status rules. An open run's batches go to `POST /api/v2/runs/<runId>/stream`, which holds them byte-offset by
+  byte-offset and fills the run's live state; the close on `/runs` (`runId`, `codec: "crucible-events"`, no report)
+  decodes the whole held stream into the run's one event.
+- **View codecs (CR-CRU-201)** live in a registry of their own, beside the report codecs, and health lists them as
+  `codecs.view`. A view codec fills an open run's live state from its held stream and is never the run's record: it
+  has no `parse`, so every report and close route refuses it as an unknown codec. `bun-console` is the first: it reads
+  bun's console (both wire forms) into the live state, its failures married to their detail by the rule the JUnit
+  raw-output reading uses. The stream route takes a view stream under the record stream's rules; a run holding one
+  closes through its report as a run with no stream does, and its batches and live state are deleted at settle.
+- **The run start's total (CR-CRU-201).** `POST /api/v2/runs/start` takes an optional `total`, an integer of 0 or more
+  (any other value is a 400, nothing started), the client's own count of the tests it is about to run, stored as
+  `runs.total`. The live read answers the stream's own `run-start` total first, else the start's, never below the
+  completed count, and 0 as no total.
+- **Python unittest streams its record (CR-CRU-224).** The python client's own unittest runner
+  (`clients/subtest_runner.py`) writes the `crucible-events` stream to the file `CRUCIBLE_STREAM` names,
+  the shared relay (`StreamRelay`) sends it to the open run while the suite works, and the run is closed
+  with `codec: "crucible-events"`. A python unittest run writes no JUnit and xmlrunner left the client;
+  a pytest run and `auto-ingest` keep their JUnit record.
+- **The run's framework and the `crucible.targets` table (CR-CRU-225).** A run carries the test framework that ran it:
+  - **The vocabulary** *(P1)*: `bun-test`, `vitest`, `playwright` and `playwright-bdd` for bun; `pytest` and
+    `unittest` for python, whose client states its runner as the framework of every run it files, the gate's tiers
+    included; `nextest`, `surefire`, `go-test` and `arduino-native` are reserved for the other stacks, which adopt it in
+    their own CRs. The bun client refuses a framework outside the bun four; the board stays string-only.
+  - **The run's `framework`.** `POST /api/v2/runs/start`, `/runs`, `/runs/parsed` and `/runs/compile` take an optional
+    `framework`, a non-empty string (any other value is a 400, nothing stored). A close states its start's framework or
+    none, and one stating none inherits the start's. It is stored beside `stack` (§3.3) and answered wherever `stack` is.
+  - **The table.** A bun project declares, per `package.json` script, one entry in `crucible.targets.<script>`: its
+    `framework` (required), its record (a `stream: {codec, path}` or a `junit` report, `flag` or `env:<VAR>`), and
+    optionally a `console` view codec and a `coverage` codec. A script with no entry keeps today's behaviour as
+    `bun-test`. A codec the table declares that the board's health does not list is refused before the run opens.
+  - **`codecs.stream`.** Health lists the record stream codecs (`crucible-events`) under `codecs.stream`, so a client
+    checks a declared `stream` codec before the run opens; `codecs.test` is unchanged.
+  - **The Vitest reporter.** `clients/reporters/vitest-crucible.ts` ships inside the client install and writes the
+    `crucible-events` shape to the file `CRUCIBLE_STREAM` names. The client hands the runner its install's
+    `reporters/` as `CRUCIBLE_REPORTERS`, and a project's Vitest config adds the reporter from it when it is set, so
+    the config names no machine path. Its `run-start` states no total *(P9)*. A stream target's run is relayed by the
+    shared `StreamRelay` and closed by the shared streamed-run close, as python unittest's is.
+- **The Playwright reporter: a BDD run's test is the scenario (CR-CRU-228).** `clients/reporters/playwright-crucible.ts`
+  ships beside the Vitest reporter, is handed in the same way through `CRUCIBLE_REPORTERS`, and writes the
+  `crucible-events` shape to the file `CRUCIBLE_STREAM` names, one whole line as each test ends:
+  - **Scenario-as-test.** Each scenario is one test per Playwright project, streamed once from its last attempt, its
+    status following `test.outcome()`, so a run's counts match its JUnit report. Its `run-start` states `onBegin`'s
+    total, every test in every project.
+  - **`test-end` takes two optional keys:** `browser`, the project, a non-empty string; and `steps`, the scenario's
+    Gherkin steps in order, each `{name, status, duration_ms?, failure?}`: the `test.step` children of the
+    `Background` hook first, then the top-level `test.step`s. A hook's own step and a fixture are not steps, so a
+    Before-hook failure is the scenario's failure with no failing step.
+  - **The board** groups a run's test-ends into suites by (`suite`, `browser`), stores a test's steps under it
+    (`run_case_steps`), and counts tests, never steps. The run detail opens a `playwright-bdd` run as feature →
+    scenario → step.
+  - **The live state holds no steps:** an open run's live view is its counts, current file and failures, and each live
+    failure answers its `browser`, so one scenario failing under two projects reads as two failures. The steps are in
+    the stored run.
+  - **A stream it cannot write** gives one error line naming the path, and the reporter writes nothing more; the run
+    completes.
+- **The bun declaration's clean break, the `test` marker and the gate's per-framework suites (CR-CRU-226).**
+  - **The clean break.** A `package.json` declaring `crucible.reportPath`, `crucible.rawReport` or
+    `crucible.testScript`, with or without `crucible.targets`, is refused by `test`, `regression`, every tier verb and
+    `pre-merge-gate` before anything is posted (the gate before its tsc step). The refusal (`declaration-refused`)
+    names each key beside what replaced it in `crucible.targets` (an entry's `junit`, its `stream`, the entry marked
+    `"test": true`), exits non-zero and files nothing. The client keeps no reader of the old keys.
+  - **The `test` marker.** The entry marked `"test": true` is the script `test` runs, with the files and the name
+    filter as its passthrough; the run carries the entry's framework, and the filter flag follows it (`-t` for
+    `bun-test` and `vitest`, `--grep` for `playwright` and `playwright-bdd`). `test` with no files runs the whole
+    script under the verb `test`, with no tier. Two marked entries, a marker that is not `true` (`false` included),
+    and a marked script missing from `scripts` or with an empty body are refused before anything is posted. Only
+    `test` reads the marker; with none, `test` runs `bun test`.
+  - **The gate runs every declared framework.** The shared `GateSuite` carries a `framework`, and `gate_regression`
+    a fourth rule: an own-stack suite whose framework is not the whole-suite run's runs in process through the
+    client's own run, filed under the tier its name names, else `regression`, its row carrying its own counts,
+    outcome and `client`, its counts added to the totals. The bun gate sets it from each `test:` script's entry
+    (`bun-test` when it has none); the other stacks set none, so their gates are unchanged, though the python gate's
+    tier runs state their runner, `pytest` or `unittest`, as the run's framework. When every own-stack
+    suite is of another framework the whole-suite run is skipped and the envelope's `wholeSuite` says so. `--suites`
+    naming a non-`bun-test` target runs only it; naming a `bun-test` target runs the whole suite. A non-`bun-test`
+    suite measures no coverage and adds no `coverage-not-measured` warning. A non-`bun-test` entry whose key is not a
+    `test:` script, or is a `test:` key with no script of that name in `scripts`, is refused by the gate before
+    anything runs. `e2e` stays outside the gate, whatever its framework. A gate composed of several runs states
+    `coverageRuns` beside `suites`: one row per run whose envelope carried a `coverage` block, in the order the runs
+    ran, absent when none did, with no total across the runs. A row is `suite` (the whole-suite label, or the suite's
+    target), `stack`, then the block's own keys: `lines` and `functions`, the run's percents, then, when the run's
+    answer carries its files, `event`, `fileCount`, `moreFiles` and `files`. A row of `files` is `file`,
+    `linesPercent`, `linesCovered`, `linesTotal`, `functionsPercent`, `functionsCovered` and `functionsTotal`. A gate
+    that is one run alone prints that run's envelope, with its `coverage`. `run <event-id> --files <n>|all` lists a
+    stored run's files in the same block, 10 by default.
+  - **Left to CR-CRU-229** (split 2026-11-04, user ruling): the `playwright` codec's retirement with Playwright's JSON
+    report (`STREAM_KEPT_REPORTS`), the migration of the runs stored through it, and the `junit` readings keyed by
+    framework rather than stack.
+- **The `playwright` codec retires; the `junit` readings follow the framework.**
+  - **Retired.** The codec registry holds `crucible-events` and `junit` for test runs, and health lists `codecs.test`
+    as those two. A post naming `codec: "playwright"` is refused with 400 `unknown codec: playwright`, and nothing is
+    stored. Neither Playwright config writes a `json` reporter, and the bun client points only the JUnit report
+    (`PLAYWRIGHT_JUNIT_OUTPUT_NAME`) into a stream run's reports dir.
+  - **The stored runs migrate (schema v25).** Each run filed through the codec moves to framework `playwright-bdd` in
+    the shape the stream stores (a suite per feature and browser, a case per scenario, its steps in
+    `run_case_steps`), recounted by scenario; its `codec` stays as the record of how it was filed. A suite's
+    `feature` is its name on a `playwright-bdd` run and NULL on any other. The rollups keep what they folded, so a day
+    folded from codec runs keeps its step counts.
+  - **The specification view** is a test run of framework `playwright-bdd`, whatever its codec.
+  - **The readings.** The decode is told the run's effective framework (the close's, else its start's):
+    `parseJunit` groups cases by classname for framework `pytest` when the report holds one suite named `pytest`, and
+    `readJunitRawOutput` reads bun's console for framework `bun-test`, whatever the stack. A run that states no
+    framework gets neither.
+  - **The python client states its runner** as the framework on every run it files. `auto-ingest`, which runs
+    nothing, states the runner `[python] runner` declares, else `unittest`, and refuses any other value before
+    anything is posted.
+- **A rust run's nextest stream is its record (CR-CRU-202).** The board's `nextest` record stream codec decodes
+  nextest's `libtest-json-plus` stream (message-format version 0.1, which nextest marks experimental); health lists
+  `nextest` in `codecs.test` and `codecs.stream`, beside `crucible-events` and `junit`. Record stream codecs share one
+  line reader, so the live fill, an aborted run's record and the close read a stream through its run's codec.
+  - **No runner totals.** nextest's stream states no run total and no run-end. An open run takes nextest's own test
+    list (`cargo nextest list --message-format json`, as nextest wrote it) through `POST /api/v2/runs/<runId>/tests`;
+    the board takes the run's total (the tests the list `matches`) and each test's binary id from it, and checks the
+    stored record against that total.
+  - **The rust client streams on every verb** (CR-CRU-233): the stream rides stdout, the list is posted once cargo has
+    built, and the JUnit path goes once the stored record is shown equal to JUnit's.
 
 ### 4.5 Compile ingest
 - Structured parsers per format: `rustc` (`error[EXXXX]` + `--> file:line:col`), java/
   maven (`[ERROR] /File.java:[line,col] msg`), `python` (traceback / SyntaxError),
-  `typescript` (`file.ts(line,col): error TSxxxx`). Unknown/absent format → best-effort
-  detect → raw fallback (never reject).
+  `typescript` (`file.ts(line,col): error TSxxxx`), `gcc` (`file:line:col: error|warning: msg`
+  and `undefined reference to …` link errors; a report with no error falls back to raw).
+  Unknown/absent format → best-effort detect → raw fallback (never reject).
+- Two lint decoders: `ruff` (`file:line:col: CODE message`, the fixable `[*]` mark dropped, the summary lines never a
+  finding) and `clippy` (rustc's shape, each lint coded `clippy::<name>` from its help URL, rustc lints coded by
+  name, the `could not compile` trailer never a finding). The hint aliases are `ruff`, `clippy`, `go vet` → `go`
+  and `clang-tidy` → `gcc`, so a clang-tidy warning decodes with its `[check-name]` as its code.
+- The lint exception: on a lint post that states the linter's exit (`runnerExit`), gcc's no-error fallback to raw
+  is off, so a clang-tidy run holding only warnings is decoded, not stored raw; a compile post keeps the fallback.
 - Records a `kind:"compile"` event; response `summary.failed` = errors, `.pending` =
   warnings (v1 client convention).
+
+#### 4.5.1 Lint records
+
+`lint` is a client verb, in every client. The gate runs it after `check` where a gate has one, fail-fast, and a
+project declares its linter in a `[lint]` table of its `crucible.toml`:
+
+```toml
+[lint]
+command = ["ruff", "check", "--output-format", "concise", "."]
+format = "ruff"
+```
+
+- `command` is a non-empty list of non-empty strings. It runs in the project directory (bun: its package
+  directory). A first word holding no `/` is looked up on PATH; one holding a `/` resolves against that directory.
+  A command that is not found is refused, naming it, and nothing is posted.
+- `format` is optional: the board's decoder for the output. Without it the client posts none, and the board
+  detects the format.
+- `name` is optional, a non-empty string. The marker posted as `lint` is `name`, else `format`, else the basename
+  of the command's first word.
+- A malformed table is refused, naming its file, before any linter starts.
+
+The table resolves as `[gate]` does: the project's own file first, then the install's, the first file that parses
+winning. A project with no file of its own inherits an install-wide `[lint]`, whatever its stack, and it replaces
+that stack's default.
+
+The defaults, when nothing is declared: rust runs `cargo clippy --workspace --all-targets --all-features -- -D
+warnings` with format `clippy` and its `CARGO_BUILD_JOBS`; go runs `go vet ./...` in each module, with format
+`go vet`, joined into one post whose exit is the first non-zero one. python, bun, maven and arduino have none. A
+declared `command` replaces the default. With nothing declared and no default, `lint` answers `ok: true` with
+`skipped: not-declared` and posts nothing, and a gate goes on with a `lint-not-declared` warning.
+
+Each client's `pre-merge-gate` runs lint in its own order. A failing lint stops the gate at `stage: lint` with
+`lint-gate-abort`; `--skip-lint` skips the stage, and `--skip-check` never does.
+
+| Client | Gate order |
+|---|---|
+| python, bun | `check` → **lint** → tests |
+| arduino | `compile` → **lint** → tests |
+| rust | **lint** (formerly its clippy step) → regression → coverage |
+| go | **lint** → `gate_regression` |
+| maven | **lint** → docker-up → … (a lint failure starts no container) |
+
+A lint run reaches the board on the compile route, and its findings are marked compile records:
+the event's `kind` stays `compile` and its payload carries `lint: "<tool>"`, the linter's name. There is no new
+event kind, route or column. `check` never lints, and a compile record never carries the marker.
+
+`POST /api/v2/runs/compile` takes two optional body fields for this. `lint` is the linter's name, a non-empty
+string (anything else is refused with a 400 naming `lint`). `runnerExit` is the linter's exit code, validated as
+`/runs` validates it, and read on a lint post only.
+
+The linter's exit is the verdict. A lint post with `runnerExit: 0` and empty `errors` is filed as a clean record
+with zero findings. A non-zero exit whose output decodes to no error gains one synthetic error naming the exit, so
+a failing linter is never shown clean. A lint record answers `LINT FAILED — N errors, M warnings` or
+`LINT OK — M warnings`, and the posting agent's last outcome reads `lint · N errors · ingested` or
+`lint · clean · ingested`.
+
+On the dashboard, the Compile tab draws compile records and lint records in two groups, `Compile · N` and
+`Lint · N`. A lint card names its tool, carries the broom glyph and reads `N lint errors` or `lint clean`; its
+drill-in shows each finding's rule code within its file, or `clean lint — no findings`. Ingest status keeps the
+two apart: `lastCompile` never holds a lint record, and `lastLint` holds the newest one.
 
 ### 4.6 Panel routing (invariant)
 Compile events and test events are separate streams in the UI — a compile failure never
@@ -274,6 +498,15 @@ duration, coverage) that feed trend views — **per wave** when `context.wave` i
 (a wave's cycle history stays reconstructable), daily buckets otherwise; raw trees are
 pruned with the rollup. Events indexed on `(projectKey, timestamp)`. One Bun process is
 the single writer — matching SQLite/WAL's concurrency model by construction.
+
+**A run's coverage files are read on their own.** `GET /api/v2/events/<id>?depth=coverage` answers
+the event without its tree and without its raw output, and its `event` carries `coverageFileCount`,
+`coverageFiles` (the files in their stored order: lowest lines percent first, then most uncovered
+lines, then name) and `coverageRoot` (the leading directories every file name of the run shares,
+empty when they share none). `&files=<n>` answers only the first `n` files; the count and the root
+stay the whole run's. A run with no files answers 0, an empty list and an empty root.
+`?depth=suites` carries `coverageFileCount` when the run has files. The files are removed with
+the run, by retention and by every other path that removes a run's detail.
 
 **Retention reaches TELEMETRY ONLY (revised 2026-09-13, CR-CRU-129).** The cap may evict
 `test`, `compile` and `lifecycle` events and nothing else. It may NOT reach a structural
@@ -303,8 +536,9 @@ change hints; the SPA refetches affected slices. Poll fallback every 5 s when SS
 
 ### 4.9 Ingest status (v2 defined shape)
 `GET /api/ingest/status?projectKey&type=` →
-`{ok, status: {hasData, lastTest: <event summary+id+ts>|null, lastCompile: …|null}}`.
-Omitted `type` ⇒ `unit`.
+`{ok, status: {hasData, lastTest: <event summary+id+ts>|null, lastCompile: …|null, lastLint: …|null}}`.
+Omitted `type` ⇒ `unit`. `lastCompile` is the newest compile record that is not a lint record, and `lastLint` the
+newest lint record, or null (§4.5.1).
 
 ### 4.10 Service health (v1 parity — the backend is monitored too)
 `GET /api/health` → `{ok, status:"healthy", version, uptime_s, counts:{projects, agents,
@@ -470,7 +704,17 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   (plan-file / cycle-activate / cycle-done / cr-close) in
   CR-CRU-008.
 - **Coverage** — line/function/branch meters on green regression events; latest-green
-  coverage shown at project level.
+  coverage shown at project level. The Coverage tab lists the files of the latest green
+  coverage run in one table beneath its totals: a heading `Files · N`, then a row per file with
+  its name, lines, a meter, the lines percent and its functions. The table opens on the first 50
+  files, with one `show all N` control for the rest, and has no sort and no filter.
+- **Coverage files on a run's page** — a test run that kept coverage shows one line above its
+  test tree (its lines percent, its functions percent when it has one, and its file count),
+  folded when the page opens; a click unfolds the same file table, reading the files then. A run
+  with coverage and no files shows its totals and `no per-file coverage for this run` on both
+  surfaces. A file's name is shown without the directories every file of the run shares; a name
+  too long for its cell is cut on the left, and on touch media it is shown whole and wrapped.
+  On the phone band a row's functions sit beneath its name.
 - Localhost tool aesthetics: fast, dense, dark-friendly, zero build step.
 - **Design consistency (user-locked during CR-007):** one design vocabulary
   everywhere. Status chips/badges are deliberate HIGHLIGHT elements (the F4½
@@ -514,7 +758,7 @@ BDD-style UI testing applies only to `type:"frontend"` projects — and for thos
 Crucible is not just a sink: it can **harness and execute the BDD suite on the agent's
 behalf** using Playwright (agent asks `POST /api/v2/projects/{key}/bdd/run`; Crucible
 runs the suite against the project's `sutRoot`, ingests the result through the
-`playwright` codec, and returns the event id). This closes the v1 gap where the
+shipped Playwright reporter's `crucible-events` stream, and returns the event id). This closes the v1 gap where the
 BDD/Playwright runtime was never fully realized. Scoped to a post-skeleton wave.
 
 ### 4.13 Configuration — a limit is configuration, never a constant (added 2026-09-14; CR-CRU-129, CR-CRU-131)
@@ -555,9 +799,9 @@ from it.
 
 **A limit is owned by the process that ENFORCES it**, because the server and the clients
 are not necessarily on the same machine: a client resolves a project directory and posts
-over HTTP, while the server may be installed anywhere. So the server's three (run-abandon
-deadline, project-inactive window, retention) live in a `crucible.toml` beside the
-server's own configuration, and the clients' three (field truncation,
+over HTTP, while the server may be installed anywhere. So the server's five (run-abandon
+deadline, project-inactive window, retention, `ingest_body_bytes`, `raw_output_chars`) live
+in a `crucible.toml` beside the server's own configuration, and the clients' three (field truncation,
 error-detail truncation, roadmap list length) live in a `crucible.toml` in the PROJECT
 directory beside the `.env` the clients already read. Neither process reads the other's
 file. One schema, one loader shape, two locations — one source per enforcer, not one file
@@ -590,6 +834,17 @@ first and reads the file beside it, and a client resolves its file from the proj
 directory it was given. The `CRUCIBLE_*` prefix is reserved for Crucible's own
 configuration (§4.11). Precedence is therefore two layers, and only retention has both:
 the file, then a per-project value in the store.
+
+**A stream is bounded by the same limit (CR-CRU-200).** `ingest_body_bytes` bounds one request body and a
+stream's total: the bytes an open run's test stream may hold across all its batches. A batch that would take the
+stream past it is refused with a 413 naming the limit, and the stream is marked cut. A stream has no size limit
+of its own (user ruling 2026-10-30).
+
+**The one cadence compiled into source (user ruling 2026-10-30).** `LIVE_FRAME_MS` (2000, a named constant in
+`src/store.ts`) paces the live frames: a batch that changes a run's live state emits its project's `events` change at
+most once per window, and a change inside the window is deferred to the window's end. It governs how often the screen
+repaints, not what anyone sees or how long the server waits, so it is not a limit: the server's limits stay five, and
+the cadence is not configurable.
 
 ## 5 Quality requirements
 - **E2E POV (user directive 2026-07-15): the design storyboard is the E2E acceptance
@@ -626,8 +881,9 @@ client-fleet upgrade, then the BDD harness (§4.12). Crucible ingests its own ru
 ## 8 Open questions
 - (none — storyboard review closed all design questions 2026-07-14)
 
-(Resolved 2026-07-14: upgraded clients send `tier` explicitly — §3.3; BDD uses the
-dedicated `playwright` codec with trace links, and Crucible can harness the run —
+(Resolved 2026-07-14: upgraded clients send `tier` explicitly — §3.3; BDD used a
+dedicated codec with trace links (since retired: BDD streams `crucible-events`
+through the shipped Playwright reporter, §4.4), and Crucible can harness the run —
 §4.12; run `context` {git, wave, orchestrator} decided as all-optional — §3.3;
 retention: wave-aware rollups — §4.7, whose "100 full-fidelity runs" default was
 DELETED 2026-09-13 by CR-CRU-129 and is now configuration with no literal fallback;

@@ -1,0 +1,46 @@
+# example.com/mod/pex
+# [example.com/mod/pex]
+pex/e_test.go:5:1: ExampleOnly refers to unknown identifier: Only
+# example.com/mod/pbuild [example.com/mod/pbuild.test]
+pbuild/b_test.go:5:37: declared and not used: x
+pbuild/b_test.go:5:45: cannot use "s" (untyped string constant) as int value in variable declaration
+# example.com/mod/pa
+# [example.com/mod/pa]
+pa/a_test.go:40:1: ExampleHello refers to unknown identifier: Hello
+pa/a_test.go:44:1: ExampleBad refers to unknown identifier: Bad
+pa/a_test.go:48:1: ExampleNoOutput refers to unknown identifier: NoOutput
+FAIL	example.com/mod/pa [build failed]
+=== RUN   TestB1
+--- PASS: TestB1 (0.00s)
+=== RUN   TestB2
+--- PASS: TestB2 (0.00s)
+PASS
+ok  	example.com/mod/pb	0.002s
+FAIL	example.com/mod/pbuild [build failed]
+FAIL	example.com/mod/pex [build failed]
+=== RUN   TestOk
+--- PASS: TestOk (0.00s)
+PASS
+FAIL	example.com/mod/pmain	0.002s
+?   	example.com/mod/pnotest	[no test files]
+=== RUN   TestBefore
+--- PASS: TestBefore (0.00s)
+=== RUN   TestPanics
+--- FAIL: TestPanics (0.00s)
+panic: assignment to entry in nil map [recovered, repanicked]
+
+goroutine 19 [running]:
+testing.tRunner.func1.2({0x6b7150, 0x6ef020})
+	/usr/lib/go/src/testing/testing.go:2125 +0x232
+testing.tRunner.func1()
+	/usr/lib/go/src/testing/testing.go:2128 +0x329
+panic({0x6b7150?, 0x6ef020?})
+	/usr/lib/go/src/runtime/panic.go:859 +0x125
+example.com/mod/ppanic.TestPanics(0x1c0d7eb5e488?)
+	/tmp/cr195-review/mod/ppanic/p_test.go:6 +0x28
+testing.tRunner(0x1c0d7eb5e488, 0x6d4bf8)
+	/usr/lib/go/src/testing/testing.go:2195 +0xea
+created by testing.(*T).Run in goroutine 1
+	/usr/lib/go/src/testing/testing.go:2260 +0x4d4
+FAIL	example.com/mod/ppanic	0.004s
+FAIL

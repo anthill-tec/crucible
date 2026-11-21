@@ -1,0 +1,21 @@
+{"Time":"2026-11-09T02:49:19.891028382+05:30","Action":"start","Package":"example.com/gomod/cases"}
+{"Time":"2026-11-09T02:49:19.891148711+05:30","Action":"start","Package":"example.com/gomod/notests"}
+{"Time":"2026-11-09T02:49:19.891177386+05:30","Action":"output","Package":"example.com/gomod/notests","Output":"?   \texample.com/gomod/notests\t[no test files]\n"}
+{"Time":"2026-11-09T02:49:19.891193848+05:30","Action":"start","Package":"example.com/gomod/plain"}
+{"Time":"2026-11-09T02:49:19.89120032+05:30","Action":"skip","Package":"example.com/gomod/notests","Elapsed":0}
+{"Time":"2026-11-09T02:49:19.89276181+05:30","Action":"output","Package":"example.com/gomod/plain","Output":"TestB1\n"}
+{"Time":"2026-11-09T02:49:19.892780396+05:30","Action":"output","Package":"example.com/gomod/plain","Output":"TestB2\n"}
+{"Time":"2026-11-09T02:49:19.892797839+05:30","Action":"output","Package":"example.com/gomod/cases","Output":"TestPass\n"}
+{"Time":"2026-11-09T02:49:19.892805383+05:30","Action":"output","Package":"example.com/gomod/cases","Output":"TestFail\n"}
+{"Time":"2026-11-09T02:49:19.892808259+05:30","Action":"output","Package":"example.com/gomod/cases","Output":"TestSkip\n"}
+{"Time":"2026-11-09T02:49:19.892816014+05:30","Action":"output","Package":"example.com/gomod/cases","Output":"TestSubs\n"}
+{"Time":"2026-11-09T02:49:19.892818729+05:30","Action":"output","Package":"example.com/gomod/cases","Output":"TestParentFailsBeyond\n"}
+{"Time":"2026-11-09T02:49:19.892821785+05:30","Action":"output","Package":"example.com/gomod/cases","Output":"TestAllPassSubs\n"}
+{"Time":"2026-11-09T02:49:19.89282472+05:30","Action":"output","Package":"example.com/gomod/cases","Output":"BenchmarkHello\n"}
+{"Time":"2026-11-09T02:49:19.892827235+05:30","Action":"output","Package":"example.com/gomod/cases","Output":"FuzzHello\n"}
+{"Time":"2026-11-09T02:49:19.892829169+05:30","Action":"output","Package":"example.com/gomod/cases","Output":"ExampleHello\n"}
+{"Time":"2026-11-09T02:49:19.892831032+05:30","Action":"output","Package":"example.com/gomod/cases","Output":"ExampleBad\n"}
+{"Time":"2026-11-09T02:49:19.892972663+05:30","Action":"output","Package":"example.com/gomod/plain","Output":"ok  \texample.com/gomod/plain\t0.002s\n"}
+{"Time":"2026-11-09T02:49:19.89299198+05:30","Action":"pass","Package":"example.com/gomod/plain","Elapsed":0.002}
+{"Time":"2026-11-09T02:49:19.892998592+05:30","Action":"output","Package":"example.com/gomod/cases","Output":"ok  \texample.com/gomod/cases\t0.002s\n"}
+{"Time":"2026-11-09T02:49:19.893018661+05:30","Action":"pass","Package":"example.com/gomod/cases","Elapsed":0.002}

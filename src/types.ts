@@ -119,14 +119,19 @@ export interface TestLeaf {
     type?: string;
     trace?: string;
   };
+  // A scenario's steps, in order; absent when the test has none.
+  steps?: TestStep[];
 }
+
+/** One step of a test (a BDD scenario's Gherkin step): a leaf's own shape, without steps. */
+export type TestStep = Omit<TestLeaf, "steps">;
 
 export interface SuiteNode {
   name: string;
   status: "pass" | "fail" | "pending";
   children: TestLeaf[];
-  // The Playwright project (browser) a scenario ran under,
-  // from the report's `projectName`. Optional: only the playwright codec sets it.
+  // The Playwright project (browser) a scenario ran under, from the
+  // `browser` of its crucible-events `test-end`. Optional: absent when none stated.
   browser?: string;
 }
 
@@ -142,14 +147,62 @@ export interface Coverage {
   branches?: CoverageAxis;
 }
 
+/**
+ * One file of a run's coverage, under the name its report writes: its lines,
+ * and its functions when it has any. Each axis's percent is `coveragePercent`'s.
+ */
+export interface CoverageFile {
+  path: string;
+  lines: CoverageAxis;
+  functions?: CoverageAxis;
+}
+
 /** CR-CRU-002 §S1 — canonical normalized-run shape produced by every codec. */
 export interface RunSchema {
   summary: RunSummary;
   tree: SuiteNode[];
   coverage?: Coverage;
+  /**
+   * The files `coverage` was decoded from, in no fixed order: set whenever
+   * `coverage` comes from a coverage block (empty when the block states no
+   * file), absent on any other run.
+   */
+  coverageFiles?: CoverageFile[];
   // CR-CRU-038 §S2b — run-level captured runner output (stdout/stderr),
   // threaded codec→ingest→event so the frontend raw-toggle has real data.
   raw?: string;
+}
+
+/**
+ * CR-CRU-223 §S1 — one failure an OPEN run has reported so far, as its live
+ * state holds it: the test's id, name, suite and file, and the first thing that
+ * explains it — its message, or its type when it gave none.
+ */
+export interface RunLiveFailure {
+  id: string;
+  name: string;
+  suite: string;
+  file: string;
+  // The browser (Playwright project) the test failed under; absent when none stated.
+  browser?: string;
+  message?: string;
+  type?: string;
+}
+
+/**
+ * CR-CRU-223 §S1 — the live state of an OPEN run: the tests finished so far by
+ * status, the runner's own total (absent when it gave none), the file of the
+ * last finished test, and every failure so far, oldest first. Read through
+ * `Store#runLive`; CR-CRU-200 fills it from the run's test stream.
+ */
+export interface RunLive {
+  completed: number;
+  total?: number;
+  passed: number;
+  failed: number;
+  pending: number;
+  currentFile?: string;
+  failures: RunLiveFailure[];
 }
 
 export interface RunContext {
@@ -194,6 +247,8 @@ export interface RunEvent {
   kind: "test" | "compile" | "lifecycle" | "gate" | "milestone";
   tier: Tier;
   stack?: string;
+  /** The framework the run ran under, beside its stack; absent when none was stated. */
+  framework?: string;
   codec?: string;
   context?: RunContext;
   /**
@@ -227,6 +282,13 @@ export interface RunEvent {
   summary?: RunSummary;
   tree?: SuiteNode[];
   coverage?: Coverage;
+  /**
+   * The files a run's coverage came from, in the order they are positioned at
+   * ingest. Carried only by the event `recordTestEvent` returns, and only when
+   * it kept the run's coverage: the files are stored as `run_coverage_files`
+   * rows, never in an `events` column, and no stored event is read back with them.
+   */
+  coverageFiles?: CoverageFile[];
   // CR-CRU-038 §S2b — run-level captured runner output; persisted and served
   // verbatim, and (unlike coverage) retained even on a failing ingest.
   raw?: string;
@@ -317,6 +379,34 @@ export interface RunEvent {
    */
   packages?: PackageRef[];
   /**
+   * A `pre-merge-gate` milestone's verdict: `pass` when the gate exited
+   * green, `fail` otherwise (a failing suite, or a step that aborted it).
+   * ABSENT on every other milestone type and every other event kind.
+   */
+  outcome?: GateOutcome;
+  /**
+   * A `pre-merge-gate` milestone's counts, named as `RunSummary` names them.
+   * Top-level, not a `summary`: a milestone is a record, not a run.
+   */
+  passed?: number;
+  failed?: number;
+  /**
+   * A `pre-merge-gate` milestone's failing tests, each named `suite > test`.
+   * PRESENT only when `failed > 0` — a green gate carries no such key at all.
+   */
+  failingTests?: string[];
+  /**
+   * A `pre-merge-gate` milestone's scope (`full` or `scoped`) and the suites
+   * the gate ran, one entry each. ABSENT when the gate did not post them.
+   */
+  scope?: GateScope;
+  suites?: GateSuiteEntry[];
+  /**
+   * A `cr-merged` milestone's record that the CR closed over a gate that was
+   * not green, and the reason its closer gave. ABSENT on an ordinary close.
+   */
+  acceptedFailingGateReason?: string;
+  /**
    * CR-CRU-017 §S1 — the RUN's start instant, carried from the open run onto
    * the event that CLOSED it. Absent on a single-shot ingest (no `runId`, no
    * lifecycle) and on every pre-017 row.
@@ -339,6 +429,17 @@ export interface RunEvent {
   status?: "aborted";
   /** CR-CRU-017 §S1 — why the RUN was aborted; present exactly when `status` is. */
   abortReason?: string;
+  /**
+   * CR-CRU-200 §S3 — why a streamed run's record cannot be trusted (its
+   * stream had no `run-end`, disagreed with it, held undecodable lines, was
+   * cut, or the run was aborted). ABSENT — never null — on a complete run.
+   */
+  incomplete?: string;
+  /**
+   * The linter a compile-kind record was posted by, which makes it a lint
+   * record. ABSENT — never null — on every compile record and every other kind.
+   */
+  lint?: string;
 }
 
 /** CR-CRU-162 §G2 — the three answers `no-mistakes axi respond` accepts. */
@@ -431,6 +532,47 @@ export interface CommitBoundary {
   closedAt: number;
 }
 
+/** A `pre-merge-gate` milestone's verdict. */
+export type GateOutcome = "pass" | "fail";
+
+/** What a `pre-merge-gate` milestone records about the gate that posted it. */
+export interface GateMilestoneFields {
+  outcome: GateOutcome;
+  passed: number;
+  failed: number;
+  /** Present only when `failed > 0`. */
+  failingTests?: string[];
+  /** Present only when the gate posted it. */
+  scope?: GateScope;
+  /** Present only when the gate posted it; never an empty list. */
+  suites?: GateSuiteEntry[];
+}
+
+/** Whether a gate ran every declared suite or only the ones it was named. */
+export type GateScope = "full" | "scoped";
+
+/**
+ * One suite a gate ran: its declared target, its outcome, and its counts and
+ * failing tests. The counts are both present or both absent — absent only on a
+ * `fail` whose suite could not run, be dispatched or report.
+ */
+export interface GateSuiteEntry {
+  target: string;
+  outcome: GateOutcome;
+  passed?: number;
+  failed?: number;
+  failingTests?: string[];
+}
+
+/**
+ * A closed plan's merge: the commit it landed as, and (only when the CR
+ * closed over a gate that was not green) the reason its closer gave.
+ */
+export interface PlanMerge {
+  commit: string;
+  acceptedFailingGateReason?: string;
+}
+
 export interface Plan {
   planId: number;
   projectKey: string;
@@ -453,7 +595,7 @@ export interface Plan {
   // one-open-plan-per-cr rule treats it as not-open, so the cr can refile.
   status: "open" | "closed" | "aborted";
   cycles: PlanCycle[];
-  merge?: { commit: string };
+  merge?: PlanMerge;
   closedAt?: number;
   commitBoundary?: CommitBoundary;
   // CR-CRU-165 S2b (additive) - an abort's record; absent on every plan

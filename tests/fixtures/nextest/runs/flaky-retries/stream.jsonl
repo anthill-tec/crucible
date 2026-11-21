@@ -1,0 +1,8 @@
+{"type":"suite","event":"started","test_count":3,"nextest":{"crate":"nxflaky","test_binary":"nxflaky","kind":"lib"}}
+{"type":"test","event":"started","name":"nxflaky::nxflaky$flaky::steady"}
+{"type":"test","event":"started","name":"nxflaky::nxflaky$flaky::always_fails"}
+{"type":"test","event":"started","name":"nxflaky::nxflaky$flaky::flips"}
+{"type":"test","event":"ok","name":"nxflaky::nxflaky$flaky::steady","exec_time":0.002707825}
+{"type":"test","event":"ok","name":"nxflaky::nxflaky$flaky::flips#2","exec_time":0.002898238}
+{"type":"test","event":"failed","name":"nxflaky::nxflaky$flaky::always_fails#3","exec_time":0.002802035,"stdout":"\nthread 'flaky::always_fails' (1243165) panicked at src/lib.rs:19:9:\nevery attempt fails\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"}
+{"type":"suite","event":"failed","passed":2,"failed":1,"ignored":0,"measured":0,"filtered_out":0,"exec_time":0.008408098,"nextest":{"crate":"nxflaky","test_binary":"nxflaky","kind":"lib"}}

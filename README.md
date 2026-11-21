@@ -6,8 +6,10 @@ workflow. It is two cooperating stacks behind one product:
 - a **Bun server** (`src/server.ts`) that ingests test runs, tracks agents,
   cycles and events, and streams live changes over SSE; and
 - a **Python client fleet** (`crucible-axi` — `_crucible_axi.py` plus the
-  per-stack `{bun,python,rust,mvn,arduino}-crucible.py` scripts) that runs a
-  stack's tests AND ingests the results to the server under an agent id.
+  per-stack `{bun,python,rust,mvn,arduino,go}-crucible.py` scripts) that runs a
+  stack's tests AND ingests the results to the server under an agent id. A new
+  project registers itself with any client's `project-create` verb, which
+  creates the project on the board, or finds it, by its token.
 
 RED/GREEN/VERIFY agents report every run through the stack client; the server
 gives orchestrators a live picture of the fleet, the cycle plan, and coverage.
@@ -26,9 +28,12 @@ own Python) is present, then installs the primary orchestrator and provisions
 the server:
 
 ```sh
-uv tool install crucible-axi
+uv tool install crucible-axi --python 3.14
 crucible-axi install
 ```
+
+`--python 3.14` follows the package name: it lands the tool on python 3.14, the
+floor crucible-axi requires, rather than on uv's default interpreter.
 
 `crucible-axi install` provisions and then **exits** — it never starts anything.
 It guarantees **Bun** (the server's runtime: detected on `PATH`, otherwise
@@ -38,11 +43,19 @@ fails outright with that remedy), provisions the server user-scoped via
 `bun add -g @anthill-tec/crucible-server@<pinned>` — Bun's global prefix lives
 under `$HOME`, so there is no system-permission problem — then creates its
 target directory (`--target-dir`, default `~/.crucible`), lays the
-`*-crucible.py` **client fleet** (the five clients, the two shared modules they
-load by path, and `STATUS-CONTRACT.md`) down in `<target-dir>/clients/`, and
-writes the client discovery **manifest** naming those paths into it. Those
-three stages — `server`, `fleet`, `manifest`, in that order, so the manifest is
-written only after the paths it names exist — are the whole install. It reports
+`*-crucible.py` **client fleet** (the six clients, the seven shared modules
+they load by path — `_crucible_axi.py`, `_crucible_run.py`,
+`_crucible_release.py`, `_crucible_project.py`, `_crucible_lint.py`,
+`_crucible_board.py` and `toon.py` — the
+`subtest_runner.py` the Python client runs, `STATUS-CONTRACT.md`, the
+shipped `crucible.toml` limit defaults, the shipped Vitest and Playwright
+reporters under `reporters/` and the stack-declaration schema
+`crucible-declaration.schema.json`) down in `<target-dir>/clients/`, and
+writes the client discovery **manifest** naming those paths into it; the
+manifest's `declaration_schema` key lists the schema as `{path, version}`. Those
+four stages — `server`, `fleet`, `manifest` and `unit` (the systemd `--user`
+service, below), in that order, so the manifest is written only after the paths
+it names exist — are the whole install. It reports
 a TOON-AXI envelope naming each stage's installed
 path plus the absolute Bun it resolved. A second run at the same version is a
 no-op; re-running after an upgrade re-provisions the server, because the
@@ -63,7 +76,17 @@ work. Note that plain `uv tool upgrade crucible-axi` is *not* sufficient by
 hand: it resolves within the constraint the tool was installed under, so a
 pinned install reports "already current" forever. The installer uses
 `uv tool install --upgrade`, which ignores that pin. Version selection is
-entirely uv's — the installer never pins a `crucible-axi` version.
+entirely uv's — the installer never pins a `crucible-axi` version. To upgrade
+by hand, name the python too:
+
+```sh
+uv tool install --upgrade crucible-axi --python 3.14
+```
+
+uv keeps a tool environment's interpreter across `--upgrade`, so an environment
+on an older python would stay on the newest release that python allows;
+`--python 3.14` makes uv rebuild it on 3.14. The installer says so before it
+rebuilds one, naming the python the environment ran.
 
 Running the server is a separate, explicit step. Start it in the foreground and
 check its health:
@@ -114,8 +137,9 @@ user-scoped server package and its `crucible-server` symlink, via
 stage in the usual TOON-AXI envelope and names the two things it deliberately
 kept — the **store** (`$XDG_DATA_HOME/crucible`, else `~/.local/share/crucible`)
 and the **config** (`<target-dir>/crucible-clients.json`) — with their paths,
-marked `retained`. Stage order is `server`, `config`, `store`: destructive last,
-so a failing step can never leave your data gone and the program still installed.
+marked `retained`. Stage order is `unit`, `server`, `config`, `store`: the
+service first, destructive last, so a failing step can never leave your data
+gone and the program still installed.
 
 Destroying data is opt-in and explicit:
 
@@ -140,13 +164,41 @@ Python coverage gate (`python-crucible.py regression --coverage`) has
 pip install -e '.[dev]'
 ```
 
+The client suite needs the same extra: it builds wheels offline with `build`,
+`hatchling` and `hatch-vcs`, and drives `pytest` and `ruff`. Run
+`scripts/provision-test-caches.sh` once (it needs the network and `mvn`) to
+fill the suite's maven repository under `.cache/test-suite/`, then run the
+tiers with the `.venv` active, because the client scripts call `python3`:
+`bun run test:unit`, `bun run test:integration`, `bun run test:client-unit` and
+`bun run test:client-integration`, or `bun run test:regression` for the whole
+bun suite and both client tiers in one run.
+
 ## Documentation
 
 - [docs/RUNBOOK.md](docs/RUNBOOK.md) — operating the server (start/stop, db
   path, health, port/bind config).
 - `clients/` — the per-stack reporting clients
-  (`{bun,python,rust,mvn,arduino}-crucible.py`) plus the shared TOON-AXI
-  envelope module every one of them emits through.
+  (`{bun,python,rust,mvn,arduino,go}-crucible.py`) plus the shared TOON-AXI
+  envelope module every one of them emits through. The Go client,
+  `go-crucible.py`, streams `go test -json` to the board; it needs go 1.24 or
+  later. Its `check` compiles the module (`go build ./...`), `check --tests`
+  compiles test files too without running a test, and `--coverage` on `test`
+  and `regression` sends each module's coverprofile as Go statement coverage
+  (`go-coverprofile`, on the `lines` axis). A Go project declares a tier by
+  build tag: `//go:build <tier>` in a `_test.go` file that declares a test.
+  The tier verbs `unit`, `module`, `integration`, `e2e` and `bdd` run only the
+  tests the tier's tag adds, never an untagged test, into one run filed under
+  its tier; a tier no module declares is refused, and so is a tier test whose
+  name is also declared in a test file the untagged build compiles.
+  `regression` runs the untagged tests and then every declared tier's tests.
+  The `pre-merge-gate` runs each declared tier as a suite with its own row,
+  filed under that tier, beside the `untagged` row (the whole run), filed
+  under `regression`; `e2e` is listed and excluded.
+  A run that kept coverage states a `coverage` block in its envelope: its
+  lines and functions percents, its file count and its 10 least covered files.
+  `run <event-id> --files <n>|all` lists a stored run's files in the same
+  block, and a gate composed of several runs states each run's block as a row
+  of `coverageRuns`.
 - `clients/STATUS-CONTRACT.md` — the status/dashboard payload contract the
   orchestrators read.
 

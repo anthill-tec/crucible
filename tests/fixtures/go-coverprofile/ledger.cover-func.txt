@@ -1,0 +1,5 @@
+example.com/ledger/ledger.go:10:	Balance		100.0%
+example.com/ledger/ledger.go:21:	Filter		100.0%
+example.com/ledger/ledger.go:32:	Debits		100.0%
+example.com/ledger/ledger.go:39:	Close		0.0%
+total:					(statements)	75.0%

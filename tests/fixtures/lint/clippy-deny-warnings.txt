@@ -1,0 +1,17 @@
+    Checking ledger v0.1.0 (clippy-deny-warnings)
+error: unneeded `return` statement
+ --> src/main.rs:2:5
+  |
+2 |     return n * 2;
+  |     ^^^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#needless_return
+  = note: `-D clippy::needless-return` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::needless_return)]`
+help: remove `return`
+  |
+2 -     return n * 2;
+2 +     n * 2
+  |
+
+error: could not compile `ledger` (bin "ledger") due to 1 previous error

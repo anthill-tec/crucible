@@ -3,7 +3,7 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 091
-- **Status**: PENDING (0.2.0) — moved into 0.2.0 by user direction 2026-08-28
+- **Status**: DONE (0.2.0) — moved into 0.2.0 by user direction 2026-08-28
 - **Design documents — READ THESE FIRST**: `docs/research/DN-crucible-wave-track-release.md` §"Reading the lane during execution" — the TRACKED model of record for the NEXT / HOLD / DRAINED vocabulary, the trigger kinds, the drained reasons, the oracle-not-scheduler rule and the conditional track rule. The visual it was approved on is `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §13 (2026-08-28) — absolute path, but `.lavish/` is **gitignored**, so where the two disagree or the flowchart is absent, the DN governs.
 
 > The design document is the contract for this CR. Implement what it specifies — do not

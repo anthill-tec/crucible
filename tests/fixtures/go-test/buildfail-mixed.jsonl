@@ -1,0 +1,72 @@
+{"ImportPath":"example.com/mod/pbuild [example.com/mod/pbuild.test]","Action":"build-output","Output":"# example.com/mod/pbuild [example.com/mod/pbuild.test]\n"}
+{"ImportPath":"example.com/mod/pbuild [example.com/mod/pbuild.test]","Action":"build-output","Output":"pbuild/b_test.go:5:37: declared and not used: x\n"}
+{"ImportPath":"example.com/mod/pbuild [example.com/mod/pbuild.test]","Action":"build-output","Output":"pbuild/b_test.go:5:45: cannot use \"s\" (untyped string constant) as int value in variable declaration\n"}
+{"ImportPath":"example.com/mod/pbuild [example.com/mod/pbuild.test]","Action":"build-fail"}
+{"ImportPath":"example.com/mod/pex [example.com/mod/pex.test]","Action":"build-output","Output":"# example.com/mod/pex\n"}
+{"ImportPath":"example.com/mod/pex [example.com/mod/pex.test]","Action":"build-output","Output":"# [example.com/mod/pex]\n"}
+{"ImportPath":"example.com/mod/pex [example.com/mod/pex.test]","Action":"build-output","Output":"pex/e_test.go:5:1: ExampleOnly refers to unknown identifier: Only\n"}
+{"ImportPath":"example.com/mod/pex [example.com/mod/pex.test]","Action":"build-fail"}
+{"ImportPath":"example.com/mod/pa [example.com/mod/pa.test]","Action":"build-output","Output":"# example.com/mod/pa\n"}
+{"ImportPath":"example.com/mod/pa [example.com/mod/pa.test]","Action":"build-output","Output":"# [example.com/mod/pa]\n"}
+{"ImportPath":"example.com/mod/pa [example.com/mod/pa.test]","Action":"build-output","Output":"pa/a_test.go:40:1: ExampleHello refers to unknown identifier: Hello\n"}
+{"ImportPath":"example.com/mod/pa [example.com/mod/pa.test]","Action":"build-output","Output":"pa/a_test.go:44:1: ExampleBad refers to unknown identifier: Bad\n"}
+{"ImportPath":"example.com/mod/pa [example.com/mod/pa.test]","Action":"build-output","Output":"pa/a_test.go:48:1: ExampleNoOutput refers to unknown identifier: NoOutput\n"}
+{"ImportPath":"example.com/mod/pa [example.com/mod/pa.test]","Action":"build-fail"}
+{"Time":"2026-11-09T01:27:27.82133533+05:30","Action":"start","Package":"example.com/mod/pa"}
+{"Time":"2026-11-09T01:27:27.821431022+05:30","Action":"output","Package":"example.com/mod/pa","Output":"FAIL\texample.com/mod/pa [build failed]\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.821448406+05:30","Action":"fail","Package":"example.com/mod/pa","Elapsed":0,"FailedBuild":"example.com/mod/pa [example.com/mod/pa.test]"}
+{"Time":"2026-11-09T01:27:27.821446382+05:30","Action":"start","Package":"example.com/mod/pb"}
+{"Time":"2026-11-09T01:27:27.821483763+05:30","Action":"start","Package":"example.com/mod/pbuild"}
+{"Time":"2026-11-09T01:27:27.821505775+05:30","Action":"output","Package":"example.com/mod/pbuild","Output":"FAIL\texample.com/mod/pbuild [build failed]\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.821513009+05:30","Action":"fail","Package":"example.com/mod/pbuild","Elapsed":0,"FailedBuild":"example.com/mod/pbuild [example.com/mod/pbuild.test]"}
+{"Time":"2026-11-09T01:27:27.821528719+05:30","Action":"start","Package":"example.com/mod/pex"}
+{"Time":"2026-11-09T01:27:27.821550731+05:30","Action":"output","Package":"example.com/mod/pex","Output":"FAIL\texample.com/mod/pex [build failed]\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.821557013+05:30","Action":"fail","Package":"example.com/mod/pex","Elapsed":0,"FailedBuild":"example.com/mod/pex [example.com/mod/pex.test]"}
+{"Time":"2026-11-09T01:27:27.821579065+05:30","Action":"start","Package":"example.com/mod/pmain"}
+{"Time":"2026-11-09T01:27:27.821627578+05:30","Action":"start","Package":"example.com/mod/pnotest"}
+{"Time":"2026-11-09T01:27:27.821655752+05:30","Action":"output","Package":"example.com/mod/pnotest","Output":"?   \texample.com/mod/pnotest\t[no test files]\n"}
+{"Time":"2026-11-09T01:27:27.821662765+05:30","Action":"skip","Package":"example.com/mod/pnotest","Elapsed":0}
+{"Time":"2026-11-09T01:27:27.82167067+05:30","Action":"start","Package":"example.com/mod/ppanic"}
+{"Time":"2026-11-09T01:27:27.82346591+05:30","Action":"run","Package":"example.com/mod/ppanic","Test":"TestBefore"}
+{"Time":"2026-11-09T01:27:27.824412469+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestBefore","Output":"=== RUN   TestBefore\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.824406567+05:30","Action":"run","Package":"example.com/mod/pmain","Test":"TestOk"}
+{"Time":"2026-11-09T01:27:27.824423289+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestBefore","Output":"--- PASS: TestBefore (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.824427838+05:30","Action":"output","Package":"example.com/mod/pmain","Test":"TestOk","Output":"=== RUN   TestOk\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.82440797+05:30","Action":"run","Package":"example.com/mod/pb","Test":"TestB1"}
+{"Time":"2026-11-09T01:27:27.824434791+05:30","Action":"output","Package":"example.com/mod/pb","Test":"TestB1","Output":"=== RUN   TestB1\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.824435963+05:30","Action":"output","Package":"example.com/mod/pmain","Test":"TestOk","Output":"--- PASS: TestOk (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.82443942+05:30","Action":"output","Package":"example.com/mod/pb","Test":"TestB1","Output":"--- PASS: TestB1 (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.82443961+05:30","Action":"pass","Package":"example.com/mod/pmain","Test":"TestOk","Elapsed":0}
+{"Time":"2026-11-09T01:27:27.824441785+05:30","Action":"pass","Package":"example.com/mod/pb","Test":"TestB1","Elapsed":0}
+{"Time":"2026-11-09T01:27:27.824444199+05:30","Action":"run","Package":"example.com/mod/pb","Test":"TestB2"}
+{"Time":"2026-11-09T01:27:27.824443448+05:30","Action":"output","Package":"example.com/mod/pmain","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.824446133+05:30","Action":"output","Package":"example.com/mod/pb","Test":"TestB2","Output":"=== RUN   TestB2\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.824429862+05:30","Action":"pass","Package":"example.com/mod/ppanic","Test":"TestBefore","Elapsed":0}
+{"Time":"2026-11-09T01:27:27.824456733+05:30","Action":"run","Package":"example.com/mod/ppanic","Test":"TestPanics"}
+{"Time":"2026-11-09T01:27:27.824449179+05:30","Action":"output","Package":"example.com/mod/pb","Test":"TestB2","Output":"--- PASS: TestB2 (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.824460721+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"=== RUN   TestPanics\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.824463065+05:30","Action":"pass","Package":"example.com/mod/pb","Test":"TestB2","Elapsed":0}
+{"Time":"2026-11-09T01:27:27.824466522+05:30","Action":"output","Package":"example.com/mod/pb","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.824467424+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"--- FAIL: TestPanics (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.824473265+05:30","Action":"output","Package":"example.com/mod/pmain","Output":"FAIL\texample.com/mod/pmain\t0.003s\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.824480008+05:30","Action":"fail","Package":"example.com/mod/pmain","Elapsed":0.003}
+{"Time":"2026-11-09T01:27:27.824486981+05:30","Action":"output","Package":"example.com/mod/pb","Output":"ok  \texample.com/mod/pb\t0.003s\n"}
+{"Time":"2026-11-09T01:27:27.824965044+05:30","Action":"pass","Package":"example.com/mod/pb","Elapsed":0.004}
+{"Time":"2026-11-09T01:27:27.825550192+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"panic: assignment to entry in nil map [recovered, repanicked]\n"}
+{"Time":"2026-11-09T01:27:27.825750124+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"\n"}
+{"Time":"2026-11-09T01:27:27.825756276+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"goroutine 34 [running]:\n"}
+{"Time":"2026-11-09T01:27:27.825761336+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"testing.tRunner.func1.2({0x6b7150, 0x6ef020})\n"}
+{"Time":"2026-11-09T01:27:27.825764331+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"\t/usr/lib/go/src/testing/testing.go:2125 +0x232\n"}
+{"Time":"2026-11-09T01:27:27.82576907+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"testing.tRunner.func1()\n"}
+{"Time":"2026-11-09T01:27:27.825771665+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"\t/usr/lib/go/src/testing/testing.go:2128 +0x329\n"}
+{"Time":"2026-11-09T01:27:27.82577414+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"panic({0x6b7150?, 0x6ef020?})\n"}
+{"Time":"2026-11-09T01:27:27.825776926+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"\t/usr/lib/go/src/runtime/panic.go:859 +0x125\n"}
+{"Time":"2026-11-09T01:27:27.82577944+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"example.com/mod/ppanic.TestPanics(0x14e777196488?)\n"}
+{"Time":"2026-11-09T01:27:27.825782947+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"\t/tmp/cr195-review/mod/ppanic/p_test.go:6 +0x28\n"}
+{"Time":"2026-11-09T01:27:27.825785362+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"testing.tRunner(0x14e777196488, 0x6d4bf8)\n"}
+{"Time":"2026-11-09T01:27:27.825787916+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"\t/usr/lib/go/src/testing/testing.go:2195 +0xea\n"}
+{"Time":"2026-11-09T01:27:27.825790411+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"created by testing.(*T).Run in goroutine 1\n"}
+{"Time":"2026-11-09T01:27:27.825793397+05:30","Action":"output","Package":"example.com/mod/ppanic","Test":"TestPanics","Output":"\t/usr/lib/go/src/testing/testing.go:2260 +0x4d4\n"}
+{"Time":"2026-11-09T01:27:27.825822903+05:30","Action":"fail","Package":"example.com/mod/ppanic","Test":"TestPanics","Elapsed":0}
+{"Time":"2026-11-09T01:27:27.825827111+05:30","Action":"output","Package":"example.com/mod/ppanic","Output":"FAIL\texample.com/mod/ppanic\t0.004s\n","OutputType":"frame"}
+{"Time":"2026-11-09T01:27:27.825832161+05:30","Action":"fail","Package":"example.com/mod/ppanic","Elapsed":0.004}

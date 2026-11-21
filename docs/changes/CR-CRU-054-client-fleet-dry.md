@@ -1,6 +1,6 @@
 # CR-CRU-054 — The client fleet is 44 functions copy-pasted five times
 
-**Status:** PENDING
+**Status:** DONE
 **Type:** maintenance (structural — deduplication)
 **Priority:** P1 — not a defect in itself; it is the multiplier that has made every recent client CR cost 5× and miss sites
 **Depends on:** CR-CRU-030 (created `clients/_crucible_axi.py`, the shared module this CR finishes the job of)

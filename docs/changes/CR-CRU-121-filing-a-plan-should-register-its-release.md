@@ -1,6 +1,6 @@
 # CR-CRU-121 — filing a plan should register its release
 
-**Status:** PENDING (0.2.0 — born mid-release, D4)
+**Status:** DONE (0.2.0 — born mid-release, D4)
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-091 (roadmap registration), CR-CRU-118 (release-membership mandate),
