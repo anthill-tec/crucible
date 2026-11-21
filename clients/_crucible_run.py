@@ -909,7 +909,7 @@ def emit_run_axi(verb, resp, context, emit_fn, *, ok=None, help_steps=None,
     and for a caller that does not ask. The answer's `warnings[]` join the
     caller's `warnings`, after them. `ok` overrides the envelope's verdict
     (default: the answer's `ok`); a gate's lone run takes the gate's verdict
-    (`lone_gate_verdict`).
+    (`_lone_gate_verdict`).
 
     The client builds `context`, so the cycle it echoes (`echoed_cycle_id`)
     stays the client's."""
@@ -931,21 +931,21 @@ def emit_run_axi(verb, resp, context, emit_fn, *, ok=None, help_steps=None,
         result_fields["error"] = err
     board_warnings = [w for w in (resp.get("warnings") or [])
                       if isinstance(w, dict)]
-    ok, all_warnings = lone_gate_verdict(
+    ok, all_warnings = _lone_gate_verdict(
         resp, bool(resp.get("ok")) if ok is None else ok,
         list(warnings or []) + board_warnings)
     return emit_fn(verb, ok, result_fields, context, all_warnings)
 
 
-def lone_gate_verdict(resp, ok, warnings):
-    """`(ok, warnings)` of a filed run's envelope: unchanged unless the run is
-    a gate's lone whole-suite call (the core's `_lone_gate_stack`), whose
-    answer is the gate's. A filed lone run the composed gate's rule
-    (`_run_outcome`, at the exit `verb_exit(0, resp)`) does not pass answers
-    not ok, with that rule's warning in the composed gate's words unless the
-    run already carries one of its code. A run that was not filed is left as
-    it is."""
-    stack = getattr(_core, "_lone_gate_stack", None)
+def _lone_gate_verdict(resp, ok, warnings):
+    """Answer the `(ok, warnings)` of a run's envelope. Most runs keep them as
+    they are. A gate's lone whole-suite call is the gate's whole answer: the
+    core's `_lone_gate_stack` names the gate's stack while it runs. When that
+    run was filed and fails the composed gate's rule (`_run_outcome`, read at
+    the exit `verb_exit(0, resp)`), it answers not ok. It also carries that
+    rule's warning, in the composed gate's words, unless it already carries a
+    warning with that code. A run that was not filed is left as it is."""
+    stack = _core._lone_gate_stack
     if stack is None or not resp.get("ok"):
         return ok, warnings
     passed, code, detail = _core._run_outcome(

@@ -6488,7 +6488,7 @@ _emitted_run_counts = None
 # the outcome milestone to carry; None while no composition ran.
 _gate_suite_results = None
 # The stack of the gate whose lone whole-suite call is running, None otherwise:
-# the filed-run emitter gives that run the gate's verdict (`lone_gate_verdict`).
+# the filed-run emitter gives that run the gate's verdict (`_lone_gate_verdict`).
 _lone_gate_stack = None
 
 
@@ -7523,7 +7523,8 @@ def gate_regression(args, *, surface, stack, verb, whole_suite, dispatch,
     `whole_suite_alone`, when given, is that same run as the gate's WHOLE
     answer: its envelope is the gate's, so it names its own run unreported
     when that run was not filed. The composition names it itself, so a
-    composed gate takes `whole_suite` and never this one."""
+    composed gate takes `whole_suite` and never this one. It marks its lone
+    call while that call runs: `_lone_gate_stack` names `stack`."""
     global _lone_gate_stack
     suites = declared_gate_suites(args, surface, stack)
     if not suites:

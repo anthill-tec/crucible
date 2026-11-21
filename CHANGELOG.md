@@ -17,7 +17,8 @@ Releases before 0.3.0 are described only on GitHub Releases.
   When that run fails, the gate now answers `ok: false` with a `gate-suite-failed` warning, in every
   client, as a gate that composes declared suites already did. Its exit and its help are unchanged.
   A stack file that reads the gate's exit sees no difference; one that reads `ok` now sees the
-  failure.
+  failure. A lone run that is filed with no counts now also answers `ok: false`, with a
+  `gate-suite-unreported` warning, while its exit stays 0.
 
 ## [0.4.0] - 2026-11-21
 
