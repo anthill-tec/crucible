@@ -315,19 +315,22 @@ class NameFilterArgvTest(unittest.TestCase):
         self.assertEqual(
             argv[position + 1], pattern,
             f"the pattern is passed unchanged, as one argument; argv={argv!r}")
-        self.assertIn("pair.test.ts", argv, f"argv={argv!r}")
+        # The entry reaches bun as a path (`./`), never as a name filter.
+        self.assertIn("./pair.test.ts", argv, f"argv={argv!r}")
+        self.assertNotIn("pair.test.ts", argv, f"argv={argv!r}")
         self.assertIn("--reporter=junit", argv, f"argv={argv!r}")
         self.assertNotIn("--", argv, f"argv={argv!r}")
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
 
     def test_without_name_the_bun_test_invocation_and_report_flags_are_unchanged(self):
         # Pins today's invocation: the name filter adds nothing when absent.
+        # The relative entry reaches bun in its `./` path form.
         result = self.drive("--tests", "pair.test.ts")
         argv = self.only_bun_call(result)
         self.assertEqual(len(argv), 6, f"argv={argv!r}")
         self.assertEqual(
             argv[:5],
-            ["test", "--timeout", self.timeout_ms, "pair.test.ts", "--reporter=junit"],
+            ["test", "--timeout", self.timeout_ms, "./pair.test.ts", "--reporter=junit"],
             f"argv={argv!r}")
         self.assertRegex(argv[5], r"^--reporter-outfile=.+junit\.xml$",
                          f"argv={argv!r}")
