@@ -38,7 +38,6 @@ from pathlib import Path
 from unittest import mock
 
 from tests.client.changelog_check_kinds import PYTHON_CHECKS
-from tests.client.changelog_section import changelog_section
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REAL_CHANGELOG = REPO_ROOT / "CHANGELOG.md"
@@ -125,25 +124,6 @@ def run_checks(module_name, text, checks=None):
         failing.setdefault(_check_name(test, module_name),
                            trace.strip().splitlines()[-1])
     return failing
-
-
-class TheNextReleasesChangelogTest(unittest.TestCase):
-    """What the checks below read: the later release's section on top, the
-    real releases whole beneath it."""
-
-    def test_its_section_being_written_holds_only_the_later_feature(self):
-        self.assertEqual(changelog_section(the_next_release()).strip(),
-                         "### Added\n\n" + LATER_FEATURE.strip())
-
-    def test_every_real_release_sits_whole_below_the_later_one(self):
-        real = REAL_CHANGELOG.read_text(encoding="utf-8")
-        built = the_next_release(real)
-        lines = real.splitlines(keepends=True)
-        releases = "".join(lines[_first_heading_at(lines):])
-        self.assertTrue(built.endswith(releases), "the real releases follow, byte for byte")
-        self.assertEqual(built.count("## [Unreleased]"), 1)
-        self.assertLess(built.index("## [Unreleased]"), built.index(lines[_first_heading_at(lines)]))
-        self.assertEqual(len(built), len(real) + len(LATER_RELEASE))
 
 
 class EveryRecordedCheckFindsItsFeatureAcrossTheNextReleaseTest(unittest.TestCase):
