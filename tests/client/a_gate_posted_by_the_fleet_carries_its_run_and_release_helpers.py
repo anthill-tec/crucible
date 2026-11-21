@@ -48,10 +48,22 @@ def _run_main(module, argv):
 # (`test_python_crucible_axi.py`'s `_FAKE_NO_MISTAKES_LIVE_LADDER_BODY`) to
 # cover `axi respond` too, since `gate-respond` drives the SAME
 # `stream_axi_ladder`/`drive_axi_run` body `gate-run` does.
+#
+# Two optional knobs, both off unless set, so a drive that sets neither runs
+# the fake exactly as before:
+#   * `GATE_FLEET_FAKE_PIDFILE` -- `axi run`/`axi respond` first writes its own
+#     pid there, so a test can find, and reap, a fake its drive left behind;
+#   * `GATE_FLEET_FAKE_STDERR_BYTES` -- after the run cycle, `axi run`/`axi
+#     respond` writes at least that many bytes of `STDERR_FILLER` lines to its
+#     stderr, before the final snapshot goes to stdout.
+STDERR_FILLER = "fake no-mistakes stderr filler line"
+
 _FAKE_NO_MISTAKES_BODY = '''
 import os
 import sys
 import time
+
+STDERR_FILLER = ''' + repr(STDERR_FILLER) + '''
 
 argv = sys.argv[1:]
 live_path = os.environ.get("GATE_FLEET_FAKE_LIVE_FILE")
@@ -70,7 +82,16 @@ if len(argv) >= 2 and argv[0] == "axi" and argv[1] == "status":
     sys.stdout.write(_read(live_path))
     sys.exit(0)
 if len(argv) >= 2 and argv[0] == "axi" and argv[1] in ("run", "respond"):
+    pid_path = os.environ.get("GATE_FLEET_FAKE_PIDFILE")
+    if pid_path:
+        with open(pid_path, "w") as f:
+            f.write(str(os.getpid()))
     time.sleep(run_seconds)
+    stderr_bytes = int(os.environ.get("GATE_FLEET_FAKE_STDERR_BYTES") or 0)
+    if stderr_bytes > 0:
+        line = STDERR_FILLER + " " + "x" * 64 + "\\n"
+        sys.stderr.write(line * (stderr_bytes // len(line) + 1))
+        sys.stderr.flush()
     sys.stdout.write(_read(final_path))
     sys.exit(0)
 sys.stderr.write("fake no-mistakes: unsupported invocation: " + repr(argv) + "\\n")
