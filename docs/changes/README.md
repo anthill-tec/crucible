@@ -187,6 +187,14 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-253](CR-CRU-253-the-client-modules-type-check-clean-and-installer-tests-stay-off-the-shipped-ports.md) | the client modules type-check clean, and the installer tests stay off the shipped ports | maintenance | COMPLETED | — | 3 (0.4.0) |
 | [CR-CRU-254](CR-CRU-254-each-stacks-lint-runs-through-its-client.md) | each stack's lint runs through its client, and the gate runs it after check | feature | COMPLETED | 199, 253 | 13 (0.4.0) |
 | [CR-CRU-256](CR-CRU-256-a-filed-lint-run-is-named-in-its-envelopes-events.md) | a filed lint run is named in its envelope's events | fix | COMPLETED | 254 | 8 (0.4.0) |
+| [CR-CRU-257](CR-CRU-257-the-doc-tests-read-the-changelog-section-being-written.md) | the doc tests read the changelog section being written | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-259](CR-CRU-259-a-client-with-no-board-declared-refuses.md) | a client with no board declared refuses | fix | COMPLETED | — | 8 (0.4.0) |
+| [CR-CRU-260](CR-CRU-260-the-client-suite-runs-from-its-own-install-and-owns-its-caches.md) | the client suite runs from its own install and owns its caches | fix | COMPLETED | 259 | 8 (0.4.0) |
+| [CR-CRU-261](CR-CRU-261-the-suites-declare-their-tiers-by-directory.md) | the suites declare their tiers by directory | fix | COMPLETED | 260 | 8 (0.4.0) |
+| [CR-CRU-262](CR-CRU-262-a-live-board-is-kept-for-feature-level-tests.md) | a live board is kept for feature-level tests | fix | COMPLETED | 261 | 8 (0.4.0) |
+| [CR-CRU-263](CR-CRU-263-ci-runs-the-suites-hermetically-behind-a-tripwire.md) | CI runs the suites hermetically behind a tripwire | fix | COMPLETED | 262, 264 | 8 (0.4.0) |
+| [CR-CRU-264](CR-CRU-264-a-bun-route-test-reaches-the-board-in-process.md) | a bun route test reaches the board in process | fix | COMPLETED | 262 | 8 (0.4.0) |
+| [CR-CRU-265](CR-CRU-265-a-test-run-refuses-a-path-that-does-not-exist.md) | a test run refuses a path that does not exist | fix | COMPLETED | — | 8 (0.4.0) |
 | [CR-CRU-255](CR-CRU-255-a-gate-whose-only-run-fails-answers-not-ok.md) | a gate whose only run fails answers not ok | fix | PENDING | — | 9 (0.5.0) |
 | [CR-CRU-258](CR-CRU-258-a-gate-drive-never-stalls-on-the-tools-own-output.md) | a gate drive never stalls on the tool's own output | fix | PENDING | — | 9 (0.5.0) |
 | [CR-CRU-200](CR-CRU-200-an-open-run-takes-its-test-stream-and-shows-it-live.md) | an open run takes its test stream and shows it live | feature | COMPLETED | 152, 206 | 8 (0.4.0) |
@@ -216,7 +224,10 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 - 2026-10-28 — **the python client cannot discover with a top-level directory** (CR-CRU-214's VERIFY, V1):
   `test --start-dir tests/client` runs unittest discovery with no `-t`, so the `tests/client` package —
   and its isolation from the live project — is imported only incidentally (the guard then fails closed).
-  The gate's declared `test:client` passes `-t .`. A `--top-level-dir` flag (or `-t` defaulting to the
+  A declared script's `-t .` does not reach the gate's run: the gate's python translation
+  (`_python_suite_argv`) drops `-t`, so the dispatched run has no top-level directory either, and the
+  gate's tier verbs (`unit`, `integration`, … from a `tests/client/<tier>` start directory, CR-CRU-261)
+  are dispatched under the same shape. A `--top-level-dir` flag (or `-t` defaulting to the
   project root for a start dir beneath it) would change discovery for every python project: a candidate CR.
 - 2026-10-28 — **the e2e ingest counts Gherkin steps, not tests** (CR-CRU-213's VERIFY, V4): the bun
   client's `e2e` run of the Playwright/bddgen suite files 1404 cases where Playwright reports 121 tests,

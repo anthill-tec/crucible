@@ -21,7 +21,7 @@ const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
 /**
  * A port the kernel has just confirmed is free, then released — the e2e mirror
  * of the bun suites' `freePorts()`
- * (tests/server-listener-is-configuration.test.ts) and the python suites'
+ * (tests/integration/server-listener-is-configuration.test.ts) and the python suites'
  * `_free_port()`.
  *
  * F10 used a FIXED 39878, which is a standing appointment with a collision: it
@@ -133,7 +133,7 @@ After(() => {
 
 function spawnServer(scratchCwd: string, port: number): ChildProcess {
   declareListener(scratchCwd, port);
-  const child = spawn("bun", ["run", SERVER_ENTRY], {
+  const child = spawn("bun", ["run", "--no-env-file", SERVER_ENTRY], {
     cwd: scratchCwd,
     env: {
       ...process.env,

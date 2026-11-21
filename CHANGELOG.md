@@ -8,9 +8,101 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each re
 also the body of its [GitHub Release](https://github.com/anthill-tec/crucible/releases).
 Releases before 0.3.0 are described only on GitHub Releases.
 
-## [Unreleased]
+## [0.4.0] - 2026-11-21
+
+### Upgrading
+
+- **Re-run `crucible-axi install` after upgrading.** It fills two settings an older install never wrote,
+  and never overwrites a value already set:
+  - the install's `crucible.toml` gains `[client] url`, built from the port the board already listens on,
+    so the clients reach the board through configuration. A client whose project and install name no
+    board refuses rather than posting anywhere;
+  - the server's own settings file gains `[server] port`, the port that server already boots on (no
+    new port is probed).
+
+  The install output lists each file it `filled`, and each it left alone under `notFilled` with the
+  reason. An install with no local server has no port to build the url from: declare
+  `[client] url = "http://<host>:<port>"` in its `crucible.toml`. The install output warns under
+  `boardUndeclared`, naming the file and the key, whenever it leaves no board declared.
+- **The rust gate's lint step is renamed.** A stack file or script that reads the rust
+  `pre-merge-gate` envelope now sees `stage: "lint"` instead of `"clippy"`, and the warning
+  `lint-gate-abort` instead of `clippy-gate-abort`. `--skip-clippy` still works, as an alias of
+  `--skip-lint`.
+- **Every gate runs a lint stage.** A project with no `[lint]` table, and no default for its stack,
+  gets a `lint-not-declared` warning and its gate goes on; declare the project's linter in a
+  `[lint]` table of its `crucible.toml` to lint it.
+- **Python 3.14 is now the floor.** `crucible-axi` requires Python 3.14 or later; 0.3.0 required
+  3.10. uv keeps a tool environment's interpreter across an upgrade, so the install one-liner
+  rebuilds an environment that runs an older Python on 3.14, and says so first, naming the Python
+  it ran. To upgrade by hand, run `uv tool install --upgrade crucible-axi --python 3.14`.
+- **The store migrates from schema v20 to v25.** The first 0.4.0 boot upgrades a 0.3.0 store.
+  Before migrating, it writes a recovery copy beside the store, `crucible.db.pre-upgrade-<epoch>`,
+  and the boot log names the migration and the backup. A store written by a newer build is refused
+  rather than touched.
+- **Ingests are bounded by two new server limits.** Both live in the server's own `crucible.toml`,
+  beside its database.
+  - `ingest_body_bytes`, by default `134217728` (128 MiB), bounds an ingest's request body and a
+    run's whole test stream. A larger body, or a stream batch that would pass it, is refused with a
+    JSON 413 naming the limit. `GET /api/health` advertises it under `limits`, and the clients
+    refuse an oversized body before sending it.
+  - `raw_output_chars`, by default `2000000`, bounds the captured runner output a run stores.
+    Longer output keeps its first and last halves around a line naming how much was cut. A server
+    with no operator file now cuts output that 0.3.0 stored whole.
+- **`regression` measures coverage only when asked.** Every client's `regression` runs the whole
+  suite as the `regression` tier without coverage unless `--coverage` is given. Without it, maven
+  applies no coverage profile and sends no `jacoco.csv`, and rust runs nextest with no
+  `cargo llvm-cov` and no `cargo clean`. A coverage-only flag given without `--coverage`
+  (`--coverage-profile`, `--lcov-output`, `--keep-target`, `--cov-source`) is refused. The
+  `pre-merge-gate` is unchanged.
 
 ### Added
+
+- **A Go project reports through its own client.** `go-crucible.py` joins the fleet as its sixth
+  client: the install lays it down beside the other five, and the manifest lists it under
+  `clients.go`. It runs the toolchain's own `go test -json`, needs go 1.24 or later on `PATH`, and
+  streams every test run to the board's `go-test` codec, its total counted first with
+  `go test -list`. `test` runs one module; `regression` and `pre-merge-gate` run every module under
+  the project dir into one run. Its compile, coverage and tiers are described below, and its
+  declaration under "Stack declaration changes".
+- **An open run shows its tests as they finish.** A client streams its runner's results to the run
+  it opened, through `POST /api/v2/runs/<runId>/stream`, in throttled batches as it is written. The
+  board holds each batch it acknowledges, so a restart loses none, and fills the run's live state
+  as the batches land.
+  - `GET /api/health` gains `codecs.stream`, the codecs whose stream is a run's record
+    (`crucible-events`, `go-test`, `nextest`), and `codecs.view`, the codecs that only fill the live
+    view (`bun-console`, `surefire-console`).
+  - A record stream is decoded into the run at its close, and no final test report is read. The
+    `crucible-events` shape is newline-delimited JSON: a `run-start`, one `test-end` per test and a
+    `run-end` with the runner's totals. A run whose tests disagree with its `run-end`, that has no
+    `run-end`, holds lines that cannot be decoded or was cut at `ingest_body_bytes` is stored
+    flagged incomplete. An aborted streamed run keeps the tests it streamed.
+  - The Runs tab's running card shows a progress bar, done of total, the current file, the
+    failures so far and the timer. It opens a live drill-in at `/run/<runId>` that lists each
+    failure as it happens and becomes the run's own page when the run settles. The agent's card
+    reads `running N/M · <file>` from the same state, which `GET /api/v2/runs/<runId>/live` serves.
+  - Each stack's runner streams. Python's own unittest runner, `subtest_runner.py`, writes the
+    stream: the python client no longer uses xmlrunner, and `unittest-xml-reporting` leaves the
+    `dev` extras. A pytest run keeps its JUnit report. bun relays `bun test`'s console to the
+    `bun-console` view codec and keeps its JUnit report as the record. Vitest and Playwright stream
+    through the shipped reporters. rust streams through nextest, arduino through its native
+    harness, maven shows its surefire console live, and go streams `go test -json` (see "Stack
+    declaration changes").
+- **The install ships Vitest and Playwright reporters.** `reporters/vitest-crucible.ts` and
+  `reporters/playwright-crucible.ts` land under `<target-dir>/clients/`. The bun client names that
+  directory to a run in `CRUCIBLE_REPORTERS`, so a project's Vitest or Playwright config adds the
+  reporter from it without naming a machine path. The reporter writes the `crucible-events` stream
+  to the file `CRUCIBLE_STREAM` names, and a script declares it in its `crucible.targets` entry
+  with `"stream": {"codec": "crucible-events", "path": "env:CRUCIBLE_STREAM"}`.
+  - A Vitest run states no total up front, so its live view shows a count with no total.
+  - The Playwright reporter files one test per scenario and browser, from its last attempt, with
+    its Gherkin steps under it, so a BDD run is counted by scenario, not by step.
+- **The board decodes every stack's reports.** Every client sends its runner's own reports to
+  `POST /api/v2/runs` and parses nothing itself: its JUnit or stream, its coverage report (`lcov`,
+  `jacoco` or `go-coverprofile`) and its captured output, inline. The stored run names the codec
+  that decoded it, and every figure a client prints is the board's answer.
+  - `data` may be one report or a list of them, merged into one run. A report that cannot be
+    decoded is skipped with a warning, and coverage that cannot be decoded is dropped with one.
+  - No client posts to `/api/v2/runs/parsed` any more.
 
 - **Every client has a `lint` verb.** `python`, `bun`, `rust`, `go`, `mvn` and `arduino-crucible.py lint
   [--agent ID] [--cycle N]` run the linter a project declares in a `[lint]` table of its `crucible.toml`
@@ -153,9 +245,44 @@ Releases before 0.3.0 are described only on GitHub Releases.
     `PROJECT_TOKEN`, `PROJECT_ACRONYM` (with `--acronym`) and each `--set KEY=VALUE`.
   - `--write-env` writes `CRUCIBLE_PROJECT_KEY=<key>` into `<root>/.env` when its key line is
     empty or missing, keeping every other byte. Without it, `.env` is never written.
+- **`runs` and `run` read stored runs back.** Every client's `runs --cycle <id>` or
+  `runs --release <label>` lists that cycle's or release's stored test and compile runs, newest
+  first, a compile row with its errors and warnings and a test row with its counts.
+  `run <event-id>` shows one run of the client's own project, with its failing tests. Both only
+  read the board and take no `--agent`.
+- **The python client runs a pytest project.** `[python] runner = "pytest"` in the project's own
+  `crucible.toml` (or `"unittest"`, the default) chooses the runner for `test`, `regression`, the
+  tier verbs and `pre-merge-gate`, and `--runner <name>` overrides it for one call. A value that is
+  neither name, or `pytest` with an interpreter that cannot import it, is refused before anything
+  is posted. A pytest collection error is filed as a failed test. A run whose passing subtests
+  pytest left uncounted carries a `subtests-uncounted` warning.
+- **An arduino agent can run only its own native tests.** `test` and `unit` take
+  `--tests <stem> …`, handed to `make` as `TESTS`, and `--name <names>`, handed to `make` as
+  `TEST_NAME` for Unity's `-f`. Ill-formed input is refused with `narrowing-refused` before
+  anything reaches the board. The tier verbs, `regression`, `auto-ingest` and the gate never
+  narrow.
+- **A scoped re-run after a red gate can close the CR.** `pre-merge-gate --suites <targets>` runs
+  only the named declared suites. Each gate milestone records its `scope` (`full` or `scoped`) and
+  one `suites` entry per suite it ran, with its outcome, counts and failing tests, and
+  `GET /api/health` states `milestones: {gate: ["scope", "suites"]}`. `cr-close` judges suite by
+  suite: the latest full gate is the base, and a later result for one of its suites replaces that
+  suite's. Every envelope also states `events`, the ids of the runs the call filed.
+- **The arduino stack's compile errors are decoded.** The board gains a `gcc` compile codec for
+  GCC and g++ diagnostics and both linker shapes of `undefined reference`, and the arduino client
+  names it on its compile ingest. A `note:` belongs to the diagnostic above it. A `gcc` report with
+  no error falls back to the raw report, so a failed build never reads clean. The Compile pane
+  omits a missing line or column instead of printing `undefined`.
 
 ### Changed
 
+- **A client with no board declared refuses.** A client whose project and install `crucible.toml`
+  name no `[client] url` now refuses every verb that must reach the board, with one envelope naming
+  each file and why it was passed over, instead of posting to the server's packaged port. The
+  shipped `clients/crucible.toml` declares no board; the installer writes the install's. An install
+  with no local server must declare `[client] url = "http://<host>:<port>"`. An upgraded install whose
+  file never named a board has none until `crucible-axi install` is re-run, which fills it from the
+  local server's port. A verb that sends nothing still runs, and every client's `--help` ends with a
+  "Board:" paragraph naming where its board comes from.
 - **The `junit` readings follow the framework.** pytest's grouping by classname applies to a run of
   framework `pytest` whose report holds one suite named `pytest`, and bun's console reading to a run
   of framework `bun-test`, whatever the run's stack. A close that states no framework reads under the
@@ -182,12 +309,11 @@ Releases before 0.3.0 are described only on GitHub Releases.
   as before.
 - **A client finds its board in the install when its project names none.** A client takes
   `[client] url` from the first `crucible.toml` that declares a non-empty one: the project's, then
-  the install's. A file without one, or one that does not parse, is passed over, and the shipped
-  `http://localhost:3849` is the last resort. Before this, a project file without `[client]` sent
-  every verb to the shipped address and the install's file was never read. The limits and
-  `[gate] skip` keep the first file that parses. An envelope names `context.board` only when the
-  board differs from the install's declared `url`, or from the shipped one when the install declares
-  none.
+  the install's. A file without one, or one that does not parse, is passed over, and when neither
+  declares one the client refuses. Before this, a project file without `[client]` sent every verb to
+  the server's packaged port and the install's file was never read. The limits and `[gate] skip`
+  keep the first file that parses. An envelope names `context.board` only when the board differs
+  from the install's declared `url`, or always when the install declares none.
 - **A re-install fills in the connection an older install never wrote, keeping the live port.** An
   existing server `crucible.toml` with no `[server] port` gains the port its server boots on today,
   the template's own `port`, with no probe. An existing install `crucible.toml` with no `[client] url`
@@ -200,6 +326,33 @@ Releases before 0.3.0 are described only on GitHub Releases.
   `ruff` joins the `dev` optional dependencies (`pip install '.[dev]'`). `clients`, `crucible_axi`
   and `tests` pass it clean. The installer's own tests now declare only ephemeral ports in the
   server templates they provision, never one in the shipped 3800–3899 window.
+- **No project is anyone's default.** `[bun] package_dir` and `[python] runner` are read from the
+  project's own `crucible.toml` only, never the install's. The bun client's `integrations/pi`
+  fallback is gone: the package dir is `--package-dir`, then `$BUN_CRUCIBLE_PACKAGE_DIR`, then
+  `[bun] package_dir`, then the project root. A declared package dir that holds no `package.json`
+  is refused before anything is posted.
+- **No client creates a project.** The arduino client no longer registers the key its `.env`
+  names, so a run under a key no project holds is refused by every client. The envelope carries the
+  board's `unknown project: <key>`, its `help[]` on registering a project, and a warning naming the
+  `.env` the key was read from. The arduino client no longer reads `CRUCIBLE_PROJECT_NAME`.
+- **`finish` refuses a release with no notes.** `scripts/release.sh finish` reads the version's
+  `CHANGELOG.md` section as committed at the release branch's HEAD, through
+  `scripts/release-notes.sh`, the extractor the release workflow also uses. It refuses, before it
+  writes anything, when the section is missing or empty or its heading carries no date. Its
+  provenance report reads the queue through `queue --format json`, which every client now accepts,
+  and no longer lists voided CRs as work that never landed.
+- **A gate files a python suite under the tier its start directory names.** When a gate's python
+  suite is a `python -m unittest discover -s <dir>` script whose `<dir>` ends in a tier the gate
+  covers (`unit`, `integration`, …), the gate runs it as that tier's verb, so the board shows its
+  run as that tier. Any other start directory still runs as `regression`.
+- **The suites declare their tiers by directory.** `test:client` is replaced by `test:client-unit`
+  and `test:client-integration` (`tests/client/<tier>`), and `test:unit` / `test:integration` run
+  `./tests/unit` and `./tests/integration` by path. The source-text classifier
+  `scripts/test-targets.ts` is gone; a test's tier is the directory that holds it.
+- **The client suite runs offline from its own caches.** Run `scripts/provision-test-caches.sh` once,
+  online, to fill the suite's maven repository under `.cache/test-suite/`; the suite fills its go
+  and uv caches there itself. The `dev` extra now also carries `hatchling` and `hatch-vcs`, so the
+  suite builds its wheels with `--no-isolation`.
 
 ### Removed
 
@@ -212,11 +365,15 @@ Releases before 0.3.0 are described only on GitHub Releases.
   - `crucible.testScript` becomes `"test": true` on the script's entry.
 - **⚠ The `playwright` codec.** The board no longer accepts Playwright's JSON report: a
   `POST /api/v2/runs` naming `codec: "playwright"` is refused with 400 `unknown codec: playwright`,
-  and nothing is stored. `GET /api/health` lists `codecs.test` as `crucible-events` and `junit`. A
+  and nothing is stored. `GET /api/health` no longer lists `playwright` under `codecs.test`, which
+  now lists `crucible-events`, `go-test`, `junit` and `nextest`. A
   Playwright run files through the shipped reporter's `crucible-events` stream instead.
 
 ### Fixed
 
+- **A filed lint run is named in its envelope's `events`.** `lint --agent` lists the board's event
+  for its run in `events`, as every verb that files a run does; `events` stays empty when nothing
+  was filed.
 - **The Runs tab stays responsive while a run streams.** A streamed batch updates only the running
   cards, which sit in a container of their own; the timeline of settled runs is no longer rebuilt
   and re-styled on every batch. The timeline's rows skip their style and layout while off screen.
@@ -226,6 +383,68 @@ Releases before 0.3.0 are described only on GitHub Releases.
     variables, base reset and two utilities) is served as a static, vendored stylesheet
     (`/vendor/tailwind-4.2.4.css`) linked after the dashboard's own, so a class name entering the
     page no longer rewrites a stylesheet. The page looks as before.
+- **A run keeps the stack it was made on.** Every client states its stack on every ingest, and the
+  board carries a run's start stack and tier onto the event that closes it. A closing ingest whose
+  stack, tier or framework differs from its start's is refused with 400, and nothing is written.
+  `stack` now comes back on the events list and every brief, not only on the detail read.
+- **Every python subtest is counted, pass or fail.** A unittest run counts each passing subtest as
+  its own case, so a suite's total no longer shrinks when its subtests pass.
+- **A python project's coverage config decides what is measured.** With no `--cov-source`, the
+  python client reads the project's own coverage.py configuration. When it declares what to
+  measure, the run passes no `--source`; when it declares nothing, the run measures the project
+  root and warns `coverage-source-undeclared`. An earlier run's coverage data is erased first, so
+  it is never merged into the next run.
+- **An interrupted run leaves nothing behind.** A SIGINT or SIGTERM anywhere in a test verb's run
+  removes the agent's run identity, aborts the opened run and exits 128 plus the signal number, with
+  one envelope naming the signal. A signal during the ingest lets the ingest finish first, so the
+  results the runner earned are kept.
+  - An interrupted runner's whole process tree is taken down, so a server it started no longer
+    outlives it.
+  - The bun client gives every test runner it spawns a run-scoped `TMPDIR` and removes it when the
+    runner exits.
+  - A runner that exits non-zero with an empty report is a failure, never a `total: 0` run.
+- **A runner that failed is never filed as green.** Every client sends its runner's exit code with
+  each test ingest as `runnerExit`. When it is non-zero and the report records no failure, the
+  board adds one failing case, suite `runner`, case `exit <n>`. A verb exits non-zero whenever its
+  runner did or its run has a failure, and each bun test file that fails to load is a failing case.
+- **A bun test run refuses an entry that names no test.** `bun-crucible.py test --tests` reads its
+  entries as paths relative to the package directory. When one names nothing that exists
+  (`tests-not-found`) or names a file that is not a test (`tests-not-a-test-file`), nothing runs,
+  no run is opened, and one envelope lists the refused entries; before, bun read a missing entry as
+  a file-name filter that matched nothing and ran the rest green. The entries reach `bun test` as
+  `./` paths, so an entry no longer also selects other files whose path contains it. A script the
+  `crucible.targets` table marks as `test` still receives the entries unchanged, as its runner's
+  filters.
+- **A python run through a symlinked install imports the project's own modules.** When the
+  install's `clients` directory is a symlink, the python runner still puts the working directory
+  first on the module search path, so a project's tests import its own modules (CR-CRU-260).
+- **A rust project outside git takes no gate lock.** The rust gate lock is no longer placed in the
+  parent directory of a project outside git, where every such project shared it. Such a run goes
+  on unlocked and says so on stderr.
+- **A dropped connection is answered.** When the board resets or drops a connection mid-request, a
+  client answers `connection lost: …` naming the board instead of failing with a traceback. It
+  reports the run as it reports one an unreachable board never took, and tries to abort the open
+  run: `run-aborted` when the board takes the abort, `run-left-open` when it cannot reach the board
+  either, and a warning that the board may hold the run when it was already settled.
+- **A gate decision and a release are reported as they happened.** `gate-respond` judges a decision
+  by whether the step it answered moved on, so a decision no-mistakes accepted is recorded and
+  reported as accepted even when the wait ran out. A held run's report names the reattaching
+  command, `gate-run --intent "<intent>"`. A gate snapshot posted with no release keeps the release
+  of the run's earlier snapshots, and `history --release` tells a planned release the project holds
+  from an unknown one.
+- **Board fixes.**
+  - On a phone, a tap on a history cycle line opens its runs: `→ Runs` sits only in the expanded
+    runs there, and on a touch screen the pill has a target of at least 44 px wherever it shows.
+  - A milestone, gate or compile result is never drawn as a run chip on a cycle line, the collapsed
+    cue counts only test runs, and an aborted run's chip reads `aborted`. The project's status line
+    reads its newest test run or compile result, never a `0/0` milestone.
+  - The run detail's failure jump counts the failures not yet opened (`▸ 1 more failure`), its first
+    press opens the first failure, and once every failure has been opened it reads
+    `▸ failure k of N`.
+  - An agent's card follows its streaming run's live counts from the first batch.
+  - An agent's card keeps a long running file inside it: the count stays whole and the path is cut
+    from its start, with the whole path as its hover title.
+  - A tombstoned agent's runtime is never negative.
 
 ### Stack declaration changes
 
@@ -451,5 +670,5 @@ For the go stack (`crucible.toml`):
   - the e2e drive counts the phone feature once per browser engine;
   - the WebKit phone tap is engine-neutral.
 
-[Unreleased]: https://github.com/anthill-tec/crucible/compare/0.3.0...HEAD
+[0.4.0]: https://github.com/anthill-tec/crucible/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/anthill-tec/crucible/compare/0.2.2...0.3.0

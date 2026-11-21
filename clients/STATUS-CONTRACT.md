@@ -124,7 +124,7 @@ A hook that receives `ok:true` together with a `status-unavailable` warning rend
 
 ## `--format {toon,json}` — JSON for programs
 
-`status` and its alias `plans` accept `--format {toon,json}` in all five clients.
+`status` and its alias `plans` accept `--format {toon,json}` in all six clients.
 
 - `--format toon` is the default, and is the TOON-AXI envelope documented above.
 - `--format json` writes the SAME envelope as ONE JSON object on stdout: every key the
@@ -137,7 +137,7 @@ A hook that receives `ok:true` together with a `status-unavailable` warning rend
 - Any other value is refused by argument parsing.
 - The no-argument dashboard does not take the flag; it always writes TOON.
 
-`queue` accepts the same flag in all five clients: `--format json` writes its
+`queue` accepts the same flag in all six clients: `--format json` writes its
 envelope (`queue`, `crMerged`, `count`, `help`, `context`, `warnings`) as one
 unwrapped JSON object, with `--fields`/`--full` selecting the same columns as in TOON.
 
@@ -170,8 +170,8 @@ The **`--role` flag declares the agent's role**, and that stored declaration is 
 classifies the agent everywhere (the dashboard's agent rail, the role filters, the
 run attribution). The role is never inferred from the agentId's shape.
 
-- `--role` is **required** on `register` across all five `*-crucible.py` clients — the
-  whole fleet, since CR-CRU-132 retired the orphaned sixth surface — and is constrained
+- `--role` is **required** on `register` across all six `*-crucible.py` clients (bun,
+  python, rust, mvn, arduino, go) — the whole fleet — and is constrained
   to the enumeration
   `RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report`. Omitting it, or passing a value
   outside the enumeration, fails argument parsing with a non-zero exit and the accepted
@@ -245,7 +245,7 @@ ingests.
 ## Bounded fetch
 
 `status`'s one read, `GET …/plans?status=open`, is bounded by a short `timeout=` on
-the underlying `urlopen` call across all five clients, so an unreachable or slow
+the underlying `urlopen` call across all six clients, so an unreachable or slow
 server fails fast and `status` returns promptly regardless of server state — it can
 never hang a session-start hook.
 

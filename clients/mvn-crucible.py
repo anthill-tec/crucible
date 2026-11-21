@@ -56,7 +56,8 @@ Project + Crucible endpoint:
     CRUCIBLE_DOCKER_SERVICES, CRUCIBLE_BIND_MOUNT_PATHS, CRUCIBLE_COVERAGE_PROFILE
     (read only with regression --coverage, and by pre-merge-gate).
   Posts to the first `[client] url` declared by the project's crucible.toml,
-  then the install's, else the shipped http://localhost:3849; v2 endpoints ONLY:
+  then the install's (with neither declaring one, a verb that must reach the
+  board refuses); v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs (codec junit, coverage
   codec jacoco), /api/v2/runs/compile. Every report travels inline, as its
   text; the client parses none of them.
@@ -218,14 +219,14 @@ def _common_mvn_flags(args):
 def _base_url():
     """CR-CRU-139 §S2 — the BOARD this client posts to, read at the POINT OF
     USE from the fleet's ONE resolver: the project's own `crucible.toml`
-    (`[client] url`), else the install's, else the distribution's shipped
-    declaration.
+    (`[client] url`), else the install's; with neither declaring one it
+    refuses.
 
     A call rather than the module constant this line used to hold. A constant
     bound at import was a setting no edit an operator made could reach, and it
     froze the board for the whole process — so a verb handed a different
     `--project-dir` posted to the previous one's board. `resolve_base_url()` in
-    `_crucible_axi.py` documents the resolution and the environment channel it
+    `_crucible_board.py` documents the resolution and the environment channel it
     retired."""
     return _axi().resolve_base_url()
 
@@ -321,7 +322,7 @@ def _ops():
         project_key=_project_key, plans_path=_plans_path,
         open_plans=_open_plans, resolve_plan=_resolve_plan_or_emit,
         post_gate=_post_gate, post_milestone=_post_milestone,
-        base_url=_base_url())
+        base_url=_base_url)
 
 
 def _run_context():
@@ -1958,7 +1959,7 @@ def cmd_pre_merge_gate(args):
             whole_suite=lambda: cmd_regression(_gate_regression_args(args),
                                                verb="pre-merge-gate"),
             context=_axi_context(project_dir, agent_id=args.agent),
-            crucible_url=_base_url())
+            crucible_url=_base_url)
     finally:
         # STEP form — the teardown must not put a second document on stdout.
         _docker_down(argparse.Namespace(
@@ -2710,7 +2711,7 @@ def main():
     _axi().add_plan_file_cycle_kind_arg(pf)
     pf.add_argument(
         "--cycles",
-        help='Legacy comma-split form, REFUSED for filing (§S4a): a filed '
+        help='Legacy comma-split form, REFUSED for filing: a filed '
              'cycle declares its kind, so repeat --cycle with its own '
              '--cycle-kind instead.')
     _add_workflow_agent_arg(

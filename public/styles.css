@@ -1537,7 +1537,7 @@ button.app-run-coverage:hover { color: var(--ink); }
    no hex value, and the one animation is the app's established
    `app-run-pulse`, not a third motion vocabulary.
 
-   Asserted by tests/roadmap-visual-grammar.test.ts, which measures this
+   Asserted by tests/integration/roadmap-visual-grammar.test.ts, which measures this
    stylesheet in headless Chromium — geometry and computed style, never class
    names.
 

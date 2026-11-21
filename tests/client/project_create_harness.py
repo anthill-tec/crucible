@@ -31,10 +31,11 @@ with the status codes and error texts read from that file:
 
 Any route may be scripted to refuse instead (`refuse(route, status, body)`).
 
-THE SCRATCH FLEET is a copy of `clients/` whose own `crucible.toml`, and the
-install's beside it, declare the double. A client run from it resolves the
-double whether or not the verb binds `--project-dir`, so no drive here can
-reach the checkout's board or the shipped default (the production install).
+THE SCRATCH FLEET is a copy of `clients/` whose install `crucible.toml` (the
+scratch root's) declares the double, and whose shipped data declares no
+board, as the distribution ships. A client run from it resolves the double
+whether or not the verb binds `--project-dir`, so no drive here can reach the
+checkout's board or a production install.
 """
 
 import http.server
@@ -52,14 +53,16 @@ import urllib.parse
 import uuid
 from pathlib import Path
 
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
+    _CLIENT_TABLE,
     declare_and_require_board,
     declare_board,
     install_project_limits,
 )
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 TOON_PATH = CLIENTS_DIR / "toon.py"
 PROJECT_MODULE_PATH = CLIENTS_DIR / "_crucible_project.py"
 
@@ -414,7 +417,7 @@ class BoardDouble:
         self._thread.join(timeout=5)
 
 
-#: The ports of the checkout's dev board and the shipped default (the
+#: The ports of the checkout's dev board and the server's packaged default (a
 #: production install). No scratch fleet ever declares either.
 PRODUCTION_BOARD_PORTS = (3849, 3850)
 
@@ -427,11 +430,12 @@ def _refuse_production_board(url):
 
 
 class ScratchFleet:
-    """A copy of `clients/` whose own and install configuration both declare
-    `board_url`, checked in process before any drive.
+    """A copy of `clients/` whose install configuration declares `board_url`
+    and whose shipped data declares no board, checked in process before any
+    drive.
 
-    With `install_board_url` (a dead loopback port), the fleet's own and
-    install configuration declare THAT instead, so only a project dir's own
+    With `install_board_url` (a dead loopback port), the install
+    configuration declares THAT instead, so only a project dir's own
     `crucible.toml` can lead a drive to the double at `board_url`. Neither
     address may be the dev board's or the production install's."""
 
@@ -442,9 +446,11 @@ class ScratchFleet:
         _refuse_production_board(self.fleet_board_url)
         self.root = Path(tempfile.mkdtemp(prefix="project-create-fleet-"))
         self.clients = self.root / "clients"
-        shutil.copytree(CLIENTS_DIR, self.clients,
+        shutil.copytree(CLIENT_SOURCE_DIR, self.clients,
                         ignore=shutil.ignore_patterns("__pycache__"))
-        declare_board(self.clients / "crucible.toml", self.fleet_board_url)
+        shipped = self.clients / "crucible.toml"
+        shipped.write_text(_CLIENT_TABLE.sub("", shipped.read_text(encoding="utf-8")),
+                           encoding="utf-8")
         declare_board(self.root / "crucible.toml", self.fleet_board_url)
         resolved = self.resolves(None)
         if resolved != self.fleet_board_url:

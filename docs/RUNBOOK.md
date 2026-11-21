@@ -239,9 +239,9 @@ gone — nothing reads them, and exporting one changes nothing:
 
 Four more carried the **connection** — the server's listener and the clients'
 board. They are gone for the same reason and one sharper: a limit left to its
-default behaves as documented, whereas a forgotten connection export fails
-*silently*, landing a run on the default board, which on a machine carrying a
-production instance is the production board:
+default behaves as documented, whereas a forgotten connection export used to
+fail *silently*, landing a run on the packaged default port, which on a machine
+carrying a production instance was the production board:
 
 - `$CRUCIBLE_PORT` is RETIRED and no longer read; declare `port` in the
   `[server]` table of the server's own file instead.
@@ -490,7 +490,11 @@ provisioned server move in lockstep; on an already-current machine it reports
   set, and names what it filled: the `[manifest]` stage lists each filled file
   with its key and value under `filled`, and each file it left alone with the
   reason under `notFilled`. The port filled is the one the server boots on
-  today, never a probed one.
+  today, never a probed one. An install that leaves that file with no
+  `[client] url` (no server on this machine, or a fill it could not make)
+  names the file and the key under `boardUndeclared`, and its `help` says to
+  declare `[client] url = "http://<host>:<port>"` there, because a client with
+  no board declared refuses.
 - The `[fleet]` stage overwrites the stack-declaration schema at
   `<target-dir>/clients/crucible-declaration.schema.json`, and the `[manifest]`
   stage lists it in `crucible-clients.json` under the `declaration_schema` key
@@ -514,8 +518,9 @@ provisioned server move in lockstep; on an already-current machine it reports
   declares is refused, and so is a tier test whose name is also declared in a
   test file the untagged build compiles. `regression` runs the untagged tests
   and then every declared tier's tests. The `pre-merge-gate` runs each
-  declared tier as a suite with its own row, beside the `untagged` row, filed
-  under `regression`. `check --tests` also compiles each declared tier's test
+  declared tier as a suite with its own row, filed under that tier, beside the
+  `untagged` row (the whole run), filed under `regression`; `e2e` is listed
+  and excluded. `check --tests` also compiles each declared tier's test
   files under its tag. A module whose `go.mod` `go list` rejects has
   `regression` and the gate refused (`declaration-refused`), not run red, even
   in a project that declares no tier.
@@ -564,9 +569,11 @@ Facts worth knowing when it misbehaves:
   bearing: the published `crucible-server` bin is a shim that spawns `bun`
   itself, and a unit inherits no shell PATH. Without it the service dies
   `status=127` (`spawn bun ENOENT`) in a `Restart=on-failure` loop.
-- **Only the `CRUCIBLE_*` vars that were set at install time are forwarded**, so
-  change the port or store by re-running `crucible-axi install` with the new
-  values (it rewrites the unit only when the text actually changes).
+- **Only `CRUCIBLE_DB`, when it was set at install time, is forwarded.** Change
+  the store by re-running `crucible-axi install` with the new value (it
+  rewrites the unit only when the text actually changes). Change the port in
+  the `[server]` table of the server's own `crucible.toml` (see "The listener"
+  below), then `systemctl --user restart crucible-server`.
 - **`systemctl --user stop` is a clean stop**, not a failure: the server
   checkpoints active cycles on SIGTERM and exits, and the unit reports
   `Result=success`.
@@ -587,9 +594,9 @@ curl -fsSL https://raw.githubusercontent.com/anthill-tec/crucible/master/install
 
 A plain uninstall reverses **program artifacts only** — the user-scoped server
 package and its `crucible-server` symlink (`bun remove -g`, using the same
-absolute Bun the install resolved). Stage order is `server`, `config`, `store`:
-destructive last, so a failing step can never leave data gone and the program
-installed.
+absolute Bun the install resolved). Stage order is `unit`, `server`, `config`,
+`store`: the service first, destructive last, so a failing step can never leave
+data gone and the program installed.
 
 Kept by default, and named with their paths in the envelope:
 
@@ -610,7 +617,7 @@ The python suites under `tests/client/` drive the **real** installer: it writes
 files, and two of its stages would otherwise run `bun add -g` and
 `systemctl --user enable --now`. The suite that exercises the whole install-then-
 resolve path is
-`tests/client/test_an_installed_deployment_resolves_its_configuration.py`.
+`tests/client/integration/test_an_installed_deployment_resolves_its_configuration.py`.
 
 They are safe to run directly, and safer still under `bwrap` — the script below
 passes `--dev-bind / /`, `--tmpfs "$HOME"`, a read-only re-exposure of bun,
@@ -625,11 +632,15 @@ scripts/sandboxed-install-tests.sh              # the install-touching suites
 Run directly, each suite pins `$HOME`, `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME` and
 `$BUN_INSTALL` into a temporary root, stubs those two stages, and asserts
 afterwards that this machine's real `~/.crucible`, `~/.local/share/crucible` and
-`~/.config/systemd/user` did not move. That is what CI runs:
+`~/.config/systemd/user` did not move. This command runs both tiers:
 
 ```sh
 python3 -m unittest discover -s tests/client -t .
 ```
+
+CI runs the same two directories as separate steps, `tests/client/unit` then
+`tests/client/integration`, each with the repo's `.venv/bin/python` inside the
+hermetic wrapper (`scripts/hermetic/README.md`).
 
 Those two layers protect you from code that plays by the rules. A hardcoded
 path, an `expanduser` evaluated before the environment is patched, or a
@@ -643,13 +654,16 @@ scripts/sandboxed-install-tests.sh -k ''        # the whole directory
 ```
 
 **The bare command is narrow on purpose.** `--unshare-net` is part of the
-isolation, and several suites under `tests/client/` legitimately reach the
-network (`python -m build --wheel` resolves pypi.org; the uv, cargo and docker
-gates reach their own registries). Wrapping the whole directory therefore
-reports dozens of failures that say nothing about the code, so with no arguments
-the script targets the install-touching suites — which is what the sandbox
-exists for. `-k ''` widens to everything, and those network-dependent suites
-will fail when you do.
+isolation, but once `scripts/provision-test-caches.sh` has run, no suite needs
+the network: the suite's caches live under `.cache/test-suite/`, inside the
+checkout the sandbox keeps bound. What the sandbox takes away is your home:
+`--tmpfs "$HOME"` hides everything under it except bun's prefix, which is
+re-exposed read-only, and the script sets `PATH` to that bun and the system
+directories only. A toolchain kept under your home (rustup and cargo,
+arduino-cli's data, Playwright's browsers) is out of reach inside the sandbox,
+so with no arguments the script targets the install-touching suites — which is
+what the sandbox exists for. `-k ''` widens to everything, and the suites that
+drive a toolchain kept under your home can fail when you do.
 
 The script is the documented command; read it for the exact invocation. Each
 part of its isolation carries its own guarantee:
@@ -727,26 +741,36 @@ crucible-axi serve
 
 ### The board — `[client]`, in the project's own file
 
-Where the clients post is `[client] url`, read from a chain of three steps:
-the `crucible.toml` of the project directory they run in (beside the `.env`
-they already read), then the install's `crucible.toml`, then the shipped one.
-The first file that declares a non-empty `url` wins. A file with no `url` — no
-`[client]` table, a missing, empty or non-string `url`, or a file that does not
-parse — is passed over for the next, so a project file that declares only
-`[gate] skip` reaches the board its install names:
+Where the clients post is `[client] url`, read from a chain of two steps: the
+`crucible.toml` of the project directory they run in (beside the `.env` they
+already read), then the install's `crucible.toml`. The first file that declares
+a non-empty `url` wins. A file with no `url` — no `[client]` table, a missing,
+empty or non-string `url`, or a file that does not parse — is passed over for
+the next, so a project file that declares only `[gate] skip` reaches the board
+its install names. The installer writes the install's, naming the board it set
+up, for example:
 
 ```toml
 [client]
-url = "http://localhost:3849"
+url = "http://127.0.0.1:3850"
 ```
 
-That is the shipped default, the chain's last resort. The value is re-read at
-the point of use, so an edit takes effect on the next verb with nothing
-restarted and nothing exported — and a verb that resolves a board other than
-the machine's own names it as `context.board` in its own envelope: the board is
-named when it differs from the install's declared `url`, or from the shipped
-one when the install declares none. A run that landed somewhere unexpected is
-legible in the output of the command that sent it.
+When neither file declares one, a client refuses every verb that must reach
+the board: one `ok: false` envelope naming each file and why it was passed
+over, and nothing sent. A verb that sends nothing (`--help`, or a run that files
+nothing on the board) still runs. To fix it, re-run the
+installer, or declare `[client] url` in the project's own `crucible.toml`. An
+install with no local server must declare it. An upgraded install whose file
+never named a board has none until `crucible-axi install` is re-run: the re-run
+fills it from the local server's port, and the install output names the file
+under `boardUndeclared` whenever it leaves the file without one.
+
+The value is re-read at the point of use, so an edit takes effect on the next
+verb with nothing restarted and nothing exported — and a verb that resolves a
+board other than the machine's own names it as `context.board` in its own
+envelope: the board is named when it differs from the install's declared
+`url`, and always when the install declares none. A run that landed somewhere
+unexpected is legible in the output of the command that sent it.
 
 ### A development board beside a production one
 

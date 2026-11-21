@@ -49,8 +49,9 @@ from pathlib import Path
 
 from tests.client.live_run_harness import REPO_ROOT, new_scratch, scrubbed_env
 from tests.client.vitest_reporter_scratch import link_repo_node_modules
+from tests.client import CLIENT_SOURCE_DIR
 
-REPORTERS_DIR = REPO_ROOT / "clients" / "reporters"
+REPORTERS_DIR = CLIENT_SOURCE_DIR / "reporters"
 REPORTER_NAME = "playwright-crucible.ts"
 REPORTER = REPORTERS_DIR / REPORTER_NAME
 FIXTURE_REL = "tests/fixtures/playwright-bdd-project"

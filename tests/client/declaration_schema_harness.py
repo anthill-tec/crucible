@@ -31,7 +31,6 @@ An object field (`stream`) is open the way an entry is (`"open": true`): a
 subfield it does not list is kept, so the generated entries carry one.
 """
 
-import importlib.util
 import itertools
 import json
 import os
@@ -41,9 +40,9 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-from tests.client.live_run_harness import CLIENTS
+from tests.client import CLIENT_SOURCE_DIR, load_client
 
-SCHEMA_PATH = CLIENTS / "crucible-declaration.schema.json"
+SCHEMA_PATH = CLIENT_SOURCE_DIR / "crucible-declaration.schema.json"
 
 STACKS = ("bun", "rust", "arduino", "maven", "python", "go")
 TARGETS_READERS = ("rust", "arduino", "maven")
@@ -80,15 +79,10 @@ def load_schema(case) -> dict:
 
 
 def client(stack):
-    """The stack's client module, loaded once by file path."""
+    """The stack's client module, loaded once from the suite's test install."""
     if stack not in _LOADED:
-        path = CLIENTS / _CLIENT_FILES[stack]
-        spec = importlib.util.spec_from_file_location(
-            f"declaration_schema_{stack}_client", path)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        _LOADED[stack] = module
+        _LOADED[stack] = load_client(_CLIENT_FILES[stack],
+                                     f"declaration_schema_{stack}_client")
     return _LOADED[stack]
 
 
@@ -100,9 +94,26 @@ def declaration_refused(stack):
 # A temporary project dir
 # --------------------------------------------------------------------------- #
 def new_project(case):
+    """A temporary project dir, removed after the test. The shared cores'
+    bindings are restored to what they were before it, for every core: a
+    client function that resolves its project binds the core it shares
+    with every other test."""
     path = tempfile.mkdtemp(prefix="declaration-schema-")
     case.addCleanup(_remove_tree, path)
+    case.addCleanup(_restore_bindings, _bindings())
     return path
+
+
+def _bindings():
+    """Each loaded client's shared-core binding, by stack."""
+    return {stack: module._axi()._PROJECT_DIR for stack, module in _LOADED.items()}
+
+
+def _restore_bindings(found):
+    """Bind every loaded core back to what `found` holds for it; a core
+    loaded since started unbound."""
+    for stack, module in _LOADED.items():
+        module._axi().bind_project_dir(found.get(stack))
 
 
 def _remove_tree(path):

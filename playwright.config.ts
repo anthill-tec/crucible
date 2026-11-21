@@ -23,7 +23,7 @@
 // probe and the user-level fallback, so no cwd, HOME or XDG_DATA_HOME value
 // can route this suite at a real database. The scratch `cwd` is KEPT and the
 // scratch DB lives inside it, so rules 2 and 3 name the same file and agree
-// rather than diverge. `tests/e2e/teardown-contracts/crucible-db-isolation.test.ts`
+// rather than diverge. `tests/unit/crucible-db-isolation.test.ts`
 // feeds this config's real `webServer.env` through the real `resolveDbPath`
 // and asserts the result is neither the user-level nor the XDG path.
 import { defineConfig, devices, type ReporterDescription } from "@playwright/test";
@@ -71,7 +71,7 @@ import { webkitEngineAvailable } from "./tests/e2e/steps/webkit-docker-preflight
 // The webkit-iphone project is ENDPOINT-GATED (user-approved ruling): it
 // collects its feature only when a WebKit engine exists for this run, CI's
 // native install or the Docker endpoint (`webkitEngineAvailable`, the one
-// predicate tests/e2e-suite-reaches-the-board.test.ts shares). A plain
+// predicate tests/integration/e2e-suite-reaches-the-board.test.ts shares). A plain
 // local `bun run test:e2e` therefore runs Chromium only instead of failing
 // on an engine this host cannot launch.
 const webkitAvailable = webkitEngineAvailable({
@@ -254,7 +254,7 @@ export default defineConfig({
     // `chromium` main body nor the other mobile project ever double-runs a
     // scenario. Both `grepInvert: /@empty-db/` per the CR's own ordering
     // note: a project that swept up the F1 empty-db precondition a second
-    // time would both red tests/e2e-suite-dependency-graph.test.ts's "the
+    // time would both red tests/unit/e2e-suite-dependency-graph.test.ts's "the
     // ordering precondition runs exactly once" invariant AND seed the
     // "empty" database ahead of that second run. Both `dependencies` on
     // `chromium-empty-db` (never on `chromium`) for the same reason every
@@ -321,7 +321,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `bun run ${SERVER_ENTRY}`,
+    command: `bun run --no-env-file ${SERVER_ENTRY}`,
     cwd: SCRATCH_CWD,
     // CR-CRU-052 §S5 — Playwright spawns this command with
     // `{...process.env, ...env}` (verified in playwright/lib/plugins/

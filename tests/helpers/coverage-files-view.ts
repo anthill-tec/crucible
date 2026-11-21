@@ -15,7 +15,7 @@
 //    its meter is drawn at;
 //  - which reads of a run's files the page sent, as the shell asked for them.
 import { expect } from "bun:test";
-import type { ServerHandle } from "../../src/server.ts";
+import type { BoardHandle } from "../../src/server.ts";
 import {
   eventIdOf,
   eventRead,
@@ -25,25 +25,31 @@ import {
   type CoverageFile,
   type LcovRecord,
 } from "./coverage-files-harness.ts";
-import { bootOn, postJson, readyProject } from "./run-stream-harness.ts";
+import { bootInProcess, postJson, readyProject } from "./run-stream-harness.ts";
 import { mountServedApp, restoreRealFetch, servedFetchLog, settleServedApp } from "./served-app.ts";
 import { FakeEventSource, installEventSource, restoreEventSource } from "./stream-workspace-harness.ts";
 
 // ── The board ───────────────────────────────────────────────────────────────
 
-export interface Board {
-  handle: ServerHandle;
+/** A board with no socket, answered by its own `fetch` at
+ *  `http://board.invalid`, holding one project and its registered agent. */
+export interface InProcessBoard {
+  handle: BoardHandle;
   /** The one project's key. */
   key: string;
   /** The agent every run is filed by. */
   agentId: string;
 }
 
-const started: ServerHandle[] = [];
+/** The board every helper below drives. */
+export type AnyBoard = InProcessBoard;
 
-/** A board on port 0 and an in-memory store, holding one project and its registered agent. */
-export async function startBoard(name = "coverage-files-view"): Promise<Board> {
-  const handle = bootOn();
+const started: BoardHandle[] = [];
+
+/** An in-memory store with no socket, holding one project and its registered
+ *  agent; `closeBoards` stops it. */
+export async function startBoardInProcess(name = "coverage-files-view"): Promise<InProcessBoard> {
+  const handle = bootInProcess();
   started.push(handle);
   const agentId = "coverage-runner";
   const key = await readyProject(handle, [agentId], name);
@@ -68,7 +74,7 @@ async function laterThanTheLastRun(): Promise<void> {
 
 /** A green run of two tests, with the coverage block when one is given; answers its event id. */
 export async function greenRun(
-  board: Board,
+  board: AnyBoard,
   coverage?: unknown,
   extra: Record<string, unknown> = {},
 ): Promise<string> {
@@ -86,12 +92,12 @@ export async function greenRun(
 }
 
 /** A green run whose coverage report is an lcov text of `records`. */
-export function lcovRun(board: Board, records: readonly LcovRecord[], extra: Record<string, unknown> = {}): Promise<string> {
+export function lcovRun(board: AnyBoard, records: readonly LcovRecord[], extra: Record<string, unknown> = {}): Promise<string> {
   return greenRun(board, { codec: "lcov", data: lcovText(records) }, extra);
 }
 
 /** A run of one failing test, with the coverage block when one is given: the board keeps no coverage for it. */
-export async function failingRun(board: Board, coverage?: unknown): Promise<string> {
+export async function failingRun(board: AnyBoard, coverage?: unknown): Promise<string> {
   await laterThanTheLastRun();
   return eventIdOf(
     await postJson(board.handle, "/api/v2/runs", {
@@ -110,7 +116,7 @@ export interface Totals {
 }
 
 /** A green run filed already decoded, its coverage as totals alone: the board keeps no file for it. */
-export async function totalsOnlyRun(board: Board, coverage: Totals): Promise<string> {
+export async function totalsOnlyRun(board: AnyBoard, coverage: Totals): Promise<string> {
   await laterThanTheLastRun();
   return eventIdOf(
     await postJson(board.handle, "/api/v2/runs/parsed", {
@@ -153,7 +159,7 @@ export interface BoardFiles {
 }
 
 /** What the board itself answers for a run's files, read in full. */
-export async function boardFiles(board: Board, eventId: string): Promise<BoardFiles> {
+export async function boardFiles(board: AnyBoard, eventId: string): Promise<BoardFiles> {
   const event = await eventRead(board.handle, eventId, "?depth=coverage");
   return {
     count: event.coverageFileCount as number,
@@ -167,7 +173,7 @@ export async function boardFiles(board: Board, eventId: string): Promise<BoardFi
 const live: { source: FakeEventSource | null } = { source: null };
 
 /** Open the board's page at `pathname`, its stream open and its first reads answered. */
-export async function openPage(board: Board, pathname: string): Promise<void> {
+export async function openPage(board: AnyBoard, pathname: string): Promise<void> {
   live.source = null;
   installEventSource(
     class extends FakeEventSource {
@@ -184,17 +190,17 @@ export async function openPage(board: Board, pathname: string): Promise<void> {
 }
 
 /** An `events` frame arrives on the page's stream, and every read it sets off is answered. */
-export async function eventsFrameArrives(board: Board): Promise<void> {
+export async function eventsFrameArrives(board: AnyBoard): Promise<void> {
   if (live.source === null) throw new Error("coverage-files-view: the page opened no stream");
   live.source.dispatch("events", board.key);
   await settleServedApp();
 }
 
 /** The path of a run's own page inside the home pane. */
-export const homeRunPath = (_board: Board, eventId: string): string => `/run/${encodeURIComponent(eventId)}`;
+export const homeRunPath = (_board: AnyBoard, eventId: string): string => `/run/${encodeURIComponent(eventId)}`;
 
 /** The path of a run's own page inside its project's workspace. */
-export const workspaceRunPath = (board: Board, eventId: string): string =>
+export const workspaceRunPath = (board: AnyBoard, eventId: string): string =>
   `/p/${encodeURIComponent(board.key)}/run/${encodeURIComponent(eventId)}`;
 
 /** The two containers a run's own page is drawn in. */
@@ -204,7 +210,7 @@ export const RUN_PAGE_CONTAINERS = [
 ] as const;
 
 /** Open the project's workspace and select its Coverage tab. */
-export async function openCoverageTab(board: Board): Promise<void> {
+export async function openCoverageTab(board: AnyBoard): Promise<void> {
   await openPage(board, `/p/${encodeURIComponent(board.key)}`);
   await selectCoverageTab();
 }

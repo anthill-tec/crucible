@@ -27,7 +27,7 @@ SHARED — the classification tracks OBSERVABLE BEHAVIOUR, not prose.
 | **DRIFTED** 🚨 | 8 | see §4 — read this section first |
 
 27 + 1 + 6 + 8 = 42. Every name partitions into exactly one category (asserted by
-`tests/client/test_cr054_fleet_inventory.py`). `cmd_register` sits in DRIFTED, not
+`tests/client/unit/test_cr054_fleet_inventory.py`). `cmd_register` sits in DRIFTED, not
 PARAMETERISED — it has a real behavioral inconsistency (§4 finding #3), and the
 source-label question (§4 finding #5) is a second, related issue on the SAME function,
 not grounds for a second bucket.

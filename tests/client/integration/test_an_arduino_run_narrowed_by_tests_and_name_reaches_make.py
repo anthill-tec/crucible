@@ -1,0 +1,578 @@
+"""An arduino `test`/`unit` run narrowed by `--tests` and `--name` reaches
+`make`, and only those flags ever narrow a run.
+
+`arduino-crucible.py test` and `unit` take two narrowing flags:
+
+  * `--tests <stem> [<stem> ...]` — the test files to run, by stem, handed to
+    `make` as `TESTS="<stem> <stem>"`;
+  * `--name <names>` — comma-separated test-name fragments, handed to `make`
+    as `TEST_NAME`, which a Makefile passes to each Unity binary as `-f`.
+
+The client owns both variables: it sets them from its flags (with or without
+an own reports directory) and removes them from `make`'s environment on every
+other native run — `test`/`unit` without the flags, `regression`, the
+pre-merge gate and a declared tier verb — so a variable exported in the shell
+never narrows a run.
+
+Ill-formed narrowing input is the typed `narrowing-refused` hard stop, decided
+before anything reaches the board (no registration heartbeat, no run start,
+no ingest) and ahead of the unattributed-run refusal: one `ok:false` envelope
+with `error` and `help[]`, a non-zero exit, `make` never run. A bare `--tests`
+is argparse's own usage error (exit 2), as on bun.
+
+A narrowed run whose reports hold zero cases is the ran-nothing failure even
+when `make` exits 0 (Unity with a `-f` that matches nothing does): the open
+run is aborted, nothing is filed, the exit is non-zero. An unnarrowed
+zero-case run that exits 0 is filed as before.
+
+Every case drives the real `clients/arduino-crucible.py` as a subprocess over
+a scratch firmware project whose `tests/native/Makefile` runs a small python
+stand-in for the Unity binaries. The stand-in reads a fixed catalogue of
+cases, honours `TESTS` and `TEST_NAME` the way the documented contract asks
+(stems from `TESTS`; Unity's name-or-file contains-match for `TEST_NAME`),
+appends what it saw — whether each variable was present, and the value the
+test itself set — to a record file, and writes one combined JUnit report
+whose cases carry the file stem as `classname` and the test function as
+`name` (Unity's stylizer shape). The board is steered only by the scratch
+project's own `crucible.toml`: a recording stand-in where the run filed is read
+off its request log (as the board's junit codec reads it) and the requests are
+counted, and a stand-in that reports an active cycle for the refusals. How the
+board stores a junit run it decodes is held in bun by
+`tests/integration/v2-runs-events.test.ts`.
+
+Invocation:
+    python3 -m unittest tests.client.integration.test_an_arduino_run_narrowed_by_tests_and_name_reaches_make -v
+"""
+
+import http.server
+import json
+import re
+import threading
+import unittest
+
+from tests.client.live_run_harness import (
+    INGEST_PATHS,
+    START,
+    RecordingBoard,
+    install_project,
+    junit_sent,
+)
+from tests.client.an_arduino_run_narrowed_by_tests_and_name_reaches_make_helpers import (
+    CATALOGUE,
+    _diagnostics,
+    _envelope,
+    _NarrowingProject,
+    RUNS_INGEST,
+    sent_case_count,
+)
+
+
+REFUSED_CODE = "narrowing-refused"
+UNATTRIBUTED_CODE = "unattributed-run-refused"
+RAN_NOTHING_CODE = "no-test-reports"
+STEM_HINT = "give a stem, not a path or file name"
+NAME_HINT = "--name takes comma-separated test-name fragments"
+
+
+#: `--tests test_a test_b`: every case of those two files, and no other.
+ONLY_A_AND_B = {"test_a": ["test_init", "test_stall_detected"],
+                "test_b": ["test_limit_clamped", "test_reset"]}
+#: `--name stall,limit`: the cases whose name or file contains either element.
+ONLY_STALL_OR_LIMIT = {"test_a": ["test_stall_detected"],
+                       "test_b": ["test_limit_clamped"],
+                       "test_c": ["test_stall_recovery"]}
+
+
+def _envelope_count(stdout):
+    return len(re.findall(r"(?m)^axi:", stdout or ""))
+
+
+class ActiveCycleBoard:
+    """A loopback stand-in board that records EVERY request (GET and POST)
+    and answers that the project has one active cycle while the agent asking
+    is bound to none — the board state that makes an unbound run with no
+    `--cycle` the unattributed-run refusal."""
+
+    ACTIVE_CYCLE_ID = 4242
+
+    def __init__(self):
+        self.requests = []
+        self._lock = threading.Lock()
+        board = self
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+
+            def _reply(self, payload):
+                encoded = json.dumps(payload).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def do_GET(self):
+                with board._lock:
+                    board.requests.append(("GET", self.path))
+                if "/plans" in self.path:
+                    self._reply({"ok": True, "plans": [{
+                        "id": 1, "status": "open",
+                        "cycles": [{"id": board.ACTIVE_CYCLE_ID,
+                                    "status": "active"}]}]})
+                elif "/agents" in self.path:
+                    self._reply({"ok": True, "agents": []})
+                else:
+                    self._reply({"ok": True})
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+                with board._lock:
+                    board.requests.append(("POST", self.path))
+                if self.path == START:
+                    self._reply({"ok": True, "changed": True,
+                                 "runId": "run-active-cycle-1"})
+                else:
+                    self._reply({"ok": True, "changed": True})
+
+            def do_PATCH(self):
+                self.do_POST()
+
+            def log_message(self, format, *args):
+                pass
+
+        self._httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        self.url = f"http://127.0.0.1:{self._httpd.server_address[1]}"
+        self._thread = threading.Thread(target=self._httpd.serve_forever,
+                                        daemon=True)
+        self._thread.start()
+
+    def seen(self):
+        with self._lock:
+            return list(self.requests)
+
+    def close(self):
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        self._thread.join(timeout=5)
+
+
+def _tree_cases(tree):
+    """`{suite name: sorted case names}` of a filed tree."""
+    return {suite.get("name"): sorted(c.get("name") for c in
+                                      (suite.get("children") or []))
+            for suite in (tree or [])}
+
+
+# ── the flags reach `make`, and the run filed holds only their cases ───────
+
+class _NarrowedRunFiled(_NarrowingProject):
+    """`--tests` and `--name` reach `make` and narrow the run the client
+    files, read as the board's junit codec reads it; without an own reports
+    directory they reach `make` all the same."""
+
+    def setUp(self):
+        self.make_project()
+
+    def drive_filed(self, *extra, agent, passed):
+        """Drive a filed run, the board answering its ingest as the server
+        answers a run of `passed` passing cases."""
+        board = RecordingBoard()
+        self.addCleanup(board.close)  # type: ignore[attr-defined]
+        board.script_run(passed=passed)
+        install_project(self.project, board.url, "arduino-narrowed-run",
+                        "arduino-narrowed-run")
+        return board, self.drive(self.VERB, *extra, agent=agent)
+
+    def the_one_stored_run(self, board, agent, result):
+        """The one run the client filed for `agent`, read as the board's
+        junit codec decodes it (`{summary, tree}`)."""
+        bodies = [b for p, b in board.posts() if p == RUNS_INGEST
+                  and isinstance(b, dict) and b.get("agentId") == agent]
+        self.assertEqual(  # type: ignore[attr-defined]
+            len(bodies), 1,
+            f"exactly one test run is filed for this agent; "
+            f"posts={[p for p, _ in board.posts()]!r} {_diagnostics(result)}")
+        return (junit_sent(bodies[0]) or {}) if bodies else {}
+
+    def drive_without_own_reports(self, *extra):
+        board = RecordingBoard()
+        self.addCleanup(board.close)  # type: ignore[attr-defined]
+        install_project(self.project, board.url, "arduino-narrowed-no-own-dir")
+        result = self.drive(self.VERB, *extra)
+        return board, result
+
+    def test_tests_flag_reaches_make_and_the_filed_run_holds_only_those_files(self):
+        agent = f"ard-narrow-{self.VERB}-tests-filed"
+        board, result = self.drive_filed("--tests", "test_a", "test_b",
+                                         agent=agent, passed=4)
+        record = self.the_one_make_run(result)
+        self.assertEqual(  # type: ignore[attr-defined]
+            (record.get("tests"), record.get("test_name_present")),
+            ("test_a test_b", False),
+            f"`--tests test_a test_b` runs `make` with TESTS=\"test_a test_b\" "
+            f"and no TEST_NAME; recorded={record!r} {_diagnostics(result)}")
+        self.assertEqual(result.returncode, 0,  # type: ignore[attr-defined]
+                         _diagnostics(result))
+        event = self.the_one_stored_run(board, agent, result)
+        self.assertEqual(  # type: ignore[attr-defined]
+            _tree_cases(event.get("tree")), ONLY_A_AND_B,
+            f"the run filed holds only test_a's and test_b's cases; "
+            f"tree={event.get('tree')!r}")
+        summary = event.get("summary") or {}
+        self.assertEqual(  # type: ignore[attr-defined]
+            (summary.get("total"), summary.get("passed"), summary.get("failed")),
+            (4, 4, 0), f"filed summary={summary!r}")
+
+    def test_name_flag_reaches_make_and_the_filed_run_holds_only_matching_cases(self):
+        agent = f"ard-narrow-{self.VERB}-name-filed"
+        board, result = self.drive_filed("--name", "stall,limit", agent=agent,
+                                         passed=3)
+        record = self.the_one_make_run(result)
+        self.assertEqual(  # type: ignore[attr-defined]
+            (record.get("test_name"), record.get("tests_present")),
+            ("stall,limit", False),
+            f"`--name stall,limit` runs `make` with TEST_NAME=\"stall,limit\" "
+            f"and no TESTS; recorded={record!r} {_diagnostics(result)}")
+        self.assertEqual(result.returncode, 0,  # type: ignore[attr-defined]
+                         _diagnostics(result))
+        event = self.the_one_stored_run(board, agent, result)
+        self.assertEqual(  # type: ignore[attr-defined]
+            _tree_cases(event.get("tree")), ONLY_STALL_OR_LIMIT,
+            f"the run filed holds only the cases whose name or file contains "
+            f"`stall` or `limit`; tree={event.get('tree')!r}")
+        summary = event.get("summary") or {}
+        self.assertEqual(  # type: ignore[attr-defined]
+            (summary.get("total"), summary.get("passed"), summary.get("failed")),
+            (3, 3, 0), f"filed summary={summary!r}")
+
+    def test_tests_flag_reaches_make_without_an_own_reports_directory(self):
+        board, result = self.drive_without_own_reports("--tests", "test_a", "test_b")
+        record = self.the_one_make_run(result)
+        self.assertEqual(  # type: ignore[attr-defined]
+            (record.get("tests"), record.get("test_name_present")),
+            ("test_a test_b", False),
+            f"with no --agent and no --reports, `--tests test_a test_b` still "
+            f"runs `make` with TESTS=\"test_a test_b\"; recorded={record!r} "
+            f"{_diagnostics(result)}")
+        self.assertEqual(result.returncode, 0,  # type: ignore[attr-defined]
+                         _diagnostics(result))
+        self.assertIn(  # type: ignore[attr-defined]
+            "ran 4 testcases (4 not skipped); runner exit 0", result.stderr,
+            f"the run's own line counts only test_a's and test_b's four "
+            f"cases; {_diagnostics(result)}")
+        self.assertEqual(  # type: ignore[attr-defined]
+            [p for p, _ in board.posts() if p in INGEST_PATHS], [],
+            "a run without --agent files nothing")
+
+    def test_name_flag_reaches_make_without_an_own_reports_directory(self):
+        board, result = self.drive_without_own_reports("--name", "stall,limit")
+        record = self.the_one_make_run(result)
+        self.assertEqual(  # type: ignore[attr-defined]
+            (record.get("test_name"), record.get("tests_present")),
+            ("stall,limit", False),
+            f"with no --agent and no --reports, `--name stall,limit` still runs "
+            f"`make` with TEST_NAME=\"stall,limit\"; recorded={record!r} "
+            f"{_diagnostics(result)}")
+        self.assertEqual(result.returncode, 0,  # type: ignore[attr-defined]
+                         _diagnostics(result))
+        self.assertIn(  # type: ignore[attr-defined]
+            "ran 3 testcases (3 not skipped); runner exit 0", result.stderr,
+            f"the run's own line counts only the three matching cases; "
+            f"{_diagnostics(result)}")
+        self.assertEqual(  # type: ignore[attr-defined]
+            [p for p, _ in board.posts() if p in INGEST_PATHS], [],
+            "a run without --agent files nothing")
+
+
+class TestVerbNarrowedRunFiledTest(_NarrowedRunFiled, unittest.TestCase):
+    VERB = "test"
+
+
+class UnitVerbNarrowedRunFiledTest(_NarrowedRunFiled, unittest.TestCase):
+    VERB = "unit"
+
+
+# ── ill-formed narrowing input is refused before anything reaches the board ─
+
+class _NarrowingRefused(_NarrowingProject):
+    """Each ill-formed input is the typed `narrowing-refused` hard stop. Every
+    case runs with `--agent` and no `--cycle` against a board reporting an
+    active cycle, so a check placed after the board is consulted would surface
+    as a request, or as the unattributed-run refusal instead."""
+
+    def setUp(self):
+        self.make_project()
+        self.board = ActiveCycleBoard()
+        self.addCleanup(self.board.close)  # type: ignore[attr-defined]
+        install_project(self.project, self.board.url, "arduino-narrowing-refused")
+
+    def refused(self, case, *narrowing, hint):
+        agent = f"ard-refuse-{self.VERB}-{case}"
+        result = self.drive(self.VERB, *narrowing, agent=agent)
+        envelope = _envelope(result.stdout)
+        self.assertIsNotNone(  # type: ignore[attr-defined]
+            envelope,
+            f"{narrowing!r} is the typed {REFUSED_CODE} hard stop, which "
+            f"prints an envelope — not argparse's usage error; "
+            f"{_diagnostics(result)}")
+        envelope = envelope or {}
+        self.assertEqual(  # type: ignore[attr-defined]
+            _envelope_count(result.stdout), 1,
+            f"exactly one envelope; {_diagnostics(result)}")
+        self.assertEqual(  # type: ignore[attr-defined]
+            (envelope.get("verb"), envelope.get("ok")), (self.VERB, False),
+            f"an ok:false {self.VERB} envelope; envelope={envelope!r}")
+        self.assertIn(REFUSED_CODE, result.stderr,  # type: ignore[attr-defined]
+                      f"the refusal names its code; {_diagnostics(result)}")
+        self.assertNotIn(UNATTRIBUTED_CODE, result.stderr,  # type: ignore[attr-defined]
+                         f"the narrowing refusal comes before the unattributed-"
+                         f"run refusal; {_diagnostics(result)}")
+        error = envelope.get("error")
+        self.assertIsInstance(error, str,  # type: ignore[attr-defined]
+                              f"the refusal states an error; envelope={envelope!r}")
+        self.assertTrue((error or "").strip(),  # type: ignore[attr-defined]
+                        f"envelope={envelope!r}")
+        help_steps = envelope.get("help")
+        self.assertIsInstance(help_steps, list,  # type: ignore[attr-defined]
+                              f"the refusal states help[]; envelope={envelope!r}")
+        help_text = " ".join(str(h) for h in (help_steps or [])).replace("`", "")
+        self.assertIn(hint, help_text.lower(),  # type: ignore[attr-defined]
+                      f"help[] names the fix; help={help_steps!r}")
+        self.assertNotEqual(result.returncode, 0,  # type: ignore[attr-defined]
+                            f"a refusal exits non-zero; {_diagnostics(result)}")
+        self.assertEqual(  # type: ignore[attr-defined]
+            self.board.seen(), [],
+            f"refused before anything reaches the board — no registration "
+            f"heartbeat, no run start, no ingest; {_diagnostics(result)}")
+        self.assertEqual(  # type: ignore[attr-defined]
+            self.make_runs(), [], f"`make` never runs; {_diagnostics(result)}")
+
+    def test_a_stem_with_a_path_is_refused(self):
+        self.refused("path-stem", "--tests", "src/test_a", hint=STEM_HINT)
+
+    def test_a_stem_with_an_extension_is_refused(self):
+        self.refused("extension-stem", "--tests", "test_a.c", hint=STEM_HINT)
+
+    def test_a_stem_outside_the_stem_characters_is_refused(self):
+        self.refused("bad-char-stem", "--tests", "bad stem!", hint=STEM_HINT)
+
+    def test_an_empty_name_is_refused(self):
+        self.refused("empty-name", "--name", "", hint=NAME_HINT)
+
+    def test_a_name_with_an_empty_element_is_refused(self):
+        self.refused("empty-element", "--name", "stall,,limit", hint=NAME_HINT)
+
+    def test_a_name_element_with_a_colon_is_refused(self):
+        self.refused("colon-element", "--name", "a:b", hint=NAME_HINT)
+
+    def test_a_name_element_with_a_space_is_refused(self):
+        self.refused("space-element", "--name", "a b", hint=NAME_HINT)
+
+    def test_a_bare_tests_flag_is_argparses_usage_error(self):
+        result = self.drive(self.VERB, "--tests",
+                            agent=f"ard-refuse-{self.VERB}-bare-tests")
+        self.assertEqual(result.returncode, 2,  # type: ignore[attr-defined]
+                         f"a bare --tests is argparse's usage error; "
+                         f"{_diagnostics(result)}")
+        self.assertIn(  # type: ignore[attr-defined]
+            "argument --tests: expected at least one argument", result.stderr,
+            f"argparse rejects --tests for its missing value, as bun does — "
+            f"not as an unknown flag; {_diagnostics(result)}")
+        self.assertEqual(self.board.seen(), [],  # type: ignore[attr-defined]
+                         f"nothing reaches the board; {_diagnostics(result)}")
+        self.assertEqual(self.make_runs(), [],  # type: ignore[attr-defined]
+                         f"`make` never runs; {_diagnostics(result)}")
+
+    def test_guard_an_unnarrowed_run_on_this_board_is_the_unattributed_refusal(self):
+        """GUARD — the stand-in's active cycle is what makes the refusal
+        ordering observable: an unnarrowed run with no `--cycle` against it is
+        the unattributed-run refusal, and `make` never runs."""
+        result = self.drive(self.VERB, agent=f"ard-refuse-{self.VERB}-guard")
+        self.assertIn(UNATTRIBUTED_CODE, result.stderr,  # type: ignore[attr-defined]
+                      f"an unbound run with no --cycle while cycle "
+                      f"{ActiveCycleBoard.ACTIVE_CYCLE_ID} is active is "
+                      f"refused; {_diagnostics(result)}")
+        self.assertNotEqual(result.returncode, 0,  # type: ignore[attr-defined]
+                            _diagnostics(result))
+        self.assertEqual(self.make_runs(), [],  # type: ignore[attr-defined]
+                         _diagnostics(result))
+
+
+class TestVerbNarrowingRefusedTest(_NarrowingRefused, unittest.TestCase):
+    VERB = "test"
+
+
+class UnitVerbNarrowingRefusedTest(_NarrowingRefused, unittest.TestCase):
+    VERB = "unit"
+
+
+# ── a narrowed run that ran nothing fails ───────────────────────────────────
+
+class _NarrowedRunThatRanNothing(_NarrowingProject):
+    """A narrowed run whose Makefile exits 0 over a zero-case report is the
+    ran-nothing failure; an unnarrowed one is filed as before."""
+
+    def setUp(self):
+        self.board = RecordingBoard()
+        self.addCleanup(self.board.close)  # type: ignore[attr-defined]
+
+    def install(self):
+        install_project(self.project, self.board.url, "arduino-narrowed-ran-nothing")
+
+    def test_a_narrowed_run_that_matches_nothing_fails_and_files_nothing(self):
+        self.make_project()
+        self.install()
+        result = self.drive(self.VERB, "--name", "nomatch",
+                            agent=f"ard-ran-nothing-{self.VERB}-narrowed")
+        record = self.the_one_make_run(result)
+        self.assertEqual(  # type: ignore[attr-defined]
+            record.get("test_name"), "nomatch",
+            f"`make` ran narrowed by TEST_NAME=\"nomatch\"; recorded={record!r} "
+            f"{_diagnostics(result)}")
+        envelope = self.envelope_of(result)
+        self.assertEqual(  # type: ignore[attr-defined]
+            (envelope.get("verb"), envelope.get("ok")), (self.VERB, False),
+            f"a narrowed run that ran nothing is ok:false even though `make` "
+            f"exited 0; envelope={envelope!r}")
+        ran_nothing = [w for w in (envelope.get("warnings") or [])
+                       if isinstance(w, dict) and w.get("code") == RAN_NOTHING_CODE]
+        self.assertEqual(  # type: ignore[attr-defined]
+            len(ran_nothing), 1,
+            f"exactly one {RAN_NOTHING_CODE} (ran-nothing) warning; "
+            f"warnings={envelope.get('warnings')!r}")
+        posts = self.board.posts()
+        self.assertEqual(  # type: ignore[attr-defined]
+            [p for p, _ in posts if p in INGEST_PATHS], [],
+            f"nothing is filed; posts={[p for p, _ in posts]!r}")
+        starts = [p for p, _ in posts if p == START]
+        self.assertEqual(  # type: ignore[attr-defined]
+            (len(starts), len(self.board.aborts())), (1, 1),
+            f"the one run opened before `make` is aborted; "
+            f"posts={[p for p, _ in posts]!r}")
+        self.assertNotEqual(result.returncode, 0,  # type: ignore[attr-defined]
+                            f"a narrowed run that ran nothing exits non-zero; "
+                            f"{_diagnostics(result)}")
+
+    def test_guard_an_unnarrowed_zero_case_run_that_exits_0_is_filed_as_before(self):
+        """GUARD — no narrowing flag: a zero-case report from a `make` that
+        exited 0 is filed, and the verb exits 0."""
+        self.make_project(catalogue=())
+        self.install()
+        result = self.drive(self.VERB, agent=f"ard-ran-nothing-{self.VERB}-guard")
+        self.assertEqual(result.returncode, 0, _diagnostics(result))  # type: ignore[attr-defined]
+        envelope = self.envelope_of(result)
+        self.assertIs(envelope.get("ok"), True,  # type: ignore[attr-defined]
+                      f"envelope={envelope!r}")
+        ingests = [b for p, b in self.board.posts() if p == RUNS_INGEST]
+        self.assertEqual(len(ingests), 1,  # type: ignore[attr-defined]
+                         f"exactly one ingest; {_diagnostics(result)}")
+        self.assertEqual(sent_case_count(ingests[0] if ingests else {}), 0,  # type: ignore[attr-defined]
+                         f"the zero-case run is filed as it ran; {_diagnostics(result)}")
+        self.assertEqual(self.board.aborts(), [],  # type: ignore[attr-defined]
+                         "a filed run is never aborted")
+
+
+class TestVerbNarrowedRunThatRanNothingTest(_NarrowedRunThatRanNothing,
+                                            unittest.TestCase):
+    VERB = "test"
+
+
+class UnitVerbNarrowedRunThatRanNothingTest(_NarrowedRunThatRanNothing,
+                                            unittest.TestCase):
+    VERB = "unit"
+
+
+# ── a TESTS / TEST_NAME exported in the shell never reaches `make` ──────────
+
+class AShellNarrowingVariableNeverReachesMakeTest(_NarrowingProject,
+                                                  unittest.TestCase):
+    """With TESTS and TEST_NAME set in the client's own environment, every
+    native run without the flags runs `make` with neither — and so runs the
+    whole catalogue. A run given one flag runs `make` with that flag's
+    variable only: the other one, exported in the shell, never comes along."""
+
+    #: The narrowing the shell exports, as (variable, value) pairs.
+    SHELL_NARROWING = (("TESTS", "test_c"), ("TEST_NAME", "speed"))
+
+    def setUp(self):
+        self.board = RecordingBoard()
+        self.addCleanup(self.board.close)
+
+    def assert_unnarrowed(self, verb, *extra, declare_integration=False):
+        self.VERB = verb
+        self.make_project(declare_integration=declare_integration)
+        install_project(self.project, self.board.url, "arduino-shell-narrowing")
+        result = self.drive(verb, *extra, agent=f"ard-shell-{verb}",
+                            client_env=dict(self.SHELL_NARROWING))
+        record = self.the_one_make_run(result)
+        self.assert_saw_neither(record, result)
+        ingests = [b for p, b in self.board.posts() if p == RUNS_INGEST]
+        self.assertEqual(len(ingests), 1,
+                         f"exactly one ingest; {_diagnostics(result)}")
+        self.assertEqual(sent_case_count(ingests[0] if ingests else {}), len(CATALOGUE),
+                         f"the run covers the whole catalogue; {_diagnostics(result)}")
+        return record
+
+    def test_test_without_the_flags_runs_make_with_neither_variable(self):
+        self.assert_unnarrowed("test")
+
+    def test_unit_without_the_flags_runs_make_with_neither_variable(self):
+        self.assert_unnarrowed("unit")
+
+    def test_regression_runs_make_with_neither_variable(self):
+        self.assert_unnarrowed("regression")
+
+    def test_pre_merge_gate_runs_make_with_neither_variable(self):
+        self.assert_unnarrowed("pre-merge-gate", "--skip-check")
+
+    def test_a_declared_tier_verb_runs_make_with_neither_variable(self):
+        record = self.assert_unnarrowed("integration", declare_integration=True)
+        self.assertEqual(record.get("target"), "junit-integration",
+                         f"the declared tier verb ran its own target; "
+                         f"recorded={record!r}")
+
+    def make_run_with_one_flag(self, verb, *flag):
+        """Run `verb` with one narrowing flag while the shell exports both
+        variables, and return the one `make` run the stand-in recorded."""
+        self.VERB = verb
+        self.make_project()
+        install_project(self.project, self.board.url, "arduino-shell-narrowing")
+        result = self.drive(verb, *flag, agent=f"ard-shell-one-flag-{verb}",
+                            client_env=dict(self.SHELL_NARROWING))
+        return self.the_one_make_run(result), result
+
+    def assert_name_flag_keeps_the_shell_tests_out(self, verb):
+        record, result = self.make_run_with_one_flag(verb, "--name", "stall")
+        self.assertEqual(
+            (record.get("tests_present"), record.get("test_name")),
+            (False, "stall"),
+            f"`{verb} --name stall` runs `make` with TEST_NAME from the flag "
+            f"and no TESTS, though the shell exports TESTS; "
+            f"recorded={record!r} {_diagnostics(result)}")
+
+    def assert_tests_flag_keeps_the_shell_test_name_out(self, verb):
+        record, result = self.make_run_with_one_flag(verb, "--tests", "test_a")
+        self.assertEqual(
+            (record.get("test_name_present"), record.get("tests")),
+            (False, "test_a"),
+            f"`{verb} --tests test_a` runs `make` with TESTS from the flag "
+            f"and no TEST_NAME, though the shell exports TEST_NAME; "
+            f"recorded={record!r} {_diagnostics(result)}")
+
+    def test_test_with_the_name_flag_runs_make_without_the_shell_tests(self):
+        self.assert_name_flag_keeps_the_shell_tests_out("test")
+
+    def test_unit_with_the_name_flag_runs_make_without_the_shell_tests(self):
+        self.assert_name_flag_keeps_the_shell_tests_out("unit")
+
+    def test_test_with_the_tests_flag_runs_make_without_the_shell_test_name(self):
+        self.assert_tests_flag_keeps_the_shell_test_name_out("test")
+
+    def test_unit_with_the_tests_flag_runs_make_without_the_shell_test_name(self):
+        self.assert_tests_flag_keeps_the_shell_test_name_out("unit")
+
+
+if __name__ == "__main__":
+    unittest.main()

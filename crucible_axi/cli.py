@@ -173,6 +173,7 @@ def cmd_install(args) -> int:
     # when an upgrade re-exec'd the live service (CR-CRU-071 AC9), which drops
     # every SSE subscriber and so is never left to be inferred.
     stage_fields = []
+    help_lines: list[str] = []
     for stage in stages:
         fields = {"name": stage["name"], "path": stage["path"]}
         if stage.get("bun"):
@@ -207,10 +208,21 @@ def cmd_install(args) -> int:
                     {**entry,
                      "path": install.abbreviate_home(str(entry["path"]))}
                     for entry in stage[field]]
+        # The install file left declaring no board: the row names it and
+        # the key, and the help says how to declare one, because a client
+        # with no board declared refuses.
+        board_undeclared = stage.get("boardUndeclared")
+        if board_undeclared:
+            shown = install.abbreviate_home(str(board_undeclared["path"]))
+            fields["boardUndeclared"] = {**board_undeclared, "path": shown}
+            help_lines.append(
+                f"declare {board_undeclared['key']} = "
+                f"\"http://<host>:<port>\" in {shown}, or re-install on a "
+                f"machine with a server")
         stage_fields.append(fields)
     result_fields = {
         "stages": stage_fields,
-        "help": ["status"],
+        "help": ["status", *help_lines],
     }
     axi.emit_axi(
         verb="install",

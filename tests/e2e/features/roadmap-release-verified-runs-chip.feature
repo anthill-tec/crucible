@@ -6,7 +6,7 @@ Feature: CR-CRU-164 §S2/AC4 — the roadmap release band's verified-runs chip a
 
   Measured against this branch: no "verified" text and no by-release events
   fetch exist anywhere in `public/app.js` (also confirmed by the happy-dom
-  half, `tests/roadmap-release-verified-runs-chip.test.ts`) — this scenario
+  half, `tests/integration/roadmap-release-verified-runs-chip.test.ts`) — this scenario
   is expected to FAIL at every `Then` step below.
 
   Scenario: at a 1280x800 desktop viewport the verified-runs chip renders in the release band and clicking it opens the Runs tab filtered to that release

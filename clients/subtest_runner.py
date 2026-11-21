@@ -85,8 +85,8 @@ def _restore_module_search_path() -> None:
     ``sys.path``; ``-m`` puts the working directory there instead, which is
     what a dotted test target and a project-local import rely on. Under
     ``PYTHONSAFEPATH`` neither is added, so nothing is replaced."""
-    own_dir = os.path.dirname(os.path.abspath(__file__))
-    if sys.path and os.path.abspath(sys.path[0] or os.curdir) == own_dir:
+    own_dir = os.path.dirname(os.path.realpath(__file__))
+    if sys.path and os.path.realpath(sys.path[0] or os.curdir) == own_dir:
         sys.path[0] = os.getcwd()
 
 

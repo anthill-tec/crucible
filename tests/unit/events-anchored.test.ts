@@ -1,0 +1,477 @@
+// CR-CRU-032 §S1 — anchored events query: GET /api/v2/events?project=<k>&cycleId=<id>
+// returns ONE cycle's linked runs + its declared "Cycle done" boundary, without
+// pulling all project history. Additive, and it answers JSON like every
+// sibling v2 GET — the TOON negotiation this route originally carried was
+// retired by CR-CRU-132 §S1 (see the superseded-claim note below); the
+// existing `?limit=N` recent-feed behavior (no cycleId) is byte-unchanged.
+// Unknown cycleId -> empty set (never a 4xx).
+//
+// RED phase: `handleEventsList` (src/v2.ts) has NO cycleId
+// awareness at all today — it only reads `project`/`limit`. Every assertion
+// below that expects cycleId-scoped filtering or the boundary payload will
+// fail against current production (either the extra runs/other-cycle noise
+// will still be present, or the boundary field will be `undefined`).
+//
+// Query param naming: the CR prose's Scope section uses "e.g. projectKey=<k>"
+// as an illustrative example only; its Acceptance Criteria bullet for §S1
+// does NOT pin the project param's name, and explicitly requires this route
+// stay "TOON-negotiable like sibling v2 GET routes" — EVERY existing v2 GET
+// route (handleEventsList itself, the activity feed, etc., see
+// tests/unit/axi-negotiation.test.ts, tests/unit/ingest-cycle-validation.test.ts,
+// tests/integration/v2-brief-reshape.test.ts) scopes by `?project=<key>`, never
+// `?projectKey=`. This file uses `project=<key>` to match that sibling
+// convention rather than inventing a new, inconsistent param name.
+// ESCALATION: the C1 dispatch prompt's illustrative examples said
+// `projectKey=<k>`; flagging the substitution to `project=<key>` here since
+// it is what every sibling v2 GET route (and the CR's own "like sibling v2
+// GET routes" requirement) actually uses — confirm with GREEN before wiring.
+//
+// Boundary-row shape: neither the CR doc nor the dispatch pins the exact
+// wire shape of "its declared `Cycle done` boundary row". Client-side
+// (public/app-logic.mjs `timelineRows`), a declared marker is NEVER a raw
+// event — it is derived purely by crossing a linked RunEvent against
+// separately-fetched PlanCycle data (`{cycle, plan}` from
+// GET /projects/:key/plans). There is no precedent anywhere in store.ts for
+// a synthesized "boundary" RunEvent. Given the route must be self-sufficient
+// (return the boundary WITHOUT a second /plans round trip) this file pins
+// the boundary as an ADDITIVE top-level `cycle` field (sibling to `events`,
+// not smuggled into the `events` array as a fake RunEvent) shaped exactly
+// like the PlanCycle objects `Store#toPlan`/`editCycleLabel` already return
+// to clients: `{ id, label, kind, status, activatedAt?, doneAt? }`. This is
+// the RED agent's best-grounded interpretation of an underspecified AC —
+// ESCALATION: confirm this shape (or swap for whatever GREEN actually
+// implements) before merge; the important, unambiguous behavior this file
+// locks down is that SOME distinguishable boundary descriptor for the
+// requested cycle is present, resolved via `Store#findCycle` (CR-024 §S7),
+// and that it is ABSENT for an unknown cycleId.
+import { describe, test, expect, afterEach } from "bun:test";
+import type { BoardHandle } from "../../src/server.ts";
+import type { RunSummary, SuiteNode } from "../../src/types.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
+
+interface PlanCyclePayload {
+  id: number;
+  label: string;
+  kind: string;
+  status: string;
+}
+
+interface PlanFileResponse {
+  planId: number | string;
+  cr: string;
+  status: string;
+  cycles: PlanCyclePayload[];
+  [key: string]: unknown;
+}
+
+interface EventBrief {
+  id: string;
+  projectKey: string;
+  timestamp: number;
+  context?: { cycleId?: number; cycle?: string };
+  [key: string]: unknown;
+}
+
+interface AnchoredEventsResponse {
+  ok: true;
+  events: EventBrief[];
+  cycle?: {
+    id: number;
+    label: string;
+    kind: string;
+    status: string;
+    activatedAt?: number;
+    doneAt?: number;
+  };
+  [key: string]: unknown;
+}
+
+let servers: BoardHandle[] = [];
+
+function boot(): BoardHandle {
+  const handle = bootInProcess();
+  servers.push(handle);
+  return handle;
+}
+
+afterEach(() => {
+  for (const handle of servers) {
+    handle.stop();
+  }
+  servers = [];
+});
+
+// CR-CRU-056 §S2b fixture-repair (C3): mutating v2 workflow verbs
+// (plan-file, cycle transitions) now refuse an unregistered caller (409) —
+// merge a live-registered agentId into any JSON body lacking one.
+function withFixtureAgent(body: unknown): unknown {
+  if (body !== null && typeof body === "object" && !Array.isArray(body) && !("agentId" in (body as Record<string, unknown>))) {
+    return { ...(body as Record<string, unknown>), agentId: "fixture-orch" };
+  }
+  return body;
+}
+
+async function postJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
+  return send(handle, `${urlPath}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(withFixtureAgent(body)),
+  });
+}
+
+async function patchJson(handle: BoardHandle, urlPath: string, body: unknown): Promise<Response> {
+  return send(handle, `${urlPath}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(withFixtureAgent(body)),
+  });
+}
+
+async function getRaw(handle: BoardHandle, urlPath: string): Promise<Response> {
+  return send(handle, `${urlPath}`);
+}
+
+async function registerAgent(handle: BoardHandle, key: string, agentId: string): Promise<void> {
+  const res = await postJson(handle, "/api/v2/agents/register", { projectKey: key, agentId, role: "ORCHESTRATOR" });
+  expect(res.status).toBe(200);
+}
+
+async function createProject(handle: BoardHandle): Promise<string> {
+  const res = await postJson(handle, "/api/v2/projects", { name: `anchor-${crypto.randomUUID()}` });
+  const body = (await res.json()) as { ok: true; project: { key: string } };
+  await registerAgent(handle, body.project.key, "fixture-orch");
+  return body.project.key;
+}
+
+function plansPath(key: string, suffix = ""): string {
+  return `/api/v2/projects/${key}/plans${suffix}`;
+}
+
+async function filePlanAB(
+  handle: BoardHandle,
+  key: string,
+  cr: string,
+): Promise<{ planId: number | string; a: number; b: number }> {
+  const res = await postJson(handle, plansPath(key), {
+    cr,
+    cycles: [{ label: "A" }, { label: "B" }],
+  });
+  expect(res.status).toBe(201);
+  const body = (await res.json()) as PlanFileResponse;
+  return { planId: body.planId, a: body.cycles[0]!.id, b: body.cycles[1]!.id };
+}
+
+async function transition(
+  handle: BoardHandle,
+  key: string,
+  planId: number | string,
+  cycleId: number,
+  status: string,
+): Promise<void> {
+  const res = await patchJson(handle, plansPath(key, `/${planId}/cycles/${cycleId}`), { status });
+  expect(res.status).toBe(200);
+}
+
+function parsedRunBody(overrides: {
+  projectKey: string;
+  agentId?: string;
+  context?: Record<string, unknown>;
+  summary?: Partial<RunSummary>;
+}) {
+  return {
+    projectKey: overrides.projectKey,
+    agentId: overrides.agentId ?? "anchor-agent",
+    summary: {
+      total: 3,
+      passed: 3,
+      failed: 0,
+      pending: 0,
+      duration_ms: 42,
+      ...overrides.summary,
+    },
+    tree: [
+      {
+        name: "suite",
+        status: "pass",
+        children: [{ name: "t1", status: "pass", duration_ms: 10 }],
+      },
+    ] as SuiteNode[],
+    ...(overrides.context !== undefined ? { context: overrides.context } : {}),
+  };
+}
+
+async function postParsedRun(
+  handle: BoardHandle,
+  projectKey: string,
+  agentId: string,
+  context?: Record<string, unknown>,
+): Promise<{ status: number; id: string }> {
+  const res = await postJson(
+    handle,
+    "/api/v2/runs/parsed",
+    parsedRunBody({ projectKey, agentId, context }),
+  );
+  const body = (await res.json()) as { ok: boolean; event?: string };
+  return { status: res.status, id: body.event ?? "" };
+}
+
+async function getAnchoredEvents(
+  handle: BoardHandle,
+  key: string,
+  cycleId: number,
+): Promise<{ status: number; body: AnchoredEventsResponse }> {
+  const res = await getRaw(handle, `/api/v2/events?project=${key}&cycleId=${cycleId}`);
+  const body = (await res.json()) as AnchoredEventsResponse;
+  return { status: res.status, body };
+}
+
+describe("§S1 — GET /api/v2/events?project=<k>&cycleId=<id> (anchored fetch)", () => {
+  test("returns ONLY the requested cycle's linked runs + its Cycle done boundary — other-cycle and unlinked runs excluded", async () => {
+    const handle = boot();
+    const key = await createProject(handle);
+    const { planId, a, b } = await filePlanAB(handle, key, "CR-ANCHOR-HAPPY");
+
+    // Cycle A: activate then close — this is the anchored target, "done".
+    await transition(handle, key, planId, a, "active");
+    await transition(handle, key, planId, a, "done");
+    // Cycle B stays pending/active — its own run must NOT show up under A's anchor.
+    await transition(handle, key, planId, b, "active");
+
+    await registerAgent(handle, key, "agent-a");
+    await registerAgent(handle, key, "agent-b");
+    await registerAgent(handle, key, "agent-unlinked");
+    const linkedToA = await postParsedRun(handle, key, "agent-a", { cycleId: a });
+    const linkedToB = await postParsedRun(handle, key, "agent-b", { cycleId: b });
+    const unlinked = await postParsedRun(handle, key, "agent-unlinked");
+
+    expect(linkedToA.status).toBe(200);
+    expect(linkedToB.status).toBe(200);
+    expect(unlinked.status).toBe(200);
+
+    const { status, body } = await getAnchoredEvents(handle, key, a);
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+
+    // Exactly the linked run for A — B's run and the unlinked run are absent.
+    const ids = body.events.map((e) => e.id);
+    expect(ids).toContain(linkedToA.id);
+    expect(ids).not.toContain(linkedToB.id);
+    expect(ids).not.toContain(unlinked.id);
+    expect(body.events.every((e) => e.context?.cycleId === a)).toBe(true);
+    expect(body.events.length).toBe(1);
+
+    // The cycle's declared "Cycle done" boundary is present and identifies
+    // cycle A specifically (resolved via Store#findCycle, CR-024 §S7).
+    expect(body.cycle).toBeDefined();
+    expect(body.cycle!.id).toBe(a);
+    expect(body.cycle!.label).toBe("A");
+    expect(body.cycle!.status).toBe("done");
+    expect(typeof body.cycle!.doneAt).toBe("number");
+  });
+
+  test("unknown cycleId (no such cycle in any plan) -> 200 with an EMPTY set, never a 4xx", async () => {
+    const handle = boot();
+    const key = await createProject(handle);
+    const { planId, a } = await filePlanAB(handle, key, "CR-ANCHOR-UNKNOWN");
+    await transition(handle, key, planId, a, "active");
+    await transition(handle, key, planId, a, "done");
+    await registerAgent(handle, key, "agent-a");
+    await postParsedRun(handle, key, "agent-a", { cycleId: a });
+
+    const { status, body } = await getAnchoredEvents(handle, key, 999999);
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.events).toEqual([]);
+    expect(body.cycle).toBeUndefined();
+  });
+
+  // ?fmt=toon on the anchored route — DELETED by CR-CRU-132 §S2.
+  //
+  // SUPERSEDED CLAIM: CR-CRU-094 §S1 — "`?fmt=toon` on the anchored route
+  // negotiates the same TOON contract as sibling v2 GET routes
+  // (`content-type: text/toon; charset=utf-8`, first line `ok: true`)."
+  // SUPERSEDED BY CR-CRU-132 §S1, which deletes the server's TOON rendering.
+  // Its SUBJECT was the negotiation contract, not the anchored payload: it
+  // asserted the media type and the wire text's first line and never looked
+  // at `events` or `cycle`. The anchored route's own contract — the cycle's
+  // linked runs and its `PlanCycle` descriptor — is asserted by every other
+  // test in this file, over JSON, unchanged by this CR.
+
+  test("regression: GET /api/v2/events?project=<k>&limit=N (no cycleId) is byte-unchanged — the recent-N feed still works", async () => {
+    const handle = boot();
+    const key = await createProject(handle);
+
+    // Five unlinked runs, no plan/cycleId involved at all. Register all
+    // agents UP FRONT (each registration's own "lifecycle" event lands
+    // before any of the 5 test events) so the 5 real runs are the 5 NEWEST
+    // events — `limit=2` below fetches exactly the 2 newest of THOSE.
+    for (let i = 0; i < 5; i += 1) {
+      await registerAgent(handle, key, `agent-${i}`);
+    }
+    for (let i = 0; i < 5; i += 1) {
+      await postParsedRun(handle, key, `agent-${i}`);
+    }
+
+    const res = await getRaw(handle, `/api/v2/events?project=${key}&limit=2`);
+    const body = (await res.json()) as AnchoredEventsResponse;
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    // The pre-existing recent-N behavior: exactly `limit` events, newest first.
+    expect(body.events.length).toBe(2);
+    // No cycleId was requested — the additive `cycle` boundary field must be
+    // absent, proving §S1 is purely additive and doesn't leak into the plain
+    // recent-feed path.
+    expect(body.cycle).toBeUndefined();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// CR-CRU-094 §S1/AC3 — `Store.listEventsForCycle` is the FOURTH consumer of
+// `context.cycleId`, and the only server-side one: it pulls every row whose
+// `context` is non-NULL and matches on the PARSED value, because the binding
+// lives in a JSON blob. §S1 adds `events.cycle_id` beside that blob and says
+// this consumer is the one a later CR could turn into a real `WHERE` clause —
+// which is exactly why its behaviour is pinned HERE, before the column lands.
+//
+// PASSES ON ARRIVAL by design. It is the regression wall, not a RED signal.
+describe("CR-CRU-094 §S1/AC3 — Store.listEventsForCycle still matches on the parsed context.cycleId", () => {
+  test("one fixture, both attachment paths: a server-STAMPED run and an EXPLICIT one match, nothing else does", async () => {
+    const handle = boot();
+    const key = await createProject(handle);
+    const { planId, a, b } = await filePlanAB(handle, key, "CR-AUTH-3");
+    // A plan runs ONE active cycle at a time (CR-CRU-024 §S0), so the fixture
+    // is built in execution order: A runs and closes, then B opens.
+    await transition(handle, key, planId, a, "active");
+
+    // Two ways a run reaches cycle A. The server STAMPS a bound agent's
+    // registration (CR-CRU-056 §S3 — the very seam this CR hangs its column
+    // on), and an unbound caller may send `context.cycleId` itself. §S1 keeps
+    // `context` authoritative for both, so this consumer must go on matching
+    // both, byte-identically.
+    const bound = await postJson(handle, "/api/v2/agents/register", {
+      projectKey: key,
+      agentId: "bound-red",
+      role: "RED",
+      cycleId: a,
+    });
+    expect(bound.status).toBe(200);
+    const stamped = await postParsedRun(handle, key, "bound-red");
+
+    await registerAgent(handle, key, "explicit-orch");
+    const explicit = await postParsedRun(handle, key, "explicit-orch", { cycleId: a });
+
+    await transition(handle, key, planId, a, "done");
+    await transition(handle, key, planId, b, "active");
+    await registerAgent(handle, key, "other-orch");
+    const otherCycle = await postParsedRun(handle, key, "other-orch", { cycleId: b });
+    await registerAgent(handle, key, "unlinked-orch");
+    const unlinked = await postParsedRun(handle, key, "unlinked-orch");
+
+    const matched = handle.store.listEventsForCycle(key, a).map((e) => e.id).sort();
+
+    // EXACTLY the two, so a filter that widened (matching every row with a
+    // context, or every row of the project) fails rather than passing bigger.
+    expect(matched).toEqual([stamped.id, explicit.id].sort());
+    expect(matched).not.toContain(otherCycle.id);
+    expect(matched).not.toContain(unlinked.id);
+    // The registration lifecycle rows carry no context at all and are
+    // therefore invisible to this consumer — stated because §S2, a LATER
+    // cycle, is about giving them one.
+    expect(matched.length).toBe(2);
+
+    // ... and the route built on it agrees, run for run: the store method and
+    // the anchored fetch cannot drift apart unnoticed.
+    const { body } = await getAnchoredEvents(handle, key, a);
+    expect(body.events.map((e) => e.id).sort()).toEqual(matched);
+    expect(body.events.every((e) => e.context?.cycleId === a)).toBe(true);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// CR-CRU-120 §S5 — the anchored route carries NO cycle-status filter, and the
+// client fix that widens the `→ Runs` affordance to ACTIVE cycles depends on
+// that being true. The cycleId branch of `handleEventsList` (src/v2.ts)
+// and `Store#listEventsForCycle`/`findCyclePlanEntry` have never had one, so
+// this is a REGRESSION PIN, not a RED signal: it PASSES on arrival and exists
+// so a future narrowing to terminal cycles fails here before it fails a user.
+//
+// The AC requires ONE shared shape check driven through BOTH statuses, so the
+// assertion lives in `expectAnchoredShape` below and the test calls it twice —
+// a `done` cycle and an `active` one, both activated by the REAL
+// `cycle-activate` transition, never by a hand-written fixture status.
+interface AnchoredShapeExpectation {
+  key: string;
+  cycleId: number;
+  label: string;
+  status: "active" | "done";
+  runId: string;
+}
+
+async function expectAnchoredShape(
+  handle: BoardHandle,
+  expected: AnchoredShapeExpectation,
+): Promise<void> {
+  const { status, body } = await getAnchoredEvents(handle, expected.key, expected.cycleId);
+
+  expect(status).toBe(200);
+  expect(body.ok).toBe(true);
+  // EXACTLY this cycle's linked run — bounded, so a status-blind widening
+  // (every row of the project) fails as loudly as a narrowing would.
+  expect(body.events.map((e) => e.id)).toEqual([expected.runId]);
+  expect(body.events.every((e) => e.context?.cycleId === expected.cycleId)).toBe(true);
+  // …and the cycle's own PlanCycle descriptor, identically shaped for both
+  // statuses: an active cycle resolves exactly as a done one does.
+  expect(body.cycle).toBeDefined();
+  expect(body.cycle!.id).toBe(expected.cycleId);
+  expect(body.cycle!.label).toBe(expected.label);
+  expect(body.cycle!.status).toBe(expected.status);
+  expect(typeof body.cycle!.activatedAt).toBe("number");
+  // The ONE honest difference between the two statuses: a cycle that has not
+  // closed carries no `doneAt`. Asserted in both directions so the shared
+  // check cannot pass by ignoring the field.
+  if (expected.status === "done") {
+    expect(typeof body.cycle!.doneAt).toBe("number");
+  } else {
+    expect(body.cycle!.doneAt).toBeUndefined();
+  }
+}
+
+describe("CR-CRU-120 §S5 — the anchored route answers an ACTIVE cycle exactly as it answers a DONE one", () => {
+  test("one shared shape check, two statuses: ?project=<k>&cycleId=<id> returns the cycle's linked runs and its PlanCycle for a DONE cycle and for an ACTIVE one alike — no status filter anywhere on the route", async () => {
+    const handle = boot();
+    const key = await createProject(handle);
+    const { planId, a, b } = await filePlanAB(handle, key, "CR-120-ACTIVE-ANCHOR");
+
+    // Cycle A: activated, one linked run ingested, then closed — the DONE arm.
+    await transition(handle, key, planId, a, "active");
+    await registerAgent(handle, key, "agent-done-arm");
+    const doneRun = await postParsedRun(handle, key, "agent-done-arm", { cycleId: a });
+    expect(doneRun.status).toBe(200);
+    await transition(handle, key, planId, a, "done");
+
+    // Cycle B: activated and LEFT OPEN, one linked run ingested — the ACTIVE
+    // arm, i.e. the exact situation the user reported as unreachable.
+    await transition(handle, key, planId, b, "active");
+    await registerAgent(handle, key, "agent-active-arm");
+    const activeRun = await postParsedRun(handle, key, "agent-active-arm", { cycleId: b });
+    expect(activeRun.status).toBe(200);
+
+    await expectAnchoredShape(handle, {
+      key,
+      cycleId: a,
+      label: "A",
+      status: "done",
+      runId: doneRun.id,
+    });
+    await expectAnchoredShape(handle, {
+      key,
+      cycleId: b,
+      label: "B",
+      status: "active",
+      runId: activeRun.id,
+    });
+  });
+});

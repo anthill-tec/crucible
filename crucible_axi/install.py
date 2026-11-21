@@ -238,6 +238,7 @@ STORE_DIR_NAME = "crucible"
 # the same reason.
 # And `_crucible_project.py`, a project's own verbs' module, loaded the same way.
 # And `_crucible_lint.py`, the shared lint runner, loaded the same way.
+# And `_crucible_board.py`, the board a client posts to, loaded the same way.
 # And `reporters/vitest-crucible.ts` and `reporters/playwright-crucible.ts`,
 # the shipped Vitest and Playwright reporters, in the `reporters/` subdirectory the bun client hands a runner as
 # `CRUCIBLE_REPORTERS`; a name may carry a `/`-separated subdirectory, which
@@ -257,6 +258,7 @@ FLEET_FILES = (
     "_crucible_release.py",
     "_crucible_project.py",
     "_crucible_lint.py",
+    "_crucible_board.py",
     "toon.py",
     "STATUS-CONTRACT.md",
     manifest.CONFIG_FILENAME,
@@ -1563,6 +1565,13 @@ def run_install(target_dir, stage_runners=None, force=False,
             entries = result.get(field)
             if entries:
                 stage[field] = [dict(entry) for entry in entries]
+        # The install file the `[manifest]` stage left declaring no board
+        # (`{path, key}`, the path ABSOLUTE for the same reason): a client
+        # with no board declared refuses, so the operator is told where to
+        # declare one.
+        board_undeclared = result.get("boardUndeclared")
+        if board_undeclared:
+            stage["boardUndeclared"] = dict(board_undeclared)
         # A RESTART is disclosed (CR-CRU-071 AC9): it drops every live SSE
         # subscriber, so an operator watching an upgrade must see that it
         # happened on purpose rather than infer it from a broken stream.

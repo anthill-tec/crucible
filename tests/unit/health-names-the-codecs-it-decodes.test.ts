@@ -1,0 +1,59 @@
+// Health (`/api/health`, `/api/v2/health`) carries
+// `codecs: {test: [...], coverage: [...], view: [...], stream: [...]}` — the
+// names this board decodes — so a client can tell a board that predates server-side
+// decoding before it sends. This board decodes `junit` test reports
+// (Playwright's JSON report retired with its codec), the `crucible-events` and `nextest` test streams, and `jacoco` and `lcov`
+// coverage, and reads the `bun-console` and `surefire-console` view streams
+// into a run's live state (CR-CRU-201 §S1). Driven through the real production HTTP surface
+// (`bootInProcess`, in-memory store).
+import { describe, test, expect, afterEach } from "bun:test";
+import type { BoardHandle } from "../../src/server.ts";
+import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
+
+const handles: BoardHandle[] = [];
+
+afterEach(() => {
+  while (handles.length > 0) handles.pop()?.stop();
+});
+
+async function health(route: string): Promise<Record<string, unknown>> {
+  const handle = bootInProcess();
+  handles.push(handle);
+  const res = await send(handle, `${route}`);
+  expect(res.status).toBe(200);
+  return (await res.json()) as Record<string, unknown>;
+}
+
+const CODECS = {
+  test: ["crucible-events", "go-test", "junit", "nextest"],
+  coverage: ["go-coverprofile", "jacoco", "lcov"],
+  view: ["bun-console", "surefire-console"],
+  stream: ["crucible-events", "go-test", "nextest"],
+};
+
+describe("health names the codecs the board decodes", () => {
+  test("GET /api/health carries codecs {test: [crucible-events, go-test, junit, nextest], coverage: [go-coverprofile, jacoco, lcov], view: [bun-console, surefire-console], stream: [crucible-events, go-test, nextest]}", async () => {
+    const body = await health("/api/health");
+    expect(body.ok).toBe(true);
+    expect(body.codecs).toEqual(CODECS);
+  });
+
+  test("GET /api/v2/health carries the same codecs, stream: [crucible-events, go-test, nextest] among them", async () => {
+    const body = await health("/api/v2/health");
+    expect(body.ok).toBe(true);
+    expect(body.codecs).toEqual(CODECS);
+  });
+
+  test("the codec lists hold exactly these names — no compile format, no parsed pseudo-codec, the view codecs only under view", async () => {
+    const body = await health("/api/v2/health");
+    const codecs = body.codecs as { test?: string[]; coverage?: string[]; view?: string[] } | undefined;
+    expect(codecs?.test?.length).toBe(4);
+    expect(codecs?.test ?? []).not.toContain("playwright");
+    expect(codecs?.coverage?.length).toBe(3);
+    expect(codecs?.view?.length).toBe(2);
+    expect(codecs?.test ?? []).not.toContain("parsed");
+    expect(codecs?.test ?? []).not.toContain("bun-console");
+    expect(codecs?.test ?? []).not.toContain("surefire-console");
+    expect(codecs?.coverage ?? []).not.toContain("junit");
+  });
+});

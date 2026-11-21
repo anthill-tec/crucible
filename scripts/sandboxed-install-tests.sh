@@ -4,7 +4,7 @@
 # $HOME.
 #
 # THE SUITE THIS EXISTS FOR
-#   tests/client/test_an_installed_deployment_resolves_its_configuration.py
+#   tests/client/integration/test_an_installed_deployment_resolves_its_configuration.py
 # is the one that installs and THEN resolves, so it drives the real installer
 # end to end. Every other suite under tests/client/ is wrapped too, because
 # discovery runs the directory and any of them may grow an install-driving
@@ -28,21 +28,25 @@
 # protect. The value is local: YOUR dotfiles, YOUR ~/.crucible, YOUR systemd
 # units.
 #
-# NETWORK IS OFF, SO THE DEFAULT TARGET IS NARROW
-# `--unshare-net` is part of the isolation, and some suites under tests/client/
-# legitimately need the network (`python -m build --wheel` reaches pypi.org, and
-# the uv/cargo/docker gates reach their own registries). Wrapping the whole
-# directory therefore reports dozens of failures that say nothing about the code
-# — so with NO arguments this runs the install-touching suites only, which is
-# what the sandbox exists for. Pass your own unittest arguments to widen it, and
-# expect network-dependent suites to fail when you do.
+# YOUR HOME IS HIDDEN, SO THE DEFAULT TARGET IS NARROW
+# `--unshare-net` is part of the isolation, but once
+# scripts/provision-test-caches.sh has run, no suite needs the network: the
+# suite's caches live under .cache/test-suite/, inside the checkout, which
+# stays bound. What the sandbox takes away is $HOME: `--tmpfs "$HOME"` hides
+# everything under it except bun's prefix, re-exposed read-only, and PATH is
+# set to that bun and the system directories only. A toolchain kept under your
+# home is out of reach in here — so with NO arguments this runs the
+# install-touching suites only, which is what the sandbox exists for. Pass your
+# own unittest arguments to widen it; the suites that drive a toolchain kept
+# under your home can fail when you do.
 #
 # Usage:
 #   scripts/sandboxed-install-tests.sh                  # the install suites
 #   scripts/sandboxed-install-tests.sh -k pattern       # your own narrowing
 #   scripts/sandboxed-install-tests.sh -k ''            # the whole directory
-#                                                       # (network-dependent
-#                                                       #  suites will fail)
+#                                                       # (suites that drive a
+#                                                       #  toolchain under your
+#                                                       #  home can fail)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -58,7 +62,8 @@ false assurance this script exists to remove.
 
 The suites' own L1+L2 sandboxing is independent of this script: running them
 directly with `python3 -m unittest discover -s tests/client -t .` is safe by
-design and is exactly what CI does.
+design and covers both tiers CI runs as two steps (tests/client/unit and
+tests/client/integration).
 MSG
   exit 127
 fi

@@ -14,7 +14,7 @@
 // resolved nothing on a fresh clone or in CI. Same code, same command, two
 // different caps — green here, red there, surfacing at gate time wearing an
 // unrelated face. C2 found the first instance by measurement
-// (tests/milestone-records-are-queryable-by-type.test.ts ingests 5001 events)
+// (tests/unit/milestone-records-are-queryable-by-type.test.ts ingests 5001 events)
 // and migrated that one suite by hand; nothing stopped the next one.
 //
 // DECLARED, not merely absent: a suite that is isolated only because a file
@@ -56,6 +56,27 @@
 // module's own `exit` cleanup runs at the end of a test run exactly as it
 // does at the end of any other process. This is independent of the switch
 // above: it removes nothing itself, it only lets a module's own cleanup run.
+//
+// ── CR-CRU-260: the test install, the project dirs, the .env registry ─────
+//
+// After the temp root is settled, this preload:
+//
+//   - establishes the run's TEST INSTALL (`tests/helpers/test-install.ts`),
+//     under the run's temp root, so every client the suite loads or spawns
+//     derives an install that declares nothing — never the repo root, whose
+//     git-ignored `crucible.toml` is the operator's. The process that creates
+//     it removes it at exit; a child that inherits the marker reuses it;
+//   - points the six `<STACK>_CRUCIBLE_PROJECT_DIR` variables at ONE fresh,
+//     empty directory it owns (overriding any inherited value) and removes it
+//     at exit, as `tests/client/__init__.py` does for the python suite, so a
+//     client spawned with no `--project-dir` finds no project rather than the
+//     repo root's live one;
+//   - deletes the inherited `.env` registry variables. `bunfig.toml`'s
+//     `env = false` keeps bun from loading the root `.env`, but direnv exports
+//     it into the operator's shell, so they arrive by inheritance too.
+//
+// Both hold with `CRUCIBLE_TEST_TMPROOT_DISABLE=1` as well: the switch only
+// decides which temp root they live under.
 import { afterAll } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
@@ -81,6 +102,38 @@ if (process.env[TMPROOT_DISABLE_ENV] !== "1") {
   process.once("SIGINT", exitOnSignal(130));
   process.once("SIGTERM", exitOnSignal(143));
 }
+
+/** The `.env` registry variables no test process may inherit. Kept in step
+ *  with `ENV_REGISTRY_VARIABLES` in `tests/client/__init__.py`. */
+const ENV_REGISTRY_VARIABLES = [
+  "CRUCIBLE_PROJECT_KEY",
+  "CRUCIBLE_PROJECT_NAME",
+  "WORKFLOW_ORCHESTRATOR",
+  "SANDESH_PROJECT",
+  "SANDESH_ADDRESS",
+  "PROJECT_TOKEN",
+  "PROJECT_STACKS",
+  "KNOWLEDGE_CATEGORY",
+] as const;
+for (const variable of ENV_REGISTRY_VARIABLES) delete process.env[variable];
+
+/** The client-steering variables, one per stack. */
+const PROJECT_DIR_VARIABLES = [
+  "PY_CRUCIBLE_PROJECT_DIR",
+  "BUN_CRUCIBLE_PROJECT_DIR",
+  "MVN_CRUCIBLE_PROJECT_DIR",
+  "RUST_CRUCIBLE_PROJECT_DIR",
+  "ARDUINO_CRUCIBLE_PROJECT_DIR",
+  "GO_CRUCIBLE_PROJECT_DIR",
+] as const;
+const isolationDir = mkdtempSync(path.join(os.tmpdir(), "crucible-bun-suite-isolation-"));
+process.on("exit", () => {
+  rmSync(isolationDir, { recursive: true, force: true });
+});
+for (const variable of PROJECT_DIR_VARIABLES) process.env[variable] = isolationDir;
+
+// Loaded only now, so the install lands under the temp root settled above.
+await import("./test-install.ts");
 
 process.env.CRUCIBLE_DB = path.join(
   os.tmpdir(),

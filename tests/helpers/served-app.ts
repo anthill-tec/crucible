@@ -1,6 +1,7 @@
 // The production SPA shell mounted in happy-dom against a REAL board: every
 // read the shell makes (`fetch` with a path) is answered by a `startServer`
-// handle bound to port 0, so what the view draws is what the server stored and
+// handle bound to port 0 — or, in process, by a `createBoard` board's own
+// `fetch` at `http://board.invalid` — so what the view draws is what the server stored and
 // serves — never a scripted reply shaped to the test.
 //
 // Real VanJS/VanX vendor bundles, the real public/app-logic.mjs and the real
@@ -17,9 +18,8 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ServerHandle } from "../../src/server.ts";
 import { settleDom } from "./dom-settle";
-import { base } from "./run-stream-harness.ts";
+import { base, type Booted } from "./run-stream-harness.ts";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const VAN_SRC = readFileSync(path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"), "utf8");
@@ -28,6 +28,7 @@ const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
 const REAL_FETCH: typeof fetch = globalThis.fetch;
+const NATIVE_REQUEST = globalThis.Request;
 
 // The board runs in this same process, so it builds its replies with whatever
 // `Response` (and friends) the global scope holds. Registering a happy-dom
@@ -85,8 +86,9 @@ export async function restoreRealFetch(): Promise<void> {
   globalThis.fetch = REAL_FETCH;
 }
 
-/** Mount the production shell at `pathname`, every read answered by `handle`. */
-export async function mountServedApp(handle: ServerHandle, pathname: string): Promise<void> {
+/** Mount the production shell at `pathname`, every read answered by `handle`:
+ *  over the socket for a served board, through its own `fetch` in process. */
+export async function mountServedApp(handle: Booted, pathname: string): Promise<void> {
   await restoreRealFetch();
   await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
   keepNativeServerGlobals();
@@ -100,7 +102,11 @@ export async function mountServedApp(handle: ServerHandle, pathname: string): Pr
     servedFetchLog.push(url.replace(/^https?:\/\/localhost(?::\d+)?/, ""));
     inFlight += 1;
     try {
-      const res = await REAL_FETCH(toServed(origin, url), init);
+      const target = toServed(origin, url);
+      const res =
+        "server" in handle
+          ? await REAL_FETCH(target, init)
+          : await handle.fetch(new NATIVE_REQUEST(target, init));
       // The body is read here, inside the in-flight window, so a settle never
       // returns while a reply is still arriving.
       const text = await res.text();

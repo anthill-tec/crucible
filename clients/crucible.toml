@@ -178,10 +178,12 @@ max = 500
 #
 # A profile with no entry, or a project with no `crucible.toml`, is undeclared
 # and runs exactly as if it declared that entry: it streams by default. An
-# entry naming another `framework`, `codec` or `path`, or declaring `junit`,
-# `console` or `coverage` (a rust run's record is its stream, and its coverage
-# follows the verb), is REFUSED before anything runs, naming the table and the
-# field. A project file that does not parse is refused too.
+# entry naming another stack's framework (`arduino-native`, `surefire`,
+# `pytest`, `go-test`, ...) is that stack's and is skipped. Any other
+# `framework`, `codec` or `path`, or a `junit`, `console` or `coverage` field
+# (a rust run's record is its stream, and its coverage follows the verb), is
+# REFUSED before anything runs, naming the table and the field. A project file
+# that does not parse is refused too.
 #
 # Read from the PROJECT's own file only, never the installed copy: an install
 # entry would make one project every other project's declaration.
@@ -260,25 +262,21 @@ max = 500
 
 # ── The BOARD this fleet posts to ──────────────────────────────────────────
 #
-# CR-CRU-139 §S2. A connection is configuration too. The board a client posts
-# to used to be `$CRUCIBLE_URL`, bound at import into five separate module
-# constants, so "point this checkout at another board" meant an export every
-# shell and every sub-agent had to remember — and forgetting was silent: the
-# run simply landed on the default, which on a machine carrying a production
-# instance is the production board. It is a DECLARATION here instead, resolved
-# at the same POINT OF USE as the limits above but BY TABLE: the first file that
-# declares a non-empty `url` wins — the PROJECT's own `crucible.toml`, then the
-# installed copy — a file without one is passed over, and this shipped data is
-# the last resort. Nothing to export, and a per-project answer that survives
-# every verb and every sub-agent.
-
-[client]
-# The board every verb of every client posts to. The shipped value is the
-# address this fleet has always defaulted to, so an install that declares
-# nothing reports exactly where it did before. An operator running a second
-# instance beside a production one declares that instance's address in the
-# project's own file — `url = "http://localhost:3850"` — and every client in
-# that project follows, with nothing exported.
-# A project file declaring no `url` here is passed over for the install's.
-url = "http://localhost:3849"
+# A connection is configuration too. The board a client posts to is a
+# DECLARATION, resolved at the same POINT OF USE as the limits above but BY
+# TABLE: the first file that declares a non-empty `url` wins — the PROJECT's
+# own `crucible.toml`, then the installed copy — and a file without one is
+# passed over. A project file declaring no `url` here is passed over for the
+# install's. Nothing to export, and a per-project answer that survives every
+# verb and every sub-agent.
+#
+# This file declares no board. The installer writes the install's `url` from
+# the server it set up on this machine; an install with no local server
+# declares none, and its output names the file under `boardUndeclared`. A
+# client whose project and install both declare none refuses every verb that
+# must reach the board, and sends nothing. To declare one, uncomment the table
+# in the project's own file (or the install's) and name the board's address:
+#
+# [client]
+# url = "http://<host>:<port>"
 

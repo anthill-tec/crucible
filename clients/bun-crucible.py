@@ -59,7 +59,8 @@ Project + Crucible endpoint:
   Bun resolution: --bun > $BUN_CRUCIBLE_BUN > `bun` on PATH.
   Run-lifecycle opt-out (CR-CRU-017 §S4): --no-lifecycle > $BUN_CRUCIBLE_NO_LIFECYCLE.
   Posts to the first `[client] url` declared by the project's crucible.toml,
-  then the install's, else the shipped http://localhost:3849; v2 endpoints ONLY:
+  then the install's (with neither declaring one, a verb that must reach the
+  board refuses); v2 endpoints ONLY:
   /api/v2/agents/register|unregister, /api/v2/runs, /api/v2/runs/start|compile,
   /api/v2/projects/<key>/plans. This in-repo clients/ copy is the SOURCE OF
   TRUTH (CR-CRU-008 Risk section) — ~/.claude/scripts/ mirrors it.
@@ -231,14 +232,14 @@ def _project_key(project_dir):
 def _base_url():
     """CR-CRU-139 §S2 — the BOARD this client posts to, read at the POINT OF
     USE from the fleet's ONE resolver: the project's own `crucible.toml`
-    (`[client] url`), else the install's, else the distribution's shipped
-    declaration.
+    (`[client] url`), else the install's; with neither declaring one it
+    refuses.
 
     A call rather than the module constant this line used to hold. A constant
     bound at import was a setting no edit an operator made could reach, and it
     froze the board for the whole process — so a verb handed a different
     `--project-dir` posted to the previous one's board. `resolve_base_url()` in
-    `_crucible_axi.py` documents the resolution and the environment channel it
+    `_crucible_board.py` documents the resolution and the environment channel it
     retired."""
     return _axi().resolve_base_url()
 
@@ -857,6 +858,63 @@ def _emit_target_refused(verb, project_dir, agent_id, detail):
     return 1
 
 
+# The markers bun reads in a file name to call it a test file.
+_BUN_TEST_FILE_MARKERS = (".test", "_test_", ".spec", "_spec_")
+_TESTS_NOT_FOUND = "tests-not-found"
+_TESTS_NOT_A_TEST_FILE = "tests-not-a-test-file"
+
+
+def _refused_test_entries(package_dir, entries):
+    """The `--tests` entries a plain `bun test` run cannot honour, as
+    `{code: [entry, ...]}` in the order given. Each entry is resolved against
+    `package_dir` unless it is absolute; it is refused when it names nothing
+    (`tests-not-found`) or an existing file whose name carries none of bun's
+    test-file markers (`tests-not-a-test-file`). A directory passes."""
+    refused = {}
+    for entry in entries or ():
+        path = entry if os.path.isabs(entry) else os.path.join(package_dir, entry)
+        if not os.path.exists(path):
+            refused.setdefault(_TESTS_NOT_FOUND, []).append(entry)
+        elif os.path.isfile(path) and not any(
+                marker in os.path.basename(path)
+                for marker in _BUN_TEST_FILE_MARKERS):
+            refused.setdefault(_TESTS_NOT_A_TEST_FILE, []).append(entry)
+    return refused
+
+
+def _emit_tests_refused(project_dir, package_dir, agent_id, refused):
+    """The exit of a `bun test` run whose `--tests` entries were refused:
+    nothing is run and no run is opened; ONE ok:false envelope lists every
+    refused entry, one warning per refusal kind. Returns 1."""
+    reasons = {_TESTS_NOT_FOUND: "name nothing that exists",
+               _TESTS_NOT_A_TEST_FILE: ("name a file that is not a test (its "
+                                        "name carries none of `.test`, "
+                                        "`_test_`, `.spec`, `_spec_`)")}
+    warnings = [{"code": code,
+                 "detail": f"--tests {', '.join(entries)}: {reasons[code]}"}
+                for code, entries in refused.items()]
+    every = [entry for entries in refused.values() for entry in entries]
+    detail = (f"--tests entries refused, nothing was run: {', '.join(every)}")
+    _emit_axi("test", False,
+              {"error": detail,
+               "help": [f"paths are relative to {package_dir}; fix the "
+                        f"--tests entries, then re-run test", "status"]},
+              _axi_context(project_dir, agent_id=agent_id),
+              warnings,
+              f"[crucible] ERROR: {detail}")
+    return 1
+
+
+def _as_bun_paths(entries):
+    """The `--tests` entries in the form `bun test` reads as PATHS, never as
+    name filters: a relative entry not starting with `./` or `../` gains a
+    `./`; every other entry is handed on as given."""
+    if not entries:
+        return entries
+    return [entry if os.path.isabs(entry) or entry.startswith(("./", "../"))
+            else f"./{entry}" for entry in entries]
+
+
 def _bun_run_script_cmd(bun, script, junit_path, coverage, coverage_dir,
                         mechanism=None, passthrough=()):
     """§S6 ruling 2 — a DECLARED tier target is a `package.json` script, and it
@@ -1178,6 +1236,13 @@ def cmd_test(args, tier=None):
             [flag, name] if name is not None else [])
         return cmd_regression(args, verb="test", tier=tier, script=script,
                               passthrough=passthrough, name=name)
+    # A plain `bun test` run reads its entries as paths: one that names no
+    # test refuses the run before the reports directory or the board is
+    # touched, and the rest reach bun in their path form.
+    refused = _refused_test_entries(package_dir, args.tests)
+    if refused:
+        return _emit_tests_refused(project_dir, package_dir, args.agent, refused)
+    tests = _as_bun_paths(args.tests)
     bun = _resolve_bun(args.bun)
     reports_dir = _reports_dir(package_dir, args.reports, args.agent)
     os.makedirs(reports_dir, exist_ok=True)
@@ -1199,7 +1264,7 @@ def cmd_test(args, tier=None):
     # server refuses a run-start from an unregistered caller, so the run can
     # only be opened once the identity heartbeat above has landed.
     run_id, run_warnings, preflight_warnings = None, [], []
-    cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None, name=name)
+    cmd = _bun_test_cmd(bun, tests, junit_path, False, None, name=name)
     env = os.environ.copy()
     print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
     # Capture output whenever an ingest may be needed: bun's JUnit reporter
@@ -1229,7 +1294,7 @@ def cmd_test(args, tier=None):
             # live and the §S2c run.log keeps its result-line block boundaries.
             for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
-            scanned = _prescan_test_total(package_dir, args.tests)
+            scanned = _prescan_test_total(package_dir, tests)
             # CR-CRU-201 \u00a7S4 \u2014 this client's own `bun test` relays its
             # console when the board reads it; the start then carries the
             # scan's total, unless a name filter runs fewer than it counts.
@@ -1952,7 +2017,7 @@ def cmd_pre_merge_gate(args):
             script=suite.target),
         whole_framework=DEFAULT_FRAMEWORK, whole_script=marked,
         context=_axi_context(project_dir, agent_id=args.agent),
-        crucible_url=_base_url())
+        crucible_url=_base_url)
 
 
 def _gate_marked_script(package_dir):
@@ -2390,7 +2455,7 @@ def _ops():
         project_key=_project_key, plans_path=_plans_path,
         open_plans=_open_plans, resolve_plan=_resolve_plan_or_emit,
         post_gate=_post_gate, post_milestone=_post_milestone,
-        base_url=_base_url())
+        base_url=_base_url)
 
 
 # §S15 — per-verb next-step command TEMPLATES: every envelope names the sane
@@ -2845,9 +2910,17 @@ def main():
                     "`crucible.targets` table in package.json marks one entry "
                     "`\"test\": true` runs `test` through that script (`bun run "
                     "<script>`, with the files and the --name filter passed on); "
-                    "without it the run is `bun test`.")
+                    "without it the run is `bun test`. For `bun test` the --tests "
+                    "entries are paths relative to the package directory, and "
+                    "the run is refused when an entry is missing or names a file "
+                    "that is not a test; a declared script receives the entries "
+                    "unchanged, as its runner's filters.")
     t.add_argument("--tests", nargs="+",
-                   help="Test file/path target(s) (e.g. src/example.test.ts). Omit for all.")
+                   help="Test file/path target(s) (e.g. src/example.test.ts). Omit "
+                        "for all. For `bun test`: paths relative to the package "
+                        "directory; a missing entry or a file that is not a test "
+                        "is refused. A declared script receives them unchanged, "
+                        "as its runner's filters.")
     t.add_argument("--name", metavar="PATTERN",
                    help="Run only the tests whose name matches this regular "
                         "expression (passed unchanged as `-t PATTERN`, or as "
@@ -2951,7 +3024,7 @@ def main():
     _axi().add_plan_file_cycle_kind_arg(pf)
     pf.add_argument(
         "--cycles",
-        help='Legacy comma-split form, REFUSED for filing (§S4a): a filed '
+        help='Legacy comma-split form, REFUSED for filing: a filed '
              'cycle declares its kind, so repeat --cycle with its own '
              '--cycle-kind instead.')
     _add_workflow_agent_arg(

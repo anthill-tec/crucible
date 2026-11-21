@@ -100,7 +100,7 @@ function crGroup(page: import("@playwright/test").Page, cr: string) {
 // done/total figures now live in the VISIBLE inline rollup form on the
 // group header toggle itself ("<done>/<total> cycles" while not all done,
 // "<total> cycles ✓" once all done — see app.js LensCrGroup and the
-// re-targeted unit assertion in tests/workflow-lens.test.ts). The scenario's
+// re-targeted unit assertion in tests/integration/workflow-lens.test.ts). The scenario's
 // subject (the group rollup figures) is unchanged; only the DOM location
 // asserted moves from `cr-rollup` to `cr-group-toggle`.
 Step(

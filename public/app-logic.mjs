@@ -1425,7 +1425,7 @@ const ROADMAP_WAVE_ROWS = 5;
 /**
  * §S1 AC5 — the browser's ONE dead-CR rule, a state-based mirror of
  * `isDeadCr` in `src/types.ts` (this module cannot import `src/`, so it keeps
- * this copy, and tests/dead-cr-rule-parity.test.ts holds the two to the same
+ * this copy, and tests/unit/dead-cr-rule-parity.test.ts holds the two to the same
  * answer on every fixture). Dead iff `lifecycle.state` is `VOID` or
  * `SUPERSEDED`; no lifecycle, a `null` one, or a state it does not recognise
  * is live. A null or undefined `entry` is live too: the optional chain answers
@@ -1604,7 +1604,7 @@ export function focusedReleaseView(gate, releases, entries) {
   // The `false` branch is now REACHABLE and asserted rather than reasoned
   // about: a focused release with nothing running carries NO marker on any
   // box, and that is a state, not an error
-  // (tests/roadmap-wave-active-marker.test.ts).
+  // (tests/integration/roadmap-wave-active-marker.test.ts).
   const waves = [];
   const boxOf = new Map();
   for (const entry of members) {

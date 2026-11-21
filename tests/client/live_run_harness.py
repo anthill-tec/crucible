@@ -27,13 +27,15 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 import urllib.parse
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS = REPO_ROOT / "clients"
-SHIPPED_TOML = CLIENTS / "crucible.toml"
+CLIENTS = TEST_INSTALL_CLIENTS
+SHIPPED_TOML = CLIENT_SOURCE_DIR / "crucible.toml"
 
 ENV_KEYS_TO_SCRUB = ("WORKFLOW_WAVE", "WORKFLOW_ROLE", "WORKFLOW_CYCLE_ID",
                      "WORKFLOW_CYCLE", "PY_CRUCIBLE_PYTHON", "REPORTS_DIR",
@@ -70,6 +72,34 @@ DEFAULT_INGEST_BODY_BYTES = 128 * 1024 * 1024
 DEFAULT_RUN_BLOCK = {"total": 0, "passed": 0, "failed": 0}
 # The ways `RecordingBoard.drop_next` can break a connection it has read.
 DROP_SHAPES = ("close", "reset", "truncate", "truncate-error", "garble")
+
+# The answer shapes of the board's reads, as `src/v2.ts` returns them with
+# nothing held, for a test to hand to `RecordingBoard.answer` (filled in with
+# its own rows). The board answers none of them unscripted.
+# `handleProjectMilestones` -- `GET .../projects/<key>/milestones?type=`.
+MILESTONES_ANSWER = {"ok": True, "milestones": [], "totalCount": 0}
+# `handleEventsList` -- `GET /api/v2/events?project=` (newest first).
+EVENTS_ANSWER = {"ok": True, "events": [], "openRuns": []}
+# `handleQueueGet` -- `GET .../projects/<key>/queue`.
+QUEUE_ANSWER = {"ok": True, "entries": [], "tracks": []}
+# `handleProjectHistory` -- `GET .../projects/<key>/history`.
+HISTORY_ANSWER = {"ok": True, "releases": [], "acceptedFailingGates": []}
+# `handlePlansList` -- `GET .../projects/<key>/plans[?status=]`.
+PLANS_ANSWER = {"ok": True, "plans": [], "lastClosedCr": None, "filed": 0}
+# `handleProjectMetadataGet` -- `GET .../projects/<key>/metadata`.
+METADATA_ANSWER = {"ok": True, "metadata": {}}
+# `handleAgentsList` -- `GET /api/v2/agents[?project=]`: each agent the
+# board holds (none here), as the pre-flight attribution read takes it.
+AGENTS_ANSWER = {"ok": True, "agents": []}
+# `handleMilestones` -- `POST /api/v2/milestones`, a new record: 201 with
+# the event id the store minted (see `milestone_posted`).
+MILESTONE_POSTED_STATUS = 201
+
+
+def milestone_posted(event_id):
+    """`handleMilestones`' answer to a recorded milestone (`src/v2.ts`):
+    `{ok, changed, event}`, given with `MILESTONE_POSTED_STATUS`."""
+    return {"ok": True, "changed": True, "event": event_id}
 
 
 def _health_codecs(stream_codec=True, nextest_stream=True):
@@ -147,7 +177,13 @@ def load_client(name):
 class RecordingBoard:
     """A real `ThreadingHTTPServer` on loopback that records every request in
     wire order with its receipt time, opens a run on `/api/v2/runs/start` and
-    answers everything else `ok`.
+    answers every other write `ok`.
+
+    A read (`GET`) is answered only where the board models it: health, below,
+    and the open plans `refuse_cycle_binding` scripts. Any other read a test
+    has not scripted (`answer`) is a 404 `{ok: False, error: "unscripted
+    read: GET <path>"}` -- never a made-up `ok` -- so a test that forgets a
+    read its client makes meets a refusal, not a silent 200.
 
     Health (`HEALTH_PATHS`) is answered as a board that decodes the clients'
     reports states it \u2014 `version`, `codecs` and `limits.ingest_body_bytes`
@@ -163,7 +199,12 @@ class RecordingBoard:
     is a 409 carrying `held`; a total past `stream_limit` (default
     `ingest_body_bytes`) is a 413 carrying `held`. `stream_codec=False` is a
     board whose health lists no `crucible-events`; `stream_route=False` is a
-    board with no stream route at all (every batch a 404)."""
+    board with no stream route at all (every batch a 404).
+
+    A test sets the answer to any request by method and path (`answer`),
+    refusals included, from the server's own shapes (`MILESTONES_ANSWER` and
+    its siblings above); ids and timestamps it lists are minted as the store
+    mints them (`mint_event_id`, `milestone_record`)."""
 
     def __init__(self, ingest_body_bytes=DEFAULT_INGEST_BODY_BYTES,
                  stream_codec=True, stream_route=True, stream_limit=None,
@@ -238,6 +279,12 @@ class RecordingBoard:
         self._refused_binding = None
         self._active_cycle = None
         self._held_agents = set()
+        # Answers a test set for a method and path (`answer`): newest first,
+        # each `[method, path, prefix, status, body, remaining]`. None set by
+        # default, so every request keeps the answer described above.
+        self._answers = []
+        # The store's event-id sequence (`mint_event_id`).
+        self._event_seq = 0
         board = self
 
         class _Handler(http.server.BaseHTTPRequestHandler):
@@ -276,16 +323,22 @@ class RecordingBoard:
                     board.events.append((time.time(), "GET", self.path, None))
                     health = board._health_answer()
                     failure = board._health_failure
-                if self.path in HEALTH_PATHS:
+                    binding_scripted = board._active_cycle is not None
+                scripted = board._scripted_answer(self.command, self.path)
+                if scripted is not None:
+                    self._reply_status(*scripted)
+                elif self.path in HEALTH_PATHS:
                     if failure is not None:
                         status, error = failure
                         self._reply_status(status, {"ok": False, "error": error})
                     else:
                         self._reply(health)
-                elif "/plans" in self.path:
-                    self._reply({"ok": True, "plans": board._open_plans()})
+                elif "/plans" in self.path and binding_scripted:
+                    self._reply(board._open_plans())
                 else:
-                    self._reply({"ok": True, "agents": []})
+                    self._reply_status(404, {
+                        "ok": False,
+                        "error": f"unscripted read: {self.command} {self.path}"})
 
             def _drop_connection(self, shape):
                 """Break this connection in one of `DROP_SHAPES`, after the
@@ -318,7 +371,9 @@ class RecordingBoard:
             def do_POST(self):
                 body = self._body()
                 with board._lock:
-                    board.events.append((time.time(), "POST", self.path, body))
+                    # Logged under the method it came in on: a PATCH (routed
+                    # here by `do_PATCH`) is logged as a PATCH.
+                    board.events.append((time.time(), self.command, self.path, body))
                     held = board._hold_path == self.path
                     if held:
                         board._hold_path = None
@@ -332,6 +387,10 @@ class RecordingBoard:
                     return
                 if held:
                     board._hold_released.wait(timeout=30)
+                scripted = board._scripted_answer(self.command, self.path)
+                if scripted is not None:
+                    self._reply_status(*scripted)
+                    return
                 refused = board._caller_refusal(self.path, body)
                 if refused is not None:
                     self._reply_status(*refused)
@@ -419,7 +478,10 @@ class RecordingBoard:
 
         self._httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         self.url = f"http://127.0.0.1:{self._httpd.server_address[1]}"
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        # A short poll: `shutdown()` waits for the loop's next poll, so the
+        # stock half-second poll made every `close()` wait up to 0.5 s.
+        self._thread = threading.Thread(target=self._httpd.serve_forever,
+                                        kwargs={"poll_interval": 0.05}, daemon=True)
         self._thread.start()
 
     def close(self):
@@ -601,9 +663,16 @@ class RecordingBoard:
                     if m == "GET" and p in HEALTH_PATHS]
 
     def posts(self):
-        """`[(path, body), ...]` for every POST, in wire order."""
+        """`[(path, body), ...]` for every POST and PATCH, in wire order --
+        every write the board took; `patches()` keeps only the PATCHes."""
         with self._lock:
-            return [(p, b) for _, m, p, b in self.events if m == "POST"]
+            return [(p, b) for _, m, p, b in self.events if m in ("POST", "PATCH")]
+
+    def patches(self):
+        """`[(path, body), ...]` for every PATCH, in wire order (a subset of
+        `posts()`), so a test can assert a write came in as a PATCH."""
+        with self._lock:
+            return [(p, b) for _, m, p, b in self.events if m == "PATCH"]
 
     def aborts(self):
         """CR-CRU-170 \u00a7S2 \u2014 `[(path, body), ...]` for every `POST
@@ -672,13 +741,15 @@ class RecordingBoard:
                 f"require an ACTIVE cycle")
 
     def _open_plans(self):
+        """The plans read (`handlePlansList`' shape, `PLANS_ANSWER`) of a
+        board `refuse_cycle_binding` scripted: one open plan naming its
+        active and its done cycle."""
         with self._lock:
             active, done = self._active_cycle, self._refused_binding
-        if active is None:
-            return []
-        return [{"planId": 1, "cr": "CR-T-BINDING", "status": "open",
-                 "cycles": [{"id": active, "status": "active"},
-                            {"id": done, "status": "done"}]}]
+        plans = [{"planId": 1, "cr": "CR-T-BINDING", "status": "open",
+                  "cycles": [{"id": active, "status": "active"},
+                             {"id": done, "status": "done"}]}]
+        return dict(PLANS_ANSWER, plans=plans, filed=len(plans))
 
     def _caller_refusal(self, path, body):
         """`(status, answer)` for a POST the scripted binding refusal
@@ -727,7 +798,8 @@ class RecordingBoard:
 
     def received_at(self, post_index):
         with self._lock:
-            return [t for t, m, _p, _b in self.events if m == "POST"][post_index]
+            return [t for t, m, _p, _b in self.events
+                    if m in ("POST", "PATCH")][post_index]
 
     def messages(self):
         """Every heartbeat message, in wire order."""
@@ -737,6 +809,66 @@ class RecordingBoard:
 
     def run_ids_opened(self):
         return [f"run-live-{i}" for i in range(1, self._run_seq + 1)]
+
+    def answer(self, method, path, body, status=200, prefix=False, times=None):
+        """Answer `method` (`GET`, `POST`, `PATCH`) on `path` with `status`
+        and the JSON `body` (a copy, taken now) -- a refusal is a non-200
+        status and its `{ok: False, error}` body. `path` is the request path
+        with its query, matched exactly, or as a prefix when `prefix`. With
+        `times` the answer is given for the next `times` such requests only;
+        without, for every one. The answer set last wins; the request is
+        still recorded, and a request no answer matches keeps the board's own
+        answer."""
+        if times is not None and times < 1:
+            raise ValueError(f"times must be at least 1, not {times!r}")
+        copied = json.loads(json.dumps(body))
+        with self._lock:
+            self._answers.insert(0, [method.upper(), path, prefix, status,
+                                     copied, times])
+
+    def _scripted_answer(self, method, path):
+        """`(status, body)` of the answer set for this request, or None."""
+        with self._lock:
+            for entry in self._answers:
+                verb, wanted, prefix, status, body, remaining = entry
+                if verb != method:
+                    continue
+                if not (path.startswith(wanted) if prefix else path == wanted):
+                    continue
+                if remaining is not None:
+                    entry[5] = remaining - 1
+                    if entry[5] == 0:
+                        self._answers.remove(entry)
+                return status, json.loads(json.dumps(body))
+        return None
+
+    def mint_event_id(self, at_ms=None):
+        """An event id as the store mints one (`Store.nextEventId`,
+        src/store.ts): `evt-<ms>-<seq>`, `<ms>` the epoch milliseconds (now,
+        or `at_ms`) and `<seq>` this board's own sequence, one higher on every
+        call and never reset -- so ids minted within one millisecond differ
+        only by a sequence that grows past two digits (`-100` after `-59`)."""
+        at = int(time.time() * 1000) if at_ms is None else int(at_ms)
+        with self._lock:
+            self._event_seq += 1
+            seq = self._event_seq
+        return f"evt-{at}-{seq}"
+
+    def milestone_record(self, project_key, agent_id, milestone_type, label,
+                         at_ms=None, **fields):
+        """One milestone as `handleProjectMilestones` lists it (`Store.toEvent`
+        over a record `recordMilestoneEvent` wrote, src/store.ts): a minted
+        `id` and its millisecond `timestamp`, the posting project and agent,
+        `kind` `milestone`, `tier` `unit`, the `type` (`milestone_type`) and
+        `label`, and any
+        further `fields` (a gate's `outcome`, `scope`, `suites`, a `commit`)
+        as given. For a test to list in `MILESTONES_ANSWER`."""
+        at = int(time.time() * 1000) if at_ms is None else int(at_ms)
+        record = {"id": self.mint_event_id(at), "projectKey": project_key,
+                  "agentId": agent_id, "kind": "milestone", "tier": "unit",
+                  "timestamp": at, "type": milestone_type, "label": label}
+        record.update(json.loads(json.dumps(fields)))
+        return record
 
 
 def junit_sent(body):
@@ -861,18 +993,37 @@ def heartbeat_index(posts, message):
                        and isinstance(b, dict) and b.get("message") == message)
 
 
+#: A live `[client]` table, from its header line to the next live table
+#: header line or the end of the file. Comments and array values carry
+#: brackets, so the end is a whole header LINE, never the first `[`.
+_LIVE_CLIENT_TABLE = re.compile(
+    r"(?ms)^[ \t]*\[[ \t]*client[ \t]*\][ \t]*(?:#[^\n]*)?$"
+    r".*?(?=^[ \t]*\[\[?[ \t]*[A-Za-z0-9_.\-]+[ \t]*\]\]?[ \t]*(?:#[^\n]*)?$|\Z)")
+
+
+def project_toml_declaring(board_url):
+    """The project `crucible.toml` a live-run fixture writes: the shipped
+    file's limits and tables, with the project's OWN `[client]` table naming
+    `board_url`. Any `[client]` table the shipped file carries is dropped
+    first, so the text is right whether or not the distribution ships one, and
+    the result is read back: a fixture whose project declares no board would
+    fall through to whatever the install declares."""
+    shipped = _LIVE_CLIENT_TABLE.sub("", SHIPPED_TOML.read_text()).rstrip("\n")
+    text = f'{shipped}\n\n[client]\nurl = "{board_url}"\n'
+    declared = tomllib.loads(text).get("client", {}).get("url")
+    assert declared == board_url, (
+        f"fixture broken: the project file declares {declared!r}, not "
+        f"{board_url!r}")
+    return text
+
+
 def install_project(project_dir, board_url, project_key, project_name=None):
     with open(os.path.join(project_dir, ".env"), "w") as f:
         f.write(f"CRUCIBLE_PROJECT_KEY={project_key}\n")
         if project_name:
             f.write(f"CRUCIBLE_PROJECT_NAME={project_name}\n")
-    toml_text = SHIPPED_TOML.read_text()
-    assert 'url = "http://localhost:3849"' in toml_text, (
-        "fixture assumption broken: clients/crucible.toml no longer ships "
-        "the default [client] url this fixture patches")
     with open(os.path.join(project_dir, "crucible.toml"), "w") as f:
-        f.write(toml_text.replace('url = "http://localhost:3849"',
-                                  f'url = "{board_url}"'))
+        f.write(project_toml_declaring(board_url))
 
 
 def scrubbed_env(path_prefix=None, **extra):

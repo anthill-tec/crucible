@@ -34,7 +34,6 @@ import os
 import shutil
 import tempfile
 import urllib.parse
-from pathlib import Path
 from unittest import mock
 
 from tests.client.kept_coverage_answer import (
@@ -44,11 +43,11 @@ from tests.client.kept_coverage_answer import (
     listed_rows,
 )
 from tests.client.live_run_harness import load_toon
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     declare_board,
     install_project_limits,
 )
-from tests.client.test_runs_and_run_read_a_projects_stored_runs_back import (
+from tests.client.runs_and_run_read_a_projects_stored_runs_back_helpers import (
     ENV_KEYS,
     EVENT_PATH_PREFIX,
     FULL_TEST_EVENT,
@@ -59,8 +58,9 @@ from tests.client.test_runs_and_run_read_a_projects_stored_runs_back import (
     _load_module,
     _run_main,
 )
+from tests.client import TEST_INSTALL_CLIENTS
 
-CLIENTS_DIR = Path(__file__).resolve().parents[2] / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 
 #: Every client that has the `run` verb.
 RUN_VERB_CLIENTS = {stack: CLIENTS_DIR / f"{stack}-crucible.py"

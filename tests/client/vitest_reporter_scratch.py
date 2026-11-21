@@ -38,8 +38,9 @@ import subprocess
 from pathlib import Path
 
 from tests.client.live_run_harness import REPO_ROOT, new_scratch, scrubbed_env
+from tests.client import CLIENT_SOURCE_DIR
 
-REPORTERS_DIR = REPO_ROOT / "clients" / "reporters"
+REPORTERS_DIR = CLIENT_SOURCE_DIR / "reporters"
 REPORTER_NAME = "vitest-crucible.ts"
 REPORTER = REPORTERS_DIR / REPORTER_NAME
 VITEST_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "vitest-project"

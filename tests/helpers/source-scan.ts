@@ -2,7 +2,7 @@
 // as text: the tree walker and the comment-vs-live-text classifier.
 //
 // LIFTED, not re-derived (CR-CRU-097 §S6). Every function here was
-// file-local to tests/docs-retired-mirror-references.test.ts, which proved
+// file-local to tests/unit/docs-retired-mirror-references.test.ts, which proved
 // them; CR-CRU-097's namespace tripwire needs the same
 // comment-vs-string discrimination, and writing a second stripper is
 // exactly the failure CR-CRU-096's C1 fix round was opened for (a
@@ -372,7 +372,7 @@ export function jsLiveCode(text: string): string {
 // the `;` that ends the statement when one arrives at depth 0 — so an
 // unterminated group can never swallow the rest of the file.
 //
-// LIFTED in CR-CRU-104 §S3 from tests/project-namespace-tripwire.test.ts,
+// LIFTED in CR-CRU-104 §S3 from tests/integration/project-namespace-tripwire.test.ts,
 // which proved it (its assertion-span and object-literal walks both call it),
 // because the accepted-field guard needs the same walk to find the span of
 // the object literal handed to the store — and a second hand-rolled brace
@@ -410,7 +410,7 @@ export function balancedEnd(text: string, from: number): number {
 // early and see nothing), and an unterminated span can never swallow the rest
 // of the file.
 //
-// LIFTED in CR-CRU-104 §S3 from tests/project-namespace-tripwire.test.ts's
+// LIFTED in CR-CRU-104 §S3 from tests/integration/project-namespace-tripwire.test.ts's
 // `statementEnd`, PARAMETERISED by the terminator set rather than copied: the
 // tripwire ends a statement (`;`), the accepted-field guard ends an object
 // property's value expression (`;` or `,`), and the two bodies were otherwise

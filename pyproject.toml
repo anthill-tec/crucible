@@ -34,21 +34,27 @@ Issues = "https://github.com/anthill-tec/crucible/issues"
 #                            (CR-CRU-040 §S1); coverage.py is the only
 #                            supported coverage path for this client.
 #   build                  — the PEP 517 frontend the packaging contracts
-#                            build a real wheel with. Fail-fast, never
-#                            skipped: `setUpClass` RAISES when no reachable
-#                            interpreter can `import build`, because a silent
+#                            build a real wheel with, as
+#                            `sys.executable -m build --wheel --no-isolation`:
+#                            the suite's OWN interpreter, offline, no other
+#                            interpreter tried. Fail-fast, never skipped:
+#                            `setUpClass` RAISES, naming this extra, when
+#                            `importlib.util.find_spec` cannot find `build`,
+#                            `hatchling` or `hatch_vcs`, because a silent
 #                            skip is how a packaging defect stays invisible.
-#                            Reachability is the operative word — under
-#                            `uv run`, `sys.executable`, `which("python3")`
-#                            and `sys.base_prefix` all resolve to the venv or
-#                            the uv-managed interpreter, so a `build` present
-#                            only in the SYSTEM python is not reachable and
-#                            the gate correctly reports it missing. Named
-#                            demanders: test_cr046_uv_env_gate.py:174,
-#                            test_crucible_axi_wheel_packaging.py:121, and
-#                            test_shipped_limits_ship_as_package_data.py:125
+#                            Named demanders (each `_build_modules_gap`):
+#                            test_cr046_uv_env_gate.py,
+#                            test_crucible_axi_wheel_packaging.py, and
+#                            test_shipped_limits_ship_as_package_data.py
 #                            (three classes — CR-CRU-131 §S1c's travel,
 #                            one-datum and version-skew proofs).
+#   hatchling              — the build backend `[build-system]` names. With
+#                            `--no-isolation` no isolated environment
+#                            downloads it, so the suite's interpreter carries
+#                            it; same demanders and floor as `[build-system]`.
+#   hatch-vcs              — the version source plugin `[build-system]` names
+#                            (`[tool.hatch.version] source = "vcs"`); carried
+#                            here for the same offline build, same demanders.
 #   pytest                 — the second runner the python client drives, for
 #                            a project declaring `[python] runner = "pytest"`
 #                            in its own crucible.toml or a run passing
@@ -71,7 +77,8 @@ Issues = "https://github.com/anthill-tec/crucible/issues"
 #                            `[tool.ruff.lint]` below declares;
 #                            test_the_run_pipeline_lives_in_its_own_shared_module.py
 #                            runs `--select F` on the two shared modules.
-dev = ["coverage>=7", "build>=1", "pytest>=9", "ruff>=0.16,<0.17"]
+dev = ["coverage>=7", "build>=1", "pytest>=9", "ruff>=0.16,<0.17",
+       "hatchling>=1.27", "hatch-vcs>=0.4"]
 
 [project.scripts]
 crucible-axi = "crucible_axi.cli:main"
@@ -89,9 +96,9 @@ packages = ["crucible_axi"]
 # resolve every limit with no git checkout present (CR-CRU-131 §S1c).
 #
 # The mapping is RECURSIVE and must stay so: `clients/crucible.toml` is the
-# fleet's last resort and the file `[manifest]` copies to `<target-dir>` for the
-# operator to edit, so narrowing this to the `*.py` fleet would ship an
-# orchestrator whose clients have nothing to fall back to.
+# fleet's last resort for its LIMITS (it declares no board) and the file
+# `[manifest]` copies to `<target-dir>` for the operator to edit, so narrowing
+# this to the `*.py` fleet would ship clients with no limits to fall back to.
 [tool.hatch.build.targets.wheel.force-include]
 "clients" = "crucible_axi/clients"
 

@@ -31,7 +31,7 @@ Feature: CR-CRU-014 §S3, amended by CR-CRU-083 AC7, CR-CRU-078 §S1/§S4 and CR
   the same node TWICE — once while it is PENDING (inert), then again once a
   filed plan has made it IN_PROGRESS (swaps). The third and fourth cases
   (COMPLETED swaps, COMPLETED_UNTRACKED inert) are pinned at unit level in
-  tests/roadmap-release-focus.test.ts; the e2e's job is to prove the seam
+  tests/integration/roadmap-release-focus.test.ts; the e2e's job is to prove the seam
   through the real server and the real SPA, not to re-enumerate the matrix.
 
   Scenario: the roadmap flowchart draws the focused release's wave, and its CR node's tap is inert while PENDING and swaps to the Workflow tab once a filed plan makes it IN_PROGRESS

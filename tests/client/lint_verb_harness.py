@@ -57,14 +57,15 @@ from tests.client.project_create_harness import (
     closed_port_url,
     decode_envelope,
 )
-from tests.client.test_client_fleet_envelope_census import (
+from tests.client.client_fleet_envelope_census_helpers import (
     _build_fake_bin_dir,
     declare_and_require_board,
     install_project_limits,
 )
+from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 
 #: The six clients, in a fixed order; each client's stack is its key.
 CLIENTS = ("python", "bun", "rust", "mvn", "arduino", "go")

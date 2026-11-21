@@ -22,7 +22,7 @@
 // groups these fixtures already assert, just nested one level deeper. The
 // release is ALONE in the `releases` array, so it IS "the open release"
 // (RED's own default-open rule for CR-CRU-173 §S1, documented in
-// tests/workflow-history-release-tree.test.ts) and starts expanded — none
+// tests/integration/workflow-history-release-tree.test.ts) and starts expanded — none
 // of these pre-existing fixtures relied on a folded top level, so nothing
 // they already assert moves except its nesting depth.
 //
@@ -31,7 +31,7 @@
 // `workflowLens` builds purely from events' `context.wave` — had no plan,
 // queue or release record to hang a release row off at all. The ruling
 // places a runs-only inferred wave by its FIRST RUN's time, so that one
-// fixture (tests/workflow-lens.test.ts's "§S3 history lens — inferred
+// fixture (tests/integration/workflow-lens.test.ts's "§S3 history lens — inferred
 // fallback (no plan)" describe block) now supplies its own explicit
 // `history` stub directly to `mountApp` instead of calling this function
 // (which stays plan-driven, unchanged, for every other fixture).

@@ -1,50 +1,77 @@
-"""Fixtures for the `release-notes` suites: a real, throwaway board seeded
-through its own routes, one project per scenario, the six clients driven as
-genuine subprocesses, and a capturing proxy that records every request a
+"""Fixtures for the `release-notes` suites: a fake board (`RecordingBoard`)
+seeded scenario by scenario, one project per scenario, the six clients driven
+as genuine subprocesses, and a capturing proxy that records every request a
 client makes (and can answer one chosen read with an error).
 
 Not a test module: it holds no `TestCase`.
 
-The board is `tests/client/real_board.py`'s `RealBoard` (a scratch `bun run
-src/server.ts` on a free port over a `mkdtemp` store, never :3849/:3850). A
-scenario's history is built the way the board really builds one:
+The board is `tests/client/live_run_harness.py`'s `RecordingBoard`, a stand-in
+on loopback. A scenario is SEEDED here the way an operator builds one on the
+real board — a release is proposed, its CRs declared in the queue, each CR
+landed by a closed plan (with or without a merge, with or without a title),
+the release shipped with the CRs it names — and the seeder scripts, for each
+project, the four reads `release-notes` makes in the server's own shapes:
 
-- a release is PROPOSED (`…/release-proposals`), its CRs are DECLARED in it
-  (`…/queue/plan`, which records each CR's queue title);
-- a CR LANDS when a plan filed for it (`…/plans`, with or without a title) has
-  its cycle sealed and is closed with a merge commit — the server stamps
-  `closedAt` itself, so landing order is the order the closes are made;
-- a release SHIPS through the python client's own `milestone --type release
-  … --released-at <epoch> --crs <ids>`, the very path `scripts/release.sh`
-  (`emit_release_milestone`) records a ship with.
+- `GET …/history` — one row per past release, newest version first, as
+  `projectHistory` (src/v2.ts) composes it from those records;
+- `GET …/plans?status=closed` — the closed plans, each with its `closedAt`
+  (epoch ms, strictly increasing in landing order), its title when it was
+  filed with one, and `merge.commit` only when it was closed with a merge;
+- `GET …/queue` — each declared CR with its queue title, wave and release;
+- `GET …/release-proposals` — the live proposals.
+
+What the server STORES for those writes, and the history it derives, is the
+server's half and is held by the bun route tests (CR-CRU-262 route pass,
+red970-report row 5): `history-by-release-read.test.ts`,
+`plans-status-filter.test.ts`, `closed-plans-read-carries-merge-and-title-
+verbatim.test.ts`, `plans.test.ts` and `queue-registration.test.ts`. These
+suites keep the CLIENT's half: what it reads, in which order, and what it
+drafts from the answers.
+
+The seeder's `SeededProject.history` / `_history_row` /
+`SeededProject._place_unheld_crs` are a second copy of the server's
+`projectHistory` / `historyRow` / `placeUnnamedCrs` (src/v2.ts), good for
+these scenarios only. They differ from the server in exactly these ways:
+
+- no dead-CR filter: a queued CR declared VOID or SUPERSEDED that no plan
+  took up is still placed in a release (`projectHistory` drops it);
+- no `activatedAt` fallback: a CR with no closed plan is placed as a CR with
+  no time yet, where `placeUnnamedCrs` places it by its first cycle's
+  `activatedAt`;
+- `commit`: a shipped row always carries the fixture's `FIXTURE_COMMIT`,
+  where `historyRow` carries the release record's own commit, and none when
+  the record holds none;
+- `gateRuns`: always empty (with `verificationRuns` 0 and no `packages`),
+  where `historyRow` lists the release's gate runs.
+
+If the server changes how it derives history, these suites stay green against
+the old shape: the bun test that holds the server's derivation is
+`tests/unit/history-by-release-read.test.ts`.
 
 Every project directory declares its board in its own `crucible.toml` and is
-checked by `declare_and_require_board`, so no drive can resolve the shipped
-default board.
+checked by `declare_and_require_board`, so no drive can resolve another board.
 """
 
 import contextlib
 import datetime
-import http.server as http_server
 import importlib.util
+import itertools
 import json
 import shutil
 import subprocess
 import sys
 import tempfile
-import threading
-import urllib.error
+import time
 import urllib.parse
-import urllib.request
+import uuid
 from pathlib import Path
 
-from tests.client.live_run_harness import install_project, scrubbed_env
-from tests.client.real_board import REPO_ROOT, RealBoard, _require_http_scheme
-from tests.client.test_client_fleet_envelope_census import (
-    declare_and_require_board,
-)
+from tests.client.live_run_harness import (  # noqa: F401 -- REPO_ROOT is re-exported to the release-notes modules
+    REPO_ROOT, RecordingBoard, install_project, scrubbed_env)
+from tests.client.client_fleet_envelope_census_helpers import declare_and_require_board
+from tests.client import TEST_INSTALL_CLIENTS
 
-CLIENTS_DIR = REPO_ROOT / "clients"
+CLIENTS_DIR = TEST_INSTALL_CLIENTS
 TOON_PATH = CLIENTS_DIR / "toon.py"
 RELEASE_MODULE = CLIENTS_DIR / "_crucible_release.py"
 CORE_MODULE = CLIENTS_DIR / "_crucible_axi.py"
@@ -80,8 +107,6 @@ STUB_HELP = "stub-board-help: retry the read once the board answers"
 _EXTRA_SCRUB = ("CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY", "CRUCIBLE_AGENT",
                 "WORKFLOW_RELEASE")
 
-_RESERVED_PORTS = (3850, 3849, 39877)
-
 
 # ── dates and the expected section ──────────────────────────────────────────
 
@@ -112,56 +137,96 @@ def expected_section(label, date, cr_lines):
     return text
 
 
-# ── HTTP ────────────────────────────────────────────────────────────────────
-
-def board_http(base, path, payload=None, method=None):
-    data = None if payload is None else json.dumps(payload).encode()
-    request = urllib.request.Request(  # noqa: S310
-        _require_http_scheme(base + path), data=data,
-        method=method or ("POST" if data is not None else "GET"),
-        headers={"content-type": "application/json",
-                 "accept": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
-            return json.loads(response.read().decode())
-    except urllib.error.HTTPError as exc:
-        return json.loads(exc.read().decode())
-
-
-def _require(answer, what):
-    if not isinstance(answer, dict) or not answer.get("ok"):
-        raise RuntimeError(f"fixture: {what} failed: {answer!r}")
-    return answer
-
-
 # ── the board and its projects ──────────────────────────────────────────────
 
+class FakeBoard:
+    """A `RecordingBoard` and the scratch directory its projects live in."""
+
+    def __init__(self, name):
+        self.tmpdir = tempfile.mkdtemp(prefix=f"{name}-")
+        self.recording = RecordingBoard()
+        self.base = self.recording.url
+        # Plan and cycle ids are per board, as the store numbers them.
+        self._ids = itertools.count(1)
+
+    def next_id(self):
+        return next(self._ids)
+
+    def close(self):
+        try:
+            self.recording.close()
+        finally:
+            shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+
 def start_board(name):
-    """A real scratch board, or `None` when there is no `bun` to run one."""
-    bun = shutil.which("bun")
-    if bun is None:
-        return None
-    return RealBoard(bun, name)
+    """A fresh fake board for one module's scenarios."""
+    return FakeBoard(name)
+
+
+def _version_key(label):
+    """A release label as `compareVersionLabels` orders it: numerically, part
+    by part."""
+    return tuple(int(part) if part.isdigit() else 0
+                 for part in str(label).split("."))
+
+
+def _history_row(entry, wave_of, completed):
+    """One release's history row, as `historyRow` (src/v2.ts) shapes it:
+    its completed CRs by wave (a wave with none is not listed), the rest
+    counted pending, and its state."""
+    crs = entry["crs"]
+    shipped = "shippedAt" in entry
+    done = [cr for cr in crs if cr in completed]
+    waves = {}
+    for cr in crs:
+        if cr not in wave_of:
+            continue
+        held = waves.setdefault(wave_of[cr], {"crs": [], "pendingCount": 0})
+        if cr in completed:
+            held["crs"].append(cr)
+        else:
+            held["pendingCount"] += 1
+    state = ("shipped" if shipped else
+             "ship not recorded" if crs and len(done) == len(crs)
+             else "in progress")
+    row = {"labels": [entry["label"]], "state": state}
+    if shipped:
+        row.update({"shippedAt": entry["shippedAt"],
+                    "tag": f"v{entry['label']}", "commit": FIXTURE_COMMIT})
+    if "targetAt" in entry:
+        row["targetAt"] = entry["targetAt"]
+    row.update({
+        "crCount": len(done), "pendingCount": len(crs) - len(done),
+        "waves": [{"wave": wave, "crs": held["crs"],
+                   "pendingCount": held["pendingCount"]}
+                  for wave, held in sorted(
+                      waves.items(), key=lambda kv: _version_key(kv[0]),
+                      reverse=True) if held["crs"]],
+        "workflows": [{"label": entry["label"], "gateRuns": [],
+                       "verificationRuns": 0}]})
+    return row
 
 
 class SeededProject:
-    """One project on a real board, its orchestrator registered, and a
-    project directory whose own configuration resolves that board."""
+    """One project on a fake board, and a project directory whose own
+    configuration resolves that board. Every seeding call re-scripts the
+    project's four reads in the server's shapes."""
 
     def __init__(self, board, name):
         self.board = board
         self.base = board.base
         self.name = name
-        created = _require(board.http("/api/v2/projects", {"name": name}),
-                           f"creating project {name}")
-        self.key = created["project"]["key"]
-        _require(board_http(self.base, "/api/v2/agents/register",
-                      {"projectKey": self.key, "agentId": ORCHESTRATOR,
-                       "status": "online", "role": "ORCHESTRATOR",
-                       "identity": {"displayName": ORCHESTRATOR,
-                                    "source": "manual"}}),
-                 f"registering the orchestrator on {name}")
+        self.key = str(uuid.uuid4())
+        self._proposals = []      # [{label, targetAt}]
+        self._queue = []          # [{cr, title, wave, release}]
+        self._plans = []          # closed plans, in closing order
+        self._ships = {}          # label -> {releasedAt, crs}
+        # `closedAt` in epoch ms, strictly increasing close after close, as
+        # the server stamps it on each close.
+        self._clock_ms = int(time.time() * 1000) - 60_000
         self.project_dir = self.dir_through(self.base)
+        self._publish()
 
     def dir_through(self, base):
         """A fresh project directory for this project whose configuration
@@ -175,101 +240,176 @@ class SeededProject:
     # -- the roadmap --------------------------------------------------------
 
     def propose(self, label):
-        _require(board_http(self.base,
-                      f"/api/v2/projects/{self.key}/release-proposals",
-                      {"label": label, "agentId": ORCHESTRATOR,
-                       "targetAt": utc_epoch(2027, 6, 1)}),
-                 f"proposing {label}")
+        self._proposals.append({"label": label,
+                                "targetAt": utc_epoch(2027, 6, 1)})
+        self._publish()
 
     def declare(self, cr, title, release, wave="1"):
         """Declare `cr` in `release` with its queue title."""
-        _require(board_http(self.base, f"/api/v2/projects/{self.key}/queue/plan",
-                      {"cr": cr, "title": title, "release": release,
-                       "wave": wave, "agentId": ORCHESTRATOR}),
-                 f"declaring {cr} in {release}")
+        self._queue.append({"cr": cr, "title": title, "wave": wave,
+                            "release": release})
+        self._publish()
 
     # -- landing ------------------------------------------------------------
 
     def land(self, cr, title=None, wave="1", merged=True):
-        """File a plan for `cr` (titled when `title` is given), seal its one
-        cycle and close it with a merge commit: the CR lands now.
-
-        With `merged=False` the plan is closed WITHOUT a merge — the board's
-        plan route takes `merge` as optional, so this is a close the board
-        really records — and the CR does not land by it."""
-        body = {"cr": cr, "wave": wave, "cycles": [{"label": "solo"}],
-                "agentId": ORCHESTRATOR}
+        """A plan for `cr` (titled when `title` is given), its one cycle
+        done, closed now — with a merge commit, so the CR lands, or with
+        `merged=False` without one, so it does not land by it."""
+        self._clock_ms += 1000
+        plan_id = self.board.next_id()
+        plan = {"planId": plan_id, "projectKey": self.key, "cr": cr,
+                "wave": wave, "status": "closed",
+                "cycles": [{"id": self.board.next_id(), "label": "solo",
+                            "kind": "red-green", "status": "done",
+                            "activatedAt": self._clock_ms - 500,
+                            "doneAt": self._clock_ms - 100}],
+                "closedAt": self._clock_ms}
         if title is not None:
-            body["title"] = title
-        filed = _require(board_http(self.base, f"/api/v2/projects/{self.key}/plans",
-                              body), f"filing a plan for {cr}")
-        plan_id = filed["planId"]
-        cycle_id = filed["cycles"][0]["id"]
-        for status in ("active", "done"):
-            _require(board_http(self.base,
-                          f"/api/v2/projects/{self.key}/plans/{plan_id}"
-                          f"/cycles/{cycle_id}",
-                          {"status": status, "agentId": ORCHESTRATOR},
-                          method="PATCH"),
-                     f"moving {cr}'s cycle to {status}")
-        close: dict[str, object] = {"status": "closed", "agentId": ORCHESTRATOR}
+            plan["title"] = title
         if merged:
-            close["merge"] = {"commit": FIXTURE_COMMIT}
-        _require(board_http(self.base, f"/api/v2/projects/{self.key}/plans/{plan_id}",
-                      close, method="PATCH"),
-                 f"closing {cr}'s plan")
+            plan["merge"] = {"commit": FIXTURE_COMMIT}
+        self._plans.append(plan)
+        self._publish()
         return plan_id
 
     # -- shipping -----------------------------------------------------------
 
     def ship(self, label, released_at, crs=()):
-        """Record the ship through the python client's `milestone` verb."""
-        argv = [sys.executable, str(CLIENTS_DIR / "python-crucible.py"),
-                "milestone", "--type", "release", "--label", label,
-                "--commit", FIXTURE_COMMIT, "--agent", ORCHESTRATOR,
-                "--released-at", str(released_at)]
-        if crs:
-            argv += ["--crs", ",".join(crs)]
-        argv += ["--project-dir", self.project_dir]
-        run = subprocess.run(argv, cwd=self.project_dir, env=drive_env(),
-                             capture_output=True, text=True, timeout=120,
-                             check=False)
-        if run.returncode != 0:
-            raise RuntimeError(
-                f"fixture: shipping {label} failed: exit={run.returncode} "
-                f"stdout={run.stdout!r} stderr={run.stderr!r}")
+        """The release record a ship writes: `released_at` (epoch seconds)
+        and the CRs it names (none named when `crs` is empty)."""
+        self._ships[label] = {"releasedAt": released_at,
+                              "crs": list(crs) if crs else None}
+        self._publish()
 
-    # -- the board's own answers --------------------------------------------
+    # -- the answers --------------------------------------------------------
+
+    def closed_plans(self):
+        """The closed plans, as `GET …/plans?status=closed` lists them."""
+        return json.loads(json.dumps(self._plans))
+
+    def queue_entries(self):
+        """The queue, as `GET …/queue` lists it."""
+        entries = []
+        for seq, entry in enumerate(self._queue, start=1):
+            mine = [p for p in self._plans if p["cr"] == entry["cr"]]
+            merged = [p for p in mine if p.get("merge")]
+            row = {"cr": entry["cr"], "title": entry["title"],
+                   "wave": entry["wave"], "dependsOn": [],
+                   "status": "COMPLETED" if merged else "PENDING",
+                   "seq": seq, "release": entry["release"]}
+            if mine:
+                row["planId"] = mine[-1]["planId"]
+            entries.append(row)
+        return entries
+
+    def history(self):
+        """The history rows, as `projectHistory` (src/v2.ts) composes them
+        from this project's records: a shipped release's CRs are those its
+        record names (else the queue's), an unshipped one's are the queue's,
+        and a CR no release holds falls in the release that succeeds its
+        close. Only a past release — shipped, or with a completed CR — is a
+        row; newest version first."""
+        labels = self._release_labels()
+        completed = {p["cr"] for p in self._plans if p.get("merge")}
+        for ship in self._ships.values():
+            completed.update(ship["crs"] or [])
+        self._place_unheld_crs(labels)
+        wave_of = {p["cr"]: p.get("wave", "") for p in self._plans}
+        wave_of.update({e["cr"]: e["wave"] for e in self._queue})
+        return [_history_row(entry, wave_of, completed)
+                for entry in sorted(labels.values(),
+                                    key=lambda e: _version_key(e["label"]),
+                                    reverse=True)
+                if "shippedAt" in entry
+                or any(cr in completed for cr in entry["crs"])]
+
+    def _release_labels(self):
+        """Each release label and the CRs it holds: a ship record first,
+        then a proposal, then a label only the queue names."""
+        queued_under = {}
+        for entry in self._queue:
+            queued_under.setdefault(entry["release"], []).append(entry["cr"])
+        labels = {}
+        for label, ship in self._ships.items():
+            crs = ship["crs"] if ship["crs"] is not None else queued_under.get(label)
+            labels[label] = {"label": label, "shippedAt": ship["releasedAt"],
+                             "crs": list(dict.fromkeys(crs or []))}
+        for proposal in self._proposals:
+            labels.setdefault(proposal["label"], {
+                "label": proposal["label"], "targetAt": proposal["targetAt"],
+                "crs": list(dict.fromkeys(queued_under.get(proposal["label"]) or []))})
+        for label, crs in queued_under.items():
+            labels.setdefault(label, {"label": label,
+                                      "crs": list(dict.fromkeys(crs))})
+        return labels
+
+    def _place_unheld_crs(self, labels):
+        """A CR no release holds falls in the first release shipped at or
+        after its latest close, else the lowest unshipped one."""
+        held = {cr for entry in labels.values() for cr in entry["crs"]}
+        timeline = sorted(labels.values(), key=lambda e: (
+            (0, e["shippedAt"], ()) if "shippedAt" in e
+            else (1, 0, _version_key(e["label"]))))
+        unplaced = dict.fromkeys(
+            [e["cr"] for e in self._queue] + [p["cr"] for p in self._plans])
+        for cr in unplaced:
+            if cr in held:
+                continue
+            closes = [p["closedAt"] for p in self._plans if p["cr"] == cr]
+            at = max(closes) if closes else None
+            entry = next((e for e in timeline if "shippedAt" not in e or (
+                at is not None and e["shippedAt"] * 1000 >= at)), None)
+            if entry is not None:
+                entry["crs"].append(cr)
+
+    def _publish(self):
+        """Script the project's four reads with the answers as they stand."""
+        prefix = f"/api/v2/projects/{self.key}"
+        recording = self.board.recording
+        last_closed = self._plans[-1]["cr"] if self._plans else None
+        recording.answer("GET", f"{prefix}/history",
+                         {"ok": True, "releases": self.history(),
+                          "acceptedFailingGates": []})
+        recording.answer("GET", f"{prefix}/plans?status=closed",
+                         {"ok": True, "plans": self.closed_plans(),
+                          "lastClosedCr": last_closed,
+                          "filed": len(self._plans)})
+        recording.answer("GET", f"{prefix}/queue",
+                         {"ok": True, "entries": self.queue_entries(),
+                          "tracks": []})
+        proposals = [{"label": p["label"], "targetAt": p["targetAt"],
+                      "waves": sorted({e["wave"] for e in self._queue
+                                       if e["release"] == p["label"]})}
+                     for p in self._proposals if p["label"] not in self._ships]
+        recording.answer("GET", f"{prefix}/release-proposals",
+                         {"ok": True, "proposals": proposals,
+                          "totalCount": len(proposals)})
+
+    # -- the answers, as the fixtures check them ------------------------------
 
     def history_row(self, label):
-        """The board's own history row for `label`, or None."""
-        answer = _require(board_http(self.base,
-                               f"/api/v2/projects/{self.key}/history"),
-                          "reading the history")
-        for row in answer.get("releases") or []:
+        """The history row for `label`, or None."""
+        for row in self.history():
             if label in (row.get("labels") or []):
                 return row
         return None
 
     def history_crs(self, label):
-        """The CRs the board's history row for `label` counts completed, in
-        the order the row lists them."""
+        """The CRs the history row for `label` counts completed, in the
+        order the row lists them."""
         row = self.history_row(label) or {}
         return [cr for wave in row.get("waves") or []
                 for cr in wave.get("crs") or []]
 
     def closed_at(self):
-        """Every closed plan's `(cr, closedAt)`, as the board answers them."""
-        answer = _require(
-            board_http(self.base, f"/api/v2/projects/{self.key}/plans?status=closed"),
-            "reading the closed plans")
-        return [(plan.get("cr"), plan.get("closedAt"))
-                for plan in answer.get("plans") or []]
+        """Every closed plan's `(cr, closedAt)`."""
+        return [(plan.get("cr"), plan.get("closedAt")) for plan in self._plans]
 
 
 def require_strictly_later(project, earlier_cr, later_cr):
     """Fixture sanity: `later_cr`'s latest close is strictly after
-    `earlier_cr`'s latest close, as the board recorded them."""
+    `earlier_cr`'s latest close."""
     latest = {}
     for cr, at in project.closed_at():
         if at is not None:
@@ -278,7 +418,7 @@ def require_strictly_later(project, earlier_cr, later_cr):
             or latest[earlier_cr] >= latest[later_cr]:
         raise RuntimeError(
             f"fixture: {later_cr} must close strictly after {earlier_cr}; "
-            f"the board recorded {latest!r}")
+            f"the seeding recorded {latest!r}")
 
 
 # ── driving a client ────────────────────────────────────────────────────────
@@ -367,75 +507,15 @@ def stderr_lines(run):
     return [line for line in run.stderr.splitlines() if line.strip()]
 
 
-# ── the capturing proxy ─────────────────────────────────────────────────────
+# ── the recorded reads ────────────────────────────────────────────────────────
+#
+# A scenario's client is driven through `real_board.RecordingProxy` in front
+# of the fake board, which records every request `(method, path-with-query)`
+# in arrival order (`taken()`); `fail_read` is its `intercept` hook for a read
+# the stub answers instead of the board.
 
-class CapturingProxy:
-    """An HTTP proxy in front of a board: it records every request
-    `(method, path-with-query)` in arrival order and relays it, except a read
-    `fail_on` matches, which it answers 500 with the stub's own error and
-    help instead of reaching the board."""
-
-    def __init__(self, upstream, fail_on=None):
-        self.upstream = upstream
-        self.fail_on = fail_on
-        self.requests = []
-        self._lock = threading.Lock()
-        proxy = self
-
-        class Handler(http_server.BaseHTTPRequestHandler):
-            def _relay(self):
-                length = int(self.headers.get("Content-Length") or 0)
-                body = self.rfile.read(length) if length else None
-                with proxy._lock:
-                    proxy.requests.append((self.command, self.path))
-                if proxy.fail_on is not None and proxy.fail_on(self.command,
-                                                               self.path):
-                    status = 500
-                    payload = json.dumps({"ok": False, "error": STUB_ERROR,
-                                          "help": [STUB_HELP]}).encode()
-                else:
-                    request = urllib.request.Request(  # noqa: S310
-                        _require_http_scheme(proxy.upstream + self.path),
-                        data=body, method=self.command,
-                        headers={"content-type": "application/json"})
-                    try:
-                        with urllib.request.urlopen(request, timeout=20) as answer:  # noqa: S310
-                            status, payload = answer.status, answer.read()
-                    except urllib.error.HTTPError as exc:
-                        status, payload = exc.code, exc.read()
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-
-            do_GET = do_POST = do_PATCH = do_PUT = do_DELETE = _relay
-
-            def log_message(self, format, *args):  # noqa: A002 -- the base's own name
-                return None
-
-        for _ in range(20):
-            server = http_server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-            if server.server_address[1] not in _RESERVED_PORTS:
-                break
-            server.server_close()
-        else:
-            raise RuntimeError("no free proxy port outside the reserved ones")
-        self.server = server
-        self.base = f"http://127.0.0.1:{server.server_address[1]}"
-        self.thread = threading.Thread(target=server.serve_forever, daemon=True)
-        self.thread.start()
-
-    def taken(self):
-        """The requests recorded so far, and a fresh record from here on."""
-        with self._lock:
-            taken, self.requests = self.requests, []
-        return taken
-
-    def close(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=10)
+#: How long the proxy waits on the board's answer to one request.
+PROXY_TIMEOUT = 20
 
 
 def split_request(path):
@@ -463,8 +543,15 @@ def read_name(project_key, method, path):
 
 
 def fail_read(project_key, name):
-    """A `fail_on` predicate that fails exactly the read called `name`."""
-    return lambda method, path: read_name(project_key, method, path) == name
+    """A `RecordingProxy` `intercept` hook that fails exactly the read called
+    `name`: it answers 500 with the stub's own error and help instead of
+    reaching the board, and lets every other request through."""
+    def intercept(method, path, _body):
+        if read_name(project_key, method, path) != name:
+            return None
+        return 500, json.dumps({"ok": False, "error": STUB_ERROR,
+                                "help": [STUB_HELP]}).encode()
+    return intercept
 
 
 def write_refused_limit(project_dir):
@@ -495,4 +582,3 @@ def scratch_dir(prefix):
 
 def remove_dir(path):
     shutil.rmtree(path, ignore_errors=True)
-

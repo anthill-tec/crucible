@@ -581,7 +581,7 @@ export async function ingestCompile(
 }
 
 // 3-case junit: 2 pass + 1 fail w/ message="boom" (mirrors the fixture
-// already used in tests/v2-runs-events.test.ts; the v1 `ingest-routes.test.ts`
+// already used in tests/integration/v2-runs-events.test.ts; the v1 `ingest-routes.test.ts`
 // that first carried it was deleted by CR-CRU-008's C7 v1-retirement sweep).
 export const JUNIT_3CASE_1FAIL = [
   '<testsuite name="Suite1" tests="3">',
@@ -718,7 +718,7 @@ export function junitManySuites(suiteCount: number, leavesPerSuite: number): str
 }
 
 // rustc fixture per CR §S2 AC4: 1 error[E0308] block + 1 plain warning block
-// (same fixture shape as tests/v2-runs-events.test.ts; the v1
+// (same fixture shape as tests/integration/v2-runs-events.test.ts; the v1
 // `ingest-routes.test.ts` it also came from was deleted by CR-CRU-008's C7
 // v1-retirement sweep).
 export const RUSTC_ERRORS = [
@@ -731,7 +731,7 @@ export const RUSTC_ERRORS = [
 // ── CR-CRU-013 §S1/§S4b — gate/milestone event POST helpers (C6 BDD layer,
 // AC150 e2e round trip). Verbatim field names from the CR spec's §S1/§S4b
 // shape, matching the fixture already round-tripped server-side by
-// tests/gate-milestone-server.test.ts's `defaultGate`/`gateBody` helpers:
+// tests/integration/gate-milestone-server.test.ts's `defaultGate`/`gateBody` helpers:
 // {projectKey, agentId, context?{wave, track?}, gate:{intent, outcome,
 // steps:[{name, status, findings?, fixRounds?}], fixes?, push?, pr?}}.
 export interface GateStepFixture {
@@ -790,7 +790,7 @@ export async function postGate(
  *  §S1 (e2e) — widened with the CR-CRU-080/CR-CRU-084 "release" ceremony
  *  fields (`crs`, `releasedAt`, `packages`) `src/v2.ts` `handleMilestones`
  *  already reads straight off the body (verified by reading it — see
- *  CR-CRU-173's own tests/history-by-release-read.test.ts's `shipReleaseAt`
+ *  CR-CRU-173's own tests/unit/history-by-release-read.test.ts's `shipReleaseAt`
  *  for the store-level sibling of this same shape), additive and optional so
  *  every existing caller (gates.steps.ts's gap-analysis milestone) is
  *  unaffected. */

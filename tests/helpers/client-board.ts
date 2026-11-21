@@ -6,7 +6,7 @@
  * Every bun suite that drives a real client as a subprocess declares its board
  * through here, so the fleet's target is spelled one way in the TypeScript
  * half exactly as it is in the python half (`declare_and_require_board` in
- * `tests/client/test_client_fleet_envelope_census.py`).
+ * `tests/client/client_fleet_envelope_census_helpers.py`).
  *
  * THE INTERLOCK IS A SAFETY DEVICE, NOT CEREMONY. A suite that simply stopped
  * exporting does not fail: it silently stops steering, and the drive falls
@@ -16,17 +16,25 @@
  * not a red test but somebody else's board carrying this suite's rows. So the
  * declaration is READ BACK through the real shared resolver, in the same
  * process the client will load it with, before the spawn.
+ *
+ * CR-CRU-260 — the resolver is loaded from the TEST INSTALL
+ * (`tests/helpers/test-install.ts`), so a directory that declares no board
+ * falls through to the test install's empty `crucible.toml` and refuses,
+ * never to the operator's root one.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { clientScript } from "./test-install.ts";
 
 const REPO_ROOT = resolve(dirname(new URL(import.meta.url).pathname), "..", "..");
-const AXI_MODULE = join(REPO_ROOT, "clients", "_crucible_axi.py");
+
+/** The shared resolver module every probe here loads: the test install's. */
+export const RESOLVER_MODULE = clientScript("_crucible_axi.py");
 const CONFIG_NAME = "crucible.toml";
 
-/** The board a drive lands on when nothing declares one — named so a refusal
- *  can say what it avoided rather than only that it refused. */
-export const SHIPPED_DEFAULT_BOARD = "http://localhost:3849";
+/** The server's packaged port. No client falls back to it any more, but a
+ *  production install listens there, so a census never reads a board on it. */
+const PACKAGED_SERVER_PORT = "3849";
 
 /** Ask the fleet's OWN resolver what a client started in `dir` would resolve.
  *  In process, over no socket — the python interlock's exact question. */
@@ -47,7 +55,7 @@ function requireResolves(dir: string, url: string): void {
   const key = `${dir}\u0000${url}`;
   if (proven.has(key)) return;
   const probe = Bun.spawnSync({
-    cmd: ["python3", "-c", RESOLVER_PROBE, AXI_MODULE, dir],
+    cmd: ["python3", "-c", RESOLVER_PROBE, RESOLVER_MODULE, dir],
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -59,8 +67,8 @@ function requireResolves(dir: string, url: string): void {
     throw new Error(
       `refusing to drive a client in ${dir}: the board declared there is ` +
         `${url} but ${why}. A drive that does not resolve its own declared ` +
-        `board reaches another one — the shipped default is ` +
-        `${SHIPPED_DEFAULT_BOARD}, and these verbs include writes.`,
+        `board reaches the one the install declares — for a client run out ` +
+        `of this checkout, the operator's own — and these verbs include writes.`,
     );
   }
   proven.add(key);
@@ -94,39 +102,24 @@ const declared = new Map<string, DeclaredBoard>();
 export type DeclaredBoard = { url: string } | { skip: string };
 
 /**
- * The board THIS checkout declares, asked of the fleet's OWN resolver — the
- * same question, through the same module, that a client started here would
- * ask — or the reason there is none to read.
+ * The board `dir` declares, asked of the fleet's OWN resolver — the same
+ * question, through the same module, that a client started there would ask —
+ * or the reason there is none to read. `dir` is always named: the repo root's
+ * board is the operator's, and no test reads it (CR-CRU-260 AC9).
  *
- * For suites that READ a live board rather than drive a client at one. The
- * hazard is the declaring one in reverse: with nothing declared the chain does
- * not fail, it ENDS at `SHIPPED_DEFAULT_BOARD`, which on a machine carrying a
- * production install is the production board. A census aimed there either
- * asserts a board fact against the wrong board or finds nothing and passes
- * VACUOUSLY, having quietly stopped measuring anything. So an undeclared board
- * is a STATED skip and never a request — the shipped default is named in the
- * refusal, not fetched.
- *
- * THE TRADE, STATED: "nothing is declared" is decided by comparing the
- * resolver's answer against `SHIPPED_DEFAULT_BOARD`, not by asking whether
- * anything is listening there. So an operator on a single-instance install at
- * the default port, who has legitimately and deliberately declared
- * `http://localhost:3849` as their board, is treated here as having declared
- * nothing, and loses the four live-board censuses that call this: they SKIP,
- * with the reason printed, rather than running against the board they meant.
- * That is the deliberate side to fail on. The alternative — distinguishing the
- * two cases by connectivity — means fetching the reserved port to find out,
- * which is the exact accident §S2 exists to make impossible, and it would fail
- * OPEN on the machine that carries a production install (where something is
- * always listening there). A census that announces why it did not run costs a
- * measurement; one that quietly reads production costs the board.
+ * For suites that READ a live board rather than drive a client at one. With
+ * nothing declared the resolver REFUSES — a client with no board declared has
+ * no last resort — so an undeclared board is a STATED skip and never a
+ * request: the census announces why it did not run rather than reading a board
+ * nobody named. A board declared at the server's packaged port is skipped too:
+ * a production install listens there, and a census never reads production.
  */
-export function declaredClientBoard(dir: string = REPO_ROOT): DeclaredBoard {
+export function declaredClientBoard(dir: string): DeclaredBoard {
   const key = resolve(dir);
   const already = declared.get(key);
   if (already !== undefined) return already;
   const probe = Bun.spawnSync({
-    cmd: ["python3", "-c", RESOLVER_PROBE, AXI_MODULE, key],
+    cmd: ["python3", "-c", RESOLVER_PROBE, RESOLVER_MODULE, key],
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -134,14 +127,17 @@ export function declaredClientBoard(dir: string = REPO_ROOT): DeclaredBoard {
   let result: DeclaredBoard;
   if (probe.exitCode !== 0 || answer === "") {
     const said = new TextDecoder().decode(probe.stderr).trim() || "it printed nothing";
-    result = { skip: `the fleet's resolver could not say which board ${key} declares (${said})` };
-  } else if (answer === SHIPPED_DEFAULT_BOARD) {
     result = {
       skip:
-        `${key} declares no \`[client] url\`, so the resolution chain ends at the ` +
-        `shipped default (${SHIPPED_DEFAULT_BOARD}) — which on a machine carrying a ` +
-        `production install IS the production board. Nothing is read: a census against ` +
-        `the wrong board is worse than one that was not taken.`,
+        `${key} declares no \`[client] url\` the fleet's resolver can answer — a ` +
+        `client with no board declared refuses — so nothing is read (${said})`,
+    };
+  } else if (new URL(answer).port === PACKAGED_SERVER_PORT) {
+    result = {
+      skip:
+        `${key} declares ${answer}, the server's packaged port, where a production ` +
+        `install listens. Nothing is read: a census against production is worse than ` +
+        `one that was not taken.`,
     };
   } else {
     result = { url: answer };

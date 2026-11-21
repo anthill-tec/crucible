@@ -20,18 +20,18 @@ import type { Database, Statement } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { coveragePercent } from "../../src/codecs/coverage.ts";
-import type { ServerHandle } from "../../src/server.ts";
 import type { Store } from "../../src/store.ts";
 import {
-  base,
-  bootOn,
+  bootInProcess,
   eventLine,
   openRun,
   postJson,
   readyProject,
+  send,
   sendBatch,
   STREAM_CODEC,
   type Answer,
+  type Booted,
 } from "./run-stream-harness.ts";
 
 // ── The shapes ──────────────────────────────────────────────────────────────
@@ -264,7 +264,7 @@ export const GREEN_STREAM =
 
 /** A single-shot `POST /api/v2/runs` of a junit report, with the coverage block when one is given. */
 export function ingestRun(
-  handle: ServerHandle,
+  handle: Booted,
   projectKey: string,
   agentId: string,
   coverage?: unknown,
@@ -281,7 +281,7 @@ export function ingestRun(
 
 /** A run opened, streamed green and closed through `POST /api/v2/runs`, the coverage block sent with the close. */
 export async function closeStreamedRun(
-  handle: ServerHandle,
+  handle: Booted,
   projectKey: string,
   agentId: string,
   coverage?: unknown,
@@ -384,7 +384,7 @@ export interface FileColumns {
 export const PROBE_FILE = { path: "probe/only-here.ts", lf: 41, lh: 30, fnf: 7, fnh: 5 } as const;
 
 async function probeFileColumns(): Promise<FileColumns> {
-  const handle = bootOn();
+  const handle = bootInProcess();
   try {
     const agentId = "column-probe";
     const key = await readyProject(handle, [agentId], "column-probe");
@@ -521,9 +521,10 @@ export function fileReadKeysOf(event: Record<string, unknown>): string[] {
   return FILE_READ_KEYS.filter((key) => key in event).sort();
 }
 
-/** A GET answered with whatever status the board gives it: the status and the JSON body. */
-export async function getAnswer(handle: ServerHandle, route: string): Promise<Answer> {
-  const res = await fetch(`${base(handle)}${route}`);
+/** A GET answered with whatever status the board gives it (served or in
+ *  process): the status and the JSON body. */
+export async function getAnswer(handle: Booted, route: string): Promise<Answer> {
+  const res = await send(handle, route);
   const text = await res.text();
   let parsed: Record<string, unknown>;
   try {
@@ -535,7 +536,7 @@ export async function getAnswer(handle: ServerHandle, route: string): Promise<An
 }
 
 /** The `event` of `GET /api/v2/events/<id><query>`, which must answer 200. */
-export async function eventRead(handle: ServerHandle, eventId: string, query = ""): Promise<Record<string, unknown>> {
+export async function eventRead(handle: Booted, eventId: string, query = ""): Promise<Record<string, unknown>> {
   const route = `/api/v2/events/${eventId}${query}`;
   const answer = await getAnswer(handle, route);
   expect(answer.status, `GET ${route}: ${JSON.stringify(answer.body).slice(0, 300)}`).toBe(200);

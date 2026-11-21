@@ -22,7 +22,7 @@
 // is the SECOND line of defence, behind playwright.config.ts's endpoint gate.
 import { spawn, spawnSync } from "node:child_process";
 import { constants } from "node:os";
-import { REPO_ROOT } from "./test-targets";
+import { REPO_ROOT } from "./repo-root";
 import {
   EXPOSE_NETWORK,
   RUN_SERVER_PORT,
