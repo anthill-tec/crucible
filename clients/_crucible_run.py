@@ -1380,12 +1380,12 @@ def launched_axi_tool(argv):
 
     Its stdout goes to an unnamed temporary file, which has no fixed capacity
     the way a pipe does, and its stderr to `DEVNULL`. `read_output()` waits for
-    the tool and reads the file once from offset 0, as text decoded the way
-    `Popen(text=True)` decodes: the locale encoding, strict errors, universal
-    newlines. The file is closed on every exit, an interrupt included; the
-    tool keeps the caller's process group and is never signalled, killed or
-    waited for here. Creating the file or launching the tool raises `OSError`
-    to the caller (`drive_axi_run` reports it)."""
+    the tool's exit before it reads the file once from offset 0, as text
+    decoded the way `Popen(text=True)` decodes: the locale encoding, strict
+    errors, universal newlines. The file is closed on every exit, an interrupt
+    included; the tool keeps the caller's process group and, on an interrupt,
+    is never signalled, killed or waited for. Creating the file or launching
+    the tool raises `OSError` to the caller (`drive_axi_run` reports it)."""
     with tempfile.TemporaryFile(mode="w+") as sink:
         proc = subprocess.Popen(argv, stdout=sink, stderr=subprocess.DEVNULL)
 
