@@ -888,8 +888,10 @@ class NoBoardNoFiguresTest(_ArduinoProject, unittest.TestCase):
 # project grows that module, and the core by its help steps. The board's
 # resolution moves out of the core into its own module, so the core's budget
 # is re-recorded lower and that module's is added. The pre-flight's refusal
-# of an attributed run with no board declared grows the core.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9071, "_crucible_run.py": 1974,
+# of an attributed run with no board declared grows the core. A gate's lone
+# whole-suite run taking the gate's verdict grows the core by its mark and the
+# run module by that verdict.
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9081, "_crucible_run.py": 1999,
                               "_crucible_release.py": 266,
                               "_crucible_project.py": 521,
                               "_crucible_lint.py": 399,

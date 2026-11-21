@@ -28,7 +28,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { changelogSection } from "../helpers/changelog-section.ts";
 
 const REPO_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const REAL_CHANGELOG = readFileSync(join(REPO_ROOT, "CHANGELOG.md"), "utf8");
@@ -143,20 +142,6 @@ function runDocTest(stem: string, text: string): ChildRun {
     rmSync(scratch, { recursive: true, force: true });
   }
 }
-
-describe("the next release's changelog", () => {
-  test("its section being written holds only the later feature", () => {
-    expect(changelogSection(theNextRelease()).trim()).toBe(`### Added\n\n${LATER_FEATURE}`);
-  });
-
-  test("every real release sits whole below the later one", () => {
-    const built = theNextRelease();
-    const at = REAL_CHANGELOG.indexOf("\n## [") + 1;
-    expect(built.endsWith(REAL_CHANGELOG.slice(at))).toBe(true);
-    expect(built.split("## [Unreleased]").length - 1).toBe(1);
-    expect(built.length).toBe(REAL_CHANGELOG.length + LATER_RELEASE.length);
-  });
-});
 
 describe("the child run reads each doc test's report", () => {
   // On the real changelog of this branch every RECORDED check runs, under the

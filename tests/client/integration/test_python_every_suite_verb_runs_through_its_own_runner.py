@@ -30,6 +30,7 @@ from tests.client.live_run_harness import (
     RecordingBoard,
     install_project,
     load_client,
+    load_toon,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -183,6 +184,45 @@ class EveryVerbRunsThroughItsOwnRunnerModuleTest(unittest.TestCase):
                          f"stderr={err[-2000:]!r}")
         self.assertIn("stream-incomplete", out)
         self.assertNotEqual(code, 0, "an incomplete stream never passes the gate")
+
+    def test_a_lone_gate_whose_stream_the_board_flags_incomplete_answers_not_ok_with_one_gate_suite_failed(self):
+        """The gate's one run is filed with no failed test, and the board
+        flags its stream incomplete: the gate is not ok, exits 1, and names
+        its whole-suite run failed, 0 of the run's 2 tests failing."""
+        project_dir = tempfile.mkdtemp(prefix="every-verb-incomplete-verdict-")
+        self.addCleanup(shutil.rmtree, project_dir, ignore_errors=True)
+        board = RecordingBoard()
+        self.addCleanup(board.close)
+        incomplete = {"code": "stream-incomplete",
+                      "detail": "the stream cannot be trusted: no run-end — the run is "
+                                "stored flagged incomplete"}
+        board.script_run(passed=2, warnings=[incomplete])
+        install_project(project_dir, board.url, PROJECT_KEY)
+        os.makedirs(os.path.join(project_dir, "tests"))
+        Path(project_dir, "tests", "__init__.py").write_text("", encoding="utf-8")
+        Path(project_dir, "tests", "fixture_plain.py").write_text(
+            NO_SUBTEST_FIXTURE_SOURCE, encoding="utf-8")
+        code, out, err = _run_main(
+            load_client("python-crucible.py"),
+            ["pre-merge-gate", "--start-dir", "tests", "--pattern", "fixture_plain.py",
+             "--project-dir", project_dir, "--agent", AGENT,
+             "--python", str(REAL_VENV_PYTHON)])
+        where = f"exit={code} stdout={out!r} stderr={err[-2000:]!r}"
+        decoded = load_toon().decode(out) if out.strip() else {}
+        axi = (decoded.get("axi") if isinstance(decoded, dict) else None) or {}
+        self.assertEqual(axi.get("verb"), "pre-merge-gate", where)
+        self.assertEqual((axi.get("run") or {}).get("failed"), 0,
+                         f"the board filed the run with no failed test; {where}")
+        self.assertIs(axi.get("ok"), False,
+                      f"a gate whose one run was cut short is not ok; {where}")
+        self.assertEqual(code, 1, where)
+        failed = [w.get("detail") for w in axi.get("warnings") or []
+                  if isinstance(w, dict) and w.get("code") == "gate-suite-failed"]
+        self.assertEqual(failed, ["the whole python suite this gate ran FAILED: 0 of 2 "
+                                  "test(s) failed (exit 1)"],
+                         f"exactly one gate-suite-failed; {where}")
+        self.assertIn(incomplete, axi.get("warnings") or [],
+                      f"the board's own warning still rides the envelope; {where}")
 
 
 if __name__ == "__main__":

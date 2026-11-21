@@ -663,6 +663,60 @@ class NoBoardNoFiguresTest(_MavenProject, unittest.TestCase):
             {("POST", RUNS), ("POST", PARSED)})
         self.assert_gate_unreported(code, stdout, stderr)
 
+    def test_a_composed_gate_names_its_unfiled_whole_suite_unreported_exactly_once(self):
+        # The composition names the whole-suite run it could not count; the
+        # run itself, one suite of the gate's, does not name it a second time.
+        self.declare_tier_profile("unit")
+        code, stdout, stderr = self.drive_in_process(
+            self.argv("pre-merge-gate", "mvn-gate-composed-unfiled-once"),
+            {("POST", RUNS), ("POST", PARSED)})
+        envelope = self.assert_gate_unreported(code, stdout, stderr)
+        self.assertIn("suites", envelope, f"the gate composed; stdout={stdout!r}")
+        unreported = [w for w in envelope.get("warnings") or []
+                      if isinstance(w, dict) and w.get("code") == "gate-suite-unreported"]
+        self.assertEqual(len(unreported), 1,
+                         f"exactly one gate-suite-unreported; got {unreported!r}; "
+                         f"stdout={stdout!r}")
+
+
+class AComposedGateAnswersAsBeforeTest(_MavenProject, unittest.TestCase):
+    """A POM declaring a tier profile: the gate composes, and its answer is
+    the composition's, red and green alike."""
+
+    def setUp(self):
+        self.make()
+        self.declare_tier_profile("unit")
+
+    def tearDown(self):
+        self.cleanup()
+
+    def test_a_composed_gate_whose_whole_suite_run_fails_carries_one_gate_suite_failed(self):
+        self.board.script_run(passed=3, failed=1, files=2)
+        result = self.drive("pre-merge-gate", "mvn-gate-composed-red", FAKE_FAIL="1")
+        envelope = self.envelope_of(result)
+        where = self.diagnostics(result)
+        self.assertEqual(envelope.get("verb"), "pre-merge-gate", where)
+        self.assertIn("suites", envelope, f"the gate composed; {where}")
+        self.assertIs(envelope.get("ok"), False, where)
+        self.assertEqual(result.returncode, 1, where)
+        failed = [w.get("detail") for w in envelope.get("warnings") or []
+                  if isinstance(w, dict) and w.get("code") == "gate-suite-failed"]
+        self.assertEqual(failed, ["the whole mvn suite this gate ran covering `unit` "
+                                  "FAILED: 1 of 4 test(s) failed (exit 1)"],
+                         f"exactly one gate-suite-failed, the composition's; {where}")
+        self.assertNotIn("gate-suite-unreported", _codes(envelope), where)
+
+    def test_a_composed_gate_whose_whole_suite_run_passes_is_ok_with_no_gate_finding(self):
+        self.board.script_run(passed=4, files=2)
+        result = self.drive("pre-merge-gate", "mvn-gate-composed-green")
+        envelope = self.envelope_of(result)
+        where = self.diagnostics(result)
+        self.assertIn("suites", envelope, f"the gate composed; {where}")
+        self.assertIs(envelope.get("ok"), True, where)
+        self.assertEqual(result.returncode, 0, where)
+        self.assertEqual([c for c in _codes(envelope) if str(c).startswith("gate-suite-")],
+                         [], where)
+
 
 # ── AC9 — one ingest line, and the shared module does not grow ─────────────
 
@@ -683,8 +737,10 @@ class NoBoardNoFiguresTest(_MavenProject, unittest.TestCase):
 # creates a project grows that module, and the core by its help steps. The
 # board's resolution moves out of the core into its own module, so the core's
 # budget is re-recorded lower and that module's is added. The pre-flight's
-# refusal of an attributed run with no board declared grows the core.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9071, "_crucible_run.py": 1974,
+# refusal of an attributed run with no board declared grows the core. A gate's
+# lone whole-suite run taking the gate's verdict grows the core by its mark and
+# the run module by that verdict.
+SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9081, "_crucible_run.py": 1999,
                               "_crucible_release.py": 266,
                               "_crucible_project.py": 521,
                               "_crucible_lint.py": 399,

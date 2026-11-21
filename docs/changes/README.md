@@ -195,7 +195,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-263](CR-CRU-263-ci-runs-the-suites-hermetically-behind-a-tripwire.md) | CI runs the suites hermetically behind a tripwire | fix | COMPLETED | 262, 264 | 8 (0.4.0) |
 | [CR-CRU-264](CR-CRU-264-a-bun-route-test-reaches-the-board-in-process.md) | a bun route test reaches the board in process | fix | COMPLETED | 262 | 8 (0.4.0) |
 | [CR-CRU-265](CR-CRU-265-a-test-run-refuses-a-path-that-does-not-exist.md) | a test run refuses a path that does not exist | fix | COMPLETED | — | 8 (0.4.0) |
-| [CR-CRU-255](CR-CRU-255-a-gate-whose-only-run-fails-answers-not-ok.md) | a gate whose only run fails answers not ok | fix | PENDING | — | 9 (0.5.0) |
+| [CR-CRU-255](CR-CRU-255-a-gate-whose-only-run-fails-answers-not-ok.md) | a gate whose only run fails answers not ok | fix | COMPLETED | — | 9 (0.5.0) |
 | [CR-CRU-258](CR-CRU-258-a-gate-drive-never-stalls-on-the-tools-own-output.md) | a gate drive never stalls on the tool's own output | fix | PENDING | — | 9 (0.5.0) |
 | [CR-CRU-266](CR-CRU-266-the-source-package-ships-only-what-builds-the-wheel.md) | the source package ships only what builds the wheel | maintenance | PENDING | — | 9 (0.5.0) |
 | [CR-CRU-267](CR-CRU-267-a-rust-tier-verb-runs-the-tests-its-kind-names.md) | a rust tier verb runs the tests its kind names | maintenance | PENDING | — | 9 (0.5.0) |

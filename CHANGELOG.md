@@ -8,6 +8,18 @@ project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each re
 also the body of its [GitHub Release](https://github.com/anthill-tec/crucible/releases).
 Releases before 0.3.0 are described only on GitHub Releases.
 
+## [Unreleased]
+
+### Upgrading
+
+- **A gate whose only run fails now answers `ok: false`.** A `pre-merge-gate` on a project that
+  declares no suites runs one whole-suite regression, and that run's envelope is the gate's answer.
+  When that run fails, the gate now answers `ok: false` with a `gate-suite-failed` warning, in every
+  client, as a gate that composes declared suites already did. Its exit and its help are unchanged.
+  A stack file that reads the gate's exit sees no difference; one that reads `ok` now sees the
+  failure. A lone run that is filed with no counts now also answers `ok: false`, with a
+  `gate-suite-unreported` warning, while its exit stays 0.
+
 ## [0.4.0] - 2026-11-21
 
 ### Upgrading
