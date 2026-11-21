@@ -339,6 +339,10 @@ Releases before 0.3.0 are described only on GitHub Releases.
   writes anything, when the section is missing or empty or its heading carries no date. Its
   provenance report reads the queue through `queue --format json`, which every client now accepts,
   and no longer lists voided CRs as work that never landed.
+- **A gate files a python suite under the tier its start directory names.** When a gate's python
+  suite is a `python -m unittest discover -s <dir>` script whose `<dir>` ends in a tier the gate
+  covers (`unit`, `integration`, …), the gate runs it as that tier's verb, so the board shows its
+  run as that tier. Any other start directory still runs as `regression`.
 
 ### Removed
 
@@ -393,6 +397,14 @@ Releases before 0.3.0 are described only on GitHub Releases.
   each test ingest as `runnerExit`. When it is non-zero and the report records no failure, the
   board adds one failing case, suite `runner`, case `exit <n>`. A verb exits non-zero whenever its
   runner did or its run has a failure, and each bun test file that fails to load is a failing case.
+- **A bun test run refuses an entry that names no test.** `bun-crucible.py test --tests` reads its
+  entries as paths relative to the package directory. When one names nothing that exists
+  (`tests-not-found`) or names a file that is not a test (`tests-not-a-test-file`), nothing runs,
+  no run is opened, and one envelope lists the refused entries; before, bun read a missing entry as
+  a file-name filter that matched nothing and ran the rest green. The entries reach `bun test` as
+  `./` paths, so an entry no longer also selects other files whose path contains it. A script the
+  `crucible.targets` table marks as `test` still receives the entries unchanged, as its runner's
+  filters.
 - **A python run through a symlinked install imports the project's own modules.** When the
   install's `clients` directory is a symlink, the python runner still puts the working directory
   first on the module search path, so a project's tests import its own modules (CR-CRU-260).
