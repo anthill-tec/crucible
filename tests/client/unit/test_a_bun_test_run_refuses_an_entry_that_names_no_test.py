@@ -273,8 +273,9 @@ class EntriesResolveAgainstThePackageDirectoryTest(_ScratchPackageCase):
             PROJECT_CONFIG + '\n[bun]\npackage_dir = "pkg"\n', encoding="utf-8")
 
     def test_an_entry_written_from_the_project_root_is_refused_naming_the_package_dir(self):
-        # `pkg/inner.test.ts` exists from the project root, but not under the
-        # package directory, where `bun test` runs.
+        # The entry names the scratch file under `pkg/` from the project root:
+        # it exists from there, but not under the package directory, where
+        # `bun test` runs.
         entry = "pkg/inner.test.ts"
         self.assertTrue((self.project / entry).is_file(), "fixture: the file exists")
         drive = self.drive(entry)

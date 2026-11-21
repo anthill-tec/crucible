@@ -6,7 +6,8 @@ match) and a `./`-prefixed one as a PATH. On a plain `bun test` run (no
 relative entry that does not start with `./` or `../` to bun as `./<entry>`,
 and an entry starting with `./` or `../`, or an absolute one, exactly as
 given. bun then never widens an entry to the other files whose path contains
-it: `test --tests a.test.ts` beside `sub/xa.test.ts` runs `a.test.ts` alone.
+it: a `test --tests` entry naming one scratch file, beside a sibling file in a
+subdirectory whose path contains its name, runs the named file alone.
 
 ── Tier ──────────────────────────────────────────────────────────────────────
 
@@ -147,8 +148,9 @@ class EntriesReachBunAsPathsTest(unittest.TestCase):
 
 
 class EntriesRunExactlyTheirFilesTest(unittest.TestCase):
-    """With the REAL `bun`: `test --tests a.test.ts` beside `sub/xa.test.ts`
-    runs `a.test.ts` alone, read from the JUnit report bun wrote."""
+    """With the REAL `bun`: a `test --tests` entry naming one scratch file,
+    beside a sibling file in a subdirectory whose path contains its name, runs
+    the named file alone, read from the JUnit report bun wrote."""
 
     def setUp(self):
         self.real_bun = shutil.which("bun")
