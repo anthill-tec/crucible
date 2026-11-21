@@ -170,6 +170,32 @@ BOARD_COUNTS = {"pass": {"total": 1, "passed": 1, "failed": 0},
                 "fail": {"total": 2, "passed": 1, "failed": 1}}
 #: The suite name of the tree the board serves for a fixture's run.
 FIXTURE_SUITE = "gate-fixture"
+#: The drives beside the gate cases, each on a plan of its own: the case, the
+#: outcome of the suite it runs, the verb it drives, and how its board answers
+#: the run ingest (`filed` with the fixture's counts, `no-counts`: filed with
+#: no `run` block, `refused`: not filed). None is a gate case, so no close
+#: drive reads what they sent.
+RUN_CASES = (("regression", "fail", "regression", "filed"),
+             ("no-counts", "pass", GATE_TYPE, "no-counts"),
+             ("unfiled", "pass", GATE_TYPE, "refused"))
+#: How a board that refuses a run ingest answers it.
+REFUSED_INGEST_STATUS = 409
+REFUSED_INGEST_ERROR = "the gate fixture's board refuses this run"
+#: The warnings that say what a gate made of its run.
+GATE_FINDING_CODES = ("gate-suite-failed", "gate-suite-unreported", "ingest-failed")
+#: The findings each client's lone gate carries today on a run the board
+#: refused, which stay as they are.
+UNFILED_LONE_GATE_FINDINGS = {
+    "bun": ["gate-suite-unreported"],
+    "python": ["gate-suite-unreported"],
+    "mvn": ["gate-suite-unreported"],
+    "arduino": ["gate-suite-unreported", "ingest-failed"],
+    "rust": ["gate-suite-unreported", "ingest-failed"],
+    "go": ["ingest-failed"],
+}
+#: The help a red run's envelope carries: the run's own next step.
+RED_RUN_HELP = ["fix the 1 failing test(s), then re-run pre-merge-gate --agent <agentId>",
+                "status"]
 
 
 # The passing fake `go`, cut to its first (passing) test.
@@ -194,12 +220,17 @@ def _run_event(project_key, event_id, outcome):
         "tree": [{"name": FIXTURE_SUITE, "children": leaves}]}}
 
 
-def _gate_board(project_key, plans, outcome):
+def _gate_board(project_key, plans, outcome, ingest="filed"):
     """A gate drive's board: health stating `milestones.gate`, the project's
     plans so far, each ingest answered with a fresh minted event id (a run
     ingest with the fixture's counts), each run's event read serving its
     tree, and a recorded milestone answered 201. Returns the board and the
-    event ids it answers run ingests with."""
+    event ids it answers run ingests with.
+
+    `ingest` is how a run ingest is answered: `filed` as above, `no-counts`
+    filed with no `run` block, `refused` refused (`REFUSED_INGEST_STATUS`)."""
+    if ingest not in ("filed", "no-counts", "refused"):
+        raise ValueError(f"unknown ingest answer {ingest!r}")
     board = RecordingBoard()
     run_event_ids = []
     health = board.default_health()
@@ -210,12 +241,17 @@ def _gate_board(project_key, plans, outcome):
     board.answer("GET", f"/api/v2/projects/{project_key}/plans",
                  {**PLANS_ANSWER, "plans": plans, "filed": len(plans)}, prefix=True)
     for path in RUN_INGEST_PATHS + (COMPILE_INGEST_PATH,):
+        if ingest == "refused" and path in RUN_INGEST_PATHS:
+            board.answer("POST", path, {"ok": False, "error": REFUSED_INGEST_ERROR},
+                         status=REFUSED_INGEST_STATUS)
+            continue
         ids = [board.mint_event_id() for _ in range(IDS_PER_ROUTE)]
         # The newest answer set is given first: set them last-to-first.
         for event_id in reversed(ids):
             body = {"ok": True, "changed": True, "event": event_id}
             if path in RUN_INGEST_PATHS:
-                body["run"] = dict(BOARD_COUNTS[outcome])
+                if ingest == "filed":
+                    body["run"] = dict(BOARD_COUNTS[outcome])
                 board.answer("GET", f"/api/v2/events/{event_id}",
                              _run_event(project_key, event_id, outcome))
                 run_event_ids.append(event_id)
@@ -228,6 +264,18 @@ def _milestones_sent(posts, mtype, cr_label):
     return [b for p, b in posts
             if p == MILESTONES_PATH and isinstance(b, dict)
             and b.get("type") == mtype and b.get("label") == cr_label]
+
+
+def _warning_details(axi, code):
+    """The detail of every `code` warning the envelope carries, in order."""
+    return [w.get("detail") for w in (axi or {}).get("warnings") or []
+            if isinstance(w, dict) and w.get("code") == code]
+
+
+def _finding_codes(axi):
+    """The envelope's `GATE_FINDING_CODES` warnings, by code, sorted."""
+    return sorted(str(w.get("code")) for w in (axi or {}).get("warnings") or []
+                  if isinstance(w, dict) and w.get("code") in GATE_FINDING_CODES)
 
 
 def _run_bodies_sent(posts):
@@ -297,10 +345,10 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
 
     @classmethod
     def _drive_pre_merge_gate(cls, client_key, project_dir, agent_id, cycle_id,
-                              bin_dir, board_url, extra_argv=()):
+                              bin_dir, board_url, extra_argv=(), verb=GATE_TYPE):
         script_path = CLIENT_FILES[client_key]
         verbs = enumerate_verbs(client_key, script_path)
-        argv = build_argv("pre-merge-gate", verbs["pre-merge-gate"], project_dir)
+        argv = build_argv(verb, verbs[verb], project_dir)
         argv = argv + ["--agent", agent_id, "--cycle", str(cycle_id)] + list(extra_argv)
         result = drive_verb(script_path, argv, project_dir, bin_dir, timeout=120,
                             board=board_url)
@@ -362,7 +410,39 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
         fixture["cases"]["none"] = {
             "cr": none_cr, "plan_id": none_plan_id, "cycle_id": none_cycle_id,
         }
+        cls._drive_run_cases(client_key, fixture, pass_bin, fail_bin, extra)
         return fixture
+
+    @classmethod
+    def _drive_run_cases(cls, client_key, fixture, pass_bin, fail_bin, extra):
+        """Drive each of `RUN_CASES` for this client, each on a plan and a
+        board of its own, keeping what it printed and exited with."""
+        key = fixture["key"]
+        for case, outcome, verb, ingest in RUN_CASES:
+            cr_label = f"gate-fixture-{client_key}-{case}"
+            plan_id, cycle_id = cls._plan(fixture, cr_label)
+            project_dir = cls._project_dir(client_key, key, f"{client_key}-{case}")
+            if client_key == "python":
+                (project_dir / "tests" / "test_gate_fixture.py").write_text(
+                    _PY_TEST_PASS if outcome == "pass" else _PY_TEST_FAIL)
+            if client_key == "arduino":
+                _write_native_fixture(project_dir, outcome)
+            _git_commit_fixture(project_dir)
+            bin_dir = pass_bin if outcome == "pass" else fail_bin
+            # A run verb has no lint stage, so the gate's own lint flag stays off it.
+            run_extra = (["--min-free-g", "1"] if client_key == "rust" and verb != GATE_TYPE
+                         else extra)
+            board, _ids = _gate_board(key, fixture["plans"], outcome, ingest)
+            try:
+                result, emits, axi = cls._drive_pre_merge_gate(
+                    client_key, project_dir, f"gate-fixture-{client_key}-{case}-agent",
+                    cycle_id, bin_dir, board.url, run_extra, verb=verb)
+            finally:
+                board.close()
+            fixture["cases"][case] = {
+                "cr": cr_label, "plan_id": plan_id, "cycle_id": cycle_id,
+                "verb": verb, "result": result, "emits": emits, "axi": axi,
+            }
 
     # ── read helpers ─────────────────────────────────────────────────────────
 
@@ -688,6 +768,110 @@ class TheGateRecordsItsOutcomeAndARedGateStopsTheCloseTest(unittest.TestCase):
                 # its-reason.test.ts` "lists each close over an accepted failing
                 # gate with its cr, planId, commit, reason and closedAt, …",
                 # over the plan PATCH and its merge asserted above.
+
+    # ── A lone gate's verdict is its one run's ──────────────────────────────
+
+    def _where(self, client_key, case_name):
+        case = self.fixtures[client_key]["cases"][case_name]
+        result = case["result"]
+        return (f"{client_key} {case_name}: exit={result.returncode} "
+                f"axi={case['axi']!r} stderr={result.stderr.strip()[-1500:]!r}")
+
+    def _lone_gate_envelope(self, client_key, case_name):
+        """The case's one envelope, after checking it is the gate's and that
+        the gate composed no declared suite (its envelope is its run's)."""
+        case = self.fixtures[client_key]["cases"][case_name]
+        where = self._where(client_key, case_name)
+        self.assertTrue(case["emits"], f"one TOON envelope; {where}")
+        axi = case["axi"]
+        self.assertEqual(axi.get("verb"), GATE_TYPE, where)
+        self.assertNotIn("suites", axi,
+                         f"the project declares no suite, so the gate's answer is "
+                         f"its one whole-suite run's; {where}")
+        return axi
+
+    def test_a_lone_gate_whose_run_fails_answers_not_ok_with_one_gate_suite_failed_for_every_client(self):
+        for client_key in CLIENT_KEYS:
+            with self.subTest(client=client_key):
+                axi = self._lone_gate_envelope(client_key, "fail")
+                where = self._where(client_key, "fail")
+                result = self.fixtures[client_key]["cases"]["fail"]["result"]
+                self.assertIs(axi.get("ok"), False,
+                              f"a gate whose one run failed is not ok; {where}")
+                self.assertEqual(result.returncode, 1, f"the run's exit, 1; {where}")
+                self.assertEqual(axi.get("help"), RED_RUN_HELP,
+                                 f"the help is the run's own next step; {where}")
+                self.assertEqual(
+                    _warning_details(axi, "gate-suite-failed"),
+                    [f"the whole {client_key} suite this gate ran FAILED: 1 of 2 "
+                     f"test(s) failed (exit 1)"],
+                    f"exactly one gate-suite-failed, worded as a composed gate "
+                    f"words its whole-suite run; {where}")
+                run = axi.get("run") or {}
+                self.assertEqual((run.get("failed"), run.get("total")), (1, 2),
+                                 f"the run's figures are its own; {where}")
+
+    def test_a_lone_gate_whose_run_passes_answers_ok_for_every_client(self):
+        for client_key in CLIENT_KEYS:
+            with self.subTest(client=client_key):
+                axi = self._lone_gate_envelope(client_key, "pass")
+                where = self._where(client_key, "pass")
+                result = self.fixtures[client_key]["cases"]["pass"]["result"]
+                self.assertIs(axi.get("ok"), True, where)
+                self.assertEqual(result.returncode, 0, where)
+                self.assertEqual(_finding_codes(axi), [],
+                                 f"a green filed run carries no gate finding; {where}")
+
+    def test_a_lone_gate_whose_run_is_refused_keeps_its_unfiled_answer_for_every_client(self):
+        for client_key in CLIENT_KEYS:
+            with self.subTest(client=client_key):
+                axi = self._lone_gate_envelope(client_key, "unfiled")
+                where = self._where(client_key, "unfiled")
+                result = self.fixtures[client_key]["cases"]["unfiled"]["result"]
+                self.assertIs(axi.get("ok"), False, where)
+                self.assertIsInstance(axi.get("error"), str,
+                                      f"the envelope says why it was not filed; {where}")
+                self.assertTrue(axi.get("error"), where)
+                self.assertEqual(_finding_codes(axi), UNFILED_LONE_GATE_FINDINGS[client_key],
+                                 f"an unfiled run keeps the findings it carries "
+                                 f"today, and never gate-suite-failed; {where}")
+                self.assertNotEqual(result.returncode, 0, where)
+
+    def test_a_lone_gate_whose_run_is_filed_with_no_counts_answers_not_ok_for_every_client(self):
+        for client_key in CLIENT_KEYS:
+            with self.subTest(client=client_key):
+                axi = self._lone_gate_envelope(client_key, "no-counts")
+                where = self._where(client_key, "no-counts")
+                result = self.fixtures[client_key]["cases"]["no-counts"]["result"]
+                label = f"the whole {client_key} suite this gate ran"
+                expected = (f"{label} reported no run counts (exit 0), so the gate "
+                            f"cannot say what it covered" if client_key == "go" else
+                            f"{label} RAN, and was not filed, so the gate cannot say "
+                            f"what it covered")
+                self.assertIs(axi.get("ok"), False,
+                              f"a gate that cannot say what its run covered is not "
+                              f"ok; {where}")
+                self.assertEqual(_warning_details(axi, "gate-suite-unreported"), [expected],
+                                 f"exactly one gate-suite-unreported; {where}")
+                self.assertEqual(_warning_details(axi, "gate-suite-failed"), [], where)
+                self.assertEqual(result.returncode, 0,
+                                 f"the exit stays the run's: a green runner, filed; {where}")
+
+    # ── A run verb's answer is unchanged ────────────────────────────────────
+
+    def test_regression_whose_run_fails_still_answers_ok_and_exits_1_for_every_client(self):
+        for client_key in CLIENT_KEYS:
+            with self.subTest(client=client_key):
+                case = self.fixtures[client_key]["cases"]["regression"]
+                where = self._where(client_key, "regression")
+                axi = case["axi"]
+                self.assertTrue(case["emits"], f"one TOON envelope; {where}")
+                self.assertEqual(axi.get("verb"), "regression", where)
+                self.assertIs(axi.get("ok"), True,
+                              f"a run verb's ok says its run was filed; {where}")
+                self.assertEqual(case["result"].returncode, 1, where)
+                self.assertEqual(_warning_details(axi, "gate-suite-failed"), [],
+                                 f"a run verb carries no gate finding; {where}")
 
 
 if __name__ == "__main__":
