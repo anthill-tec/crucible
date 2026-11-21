@@ -270,11 +270,12 @@ max = 500
 # install's. Nothing to export, and a per-project answer that survives every
 # verb and every sub-agent.
 #
-# This file declares no board. The installer writes the install's `url` (the
-# board it set up, or the one it was told to use). A client whose project and
-# install both declare none refuses every verb that must reach the board, and
-# sends nothing. To declare one, uncomment the table in the project's own file
-# (or the install's) and name the board's address:
+# This file declares no board. The installer writes the install's `url` from
+# the server it set up on this machine; an install with no local server
+# declares none, and its output names the file under `boardUndeclared`. A
+# client whose project and install both declare none refuses every verb that
+# must reach the board, and sends nothing. To declare one, uncomment the table
+# in the project's own file (or the install's) and name the board's address:
 #
 # [client]
 # url = "http://<host>:<port>"

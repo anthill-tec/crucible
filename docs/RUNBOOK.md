@@ -239,9 +239,9 @@ gone — nothing reads them, and exporting one changes nothing:
 
 Four more carried the **connection** — the server's listener and the clients'
 board. They are gone for the same reason and one sharper: a limit left to its
-default behaves as documented, whereas a forgotten connection export fails
-*silently*, landing a run on the default board, which on a machine carrying a
-production instance is the production board:
+default behaves as documented, whereas a forgotten connection export used to
+fail *silently*, landing a run on the packaged default port, which on a machine
+carrying a production instance was the production board:
 
 - `$CRUCIBLE_PORT` is RETIRED and no longer read; declare `port` in the
   `[server]` table of the server's own file instead.
@@ -632,11 +632,15 @@ scripts/sandboxed-install-tests.sh              # the install-touching suites
 Run directly, each suite pins `$HOME`, `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME` and
 `$BUN_INSTALL` into a temporary root, stubs those two stages, and asserts
 afterwards that this machine's real `~/.crucible`, `~/.local/share/crucible` and
-`~/.config/systemd/user` did not move. That is what CI runs:
+`~/.config/systemd/user` did not move. This command runs both tiers:
 
 ```sh
 python3 -m unittest discover -s tests/client -t .
 ```
+
+CI runs the same two directories as separate steps, `tests/client/unit` then
+`tests/client/integration`, each with the repo's `.venv/bin/python` inside the
+hermetic wrapper (`scripts/hermetic/README.md`).
 
 Those two layers protect you from code that plays by the rules. A hardcoded
 path, an `expanduser` evaluated before the environment is patched, or a
@@ -650,13 +654,16 @@ scripts/sandboxed-install-tests.sh -k ''        # the whole directory
 ```
 
 **The bare command is narrow on purpose.** `--unshare-net` is part of the
-isolation, and several suites under `tests/client/` legitimately reach the
-network (`python -m build --wheel` resolves pypi.org; the uv, cargo and docker
-gates reach their own registries). Wrapping the whole directory therefore
-reports dozens of failures that say nothing about the code, so with no arguments
-the script targets the install-touching suites — which is what the sandbox
-exists for. `-k ''` widens to everything, and those network-dependent suites
-will fail when you do.
+isolation, but once `scripts/provision-test-caches.sh` has run, no suite needs
+the network: the suite's caches live under `.cache/test-suite/`, inside the
+checkout the sandbox keeps bound. What the sandbox takes away is your home:
+`--tmpfs "$HOME"` hides everything under it except bun's prefix, which is
+re-exposed read-only, and the script sets `PATH` to that bun and the system
+directories only. A toolchain kept under your home (rustup and cargo,
+arduino-cli's data, Playwright's browsers) is out of reach inside the sandbox,
+so with no arguments the script targets the install-touching suites — which is
+what the sandbox exists for. `-k ''` widens to everything, and the suites that
+drive a toolchain kept under your home can fail when you do.
 
 The script is the documented command; read it for the exact invocation. Each
 part of its isolation carries its own guarantee:
@@ -753,8 +760,10 @@ the board: one `ok: false` envelope naming each file and why it was passed
 over, and nothing sent. A verb that sends nothing (`--help`, or a run that files
 nothing on the board) still runs. To fix it, re-run the
 installer, or declare `[client] url` in the project's own `crucible.toml`. An
-install with no local server, or an upgraded one whose file never named a
-board, must declare it.
+install with no local server must declare it. An upgraded install whose file
+never named a board has none until `crucible-axi install` is re-run: the re-run
+fills it from the local server's port, and the install output names the file
+under `boardUndeclared` whenever it leaves the file without one.
 
 The value is re-read at the point of use, so an edit takes effect on the next
 verb with nothing restarted and nothing exported — and a verb that resolves a

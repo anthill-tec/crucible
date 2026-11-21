@@ -28,21 +28,25 @@
 # protect. The value is local: YOUR dotfiles, YOUR ~/.crucible, YOUR systemd
 # units.
 #
-# NETWORK IS OFF, SO THE DEFAULT TARGET IS NARROW
-# `--unshare-net` is part of the isolation, and some suites under tests/client/
-# legitimately need the network (`python -m build --wheel` reaches pypi.org, and
-# the uv/cargo/docker gates reach their own registries). Wrapping the whole
-# directory therefore reports dozens of failures that say nothing about the code
-# — so with NO arguments this runs the install-touching suites only, which is
-# what the sandbox exists for. Pass your own unittest arguments to widen it, and
-# expect network-dependent suites to fail when you do.
+# YOUR HOME IS HIDDEN, SO THE DEFAULT TARGET IS NARROW
+# `--unshare-net` is part of the isolation, but once
+# scripts/provision-test-caches.sh has run, no suite needs the network: the
+# suite's caches live under .cache/test-suite/, inside the checkout, which
+# stays bound. What the sandbox takes away is $HOME: `--tmpfs "$HOME"` hides
+# everything under it except bun's prefix, re-exposed read-only, and PATH is
+# set to that bun and the system directories only. A toolchain kept under your
+# home is out of reach in here — so with NO arguments this runs the
+# install-touching suites only, which is what the sandbox exists for. Pass your
+# own unittest arguments to widen it; the suites that drive a toolchain kept
+# under your home can fail when you do.
 #
 # Usage:
 #   scripts/sandboxed-install-tests.sh                  # the install suites
 #   scripts/sandboxed-install-tests.sh -k pattern       # your own narrowing
 #   scripts/sandboxed-install-tests.sh -k ''            # the whole directory
-#                                                       # (network-dependent
-#                                                       #  suites will fail)
+#                                                       # (suites that drive a
+#                                                       #  toolchain under your
+#                                                       #  home can fail)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

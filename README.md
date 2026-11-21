@@ -43,10 +43,10 @@ fails outright with that remedy), provisions the server user-scoped via
 `bun add -g @anthill-tec/crucible-server@<pinned>` — Bun's global prefix lives
 under `$HOME`, so there is no system-permission problem — then creates its
 target directory (`--target-dir`, default `~/.crucible`), lays the
-`*-crucible.py` **client fleet** (the six clients, the six shared modules
+`*-crucible.py` **client fleet** (the six clients, the seven shared modules
 they load by path — `_crucible_axi.py`, `_crucible_run.py`,
-`_crucible_release.py`, `_crucible_project.py`, `_crucible_lint.py` and
-`toon.py` — the
+`_crucible_release.py`, `_crucible_project.py`, `_crucible_lint.py`,
+`_crucible_board.py` and `toon.py` — the
 `subtest_runner.py` the Python client runs, `STATUS-CONTRACT.md`, the
 shipped `crucible.toml` limit defaults, the shipped Vitest and Playwright
 reporters under `reporters/` and the stack-declaration schema
@@ -163,6 +163,15 @@ Python coverage gate (`python-crucible.py regression --coverage`) has
 ```sh
 pip install -e '.[dev]'
 ```
+
+The client suite needs the same extra: it builds wheels offline with `build`,
+`hatchling` and `hatch-vcs`, and drives `pytest` and `ruff`. Run
+`scripts/provision-test-caches.sh` once (it needs the network and `mvn`) to
+fill the suite's maven repository under `.cache/test-suite/`, then run the
+tiers with the `.venv` active, because the client scripts call `python3`:
+`bun run test:unit`, `bun run test:integration`, `bun run test:client-unit` and
+`bun run test:client-integration`, or `bun run test:regression` for the whole
+bun suite and both client tiers in one run.
 
 ## Documentation
 

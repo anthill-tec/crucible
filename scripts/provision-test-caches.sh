@@ -4,8 +4,9 @@
 # stale; the tests themselves run offline and never fill a cache.
 #
 #   .cache/test-suite/m2   the maven repository the live maven module
-#                          (tests/client/test_a_declared_maven_run_shows_its_
-#                          real_surefire_console_live_end_to_end.py) runs
+#                          (tests/client/integration/test_a_declared_maven_
+#                          run_shows_its_real_surefire_console_live_end_to_
+#                          end.py) runs
 #                          offline on. Filled by running the committed
 #                          fixture's real lifecycle (`clean test`) on a temp
 #                          copy, online, so every plugin, surefire provider and
