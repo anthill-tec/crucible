@@ -16,8 +16,9 @@ Pinned:
   stripped and duplicates kept, is under `crucible_axi/` or `clients/`, or is
   one of `pyproject.toml`, `README.md`, `LICENSE`, `CHANGELOG.md`,
   `.gitignore` and `PKG-INFO`.
-- The sdist is COMPLETE: every file `git ls-files crucible_axi clients`
-  lists that exists on disk is a member exactly once. Untracked files under
+- The sdist is COMPLETE: every file `git ls-files` lists under
+  `crucible_axi/` or `clients/` that exists on disk is a member exactly
+  once. Untracked files under
   the two directories are within the bound and are not demanded, and a
   tracked file deleted on disk is not demanded, so both hold on a dirty tree.
 - B1's wheel holds exactly the sdist's `crucible_axi/` files, its `clients/`
@@ -139,11 +140,12 @@ class TheSourcePackageShipsOnlyWhatBuildsTheWheelTest(unittest.TestCase):
         # What the checkout tracks under the two directories, read at the
         # moment the sdist is built from it.
         listed = subprocess.run(
-            ["git", "ls-files", "-z", "--", "crucible_axi", "clients"],
+            ["git", "ls-files", "-z"],
             cwd=str(REPO_ROOT), capture_output=True, text=True,
             timeout=GIT_TIMEOUT_SECONDS)
         cls.tracked = tuple(sorted(path for path in (listed.stdout or "").split("\0")
-                                   if path and (REPO_ROOT / path).is_file()))
+                                   if path.startswith(SDIST_DIRECTORIES)
+                                   and (REPO_ROOT / path).is_file()))
 
         cls.sdist_build = subprocess.run(
             [sys.executable, "-m", "build", "--no-isolation", "--outdir", cls.sdist_dir],
@@ -222,13 +224,14 @@ class TheSourcePackageShipsOnlyWhatBuildsTheWheelTest(unittest.TestCase):
         self.assertTrue(
             any(path.startswith(CLIENTS_SOURCE) for path in self.tracked)
             and any(path.startswith("crucible_axi/") for path in self.tracked),
-            "`git ls-files crucible_axi clients` listed both directories' files: "
+            "`git ls-files` listed files under both `crucible_axi/` and `clients/`: "
             f"{list(self.tracked[:SHOWN])}")
         counts = Counter(members)
         not_once = {path: counts[path] for path in self.tracked if counts[path] != 1}
         self.assertEqual(
             not_once, {},
-            "each file `git ls-files crucible_axi clients` lists that exists on disk "
+            "each file `git ls-files` lists under `crucible_axi/` or `clients/` that "
+            "exists on disk "
             f"is an sdist member exactly once; path -> member count: {not_once}")
 
     # -- the wheel built from the sdist -------------------------------------
