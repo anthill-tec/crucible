@@ -171,7 +171,8 @@ describe("the four analytics reads recompute on every request — no held answer
         `INSERT INTO queue_declarations (project_key, cr, verb, change_json, points, author, at)
          VALUES (?, ?, 'cr-plan', ?, ?, NULL, ?)`,
       )
-      .run(P_BURNDOWN, "CR-BETA", JSON.stringify({ points: { from: 5, to: 12 } }), 12, Date.now());
+      // One millisecond past now: never tied with the entry's own start step.
+      .run(P_BURNDOWN, "CR-BETA", JSON.stringify({ points: { from: 5, to: 12 } }), 12, Date.now() + 1);
     raw.close();
 
     const after = await getJson(h, `/api/v2/projects/${P_BURNDOWN}/analytics/burndown?release=${release}`);
