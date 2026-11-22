@@ -1,53 +1,74 @@
 # CR-CRU-273: time-ordered reads break ties by insertion order
 
-**Status:** PENDING. Filed 2026-11-22 from the test-cull survey (`test-reports/work/cull-survey-report.md` §6 item 1).
-User ruling: filed after the cull, ahead of CR-CRU-267. Revised the same day by the gap analysis
-(`test-reports/work/cr273-gap-analysis.md`) and the user's ruling on G1.
+**Status:** PENDING. Filed 2026-11-22 from the test-cull survey (`test-reports/work/cull-survey-report.md` §6 item 1),
+with the user's ruling that it comes after the cull and ahead of CR-CRU-267. Revised the same day, first by the gap
+analysis (`test-reports/work/cr273-gap-analysis.md`) and the user's ruling on G1, then by the spec pre-review
+(`test-reports/work/prereview273-report.md`).
 **Type:** bugfix
 **Points:** 2
 **Wave:** 9 (0.5.0)
 **Depends on:** —
 **Labels:** store
-**Design reference:** `test-reports/work/cr273-gap-analysis.md`.
+**Design reference:** `test-reports/work/cr273-gap-analysis.md`, `test-reports/work/prereview273-report.md`.
 
 ## Problem
 
-Some store reads order rows by a millisecond timestamp alone. When two rows share a millisecond, their order is
-whatever SQLite returns, and it can change from one read to the next. Rows written in one request, or by a fast
-client, can share a millisecond. The affected reads in `src/store.ts`:
+Six store queries in `src/store.ts` order rows by a millisecond timestamp alone:
 
-- `listProjects` orders by `created_at` alone;
-- `listAgents` orders by `last_seen` alone, in both of its queries;
-- `listOpenRuns` orders by `started_at` alone, in both of its queries;
-- `sweepOpenRuns` orders by `started_at` alone.
+| Read | Query | Order |
+|---|---|---|
+| `listProjects` | 1 | `created_at ASC` |
+| `listAgents` | 2: all projects, and one project | `last_seen DESC` |
+| `listOpenRuns` | 2: all projects, and one project | `started_at DESC` |
+| `sweepOpenRuns` | 1 | `started_at ASC` |
 
-`listCoverageDays` has a worse form of the same problem. It keeps each day's newest coverage run with
-`RANK() … ORDER BY timestamp DESC`. Two runs in that day's newest millisecond both rank first, so the coverage feed
-lists the day twice.
+When rows share a millisecond, their order depends on the query plan, not on the data.
 
-Every other time-ordered read already breaks ties by `rowid`.
+`listAgents` gets this wrong today. Tied agents come back oldest-registered first across all projects, and in
+agent-id order within one project, although the read lists every other agent newest first.
+
+The other reads return insertion order today only because of the index or scan they happen to use. Nothing
+guarantees it.
+
+Every other time-ordered read already breaks ties by `rowid` or by a monotonic id (`id`, `seq`, `plan_id`).
 
 ## Behaviour
 
-- **S1. Every time-ordered read has a tiebreak.** In each read listed above, rows with the same timestamp come back in
-  insertion order (`rowid`), in the read's own direction. This follows the house pattern
-  `ORDER BY <time> <dir>, rowid <dir>`.
-- **S2. A coverage day is one run.** `listCoverageDays` returns exactly one run per day. When runs tie on the day's
-  newest millisecond, it returns the one inserted last.
+- **S1. Every time-ordered read has a tiebreak.** Each of the six queries ends `ORDER BY <time> <dir>, rowid <dir>`,
+  the house pattern. Rows with the same timestamp come back in insertion order, in the read's own direction.
+- **S2. Insertion order for agents.** An agent's insertion order is the order its row was created. That is its first
+  registration, or its latest one after an unregister or a prune. A heartbeat or an ingest updates `last_seen` but
+  does not change this order.
+- **S3. What the user sees.** The agent list is the one read whose tie order changes visibly: agents seen in the same
+  millisecond now list newest-registered first. The other reads already return this order, and S1 makes it a
+  guarantee.
+- **S4. The order survives a compaction.** The migration `VACUUM` may renumber rowids, but it copies rows in rowid
+  order, so their relative order holds. The existing reads that use the pattern rely on this too.
 
 ## Acceptance criteria
 
-- **AC1.** For each read named in S1, a unit test writes two rows with the same timestamp and asserts they come back
-  in insertion order, in the read's direction. For `sweepOpenRuns`, the order is that of the aborted-run events it
-  returns. The tests run against an in-memory store.
-- **AC2.** A unit test writes two coverage runs with the same timestamp on one day. `listCoverageDays` returns one
-  entry for that day, the run inserted last.
-- **AC3.** A `### Fixed` entry under `[Unreleased]` in `CHANGELOG.md`. It is reviewed, not tested.
+All tests run on `new Store(":memory:")`, pin time with `setSystemTime`, and write rows only through the store's own
+methods. In each test the rows' keys sort the opposite way to the asserted order, so the result cannot come from key
+order.
+
+- **AC1.** `listAgents`, both queries: two agents touched in the same millisecond come back newest-registered first.
+  Both tests fail before the change.
+- **AC2.** `listProjects` and both `listOpenRuns` queries: two rows written in the same millisecond come back in
+  insertion order, in the read's direction. These tests guard the order and pass before and after the change; the
+  RED phase records that.
+- **AC3.** `sweepOpenRuns`: two open runs started in the same millisecond are aborted in the order they started.
+  `listEvents` lists the later-started run's aborted event first. This test is a guard, as in AC2.
+- **AC4.** A `### Fixed` entry under `[Unreleased]` in `CHANGELOG.md` for the agent list order. It is reviewed, not
+  tested.
 
 ## Non-goals
 
-- **The burndown boundary.** A change journalled in the same millisecond as the release's start folds into the
-  committed baseline, as `burndown` in `src/analytics.ts` documents. That is the designed rule, kept by user ruling
-  (gap analysis G1). The burndown test writing its re-point a millisecond after the start is correct, and stays.
+- **The burndown boundary.** `burndown` in `src/analytics.ts` folds a change journalled at or before the release's
+  start instant (its earliest `filed_at`) into the committed baseline. That is the designed rule, kept by user ruling
+  (gap analysis G1). The burndown test in `tests/unit/analytics-reads-reflect-every-store-change.test.ts` writes its
+  re-point at least a millisecond after the start. That is correct, and it stays.
+- **`listCoverageDays`.** It already returns one run per UTC day, the run inserted last. Its `RANK()` window can keep
+  tied rows, but the `newestFirst` sort and the per-day filter after it discard them (pre-review B1).
+- **Sorts done in JavaScript in `src/v2.ts`.** For example, `historyGateRuns` sorts by `at` only, so tied gate runs
+  list oldest first. This is noted for a later CR.
 - Changing timestamp resolution.
-- Any read whose order does not depend on time.
