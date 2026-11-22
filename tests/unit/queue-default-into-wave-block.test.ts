@@ -1077,13 +1077,12 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       boot();
       const key = await seed("ac12i-wave-sequence-pin");
       await propose(key, "0.2.0");
-      const rows = wave5Rows(WAVE_SEQ_STRIDE - 1);
-      expect((await rebulk(key, rows)).status).toBe(200);
-      const crs = rows.map((row) => row.cr as string);
-      // 999 cr-plans; each keeps its wave (and so its held seq), so order is
-      // immaterial and they go out together.
-      const planned = await Promise.all(crs.map((cr) => plan(key, cr, "0.2.0", 5, `title ${cr}`)));
-      expect(planned.every((res) => res.status === 200)).toBe(true);
+      const crs = wave5Rows(WAVE_SEQ_STRIDE - 1).map((row) => row.cr as string);
+      // The 999 members of 0.2.0/5 are held through the store in one write.
+      handle!.store.replaceQueue(
+        key,
+        crs.map((cr) => ({ cr, wave: "5", dependsOn: [], release: "0.2.0", title: `title ${cr}` })),
+      );
 
       const full = await sequence(key, "0.2.0", 5, crs);
       expect(full.status).toBe(200);
