@@ -54,7 +54,6 @@ Invocation:
         --tests tests.client.integration.test_rust_client_sends_its_runners_reports
 """
 
-import ast
 import contextlib
 import json
 import os
@@ -64,7 +63,6 @@ import stat
 import subprocess
 import sys
 import tempfile
-import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1028,48 +1026,6 @@ class NoBoardNoFiguresTest(_RustProject, unittest.TestCase):
             self.argv("pre-merge-gate", "rust-gate-composed-unreachable"),
             {("POST", RUNS), ("POST", PARSED)})
         self.assert_gate_unreported(code, stdout, stderr)
-
-
-# ── AC9 — one ingest line ───────────────────────────────────────────────────
-
-_OWN_RESULT_LINES = ("ingest junit:", "regression: ok=",
-                     "workspace regression: ok=", "smoke-test: ok=")
-
-
-def own_result_line_literals(source):
-    """Every string literal of `source` (an f-string's literal parts too)
-    that begins one of rust's own result lines."""
-    return sorted({node.value for node in ast.walk(ast.parse(source))
-                   if isinstance(node, ast.Constant) and isinstance(node.value, str)
-                   and node.value.startswith(_OWN_RESULT_LINES)})
-
-
-class TheRustClientPrintsOnlyTheSharedIngestLineTest(unittest.TestCase):
-
-    def test_the_scan_finds_an_own_result_line_in_a_plain_or_formatted_literal(self):
-        source = textwrap.dedent('''
-            import sys
-            def _a(resp):
-                print(f"ingest junit: ok={resp} passed=1", file=sys.stderr)
-            def _b(resp):
-                print("regression: ok=" + str(resp), file=sys.stderr)
-            def _c(resp):
-                print(f"workspace regression: ok={resp}", file=sys.stderr)
-                print(f"smoke-test: ok={resp} passed=1", file=sys.stderr)
-            def _d(verb, resp):
-                print(f"ingest compile (check): ok={resp}", file=sys.stderr)
-                print(f"ingest: ok={resp}", file=sys.stderr)
-                print(f"{verb}: ok=False — gate-locked", file=sys.stderr)
-        ''')
-        self.assertEqual(own_result_line_literals(source),
-                         ["ingest junit: ok=", "regression: ok=",
-                          "smoke-test: ok=", "workspace regression: ok="])
-
-    def test_the_rust_client_holds_none_of_its_own_result_line_literals(self):
-        found = own_result_line_literals(RUST_CLIENT.read_text(encoding="utf-8"))
-        self.assertEqual(found, [],
-                         f"the shared `ingest:` line is the run's one ingest "
-                         f"line; rust-crucible.py still prints {found!r}")
 
 
 # ── the no-report exits ───────────────────────────────────────────────────

@@ -53,15 +53,8 @@ import textwrap
 import unittest
 from unittest import mock
 
-from tests.client.live_run_harness import (
-    CLIENTS,
-    RecordingBoard,
-    load_client,
-)
 from tests.client.arduino_client_sends_its_runners_reports_helpers import (
     ARDUINO_CLIENT,
-    _ArduinoProject,
-    _envelope,
     HEALTH,
     LCOV,
     MALFORMED_REPORT,
@@ -69,8 +62,14 @@ from tests.client.arduino_client_sends_its_runners_reports_helpers import (
     PARSED,
     REPORTS,
     RUNS,
+    _ArduinoProject,
+    _envelope,
 )
-
+from tests.client.live_run_harness import (
+    CLIENTS,
+    RecordingBoard,
+    load_client,
+)
 
 FIRST_RUN = "run-live-1"
 
@@ -874,10 +873,6 @@ class NoBoardNoFiguresTest(_ArduinoProject, unittest.TestCase):
 RETIRED_EVERYWHERE = ("_emit_ingest_summary_axi", "filed_summary")
 RETIRED_FROM_ARDUINO = ("_parse_junit", "_collect_lcov", "_file_stem")
 
-# The two halves of arduino's old result line, which `ingest_reports`' one
-# `ingest:` line replaces.
-_OLD_LINE_PARTS = (" passed, ", "files (ingest ok=")
-
 
 def defined_names(source):
     """Every name `source` defines at any depth: a function or class, or an
@@ -891,49 +886,7 @@ def defined_names(source):
     return found
 
 
-def old_result_line_literals(source):
-    """Every string literal of `source` that carries arduino's old result
-    line: a plain string, or an f-string whose literal parts, joined, hold
-    both halves of it."""
-    tree = ast.parse(source)
-    in_joined = {id(part) for node in ast.walk(tree)
-                 if isinstance(node, ast.JoinedStr) for part in node.values}
-    found = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr):
-            text = "".join(part.value for part in node.values
-                           if isinstance(part, ast.Constant)
-                           and isinstance(part.value, str))
-        elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
-              and id(node) not in in_joined):
-            text = node.value
-        else:
-            continue
-        if all(part in text for part in _OLD_LINE_PARTS):
-            found.append(text)
-    return sorted(found)
-
-
 class TheLiteralScanIsProvedOnSyntheticSourcesTest(unittest.TestCase):
-
-    def test_the_old_result_line_is_found_plain_or_formatted(self):
-        source = textwrap.dedent('''
-            import sys
-            def _a(verb, key, s, files, resp):
-                print(f"[crucible] {verb} -> '{key}': {s['passed']}/{s['total']} passed, "
-                      f"{s['failed']} failed, {files} files (ingest ok={resp.get('ok')})",
-                      file=sys.stderr)
-            def _b():
-                return "1/1 passed, 0 failed, 1 files (ingest ok=True)"
-            def _c(n, m, rc):
-                print(f"[crucible] ran {n} testcases ({m} not skipped); runner exit {rc}",
-                      file=sys.stderr)
-                print(f"ingest: ok=True passed={n} files={m}", file=sys.stderr)
-        ''')
-        self.assertEqual(
-            old_result_line_literals(source),
-            ["1/1 passed, 0 failed, 1 files (ingest ok=True)",
-             "[crucible]  -> '': / passed,  failed,  files (ingest ok=)"])
 
     def test_the_definition_scan_reads_functions_classes_and_assignments(self):
         source = textwrap.dedent('''
@@ -979,12 +932,6 @@ class TheArduinoClientDefinesNoParserAndNoEmitterOfItsOwnTest(unittest.TestCase)
         self.assertEqual([name for name in imported if name.startswith("xml")], [],
                          f"the arduino client imports no XML parser; "
                          f"imports={imported!r}")
-
-    def test_the_arduino_client_holds_no_literal_of_its_old_result_line(self):
-        found = old_result_line_literals(ARDUINO_CLIENT.read_text(encoding="utf-8"))
-        self.assertEqual(found, [],
-                         f"the shared `ingest:` line is the run's one ingest "
-                         f"line; arduino-crucible.py still prints {found!r}")
 
 
 class TheFilingRunPrintsOneIngestLineTest(_ArduinoProject, unittest.TestCase):

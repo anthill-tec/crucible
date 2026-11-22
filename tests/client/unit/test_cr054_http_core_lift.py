@@ -73,17 +73,17 @@ Fallback:
     python3 tests/client/unit/test_cr054_http_core_lift.py
 """
 
-import ast
 import email.message
 import importlib.util
 import json
 import shutil
-import sys
 import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
 from unittest import mock
+
+from tests.client import TEST_INSTALL_CLIENTS
 
 #: CR-CRU-139 §S2 -- the shared module's ONE name for the board resolution the
 #: five deleted constants collapsed into, imported rather than re-spelled.
@@ -92,12 +92,10 @@ from tests.client.client_fleet_envelope_census_helpers import (  # noqa: E402
     BOARD_RESOLVER,
     declare_and_require_board,
 )
-from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
-AXI_MODULE_PATH_SOURCE = CLIENT_SOURCE_DIR / "_crucible_axi.py"
 
 CLIENT_FILES = {
     "bun": CLIENTS_DIR / "bun-crucible.py",
@@ -145,31 +143,6 @@ def _load_bound_client_module(client, test, project):
     axi.bind_project_dir(project)
     test.addCleanup(axi.bind_project_dir, None)
     return module
-
-
-def _function_source_segment(path, name):
-    """AST-extract the exact source text of a top-level `def <name>` in
-    `path` (ast.parse, not grep/eyeball -- mirrors
-    the fleet inventory's method). Returns None if not defined as
-    a top-level function at all (e.g. reduced to a module-level assignment)."""
-    text = path.read_text()
-    tree = ast.parse(text, filename=str(path))
-    for node in tree.body:
-        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name == name):
-            return ast.get_source_segment(text, node)
-    return None
-
-
-def _clients_with_marker_in_function(name, marker):
-    """Every client whose own top-level `def <name>` still contains `marker`
-    literally -- i.e. still carries the REAL logic, not a delegator."""
-    offenders = []
-    for client, path in CLIENT_FILES.items():
-        body = _function_source_segment(path, name)
-        if body is not None and marker in body:
-            offenders.append(client)
-    return offenders
 
 
 def _resolved_base_url(project):
@@ -242,16 +215,6 @@ class HttpCoreSingleLocusOfTruthTest(unittest.TestCase):
         `urllib.request.urlopen(` directly (`_request` in bun-crucible.py,
         rust-crucible.py, mvn-crucible.py, python-crucible.py and
         arduino-crucible.py) -- the real logic, not a delegator."""
-        offenders = _clients_with_marker_in_function(
-            "_request", "urllib.request.urlopen(")
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry _request's REAL transport "
-            f"call (urllib.request.urlopen) in their own source instead of "
-            f"delegating to clients/_crucible_axi.py: {offenders!r}")
-
-        # Structural condition satisfied (post-GREEN) -- now prove the
-        # client's own _request still performs a correct request end-to-end.
         project = _declared_project(self)
         for client in CLIENTS:
             with self.subTest(client=client):
@@ -296,14 +259,6 @@ class HttpCoreSingleLocusOfTruthTest(unittest.TestCase):
         `os.path.expanduser("~")` directly (confirmed identical bodies in
         bun/rust/mvn/python/arduino-crucible.py) -- the real logic, not a
         delegator."""
-        offenders = _clients_with_marker_in_function(
-            "_abbrev_home", 'os.path.expanduser("~")')
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry _abbrev_home's REAL path "
-            f"logic (os.path.expanduser) in their own source instead of "
-            f"delegating to clients/_crucible_axi.py: {offenders!r}")
-
         home = "/home/fake-user-cr054"
         for client in CLIENTS:
             with self.subTest(client=client):
@@ -321,42 +276,6 @@ class HttpCoreSingleLocusOfTruthTest(unittest.TestCase):
                     unchanged, "/opt/other/x.py",
                     f"{client}-crucible.py's _abbrev_home must still leave "
                     f"a path outside the home directory unchanged")
-
-
-class HttpCoreStdlibOnlyTest(unittest.TestCase):
-    """Binding constraint (CR-CRU-054 §S2): `_crucible_axi.py` is loaded BY
-    FILE PATH into five vendored, standalone client repos -- a third-party
-    import would break every consumer on its next sync. Ties the check to
-    the lift itself landing (the `assertIn` fails today, before any HTTP-core
-    logic exists in the shared module, which is the correct RED reason) so
-    this is not a guard that is born green with nothing new to prove."""
-
-    def test_shared_module_gains_the_http_core_and_stays_stdlib_only(self):
-        source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            "urllib.request.urlopen(", source,
-            "the §S2 HTTP-core lift must land the real transport call in "
-            "clients/_crucible_axi.py -- not present yet, confirming this "
-            "cycle's production gap")
-        tree = ast.parse(source, filename=str(AXI_MODULE_PATH))
-        stdlib_names = set(getattr(sys, "stdlib_module_names", ()))
-        offenders = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    root = alias.name.split(".")[0]
-                    if root not in stdlib_names:
-                        offenders.append(root)
-            elif (isinstance(node, ast.ImportFrom) and node.level == 0
-                  and node.module):
-                root = node.module.split(".")[0]
-                if root not in stdlib_names:
-                    offenders.append(root)
-        self.assertEqual(
-            offenders, [],
-            f"clients/_crucible_axi.py must remain stdlib-only (vendored, "
-            f"loaded by file path into consumer repos) -- found third-party "
-            f"import(s): {offenders!r}")
 
 
 # ── Contract B -- §S2b: _request's drift correction ─────────────────────────

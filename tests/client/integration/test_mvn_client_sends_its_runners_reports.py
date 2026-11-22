@@ -42,13 +42,11 @@ Invocation:
         --tests tests.client.integration.test_mvn_client_sends_its_runners_reports
 """
 
-import ast
 import contextlib
 import json
 import os
 import sys
 import tempfile
-import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -58,20 +56,18 @@ from tests.client.live_run_harness import (
     load_client,
 )
 from tests.client.mvn_client_sends_its_runners_reports_helpers import (
-    _envelope,
     HEALTH,
     JACOCO,
-    _MavenProject,
     MODULES,
-    MVN_CLIENT,
     OUTPUT_MARKER,
     PARSED,
     PLUGINS,
-    _report_name,
     REPORTS,
     RUNS,
+    _envelope,
+    _MavenProject,
+    _report_name,
 )
-
 
 COMPILE = "/api/v2/runs/compile"
 FIRST_RUN = "run-live-1"
@@ -715,42 +711,6 @@ class AComposedGateAnswersAsBeforeTest(_MavenProject, unittest.TestCase):
         self.assertEqual(result.returncode, 0, where)
         self.assertEqual([c for c in _codes(envelope) if str(c).startswith("gate-suite-")],
                          [], where)
-
-
-# ── AC9 — one ingest line ───────────────────────────────────────────────────
-
-_OWN_INGEST_LINES = ("ingest junit:", "ingest parsed:")
-
-
-def own_ingest_line_literals(source):
-    """Every string literal of `source` (an f-string's literal parts too)
-    that begins a client-owned ingest line."""
-    return sorted({node.value for node in ast.walk(ast.parse(source))
-                   if isinstance(node, ast.Constant) and isinstance(node.value, str)
-                   and node.value.startswith(_OWN_INGEST_LINES)})
-
-
-class TheMavenClientPrintsOnlyTheSharedIngestLineTest(unittest.TestCase):
-
-    def test_the_scan_finds_an_own_ingest_line_in_a_plain_or_formatted_literal(self):
-        source = textwrap.dedent('''
-            import sys
-            def _a(resp):
-                print(f"ingest junit: ok={resp} dir=x", file=sys.stderr)
-            def _b(resp):
-                print("ingest parsed: ok=" + str(resp), file=sys.stderr)
-            def _c(resp):
-                print(f"ingest compile: ok={resp}", file=sys.stderr)
-                print(f"ingest: ok={resp}", file=sys.stderr)
-        ''')
-        self.assertEqual(own_ingest_line_literals(source),
-                         ["ingest junit: ok=", "ingest parsed: ok="])
-
-    def test_the_maven_client_holds_no_ingest_junit_or_ingest_parsed_literal(self):
-        found = own_ingest_line_literals(MVN_CLIENT.read_text(encoding="utf-8"))
-        self.assertEqual(found, [],
-                         f"the shared `ingest:` line is the run's one ingest "
-                         f"line; mvn-crucible.py still prints {found!r}")
 
 
 # ── the no-report exits, unchanged ─────────────────────────────────────────

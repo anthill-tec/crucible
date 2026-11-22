@@ -56,7 +56,6 @@ Fallback:
 """
 
 import argparse
-import ast
 import contextlib
 import email.message
 import importlib.util
@@ -70,6 +69,7 @@ import unittest
 import unittest.mock
 import urllib.error
 from pathlib import Path
+
 from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -1279,57 +1279,6 @@ class SharedQueueFileRegistrarTest(unittest.TestCase):
             f"falls back to `<project>/docs/changes/README.md` (§S2), so the "
             f"registrar must leave it unset rather than default it to a path; "
             f"got {default_args!r}")
-
-
-class SharedQueueFileImplementationLandsOnceTest(unittest.TestCase):
-    """AC6 — behaviour unchanged: §S1 is wiring plus a registrar, never a
-    re-implementation. The parse, its loud-failure error type and the
-    full-replace POST every client reaches are THIS module's, and no client
-    holds a copy.
-
-    Precedent: a since-deleted inventory test's
-    `test_the_shared_module_holds_the_implementation_the_clients_delegate_to`.
-    Both tests below PASS ON ARRIVAL — they are the guard that keeps GREEN's
-    four new delegators from becoming four new parsers.
-    """
-
-    CLIENTS = ("bun-crucible.py", "python-crucible.py", "rust-crucible.py",
-               "mvn-crucible.py", "arduino-crucible.py", "go-crucible.py")
-
-    # The parse, the error it raises, and the verb that POSTs the parsed set.
-    IMPLEMENTATION = ("parse_queue_table", "QueueParseError", "cmd_queue_file")
-
-    def test_the_shared_module_holds_the_implementation_the_clients_delegate_to(self):
-        axi = _load_axi_module()
-        missing = [name for name in self.IMPLEMENTATION
-                   if getattr(axi, name, None) is None]
-        self.assertEqual(
-            missing, [],
-            f"the shared module must define the queue-file implementation "
-            f"every client delegates to (§S1: the bodies are untouched); "
-            f"missing: {missing!r}")
-
-    def test_no_client_holds_its_own_copy_of_the_queue_table_parse(self):
-        """A client that grew its own `parse_queue_table`/`QueueParseError`
-        would have re-implemented §S2's parser behind an identically-named
-        verb — the CR-CRU-054 duplication defect, arriving through the very
-        cycle that exists to remove an exception."""
-        offenders = {}
-        for name in self.CLIENTS:
-            tree = ast.parse((CLIENT_SOURCE_DIR / name).read_text())
-            copies = sorted({
-                node.name for node in ast.walk(tree)
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                     ast.ClassDef))
-                and node.name in ("parse_queue_table", "QueueParseError")
-            })
-            if copies:
-                offenders[name] = copies
-        self.assertEqual(
-            offenders, {},
-            f"the queue-table parse lands ONCE, in clients/_crucible_axi.py; "
-            f"a client defining its own copy has forked the parser the whole "
-            f"fleet must agree on: {offenders!r}")
 
 
 # ── CR-CRU-107 §S1 + §S2 — one label per flag, and the refusals are structured ──

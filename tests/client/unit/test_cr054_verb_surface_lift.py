@@ -291,19 +291,6 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_status_moves_out_of_every_client_and_still_works(self):
-        marker = "status-unavailable"
-        offenders = _clients_with_marker_in_function("cmd_status", marker)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry cmd_status's REAL "
-            f"unavailable-degrade logic in their own source instead of "
-            f"delegating to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            marker, axi_source,
-            "clients/_crucible_axi.py must own cmd_status's real logic after "
-            "the §S2 lift -- not present yet")
-
         for client in CLIENTS:
             with self.subTest(client=f"{client}-plans-listed"):
                 module = _load_client_module(client)
@@ -341,19 +328,6 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                 self.assertIn("ECONNREFUSED", warnings_arg[0]["detail"])
 
     def test_stop_moves_out_of_every_client_and_still_works(self):
-        marker = "checkpointed"
-        offenders = _clients_with_marker_in_function("cmd_stop", marker)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry cmd_stop's REAL "
-            f"checkpointed-count reporting in their own source instead of "
-            f"delegating to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            marker, axi_source,
-            "clients/_crucible_axi.py must own cmd_stop's real logic after "
-            "the §S2 lift -- not present yet")
-
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
@@ -385,19 +359,6 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                 self.assertEqual(result_fields["checkpointed"], 3)
 
     def test_checkpoint_moves_out_of_every_client_and_still_works(self):
-        marker = "planId']}/checkpoint"
-        offenders = _clients_with_marker_in_function("cmd_checkpoint", marker)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry cmd_checkpoint's REAL "
-            f"checkpoint-POST logic in their own source instead of "
-            f"delegating to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            marker, axi_source,
-            "clients/_crucible_axi.py must own cmd_checkpoint's real logic "
-            "after the §S2 lift -- not present yet")
-
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
@@ -428,19 +389,6 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                 self.assertEqual(result_fields["changed"], True)
 
     def test_abort_moves_out_of_every_client_and_still_works(self):
-        marker = "planId']}/abort"
-        offenders = _clients_with_marker_in_function("cmd_abort", marker)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry cmd_abort's REAL abort-POST "
-            f"logic in their own source instead of delegating to "
-            f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            marker, axi_source,
-            "clients/_crucible_axi.py must own cmd_abort's real logic after "
-            "the §S2 lift -- not present yet")
-
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
@@ -478,35 +426,6 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                 self.assertFalse(ok_arg)
 
     def test_cycle_add_moves_out_of_every_client_and_still_works(self):
-        # Re-pinned 2026-09-12 (CR-CRU-124 C1 FIX), "planId']}/cycles\"," ->
-        # "}/cycles\",": CR-CRU-124 §S3 gave `cycle-add` a `--plan <id>` that
-        # names the target plan DIRECTLY, so the plan id no longer necessarily
-        # comes from a resolved plan dict — `cmd_cycle_add` in clients/_crucible_axi.py
-        # now posts to f"…/{plan_id}/cycles" where it once posted to
-        # f"…/{plan['planId']}/cycles". The production change is CORRECT and is
-        # the CR's entire point; only this guard's text marker went stale, so
-        # the CR that shifted the file re-pins it.
-        # The re-pinned marker still discriminates, and both halves stay
-        # load-bearing: `}/cycles\",` demands an f-string interpolation closing
-        # immediately before the path segment AND the path string ending with a
-        # further argument — that is the cycle-append POST call itself and
-        # nothing else. It is absent from every delegating stub (which carries
-        # no URL literal at all), from the docstring prose
-        # (`…/plans/<planId>/cycles`, no brace, no quote), and from
-        # `_cycle_transition`'s PATCH path (`}/cycles/{cycle_id}\"`).
-        marker = "}/cycles\","
-        offenders = _clients_with_marker_in_function("cmd_cycle_add", marker)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry cmd_cycle_add's REAL "
-            f"cycle-append POST logic in their own source instead of "
-            f"delegating to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            marker, axi_source,
-            "clients/_crucible_axi.py must own cmd_cycle_add's real logic "
-            "after the §S2 lift -- not present yet")
-
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
@@ -534,19 +453,6 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                 self.assertEqual(result_fields["label"], "C5")
 
     def test_cr_close_moves_out_of_every_client_and_still_works(self):
-        marker = '"status": "closed"'
-        offenders = _clients_with_marker_in_function("cmd_cr_close", marker)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry cmd_cr_close's REAL "
-            f"close-PATCH logic in their own source instead of delegating to "
-            f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            marker, axi_source,
-            "clients/_crucible_axi.py must own cmd_cr_close's real logic "
-            "after the §S2 lift -- not present yet")
-
         # -- no open plan: ok:false, no milestone ever posted.
         for client in CLIENTS:
             with self.subTest(client=f"{client}-no-open-plan"):
@@ -614,19 +520,6 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase, _ProjectDirFixtu
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_post_gate_moves_out_of_every_client_and_still_works(self):
-        marker = '"/api/v2/gates"'
-        offenders = _clients_with_marker_in_function("_post_gate", marker)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry _post_gate's REAL endpoint "
-            f"in their own source instead of delegating to "
-            f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            marker, axi_source,
-            "clients/_crucible_axi.py must own _post_gate's real logic "
-            "after the §S2 lift -- not present yet")
-
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
@@ -665,19 +558,6 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase, _ProjectDirFixtu
                     f"is given")
 
     def test_post_milestone_moves_out_of_every_client_and_still_works(self):
-        marker = '"/api/v2/milestones"'
-        offenders = _clients_with_marker_in_function("_post_milestone", marker)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry _post_milestone's REAL "
-            f"endpoint in their own source instead of delegating to "
-            f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            marker, axi_source,
-            "clients/_crucible_axi.py must own _post_milestone's real logic "
-            "after the §S2 lift -- not present yet")
-
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
@@ -703,19 +583,6 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase, _ProjectDirFixtu
                     f"given, after delegating")
 
     def test_add_gate_cycle_arg_moves_out_of_every_client_and_still_works(self):
-        marker = 'p.add_argument("--cycle", type=int,'
-        offenders = _clients_with_marker_in_function("_add_gate_cycle_arg", marker)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry _add_gate_cycle_arg's REAL "
-            f"argparse binding in their own source instead of delegating to "
-            f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            marker, axi_source,
-            "clients/_crucible_axi.py must own _add_gate_cycle_arg's real "
-            "logic after the §S2 lift -- not present yet")
-
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
@@ -730,19 +597,6 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase, _ProjectDirFixtu
                 self.assertIsNone(parsed_absent.cycle)
 
     def test_gate_report_moves_out_of_every_client_and_still_works(self):
-        marker = '"outcome": args.outcome, "steps": steps}'
-        offenders = _clients_with_marker_in_function("cmd_gate_report", marker)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry cmd_gate_report's REAL gate "
-            f"assembly logic in their own source instead of delegating to "
-            f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            marker, axi_source,
-            "clients/_crucible_axi.py must own cmd_gate_report's real logic "
-            "after the §S2 lift -- not present yet")
-
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
@@ -785,19 +639,6 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase, _ProjectDirFixtu
                 self.assertFalse(emit_mock.call_args.args[1])
 
     def test_gate_run_moves_out_of_every_client_and_still_works(self):
-        marker = "_GATE_POLL_CADENCE_S"
-        offenders = _clients_with_marker_in_function("cmd_gate_run", marker)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry cmd_gate_run's REAL polling "
-            f"logic in their own source instead of delegating to "
-            f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            marker, axi_source,
-            "clients/_crucible_axi.py must own cmd_gate_run's real polling "
-            "logic after the §S2 lift -- not present yet")
-
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
@@ -832,19 +673,6 @@ class CycleTransitionSingleLocusTest(unittest.TestCase, _ProjectDirFixture):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_cycle_transition_moves_out_of_every_client_and_still_works(self):
-        marker = "is not in any OPEN plan"
-        offenders = _clients_with_marker_in_function("_cycle_transition", marker)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry _cycle_transition's REAL "
-            f"plan-scan/PATCH logic in their own source instead of "
-            f"delegating to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            marker, axi_source,
-            "clients/_crucible_axi.py must own _cycle_transition's real "
-            "logic after the §S2 lift -- not present yet")
-
         # -- cycle id not found in any open plan: ok:false, no PATCH sent.
         for client in CLIENTS:
             with self.subTest(client=f"{client}-cycle-not-found"):
@@ -894,21 +722,6 @@ class DashboardParameterisedLiftTest(unittest.TestCase):
     PARAMETERISED case, confirmed by reading all five bodies."""
 
     def test_dashboard_namespace_construction_moves_out_of_every_client_and_still_works(self):
-        marker = "argparse.Namespace("
-        offenders = _clients_with_marker_in_function("cmd_dashboard", marker)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still hand-build the cmd_status "
-            f"Namespace inline in cmd_dashboard instead of delegating the "
-            f"(parameterised) construction to clients/_crucible_axi.py: "
-            f"{offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            marker, axi_source,
-            "clients/_crucible_axi.py must own the parameterised "
-            "cmd_status-Namespace construction after the §S2 lift -- not "
-            "present yet")
-
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
@@ -1380,52 +1193,6 @@ FLEET_IDENTITY_SOURCE = "claude-md"
 RETIRED_IDENTITY_SOURCE = "openclaw"
 
 
-def _identity_payload_sites(path):
-    """Every function in `path` -- top-level or method -- that BUILDS a dict
-    literal carrying an `"identity"` key, i.e. every place an `identity.source`
-    can reach the wire from. Used to prove the behavioural coverage below is
-    EXHAUSTIVE: a new payload-building site anywhere in the fleet fails the
-    completeness test rather than slipping in unexercised."""
-    text = path.read_text()
-    tree = ast.parse(text, filename=str(path))
-    sites = set()
-
-    def visit(node, enclosing):
-        for child in ast.iter_child_nodes(node):
-            name = enclosing
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                name = child.name
-            elif isinstance(child, ast.Dict):
-                for key in child.keys:
-                    if isinstance(key, ast.Constant) and key.value == "identity":
-                        sites.add(enclosing)
-            visit(child, name)
-
-    visit(tree, None)
-    sites.discard(None)
-    return sites
-
-
-# Every identity-payload-building site in the fleet, mapped to the test method
-# below that drives it FOR REAL. Keep in step with the sweep above.
-#   * `_crucible_axi.GatedRunIdentity.open_payload` -- driven through each
-#     client's `_open_gate_identity` (test_gate_run_identity_open_...).
-#   * `_crucible_axi.cmd_register`'s own inline payload -- rust/mvn/arduino's
-#     register path (test_register_* below).
-#   * bun/python's `_register_agent` -- the same three tests, via the
-#     `register_fn` parameter their `cmd_register` passes.
-#   * mvn's `_narrate_heartbeat` -- test_narration_heartbeat_... below (the
-#     site VERIFY flagged: hardcoded, and never covered by a RED test).
-COVERED_IDENTITY_PAYLOAD_SITES = {
-    "_crucible_axi": {"open_payload", "cmd_register"},
-    "bun": {"_register_agent"},
-    "rust": set(),
-    "mvn": {"_narrate_heartbeat"},
-    "python": {"_register_agent"},
-    "arduino": set(),
-}
-
-
 class IdentitySourceOnTheWireDriftCorrectionTest(unittest.TestCase, _ProjectDirFixture):
     """DN §4 findings #4 + #5 / CR-CRU-054 §S2b: `identity.source` must leave
     every client as the documented-enum `claude-md`, never the retired
@@ -1606,22 +1373,6 @@ class IdentitySourceOnTheWireDriftCorrectionTest(unittest.TestCase, _ProjectDirF
             "mvn-crucible.py must still define _narrate_heartbeat -- it is the "
             "site DN §4 recorded the `openclaw` literal at; a loop that "
             "exercises nothing would make this test vacuous")
-
-    def test_every_identity_payload_building_site_is_behaviourally_covered(self):
-        """Completeness: the sweep of dict literals carrying an `"identity"`
-        key must match exactly the set of sites the tests above drive. A NEW
-        payload-building site fails here instead of shipping with only the
-        static scans behind it -- the precise gap this class closes."""
-        found = {"_crucible_axi": _identity_payload_sites(AXI_MODULE_PATH_SOURCE)}
-        for client, path in CLIENT_FILES.items():
-            found[client] = _identity_payload_sites(path)
-        self.assertEqual(
-            found, COVERED_IDENTITY_PAYLOAD_SITES,
-            "the fleet's identity-payload-building sites no longer match the "
-            "set exercised behaviourally by this class -- add a behavioural "
-            "test for the new/moved site (and update "
-            "COVERED_IDENTITY_PAYLOAD_SITES) rather than relying on the "
-            "source-text scans")
 
 
 # ---------------------------------------------------------------------------

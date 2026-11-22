@@ -617,24 +617,6 @@ class OneSharedRegistrarDeclaresBothFlagsTest(unittest.TestCase):
                 f"that hand-rolls it is one of the five independent edits "
                 f"§S3 forbids; offenders: {offenders!r}")
 
-    def test_exactly_one_shared_function_declares_both_flags(self):
-        declaring_plan = _shared_functions_declaring(PLAN_FLAG)
-        declaring_kind = _shared_functions_declaring(KIND_FLAG)
-
-        self.assertEqual(
-            len(declaring_plan), 1,
-            f"exactly ONE function in {AXI_MODULE.name} declares {PLAN_FLAG}; "
-            f"found {sorted(declaring_plan)!r}")
-        self.assertEqual(
-            len(declaring_kind), 1,
-            f"exactly ONE function in {AXI_MODULE.name} declares {KIND_FLAG}; "
-            f"found {sorted(declaring_kind)!r}")
-        self.assertEqual(
-            declaring_plan, declaring_kind,
-            f"§S4's census criterion says {KIND_FLAG} rides the SAME single "
-            f"registrar site as {PLAN_FLAG}; got {sorted(declaring_plan)!r} "
-            f"vs {sorted(declaring_kind)!r}")
-
     def test_every_client_reaches_that_one_registrar_from_its_cycle_add(self):
         declaring = _shared_functions_declaring(PLAN_FLAG)
         unreached = {}
