@@ -38,25 +38,16 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
+import { mountUi, SHORT_POLL, waitForPollTick, type UiIntervals } from "../helpers/ui-mount";
 
 const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
-// The real poll interval is a hard-coded 5000ms (`startPolling` in
-// public/app.js). Wait comfortably past it before asserting on a
-// poll-driven update.
-const POLL_INTERVAL_MS = 5000;
-const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
-const POLL_TEST_TIMEOUT_MS = 15_000;
+// A test that waits on a poll tick mounts with a SHORT poll (`SHORT_POLL`,
+// for its own mount only) and waits for that tick's read through the shared
+// `waitForPollTick` (1 s deadline); every other mount keeps the production
+// cadence. The per-test bound is sized to the short tick, so a poll that
+// never fires fails fast.
+const POLL_TEST_TIMEOUT_MS = 5_000;
 
 interface FailureFixture {
   message?: string;
@@ -142,9 +133,9 @@ interface MountOpts {
    *  `[]`, which is what a server without the field degrades to, so every
    *  pre-existing test in this file is unaffected. */
   openRuns?: OpenRunFixture[];
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
-
-let cacheBust = 0;
 
 function suiteCounts(children: LeafFixture[]): { passed: number; failed: number; pending: number } {
   const counts = { passed: 0, failed: 0, pending: 0 };
@@ -166,12 +157,7 @@ function suiteCounts(children: LeafFixture[]): { passed: number; failed: number;
  * "SSE-simulated" liveness update.
  */
 async function mountApp(opts: MountOpts): Promise<void> {
-  const pathname = opts.pathname ?? "/";
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
-  document.body.innerHTML = '<div id="app"></div>';
-
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+  await mountUi({ pathname: opts.pathname ?? "/", intervals: opts.intervals, fetch: async (url: string) => {
     let body: unknown;
     const eventMatch = /\/api\/v2\/events\/([^/?]+)/.exec(url);
     const isListEndpoint = url.includes("/api/v2/events?") || url.endsWith("/api/v2/events");
@@ -212,27 +198,11 @@ async function mountApp(opts: MountOpts): Promise<void> {
       throw new Error(`inpane-liveness.test.ts mountApp: unexpected fetch url ${url}`);
     }
     return { ok: true, status: 200, json: async () => body } as Response;
-  }) as typeof fetch;
-
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?inpaneLiveness=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+  } });
 }
 
 async function settle(ticks = 8): Promise<void> {
   await settleDom({ ticks });
-}
-
-/** Waits past one real poll tick (POLL_INTERVAL_MS), then settles VanJS. */
-async function waitForPollTick(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, POLL_WAIT_MS));
-  await settle();
 }
 
 afterEach(async () => {
@@ -369,6 +339,7 @@ describe("SSE liveness — with the detail open, a new run ingested for the proj
       const fx = unitFixture(eventId, projectKey, existingAgentId, now);
 
       const opts: MountOpts = {
+        intervals: SHORT_POLL,
         pathname: `/p/${projectKey}`,
         projects: [project({ key: projectKey, name: "Live WS Project", agentsTotal: 1 })],
         agents: [agent({ agentId: existingAgentId, projectKey, message: "idle" })],
@@ -454,6 +425,7 @@ describe("SSE liveness — with the detail open, a new run ingested for the proj
       const fx = unitFixture(eventId, projectKey, agentId, now);
 
       const opts: MountOpts = {
+        intervals: SHORT_POLL,
         pathname: `/p/${projectKey}`,
         projects: [project({ key: projectKey, name: "Glyph Project" })],
         agents: [agent({ agentId, projectKey, message: "booting", liveness: "stale" })],
@@ -525,6 +497,7 @@ describe("the feed behind the open detail also absorbs the new run — closing t
       const newEventId = "evt-feed-ws-2";
 
       const opts: MountOpts = {
+        intervals: SHORT_POLL,
         pathname: `/p/${projectKey}`,
         projects: [project({ key: projectKey, name: "Feed WS Project" })],
         agents: [agent({ agentId: "feed-agent-1", projectKey })],
@@ -609,6 +582,7 @@ describe("negative bound — the SSE-driven poll refetch does not reset the open
       const fx = twoSuiteFixture(eventId, projectKey, "persist-agent", now);
 
       const opts: MountOpts = {
+        intervals: SHORT_POLL,
         pathname: `/p/${projectKey}/run/${eventId}`,
         projects: [project({ key: projectKey, name: "Persist Project" })],
         agents: [agent({ agentId: "persist-agent", projectKey })],
@@ -997,6 +971,7 @@ describe("CR-CRU-123 §S1 — an agent with a run in flight animates on its Proj
       const eventId = "evt-stream-settle-1";
       const fx = unitFixture(eventId, projectKey, "alpha-agent", now);
       const opts: MountOpts = {
+        intervals: SHORT_POLL,
         pathname: `/p/${projectKey}`,
         projects: [project({ key: projectKey, name: "Settling Project", agentsTotal: 2 })],
         agents: [

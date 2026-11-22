@@ -71,24 +71,14 @@
 
 import { describe, test, expect, afterEach } from "bun:test";
 import { setSystemTime } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
 import { singleReleaseHistoryStub } from "../helpers/history-stub";
+import { mountUi, unmountUi, waitUntil, type UiIntervals } from "../helpers/ui-mount";
 
 const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 // Orchestrator pin (live-review, same session as this RED) — cycle-timer
 // badges must never wrap at narrow widths; reuses the styles.css
 // source-assertion technique tests/integration/f13-fidelity.test.ts's §S6 #7
@@ -142,18 +132,13 @@ interface MountOpts {
   pathname?: string;
   projects: ProjectFixture[];
   plans: PlanFixture[];
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
 
-let cacheBust = 0;
-
-/** Same mountApp harness pattern as tests/integration/f13-fidelity.test.ts. */
+/** The shared UI mount, answered from this file's fixture objects. */
 async function mountApp(opts: MountOpts): Promise<void> {
-  const pathname = opts.pathname ?? "/";
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
-  document.body.innerHTML = '<div id="app"></div>';
-
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+  await mountUi({ pathname: opts.pathname ?? "/", intervals: opts.intervals, fetch: async (url: string) => {
     let body: unknown;
     if (/\/api\/v2\/projects\/[^/]+\/history/.test(url)) {
       // CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved): History
@@ -174,17 +159,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
       throw new Error(`cycle-timers.test.ts mountApp: unexpected fetch url ${url}`);
     }
     return { ok: true, status: 200, json: async () => body } as Response;
-  }) as typeof fetch;
-
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?cycleTimers=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+  } });
 }
 
 async function settle(ticks = 8): Promise<void> {
@@ -192,7 +167,7 @@ async function settle(ticks = 8): Promise<void> {
 }
 
 afterEach(async () => {
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await unmountUi();
   setSystemTime(); // reset the injected clock so it never leaks to other files
 });
 
@@ -868,6 +843,22 @@ describe('§S3 — no activatedAt renders NO cycle-timer element (never a fabric
 // `parseTimerMs` mismatch here can only mean a genuine ticking failure, not
 // an untested zero-minute formatting edge case.
 
+// CONVERTED (the shell's cycle tick is now a per-mount setting): each
+// self-tick test below pins the wall clock with `setSystemTime`, mounts with
+// a SHORT cycle tick for its own mount only, MOVES the clock, and waits for
+// the tick's re-derivation of the badge — a condition with a 1 s deadline,
+// never a real wait on the 10 s cadence. The cadence bounds (>= 9 s, <= 15 s)
+// are asserted on the clock the test moved. The production 10 s value itself
+// is observed in tests/unit/the-shell-and-the-stream-run-their-default-intervals.test.ts.
+const SHORT_CYCLE_TICK: UiIntervals = { cycleTickMs: 200 };
+const TICK_TEST_TIMEOUT_MS = 5_000;
+
+/** Wait until `read()` differs from `from`: a cycle tick re-derived the badge on the moved clock. */
+async function waitForBadgeTick<T>(read: () => T, from: T): Promise<void> {
+  await waitUntil(() => read() !== from, "a cycle tick re-deriving the badge on the moved clock");
+  await settle();
+}
+
 /** Parses the pinned `⏱ <m>m <ss>s` (zero-padded seconds) format back to ms. */
 function parseTimerMs(text: string): number {
   const m = /^⏱\s+(\d+)m\s+(\d{2})s$/.exec(text.trim());
@@ -881,7 +872,9 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): the badge self-ticks without n
   test(
     "an ACTIVE cycle's cycle-timer badge advances on its own, across a real >=10s wait, on the SAME mount with UNCHANGED fetch data (no remount, no fixture mutation)",
     async () => {
-      const activatedAt = Date.now() - 62_000; // real clock, ~1m 02s elapsed at mount
+      const t0 = Date.now();
+      setSystemTime(t0); // the test's own clock: pinned here, moved below
+      const activatedAt = t0 - 62_000; // ~1m 02s elapsed at mount
       const plan: PlanFixture = {
         planId: 101,
         cr: "CR-TIMER-LIVE-1",
@@ -891,6 +884,7 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): the badge self-ticks without n
         cycles: [{ id: 901, label: "compile fallback", status: "active", activatedAt }],
       };
       await mountApp({
+        intervals: SHORT_CYCLE_TICK,
         pathname: "/p/proj-timer-live-1",
         projects: [project({ key: "proj-timer-live-1", name: "Live Tick Project" })],
         plans: [plan],
@@ -902,14 +896,17 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): the badge self-ticks without n
       expect(timerBefore).not.toBeNull();
       const msBefore = parseTimerMs(norm(timerBefore!.textContent));
 
-      // Real wall-clock wait, comfortably past the user-requested 10s
-      // cadence, with NO change to the plan/fixture and NO remount — the
-      // mocked fetch keeps returning the identical `activatedAt` every poll.
-      // If the badge only recomputes `Date.now()` at render time and only
-      // re-renders on a data-changing poll (today's bug), this observes the
-      // SAME frozen text.
-      await new Promise((resolve) => setTimeout(resolve, 11_000));
-      await settle();
+      // The clock moves 11 s (past the user-requested 10s cadence), with NO
+      // change to the plan/fixture and NO remount — the mocked fetch keeps
+      // returning the identical `activatedAt`. If the badge only recomputes
+      // `Date.now()` at render time and only re-renders on a data-changing
+      // poll, no tick re-derives it and the wait fails at its deadline.
+      const textBefore = norm(timerBefore!.textContent);
+      setSystemTime(t0 + 11_000);
+      await waitForBadgeTick(
+        () => norm(cycleRowFor(active(), "cycle-row", "compile fallback").querySelector('[data-testid="cycle-timer"]')?.textContent ?? null),
+        textBefore,
+      );
 
       const rowAfter = cycleRowFor(active(), "cycle-row", "compile fallback");
       const timerAfter = rowAfter.querySelector('[data-testid="cycle-timer"]');
@@ -922,13 +919,15 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): the badge self-ticks without n
       expect(msAfter).toBeGreaterThan(msBefore);
       expect(msAfter - msBefore).toBeGreaterThanOrEqual(9_000);
     },
-    20_000,
+    TICK_TEST_TIMEOUT_MS,
   );
 
   test(
     "the self-tick cadence is <=10s: TWO consecutive real waits of ~10.7s each (same mount, unchanged data) EACH show a further advance — not one eventual catch-up jump after a long wait",
     async () => {
-      const activatedAt = Date.now() - 65_000; // ~1m 05s elapsed at mount
+      const t0 = Date.now();
+      setSystemTime(t0); // the test's own clock: pinned here, moved below
+      const activatedAt = t0 - 65_000; // ~1m 05s elapsed at mount
       const plan: PlanFixture = {
         planId: 102,
         cr: "CR-TIMER-LIVE-2",
@@ -938,6 +937,7 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): the badge self-ticks without n
         cycles: [{ id: 902, label: "compile fallback", status: "active", activatedAt }],
       };
       await mountApp({
+        intervals: SHORT_CYCLE_TICK,
         pathname: "/p/proj-timer-live-2",
         projects: [project({ key: "proj-timer-live-2", name: "Live Tick Cadence Project" })],
         plans: [plan],
@@ -953,26 +953,26 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): the badge self-ticks without n
 
       const msSample0 = readMs();
 
-      // Window 1 — a hair over 10s, matching the user's "every 10 seconds"
-      // cadence request (a CADENCE bound, not merely an eventual-freshness
-      // bound).
-      await new Promise((resolve) => setTimeout(resolve, 10_700));
-      await settle();
+      // Window 1 — the clock moves a hair over 10s, matching the user's
+      // "every 10 seconds" cadence request (a CADENCE bound, not merely an
+      // eventual-freshness bound), and one short tick re-derives the badge.
+      setSystemTime(t0 + 10_700);
+      await waitForBadgeTick(readMs, msSample0);
       const msSample1 = readMs();
       expect(msSample1).toBeGreaterThan(msSample0);
       expect(msSample1 - msSample0).toBeGreaterThanOrEqual(9_000);
       expect(msSample1 - msSample0).toBeLessThanOrEqual(15_000);
 
       // Window 2 — a SECOND ~10s-scale window also shows a further advance,
-      // pinning ONGOING cadence rather than a single one-off catch-up tick.
-      await new Promise((resolve) => setTimeout(resolve, 10_700));
-      await settle();
+      // pinning ONGOING ticks rather than a single one-off catch-up tick.
+      setSystemTime(t0 + 21_400);
+      await waitForBadgeTick(readMs, msSample1);
       const msSample2 = readMs();
       expect(msSample2).toBeGreaterThan(msSample1);
       expect(msSample2 - msSample1).toBeGreaterThanOrEqual(9_000);
       expect(msSample2 - msSample1).toBeLessThanOrEqual(15_000);
     },
-    35_000,
+    TICK_TEST_TIMEOUT_MS,
   );
 });
 
@@ -980,7 +980,9 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): sealed rows never tick even ac
   test(
     "a DONE cycle's sealed cycle-timer text is UNCHANGED across an >=10s real wall-clock wait on the SAME mount (no re-seal, no drift)",
     async () => {
-      const activatedAt = Date.now() - 800_000;
+      const t0 = Date.now();
+      setSystemTime(t0); // the test's own clock: pinned here, moved below
+      const activatedAt = t0 - 800_000;
       const doneAt = activatedAt + 760_000; // 12m 40s sealed span
       const plan: PlanFixture = {
         planId: 103,
@@ -988,9 +990,16 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): sealed rows never tick even ac
         projectKey: "proj-timer-live-3",
         status: "open",
         wave: "1",
-        cycles: [{ id: 903, label: "compile fallback", status: "done", activatedAt, doneAt }],
+        cycles: [
+          { id: 903, label: "compile fallback", status: "done", activatedAt, doneAt },
+          // The tick WITNESS on the same mount: an active row whose badge a
+          // cycle tick visibly moves, so "the sealed row did not change" is
+          // read across ticks that really ran, never across none.
+          { id: 904, label: "tick witness", status: "active", activatedAt: t0 - 60_000 },
+        ],
       };
       await mountApp({
+        intervals: SHORT_CYCLE_TICK,
         pathname: "/p/proj-timer-live-3",
         projects: [project({ key: "proj-timer-live-3", name: "Sealed Live Project" })],
         plans: [plan],
@@ -1003,8 +1012,13 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): sealed rows never tick even ac
       const textBefore = norm(timerBefore!.textContent);
       expect(textBefore).toBe("⏱ 12m 40s");
 
-      await new Promise((resolve) => setTimeout(resolve, 11_000));
-      await settle();
+      // The clock moves 11 s; the wait is for the witness badge's tick on
+      // the moved clock (a condition, 1 s deadline).
+      const witness = (): string =>
+        norm(cycleRowFor(active(), "cycle-row", "tick witness").querySelector('[data-testid="cycle-timer"]')?.textContent ?? null);
+      const witnessBefore = witness();
+      setSystemTime(t0 + 11_000);
+      await waitForBadgeTick(witness, witnessBefore);
 
       const rowAfter = cycleRowFor(active(), "cycle-row", "compile fallback");
       const timerAfter = rowAfter.querySelector('[data-testid="cycle-timer"]');
@@ -1013,7 +1027,7 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): sealed rows never tick even ac
       expect(textAfter).toBe(textBefore);
       expect(textAfter).toBe("⏱ 12m 40s");
     },
-    20_000,
+    TICK_TEST_TIMEOUT_MS,
   );
 });
 
@@ -1104,7 +1118,9 @@ describe("§S3 (a) — CR-CRU-023: ACTIVE badge derives from server-fed activeMs
   test(
     "an ACTIVE cycle's badge, server-fed with a SMALL activeMs against a STALE activatedAt, ticks FORWARD from the activeMs baseline over a real >=10s wait (the existing self-tick cadence) — never jumps to the activatedAt-scale value",
     async () => {
-      const oldActivatedAt = Date.now() - 4 * 3_600_000; // real 4h ago
+      const t0 = Date.now();
+      setSystemTime(t0); // the test's own clock: pinned here, moved below
+      const oldActivatedAt = t0 - 4 * 3_600_000; // 4h before the pinned now
       const plan: PlanFixture = {
         planId: 302,
         cr: "CR-EPOCH-UI-2",
@@ -1122,6 +1138,7 @@ describe("§S3 (a) — CR-CRU-023: ACTIVE badge derives from server-fed activeMs
         ],
       };
       await mountApp({
+        intervals: SHORT_CYCLE_TICK,
         pathname: "/p/proj-epoch-ui-2",
         projects: [project({ key: "proj-epoch-ui-2", name: "Epoch UI Ticking Project" })],
         plans: [plan],
@@ -1138,12 +1155,14 @@ describe("§S3 (a) — CR-CRU-023: ACTIVE badge derives from server-fed activeMs
       expect(msBefore).toBeGreaterThanOrEqual(300_000);
       expect(msBefore).toBeLessThan(320_000);
 
-      // Bounded real wall-clock wait — the SAME technique (and rationale,
-      // documented above at "§S3 — LIVE-REVIEW DEFECT (cycle 18)") already
-      // established in this file for the self-ticking badge; fake timers
-      // hang this exact mountApp/settle harness (see that section's note).
-      await new Promise((resolve) => setTimeout(resolve, 11_000));
-      await settle();
+      // The clock moves 11 s and one short cycle tick re-derives the badge —
+      // the SAME technique this file's self-ticking badge tests use (the
+      // wait is for the tick's re-derivation, 1 s deadline).
+      setSystemTime(t0 + 11_000);
+      await waitForBadgeTick(
+        () => parseTimerMs(norm(cycleRowFor(active(), "cycle-row", "long-running epoch cycle").querySelector('[data-testid="cycle-timer"]')?.textContent ?? null)),
+        msBefore,
+      );
 
       const rowAfter = cycleRowFor(active(), "cycle-row", "long-running epoch cycle");
       const timerAfter = rowAfter.querySelector('[data-testid="cycle-timer"]');
@@ -1156,7 +1175,7 @@ describe("§S3 (a) — CR-CRU-023: ACTIVE badge derives from server-fed activeMs
       // Bound — still nowhere near the activatedAt-scale value (~240m).
       expect(msAfter).toBeLessThan(320_000 + 15_000);
     },
-    20_000,
+    TICK_TEST_TIMEOUT_MS,
   );
 
   // Coexistence bound (per §S3 AC: "Sealed history rows keep `doneAt −

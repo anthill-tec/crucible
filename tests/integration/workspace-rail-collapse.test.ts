@@ -39,23 +39,26 @@
 // project card, the roadmap chip and `VitalsRail` — and `aria-expanded`
 // appears ZERO times in the whole shell.
 import { describe, test, expect, afterEach, setSystemTime, spyOn } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
+import {
+  mountUi,
+  settleReads,
+  SHORT_POLL,
+  uiFetchLog,
+  unmountUi,
+  waitForPollTick,
+  waitUntil,
+  type UiIntervals,
+} from "../helpers/ui-mount";
 
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
+/** A short watchdog for the liveness test (its own mount only): the silence
+ *  window keeps its default and the clock is moved past it with
+ *  `setSystemTime`, so only the watchdog's cadence is shortened. */
+const SHORT_WATCHDOG: UiIntervals = { watchdogMs: 100 };
+
+/** The bound for a test that waits on a short tick: a tick that never fires
+ *  fails it at the helper's 1 s deadline, well inside this. */
+const TICK_TEST_TIMEOUT_MS = 5_000;
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 //
@@ -166,6 +169,8 @@ interface MountOpts {
    *  way for the same reason. Both stores are carried because AC5 leaves the
    *  mechanism to the implementer — nothing here names a key. */
   storageSeed?: StorageSnapshot;
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
 
 /** Every string the origin holds, per web storage. */
@@ -215,26 +220,23 @@ function installLayout(): void {
  *  failing that probe, never by assigning the flag. */
 let healthReachable = true;
 
-let cacheBust = 0;
-
 async function mountApp(opts: MountOpts = {}): Promise<void> {
   const key = opts.key ?? "rail-collapse-key";
   healthReachable = true;
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost/p/${key}/roadmap` });
-  document.body.innerHTML = '<div id="app"></div>';
-  // CR-CRU-093 §S4 — seeded BEFORE the shell is evaluated, because boot is
-  // when a persisted preference is read (the density guard reads its key at
-  // module top level, public/app.js).
-  if (opts.storageSeed !== undefined) {
-    for (const [k, v] of Object.entries(opts.storageSeed.local)) {
-      window.localStorage.setItem(k, v);
+  const seedAndMeasure = (): void => {
+    // The storage seed lands BEFORE the shell is evaluated, because boot is
+    // when a persisted preference is read (the density guard reads its key at
+    // module top level, public/app.js).
+    if (opts.storageSeed !== undefined) {
+      for (const [k, v] of Object.entries(opts.storageSeed.local)) {
+        window.localStorage.setItem(k, v);
+      }
+      for (const [k, v] of Object.entries(opts.storageSeed.session)) {
+        window.sessionStorage.setItem(k, v);
+      }
     }
-    for (const [k, v] of Object.entries(opts.storageSeed.session)) {
-      window.sessionStorage.setItem(k, v);
-    }
-  }
-  installLayout();
+    installLayout();
+  };
 
   const okResponse = (body: unknown): Response =>
     ({ ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(body)) }) as
@@ -280,21 +282,16 @@ async function mountApp(opts: MountOpts = {}): Promise<void> {
     }
     throw new Error(`workspace-rail-collapse.test.ts mountApp: unexpected fetch url ${url}`);
   };
-  const scriptedGlobals = globalThis as unknown as { fetch: typeof fetch };
-  scriptedGlobals.fetch = scriptedFetch as unknown as typeof fetch;
 
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  // Dynamic import is REQUIRED, not a style choice: the specifier carries a
-  // per-mount cache-bust query so each test re-evaluates app-logic.mjs into a
-  // fresh happy-dom global (house harness pattern).
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?workspaceRailCollapse=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+  // The shared UI mount re-evaluates app-logic.mjs per mount (a cache-busted
+  // import into the fresh happy-dom global); storage and the box model are
+  // this file's own setup, installed before the shell evaluates.
+  await mountUi({
+    pathname: `/p/${key}/roadmap`,
+    intervals: opts.intervals,
+    fetch: scriptedFetch,
+    beforeBoot: seedAndMeasure,
+  });
 }
 
 /** Real timers, deliberately: the subject is the production shell driving its
@@ -303,15 +300,9 @@ async function settle(ticks = 8): Promise<void> {
   await settleDom({ ticks });
 }
 
-async function sleep(ms: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, ms);
-  await promise;
-}
-
 afterEach(async () => {
   setSystemTime(); // never leak an injected clock into another file
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await unmountUi();
 });
 
 // ── DOM readers ────────────────────────────────────────────────────────────
@@ -387,17 +378,23 @@ const releaseMembership = (): string[][] =>
  * AC9 — take the backend DOWN the way the shell does. `watchdogTick` only
  * probes `/api/v2/health` once the stream has been silent for >20s, and only a
  * FAILING probe flips the pill (public/app.js), so the clock is moved past that
- * window and the probe is made unreachable; the watchdog's own 5s interval then
- * runs on real timers. Nothing here assigns `state.backendUp` — an assignment
+ * window and the probe is made unreachable; the watchdog's own (short, for
+ * this mount) interval then runs on real timers, and the drive waits for the
+ * probe it makes — a condition, with the helper's 1 s deadline — never for a
+ * duration. Nothing here assigns `state.backendUp` — an assignment
  * would prove that an assignment works, not that the shell's liveness path
  * reaches the rail's class binding.
  */
 async function driveBackendDown(): Promise<void> {
   healthReachable = false;
+  const probesBefore = uiFetchLog.filter((url) => url.includes("/api/v2/health")).length;
   try {
     setSystemTime(new Date(Date.now() + 60_000));
-    await sleep(6_000); // the watchdog ticks every 5s
-    await settle();
+    await waitUntil(
+      () => uiFetchLog.filter((url) => url.includes("/api/v2/health")).length > probesBefore,
+      "the watchdog's /api/v2/health probe past the silence window",
+    );
+    await settleReads();
   } finally {
     setSystemTime();
   }
@@ -467,7 +464,7 @@ describe("the project rail's collapse control", () => {
   });
 
   test("the collapsed modifier composes with greyed() rather than replacing it", async () => {
-    await mountApp();
+    await mountApp({ intervals: SHORT_WATCHDOG });
 
     const expandedTokens = classTokens(pane());
     expect(expandedTokens).toContain("app-pane");
@@ -493,7 +490,7 @@ describe("the project rail's collapse control", () => {
     // …and it is still collapsed: the liveness flip is not a re-expand.
     expect(accessibleName(railToggle())).toBe(EXPAND_NAME);
     expect(ariaExpanded()).toBe("false");
-  }, 30_000);
+  }, TICK_TEST_TIMEOUT_MS);
 
   test("the roadmap draws the identical CR rows, order and release membership with the rail collapsed", async () => {
     await mountApp();
@@ -650,7 +647,7 @@ function expectRailExpanded(where: string): void {
 
 describe("the rail's collapsed state, outside the render tree", () => {
   test("survives a poll tick that delivers a data frame", async () => {
-    await mountApp();
+    await mountApp({ intervals: SHORT_POLL });
     await toggleRail();
     expectRailCollapsed("collapsed");
 
@@ -664,20 +661,19 @@ describe("the rail's collapsed state, outside the render tree", () => {
       return inner(url as unknown as RequestInfo, init);
     }) as unknown as typeof fetch;
 
-    // AC3 — one FULL poll interval: the shell polls on `setInterval(refetch,
-    // 5000)` (public/app.js; a bare literal, there is no POLL_MS constant).
-    // Real timers, driven by the shell's own interval — nothing here calls
-    // `refetch` directly, because the bug being designed out is precisely that
-    // the shell's own re-render re-expands the rail.
-    await sleep(6_000);
-    await settle();
+    // AC3 — one FULL poll interval: the shell's own poll (`startPolling`,
+    // public/app.js), short for this mount. Real timers, driven by the
+    // shell's own interval — nothing here calls `refetch` directly, because
+    // the bug being designed out is precisely that the shell's own re-render
+    // re-expands the rail. The wait is for that tick's read, never a duration.
+    await waitForPollTick();
 
     // The frame really was delivered: the poll refetched the project slice.
     expect(fetched.some((url) => url.includes("/api/v2/projects"))).toBe(true);
 
     // AC3 — still collapsed. A mount-local flag fails right here.
     expectRailCollapsed("after one poll frame");
-  }, 30_000);
+  }, TICK_TEST_TIMEOUT_MS);
 
   test("survives switching tabs and opening and closing a run detail", async () => {
     await mountApp();

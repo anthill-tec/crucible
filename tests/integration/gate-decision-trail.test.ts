@@ -61,24 +61,9 @@
 //     order: the decisions section must FOLLOW the last step row, never
 //     precede it.
 import { describe, test, expect, afterEach } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
+import { mountUi, SHORT_POLL, unmountUi, waitForPollTick, type UiIntervals } from "../helpers/ui-mount";
 import { relativeTime } from "../../public/app-logic.mjs";
-
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
 interface GateStepFixture {
   name: string;
@@ -166,14 +151,14 @@ interface MountOpts {
   eventDetails?: Record<string, GateEventFixture>;
   fetchLog?: string[];
   agents?: AgentFixture[];
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
 
 // The posting identity of a gate fixture, live: its run is being driven.
 function liveIdentity(agentId: string): AgentFixture {
   return { agentId, status: "online", liveness: "online" };
 }
-
-let cacheBust = 0;
 
 function project(overrides: Partial<ProjectFixture> & { key: string }): ProjectFixture {
   const now = Date.now();
@@ -214,12 +199,7 @@ function gateEvent(
 }
 
 async function mountApp(opts: MountOpts): Promise<void> {
-  const pathname = opts.pathname ?? "/";
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
-  document.body.innerHTML = '<div id="app"></div>';
-
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+  await mountUi({ pathname: opts.pathname ?? "/", intervals: opts.intervals, fetch: async (url: string) => {
     let body: unknown;
     const eventMatch = /\/api\/v2\/events\/([^/?]+)/.exec(url);
     const isListEndpoint = url.includes("/api/v2/events?") || url.endsWith("/api/v2/events");
@@ -245,17 +225,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
       throw new Error(`gate-decision-trail.test.ts mountApp: unexpected fetch url ${url}`);
     }
     return { ok: true, status: 200, json: async () => body } as Response;
-  }) as typeof fetch;
-
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?gateDecisionTrail=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+  } });
 }
 
 async function settle(ticks = 8): Promise<void> {
@@ -263,7 +233,7 @@ async function settle(ticks = 8): Promise<void> {
 }
 
 afterEach(async () => {
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await unmountUi();
 });
 
 async function openWorkflowTab(): Promise<void> {
@@ -592,18 +562,11 @@ describe("Now's gate view (\u00a7S2/AC3) \u2014 the DECISIONS section, sourced o
 
 // The widget's detail read is held per gate id: the Workflow primary zone
 // re-renders on every poll, and each re-render must reuse the one read
-// rather than issue another. The poll fallback is the app's real
-// `setInterval(refetch, 5000)` (happy-dom has no EventSource), so each tick is
-// awaited in real time, the same way the sibling widget suites do it.
-const POLL_WAIT_MS = 5000 + 700;
-const POLL_TEST_TIMEOUT_MS = 30_000;
-
-async function waitForPollTick(): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, POLL_WAIT_MS);
-  await promise;
-  await settle();
-}
+// rather than issue another. The poll fallback is the app's real poll
+// (happy-dom has no EventSource), short for this test's own mount; each tick
+// is awaited through the shared `waitForPollTick` (its read, 1 s deadline),
+// the same way the sibling widget suites do it.
+const POLL_TEST_TIMEOUT_MS = 5_000;
 
 describe("Now's gate view (§S2/AC3) — one detail read per gate, and a failed read degrades to the bare step ladder", () => {
   test(
@@ -630,6 +593,7 @@ describe("Now's gate view (§S2/AC3) — one detail read per gate, and a failed 
       const fetchLog: string[] = [];
 
       await mountApp({
+        intervals: SHORT_POLL,
         pathname: `/p/${key}`,
         projects: [project({ key, name: "Gate Decisions Fetch Once" })],
         events,

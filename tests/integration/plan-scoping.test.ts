@@ -50,31 +50,16 @@
 // held pending — the mechanism this file uses to prove the clear happens
 // BEFORE the new project's fetch resolves, not merely after.
 import { describe, test, expect, afterEach } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
 import { singleReleaseHistoryStub } from "../helpers/history-stub";
+import { mountUi, SHORT_POLL, unmountUi, waitForPollTick, type UiIntervals } from "../helpers/ui-mount";
 
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const VAN_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
-  "utf8",
-);
-const VAN_X_SRC = readFileSync(
-  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
-  "utf8",
-);
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
-const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
-
-// The real poll interval is a hard-coded 5000ms (`startPolling` in public/app.js).
-// Every pin except the explicit regression pin settles on ticks far below
-// this, so it can never be the poll fallback quietly doing the work.
-const POLL_INTERVAL_MS = 5000;
-const POLL_WAIT_MS = POLL_INTERVAL_MS + 700;
-const POLL_TEST_TIMEOUT_MS = 15_000;
+// Every pin except the explicit regression pin mounts with the PRODUCTION
+// poll (5000ms) and settles on ticks far below it, so it can never be the
+// poll fallback quietly doing the work. The regression pin alone mounts with
+// a SHORT poll (its own mount only) and waits for that tick's read through
+// the shared `waitForPollTick` (1 s deadline).
+const POLL_TEST_TIMEOUT_MS = 5_000;
 
 interface ProjectFixture {
   key: string;
@@ -117,7 +102,6 @@ interface PendingGate {
   release: () => void;
 }
 
-let cacheBust = 0;
 let projectsState: ProjectFixture[] = [];
 let plansByKey: Record<string, PlanFixture[]> = {};
 let planFetchCalls: { key: string }[] = [];
@@ -164,20 +148,17 @@ interface MountOpts {
   pathname?: string;
   projects: ProjectFixture[];
   plans: Record<string, PlanFixture[]>;
+  /** Short intervals for this mount only; omitted = the production cadences. */
+  intervals?: UiIntervals;
 }
 
 async function mountApp(opts: MountOpts): Promise<void> {
-  const pathname = opts.pathname ?? "/";
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
-  document.body.innerHTML = '<div id="app"></div>';
-
   projectsState = opts.projects.map((p) => ({ ...p }));
   plansByKey = { ...opts.plans };
   planFetchCalls = [];
   plansGates = new Map();
 
-  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+  await mountUi({ pathname: opts.pathname ?? "/", intervals: opts.intervals, fetch: async (url: string) => {
     const historyMatch = /\/api\/v2\/projects\/([^/?]+)\/history/.exec(url);
     if (historyMatch !== null) {
       // CR-CRU-173 cycle 637 re-pin (user ruling 2026-10-09, approved): History
@@ -225,30 +206,15 @@ async function mountApp(opts: MountOpts): Promise<void> {
       return { ok: true, status: 200, json: async () => body } as Response;
     }
     throw new Error(`plan-scoping.test.ts mountApp: unexpected fetch url ${url}`);
-  }) as typeof fetch;
-
-  (0, eval)(VAN_SRC);
-  (0, eval)(VAN_X_SRC);
-
-  cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?planScoping=${cacheBust}`);
-
-  (0, eval)(APP_JS_SRC);
-
-  await settle();
+  } });
 }
 
 async function settle(ticks = 8): Promise<void> {
   await settleDom({ ticks });
 }
 
-async function waitForPollTick(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, POLL_WAIT_MS));
-  await settle();
-}
-
 afterEach(async () => {
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await unmountUi();
 });
 
 function findByText(root: ParentNode, selector: string, text: string): HTMLElement | undefined {
@@ -653,6 +619,7 @@ describe("Regression — the steady-state poll/SSE cadence still refetches the C
       };
 
       await mountApp({
+        intervals: SHORT_POLL,
         pathname: `/p/${key}`,
         projects: [project({ key, name: "Regress A" })],
         plans: { [key]: [planV1] },
