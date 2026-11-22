@@ -136,7 +136,7 @@ def _drive_plan_file_help(client):
         # cannot undo that split — while a `"- " -> "-"` rewrite would let a
         # genuine `red- green` regression pass. A wide, fixed terminal removes
         # the wrap instead of papering over it, which is the same defence the
-        # tripwire's `printedLiterals` and the fleet census already rely on.
+        # fleet census already relies on.
         #
         # The hazard is MEASURED, not theoretical: at the 80-column fallback a
         # non-tty subprocess gets when COLUMNS is unset, this very help already

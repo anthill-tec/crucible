@@ -28,8 +28,7 @@ this CR's AC10 — GREEN C1/C2 must DELETE this one cross-check test (not the
 whole file) when `_next_start_help` is removed, because its subject is gone;
 the other two tests below have no such dependency and survive unedited.
 
-AC13 — every fixture is synthetic (`CR-NEXTPTR-*`, registered in
-tests/integration/project-namespace-tripwire.test.ts's SYNTHETIC_NAMESPACES).
+AC13 — every fixture is synthetic (`CR-NEXTPTR-*`).
 
 Invocation:
     python3 -m pytest tests/client/unit/test_cr098_next_start_template_survives_the_move.py -q

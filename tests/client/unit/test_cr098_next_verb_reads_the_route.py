@@ -33,8 +33,7 @@ still present and unmodified) — that is expected and correct: they pin the
 target GREEN must keep hitting once the transport underneath changes, and each
 test still fails overall on its bundled AC8 path assertion.
 
-AC13 — every fixture is synthetic (`CR-NEXTPTR-*`, registered in
-tests/integration/project-namespace-tripwire.test.ts's SYNTHETIC_NAMESPACES).
+AC13 — every fixture is synthetic (`CR-NEXTPTR-*`).
 
 Invocation:
     python3 -m pytest tests/client/unit/test_cr098_next_verb_reads_the_route.py -q

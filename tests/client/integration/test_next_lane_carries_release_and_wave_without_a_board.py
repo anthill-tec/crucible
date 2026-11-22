@@ -22,7 +22,7 @@ verb cannot fail because GREEN chose a different internal parameter name for
 the resolver. It fails only when the BEHAVIOUR is absent.
 
 FIXTURE IDS carry a namespace no project owns, and none of them matches the
-tripwire's own CR-literal shape, so no assertion in this file names a real
+project's own CR-literal shape, so no assertion in this file names a real
 board row.
 
 THE ONE PLACE THIS FILE READS AN AC NARROWLY, stated rather than implied. §S1

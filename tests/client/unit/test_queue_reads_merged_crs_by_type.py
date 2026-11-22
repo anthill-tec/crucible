@@ -42,8 +42,8 @@ proposed spelling and why GREEN may overrule it). Nothing here pins a path:
 the assertions are that the request NAMES the type and carries NO window, both
 of which hold whatever the collection ends up being called.
 
-Fixture cr ids are drawn from the REGISTERED synthetic namespaces the
-project-namespace tripwire allows (`CR-SHIPPED-*`) — never a real board id.
+Fixture cr ids are drawn from a synthetic namespace (`CR-SHIPPED-*`) — never
+a real board id.
 
 Invocation:
     python3 -m pytest tests/client/unit/test_queue_reads_merged_crs_by_type.py -q
