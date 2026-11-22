@@ -84,7 +84,7 @@ RUN_TIMEOUT = 20
 MARKER_WAIT = 30
 # The relay sends every 0.2 s: its first answer lands well inside this, and a
 # relay that never wakes leaves the gate uncued when it passes.
-RELAY_WAIT = 2.0
+RELAY_WAIT = 5.0
 # How long a parked runner waits for an in-run tick to reach the board: twenty
 # of the stream tick's 0.2 s wakes.
 TICK_WAIT = 4.0

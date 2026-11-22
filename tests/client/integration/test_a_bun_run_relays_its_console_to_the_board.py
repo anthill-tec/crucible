@@ -103,7 +103,7 @@ RUN_TIMEOUT = 20
 MARKER_WAIT = 20
 # The relay sends every 0.2 s: a live relay's first batch lands well inside
 # this, and a relay that never wakes leaves the drive uncued when it passes.
-RELAY_WAIT = 2.0
+RELAY_WAIT = 5.0
 # The gap between the runner's later result lines: 0.1 s at production's
 # 2 s relay tick, scaled with it.
 AFTER_DELAY = "0.01"

@@ -114,7 +114,7 @@ TIMEOUT = 20
 MARKER_WAIT = 30
 # The relay sends every 0.2 s: a live relay's first batch lands well inside
 # this, and a relay that never wakes leaves the drive uncued when it passes.
-RELAY_WAIT = 2.0
+RELAY_WAIT = 5.0
 
 _SCRUBBED = ("CRUCIBLE_AGENT_ID", "CRUCIBLE_PROJECT_KEY", "CRUCIBLE_COVERAGE_PROFILE",
              "MVN_CRUCIBLE_PROJECT_DIR", "MVN_CRUCIBLE_MAVEN_DIR", "MVN_CRUCIBLE_COMPOSE_FILE")

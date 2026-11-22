@@ -69,9 +69,12 @@ DRIVE_TIMEOUT = 20
 SHORT_RUN_ID = "a1b2c3d4-short-run"
 LONG_RUN_ID = "e5f6a7b8-long-run"
 # The short drive ends well before the long one; the long one keeps being
-# driven across several poll cadences after the short one's exit.
-SHORT_RUN_SECONDS = "0.3"
-LONG_RUN_SECONDS = "1.8"
+# driven across several poll cadences after the short one's exit. The short
+# run's 0.9 s leaves its first interim poll a whole 0.6 s cadence window of
+# slack to land while the run is still going, and the long run is driven for
+# 1.5 s after the short one ends.
+SHORT_RUN_SECONDS = "0.9"
+LONG_RUN_SECONDS = "2.4"
 
 
 def _identity(caller, run_id):

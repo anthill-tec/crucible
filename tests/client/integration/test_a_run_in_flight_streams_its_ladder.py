@@ -743,8 +743,11 @@ class ALadderThatAdvancesIsPostedAgainTest(_GateRunStreamTestBase):
 
     STATUS_SNAPSHOT = _LIVE_IN_FLIGHT_SNAPSHOT
     RUN_SNAPSHOT = _HELD_RETURN_SNAPSHOT
-    RUN_SECONDS = 1.5
-    ADVANCE_AFTER = 0.9
+    # 1.8 s spans three 0.6 s posting windows. The ladder moves 0.6 s in, so a
+    # later poll sees the advanced ladder with a whole window to spare before
+    # the run ends.
+    RUN_SECONDS = 1.8
+    ADVANCE_AFTER = 0.6
 
     def fake_tool_body(self):
         return _FAKE_ADVANCING_BODY.format(

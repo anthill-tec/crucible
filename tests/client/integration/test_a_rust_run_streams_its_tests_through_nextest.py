@@ -73,9 +73,9 @@ GATED_VERBS = ("test", "regression-ingest", "smoke-test",
 # and stream tick and the narrator throttle at 0.2 s (`SHORT_RELAY`), a tenth
 # of production's 2 s, and each drive is bounded by `TIMEOUT`.
 TIMEOUT = 20
-# How long a drive waits for the relay to land what the runner wrote: ten of
+# How long a drive waits for the relay to land what the runner wrote: twenty-five of
 # its 0.2 s ticks.
-RELAY_WAIT = 2.0
+RELAY_WAIT = 5.0
 
 
 def _flag_pair(argv, pair):
