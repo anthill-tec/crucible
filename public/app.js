@@ -842,7 +842,7 @@
         if (sse !== null && sse.readyState === EventSource.CLOSED) {
           sse.close();
           sse = null;
-          setTimeout(connectStream, 5000); // auto-recover on reconnect
+          setTimeout(connectStream, L.intervals.reconnectMs); // auto-recover on reconnect
         }
       };
     }
@@ -860,7 +860,7 @@
 
     function startPolling() {
       if (pollTimer !== null) return;
-      pollTimer = setInterval(refetch, 5000);
+      pollTimer = setInterval(refetch, L.intervals.pollMs);
     }
 
     function stopPolling() {
@@ -871,7 +871,7 @@
     }
 
     async function watchdogTick() {
-      if (Date.now() - lastFrameAt <= 20000) return;
+      if (Date.now() - lastFrameAt <= L.intervals.silenceMs) return;
       try {
         const res = await fetch("/api/v2/health");
         if (res.ok) {
@@ -1222,7 +1222,7 @@
     const tickNow = van.state(Date.now());
     setInterval(() => {
       tickNow.val = Date.now();
-    }, 10_000);
+    }, L.intervals.cycleTickMs);
 
     // CR-CRU-017 §S3 — a RUN's elapsed timer needs SECOND resolution: a run is
     // over in seconds, so the cycle badge's 10s cadence would render a card
@@ -1233,7 +1233,7 @@
     const runTickNow = van.state(Date.now());
     setInterval(() => {
       runTickNow.val = Date.now();
-    }, 1000);
+    }, L.intervals.runTickMs);
 
     // §S3 — active-cycle timer: an ACTIVE cycle ticks `now − activatedAt`
     // (ember badge; `tickNow` supplies the visible updating at a ≤10s
@@ -9308,7 +9308,7 @@
     van.add(document.getElementById("app"), App());
     refetch();
     connectStream();
-    setInterval(watchdogTick, 5000);
+    setInterval(watchdogTick, L.intervals.watchdogMs);
   }
 
   // app.js is a deferred classic script; app-logic.mjs is a module script.
