@@ -1,10 +1,12 @@
 """What the suite's offline wheel build needs, in one place.
 
-The three modules that build the real `crucible-axi` wheel
-(`test_crucible_axi_wheel_packaging`, `test_shipped_limits_ship_as_package_data`
-and `test_cr046_uv_env_gate`) build it with
+Four modules build the real `crucible-axi` distributions:
+`test_crucible_axi_wheel_packaging`, `test_shipped_limits_ship_as_package_data`
+and `test_cr046_uv_env_gate` build one wheel each, and
+`test_the_source_package_ships_only_what_builds_the_wheel` builds the sdist
+(and the wheel from it), then a wheel from the checkout. Every build runs as
 
-    [sys.executable, "-m", "build", "--wheel", "--no-isolation", ...]
+    [sys.executable, "-m", "build", <no selector or --wheel>, "--no-isolation", ...]
 
 so no isolated build environment downloads the backend: the suite's own
 interpreter must import the frontend and the backend `pyproject.toml` names,
