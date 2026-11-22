@@ -170,7 +170,7 @@ describe("CR-CRU-011 C2 §S2 — Project pane agent runtime display", () => {
   );
 
   test(
-    "a TOMBSTONED agent sub-row's rendered runtime stays IDENTICAL across time — real wall-clock advances but the server-supplied (sealed) runtime_ms does not change",
+    "a TOMBSTONED agent sub-row's rendered runtime stays IDENTICAL after the clock is moved 1.2s with setSystemTime and one short tick runs — the server-supplied (sealed) runtime_ms does not change",
     async () => {
       // The wall clock is the test's own: pinned here, moved below.
       const t0 = Date.now();

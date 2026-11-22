@@ -835,7 +835,7 @@ function parseTimerMs(text: string): number {
 
 describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): the badge self-ticks without new poll/SSE data", () => {
   test(
-    "an ACTIVE cycle's cycle-timer badge advances on its own, across a real >=10s wait, on the SAME mount with UNCHANGED fetch data (no remount, no fixture mutation)",
+    "an ACTIVE cycle's cycle-timer badge advances on its own after the clock is moved 11s with setSystemTime and one short cycle tick runs, on the SAME mount with UNCHANGED fetch data (no remount, no fixture mutation)",
     async () => {
       const t0 = Date.now();
       setSystemTime(t0); // the test's own clock: pinned here, moved below
@@ -888,7 +888,7 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): the badge self-ticks without n
   );
 
   test(
-    "the self-tick cadence is <=10s: TWO consecutive real waits of ~10.7s each (same mount, unchanged data) EACH show a further advance — not one eventual catch-up jump after a long wait",
+    "the self-tick cadence is <=10s: the clock moved ~10.7s with setSystemTime TWICE, each move followed by one short cycle tick (same mount, unchanged data), shows a further advance EACH time — not one eventual catch-up jump",
     async () => {
       const t0 = Date.now();
       setSystemTime(t0); // the test's own clock: pinned here, moved below
@@ -941,9 +941,9 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): the badge self-ticks without n
   );
 });
 
-describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): sealed rows never tick even across a real wait", () => {
+describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): sealed rows never tick even when the clock moves", () => {
   test(
-    "a DONE cycle's sealed cycle-timer text is UNCHANGED across an >=10s real wall-clock wait on the SAME mount (no re-seal, no drift)",
+    "a DONE cycle's sealed cycle-timer text is UNCHANGED after the clock is moved 11s with setSystemTime and one short cycle tick runs on the SAME mount (no re-seal, no drift)",
     async () => {
       const t0 = Date.now();
       setSystemTime(t0); // the test's own clock: pinned here, moved below
@@ -1081,7 +1081,7 @@ describe("§S3 (a) — CR-CRU-023: ACTIVE badge derives from server-fed activeMs
   );
 
   test(
-    "an ACTIVE cycle's badge, server-fed with a SMALL activeMs against a STALE activatedAt, ticks FORWARD from the activeMs baseline over a real >=10s wait (the existing self-tick cadence) — never jumps to the activatedAt-scale value",
+    "an ACTIVE cycle's badge, server-fed with a SMALL activeMs against a STALE activatedAt, ticks FORWARD from the activeMs baseline after the clock is moved 11s with setSystemTime and one short cycle tick runs — never jumps to the activatedAt-scale value",
     async () => {
       const t0 = Date.now();
       setSystemTime(t0); // the test's own clock: pinned here, moved below
