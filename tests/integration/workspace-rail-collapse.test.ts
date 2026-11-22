@@ -661,7 +661,7 @@ describe("the rail's collapsed state, outside the render tree", () => {
       return inner(url as unknown as RequestInfo, init);
     }) as unknown as typeof fetch;
 
-    // AC3 — one FULL poll interval: the shell's own poll (`startPolling`,
+    // One FULL poll interval: the shell's own poll (`startPolling`,
     // public/app.js), short for this mount. Real timers, driven by the
     // shell's own interval — nothing here calls `refetch` directly, because
     // the bug being designed out is precisely that the shell's own re-render
