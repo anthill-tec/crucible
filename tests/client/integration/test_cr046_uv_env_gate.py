@@ -83,9 +83,8 @@ BUILD_TIMEOUT_SECONDS = 600
 UV_TIMEOUT_SECONDS = 120
 CORRUPT_DEPENDENCY = "definitely-not-a-real-package-xyzzy>=99"
 
-# Mirrors test_cr046_pep723_metadata.py's PEP 723 block regex/unpacking so
-# this file asserts the SAME shape the C2 contract test pins, but against
-# the INSTALLED copies rather than the source checkout.
+# The PEP 723 block regex/unpacking, so this file asserts the block's shape
+# against the INSTALLED copies rather than the source checkout.
 PEP723_BLOCK_RE = re.compile(
     r"(?m)^# /// script\s*$\n((?:^#(?:| .*)$\n)*)^# ///\s*$", re.MULTILINE
 )
@@ -284,7 +283,7 @@ class Cr046UvEnvironmentGateTest(unittest.TestCase):
         must still declare `requires-python = ">=3.14"` and an EMPTY
         `dependencies = []` (the §S2/§S3 stub-landmine guard, re-asserted
         here against the INSTALLED artifact rather than the source
-        checkout that test_cr046_pep723_metadata.py already covers)."""
+        checkout)."""
         clients_dir = self._require_installed_clients_dir()
         offenders = {}
         for stack in CLIENT_STACKS:

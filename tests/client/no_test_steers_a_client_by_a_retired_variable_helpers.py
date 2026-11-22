@@ -1,6 +1,5 @@
-"""The helpers of `test_no_test_steers_a_client_by_a_retired_variable.py` that other modules import,
-moved out of that test module so no module imports a test module for a
-helper (CR-CRU-262). Holds no `TestCase` and no test.
+"""The retired board variables other modules import. Holds no `TestCase`
+and no test.
 """
 
 

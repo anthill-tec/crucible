@@ -966,8 +966,7 @@ class ManifestPublishedPathsResolveTest(_ScratchInstallCase):
         # CR-CRU-138 §S2 declares): this fixture declares a provisioned server,
         # so `server_config` is OWED -- and owed as the path the install really
         # wrote, not as a bare key. The lineage stays in the comment: an
-        # assertion message is live text, and CR-CRU-097's tripwire keeps real
-        # board ids out of it.
+        # assertion message is live text, and real board ids stay out of it.
         self.assertIn(
             "server_config", self.document,
             f"this install provisioned a server "

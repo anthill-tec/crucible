@@ -12,7 +12,7 @@ imports them back, so the table still lives in one place. The six tier verbs
 from tests.client import CLIENT_SOURCE_DIR
 
 # The SOURCE paths: the tier-surface module and its importers
-# (test_cr128_flag_help_census) read and label them repo-relative. A spawn or a
+# read and label them repo-relative. A spawn or a
 # load goes through `client_script`, the test install.
 AXI_MODULE_PATH = CLIENT_SOURCE_DIR / "_crucible_axi.py"
 
@@ -34,8 +34,5 @@ CLIENT_FILES = {
 # client exposes the verbs" is satisfiable by one client).
 EXPECTED_CLIENT_COUNT = 6
 
-# The six, spelled as AC1 spells them. This literal is not the source of truth:
-# `TierVocabularyMirrorDriftGuardTest` below asserts it equals the `Tier` union
-# parsed out of `src/types.ts`, so a seventh server-side value makes THIS list
-# fail rather than quietly narrowing every assertion in the file.
+# The six, spelled as AC1 spells them.
 TIER_VERBS = ("unit", "module", "integration", "e2e", "regression", "bdd")

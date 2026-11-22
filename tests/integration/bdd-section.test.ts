@@ -680,8 +680,7 @@ describe("CR-CRU-145 §S4 (migrated) — the populated INDEX's dimming means liv
 });
 
 // ──────────────────────────────────────────────────────────────────────────
-// KEPT UNCHANGED — pure `workspaceTabs()` rail, born green (same precedent
-// tests/unit/ci-toolchain-provisioning.test.ts's header states): populating the
+// KEPT UNCHANGED — pure `workspaceTabs()` rail, born green: populating the
 // tab is exactly the change that could un-gate it by accident.
 // ──────────────────────────────────────────────────────────────────────────
 

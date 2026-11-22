@@ -3,8 +3,7 @@ lifted out of that test module so a suite importing them does not import a
 test module (CR-CRU-261).
 
 Holds no `TestCase` and no test: the source directory of the shared modules,
-the core module's path, the top-level-name scan and the run module's view of
-the core.
+the top-level-name scan and the run module's view of the core.
 """
 
 import ast
@@ -12,7 +11,6 @@ import ast
 from tests.client import CLIENT_SOURCE_DIR
 
 CLIENTS = CLIENT_SOURCE_DIR
-CORE_MODULE = CLIENTS / "_crucible_axi.py"
 
 
 def _target_names(target):

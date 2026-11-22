@@ -19,8 +19,7 @@ emits (`_next_start_help`, which today prints `--cycles \"<c1,c2>\"`)."
 
 WHAT IS DRIVEN, and why no assertion here reads client SOURCE:
   * AC7 -- each client's REAL `plan-file --help` is invoked (`main()` with
-    `sys.argv` patched, the sibling idiom of
-    `test_cr097_cr_help_namespace_neutral.py`) and its ACTUAL rendered stdout
+    `sys.argv` patched) and its ACTUAL rendered stdout
     is parsed into option entries. Source order is what a reader NEVER sees;
     the rendered options block is.
   * AC8 -- the shared `_next_start_help` is called directly, AND one client's

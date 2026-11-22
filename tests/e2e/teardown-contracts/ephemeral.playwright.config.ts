@@ -28,9 +28,7 @@
 //     the "Playwright Test did not expect test() to be called here." errors
 //     the plain regression gate was reporting). `bunfig.toml`'s
 //     `pathIgnorePatterns` is NOT an available fix: CR-CRU-047 §S1 forbids a
-//     permanently-excluded `tests/` directory, and
-//     `tests/integration/suite-integrity.test.ts` (out of this agent's scope) asserts
-//     `bunfig.toml` carries no such key at all. Renamed instead — to
+//     permanently-excluded `tests/` directory. Renamed instead — to
 //     `ephemeral.contract.ts` / `non-ephemeral.contract.ts` — since neither
 //     substring matches bun's discovery rule, so plain `bun test` no longer
 //     collects them, while THIS config's own `testMatch` below still finds

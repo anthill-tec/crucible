@@ -449,8 +449,8 @@ describe("CR-CRU-129 §S1 — structural records survive a retention sweep that 
       const cap = await configureCap(key, FIXTURE_CAP_BOARD);
 
       // 45 merged CRs, split across the four releases this project shipped.
-      // Synthetic ids: a test may not ASSERT on a real project's CR namespace
-      // (CR-CRU-097 AC7, tests/integration/project-namespace-tripwire.test.ts). The SHAPE
+      // Synthetic ids: a test may not ASSERT on a real project's CR namespace.
+      // The SHAPE
       // is what the fixture needs — 45 distinct ids across four releases — not
       // the ids themselves.
       const merged = Array.from({ length: 45 }, (_, i) => `CR-FIXTURE-A${i + 1}`);

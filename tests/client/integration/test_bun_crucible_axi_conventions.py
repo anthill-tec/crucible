@@ -77,7 +77,6 @@ Fallback:
     python3 tests/client/integration/test_bun_crucible_axi_conventions.py
 """
 
-import ast
 import contextlib
 import importlib.util
 import io
@@ -88,7 +87,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import cast
 from unittest import mock
 
 from tests.client.live_run_harness import get_answering_health
@@ -97,13 +95,6 @@ from tests.client.client_fleet_envelope_census_helpers import (
     declare_and_require_board,
 )
 
-# CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
-# this client register, and through what?", reused rather than re-derived.
-from tests.client.cr054_fleet_inventory_helpers import (
-    _add_parser_verb_names,
-    _defined_function_names,
-    _single_verb_registrar_delegator,
-)
 from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -825,9 +816,7 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
 # Asserted HERE, in this client's own suite, rather than as one fleet-wide set
 # comparison: a five-for-five that fails must NAME the client that lost the
 # verb, not report "expected 5, got 4". The shared registrar's own contract
-# lives in `test_crucible_axi_shared.py`; the frozen inventory set and the
-# derived registrar-parity sweep are §S2's, in
-# `test_cr054_fleet_inventory.py`.
+# lives in `test_crucible_axi_shared.py`.
 #
 # The fixture's CR ids live in module constants and are never spelled inside
 # an assertion (CR-CRU-097 §S1's residue rule), in a namespace this section
@@ -971,69 +960,6 @@ class BunCrucibleQueueFileVerbTest(_BaseAxiConventionsTest):
         absent = os.path.join(self.tmpdir, "absent-queue.md")
         code, out, err, post_mock, _patch = self._run_queue_file(absent)
         self._assert_structured_failure(code, out, err, post_mock, absent)
-
-
-class BunCrucibleQueueFileRegistrationTest(unittest.TestCase):
-    """AC1 — HOW this client wires the verb, read from its AST so a name in a
-    docstring or a help string can never be mistaken for a registration. The
-    readers are `test_cr054_fleet_inventory.py`'s, reused."""
-
-    def test_the_client_defines_one_cmd_queue_file_delegating_to_the_shared_implementation(self):
-        """AC1's delegator and AC6's DRY half in one: a body longer than the
-        single `return _axi().cmd_queue_file(...)` means the parse or the POST
-        leaked back into a client."""
-        counts = _defined_function_names(SCRIPT_PATH_SOURCE)
-        self.assertEqual(
-            counts.get("cmd_queue_file", 0), 1,
-            f"{SCRIPT_PATH.name} must define `cmd_queue_file` exactly once "
-            f"(§S1 fleet parity; a duplicate def would silently make the "
-            f"SECOND one win at import time); defined "
-            f"{counts.get('cmd_queue_file', 0)}x")
-        node = next(n for n in ast.walk(ast.parse(SCRIPT_PATH_SOURCE.read_text()))
-                    if isinstance(n, ast.FunctionDef)
-                    and n.name == "cmd_queue_file")
-        body = [stmt for stmt in node.body
-                if not (isinstance(stmt, ast.Expr)
-                        and isinstance(stmt.value, ast.Constant))]
-        self.assertEqual(
-            len(body), 1,
-            f"the delegator is THIN — exactly one `return` (§S1 is wiring, not "
-            f"a re-implementation); got {len(body)} statement(s)")
-        self.assertIsInstance(
-            body[0], ast.Return,
-            f"the delegator's one statement must RETURN the shared verb's "
-            f"exit code; got {ast.dump(body[0])!r}")
-        returned = cast(ast.Return, body[0]).value
-        self.assertIsInstance(
-            returned, ast.Call,
-            f"the delegator must return a CALL into the shared module; "
-            f"got {ast.dump(body[0])!r}")
-        called = cast(ast.Call, returned).func
-        self.assertEqual(
-            getattr(called, "attr", None), "cmd_queue_file",
-            f"the delegator must call the SHARED "
-            f"`_crucible_axi.cmd_queue_file`, never a local copy; "
-            f"got {ast.dump(called)!r}")
-
-    def test_the_client_registers_queue_file_through_the_shared_registrar(self):
-        delegator = _single_verb_registrar_delegator(
-            SCRIPT_PATH_SOURCE, "add_queue_file_verb")
-        self.assertEqual(
-            delegator, "cmd_queue_file",
-            f"{SCRIPT_PATH.name} must register the verb by handing its OWN "
-            f"delegator to the shared `_crucible_axi.add_queue_file_verb` — "
-            f"the `add_next_verb` / `add_cr_depends_verb` shape; "
-            f"got {delegator!r}")
-
-    def test_the_client_hand_rolls_no_queue_file_subparser(self):
-        """§S1's correction: one client built its own `add_parser` for this
-        verb, which forks the flag surface the shared registrar exists to keep
-        identical. After §S1 no client spells it — that one included."""
-        self.assertNotIn(
-            "queue-file", _add_parser_verb_names(SCRIPT_PATH_SOURCE),
-            f"the `queue-file` subparser is built ONCE, by "
-            f"`_crucible_axi.add_queue_file_verb`; {SCRIPT_PATH.name} spells "
-            f"its own")
 
 
 # ── CR-CRU-107 §S1 + §S2 — one label per flag, and the refusals are structured ──

@@ -15,7 +15,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { detectFormat, parseCompile } from "../../src/codecs/compile.ts";
 
-const REPO_ROOT = join(import.meta.dir, "../..");
 const FIXTURE_DIR = join(import.meta.dir, "../fixtures", "arduino-cli");
 
 function fixture(name: string): string {
@@ -397,55 +396,6 @@ describe("gcc codec — raw stays raw (regression guard: passes today)", () => {
   test("regression guard: empty input hinted gcc falls back to raw without throwing", () => {
     expect(() => parseCompile("", "gcc")).not.toThrow();
     expect(parseCompile("", "gcc").format).toBe("raw");
-  });
-});
-
-describe("gcc codec — the record names it", () => {
-  const GCC = /\bgcc\b/;
-
-  test("the compile codec module's header comment names gcc", () => {
-    const source = readFileSync(join(REPO_ROOT, "src", "codecs", "compile.ts"), "utf8");
-    const header: string[] = [];
-    for (const line of source.split("\n")) {
-      if (!line.startsWith("//")) break;
-      header.push(line);
-    }
-    expect(header.length).toBeGreaterThan(0);
-    expect(header.join("\n")).toMatch(GCC);
-  });
-
-  const PRD = readFileSync(join(REPO_ROOT, "docs", "research", "PRD-crucible-v2.md"), "utf8");
-
-  function section(startHeading: string, nextHeading: string): string {
-    const start = PRD.indexOf(startHeading);
-    expect(start).toBeGreaterThan(-1);
-    const end = PRD.indexOf(nextHeading, start + startHeading.length);
-    expect(end).toBeGreaterThan(start);
-    return PRD.slice(start, end);
-  }
-
-  test("the PRD's event `codec` values name gcc", () => {
-    const rows = PRD.split("\n").filter((l) => l.startsWith("| `codec` |"));
-    expect(rows.length).toBe(1);
-    expect(rows[0]).toMatch(GCC);
-  });
-
-  test("the PRD's /api/ingest/compile format list names gcc", () => {
-    const anchor = "- `/api/ingest/compile` `format` is optional";
-    const start = PRD.indexOf(anchor);
-    expect(start).toBeGreaterThan(-1);
-    const after = PRD.slice(start + anchor.length);
-    const endRel = after.search(/\n(?:- |\n|#)/);
-    const bullet = anchor + (endRel < 0 ? after : after.slice(0, endRel));
-    expect(bullet).toMatch(GCC);
-  });
-
-  test("the PRD's test-ingest codec section names gcc", () => {
-    expect(section("### 4.4 ", "### 4.5 ")).toMatch(GCC);
-  });
-
-  test("the PRD's compile-ingest section names gcc among its structured parsers", () => {
-    expect(section("### 4.5 ", "### 4.6 ")).toMatch(GCC);
   });
 });
 

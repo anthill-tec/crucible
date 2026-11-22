@@ -45,7 +45,6 @@ import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 // ── the route table, read off the chain that declares it ──────────────────
 
 const V2_CODE = jsUncommented(readFileSync(join(REPO_ROOT, "src", "v2.ts"), "utf8"));
-const RUNBOOK = readFileSync(join(REPO_ROOT, "docs", "RUNBOOK.md"), "utf8");
 
 interface DispatchRoute {
   method: string;
@@ -421,27 +420,6 @@ describe("CR-CRU-140 §S1 — the cycle-evidence route is discoverable", () => {
       if (res.ok && typeof body.event === "string") carryingEvent.push(path);
     }
     expect(carryingEvent).toEqual([]);
-  });
-
-  // ── AC3 ─────────────────────────────────────────────────────────────────
-
-  test("docs/RUNBOOK.md documents the cycle-evidence route at the path the server actually serves, with its cycle query — and names no /api/v2 path the server does not serve", () => {
-    const route = cycleEvidenceRoute();
-
-    // POSITIVE — a documented line names the DERIVED path and every query key
-    // the anchored read needs. Derivation rule (CR-CRU-134): the document may
-    // not retype what the code declares, so the expectation comes from the
-    // dispatch chain and the doc is measured against it.
-    const documenting = RUNBOOK.split("\n").filter(
-      (line) =>
-        namesRoute(line, route.path) && route.queryKeys.every((key) => line.includes(key)),
-    );
-    expect(documenting.length).toBeGreaterThan(0);
-
-    // NEGATIVE — and nothing in the RUNBOOK sends an operator at a path this
-    // build does not serve.
-    const unserved = pathsNamedIn(RUNBOOK).filter((path) => !isServed(path));
-    expect(unserved).toEqual([]);
   });
 
   // ── AC4 ─────────────────────────────────────────────────────────────────

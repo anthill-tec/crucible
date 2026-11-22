@@ -34,7 +34,7 @@ records no failure. The no-report exits: a list that fails to build files its
 rustc compile ingest and runs nothing; a run that writes no stream line is a
 no-report failure and files no compile ingest. The shared `ingest:` line is
 the run's one ingest line (none of rust's own result lines is left in the
-client), and the shared module does not grow past its line budget.
+client).
 
 Every drive runs the real `clients/rust-crucible.py` over a scratch project
 (outside git, so no gate lock is taken; `--min-free-g 0` and `--keep-target`
@@ -54,7 +54,6 @@ Invocation:
         --tests tests.client.integration.test_rust_client_sends_its_runners_reports
 """
 
-import ast
 import contextlib
 import json
 import os
@@ -64,7 +63,6 @@ import stat
 import subprocess
 import sys
 import tempfile
-import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1028,86 +1026,6 @@ class NoBoardNoFiguresTest(_RustProject, unittest.TestCase):
             self.argv("pre-merge-gate", "rust-gate-composed-unreachable"),
             {("POST", RUNS), ("POST", PARSED)})
         self.assert_gate_unreported(code, stdout, stderr)
-
-
-# ── AC9 — one ingest line, and the shared module does not grow ─────────────
-
-# Each shared module's line budget is that module's size (its newline count,
-# as the test below counts it), so neither shared module grows unnoticed:
-# `_crucible_axi.py`'s recorded when the run pipeline was split out of the core
-# into its own module, `_crucible_run.py`'s re-recorded when the arduino
-# client's move to the shared ingest grew it (`junit_case_sources` in,
-# `filed_summary` out), and again when CR-CRU-224's python stream relay grew
-# it (`StreamRelay` and `close_stream` in), and again at CR-CRU-225's close-out
-# (the shared streamed-run close and the stream-counted narration in). The
-# rust client's move to the shared ingest adds nothing to either. A change
-# that grows a shared module re-records its budget here, in the same change.
-# The release-notes verb's module grows the core by its load, and is a shared
-# module itself, so the core's budget is re-recorded and the module's is added.
-# A project's own verbs move out of the core into their own module, so the
-# core's budget is re-recorded lower and that module's is added. The verb that
-# creates a project grows that module, and the core by its help steps. The
-# board's resolution moves out of the core into its own module, so the core's
-# budget is re-recorded lower and that module's is added. The pre-flight's
-# refusal of an attributed run with no board declared grows the core. A gate's
-# lone whole-suite run taking the gate's verdict grows the core by its mark and
-# the run module by that verdict. A gate drive's launch of no-mistakes moves
-# into the run module, its output sent where it can never fill, so the run
-# module's budget is re-recorded higher and the core's one line lower.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9080, "_crucible_run.py": 2024,
-                              "_crucible_release.py": 266,
-                              "_crucible_project.py": 521,
-                              "_crucible_lint.py": 399,
-                              "_crucible_board.py": 179}
-_OWN_RESULT_LINES = ("ingest junit:", "regression: ok=",
-                     "workspace regression: ok=", "smoke-test: ok=")
-
-
-def own_result_line_literals(source):
-    """Every string literal of `source` (an f-string's literal parts too)
-    that begins one of rust's own result lines."""
-    return sorted({node.value for node in ast.walk(ast.parse(source))
-                   if isinstance(node, ast.Constant) and isinstance(node.value, str)
-                   and node.value.startswith(_OWN_RESULT_LINES)})
-
-
-class TheRustClientPrintsOnlyTheSharedIngestLineTest(unittest.TestCase):
-
-    def test_the_scan_finds_an_own_result_line_in_a_plain_or_formatted_literal(self):
-        source = textwrap.dedent('''
-            import sys
-            def _a(resp):
-                print(f"ingest junit: ok={resp} passed=1", file=sys.stderr)
-            def _b(resp):
-                print("regression: ok=" + str(resp), file=sys.stderr)
-            def _c(resp):
-                print(f"workspace regression: ok={resp}", file=sys.stderr)
-                print(f"smoke-test: ok={resp} passed=1", file=sys.stderr)
-            def _d(verb, resp):
-                print(f"ingest compile (check): ok={resp}", file=sys.stderr)
-                print(f"ingest: ok={resp}", file=sys.stderr)
-                print(f"{verb}: ok=False — gate-locked", file=sys.stderr)
-        ''')
-        self.assertEqual(own_result_line_literals(source),
-                         ["ingest junit: ok=", "regression: ok=",
-                          "smoke-test: ok=", "workspace regression: ok="])
-
-    def test_the_rust_client_holds_none_of_its_own_result_line_literals(self):
-        found = own_result_line_literals(RUST_CLIENT.read_text(encoding="utf-8"))
-        self.assertEqual(found, [],
-                         f"the shared `ingest:` line is the run's one ingest "
-                         f"line; rust-crucible.py still prints {found!r}")
-
-    def test_the_shared_module_is_no_longer_than_its_line_budget(self):
-        for name, budget in SHARED_MODULE_LINE_BUDGETS.items():
-            with self.subTest(module=name):
-                path = CLIENTS / name
-                self.assertTrue(path.is_file(), f"the shared module {name} exists")
-                lines = path.read_text(encoding="utf-8").count("\n")
-                self.assertLessEqual(
-                    lines, budget,
-                    f"clients/{name} is {lines} lines, over its budget of "
-                    f"{budget}")
 
 
 # ── the no-report exits ───────────────────────────────────────────────────

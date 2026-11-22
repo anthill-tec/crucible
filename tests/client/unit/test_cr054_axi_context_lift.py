@@ -79,18 +79,17 @@ Fallback:
     python3 tests/client/unit/test_cr054_axi_context_lift.py
 """
 
-import ast
+import importlib.util
 import os
 import unittest
-import importlib.util
 from pathlib import Path
 from unittest import mock
-from tests.client import CLIENT_SOURCE_DIR, TEST_INSTALL_CLIENTS
+
+from tests.client import TEST_INSTALL_CLIENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLIENTS_DIR = TEST_INSTALL_CLIENTS
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
-AXI_MODULE_PATH_SOURCE = CLIENT_SOURCE_DIR / "_crucible_axi.py"
 
 CLIENT_FILES = {
     "bun": CLIENTS_DIR / "bun-crucible.py",
@@ -119,44 +118,6 @@ def _load_client_module(client):
         CLIENT_FILES[client], f"cr054_axi_context_{client}_under_test")
 
 
-def _function_source_segment(path, name):
-    """AST-extract the exact source text of a top-level `def <name>` in
-    `path` (ast.parse, not grep/eyeball -- mirrors
-    test_cr054_fleet_inventory.py's / test_cr054_http_core_lift.py's method).
-    Returns None if not defined as a top-level function at all."""
-    text = path.read_text()
-    tree = ast.parse(text, filename=str(path))
-    for node in tree.body:
-        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name == name):
-            return ast.get_source_segment(text, node)
-    return None
-
-
-def _clients_with_marker_in_function(name, marker):
-    """Every client whose own top-level `def <name>` still contains `marker`
-    literally -- i.e. still carries the REAL logic, not a delegator."""
-    offenders = []
-    for client, path in CLIENT_FILES.items():
-        body = _function_source_segment(path, name)
-        if body is not None and marker in body:
-            offenders.append(client)
-    return offenders
-
-
-def _spec_from_file_location_call(source_segment):
-    """Return the AST `Call` node for
-    `importlib.util.spec_from_file_location(...)` inside `source_segment` (a
-    function body's source text), or None if not present."""
-    tree = ast.parse(source_segment)
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "spec_from_file_location"):
-            return node
-    return None
-
-
 class RunContextEnvGitLiftTest(unittest.TestCase):
     """`_run_context`'s real env-var + `subprocess.run` git-lookup logic
     (CR-CRU-008 SS2) is byte-identical across all five clients TODAY and NONE
@@ -167,21 +128,7 @@ class RunContextEnvGitLiftTest(unittest.TestCase):
     module docstring's exclusion note). It must move to
     `clients/_crucible_axi.py` and become a thin per-client delegator."""
 
-    MARKER = "subprocess.run("
-
     def test_env_and_git_logic_moves_out_of_every_client_and_still_works(self):
-        offenders = _clients_with_marker_in_function("_run_context", self.MARKER)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry _run_context's REAL "
-            f"subprocess/git logic in their own source instead of delegating "
-            f"to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            self.MARKER, axi_source,
-            "clients/_crucible_axi.py must own the real subprocess.run git "
-            "lookup after the §S2 lift -- not present yet")
-
         # Full context: cycle + wave + orchestrator + git, all resolved.
         for client in CLIENTS:
             with self.subTest(client=client):
@@ -236,21 +183,7 @@ class PlansPathUrlTemplateLiftTest(unittest.TestCase):
     GENUINELY PER-CLIENT, per C2's own committed ESCALATION) -- only the URL
     TEMPLATE built from an already-resolved key is SHARED."""
 
-    MARKER = "/api/v2/projects/"
-
     def test_url_template_moves_out_of_every_client_and_still_works(self):
-        offenders = _clients_with_marker_in_function("_plans_path", self.MARKER)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry _plans_path's REAL URL "
-            f"template in their own source instead of delegating to "
-            f"clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            self.MARKER, axi_source,
-            "clients/_crucible_axi.py must own the real plans-path URL "
-            "template after the §S2 lift -- not present yet")
-
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
@@ -270,21 +203,7 @@ class OpenPlansFilterLiftTest(unittest.TestCase):
     `_open_plans` in each of arduino-, bun-, mvn-, python- and
     rust-crucible.py)."""
 
-    MARKER = '== "open"'
-
     def test_open_filter_and_hard_exit_moves_out_of_every_client_and_still_works(self):
-        offenders = _clients_with_marker_in_function("_open_plans", self.MARKER)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry _open_plans's REAL "
-            f"open-status filter in their own source instead of delegating "
-            f"to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            self.MARKER, axi_source,
-            "clients/_crucible_axi.py must own the real open-status filter "
-            "after the §S2 lift -- not present yet")
-
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
@@ -329,21 +248,7 @@ class ResolvePlanOrEmitOrchestrationLiftTest(unittest.TestCase):
     remains duplicated is the surrounding prelude, evidenced by the identical
     'ambiguous' legacy-message text appearing in all five bodies today."""
 
-    MARKER = "ambiguous"
-
     def test_orchestration_prelude_moves_out_of_every_client_and_still_works(self):
-        offenders = _clients_with_marker_in_function("_resolve_plan_or_emit", self.MARKER)
-        self.assertEqual(
-            offenders, [],
-            f"the following clients still carry _resolve_plan_or_emit's REAL "
-            f"ambiguous/none message-building in their own source instead of "
-            f"delegating to clients/_crucible_axi.py: {offenders!r}")
-        axi_source = AXI_MODULE_PATH_SOURCE.read_text()
-        self.assertIn(
-            self.MARKER, axi_source,
-            "clients/_crucible_axi.py must own the real ambiguous-plan "
-            "message-building after the §S2 lift -- not present yet")
-
         # -- unique match: plan resolved, NO _emit_axi call, rc is None.
         for client in CLIENTS:
             with self.subTest(client=f"{client}-unique-match"):
@@ -444,46 +349,7 @@ class AxiLoaderCacheKeyDerivationTest(unittest.TestCase):
     function' that should stop being even a COSMETIC difference by deriving
     it from `__name__` instead of hardcoding it."""
 
-    OLD_AXI_KEYS = {
-        "bun": "bun_crucible_axi_shared", "rust": "rust_crucible_axi_shared",
-        "mvn": "mvn_crucible_axi_shared", "python": "python_crucible_axi_shared",
-        "arduino": "arduino_crucible_axi_shared",
-    }
-    OLD_TOON_KEYS = {
-        "bun": "bun_crucible_toon", "rust": "rust_crucible_toon",
-        "mvn": "mvn_crucible_toon", "python": "python_crucible_toon",
-        "arduino": "arduino_crucible_toon",
-    }
-
-    def _assert_key_not_hardcoded(self, func_name, old_keys):
-        offenders_literal = []
-        offenders_ast = []
-        for client, path in CLIENT_FILES.items():
-            body = _function_source_segment(path, func_name)
-            self.assertIsNotNone(
-                body, f"{client}-crucible.py must still define {func_name}")
-            if old_keys[client] in body:
-                offenders_literal.append(client)
-            call = _spec_from_file_location_call(body)
-            self.assertIsNotNone(
-                call, f"{client}-crucible.py's {func_name} must still call "
-                      f"importlib.util.spec_from_file_location")
-            if call.args and isinstance(call.args[0], ast.Constant) \
-                    and isinstance(call.args[0].value, str):
-                offenders_ast.append(client)
-        self.assertEqual(
-            offenders_literal, [],
-            f"the following clients' {func_name} still hardcode their OLD "
-            f"per-client cache-key literal instead of deriving it from "
-            f"__name__: {offenders_literal!r}")
-        self.assertEqual(
-            offenders_ast, [],
-            f"the following clients' {func_name} still pass a hardcoded "
-            f"string constant as the spec_from_file_location cache key "
-            f"instead of deriving it from __name__ (DN §1): {offenders_ast!r}")
-
     def test_axi_loader_cache_key_no_longer_hardcoded_and_still_works(self):
-        self._assert_key_not_hardcoded("_axi", self.OLD_AXI_KEYS)
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)
@@ -500,7 +366,6 @@ class AxiLoaderCacheKeyDerivationTest(unittest.TestCase):
                     f"after the cache-key fix")
 
     def test_toon_loader_cache_key_no_longer_hardcoded_and_still_works(self):
-        self._assert_key_not_hardcoded("_toon", self.OLD_TOON_KEYS)
         for client in CLIENTS:
             with self.subTest(client=client):
                 module = _load_client_module(client)

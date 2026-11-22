@@ -1,6 +1,6 @@
-"""The helpers of `test_cr054_fleet_inventory.py` that other modules import,
-moved out of that test module so no module imports a test module for a
-helper (CR-CRU-262). Holds no `TestCase` and no test.
+"""The fleet inventory helpers other modules import: the client table and
+the AST readers of a client's verb registration. Holds no `TestCase` and no
+test.
 """
 
 import ast

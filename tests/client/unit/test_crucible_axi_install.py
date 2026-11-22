@@ -673,8 +673,8 @@ class InstallIdempotencyTest(unittest.TestCase):
         # The conditional key by its CONDITION (CR-CRU-138 §S2 declares it):
         # this run declared no provisioned server, so publishing `server_config`
         # would name a file nothing wrote. The lineage stays HERE, in the
-        # comment -- an assertion message is live text, and CR-CRU-097's
-        # tripwire keeps real board ids out of it.
+        # comment -- an assertion message is live text, and real board ids
+        # stay out of it.
         self.assertNotIn(
             "server_config", reparsed,
             f"no server is provisioned for this install, so "

@@ -278,7 +278,7 @@ class NextsAnswerIsAPlanTheWriteSideAcceptsTest(unittest.TestCase):
 # the PUBLISHED order, never re-sorts by seq value".
 #
 # ResolverLandsOnceTest (2) — KEPT (rewritten for AC10/AC11):
-# tests/client/unit/test_cr098_resolver_lands_on_the_server.py.
+# since deleted with the other source-shape guards.
 #
 # NextBlockCitationsTest (2) — RETIRED under CR-CRU-098 §S4: it checked the
 # `path:line` citations inside the client's `next` block. That block is now the

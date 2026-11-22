@@ -77,6 +77,14 @@
 //
 // Both hold with `CRUCIBLE_TEST_TMPROOT_DISABLE=1` as well: the switch only
 // decides which temp root they live under.
+//
+// ── Fail fast ───────────────────────────────────────────────────────────────
+//
+// Last, it resolves the store, the server's configuration, the client
+// install's configuration and the project dir's `.env` exactly as the code
+// under test would, and throws before any suite loads when one of them lies
+// inside the checkout. A run that would read or write the operator's own
+// state stops here, naming the path, instead of running against it.
 import { afterAll } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
@@ -133,10 +141,29 @@ process.on("exit", () => {
 for (const variable of PROJECT_DIR_VARIABLES) process.env[variable] = isolationDir;
 
 // Loaded only now, so the install lands under the temp root settled above.
-await import("./test-install.ts");
+const { TEST_INSTALL_CONFIG } = await import("./test-install.ts");
 
 process.env.CRUCIBLE_DB = path.join(
   os.tmpdir(),
   "crucible-test-suite-store",
   "crucible.db",
 );
+
+const CHECKOUT = path.resolve(import.meta.dir, "..", "..");
+const { resolveStore } = await import("../../src/store-path.ts");
+const { serverConfigPath } = await import("../../src/limits.ts");
+const resolvedPaths: Record<string, string> = {
+  store: resolveStore().path,
+  "server config": serverConfigPath(),
+  "client config": TEST_INSTALL_CONFIG,
+  ".env": path.join(isolationDir, ".env"),
+};
+for (const [what, file] of Object.entries(resolvedPaths)) {
+  const relative = path.relative(CHECKOUT, path.resolve(file));
+  if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+    throw new Error(
+      `isolated-store-preload: the run's ${what} path ${file} lies inside the checkout ` +
+        `${CHECKOUT}; a test process resolves no store, config or .env there`,
+    );
+  }
+}

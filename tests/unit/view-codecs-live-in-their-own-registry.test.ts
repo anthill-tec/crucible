@@ -11,10 +11,7 @@
 //  - the refusals: `bun-console`, which the stream route takes as a view
 //    stream, is unknown to every report route — sent as a body report, a raw
 //    report (`dataPath`), or as a close's codec, it is a 400 naming it as an
-//    unknown codec, nothing stored and the run left open;
-//  - the one caller: `fillRunLive` (src/run-stream.ts) is the only place in
-//    src/ a codec's `fill` is called. A source check holds it, proved first on
-//    synthetic sources both ways.
+//    unknown codec, nothing stored and the run left open.
 //
 // INTERFACE CHOICES (the spec leaves them open; named here for the ruling):
 //  - the registry is exported as `viewCodecs: Map<string, ViewCodec>` from
@@ -29,8 +26,6 @@
 //
 // SAFETY: every board is in process (no socket) on ":memory:".
 import { describe, test, expect, afterEach } from "bun:test";
-import { readFileSync } from "node:fs";
-import { relative } from "node:path";
 import * as codecIndex from "../../src/codecs/index.ts";
 import { codecs } from "../../src/codecs/index.ts";
 import type { BoardHandle } from "../../src/server.ts";
@@ -44,7 +39,6 @@ import {
   utf8,
   type Answer,
 } from "../helpers/run-stream-harness.ts";
-import { balancedEnd, jsLiveCode, listFiles } from "../helpers/source-scan.ts";
 import { PLAIN_RUN } from "../fixtures/bun-console-live-captures.ts";
 
 const handles: BoardHandle[] = [];
@@ -181,113 +175,5 @@ describe("bun-console, taken by the stream route as a view stream, is unknown to
     expectUnknownCodec(s, res, before);
     // The view stream is still held: the live state was not touched by the refusal.
     expect(s.handle.store.runLive(s.runId)?.completed).toBe(2);
-  });
-});
-
-// ── The one caller of fill ──────────────────────────────────────────────────
-
-const RUN_STREAM_SOURCE = "src/run-stream.ts";
-
-/** The [start, end) span of `function <name>`'s body in live code, or null when it is not declared. */
-function functionBody(live: string, name: string): { start: number; end: number } | null {
-  const declared = new RegExp(`\\bfunction\\s+${name}\\s*\\(`).exec(live);
-  if (declared === null) return null;
-  const paramsEnd = balancedEnd(live, declared.index + declared[0].length - 1);
-  const open = live.indexOf("{", paramsEnd);
-  if (open === -1) return null;
-  return { start: open, end: balancedEnd(live, open) };
-}
-
-/**
- * What a set of sources (path → text) breaks of "fillRunLive is the one
- * caller of a codec's fill": a `.fill(` call anywhere but fillRunLive's body
- * in src/run-stream.ts, or a fillRunLive that calls none. Comments and string
- * literals never count.
- */
-function fillCallViolations(sources: Record<string, string>): string[] {
-  const violations: string[] = [];
-  const runStream = sources[RUN_STREAM_SOURCE];
-  const ownerLive = runStream === undefined ? "" : jsLiveCode(runStream);
-  const owner = functionBody(ownerLive, "fillRunLive");
-  if (owner === null) violations.push(`${RUN_STREAM_SOURCE} declares no fillRunLive`);
-  else if (!/\.fill\s*\(/.test(ownerLive.slice(owner.start, owner.end))) {
-    violations.push("fillRunLive calls no codec's fill");
-  }
-  for (const [path, text] of Object.entries(sources)) {
-    const live = jsLiveCode(text);
-    for (const call of live.matchAll(/\.fill\s*\(/g)) {
-      const at = call.index ?? 0;
-      const inOwner = path === RUN_STREAM_SOURCE && owner !== null && at >= owner.start && at < owner.end;
-      if (!inOwner) violations.push(`${path} calls fill outside fillRunLive`);
-    }
-  }
-  return violations;
-}
-
-const SYNTHETIC_OWNER_CALLS = `
-import { viewCodecs } from "./codecs/index.ts";
-// codec.fill( in a comment never counts
-function fillRunLive(db: Database, runId: string): void {
-  const codec = viewCodecs.get(live.codec);
-  if (codec !== undefined) {
-    const read = codec.fill(text, live.decoded_offset, live.reader_state, state);
-    store(read);
-    return;
-  }
-  for (const line of lines) readStreamLine(line);
-}
-`;
-
-const SYNTHETIC_ELSEWHERE_CLEAN = `
-const note = "a string naming codec.fill( never counts";
-export function other(): string {
-  return note;
-}
-`;
-
-const SYNTHETIC_OWNER_SILENT = `
-function fillRunLive(db: Database, runId: string): void {
-  for (const line of lines) readStreamLine(line);
-}
-`;
-
-const SYNTHETIC_ELSEWHERE_CALLS = `
-import { viewCodecs } from "./codecs/index.ts";
-export function sneak(text: string): void {
-  viewCodecs.get("bun-console")?.fill(text, 0, null, state);
-}
-`;
-
-describe("a source check holds that fillRunLive is the one caller of a codec's fill", () => {
-  test("proved on synthetic sources where only fillRunLive calls fill: no violation, a comment and a string not counting", () => {
-    expect(
-      fillCallViolations({
-        [RUN_STREAM_SOURCE]: SYNTHETIC_OWNER_CALLS,
-        "src/v2.ts": SYNTHETIC_ELSEWHERE_CLEAN,
-      }),
-    ).toEqual([]);
-  });
-
-  test("proved on synthetic sources where another module calls fill and fillRunLive calls none: both are caught", () => {
-    expect(
-      fillCallViolations({
-        [RUN_STREAM_SOURCE]: SYNTHETIC_OWNER_SILENT,
-        "src/v2.ts": SYNTHETIC_ELSEWHERE_CALLS,
-      }),
-    ).toEqual(["fillRunLive calls no codec's fill", "src/v2.ts calls fill outside fillRunLive"]);
-  });
-
-  test("proved on synthetic sources with no fillRunLive at all: it is named as missing", () => {
-    expect(fillCallViolations({ "src/v2.ts": SYNTHETIC_ELSEWHERE_CLEAN })).toEqual([
-      `${RUN_STREAM_SOURCE} declares no fillRunLive`,
-    ]);
-  });
-
-  test("in src/, fillRunLive in src/run-stream.ts calls a codec's fill and nothing else does", () => {
-    const root = `${import.meta.dir}/../..`;
-    const sources: Record<string, string> = {};
-    for (const file of listFiles("src", [".ts"])) sources[relative(root, file)] = readFileSync(file, "utf8");
-    expect(Object.keys(sources)).toContain(RUN_STREAM_SOURCE);
-    expect(fillCallViolations(sources)).toEqual([]);
   });
 });

@@ -228,7 +228,7 @@ function json(body: unknown, status = 200): Response {
  * all 16 call sites for no behavioural gain, and it is precisely this
  * signature's sameness that makes "no payload moved" trivially checkable.
  */
-function reply(req: Request, url: URL, payload: Record<string, unknown>, status = 200): Response {
+function reply(_req: Request, _url: URL, payload: Record<string, unknown>, status = 200): Response {
   return json(payload, status);
 }
 
@@ -4066,8 +4066,7 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
       // moved here because CR-CRU-078's e2e scenario declares through THIS
       // route). `release` and `track` are the values the membership gate
       // VETTED and returned; a property one literal deeper than these would
-      // store nothing under its name at all, which the AC11 half of
-      // tests/unit/queue-accepted-field-guard.test.ts now fires on.
+      // store nothing under its name at all.
       ...(release !== undefined ? { release } : {}),
       ...(track !== undefined ? { track } : {}),
       ...(lifecycle !== undefined ? { lifecycle } : {}),

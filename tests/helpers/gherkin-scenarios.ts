@@ -2,8 +2,7 @@
 //
 // A `.feature` file's scenarios as the board stores them once the suite has
 // run: under which suite each one sits, by what name, and with which step
-// lines in order. Read by tests/integration/e2e-suite-reaches-the-board.test.ts, and
-// pinned on its own by tests/unit/gherkin-scenario-reader.test.ts.
+// lines in order. Pinned by tests/unit/gherkin-scenario-reader.test.ts.
 //
 // WHERE A SCENARIO SITS. The shipped Playwright reporter names a test's suite
 // by its whole describe chain. A plain `Scenario:` is a test directly under

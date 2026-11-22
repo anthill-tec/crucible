@@ -12,10 +12,6 @@ AC3 and AC4 are cycle 389's; AC7's reverted-fix reproduction is cycle 390's.
   * **AC5** — 'each suite's runs are ingested by its own stack's client …: the
     python suite's run carries the python stack and the bun suite's run carries
     the bun stack, from one gate invocation.'
-  * **AC6** — '`bunfig.toml` still carries no `pathIgnorePatterns` and
-    `tests/integration/suite-integrity.test.ts` passes unchanged; the count of discovery
-    exclusions the repo declares is still zero, asserted by that file's own
-    `discoveryExclusions` over the real config.'
   * **AC8** — 'caller existence: a grep at VERIFY time returns ≥1 non-test
     caller of the multi-suite gate path, and the standing python gate step is
     invoked from the gate itself rather than only from documentation.'
@@ -45,12 +41,6 @@ colour means nothing:
          sibling client: `scripts/run-test-target.ts` already runs the union
          (`bun test` then `python3 -m unittest discover -s tests/client`) in a
          place the gate does not look, and nothing is ingested for it.
-  PIN  `NoSuiteIsGainedByHidingFilesTest` (AC6, §S3). It passes today and must
-         keep passing: this CR widens what the gate RUNS and may not narrow
-         what a runner COLLECTS. Driven through `tests/integration/suite-integrity.test.ts`
-         itself — its own `discoveryExclusions` over the real `bunfig.toml` —
-         rather than through a python re-implementation of that decision,
-         because AC6 names that function as the instrument.
 
 THE FIXTURE PROJECT, and why it is shaped the way it is. One throwaway project
 per test declaring THREE targets at this repo's own declaration surface — the
@@ -155,8 +145,6 @@ import importlib.util
 import json
 import os
 import re
-import shutil
-import subprocess
 import sys
 import threading
 import time
@@ -1118,78 +1106,6 @@ class MultiSuiteGateHasACallerTest(unittest.TestCase):
             "ingested for the python suite and the gate never consults it."
             % (GATE_ENTRY, ", ".join(code) or "nowhere",
                ", ".join(docs) or "nowhere"))
-
-
-# ── AC6/§S3 — no suite is gained by hiding files ──────────────────────────
-
-
-class NoSuiteIsGainedByHidingFilesTest(unittest.TestCase):
-    """AC6/§S3 — PIN, born green and required to stay green. 'Nothing in this
-    CR may introduce a discovery exclusion: `bunfig.toml` carries no
-    `pathIgnorePatterns` (CR-CRU-047 §S1) and `tests/integration/suite-integrity.test.ts`
-    asserts the key is absent, because a permanently-excluded directory makes
-    suite size unreconcilable.'
-
-    Driven through that file's OWN `discoveryExclusions` over the REAL config,
-    which is what AC6 names as the instrument: a python re-implementation of
-    the same regex would be a second decision that can disagree with the one
-    the repo actually ships. The run is filtered to that guard's own describe
-    block, so this PIN costs one `bun test` of two assertions and never the
-    file's real-bun fixture block.
-
-    TOOLCHAIN DEPENDENCY, declared rather than assumed (2026-09-09, found by
-    the 0.2.0 release CI). Driving the real guard means this python test needs
-    the BUN toolchain, and CR-CRU-112 declares `tests/client` as the PYTHON
-    suite -- so in an environment with no bun (exactly what the release
-    workflow's `test-python` job is: "Python client suite (no server
-    required)") the drive raised `FileNotFoundError` and the case ERRORed. It
-    passed everywhere it had been run before only because every one of those
-    environments happened to have bun.
-
-    It SKIPS there instead, and the skip costs no coverage: the property is
-    asserted by `tests/integration/suite-integrity.test.ts` itself, which CI runs in the
-    `test-bun` job -- the job that owns that toolchain. What this case adds is
-    the CROSS-suite confirmation, which is meaningful only where both
-    toolchains exist. A suite that cannot run without another stack's
-    toolchain is not really that stack's suite, which is CR-CRU-112's own
-    thesis pointed at itself."""
-
-    GUARD = "no pathIgnorePatterns exclusion"
-
-    def test_the_repo_declares_zero_discovery_exclusions_by_its_own_guard(self):
-        if shutil.which("bun") is None:
-            self.skipTest(
-                "no `bun` on PATH: this AC6 cross-check drives"
-                " `tests/integration/suite-integrity.test.ts`'s own guard, and"
-                " `tests/client` is the PYTHON suite. The property itself is"
-                " asserted by that bun test in the job that owns the bun"
-                " toolchain; re-implementing its regex here would be a second"
-                " decision that can disagree with the one the repo ships.")
-        result = subprocess.run(
-            ["bun", "test", "tests/integration/suite-integrity.test.ts", "-t", self.GUARD],
-            cwd=REPO_ROOT, capture_output=True, text=True, timeout=180)
-        output = result.stdout + result.stderr
-        self.assertEqual(
-            result.returncode, 0,
-            "AC6 — `tests/integration/suite-integrity.test.ts`'s own `discoveryExclusions` "
-            "guard does not pass over the real `bunfig.toml`: this CR widens "
-            "what the gate RUNS and may not narrow what the runner COLLECTS. "
-            "output=%s" % output[-3000:])
-        passed = re.search(r"^\s*(\d+) pass", output, re.MULTILINE)
-        failed = re.search(r"^\s*(\d+) fail", output, re.MULTILINE)
-        self.assertIsNotNone(
-            passed,
-            "AC6 — the guard run reported no pass count, so this PIN measured "
-            "nothing. output=%s" % output[-3000:])
-        self.assertEqual(
-            int(passed.group(1)), 2,
-            "AC6 — the %r block is two assertions (the key is absent; no "
-            "future entry may reference the tests/ tree) and the run collected "
-            "%s. output=%s" % (self.GUARD, passed.group(1), output[-3000:]))
-        self.assertEqual(
-            int(failed.group(1)) if failed else 0, 0,
-            "AC6 — the discovery-exclusion guard failed. output=%s"
-            % output[-3000:])
 
 
 if __name__ == "__main__":

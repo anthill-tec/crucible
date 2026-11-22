@@ -66,7 +66,7 @@ constructed.
 
 Module-loading convention: REPO_ROOT-relative `clients/*.py`, loaded by file
 path (hyphenated filenames), same idiom as every sibling harness in this
-directory (`test_bun_crucible_gates.py`, `test_cr054_drift_guard.py`, ...).
+directory (`test_bun_crucible_gates.py`, ...).
 
 Invocation:
     python3 -m pytest tests/client/integration/test_cr061_gate_run_skip_passthrough.py -q

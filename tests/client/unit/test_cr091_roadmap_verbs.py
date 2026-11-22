@@ -37,7 +37,7 @@ What is asserted here, and where it comes from:
   to STDOUT with exit 2 (usage) or 1 (transport/refusal), never bare prose on
   stderr. The other half — presence and the live envelope census over all 25
   (verb × client) pairs — extends the two existing fleet harnesses
-  (`test_cr054_fleet_inventory.py`, `test_client_fleet_envelope_census.py`).
+  (`test_client_fleet_envelope_census.py`).
 - **§S2/AC17 — `--track` is passed through VERBATIM.** The SERVER normalises
   `2` / `track-2` / `Track 2` to `track-<n>`; a client re-implementing that
   normalisation is the second decision-maker §S9 forbids, so the assertion is

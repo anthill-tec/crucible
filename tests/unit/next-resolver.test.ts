@@ -33,9 +33,8 @@
 // failed, which is the missing contract, not a broken harness (Mode 1, compile/
 // import error from a not-yet-existing SUT symbol IS red).
 //
-// AC13 — every fixture below is synthetic: `CR-NEXTPTR-*` ids (registered in
-// tests/integration/project-namespace-tripwire.test.ts's SYNTHETIC_NAMESPACES in this same
-// commit) or bare placeholder ids (`CR-A`, `CR-TARGET`, …) that name no real CR.
+// AC13 — every fixture below is synthetic: placeholder ids that name no real
+// CR.
 
 import { readFileSync } from "node:fs";
 import { describe, test, expect } from "bun:test";

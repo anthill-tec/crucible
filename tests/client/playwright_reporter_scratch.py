@@ -275,12 +275,6 @@ def junit_report(case, junit_path, result):
               for key in ("tests", "skipped", "failures", "errors")}
     return counts, cases
 
-def expected_junit_cases():
-    """(project, name) as Playwright's JUnit names each expected test case:
-    the title path after the file, joined by ` › `."""
-    return {(project, f"{suite}{SUITE_SEPARATOR}{name}")
-            for (name, project), (_, suite, _, _, _) in EXPECTED_TEST_ENDS.items()}
-
 def listed_test_ids(case, bun, project):
     """{test id: (scenario, project)} as Playwright itself lists the scratch
     copy's tests: `bunx bddgen && bunx playwright test --list --reporter=json`,

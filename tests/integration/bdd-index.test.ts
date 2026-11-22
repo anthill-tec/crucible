@@ -37,7 +37,7 @@ const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
 /** CR-CRU-097 AC1's two rules, restated here as tests/integration/bdd-section.test.ts
- *  and tests/integration/project-namespace-tripwire.test.ts already do. */
+ *  already does. */
 const ANY_PROJECT_CR = /CR-[A-Z]{2,}-\d+/;
 const RELEASE_VERSION = /\b\d+\.\d+(?:\.\d+)?\b/;
 

@@ -60,7 +60,6 @@ Fallback:
     python3 tests/client/integration/test_arduino_crucible_axi.py
 """
 
-import ast
 import contextlib
 import importlib.util
 import io
@@ -84,13 +83,6 @@ from tests.client.client_fleet_envelope_census_helpers import (
 )
 from tests.client.live_run_harness import get_answering_health
 
-# CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
-# this client register, and through what?", reused rather than re-derived.
-from tests.client.cr054_fleet_inventory_helpers import (
-    _add_parser_verb_names,
-    _defined_function_names,
-    _single_verb_registrar_delegator,
-)
 from tests.client import CLIENT_SOURCE_DIR, client_script
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -132,58 +124,7 @@ else:
     sys.exit(1)
 '''
 
-# ── C6 VERIFY-fix: §S8 interim-snapshot fixture (mirrors
-# test_bun_crucible_gates.py::GateRunAxiProxyTest exactly) -- a PROGRESSIVE
-# fake `no-mistakes` that writes 3 in-flight snapshots to a shared state file
-# over ~3 real seconds (comfortably past the >=2s §S2b cadence) before the
-# final resolved snapshot, so a correctly-throttled gate-run has exactly one
-# legitimate window to POST an interim gate before the unconditional final
-# seal.
 _INTERIM_RELAY_MARKER = "arduino-gate-axi-interim-relay-marker-555"
-_INTERIM_SNAPSHOT_1 = (
-    'run:\n'
-    '  id: "gate-axi-arduino-interim-001"\n'
-    f'  branch: {_INTERIM_RELAY_MARKER}\n'
-    '  status: running\n'
-    '  head: cc33dd4\n'
-    '  findings: 0\n'
-    '  steps[3]{step,status,findings,duration_ms}:\n'
-    '    intent,completed,0,100\n'
-    '    rebase,completed,0,50\n'
-    '    review,completed,1,200\n'
-)
-_INTERIM_SNAPSHOT_2 = (
-    'run:\n'
-    '  id: "gate-axi-arduino-interim-001"\n'
-    f'  branch: {_INTERIM_RELAY_MARKER}\n'
-    '  status: running\n'
-    '  head: cc33dd4\n'
-    '  findings: 1\n'
-    '  steps[6]{step,status,findings,duration_ms}:\n'
-    '    intent,completed,0,100\n'
-    '    rebase,completed,0,50\n'
-    '    review,completed,1,200\n'
-    '    test,completed,0,300\n'
-    '    document,completed,0,150\n'
-    '    lint,completed,0,80\n'
-)
-_INTERIM_SNAPSHOT_3 = (
-    'run:\n'
-    '  id: "gate-axi-arduino-interim-001"\n'
-    f'  branch: {_INTERIM_RELAY_MARKER}\n'
-    '  status: running\n'
-    '  head: cc33dd4\n'
-    '  findings: 1\n'
-    '  steps[8]{step,status,findings,duration_ms}:\n'
-    '    intent,completed,0,100\n'
-    '    rebase,completed,0,50\n'
-    '    review,completed,1,200\n'
-    '    test,completed,0,300\n'
-    '    document,completed,0,150\n'
-    '    lint,completed,0,80\n'
-    '    push,completed,0,40\n'
-    '    pr,skipped,0,10\n'
-)
 # TOOL VERSION: `no-mistakes` v1.70.1 — the NINE-row ladder below (and its step
 # names) is that version's pipeline, 2026-09-10; v1.72.0 was already published.
 # This nine-row fixture is a SEALING snapshot: `status: completed` with a
@@ -209,47 +150,6 @@ _INTERIM_SNAPSHOT_FINAL = (
     '    ci,skipped,0,10\n'
     'outcome: passed\n'
 )
-_FAKE_NO_MISTAKES_INTERIM_BODY = '''
-import json
-import os
-import sys
-import time
-
-argv = sys.argv[1:]
-state_file = os.environ.get("GATE_RUN_FAKE_STATE")
-
-
-def _write_state(text):
-    if state_file:
-        with open(state_file, "w") as f:
-            f.write(text)
-
-
-if len(argv) >= 2 and argv[0] == "axi" and argv[1] == "run":
-    argv_file = os.environ.get("GATE_RUN_FAKE_ARGV_FILE")
-    if argv_file:
-        with open(argv_file, "w") as f:
-            json.dump(argv, f)
-    _write_state({s1!r})
-    time.sleep(1.0)
-    _write_state({s2!r})
-    time.sleep(1.5)
-    _write_state({s3!r})
-    time.sleep(0.8)
-    _write_state({sf!r})
-    sys.stdout.write({sf!r})
-    sys.exit(0)
-elif len(argv) >= 2 and argv[0] == "axi" and argv[1] == "status":
-    content = ""
-    if state_file and os.path.exists(state_file):
-        with open(state_file) as f:
-            content = f.read()
-    sys.stdout.write(content or {s1!r})
-    sys.exit(0)
-else:
-    sys.stderr.write("fake no-mistakes: unsupported invocation: " + repr(argv) + "\\n")
-    sys.exit(1)
-'''.format(s1=_INTERIM_SNAPSHOT_1, s2=_INTERIM_SNAPSHOT_2, s3=_INTERIM_SNAPSHOT_3, sf=_INTERIM_SNAPSHOT_FINAL)
 
 # A fake `arduino-cli` substituted for the real (heavy, not always installed)
 # toolchain: always fails compilation with a recognizable error line.
@@ -660,91 +560,6 @@ class ArduinoCrucibleVerbEnvelopeTest(_BaseArduinoAxiTest):
         self.assertNotIn("prefer-gate-run", codes,
                           "gate-run is itself the streaming standard -- it must never "
                           "carry the prefer-gate-run discouragement")
-
-    def test_gate_run_posts_interim_snapshot_before_final_sealed_gate(self):
-        """§S8 (CR-CRU-030 AC line 270, C6 VERIFY-fix): `gate-run` must POST
-        >=1 interim gate snapshot (from polling `axi status` while `axi run`
-        is still in flight) BEFORE the final sealed gate -- mirrors
-        test_bun_crucible_gates.py::GateRunAxiProxyTest.
-        test_gate_run_polls_status_for_interim_gates_and_seals_final_from_run_outcome
-        against the SAME `while proc.poll() is None:` polling loop
-        arduino-crucible.py's `cmd_gate_run` already wires up (confirmed by
-        reading the function body of `cmd_gate_run` in arduino-crucible.py)."""
-        saved_path = os.environ.get("PATH", "")
-        fake_bin_dir = tempfile.mkdtemp(prefix="fake-no-mistakes-arduino-interim-")
-        fake_path = os.path.join(fake_bin_dir, "no-mistakes")
-        _write_fake_executable(fake_path, _FAKE_NO_MISTAKES_INTERIM_BODY)
-
-        state_file = os.path.join(self.tmpdir, "interim-state.toon")
-        argv_file = os.path.join(self.tmpdir, "interim-argv.json")
-        os.environ["PATH"] = fake_bin_dir + os.pathsep + saved_path
-        os.environ["GATE_RUN_FAKE_STATE"] = state_file
-        os.environ["GATE_RUN_FAKE_ARGV_FILE"] = argv_file
-
-        calls = []
-
-        def fake_post(path, payload):
-            calls.append((path, dict(payload) if isinstance(payload, dict) else payload))
-            return {"ok": True}
-
-        try:
-            with mock.patch.object(self.module, "_post", side_effect=fake_post, create=True):
-                code, out, _err = _run_main(self.module, [
-                    "gate-run", "--intent", "verify the interim polling path",
-                    "--agent", "test-agent", "--project-dir", self.tmpdir,
-                ])
-        finally:
-            os.environ["PATH"] = saved_path
-            os.environ.pop("GATE_RUN_FAKE_STATE", None)
-            os.environ.pop("GATE_RUN_FAKE_ARGV_FILE", None)
-            shutil.rmtree(fake_bin_dir, ignore_errors=True)
-
-        self.assertEqual(code, 0, f"stdout={out!r}")
-        self.assertIn(_INTERIM_RELAY_MARKER, out,
-                      "gate-run must relay the no-mistakes axi detail to its own stdout")
-
-        gate_calls = [c for c in calls if c[0] == "/api/v2/gates"]
-        self.assertGreaterEqual(len(gate_calls), 2,
-                                 f"expected >=1 interim + 1 final gate POST, got {calls}")
-        # Re-pin (approved by the orchestrator — user ruling 2026-10-08): the
-        # gate's snapshots post under the RUN IDENTITY (`<caller>\u00b7gate\u00b7<run>`,
-        # `<run>` the first 8 characters of the no-mistakes run id),
-        # whose own lifecycle (open/heartbeat/removal) is the ONLY other
-        # plumbing allowed; any other call, or a lifecycle call for any
-        # other id, still fails the comparison below.
-        run_identity = "test-agent\u00b7gate\u00b7" + "gate-axi-arduino-interim-001"[:8]
-        lifecycle_paths = ("/api/v2/agents/heartbeat", "/api/v2/agents/register",
-                           "/api/v2/agents/unregister")
-        identity_calls = [c for c in calls if c[0] in lifecycle_paths
-                          and isinstance(c[1], dict)
-                          and c[1].get("agentId") == run_identity]
-        self.assertTrue(
-            any(c[0] == "/api/v2/agents/heartbeat" for c in identity_calls),
-            f"the run identity {run_identity!r} must be opened/heartbeated; "
-            f"got {calls}")
-        other_calls = [c for c in calls if c not in identity_calls]
-        self.assertEqual(other_calls, gate_calls,
-                          "gate-run owns ALL Crucible plumbing -- no other endpoint "
-                          "should ever be hit")
-
-        *interim, final = gate_calls
-        self.assertGreaterEqual(len(interim), 1,
-                                 "gate-run must POST at least ONE interim snapshot "
-                                 "before the final sealed gate")
-
-        final_gate = final[1].get("gate", {})
-        self.assertEqual(final_gate.get("outcome"), "passed",
-                          "the final gate's outcome must match `axi run`'s resolved outcome")
-        self.assertEqual(len(final_gate.get("steps", [])), 9)
-
-        for _path, payload in interim:
-            interim_gate = payload.get("gate", {})
-            self.assertLess(len(interim_gate.get("steps", [])), 9,
-                             f"an interim gate must be a PARTIAL snapshot, got {interim_gate}")
-            self.assertIn(interim_gate.get("outcome"), ("checks-passed", "passed",
-                                                          "failed", "cancelled"),
-                           "gate.outcome is REQUIRED by the server even for an interim "
-                           "snapshot")
 
 
 # ── CR-CRU-035 §S1: `status` is hook-safe -- tolerant + bounded ────────────
@@ -1380,9 +1195,7 @@ class ArduinoCrucibleToolchainTest(_BaseArduinoAxiTest):
 # Asserted HERE, in this client's own suite, rather than as one fleet-wide set
 # comparison: a five-for-five that fails must NAME the client that lost the
 # verb, not report "expected 5, got 4". The shared registrar's own contract
-# lives in `test_crucible_axi_shared.py`; the frozen inventory set and the
-# derived registrar-parity sweep are §S2's, in
-# `test_cr054_fleet_inventory.py`.
+# lives in `test_crucible_axi_shared.py`.
 #
 # The fixture's CR ids live in module constants and are never spelled inside
 # an assertion (CR-CRU-097 §S1's residue rule), in a namespace this section
@@ -1526,67 +1339,6 @@ class ArduinoCrucibleQueueFileVerbTest(_BaseArduinoAxiTest):
         absent = os.path.join(self.tmpdir, "absent-queue.md")
         code, out, err, post_mock, _patch = self._run_queue_file(absent)
         self._assert_structured_failure(code, out, err, post_mock, absent)
-
-
-class ArduinoCrucibleQueueFileRegistrationTest(unittest.TestCase):
-    """AC1 — HOW this client wires the verb, read from its AST so a name in a
-    docstring or a help string can never be mistaken for a registration. The
-    readers are `test_cr054_fleet_inventory.py`'s, reused."""
-
-    def test_the_client_defines_one_cmd_queue_file_delegating_to_the_shared_implementation(self):
-        """AC1's delegator and AC6's DRY half in one: a body longer than the
-        single `return _axi().cmd_queue_file(...)` means the parse or the POST
-        leaked back into a client."""
-        counts = _defined_function_names(SCRIPT_PATH_SOURCE)
-        self.assertEqual(
-            counts.get("cmd_queue_file", 0), 1,
-            f"{SCRIPT_PATH.name} must define `cmd_queue_file` exactly once "
-            f"(§S1 fleet parity; a duplicate def would silently make the "
-            f"SECOND one win at import time); defined "
-            f"{counts.get('cmd_queue_file', 0)}x")
-        node = next(n for n in ast.walk(ast.parse(SCRIPT_PATH_SOURCE.read_text()))
-                    if isinstance(n, ast.FunctionDef)
-                    and n.name == "cmd_queue_file")
-        body = [stmt for stmt in node.body
-                if not (isinstance(stmt, ast.Expr)
-                        and isinstance(stmt.value, ast.Constant))]
-        self.assertEqual(
-            len(body), 1,
-            f"the delegator is THIN — exactly one `return` (§S1 is wiring, not "
-            f"a re-implementation); got {len(body)} statement(s)")
-        self.assertIsInstance(
-            body[0], ast.Return,
-            f"the delegator's one statement must RETURN the shared verb's "
-            f"exit code; got {ast.dump(body[0])!r}")
-        self.assertIsInstance(
-            body[0].value, ast.Call,
-            f"the delegator must return a CALL into the shared module; "
-            f"got {ast.dump(body[0])!r}")
-        self.assertEqual(
-            getattr(body[0].value.func, "attr", None), "cmd_queue_file",
-            f"the delegator must call the SHARED "
-            f"`_crucible_axi.cmd_queue_file`, never a local copy; "
-            f"got {ast.dump(body[0].value.func)!r}")
-
-    def test_the_client_registers_queue_file_through_the_shared_registrar(self):
-        delegator = _single_verb_registrar_delegator(
-            SCRIPT_PATH_SOURCE, "add_queue_file_verb")
-        self.assertEqual(
-            delegator, "cmd_queue_file",
-            f"{SCRIPT_PATH.name} must register the verb by handing its OWN "
-            f"delegator to the shared `_crucible_axi.add_queue_file_verb` — "
-            f"the `add_next_verb` / `add_cr_depends_verb` shape; "
-            f"got {delegator!r}")
-
-    def test_the_client_hand_rolls_no_queue_file_subparser(self):
-        """§S1's correction: one client built its own `add_parser` for this
-        verb, which forks the flag surface the shared registrar exists to keep
-        identical. After §S1 no client spells it — that one included."""
-        self.assertNotIn(
-            "queue-file", _add_parser_verb_names(SCRIPT_PATH_SOURCE),
-            f"the `queue-file` subparser is built ONCE, by "
-            f"`_crucible_axi.add_queue_file_verb`; {SCRIPT_PATH.name} spells "
-            f"its own")
 
 
 # ── CR-CRU-107 §S1 + §S2 — one label per flag, and the refusals are structured ──

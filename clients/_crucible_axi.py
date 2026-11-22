@@ -6358,13 +6358,10 @@ def add_queue_file_verb(sub, func, *, parents=(), add_args=()):
 #
 # PROVENANCE: the server DECLARES this vocabulary as the `Tier` union in
 # `src/types.ts`, and that declaration is authoritative. The dict below is the
-# client side's ONLY copy of it: `tests/client/integration/test_client_tier_surface.py`
-# parses that union out by SYMBOL and asserts the two are the same set, so a
-# seventh server-side value fails a test rather than quietly narrowing five
-# clients. Reading `src/types.ts` at client RUNTIME is not the requirement and
-# cannot be — an installed wheel ships no `src/` — so this is the
-# mirror-plus-guard pattern `canonical_track` already uses for `normalizeTrack`
-# above. What is forbidden is a SECOND mirror: no client carries its own copy
+# client side's ONLY copy of it. Reading `src/types.ts` at client RUNTIME is
+# not the requirement and cannot be — an installed wheel ships no `src/` — so
+# this is a mirror, as `canonical_track` mirrors `normalizeTrack` above.
+# What is forbidden is a SECOND mirror: no client carries its own copy
 # of the six, they take them from here through `add_tier_verbs`.
 #
 # The VALUE is what the tier means: the DEPENDENCY a run of it takes. That is
@@ -6399,9 +6396,8 @@ TIER_MEANINGS = {
 # tell a decision from an oversight (§S1).
 #
 # That sentence NAMES the open question and cites no CR id, and the omission is
-# deliberate: the value is EMITTED into `suites[].excluded`, and a project
-# namespace literal at a position a client EMITS is what this project's own
-# tripwire forbids. The lineage belongs in this comment, where it already is;
+# deliberate: the value is EMITTED into `suites[].excluded`, and what a client
+# EMITS carries no project's CR namespace. The lineage belongs in this comment, where it already is;
 # the reader of the envelope needs the REASON, which is the unanswered
 # question, not the number of the CR that declined to answer it.
 GATE_UNCOVERED_TIERS = {

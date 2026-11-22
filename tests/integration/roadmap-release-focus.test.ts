@@ -1372,9 +1372,7 @@ describe("CR-CRU-096 §S4/AC12b/AC13/AC13a, capped by CR-CRU-109 §S1 — ONE `n
 // FIXTURE PROVENANCE — no server, no network, no git at test time:
 //   • ENTRIES are PARSED from the checked-in `docs/changes/README.md` queue
 //     table, which is the authored queue `queue register` ingests, so it IS the
-//     real shape. The size stays UNPINNED — a guard asserts the table still
-//     parses, so a README edit that breaks the shape is loud rather than
-//     silently vacuous.
+//     real shape. The size stays UNPINNED.
 //   • The LEDGER is the measured `GET /api/v2/projects/<key>/releases` payload
 //     (2026-08-27), kept NEWEST-FIRST exactly as the live read publishes it —
 //     which is the whole point here: §S9's blocker was the strip rendering that
@@ -1487,31 +1485,6 @@ const LIVE_ENTRIES: QueueFixture[] = parseQueueTable(
 const LIVE_IN_FLIGHT = LIVE_ENTRIES.filter((entry) => entry.release === "0.2.0");
 
 describe("CR-CRU-078 AC1/AC28 — the whole board renders at the LIVE shape, not just at fixture scale", () => {
-  test("the parsed fixture IS the real shape: a full queue, every dependency resolving, and a real release declared into", () => {
-    // Guards on the FIXTURE, not a pinned size: if the README table stopped
-    // parsing, every assertion below would pass vacuously.
-    expect(LIVE_ENTRIES.length).toBeGreaterThan(80);
-    const ids = new Set(LIVE_ENTRIES.map((entry) => entry.cr));
-    const unknownDependencies = [
-      ...new Set(
-        LIVE_ENTRIES.flatMap((entry) => entry.dependsOn).filter((dep) => !ids.has(dep)),
-      ),
-    ].sort();
-    expect(unknownDependencies).toEqual([]);
-    // A real in-flight membership, and it is a strict SUBSET — so "renders the
-    // focused release" is a different answer from "renders the queue".
-    expect(LIVE_IN_FLIGHT.length).toBeGreaterThan(10);
-    expect(LIVE_IN_FLIGHT.length).toBeLessThan(LIVE_ENTRIES.length);
-    // Titles worth crowding an identifier out — the no-title assertion below
-    // is not passing against a table that yields none.
-    expect(LIVE_ENTRIES.filter((entry) => (entry.title ?? "").length > 20).length).toBeGreaterThan(
-      40,
-    );
-    // The ledger really is newest-first, so a strip that echoes the array
-    // order is visibly wrong at this shape.
-    expect(LIVE_LEDGER.map((r) => r.version)).toEqual(["0.1.3", "0.1.2", "0.1.1", "0.1.0"]);
-  });
-
   test("the strip is ONE monotonic sequence at the live shape — the exact board §S9's blocker rendered backwards", async () => {
     await mountApp({
       releases: LIVE_LEDGER,

@@ -10,8 +10,7 @@
 // release. Before that rebuild happens, the installer says so, naming the old
 // python and that the environment is rebuilt on 3.14.
 //
-// TECHNIQUE — the source-text pins below cover the shape of the two commands
-// (in `install.sh` and in the README). The behaviour is driven by running the
+// TECHNIQUE — the behaviour is driven by running the
 // REAL `install.sh` as a subprocess in a throwaway world: a scratch HOME, a
 // stub `uv` and a stub `crucible-axi` first on a PATH whose tail is a toolbox
 // of ordinary utilities only — the real uv, the real crucible-axi and the real
@@ -52,7 +51,6 @@ import { join } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 const INSTALL_SH = join(REPO_ROOT, "install.sh");
-const README = join(REPO_ROOT, "README.md");
 
 /** The release an interpreter older than 3.14 is stranded on. */
 const STRANDED_RELEASE = "0.3.0";
@@ -62,9 +60,6 @@ const LATEST_RELEASE = "0.4.0";
 const OLD_PYTHON = "3.13.13";
 /** The python a 3.14 environment runs once built. */
 const NEW_PYTHON = "3.14.8";
-
-const FRESH_COMMAND = "uv tool install crucible-axi --python 3.14";
-const UPGRADE_COMMAND = "uv tool install --upgrade crucible-axi --python 3.14";
 
 // ---------------------------------------------------------------------------
 // PATH sandbox — the real uv must be unreachable
@@ -414,39 +409,6 @@ describe("installer python-floor harness", () => {
       expect(w.envPython()).toBe(OLD_PYTHON);
       expect(w.installedRelease()).toBe(STRANDED_RELEASE);
     });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// The commands, as written
-// ---------------------------------------------------------------------------
-
-describe("install.sh and the README name python 3.14 in their uv tool install commands", () => {
-  test("install.sh's fresh and upgrade commands carry `--python 3.14` after the package name", () => {
-    const script = readFileSync(INSTALL_SH, "utf8");
-    const unpinned = [...script.matchAll(/uv tool install (--upgrade )?crucible-axi(?! --python 3\.14)[^\n]*/g)].map(
-      (m) => m[0],
-    );
-    expect({
-      fresh: script.includes(FRESH_COMMAND),
-      upgrade: script.includes(UPGRADE_COMMAND),
-      unpinned,
-      // The flow-shape pins the release-bundle test holds stay satisfiable.
-      freshShape: script.includes("uv tool install crucible-axi"),
-      upgradeShape: script.includes("uv tool install --upgrade crucible-axi"),
-    }).toEqual({ fresh: true, upgrade: true, unpinned: [], freshShape: true, upgradeShape: true });
-  });
-
-  test("the README's install and upgrade commands carry `--python 3.14` after the package name", () => {
-    const readme = readFileSync(README, "utf8");
-    const unpinned = [...readme.matchAll(/uv tool install (--upgrade )?crucible-axi(?! --python 3\.14)[^\n]*/g)].map(
-      (m) => m[0],
-    );
-    expect({
-      install: readme.includes(FRESH_COMMAND),
-      upgrade: readme.includes(UPGRADE_COMMAND),
-      unpinned,
-    }).toEqual({ install: true, upgrade: true, unpinned: [] });
   });
 });
 

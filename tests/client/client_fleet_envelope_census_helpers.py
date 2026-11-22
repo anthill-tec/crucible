@@ -692,8 +692,7 @@ def declare_and_require_board(project_dir, board, label="a client"):
             f"refusing to declare a board at {REPO_ROOT}: that file is the "
             f"OPERATOR's own connection, and a fixture that wrote it would "
             f"both destroy their setting and make every later drive in this "
-            f"checkout resolve a fixture's board "
-            f"(test_no_suite_resolves_the_checkout_configuration.py).")
+            f"checkout resolve a fixture's board.")
     declare_board(Path(project_dir) / "crucible.toml", board)
     resolves, reason = would_resolve(CLIENTS_DIR / "_crucible_axi.py",
                                      project_dir, board)

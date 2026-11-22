@@ -1381,8 +1381,7 @@ describe("CR-CRU-120 §S4 — a cycle that genuinely has zero runs gets honest f
 // (rendered output is identical either way on the day it ships — the drift
 // arrives later), and §S4's shape AC names a slot the IIFE never exposes.
 // Both are asserted over `jsLiveCode(public/app.js)` — the repo's existing
-// source-scan convention (tests/integration/project-namespace-tripwire.test.ts,
-// tests/unit/queue-accepted-field-guard.test.ts), which blanks comment runs and
+// source-scan convention (tests/helpers/source-scan.ts), which blanks comment runs and
 // string prose so app.js's 197 lines of provenance narration can never be
 // mistaken for code.
 

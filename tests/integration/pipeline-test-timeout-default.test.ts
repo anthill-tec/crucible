@@ -53,7 +53,7 @@ const CR009_TEST_REL = join("tests", "integration", "cr009-release-bundle.test.t
 const REQUIRED_DEFAULT_TIMEOUT_MS = 30000;
 
 // ── release.yml as data (same shape as tests/integration/cr009-release-bundle.test.ts's
-//    and tests/unit/ci-toolchain-provisioning.test.ts's readReleaseWorkflow()) ────
+//    readReleaseWorkflow()) ────
 
 type WorkflowStep = {
   name?: string;

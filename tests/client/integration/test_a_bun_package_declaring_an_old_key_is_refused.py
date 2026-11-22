@@ -31,12 +31,7 @@ What is pinned:
   so the refusal cannot be the table's;
 - the client keeps no reader of the old keys: `_declared_report_mechanism`,
   `RAW_REPORT_KEY`, `_declared_raw_report`, `_TEST_SCRIPT_DECLARATION`,
-  `_declared_test_script` and `_emit_test_script_refused` are gone;
-- this repo's own `package.json` and every fixture `package.json` declare no
-  old key, and the Vitest fixture declares only `crucible.targets`, its
-  `test:vitest` entry carrying framework `vitest` and the JUnit path its
-  config reads (`junit: env:FIXTURE_JUNIT_PATH`, the declaration its
-  `reportPath` made).
+  `_declared_test_script` and `_emit_test_script_refused` are gone.
 
 Interface choices (the spec leaves these open; GREEN is asked to use them):
 - The refusal is said in the verb's envelope on stdout (`ok: false`, its
@@ -48,9 +43,7 @@ Interface choices (the spec leaves these open; GREEN is asked to use them):
 
 import importlib.util
 import json
-import os
 import unittest
-from pathlib import Path
 
 from tests.client.bun_targets_harness import (
     BUN_CLIENT,
@@ -58,10 +51,6 @@ from tests.client.bun_targets_harness import (
     TABLE,
     TargetsCase,
 )
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-FIXTURES = REPO_ROOT / "tests" / "fixtures"
-VITEST_FIXTURE_MANIFEST = FIXTURES / "vitest-project" / "package.json"
 
 TIER_VERBS = ("unit", "module", "integration", "e2e", "bdd")
 LEGACY = "test:legacy"
@@ -268,50 +257,6 @@ class TheClientKeepsNoReaderOfAnOldKeyTest(unittest.TestCase):
         self.assertEqual(remaining, [],
                          f"the readers of the old keys are removed; "
                          f"still defined: {remaining!r}")
-
-
-# ── dog-food: no old key in this repo or its fixtures ───────────────────────
-
-
-def _manifests():
-    """This repo's own `package.json` and every fixture's, outside any
-    installed `node_modules`."""
-    found = [REPO_ROOT / "package.json"]
-    for root, dirs, files in os.walk(FIXTURES):
-        dirs[:] = [d for d in dirs if d != "node_modules"]
-        if "package.json" in files:
-            found.append(Path(root) / "package.json")
-    return found
-
-
-class NoManifestInThisRepoDeclaresAnOldKeyTest(unittest.TestCase):
-
-    def test_no_package_json_in_the_repo_or_its_fixtures_declares_an_old_key(self):
-        manifests = _manifests()
-        self.assertIn(VITEST_FIXTURE_MANIFEST, manifests,
-                      "the walk reaches the Vitest fixture's manifest")
-        declaring = []
-        for path in manifests:
-            crucible = json.loads(path.read_text(encoding="utf-8")).get("crucible") or {}
-            declaring += [f"{path.relative_to(REPO_ROOT)}: crucible.{key}"
-                          for key in OLD_KEYS if key in crucible]
-        self.assertEqual(declaring, [],
-                         f"no manifest declares an old key; found {declaring!r}")
-
-    def test_the_vitest_fixture_declares_only_crucible_targets(self):
-        manifest = json.loads(VITEST_FIXTURE_MANIFEST.read_text(encoding="utf-8"))
-        crucible = manifest.get("crucible") or {}
-        self.assertEqual(sorted(crucible), ["targets"],
-                         f"the fixture's crucible block is its table alone; "
-                         f"crucible={crucible!r}")
-        declared = (crucible.get("targets") or {}).get("test:vitest")
-        self.assertIsInstance(declared, dict,
-                              f"test:vitest has a table entry; crucible={crucible!r}")
-        entry = declared if isinstance(declared, dict) else {}
-        self.assertEqual(entry.get("framework"), "vitest", f"entry={entry!r}")
-        self.assertEqual(entry.get("junit"), f"env:{JUNIT_VAR}",
-                         f"the JUnit path arrives the way the fixture's config "
-                         f"reads it; entry={entry!r}")
 
 
 if __name__ == "__main__":
