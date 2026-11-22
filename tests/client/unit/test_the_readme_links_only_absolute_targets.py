@@ -17,6 +17,11 @@ code blocks and inline code spans is skipped. In the angle-bracket form, an
 HTML tag (`<details>`, `</a>`, `<project-dir>`) and an e-mail autolink are not
 link targets.
 
+The README wraps its lines by hand, so a link's text or target may wrap onto
+the next line, and so may an inline code span. The scan reads each paragraph
+of prose as one block, line breaks kept, and reports each target at the line
+where its match starts.
+
 A unit test: it reads the file in process.
 
 Invocation:
@@ -33,14 +38,15 @@ README = REPO_ROOT / "README.md"
 
 SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
-INLINE_CODE = re.compile(r"(`+)(?:(?!\1).)+?\1")
+#: A code span; it may wrap across the lines of its paragraph.
+INLINE_CODE = re.compile(r"(`+)(?:(?!\1).)+?\1", re.DOTALL)
 
 #: `[t](u)`, `[t](u "title")`, `[t](<u>)` and, with a leading `!`, images.
 INLINE_LINK = re.compile(
     r"(!?)\[(?:[^\[\]]|\[[^\[\]]*\])*\]\(\s*(<[^>]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)"
     r"(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)")
-#: `[label]: u`, up to three spaces of indent.
-REFERENCE_DEFINITION = re.compile(r"^ {0,3}\[[^\]]+\]:\s*(<[^>]*>|\S+)")
+#: `[label]: u`, up to three spaces of indent, at the start of any line.
+REFERENCE_DEFINITION = re.compile(r"^ {0,3}\[[^\]]+\]:\s*(<[^>]*>|\S+)", re.MULTILINE)
 #: `href=` and `src=` in any quoting.
 HTML_ATTRIBUTE = re.compile(r"""\b(href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""",
                             re.IGNORECASE)
@@ -50,13 +56,28 @@ HTML_TAG = re.compile(r"^/?[A-Za-z][A-Za-z0-9-]*/?$")
 EMAIL = re.compile(r"^[^@/\s]+@[^@/\s]+\.[^@/\s]+$")
 
 
-def prose_lines(text):
-    """(line number, line) for every line outside a fenced code block, with
-    its inline code spans blanked."""
+def _blank_inline_code(block):
+    """The block with each inline code span, a wrapped one included, blanked
+    to spaces; its line breaks stay, so an offset still maps to its line."""
+    return INLINE_CODE.sub(lambda span: re.sub(r"[^\n]", " ", span.group(0)), block)
+
+
+def prose_blocks(text):
+    """(first line number, block) for every paragraph of prose: a run of
+    non-blank lines outside a fenced code block, joined with its line breaks,
+    with its inline code spans blanked."""
     fence = None
+    first, lines = 0, []
+
+    def flush():
+        if lines:
+            yield first, _blank_inline_code("\n".join(lines))
+            lines.clear()
+
     for number, line in enumerate(text.splitlines(), start=1):
         opened = FENCE.match(line)
         if fence is None and opened:
+            yield from flush()
             fence = opened.group(1)
             continue
         if fence is not None:
@@ -65,29 +86,38 @@ def prose_lines(text):
                     and not line.strip()[len(closing.group(1)):].strip():
                 fence = None
             continue
-        yield number, INLINE_CODE.sub(lambda span: " " * len(span.group(0)), line)
+        if not line.strip():
+            yield from flush()
+            continue
+        if not lines:
+            first = number
+        lines.append(line)
+    yield from flush()
 
 
 def link_targets(text):
     """(line number, form, target) for every link target in the markdown's
-    prose, in every form the README may use."""
+    prose, in every form the README may use, a wrapped link included. The
+    line number is the line the link starts on."""
     found = []
-    for number, line in prose_lines(text):
-        for match in INLINE_LINK.finditer(line):
+    for first, block in prose_blocks(text):
+        def line_of(match, first=first, block=block):
+            return first + block.count("\n", 0, match.start())
+
+        for match in INLINE_LINK.finditer(block):
             form = "image" if match.group(1) else "inline link"
-            found.append((number, form, match.group(2).strip("<>")))
-        definition = REFERENCE_DEFINITION.match(line)
-        if definition:
-            found.append((number, "reference definition", definition.group(1).strip("<>")))
-        for match in HTML_ATTRIBUTE.finditer(line):
+            found.append((line_of(match), form, match.group(2).strip("<>")))
+        for match in REFERENCE_DEFINITION.finditer(block):
+            found.append((line_of(match), "reference definition", match.group(1).strip("<>")))
+        for match in HTML_ATTRIBUTE.finditer(block):
             value = next(v for v in match.group(2, 3, 4) if v is not None)
-            found.append((number, f"HTML {match.group(1).lower()}=", value))
-        for match in ANGLE.finditer(line):
+            found.append((line_of(match), f"HTML {match.group(1).lower()}=", value))
+        for match in ANGLE.finditer(block):
             inner = match.group(1)
             if HTML_TAG.match(inner) or EMAIL.match(inner) or "=" in inner:
                 continue
-            found.append((number, "autolink", inner))
-    return found
+            found.append((line_of(match), "autolink", inner))
+    return sorted(found, key=lambda item: item[0])
 
 
 def is_relative(target):
@@ -107,6 +137,26 @@ class TheReadmeLinksOnlyAbsoluteTargetsTest(unittest.TestCase):
             "every link target in README.md is absolute (the package index renders "
             "the README with no repository files and no heading anchors); relative "
             "targets:\n" + "\n".join(relative))
+
+    def test_the_scan_reads_wrapped_links_and_skips_code(self):
+        text = ("Read [the\n"
+                "runbook](docs/RUNBOOK.md) first.\n"
+                "\n"
+                "See [the guide](\n"
+                "  docs/GUIDE.md) too.\n"
+                "\n"
+                "```sh\n"
+                "[fenced](docs/FENCED.md)\n"
+                "```\n"
+                "\n"
+                "A span `wraps [code\n"
+                "](docs/CODE.md)` here.\n")
+        self.assertEqual(
+            link_targets(text),
+            [(1, "inline link", "docs/RUNBOOK.md"),
+             (4, "inline link", "docs/GUIDE.md")],
+            "a link whose text or target wraps is found on the line it starts on; "
+            "a link in a fenced block or in a wrapped inline code span is skipped")
 
 
 if __name__ == "__main__":
