@@ -1,6 +1,6 @@
 # CR-CRU-271: the TestPyPI version check derives the version it checks
 
-**Status:** PENDING.
+**Status:** COMPLETED — 2026-11-22.
 
 - **Filed** 2026-11-22, from the CR-CRU-266 gap analysis (`test-reports/work/cr266-gap-analysis.md`, adjacent
   defect). User ruling: its own CR, in wave 9, after CR-CRU-266.
@@ -123,3 +123,37 @@ files the job uploads: those come from the `build` job, which builds and checks 
 
 - The `build` job's own version handling.
 - The `publish-pypi` and `publish-npm` jobs.
+
+## Close-out (2026-11-22)
+
+- **The change.** The `publish-testpypi` job in `.github/workflows/release.yml`:
+  - drops its `actions/checkout` and `actions/setup-python` steps;
+  - keeps the "Version sanity" step, now after `actions/download-artifact` and before the publish step.
+
+  The step is plain bash. It uses `nullglob` and requires exactly one wheel and one sdist. It derives the version
+  only from `crucible_axi-*` file names, then checks in order:
+  1. both counts;
+  2. an empty version;
+  3. a mismatch;
+  4. the existing `+` message, word for word.
+
+  On success it prints `derived version: <v>`. Nothing is hidden and nothing is rebuilt.
+- **AC1 is reviewed, not tested** (user ruling, 2026-11-22). Its unit test of the job's shape was deleted, because
+  its subject was workflow text. VERIFY 1001 confirmed the shape by reading the job.
+- **AC2.** `tests/integration/release-testpypi-version-check.test.ts` runs the step's own text under `bash -e` (the
+  shell GitHub uses) against nine planted `dist/` cases. 9/0.
+- **AC3.** `ci-every-python-job-sets-up-the-python-floor.test.ts` lists three jobs.
+- **AC4** waits for the 0.5.0 rehearsal.
+- **AC5.** There is no CHANGELOG entry.
+- **Gates.**
+  - The cycle-1001 gate was stopped at the user's ruling on test scope.
+  - The cycle-1002 gate failed 1/14852 on a flaky, unrelated burndown test: two writes landed in the same
+    millisecond. FIX 1003 moved the test's re-point one millisecond later.
+  - The cycle-1003 gate passed: 5 suites, 14852/0.
+- **Cycles.**
+  - 1000 red-green;
+  - 1001 verify: READY, with 3 suggestions. Sug1, a foreign-wheel case, was noted only. Sug2, the lineage wording,
+    is fixed.
+  - 1002 fix: the test trim.
+  - 1003 fix: the flake.
+- **Merge:** approved by the user once the gate was green.
