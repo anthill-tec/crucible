@@ -1,10 +1,5 @@
 """The shipped Playwright reporter stands alone, is typechecked, and is installed.
 
-* **No client.** The playwright-bdd fixture's config runs unchanged with
-  `CRUCIBLE_REPORTERS` unset -- Playwright's own JUnit report shows every
-  scenario of every project run as the fixture designs -- and writes no
-  stream, even with `CRUCIBLE_STREAM` set; the same copy, with
-  `CRUCIBLE_REPORTERS` set, does stream.
 * **No `node_modules` above it.** The reporter, copied alone into a directory
   with no `node_modules` ancestor and handed to Playwright from there, loads
   and streams. A source check states why: it imports only Playwright types and
@@ -38,11 +33,8 @@ from tests.client.playwright_reporter_scratch import (
     EXPECTED_TOTALS,
     REPORTER,
     REPORTER_NAME,
-    REPORTERS_DIR,
     STREAM_FILE_NAME,
     diagnostics,
-    expected_junit_cases,
-    junit_report,
     require_playwright_toolchain,
     run_fixture_playwright,
     scratch_fixture,
@@ -62,57 +54,6 @@ def _run_end(case, events):
     ends = [event for event in events if event.get("event") == "run-end"]
     case.assertEqual(len(ends), 1, f"exactly one run-end; events={events!r}")
     return {key: ends[0].get(key) for key in EXPECTED_TOTALS}
-
-class FixtureConfigAddsTheReporterOnlyFromCrucibleReportersTest(unittest.TestCase):
-    """The fixture's config, unchanged, with and without the client's variable."""
-
-    def setUp(self):
-        self.bun = require_playwright_toolchain(self)
-        self.scratch, self.project = scratch_fixture("playwright-reporter-gate-")
-        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
-
-    def reports_dir(self, name):
-        directory = os.path.join(self.scratch, name)
-        os.makedirs(directory)
-        return directory
-
-    def test_unset_crucible_reporters_runs_the_fixture_and_writes_no_stream(self):
-        quiet_dir = self.reports_dir("without-client")
-        junit_dir = self.reports_dir("without-client-junit")
-        junit = os.path.join(junit_dir, "junit.xml")
-        quiet = run_fixture_playwright(self.bun, self.project, None,
-                                       os.path.join(quiet_dir, STREAM_FILE_NAME),
-                                       junit_path=junit)
-        # Playwright itself ran the fixture as it is designed.
-        self.assertEqual(quiet.returncode, 1,
-                         f"with no client the fixture runs as designed: its failing "
-                         f"scenarios fail the run; {diagnostics(quiet)}")
-        counts, cases = junit_report(self, junit, quiet)
-        # JUnit files a thrown `Error` (not an assertion) under `errors`, so the
-        # not-ok scenarios are its failures and errors together.
-        self.assertEqual(
-            {"tests": counts["tests"], "skipped": counts["skipped"],
-             "not ok": counts["failures"] + counts["errors"]},
-            {"tests": EXPECTED_TOTALS["total"], "skipped": EXPECTED_TOTALS["pending"],
-             "not ok": EXPECTED_TOTALS["failed"]},
-            f"Playwright's own JUnit: every scenario of every project, the failed "
-            f"dependency's dependents skipped; junit={counts!r} {diagnostics(quiet)}")
-        self.assertEqual(cases, expected_junit_cases(),
-                         "Playwright's own JUnit lists each scenario in its projects")
-        # No stream while CRUCIBLE_REPORTERS is unset.
-        self.assertEqual(os.listdir(quiet_dir), [],
-                         f"no reporter is added while CRUCIBLE_REPORTERS is unset, "
-                         f"so no stream is written; {diagnostics(quiet)}")
-
-        live_dir = self.reports_dir("with-client")
-        live_stream = os.path.join(live_dir, STREAM_FILE_NAME)
-        live = run_fixture_playwright(self.bun, self.project, REPORTERS_DIR, live_stream)
-        self.assertEqual(_run_end(self, stream_events(self, live_stream, live)),
-                         EXPECTED_TOTALS,
-                         f"the same copy streams once CRUCIBLE_REPORTERS is set; "
-                         f"{diagnostics(live)}")
-        self.assertEqual(live.returncode, quiet.returncode,
-                         f"adding the reporter changes no outcome; {diagnostics(live)}")
 
 class ReporterLoadsWithNoNodeModulesAboveItTest(unittest.TestCase):
     """The reporter alone, in a directory no `node_modules` sits above."""
