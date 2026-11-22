@@ -107,9 +107,13 @@ from tests.client.client_fleet_envelope_census_helpers import (
     declare_and_require_board,
 )
 from tests.client import client_script
+from tests.client.client_cadence_settings import short_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = client_script("bun-crucible.py")
+#: The factor the gate-run drive's poll cadence and tick, and the fake run's
+#: own durations, are shortened by: 2.0 s / 0.4 s become 0.6 s / 0.12 s.
+GATE_RUN_SCALE = 0.3
 
 
 def _load_bun_crucible_module():
@@ -555,12 +559,13 @@ _SNAPSHOT_FINAL = (
 #
 # The fake below is TWO behaviours in one script, dispatched on argv[0:2]:
 #   `axi run`    -- writes progressive snapshots to a shared STATE_FILE (env
-#                   GATE_RUN_FAKE_STATE) as steps complete over ~3 real
-#                   seconds (comfortably past the >=2s §S2b cadence, CR-CRU-008
-#                   `_Narrator` default -- the only concrete cadence constant
-#                   this codebase defines), then prints the FINAL resolved
-#                   TOON to its OWN stdout and exits -- mirroring axi run's
-#                   real blocking-until-outcome behavior.
+#                   GATE_RUN_FAKE_STATE) as steps complete over ~3.3 seconds
+#                   times GATE_RUN_FAKE_TIME_SCALE (default 1; the test sets
+#                   the same factor its gate-run cadence is shortened by, so
+#                   the run still spans the same cadence windows), then
+#                   prints the FINAL resolved TOON to its OWN stdout and
+#                   exits -- mirroring axi run's real blocking-until-outcome
+#                   behavior.
 #   `axi status` -- reads whatever is CURRENTLY in STATE_FILE and prints it,
 #                   fast, no sleep -- mirroring the real non-disturbing poll.
 _FAKE_NO_MISTAKES_BODY = '''
@@ -571,6 +576,7 @@ import time
 
 argv = sys.argv[1:]
 state_file = os.environ.get("GATE_RUN_FAKE_STATE")
+scale = float(os.environ.get("GATE_RUN_FAKE_TIME_SCALE", "1"))
 
 
 def _write_state(text):
@@ -585,11 +591,11 @@ if len(argv) >= 2 and argv[0] == "axi" and argv[1] == "run":
         with open(argv_file, "w") as f:
             json.dump(argv, f)
     _write_state({s1!r})
-    time.sleep(1.0)
+    time.sleep(1.0 * scale)
     _write_state({s2!r})
-    time.sleep(1.5)
+    time.sleep(1.5 * scale)
     _write_state({s3!r})
-    time.sleep(0.8)
+    time.sleep(0.8 * scale)
     _write_state({sf!r})
     sys.stdout.write({sf!r})
     sys.exit(0)
@@ -625,11 +631,13 @@ class GateRunAxiProxyTest(_BaseClientVerbTest):
         self.state_file = os.path.join(self.tmpdir, "state.toon")
         os.environ["GATE_RUN_FAKE_ARGV_FILE"] = self.argv_file
         os.environ["GATE_RUN_FAKE_STATE"] = self.state_file
+        os.environ["GATE_RUN_FAKE_TIME_SCALE"] = repr(GATE_RUN_SCALE)
 
     def tearDown(self):
         os.environ["PATH"] = self._saved_path
         os.environ.pop("GATE_RUN_FAKE_ARGV_FILE", None)
         os.environ.pop("GATE_RUN_FAKE_STATE", None)
+        os.environ.pop("GATE_RUN_FAKE_TIME_SCALE", None)
         shutil.rmtree(self.fake_bin_dir, ignore_errors=True)
         super().tearDown()
 
@@ -642,6 +650,9 @@ class GateRunAxiProxyTest(_BaseClientVerbTest):
         exits, (4) do all of this WITHOUT the caller issuing any POST itself,
         and (5) still RELAY the axi detail to the caller's own stdout (proxy
         role)."""
+        short_settings(self, self.module,
+                       gate_poll_cadence_seconds=2.0 * GATE_RUN_SCALE,
+                       gate_poll_tick_seconds=0.4 * GATE_RUN_SCALE)
         calls = []
 
         def fake_post(path, payload):

@@ -41,6 +41,7 @@ from tests.client.a_gate_is_running_only_while_its_run_is_driven_or_held_helpers
     _drive_all,
     _fixture,
 )
+from tests.client.client_cadence_settings import launcher_command
 from tests.client.live_run_harness import (
     CLIENTS,
     RecordingBoard,
@@ -56,14 +57,21 @@ CALLER = "one-caller-two-runs"
 PROJECT_KEY = "one-caller-two-runs-key"
 PROJECT_NAME = "one-caller-two-runs"
 
+# Every drive runs on 0.3 of production's gate-run poll cadence and tick
+# (2.0 s / 0.4 s), and every run length below is scaled by the same factor,
+# so each drive spans the same number of cadence windows it did before.
+GATE_RUN_SETTINGS = {"gate_poll_cadence_seconds": 0.6, "gate_poll_tick_seconds": 0.12}
+# Each concurrent drive's own bound: a poll that never comes fails fast.
+DRIVE_TIMEOUT = 20
+
 # Two runs whose ids differ within their first 8 characters, so each names
 # an identity of its own.
 SHORT_RUN_ID = "a1b2c3d4-short-run"
 LONG_RUN_ID = "e5f6a7b8-long-run"
 # The short drive ends well before the long one; the long one keeps being
 # driven across several poll cadences after the short one's exit.
-SHORT_RUN_SECONDS = "1.0"
-LONG_RUN_SECONDS = "6.0"
+SHORT_RUN_SECONDS = "0.3"
+LONG_RUN_SECONDS = "1.8"
 
 
 def _identity(caller, run_id):
@@ -131,14 +139,15 @@ class TwoConcurrentDrivesByOneCallerTest(unittest.TestCase):
             procs = []
             for name, seconds in (("long", LONG_RUN_SECONDS),
                                   ("short", SHORT_RUN_SECONDS)):
-                cmd = [sys.executable, str(CLIENTS / client_name), "gate-run",
-                       "--intent", f"drive the {name} run", "--agent", CALLER,
-                       "--project-dir", self.project]
+                cmd = launcher_command(
+                    CLIENTS / client_name, "gate-run",
+                    "--intent", f"drive the {name} run", "--agent", CALLER,
+                    "--project-dir", self.project, **GATE_RUN_SETTINGS)
                 procs.append(subprocess.Popen(
                     cmd, cwd=self.project, env=self._env(name, seconds),
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
             try:
-                outputs = [p.communicate(timeout=60) for p in procs]
+                outputs = [p.communicate(timeout=DRIVE_TIMEOUT) for p in procs]
             finally:
                 for p in procs:
                     if p.poll() is None:
@@ -228,7 +237,7 @@ class TheRunIdentityNamesItsRunTest(unittest.TestCase):
             cls.drives[key] = _drive_all(
                 key, path,
                 ["gate-run", "--intent", "name the run", "--agent", cls.CALLER],
-                live, final, "1.0")
+                live, final, "0.3", settings=GATE_RUN_SETTINGS)
 
     def test_every_clients_identity_is_the_caller_gate_and_the_run_ids_first_8(self):
         want = f"{self.CALLER}\u00b7gate\u00b701234567"
@@ -265,7 +274,7 @@ class ARefusedDriveWithNoRunIdOpensNoIdentityTest(unittest.TestCase):
             cls.drives[key] = _drive_all(
                 key, path,
                 ["gate-respond", "--action", "approve", "--agent", cls.CALLER],
-                "", _REFUSED_NO_RUN, "0.5")
+                "", _REFUSED_NO_RUN, "0.15", settings=GATE_RUN_SETTINGS)
 
     def test_every_clients_refused_drive_opens_and_removes_no_identity(self):
         for key, drive in self.drives.items():

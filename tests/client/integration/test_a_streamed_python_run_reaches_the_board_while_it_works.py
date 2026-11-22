@@ -57,6 +57,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from tests.client.live_run_harness import scrubbed_env
 from tests.client.real_board import RealBoard
 from tests.client import client_script
+from tests.client.client_cadence_settings import SHORT_RELAY, launcher_command
 from tests.client.unittest_project_fixture import (
     FixtureRun,
     digest,
@@ -71,9 +72,13 @@ PYTHON_SCRIPT = client_script("python-crucible.py")
 REAL_VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 
 AGENT = "python-live-stream-agent"
-GATE_SECONDS = 20
-OBSERVE_SECONDS = 25
-RUN_TIMEOUT = 240
+# The client runs through the test-only launcher with the relay and stream
+# tick and the narrator throttle at 0.2 s (`SHORT_RELAY`), a tenth of
+# production's 2 s; the waits below are scaled with it, so a relay that never
+# wakes fails the drive within seconds.
+GATE_SECONDS = 4
+OBSERVE_SECONDS = 5
+RUN_TIMEOUT = 30
 RUN_STARTED = re.compile(r"^\[crucible\] run started: (\S+)$", re.MULTILINE)
 
 FIRST = "test_1_passes"
@@ -149,9 +154,11 @@ class AStreamedPythonRunReachesTheBoardWhileItWorksTest(unittest.TestCase):
         stderr_path = self.scratch / "client-stderr.txt"
         env = scrubbed_env(LIVE_GATE_DIR=self.gates)
         env.pop("CRUCIBLE_STREAM", None)
-        cmd = [sys.executable, str(PYTHON_SCRIPT), "test",
-               "--python", str(REAL_VENV_PYTHON), "--project-dir", str(self.project),
-               "--reports", str(self.scratch / "reports"), "--agent", AGENT]
+        cmd = launcher_command(PYTHON_SCRIPT, "test",
+                               "--python", str(REAL_VENV_PYTHON),
+                               "--project-dir", str(self.project),
+                               "--reports", str(self.scratch / "reports"), "--agent", AGENT,
+                               **SHORT_RELAY)
         seen = {}
         with open(stderr_path, "w") as err:
             proc = subprocess.Popen(cmd, cwd=str(self.project), env=env,
@@ -159,10 +166,13 @@ class AStreamedPythonRunReachesTheBoardWhileItWorksTest(unittest.TestCase):
             try:
                 run_id = None
                 deadline = time.monotonic() + 60
-                while run_id is None and time.monotonic() < deadline:
+                while (run_id is None and time.monotonic() < deadline
+                       and proc.poll() is None):
                     found = RUN_STARTED.search(stderr_path.read_text(errors="replace"))
                     run_id = found.group(1) if found else None
                     time.sleep(0.05)
+                found = RUN_STARTED.search(stderr_path.read_text(errors="replace"))
+                run_id = found.group(1) if found else None
                 self.assertIsNotNone(run_id, stderr_path.read_text(errors="replace"))
                 steps = (
                     ("seen-1", lambda a: (a.get("live") or {}).get("passed", 0) >= 1),

@@ -11,8 +11,11 @@
 //
 // The bound itself is NOT being tuned (§S3, user ruling: fix the performance,
 // not the symptom) — so each test also pins the WAIT: the client must still have
-// waited its 10 seconds before reporting, which is what makes "the timeout value
-// is unchanged" an assertion rather than a promise.
+// waited its bound before reporting, which is what makes "the timeout is
+// honoured" an assertion rather than a promise. The client runs through the
+// test-only launcher (`tests/client/short_cadence_launcher.py`) with a 1 s read
+// timeout, so the wait is 1 s rather than production's 10 s; the 10 s default
+// itself is pinned by the clients' own unit tests of `_get`.
 //
 // That wait is measured BOARD-SIDE — from the instant the stalled board
 // receives the request to the instant the client exits — so `uv`/interpreter
@@ -31,15 +34,22 @@ import { declareClientBoard, projectDirFromArgs } from "../helpers/client-board.
 
 const CLIENT = clientScript("python-crucible.py");
 
-/** The client's own hook-safe read bound (`_get(path, timeout=10)`). */
-const clientReadTimeoutMs = 10_000;
+/** The test-only launcher that runs the client with a short read timeout. */
+const LAUNCHER = join(import.meta.dir, "..", "client", "short_cadence_launcher.py");
 
-/** Upper slack around the bound: generous, but far short of 2x. */
-const waitSlackMs = 5_000;
+/** The read bound the client is launched with: the shortest the suite allows. */
+const clientReadTimeoutMs = 1_000;
 
-/** Lower slack. A client whose timer merely drifts loses milliseconds; a
- *  client that stopped waiting its bound loses whole seconds. */
-const waitToleranceMs = 1_000;
+/** Upper slack around the bound: the read phase stays under the bound + 2 s. */
+const waitSlackMs = 2_000;
+
+/** Lower slack: the read phase lasts at least 0.8 × the bound. A client whose
+ *  timer merely drifts loses milliseconds; one that stopped waiting its bound
+ *  loses most of it. */
+const waitToleranceMs = 200;
+
+/** Each test's own bound: a timeout that never trips fails fast. */
+const testTimeoutMs = 15_000;
 
 interface RunResult {
   code: number;
@@ -134,7 +144,8 @@ async function runVerb(args: string[], crucibleUrl: string, cwd: string): Promis
   declareClientBoard(crucibleUrl, cwd, projectDirFromArgs(args));
   const started = Date.now();
   const proc = Bun.spawn({
-    cmd: ["uv", "run", CLIENT, ...args],
+    cmd: ["uv", "run", LAUNCHER, "--read-timeout-seconds", String(clientReadTimeoutMs / 1000),
+      CLIENT, ...args],
     cwd,
     env: { ...env },
     stdout: "pipe",
@@ -206,9 +217,9 @@ function assertTimeoutEnvelope(verb: string, result: RunResult, board: StalledBo
   // failed in the CONNECT phase and never exercised the read bound at all.
   expect(board.requestCount, `${diag}\n\nthe stalled board never received a request — this run failed in the CONNECT phase and never exercised the read bound under test`).toBeGreaterThan(0);
   const waited = readPhaseMs(result, board)!;
-  // The VALUE is unchanged (§S3: legibility, not tuning): the client really
-  // waited its 10s bound before reporting.
-  expect(waited, `${diag}\n\nthe client stopped waiting ${clientReadTimeoutMs - waitToleranceMs}ms into its ${clientReadTimeoutMs}ms read bound — the bound this CR refuses to tune was not actually served`).toBeGreaterThanOrEqual(clientReadTimeoutMs - waitToleranceMs);
+  // The bound is honoured (legibility, not tuning): the client really
+  // waited the read bound it was launched with before reporting.
+  expect(waited, `${diag}\n\nthe client stopped waiting ${clientReadTimeoutMs - waitToleranceMs}ms into its ${clientReadTimeoutMs}ms read bound — the bound was not actually served`).toBeGreaterThanOrEqual(clientReadTimeoutMs - waitToleranceMs);
   expect(waited, `${diag}\n\nthe client waited well past its ${clientReadTimeoutMs}ms read bound — the bound is not being honoured`).toBeLessThan(clientReadTimeoutMs + waitSlackMs);
 }
 
@@ -224,7 +235,7 @@ describe("a plans GET that times out is reported as an envelope (CR-CRU-126 §S3
     );
 
     assertTimeoutEnvelope("cycle-activate", result, board);
-  }, 60_000);
+  }, testTimeoutMs);
 
   test("cycle-done against a board that never answers emits the ok:false envelope naming the timeout, exits non-zero, and prints no traceback", async () => {
     const board = startStalledBoard();
@@ -237,5 +248,5 @@ describe("a plans GET that times out is reported as an envelope (CR-CRU-126 §S3
     );
 
     assertTimeoutEnvelope("cycle-done", result, board);
-  }, 60_000);
+  }, testTimeoutMs);
 });

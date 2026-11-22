@@ -12,9 +12,10 @@ client's transport (`http_request`) answers the real board's stream route
 beside it when the board sent one; an unreachable board or a timeout as the
 transport's own `connection failed:` / `request timed out` errors.
 
-Where the relay's tick is timed, the run module's `RELAY_SECONDS` (and, for
-the bounded join, `RELAY_POST_TIMEOUT_SECONDS`) is patched small: the relay
-reads both at run time from the run module.
+Where the relay's tick is timed, the `relay_seconds` attribute of the run
+module's one settings instance (`SETTINGS`) is set small and restored after
+the test, and, for the bounded join, `RELAY_POST_TIMEOUT_SECONDS` is patched
+small: the relay reads both at run time.
 
 `finish(deadline_seconds)` answers the board's confirmed `held` and whether
 sending stopped and why. The spec names no shape for that answer, so these
@@ -198,10 +199,13 @@ class RelayTestCase(unittest.TestCase):
         return AXI.StreamRelay(board, PROJECT_KEY, AGENT, RUN_ID, str(self.path),
                                CODEC, batch_limit)
 
+    def relay_ticks_every(self, seconds):
+        settings = RUN.SETTINGS
+        self.addCleanup(setattr, settings, "relay_seconds", settings.relay_seconds)
+        settings.relay_seconds = seconds
+
     def fast_ticks(self):
-        patcher = mock.patch.object(RUN, "RELAY_SECONDS", FAST_TICK)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.relay_ticks_every(FAST_TICK)
 
     def run_relay(self, board, batch_limit: int | None = 10 ** 9, deadline=10.0):
         """start, then finish: the relay over a file already written. Answers
@@ -462,9 +466,7 @@ class TheRelayRetriesWhatTheBoardCouldNotTakeTest(RelayTestCase):
         self.append(STREAM_TEXT)
         board = FakeStreamBoard()
         board.always = http_refusal(503, "zz-down")
-        patcher = mock.patch.object(RUN, "RELAY_SECONDS", 60.0)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.relay_ticks_every(60.0)
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             relay = self.relay(board)
@@ -642,14 +644,15 @@ class StreamRelay:
 
 
 class TheRelaysConstantsAreNamedTest(unittest.TestCase):
-    """AC4: `RELAY_SECONDS`, `RELAY_POST_TIMEOUT_SECONDS`, `RELAY_FINISH_ATTEMPTS`
-    and `RELAY_DEFAULT_BATCH_BYTES` are each one named constant."""
+    """`RELAY_POST_TIMEOUT_SECONDS`, `RELAY_FINISH_ATTEMPTS` and
+    `RELAY_DEFAULT_BATCH_BYTES` are each one named constant; the relay's tick
+    is the `relay_seconds` setting."""
 
-    NAMES = ("RELAY_SECONDS", "RELAY_POST_TIMEOUT_SECONDS", "RELAY_FINISH_ATTEMPTS",
+    NAMES = ("RELAY_POST_TIMEOUT_SECONDS", "RELAY_FINISH_ATTEMPTS",
              "RELAY_DEFAULT_BATCH_BYTES")
 
-    def test_the_four_relay_constants_carry_their_values(self):
-        self.assertEqual(RUN.RELAY_SECONDS, 2.0, "P3: the board's LIVE_FRAME_MS")
+    def test_the_relay_constants_and_its_tick_setting_carry_their_values(self):
+        self.assertEqual(RUN.SETTINGS.relay_seconds, 2.0, "P3: the board's LIVE_FRAME_MS")
         self.assertEqual(RUN.RELAY_DEFAULT_BATCH_BYTES, 1024 * 1024)
         timeout = RUN.RELAY_POST_TIMEOUT_SECONDS
         self.assertTrue(isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
@@ -674,9 +677,11 @@ class TheRelaysConstantsAreNamedTest(unittest.TestCase):
 
     def test_the_relay_spells_no_constants_value(self):
         source = RUN_MODULE_PATH.read_text(encoding="utf-8")
-        values = [getattr(RUN, name) for name in self.NAMES]
+        values = ([getattr(RUN, name) for name in self.NAMES]
+                  + [RUN.SETTINGS.relay_seconds])
         self.assertEqual(spelled_constant_values(source, values), [],
-                         "StreamRelay reads its bounds through the named constants")
+                         "StreamRelay reads its bounds through the named constants "
+                         "and its tick through the setting")
 
 
 class TheRelayDecodesNothingTest(unittest.TestCase):

@@ -14,6 +14,7 @@ import sys
 import time
 from pathlib import Path
 
+from tests.client.client_cadence_settings import launcher_command
 from tests.client.fake_nextest import list_text, read_calls
 from tests.client.live_run_harness import (
     CLIENTS,
@@ -146,10 +147,17 @@ def results(text, event=None):
 
 
 class StreamedRustProject:
-    """One scratch rust project on its own `RecordingBoard`."""
+    """One scratch rust project on its own `RecordingBoard`.
 
-    def __init__(self, test, nextest_toml=STANDARD_PROFILES, board=None):
+    `settings`, when given, maps client setting names to values: the client
+    is then spawned through the test-only launcher on those settings, and
+    `timeout` (default `TIMEOUT`) bounds each drive."""
+
+    def __init__(self, test, nextest_toml=STANDARD_PROFILES, board=None, settings=None,
+                 timeout=TIMEOUT):
         self.test = test
+        self.settings = settings
+        self.timeout = timeout
         self.board = board or RecordingBoard()
         test.addCleanup(self.board.close)
         self.dir = new_scratch("rust-stream-")
@@ -172,18 +180,21 @@ class StreamedRustProject:
         env.update({k: str(v) for k, v in fake.items()})
         return env
 
-    def argv(self, label, *extra, agent=AGENT, verb_argv=None):
-        cmd = [sys.executable, str(RUST_CLIENT), *(verb_argv or VERBS[label])]
+    def argv(self, label, *extra, agent: str | None = AGENT, verb_argv=None):
+        verb = list(verb_argv or VERBS[label])
+        cmd = (launcher_command(RUST_CLIENT, *verb, **self.settings) if self.settings
+               else [sys.executable, str(RUST_CLIENT), *verb])
         if agent:
             cmd += ["--agent", agent]
         return cmd + ["--project-dir", self.dir, *extra]
 
-    def drive(self, label, *extra, agent=AGENT, verb_argv=None, timeout=TIMEOUT,
+    def drive(self, label, *extra, agent: str | None = AGENT, verb_argv=None, timeout=None,
               **fake):
         return subprocess.run(self.argv(label, *extra, agent=agent,
                                         verb_argv=verb_argv),
                               cwd=self.dir, env=self.env(**fake),
-                              capture_output=True, text=True, timeout=timeout,
+                              capture_output=True, text=True,
+                              timeout=timeout or self.timeout,
                               check=False)
 
     # ── what cargo was asked ────────────────────────────────────────────────

@@ -55,6 +55,7 @@ from tests.client.live_run_harness import (
     scrubbed_env,
 )
 from tests.client import client_script
+from tests.client.client_cadence_settings import SHORT_RELAY, launcher_command
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PYTHON_CLIENT = client_script("python-crucible.py")
@@ -76,13 +77,17 @@ MIDDLE = 20
 AFTER = 20
 TOTAL = BEFORE + MIDDLE + AFTER
 
-RUN_TIMEOUT = 120
+# Every drive runs the client through the test-only launcher with the relay
+# and stream tick and the narrator throttle at 0.2 s (`SHORT_RELAY`), a tenth
+# of production's 2 s.
+RUN_TIMEOUT = 20
 MARKER_WAIT = 30
-# The relay sends every RELAY_SECONDS (2 s): its first answer lands well
-# inside this.
-RELAY_WAIT = 10
-# How long a parked runner waits for an in-run tick to reach the board.
-TICK_WAIT = 20
+# The relay sends every 0.2 s: its first answer lands well inside this, and a
+# relay that never wakes leaves the gate uncued when it passes.
+RELAY_WAIT = 2.0
+# How long a parked runner waits for an in-run tick to reach the board: twenty
+# of the stream tick's 0.2 s wakes.
+TICK_WAIT = 4.0
 
 # An in-run tick: `running <completed>` or `running <completed>/<total>`, a
 # label maybe after it.
@@ -216,7 +221,8 @@ def drive_through_gates(cmd, cwd, env, scratch, gates):
                                 stderr=err, text=True)
         try:
             for _case, marker, release, step in plan:
-                parked = _wait_until(lambda m=marker: m in said(), MARKER_WAIT)
+                parked = _wait_until(lambda m=marker: m in said() or proc.poll() is not None,
+                                     MARKER_WAIT) and marker in said()
                 cues.append(bool(parked and step(said)))
                 release.write_text("go", encoding="utf-8")
             stdout, _ = proc.communicate(timeout=RUN_TIMEOUT)
@@ -265,9 +271,11 @@ class AStreamTargetsInRunCountComesFromItsStreamTest(TargetsCase):
         self.declare_unit_target(VITEST_STREAM_ENTRY)
 
     def drive_gated(self, gates):
-        cmd = [sys.executable, str(BUN_CLIENT), "unit", "--bun", str(self.runner),
-               "--project-dir", str(self.project), "--package-dir", str(self.project),
-               "--reports", str(self.reports), "--agent", BUN_AGENT]
+        cmd = launcher_command(BUN_CLIENT, "unit", "--bun", str(self.runner),
+                               "--project-dir", str(self.project),
+                               "--package-dir", str(self.project),
+                               "--reports", str(self.reports), "--agent", BUN_AGENT,
+                               **SHORT_RELAY)
         env = scrubbed_env(FAKE_STREAM_TOTAL=TOTAL)
         for key in ("BUN_CRUCIBLE_NO_LIFECYCLE", "BUN_CRUCIBLE_PACKAGE_DIR",
                     "BUN_CRUCIBLE_PROJECT_DIR", "BUN_CRUCIBLE_BUN", "CRUCIBLE_AGENT_ID",
@@ -366,9 +374,11 @@ class AStreamedPythonRunsInRunCountComesFromItsStreamTest(unittest.TestCase):
         self.python = load_client("python-crucible.py")
 
     def test_a_stream_answered_503_throughout_ticks_its_in_run_count_from_the_streams_test_ends(self):
-        cmd = [sys.executable, str(PYTHON_CLIENT), "test", "--python", str(self.runner),
-               "--project-dir", str(self.project), "--reports", str(self.reports),
-               "--log", str(self.runner_log), "--agent", PYTHON_AGENT]
+        cmd = launcher_command(PYTHON_CLIENT, "test", "--python", str(self.runner),
+                               "--project-dir", str(self.project),
+                               "--reports", str(self.reports),
+                               "--log", str(self.runner_log), "--agent", PYTHON_AGENT,
+                               **SHORT_RELAY)
         env = scrubbed_env(FAKE_STREAM_TOTAL=TOTAL)
         env.pop("CRUCIBLE_STREAM", None)
         seen_while_parked = []

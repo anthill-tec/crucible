@@ -34,12 +34,12 @@ Invocation:
 
 import ast
 import subprocess
-import sys
 import time
 import unittest
 from pathlib import Path
 from typing import Any
 
+from tests.client.client_cadence_settings import SHORT_RELAY, launcher_command
 from tests.client.go_client_harness import (
     AGENT,
     GO_CLIENT,
@@ -74,13 +74,16 @@ AT_SECOND_GATE = 16
 
 #: How long a go build plus the tests before a gate may take to park.
 PARK_WAIT = 120
-#: The relay sends every 2 s: its first answer lands well inside this.
-RELAY_WAIT = 15
+#: Every drive runs the client through the test-only launcher with the relay
+#: and stream tick and the narrator throttle at 0.2 s (`SHORT_RELAY`), a
+#: tenth of production's 2 s; the waits below are scaled with them.
+#: The relay sends every 0.2 s: its first answer lands well inside this.
+RELAY_WAIT = 3.0
 #: How long a parked run waits for an in-run tick to reach the board.
-TICK_WAIT = 20
-#: Longer than two of the narrator's 2 s wakes: a tick that is going to be
-#: posted while the run is parked is posted inside it.
-QUIET_WAIT = 5
+TICK_WAIT = 4.0
+#: Five of the narrator's 0.2 s wakes: a tick that is going to be posted
+#: while the run is parked is posted inside it.
+QUIET_WAIT = 1.0
 
 
 def _wait_until(predicate, seconds):
@@ -188,8 +191,8 @@ class _GoTickCase(unittest.TestCase):
         for n, (parked, release, _step) in enumerate(plan, start=1):
             env[f"TICK_PARKED_{n}"] = str(parked)
             env[f"TICK_RELEASE_{n}"] = str(release)
-        cmd = [sys.executable, str(GO_CLIENT), verb, *argv, "--agent", AGENT,
-               "--project-dir", p.dir]
+        cmd = launcher_command(GO_CLIENT, verb, *argv, "--agent", AGENT,
+                               "--project-dir", p.dir, **SHORT_RELAY)
 
         def said():
             try:
@@ -203,7 +206,9 @@ class _GoTickCase(unittest.TestCase):
                                     stdout=subprocess.PIPE, stderr=err, text=True)
             try:
                 for parked, release, step in plan:
-                    reached = _wait_until(parked.exists, PARK_WAIT)
+                    reached = _wait_until(
+                        lambda pk=parked: pk.exists() or proc.poll() is not None,
+                        PARK_WAIT) and parked.exists()
                     cues.append(bool(reached and step(said)))
                     seen.append(in_run_ticks(p.board))
                     release.write_text("go", encoding="utf-8")
