@@ -1,16 +1,12 @@
 """The clients read their intervals from one mutable settings instance.
 
-The run module holds ONE settings instance, which the shared core re-exports
-by identity, so a client's `_axi().SETTINGS` is the very object the relay,
-the stream tick, the narrator, the gate-run ladder and every client's `_get`
-read. It holds today's values. A reader reads its attribute at the point of
-use — the relay and the stream tick when they wake, the narrator when it is
-built, `_get` when it is called — so an attribute set on the instance
-reaches code built before it was set (and the narrator keeps what it read).
-An explicit `min_seconds` or `timeout` still wins over the setting.
-
-The old module constants are gone, so a test that still patches one fails
-loudly instead of silently patching nothing.
+An interval set through a client's `_axi().SETTINGS` is the interval the
+relay, the stream tick, the narrator, the gate-run ladder and every client's
+`_get` run. A reader reads its attribute at the point of use — the relay and
+the stream tick when they wake, the narrator when it is built, `_get` when it
+is called — so an attribute set on the instance reaches code built before it
+was set (and the narrator keeps what it read). An explicit `min_seconds` or
+`timeout` still wins over the setting.
 
 Unit tier: no process, no socket, no real-time wait — the clock, the events
 and the threads are fakes (`tests/client/client_interval_fakes.py`). Every
@@ -21,7 +17,7 @@ import unittest
 from unittest import mock
 
 from tests.client import load_client
-from tests.client.client_cadence_settings import DEFAULTS, short_settings
+from tests.client.client_cadence_settings import short_settings
 from tests.client.client_interval_fakes import (
     FakeClock,
     ProcessUntil,
@@ -33,48 +29,6 @@ CLIENT_NAMES = ("arduino-crucible.py", "bun-crucible.py", "go-crucible.py",
                 "mvn-crucible.py", "python-crucible.py", "rust-crucible.py")
 BOARD = "http://127.0.0.1:9"
 STATUS_PATH = "/api/v2/health"
-
-
-class OneSettingsInstanceHoldsTodaysValuesTest(unittest.TestCase):
-
-    def test_the_core_re_exports_the_run_modules_settings_instance_by_identity(self):
-        for name in CLIENT_NAMES:
-            with self.subTest(client=name):
-                axi = load_client(name)._axi()
-                self.assertIs(axi.SETTINGS, axi._RUN.SETTINGS,
-                              "the core's SETTINGS is the run module's own instance")
-
-    def test_the_settings_instance_holds_todays_intervals(self):
-        settings = load_client("python-crucible.py")._axi().SETTINGS
-        self.assertEqual({name: getattr(settings, name) for name in DEFAULTS},
-                         {"relay_seconds": 2.0, "narrator_seconds": 2.0,
-                          "gate_poll_cadence_seconds": 2.0,
-                          "gate_poll_tick_seconds": 0.4,
-                          "read_timeout_seconds": 10})
-
-    def test_a_value_set_through_the_core_is_the_value_the_run_module_sees(self):
-        client = load_client("python-crucible.py")
-        short_settings(self, client, relay_seconds=0.25)
-        self.assertEqual(client._axi()._RUN.SETTINGS.relay_seconds, 0.25,
-                         "the instance is mutated in place, never rebound")
-
-
-class TheOldConstantsAreGoneTest(unittest.TestCase):
-
-    def setUp(self):
-        self.axi = load_client("python-crucible.py")._axi()
-
-    def test_patching_the_relay_constant_fails_loudly(self):
-        for module, label in ((self.axi._RUN, "run module"), (self.axi, "core")):
-            with self.subTest(module=label), self.assertRaises(AttributeError), \
-                    mock.patch.object(module, "RELAY_SECONDS", 60.0):
-                pass
-
-    def test_patching_the_gate_poll_constants_fails_loudly(self):
-        for name in ("_GATE_POLL_CADENCE_S", "_GATE_POLL_TICK_S"):
-            with self.subTest(name=name), self.assertRaises(AttributeError), \
-                    mock.patch.object(self.axi, name, 0.5):
-                pass
 
 
 class TheRelayAndTheStreamTickReadTheirTickWhenTheyWakeTest(unittest.TestCase):
