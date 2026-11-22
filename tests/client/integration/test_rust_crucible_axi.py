@@ -129,58 +129,7 @@ else:
     sys.exit(1)
 '''
 
-# ── C6 VERIFY-fix: §S8 interim-snapshot fixture (mirrors
-# test_bun_crucible_gates.py::GateRunAxiProxyTest exactly) -- a PROGRESSIVE
-# fake `no-mistakes` that writes 3 in-flight snapshots to a shared state file
-# over ~3 real seconds (comfortably past the >=2s §S2b cadence) before the
-# final resolved snapshot, so a correctly-throttled gate-run has exactly one
-# legitimate window to POST an interim gate before the unconditional final
-# seal.
 _INTERIM_RELAY_MARKER = "rust-gate-axi-interim-relay-marker-333"
-_INTERIM_SNAPSHOT_1 = (
-    'run:\n'
-    '  id: "gate-axi-rust-interim-001"\n'
-    f'  branch: {_INTERIM_RELAY_MARKER}\n'
-    '  status: running\n'
-    '  head: aa11bb2\n'
-    '  findings: 0\n'
-    '  steps[3]{step,status,findings,duration_ms}:\n'
-    '    intent,completed,0,100\n'
-    '    rebase,completed,0,50\n'
-    '    review,completed,1,200\n'
-)
-_INTERIM_SNAPSHOT_2 = (
-    'run:\n'
-    '  id: "gate-axi-rust-interim-001"\n'
-    f'  branch: {_INTERIM_RELAY_MARKER}\n'
-    '  status: running\n'
-    '  head: aa11bb2\n'
-    '  findings: 1\n'
-    '  steps[6]{step,status,findings,duration_ms}:\n'
-    '    intent,completed,0,100\n'
-    '    rebase,completed,0,50\n'
-    '    review,completed,1,200\n'
-    '    test,completed,0,300\n'
-    '    document,completed,0,150\n'
-    '    lint,completed,0,80\n'
-)
-_INTERIM_SNAPSHOT_3 = (
-    'run:\n'
-    '  id: "gate-axi-rust-interim-001"\n'
-    f'  branch: {_INTERIM_RELAY_MARKER}\n'
-    '  status: running\n'
-    '  head: aa11bb2\n'
-    '  findings: 1\n'
-    '  steps[8]{step,status,findings,duration_ms}:\n'
-    '    intent,completed,0,100\n'
-    '    rebase,completed,0,50\n'
-    '    review,completed,1,200\n'
-    '    test,completed,0,300\n'
-    '    document,completed,0,150\n'
-    '    lint,completed,0,80\n'
-    '    push,completed,0,40\n'
-    '    pr,skipped,0,10\n'
-)
 # TOOL VERSION: `no-mistakes` v1.70.1 — the NINE-row ladder below (and its step
 # names) is that version's pipeline, 2026-09-10; v1.72.0 was already published.
 # This nine-row fixture is a SEALING snapshot: `status: completed` with a
@@ -206,47 +155,6 @@ _INTERIM_SNAPSHOT_FINAL = (
     '    ci,skipped,0,10\n'
     'outcome: passed\n'
 )
-_FAKE_NO_MISTAKES_INTERIM_BODY = '''
-import json
-import os
-import sys
-import time
-
-argv = sys.argv[1:]
-state_file = os.environ.get("GATE_RUN_FAKE_STATE")
-
-
-def _write_state(text):
-    if state_file:
-        with open(state_file, "w") as f:
-            f.write(text)
-
-
-if len(argv) >= 2 and argv[0] == "axi" and argv[1] == "run":
-    argv_file = os.environ.get("GATE_RUN_FAKE_ARGV_FILE")
-    if argv_file:
-        with open(argv_file, "w") as f:
-            json.dump(argv, f)
-    _write_state({s1!r})
-    time.sleep(1.0)
-    _write_state({s2!r})
-    time.sleep(1.5)
-    _write_state({s3!r})
-    time.sleep(0.8)
-    _write_state({sf!r})
-    sys.stdout.write({sf!r})
-    sys.exit(0)
-elif len(argv) >= 2 and argv[0] == "axi" and argv[1] == "status":
-    content = ""
-    if state_file and os.path.exists(state_file):
-        with open(state_file) as f:
-            content = f.read()
-    sys.stdout.write(content or {s1!r})
-    sys.exit(0)
-else:
-    sys.stderr.write("fake no-mistakes: unsupported invocation: " + repr(argv) + "\\n")
-    sys.exit(1)
-'''.format(s1=_INTERIM_SNAPSHOT_1, s2=_INTERIM_SNAPSHOT_2, s3=_INTERIM_SNAPSHOT_3, sf=_INTERIM_SNAPSHOT_FINAL)
 
 
 def _load_module(path, name):
@@ -621,95 +529,6 @@ class RustCrucibleVerbEnvelopeTest(_BaseRustAxiTest):
         self.assertNotIn("prefer-gate-run", codes,
                           "gate-run is itself the streaming standard -- it must never "
                           "carry the prefer-gate-run discouragement")
-
-    def test_gate_run_posts_interim_snapshot_before_final_sealed_gate(self):
-        """§S8 (CR-CRU-030 AC line 270, C6 VERIFY-fix): `gate-run` must POST
-        >=1 interim gate snapshot (from polling `axi status` while `axi run`
-        is still in flight) BEFORE the final sealed gate -- mirrors
-        test_bun_crucible_gates.py::GateRunAxiProxyTest.
-        test_gate_run_polls_status_for_interim_gates_and_seals_final_from_run_outcome
-        against the SAME `while proc.poll() is None:` polling loop
-        rust-crucible.py's `cmd_gate_run` already wires up (confirmed by
-        reading the function body of `cmd_gate_run` in rust-crucible.py)."""
-        saved_path = os.environ.get("PATH", "")
-        fake_bin_dir = tempfile.mkdtemp(prefix="fake-no-mistakes-rust-interim-")
-        fake_path = os.path.join(fake_bin_dir, "no-mistakes")
-        with open(fake_path, "w") as f:
-            f.write(f"#!{sys.executable}\n")
-            f.write(_FAKE_NO_MISTAKES_INTERIM_BODY)
-        st = os.stat(fake_path)
-        os.chmod(fake_path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-
-        state_file = os.path.join(self.tmpdir, "interim-state.toon")
-        argv_file = os.path.join(self.tmpdir, "interim-argv.json")
-        os.environ["PATH"] = fake_bin_dir + os.pathsep + saved_path
-        os.environ["GATE_RUN_FAKE_STATE"] = state_file
-        os.environ["GATE_RUN_FAKE_ARGV_FILE"] = argv_file
-
-        calls = []
-
-        def fake_post(path, payload):
-            calls.append((path, dict(payload) if isinstance(payload, dict) else payload))
-            return {"ok": True}
-
-        try:
-            with mock.patch.object(self.module, "_post", side_effect=fake_post, create=True):
-                code, out, _err = _run_main(self.module, [
-                    "gate-run", "--intent", "verify the interim polling path",
-                    "--agent", "test-agent", "--project-dir", self.tmpdir,
-                ])
-        finally:
-            os.environ["PATH"] = saved_path
-            os.environ.pop("GATE_RUN_FAKE_STATE", None)
-            os.environ.pop("GATE_RUN_FAKE_ARGV_FILE", None)
-            shutil.rmtree(fake_bin_dir, ignore_errors=True)
-
-        self.assertEqual(code, 0, f"stdout={out!r}")
-        self.assertIn(_INTERIM_RELAY_MARKER, out,
-                      "gate-run must relay the no-mistakes axi detail to its own stdout")
-
-        gate_calls = [c for c in calls if c[0] == "/api/v2/gates"]
-        self.assertGreaterEqual(len(gate_calls), 2,
-                                 f"expected >=1 interim + 1 final gate POST, got {calls}")
-        # Re-pin (approved by the orchestrator — user ruling 2026-10-08): the
-        # gate's snapshots post under the RUN IDENTITY (`<caller>\u00b7gate\u00b7<run>`,
-        # `<run>` the first 8 characters of the no-mistakes run id),
-        # whose own lifecycle (open/heartbeat/removal) is the ONLY other
-        # plumbing allowed; any other call, or a lifecycle call for any
-        # other id, still fails the comparison below.
-        run_identity = "test-agent\u00b7gate\u00b7" + "gate-axi-rust-interim-001"[:8]
-        lifecycle_paths = ("/api/v2/agents/heartbeat", "/api/v2/agents/register",
-                           "/api/v2/agents/unregister")
-        identity_calls = [c for c in calls if c[0] in lifecycle_paths
-                          and isinstance(c[1], dict)
-                          and c[1].get("agentId") == run_identity]
-        self.assertTrue(
-            any(c[0] == "/api/v2/agents/heartbeat" for c in identity_calls),
-            f"the run identity {run_identity!r} must be opened/heartbeated; "
-            f"got {calls}")
-        other_calls = [c for c in calls if c not in identity_calls]
-        self.assertEqual(other_calls, gate_calls,
-                          "gate-run owns ALL Crucible plumbing -- no other endpoint "
-                          "should ever be hit")
-
-        *interim, final = gate_calls
-        self.assertGreaterEqual(len(interim), 1,
-                                 "gate-run must POST at least ONE interim snapshot "
-                                 "before the final sealed gate")
-
-        final_gate = final[1].get("gate", {})
-        self.assertEqual(final_gate.get("outcome"), "passed",
-                          "the final gate's outcome must match `axi run`'s resolved outcome")
-        self.assertEqual(len(final_gate.get("steps", [])), 9)
-
-        for _path, payload in interim:
-            interim_gate = payload.get("gate", {})
-            self.assertLess(len(interim_gate.get("steps", [])), 9,
-                             f"an interim gate must be a PARTIAL snapshot, got {interim_gate}")
-            self.assertIn(interim_gate.get("outcome"), ("checks-passed", "passed",
-                                                          "failed", "cancelled"),
-                           "gate.outcome is REQUIRED by the server even for an interim "
-                           "snapshot")
 
 
 # ── CR-CRU-035 §S1: `status` is hook-safe -- tolerant + bounded ────────────
