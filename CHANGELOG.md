@@ -34,7 +34,7 @@ Releases before 0.3.0 are described only on GitHub Releases.
   snapshot is sealed and relayed as before, whatever its size.
 - **Agents seen in the same millisecond now list newest-registered first.** The agent list put
   agents last seen in the same millisecond oldest-registered first, or in agent-id order within one
-  project, although it lists every other agent newest first. Such agents now list newest-registered
+  project, although it lists every other agent most recently seen first. Such agents now list newest-registered
   first. A heartbeat does not move an agent in this order. The project list, the open-run list and
   the stale-run sweep also keep a fixed order now when two rows share a millisecond: the order they
   were written in.
