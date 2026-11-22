@@ -13,8 +13,9 @@
 **Depends on:** CR-CRU-266
 **Labels:** release, ci
 **Design lineage:** this reverses CR-CRU-198's addition of `actions/setup-python` to `publish-testpypi`. Python leaves
-the job. `publish-pypi` already runs the same publish action with neither a checkout nor `setup-python`
-(`release.yml`, the `publish-pypi` job; `rel040-publish-pypi.log:224-262`).
+the job. `publish-pypi` already runs the same publish action without `setup-python`: the action finds its own
+python (`rel040-publish-pypi.log:232`). Unlike this job after the change, `publish-pypi` still checks out the
+repository.
 
 ## Problem
 
@@ -35,8 +36,8 @@ files the job uploads: those come from the `build` job, which builds and checks 
 ## Behaviour
 
 - **S1. The check reads the version of the artifacts it uploads.**
-  - **Name.** The step keeps the name `Version sanity — reject PEP 440 local segment ('+')`. Both tests find exactly
-    one step by that name.
+  - **Name.** The step keeps the name `Version sanity — reject PEP 440 local segment ('+')`. The AC2 test finds
+    exactly one step by that name.
   - **Position.** It runs after the `actions/download-artifact` step and before the `pypa/gh-action-pypi-publish`
     step.
   - **Contents.**
@@ -80,15 +81,11 @@ files the job uploads: those come from the `build` job, which builds and checks 
 
 ## Acceptance criteria
 
-- **AC1. A bun unit test pins the job's shape.**
-  - **File:** `tests/unit/release-testpypi-version-check-reads-the-download.test.ts`.
-  - **What it reads:** it parses `release.yml` in process and finds exactly one step in `jobs.publish-testpypi.steps`
-    by the S1 name.
-  - **Order:** the step comes after the `actions/download-artifact` step and before the
-    `pypa/gh-action-pypi-publish` step.
-  - **Contents:** the step's code lines (comment lines dropped) hold no `|| true`, no `/dev/null`, no `python` or
-    `pip` token, and no `${{`.
-  - **The job:** it carries no `actions/setup-python` step and no `actions/checkout` step.
+- **AC1. The job's shape is reviewed, not tested** (user ruling, 2026-11-22: a test's subject is production code that
+  runs, never configuration text). VERIFY confirms by reading the job:
+  - the step comes after the `actions/download-artifact` step and before the `pypa/gh-action-pypi-publish` step;
+  - its code holds no `|| true`, no `/dev/null`, no `python` or `pip`, and no `${{`;
+  - the job carries no `actions/setup-python` step and no `actions/checkout` step.
 - **AC2. A bun integration test runs the step itself.**
   - **File:** `tests/integration/release-testpypi-version-check.test.ts`.
   - **Harness:** modelled on `tests/integration/release-notes-extractor.test.ts:326-414`. The test extracts the
