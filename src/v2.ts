@@ -4066,8 +4066,7 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
       // moved here because CR-CRU-078's e2e scenario declares through THIS
       // route). `release` and `track` are the values the membership gate
       // VETTED and returned; a property one literal deeper than these would
-      // store nothing under its name at all, which the AC11 half of
-      // tests/unit/queue-accepted-field-guard.test.ts now fires on.
+      // store nothing under its name at all.
       ...(release !== undefined ? { release } : {}),
       ...(track !== undefined ? { track } : {}),
       ...(lifecycle !== undefined ? { lifecycle } : {}),

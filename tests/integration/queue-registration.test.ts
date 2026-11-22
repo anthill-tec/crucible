@@ -63,7 +63,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BoardHandle } from "../../src/server.ts";
-import { SCHEMA_VERSION } from "../../src/store.ts";
+import { SCHEMA_VERSION, type QueueEntryInput } from "../../src/store.ts";
 import * as AppLogic from "../../public/app-logic.mjs";
 import { bootInProcess, send } from "../helpers/run-stream-harness.ts";
 
@@ -2131,5 +2131,43 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         expect(body.tracks).toEqual([]);
       },
     );
+  });
+
+  describe("every QueueEntryInput key round-trips through the bulk post", () => {
+    const RELEASE = "0.2.0";
+    // `at` is epoch MILLISECONDS, the unit `QueueLifecycle` declares.
+    const LIFECYCLE = { state: "VOID", reason: "folded into another entry", at: 1_787_149_125_000 };
+
+    // One row per key `QueueEntryInput` declares: the value posted, and the
+    // value `GET …/queue` must answer for it. The table is typed by the
+    // interface's own keys, so a key added there without a row here fails
+    // the typecheck rather than being silently dropped by the route.
+    const ROUND_TRIP: Record<keyof QueueEntryInput, { sent: unknown; read: unknown }> = {
+      cr: { sent: "ROUND-TRIP-A", read: "ROUND-TRIP-A" },
+      title: { sent: "every declared key", read: "every declared key" },
+      wave: { sent: "5", read: "5" },
+      dependsOn: { sent: ["ROUND-TRIP-Z"], read: ["ROUND-TRIP-Z"] },
+      size: { sent: "M", read: "M" },
+      release: { sent: RELEASE, read: RELEASE },
+      // The one normalised key: any accepted spelling reads back `track-<n>`.
+      track: { sent: "Track 2", read: "track-2" },
+      seq: { sent: 5007, read: 5007 },
+      lifecycle: { sent: LIFECYCLE, read: LIFECYCLE },
+    };
+
+    test("one post declaring every key reads each back as the table states", async () => {
+      handle = boot();
+      const key = await createProject("queue-every-key-round-trip");
+      await propose(key, RELEASE);
+      const fields = Object.keys(ROUND_TRIP) as Array<keyof QueueEntryInput>;
+      const posted = Object.fromEntries(fields.map((field) => [field, ROUND_TRIP[field].sent]));
+
+      expect([200, 202]).toContain((await postQueue(key, [posted])).status);
+
+      const entry = findEntry((await getQueue(key)).entries, "ROUND-TRIP-A");
+      const read = Object.fromEntries(fields.map((field) => [field, entry[field]]));
+      const expected = Object.fromEntries(fields.map((field) => [field, ROUND_TRIP[field].read]));
+      expect(read).toEqual(expected);
+    });
   });
 });
