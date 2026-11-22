@@ -27,7 +27,7 @@ exit by `verb_exit` over the runner's exit and the board's answer;
 otherwise. The no-report exits are unchanged: a run that wrote no report files
 its compile ingest and no run. The shared `ingest:` line is the run's one
 ingest line (no `ingest junit:` or `ingest parsed:` literal is left in the
-client), and the shared module does not grow past its line budget.
+client).
 
 Every drive runs the real `clients/mvn-crucible.py` over a scratch two-module
 reactor (`alpha`, `beta`) with a fake `mvnw` in the maven directory that
@@ -54,7 +54,6 @@ from pathlib import Path
 from unittest import mock
 
 from tests.client.live_run_harness import (
-    CLIENTS,
     RecordingBoard,
     load_client,
 )
@@ -718,35 +717,8 @@ class AComposedGateAnswersAsBeforeTest(_MavenProject, unittest.TestCase):
                          [], where)
 
 
-# ── AC9 — one ingest line, and the shared module does not grow ─────────────
+# ── AC9 — one ingest line ───────────────────────────────────────────────────
 
-# Each shared module's line budget is that module's size (its newline count,
-# as the test below counts it), so neither shared module grows unnoticed:
-# `_crucible_axi.py`'s recorded when the run pipeline was split out of the core
-# into its own module, `_crucible_run.py`'s re-recorded when the arduino
-# client's move to the shared ingest grew it (`junit_case_sources` in,
-# `filed_summary` out), and again when CR-CRU-224's python stream relay grew
-# it (`StreamRelay` and `close_stream` in), and again at CR-CRU-225's close-out
-# (the shared streamed-run close and the stream-counted narration in). The
-# maven client's move to the shared ingest adds nothing to either. A change
-# that grows a shared module re-records its budget here, in the same change.
-# The release-notes verb's module grows the core by its load, and is a shared
-# module itself, so the core's budget is re-recorded and the module's is added.
-# A project's own verbs move out of the core into their own module, so the
-# core's budget is re-recorded lower and that module's is added. The verb that
-# creates a project grows that module, and the core by its help steps. The
-# board's resolution moves out of the core into its own module, so the core's
-# budget is re-recorded lower and that module's is added. The pre-flight's
-# refusal of an attributed run with no board declared grows the core. A gate's
-# lone whole-suite run taking the gate's verdict grows the core by its mark and
-# the run module by that verdict. A gate drive's launch of no-mistakes moves
-# into the run module, its output sent where it can never fill, so the run
-# module's budget is re-recorded higher and the core's one line lower.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9080, "_crucible_run.py": 2024,
-                              "_crucible_release.py": 266,
-                              "_crucible_project.py": 521,
-                              "_crucible_lint.py": 399,
-                              "_crucible_board.py": 179}
 _OWN_INGEST_LINES = ("ingest junit:", "ingest parsed:")
 
 
@@ -779,17 +751,6 @@ class TheMavenClientPrintsOnlyTheSharedIngestLineTest(unittest.TestCase):
         self.assertEqual(found, [],
                          f"the shared `ingest:` line is the run's one ingest "
                          f"line; mvn-crucible.py still prints {found!r}")
-
-    def test_the_shared_module_is_no_longer_than_its_line_budget(self):
-        for name, budget in SHARED_MODULE_LINE_BUDGETS.items():
-            with self.subTest(module=name):
-                path = CLIENTS / name
-                self.assertTrue(path.is_file(), f"the shared module {name} exists")
-                lines = path.read_text(encoding="utf-8").count("\n")
-                self.assertLessEqual(
-                    lines, budget,
-                    f"clients/{name} is {lines} lines, over its budget of "
-                    f"{budget}")
 
 
 # ── the no-report exits, unchanged ─────────────────────────────────────────

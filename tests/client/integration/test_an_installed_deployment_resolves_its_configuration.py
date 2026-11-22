@@ -167,8 +167,13 @@ SHIPPED_SERVER_DATA = REPO_ROOT / "src" / CONFIG_NAME
 def _with_listener_values(text, values):
     """`text`, a server template, with each `<key> = <number>` line named in
     `values` given that value instead; every other byte is kept, comments and
-    all, so the template stays the shipped one but for its listener."""
+    all, so the template stays the shipped one but for its listener. A value
+    in the shipped window is refused: a live board listens there."""
     for key, value in values.items():
+        if SHIPPED_RANGE_MIN <= value <= SHIPPED_RANGE_MAX:
+            raise AssertionError(
+                f"fixture sanity: `{key} = {value}` lies inside the shipped "
+                f"{SHIPPED_RANGE_MIN}-{SHIPPED_RANGE_MAX} window")
         text, replaced = re.subn(
             rf"(?m)^({re.escape(key)}\s*=\s*)\d+", rf"\g<1>{value}", text)
         if replaced != 1:

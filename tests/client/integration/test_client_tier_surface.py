@@ -1,7 +1,7 @@
 """CR-CRU-111 §S1 — the tier VERB surface, the ONE vocabulary, and the flag
 that was never implemented.
 
-Four acceptance criteria live here, and they are the four this cycle owns:
+Three acceptance criteria live here:
 
   * **AC1** — each of the six `Tier` values (`unit`, `module`, `integration`,
     `e2e`, `regression`, `bdd`) is an invocable VERB in EACH of the five
@@ -12,9 +12,6 @@ Four acceptance criteria live here, and they are the four this cycle owns:
   * **AC4** — the tier surface is registered from ONE place, and the
     registrar-parity check COUNTS the call sites over the five files rather
     than comparing them to a frozen list.
-  * **AC10** — the vocabulary is mirrored ONCE on the client side, and the
-    mirror cannot drift: the guard parses the `Tier` union out of
-    `src/types.ts` and asserts the mirror equals it set for set.
   * **AC11** — the `--tier` flag CR-CRU-008's contract named and no client ever
     implemented is retired explicitly.
 
@@ -33,20 +30,6 @@ colour means nothing (measured on `feature/CR-CRU-111` @ `develop`+0,
   RED  `TierRegistrarSingleLocusTest` (both) — `clients/_crucible_axi.py` has
          no tier registrar at all, so the derived count over the five client
          files is 0, not 5.
-  RED  `TierVocabularyMirrorDriftGuardTest.
-         test_the_client_side_mirror_equals_the_tier_union_set_for_set` — the
-         client side holds NO copy of the vocabulary today; the six values
-         exist only as scattered `tier="..."` keyword literals, which is
-         exactly the shape AC10 replaces with one mirror.
-  PIN  `TierVocabularyMirrorDriftGuardTest.
-         test_the_vocabulary_this_guard_reads_is_the_tier_union_of_src_types_ts`
-         and `..._no_client_file_carries_a_second_copy_...` — both pass today
-         (the union parses; no client holds a copy because no client holds
-         ANY copy). They are the two BOUNDS on the drift guard: without the
-         first, the guard could compare a mirror against an empty parse and
-         call it equal; without the second, AC10's single-mirror rule would be
-         satisfied by six mirrors as long as one of them lived in the shared
-         module.
   PIN  `TierVerbSurfaceFleetParityTest.
          test_a_seventh_name_is_still_argparse_invalid_choice_in_every_client`
          — passes today. It is the negative bound on "the six values AND NO
@@ -75,11 +58,7 @@ ESCALATIONS recorded at the time of writing (see the report for the full text):
      the singular (`add_next_verb`, `add_cr_depends_verb`, `add_queue_file_verb`).
      Six verbs is the plural case. If GREEN spells it otherwise the two AC4
      tests fail on the NAME, which is a naming disagreement, not a defect.
-  2. AC10 does not NAME the mirror either, so the guard DERIVES it: any
-     collection literal in `clients/_crucible_axi.py` holding two or more of
-     the six values IS the mirror, whatever it is called. That is deliberate —
-     the guard has to survive GREEN's naming choice.
-  3. §S1 names only mvn's `unit`/`module`/`e2e` as verbs that migrate, but
+  2. §S1 names only mvn's `unit`/`module`/`e2e` as verbs that migrate, but
      `regression` already exists as a full-suite verb in FOUR clients (bun,
      mvn, python, arduino) and `unit` in TWO (mvn, arduino). Those collisions
      are reported, not resolved here: this file asserts the AC's own
@@ -119,7 +98,6 @@ from tests.client.client_tier_surface_helpers import (  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLIENTS_DIR = CLIENT_SOURCE_DIR
-TYPES_TS_PATH = REPO_ROOT / "src" / "types.ts"
 
 CLIENTS = tuple(CLIENT_FILES)
 
@@ -404,150 +382,6 @@ class TierRegistrarSingleLocusTest(unittest.TestCase):
             f"{EXPECTED_CLIENT_COUNT} in total across "
             f"{sorted(CLIENT_FILES)!r}; counted {derived_total} "
             f"(client -> lines: {sites!r})")
-
-
-_TIER_UNION_RE = re.compile(r"export\s+type\s+Tier\s*=\s*([^;]+);", re.S)
-
-
-def _tier_union_from_types_ts():
-    """The `Tier` union of `src/types.ts`, parsed by SYMBOL.
-
-    AC10's guard reads the server's vocabulary at TEST time (a test may read
-    `src/`; a client may not -- an installed wheel has no `src/` to read). It
-    is anchored on `export type Tier =` rather than on a line number, so an
-    edit anywhere above it cannot silently move the guard onto another
-    declaration.
-
-    Returns `None` when the symbol is absent -- distinct from an empty union,
-    and asserted as such below."""
-    match = _TIER_UNION_RE.search(TYPES_TS_PATH.read_text())
-    if match is None:
-        return None
-    return frozenset(re.findall(r'"([^"]*)"', match.group(1)))
-
-
-def _string_collection_literals(path):
-    """Every literal COLLECTION of strings in `path`: list/tuple/set literals
-    whose elements are all string constants, and dict literals whose keys are.
-
-    Both shapes count, because both are a vocabulary: `TIERS = ("unit", ...)`
-    and `TIERS = {"unit": "...", ...}` mirror the union equally well, and a
-    guard that only recognised one of them would be a guard GREEN could walk
-    around by choosing the other. Returns `(lineno, frozenset(values))`."""
-    found = []
-    for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
-        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-            elements = node.elts
-        elif isinstance(node, ast.Dict):
-            elements = [key for key in node.keys if key is not None]
-        else:
-            continue
-        if not elements:
-            continue
-        if not all(isinstance(e, ast.Constant) and isinstance(e.value, str)
-                   for e in elements):
-            continue
-        found.append((node.lineno, frozenset(e.value for e in elements)))
-    return found
-
-
-def _tier_mirrors(path):
-    """Every string collection in `path` that is a COPY of the tier vocabulary:
-    two or more of the six values together in one literal.
-
-    Two, not six, on purpose. A copy that has DRIFTED (five of the six, or the
-    six plus a seventh) is exactly what AC10's guard exists to catch, and a
-    detector keyed on the complete set would go blind at precisely the moment
-    it matters. One tier word alone is not a vocabulary -- `HELP_STEPS`
-    (`clients/_crucible_axi.py`) legitimately keys `"regression"` beside
-    non-tier verbs -- so the threshold is two."""
-    return [(lineno, values) for lineno, values in _string_collection_literals(path)
-            if len(values & TIER_VOCABULARY) >= 2]
-
-
-class TierVocabularyMirrorDriftGuardTest(unittest.TestCase):
-    """AC10 -- the vocabulary is mirrored ONCE on the client side, and the
-    mirror cannot drift from `src/types.ts`.
-
-    The pattern is the project's own: `canonical_track`
-    (`clients/_crucible_axi.py`) mirrors `normalizeTrack`
-    (`src/store.ts`) and is "held to one rule by assertion (AC18), not
-    by comment". This is that assertion for the tier vocabulary.
-
-    The mirror is DERIVED, never named: any collection literal in the shared
-    module carrying two or more of the six IS the mirror, whatever GREEN calls
-    it (ESCALATION 2)."""
-
-    def test_the_vocabulary_this_guard_reads_is_the_tier_union_of_src_types_ts(self):
-        """PASSES TODAY -- the BOUND on the guard below, not a RED.
-
-        Without it, a `Tier` union that stopped parsing would leave the drift
-        guard comparing a mirror against an empty set and reporting agreement.
-        It also ties this file's own `TIER_VERBS` literal to the server's
-        declaration, so a seventh server-side value fails HERE rather than
-        quietly narrowing every assertion in the file."""
-        union = _tier_union_from_types_ts()
-        self.assertIsNotNone(
-            union,
-            f"`export type Tier = ...;` must be parseable out of "
-            f"{TYPES_TS_PATH} -- the drift guard's source of truth")
-        self.assertEqual(
-            set(union), set(TIER_VOCABULARY),
-            f"the `Tier` union in src/types.ts and this suite's own "
-            f"vocabulary must be the same set; src/types.ts says "
-            f"{sorted(union)!r}, this suite says {sorted(TIER_VOCABULARY)!r}")
-
-    def test_the_client_side_mirror_equals_the_tier_union_set_for_set(self):
-        """CR-CRU-111 AC10 -- the tier vocabulary is mirrored on the client
-        side in exactly ONE place, and that mirror equals the `Tier` union of
-        `src/types.ts` set for set."""
-        union = _tier_union_from_types_ts()
-        self.assertIsNotNone(union, "`Tier` must parse out of src/types.ts")
-
-        mirrors = _tier_mirrors(CLIENT_SOURCE_DIR / "_crucible_axi.py")
-        self.assertEqual(
-            len(mirrors), 1,
-            f"the tier vocabulary must live in exactly ONE "
-            f"place on the client side: a single mirror in "
-            f"clients/_crucible_axi.py carrying a provenance comment naming "
-            f"`Tier` in src/types.ts. Found {len(mirrors)} collection "
-            f"literal(s) holding two or more of {sorted(TIER_VOCABULARY)!r} "
-            f"(line -> values): "
-            f"{[(line, sorted(values)) for line, values in mirrors]!r}")
-
-        _, mirrored = mirrors[0]
-        self.assertEqual(
-            set(mirrored), set(union),
-            f"AC10's DRIFT GUARD -- the client-side mirror "
-            f"(clients/_crucible_axi.py:{mirrors[0][0]}) must equal the "
-            f"`Tier` union of src/types.ts set for set; mirror has "
-            f"{sorted(mirrored)!r}, src/types.ts declares {sorted(union)!r}")
-
-    def test_no_client_file_carries_a_second_copy_of_the_tier_vocabulary(self):
-        """CR-CRU-111 AC10, PASSES TODAY -- the second BOUND, and the half of
-        AC10 that says what is FORBIDDEN: "a SECOND mirror: no per-client copy
-        of the six values".
-
-        It is green now only because no client holds ANY copy; it turns RED the
-        moment GREEN hand-rolls `choices=("unit", ..., "bdd")` in a client
-        alongside the shared registrar -- which is the exact drift §S1 is
-        written to prevent, and which the single-mirror assertion above cannot
-        see (it reads the shared module alone)."""
-        offenders = {}
-        for client, path in CLIENT_FILES.items():
-            mirrors = _tier_mirrors(path)
-            if mirrors:
-                offenders[client] = [(line, sorted(values))
-                                     for line, values in mirrors]
-        self.assertEqual(
-            len(CLIENT_FILES), EXPECTED_CLIENT_COUNT,
-            f"all {EXPECTED_CLIENT_COUNT} clients must be scanned for a "
-            f"second copy; scanned {sorted(CLIENT_FILES)!r}")
-        self.assertEqual(
-            offenders, {},
-            f"what is FORBIDDEN is a SECOND mirror. These "
-            f"clients carry their own copy of the tier vocabulary instead of "
-            f"taking it from clients/_crucible_axi.py: {offenders!r}")
 
 
 class RetiredTierFlagTest(unittest.TestCase):

@@ -3435,7 +3435,7 @@ def main():
     tier_verb = _axi().TierVerb
     _axi().add_tier_verbs(
         sub,
-        # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, which the tier-mirror guard reads as a copy of the tier vocabulary
+        # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, so the shared module holds the one copy of the tier vocabulary
         dict(unit=tier_verb(  # noqa: C408
                  cmd_unit,
                  "Runs `cargo nextest run --lib` — cargo's own in-crate unit "

@@ -192,6 +192,14 @@ class CrucibleAxiWheelPackagingTest(unittest.TestCase):
             f"each client payload path must appear in the wheel exactly "
             f"once, got: {not_exactly_once}")
 
+    def test_the_wheel_metadata_requires_python_3_14(self):
+        namelist = self._require_wheel()
+        with zipfile.ZipFile(self.wheel_path) as archive:
+            metadata = "".join(
+                archive.read(name).decode("utf-8") for name in namelist
+                if name.endswith(".dist-info/METADATA"))
+        self.assertIn("Requires-Python: >=3.14", metadata.splitlines())
+
     def test_build_leaves_no_artifacts_in_the_repo(self):
         """Hygiene -- the build is directed at a tempdir, so the checkout
         must stay clean of dist/ and build/ droppings."""

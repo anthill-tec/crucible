@@ -1735,7 +1735,7 @@ def _add_tier_verbs(sub):
     tier_verb = _axi().TierVerb
     _axi().add_tier_verbs(
         sub,
-        # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, which the tier-mirror guard reads as a copy of the tier vocabulary
+        # pi-lens-ignore: C408 — the keyword form keeps the tier names out of a string-keyed literal, so the shared module holds the one copy of the tier vocabulary
         dict(regression=tier_verb(  # noqa: C408
             cmd_regression,
             "Runs `go test -json ./...` in every module under the project dir "

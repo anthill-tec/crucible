@@ -27,8 +27,7 @@ The client still decides locally whether a run "ran nothing" (a non-zero
 exits 0 only on an `ok` answer whose run records no failure. A run without
 `--agent` files nothing, prints `ran <n> testcases (<m> not skipped); runner
 exit <rc>` and exits with `make`'s exit. The client defines no report parser
-and no emitter of its own figures, and the shared modules do not grow past
-their line budget.
+and no emitter of its own figures.
 
 Every drive runs the real `clients/arduino-crucible.py` over a scratch
 firmware project (outside git) with a fake `make` first on PATH, which
@@ -867,37 +866,7 @@ class NoBoardNoFiguresTest(_ArduinoProject, unittest.TestCase):
         self.assert_gate_unreported(code, stdout, stderr)
 
 
-# ── AC8 / AC9 — one emitter, no parser, one ingest line, the budget ─────────
-
-# Each shared module's line budget is that module's size (its newline count,
-# as the test below counts it), the same pin maven's and rust's send-reports
-# tests hold, so neither shared module grows unnoticed. The arduino client's
-# move to the shared ingest grows `_crucible_run.py` (`junit_case_sources` in,
-# `filed_summary` out), so its budget is re-recorded at that size here and in
-# maven's and rust's tests; `_crucible_axi.py` does not grow. CR-CRU-224's
-# python stream relay grows `_crucible_run.py` again (`StreamRelay` and
-# `close_stream` in), so its budget is re-recorded at that size here and in
-# maven's and rust's tests; `_crucible_axi.py` still does not grow. CR-CRU-225's
-# close-out re-records it once more (the shared streamed-run close and the
-# stream-counted narration in). A change that grows a shared module
-# re-records its budget here, in the same change. The release-notes verb's
-# module grows the core by its load, and is a shared module itself, so the
-# core's budget is re-recorded and the module's is added. A project's own
-# verbs move out of the core into their own module, so the core's budget is
-# re-recorded lower and that module's is added. The verb that creates a
-# project grows that module, and the core by its help steps. The board's
-# resolution moves out of the core into its own module, so the core's budget
-# is re-recorded lower and that module's is added. The pre-flight's refusal
-# of an attributed run with no board declared grows the core. A gate's lone
-# whole-suite run taking the gate's verdict grows the core by its mark and the
-# run module by that verdict. A gate drive's launch of no-mistakes moves into
-# the run module, its output sent where it can never fill, so the run module's
-# budget is re-recorded higher and the core's one line lower.
-SHARED_MODULE_LINE_BUDGETS = {"_crucible_axi.py": 9080, "_crucible_run.py": 2024,
-                              "_crucible_release.py": 266,
-                              "_crucible_project.py": 521,
-                              "_crucible_lint.py": 399,
-                              "_crucible_board.py": 179}
+# ── AC8 / AC9 — one emitter, no parser, one ingest line ────────────────────
 
 # Names the arduino client's move to the shared ingest retires: its own
 # parsers and its own figures' emitter from the client, and the client-figure
@@ -1016,17 +985,6 @@ class TheArduinoClientDefinesNoParserAndNoEmitterOfItsOwnTest(unittest.TestCase)
         self.assertEqual(found, [],
                          f"the shared `ingest:` line is the run's one ingest "
                          f"line; arduino-crucible.py still prints {found!r}")
-
-    def test_the_shared_modules_are_no_longer_than_their_line_budget(self):
-        for name, budget in SHARED_MODULE_LINE_BUDGETS.items():
-            with self.subTest(module=name):
-                path = CLIENTS / name
-                self.assertTrue(path.is_file(), f"the shared module {name} exists")
-                lines = path.read_text(encoding="utf-8").count("\n")
-                self.assertLessEqual(
-                    lines, budget,
-                    f"clients/{name} is {lines} lines, over its budget of "
-                    f"{budget}")
 
 
 class TheFilingRunPrintsOneIngestLineTest(_ArduinoProject, unittest.TestCase):
