@@ -131,6 +131,9 @@ class _InProcessBuild(unittest.TestCase):
         module = importlib.import_module(module_name)
         probe = type(f"_{class_name}SetupProbe", (getattr(module, class_name),), {})
         self.addCleanup(probe.tearDownClass)
+        # A builder may clean up through `addClassCleanup`, which only
+        # `doClassCleanups` runs; the probe runs it so no directory leaks.
+        self.addCleanup(probe.doClassCleanups)
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch("importlib.util.find_spec",
                                            side_effect=self.fake_find_spec(set(missing))))

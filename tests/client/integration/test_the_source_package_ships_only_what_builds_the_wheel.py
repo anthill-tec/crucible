@@ -121,8 +121,12 @@ class TheSourcePackageShipsOnlyWhatBuildsTheWheelTest(unittest.TestCase):
         if gap is not None:
             raise RuntimeError(f"the source package's contents cannot be verified: {gap}")
 
+        # Each directory's cleanup is registered as it is made, so a build
+        # that times out or fails in this method leaks neither.
         cls.sdist_dir = tempfile.mkdtemp(prefix="crucible-axi-sdist-build-")
+        cls.addClassCleanup(shutil.rmtree, cls.sdist_dir, ignore_errors=True)
         cls.wheel_dir = tempfile.mkdtemp(prefix="crucible-axi-checkout-wheel-build-")
+        cls.addClassCleanup(shutil.rmtree, cls.wheel_dir, ignore_errors=True)
 
         # What the checkout tracks under the two directories, read at the
         # moment the sdist is built from it.
@@ -161,12 +165,6 @@ class TheSourcePackageShipsOnlyWhatBuildsTheWheelTest(unittest.TestCase):
         if cls.checkout_wheel_path is not None:
             with zipfile.ZipFile(cls.checkout_wheel_path) as archive:
                 cls.checkout_wheel_names = archive.namelist()
-
-    @classmethod
-    def tearDownClass(cls):
-        for directory in (cls.sdist_dir, cls.wheel_dir):
-            if directory:
-                shutil.rmtree(directory, ignore_errors=True)
 
     # -- what each test needs from the builds ------------------------------
 
