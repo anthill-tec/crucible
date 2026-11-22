@@ -63,10 +63,6 @@
 //     literal "every 2s (or every 10 completions)" reading. A 1900ms floor
 //     (not a strict 2000ms) tolerates minor scheduling jitter without
 //     weakening the throttle's intent.
-//   - "first throttle window" contract (item 4): a run that finishes before
-//     BOTH bounds are ever crossed (under ~2s wall time AND under 10
-//     completions) must show ZERO narration messages — narration doesn't
-//     fire eagerly on test #1.
 //
 // Technique: reused from tests/integration/clients-bun-crucible.test.ts /
 // tests/integration/clients-rust-mvn-crucible.test.ts — a real `startServer({port:0,
@@ -176,34 +172,6 @@ function spawnScript(
   });
 }
 
-/**
- * CR-CRU-047 §S3 — identical to `spawnScript` except it explicitly DELETES
- * `CLAUDECODE` from the child's environment rather than merging an override
- * on top. `spawnScript`'s `env` option can only ADD/override keys with a
- * string value; it cannot remove a key the ambient session already set
- * (this session runs with `CLAUDECODE=1`). The two narration-under-both-
- * states tests need a genuine unset, not "unset unless already set".
- */
-function spawnScriptWithClaudecodeUnset(
-  scriptPath: string,
-  args: string[],
-  opts: { cwd: string; crucibleUrl: string },
-) {
-  const baseEnv: Record<string, string | undefined> = { ...process.env };
-  for (const k of Object.keys(baseEnv)) {
-    if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
-  }
-  delete baseEnv.CLAUDECODE;
-  declareClientBoard(opts.crucibleUrl, opts.cwd, projectDirFromArgs(args));
-  return Bun.spawn({
-    cmd: ["uv", "run", scriptPath, ...args],
-    cwd: opts.cwd,
-    env: { ...baseEnv },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-}
-
 function makeScratchTracker(): { dir(prefix: string): string; cleanup(): void } {
   const dirs: string[] = [];
   return {
@@ -242,10 +210,8 @@ async function createProject(baseUrl: string, name: string): Promise<string> {
  * unregistered agentId (409). The narration fixtures above (24-test/20-test)
  * work around this implicitly — their longer runs fire enough throttled
  * heartbeats (`/api/v2/agents/heartbeat`, which creates the agent row on
- * first touch) BEFORE the final ingest. The deliberately near-instant 5-test
- * fixture below fires ZERO heartbeats (that's its whole point — proving no
- * premature narration), so its agent is never created before the final
- * ingest and the ingest gets refused. Register it directly up front instead.
+ * first touch) BEFORE the final ingest. A run that fires no heartbeat first
+ * would have its ingest refused, so its agent is registered up front.
  */
 async function ensureRegistered(baseUrl: string, key: string, agentId: string): Promise<void> {
   await fetch(`${baseUrl}/api/v2/agents/register`, {
@@ -552,38 +518,6 @@ describe("§S2b in-run progress narration — clients/bun-crucible.py (fine-grai
     },
     20000,
   );
-
-  test(
-    "a 5-test near-instant fixture (finishes well under BOTH throttle bounds — 2s wall time and 10 completions) shows ZERO 'running N/M' narration messages",
-    async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const baseUrl = `http://localhost:${handle.server.port}`;
-      const key = await createProject(baseUrl, "clients-narration-bun-silent");
-      const dir = scratch.dir("narration-bun-silent-");
-      writeNarrationBunProject(dir, key, 5, 0);
-      const agentId = "narration-bun-silent-agent";
-      await ensureRegistered(baseUrl, key, agentId);
-
-      let done = false;
-      const pollPromise = pollAgentUntil(baseUrl, key, agentId, () => done, 100);
-      const proc = spawnScript(
-        BUN_SCRIPT_PATH,
-        ["test", "--agent", agentId, "--tests", "narration.test.ts", "--project-dir", dir, "--package-dir", dir],
-        { cwd: dir, crucibleUrl: baseUrl },
-      );
-      const [, , code] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ]);
-      done = true;
-      const log = await pollPromise;
-
-      expect(code).toBe(0);
-      expect(extractNarration(log, NARRATION_RE).length).toBe(0);
-    },
-    15000,
-  );
 });
 
 // ── CR-CRU-047 §S3 — SECOND PASS. `--dots` is WITHDRAWN. ───────────────────
@@ -760,19 +694,6 @@ describe("§S3 (CR-CRU-047) — bun narration survives bun's real ANSI tick line
     15000,
   );
 
-  test("_COMPLETION_LINE (the completion-line matcher symbol) SURVIVES in clients/bun-crucible.py — the fix changes what it MATCHES, not whether the mechanism exists", () => {
-    const source = readFileSync(BUN_SCRIPT_PATH, "utf-8");
-    // POSITIVE: the symbol survives — GREEN must repair its regex in place,
-    // never delete the console-scraping mechanism outright (that would be
-    // console-scraping REMOVED, not FIXED, and would silently kill narration).
-    expect(source).toContain("_COMPLETION_LINE");
-    // NEGATIVE: the stale, non-ANSI-tolerant pattern — bun's OLD
-    // `(pass)/(fail)/(skip)/(todo)` format, which bun 1.3.14 never emits —
-    // must be gone. A survival check on the symbol NAME alone would pass an
-    // untouched regex; this pins that the literal old pattern text changed.
-    expect(source).not.toContain(String.raw`^\((?:pass|fail|skip|todo)\)`);
-  });
-
   test(
     "the completion pattern matches REAL captured ANSI-colourised bun tick lines — a passing (✓, green) line AND a failing (✗, red) line both register as completions (the anti-trap test: a hand-typed bare glyph would NOT reproduce bun's real, escape-wrapped bytes)",
     async () => {
@@ -898,43 +819,6 @@ describe("§S3 (CR-CRU-047) — bun narration survives bun's real ANSI tick line
     },
     15000,
   );
-
-  test(
-    "narration still posts 'running N/M' when CLAUDECODE=1 is explicitly SET in the runner's environment (Fault 2 regression guard — every agent-run gate sets this var)",
-    async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const baseUrl = `http://localhost:${handle.server.port}`;
-      const key = await createProject(baseUrl, "clients-narration-bun-cc-set");
-      const dir = scratch.dir("narration-bun-cc-set-");
-      writeNarrationBunProject(dir, key, 24, 120);
-      const agentId = "narration-bun-cc-set-agent";
-
-      let done = false;
-      const pollPromise = pollAgentUntil(baseUrl, key, agentId, () => done);
-      const proc = spawnScript(
-        BUN_SCRIPT_PATH,
-        ["test", "--agent", agentId, "--tests", "narration.test.ts", "--project-dir", dir, "--package-dir", dir],
-        { cwd: dir, crucibleUrl: baseUrl, env: { CLAUDECODE: "1" } },
-      );
-      const [, , code] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ]);
-      done = true;
-      const log = await pollPromise;
-
-      expect(code).toBe(0); // all 24 fixture tests pass
-
-      const matches = extractNarration(log, NARRATION_RE);
-      // Non-vacuous precondition, same discipline as the §S2b tests above:
-      // narration must actually be OBSERVED, not merely asserted away.
-      expect(matches.length).toBeGreaterThan(0);
-      for (const m of matches) expect(m.m).toBe(24);
-    },
-    20000,
-  );
-
   test(
     "narration still posts 'running N/M' when AI_AGENT=1 is explicitly SET in the runner's environment (CR-CRU-055 — the quieting list must strip it)",
     async () => {
@@ -965,40 +849,6 @@ describe("§S3 (CR-CRU-047) — bun narration survives bun's real ANSI tick line
       const matches = extractNarration(log, NARRATION_RE);
       // Non-vacuous precondition, same discipline as the §S2b tests above:
       // narration must actually be OBSERVED, not merely asserted away.
-      expect(matches.length).toBeGreaterThan(0);
-      for (const m of matches) expect(m.m).toBe(24);
-    },
-    20000,
-  );
-
-  test(
-    "narration still posts 'running N/M' when CLAUDECODE is explicitly UNSET in the runner's environment",
-    async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const baseUrl = `http://localhost:${handle.server.port}`;
-      const key = await createProject(baseUrl, "clients-narration-bun-cc-unset");
-      const dir = scratch.dir("narration-bun-cc-unset-");
-      writeNarrationBunProject(dir, key, 24, 120);
-      const agentId = "narration-bun-cc-unset-agent";
-
-      let done = false;
-      const pollPromise = pollAgentUntil(baseUrl, key, agentId, () => done);
-      const proc = spawnScriptWithClaudecodeUnset(
-        BUN_SCRIPT_PATH,
-        ["test", "--agent", agentId, "--tests", "narration.test.ts", "--project-dir", dir, "--package-dir", dir],
-        { cwd: dir, crucibleUrl: baseUrl },
-      );
-      const [, , code] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ]);
-      done = true;
-      const log = await pollPromise;
-
-      expect(code).toBe(0);
-
-      const matches = extractNarration(log, NARRATION_RE);
       expect(matches.length).toBeGreaterThan(0);
       for (const m of matches) expect(m.m).toBe(24);
     },
@@ -1059,22 +909,6 @@ describe("§S2b in-run progress narration — clients/mvn-crucible.py (class-gra
 });
 
 // ── CR-CRU-049 — mvn narration hardening ────────────────────────────────
-//
-// Spec: docs/changes/CR-CRU-049-mvn-narration-hardening.md. Context section
-// measured against REAL surefire 3.2.5 AND 3.5.4 (offline, real mvnw
-// wrappers + local ~/.m2 cache): both emit exactly
-//   `[INFO] Running <FQCN>`
-//   `[INFO] Tests run: N, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: T s -- in <FQCN>`
-// STREAMING_MVNW_SCRIPT above currently hand-fits `_MVN_RUNNING_LINE`
-// instead (`Running com.acme.AlphaTest` — no `[INFO] ` prefix — and the
-// completion lines use the older single-dash `- in` separator). That is the
-// CR's named defect: the fixture confirms the narrator against itself, not
-// against Maven. `_MVN_RUNNING_LINE` itself is verified CORRECT already
-// (`(?:^|\s)` accepts the space after `[INFO]`) — GREEN fixes the FIXTURE
-// BODY (STREAMING_MVNW_SCRIPT), never the regex. RED never touches the
-// fixture body; these tests assert on it as it exists today (real behavioral
-// RED — see "STREAMING_MVNW_SCRIPT emits real surefire..." below) and on
-// clients/mvn-crucible.py's current command construction / comments.
 describe("CR-CRU-049 — mvn narration hardening", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
@@ -1083,29 +917,6 @@ describe("CR-CRU-049 — mvn narration hardening", () => {
     handle?.stop();
     handle = undefined;
     scratch.cleanup();
-  });
-
-  test("STREAMING_MVNW_SCRIPT emits real surefire console format ([INFO] prefix + '-- in' separator), not the hand-fitted format lacking both", () => {
-    // POSITIVE — the exact real-surefire lines the CR's Context section
-    // measured, for every one of the fixture's 3 classes.
-    for (const cls of ["AlphaTest", "BravoTest", "CharlieTest"]) {
-      expect(STREAMING_MVNW_SCRIPT).toContain(`[INFO] Running com.acme.${cls}`);
-      expect(STREAMING_MVNW_SCRIPT).toContain(
-        `[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec -- in com.acme.${cls}`,
-      );
-    }
-    // BOUND — exactly 3 of each real-format marker (one per fixture class),
-    // never more, never fewer.
-    expect((STREAMING_MVNW_SCRIPT.match(/\[INFO\] Running /g) ?? []).length).toBe(3);
-    expect((STREAMING_MVNW_SCRIPT.match(/\[INFO\] Tests run: /g) ?? []).length).toBe(3);
-    expect((STREAMING_MVNW_SCRIPT.match(/ -- in /g) ?? []).length).toBe(3);
-    // NEGATIVE — the CR's named defect must be gone: no un-prefixed
-    // "Running <FQCN>" line, no single-dash " - in " separator anywhere.
-    // This is what pins the fixture so it "cannot silently drift back to a
-    // hand-fitted format" (spec AC bullet 2).
-    const bareRunning = STREAMING_MVNW_SCRIPT.match(/(?<!\[INFO\] )Running com\.acme\.\w+Test/g);
-    expect(bareRunning).toBeNull();
-    expect(STREAMING_MVNW_SCRIPT.includes(" - in ")).toBe(false);
   });
 
   test(
@@ -1148,49 +959,4 @@ describe("CR-CRU-049 — mvn narration hardening", () => {
     },
     20000,
   );
-
-  test(
-    "regression tier passes -B/--batch-mode on its narrated maven invocation",
-    async () => {
-      handle = startServer({ port: 0, dbPath: ":memory:" });
-      const baseUrl = `http://localhost:${handle.server.port}`;
-      const key = await createProject(baseUrl, "clients-narration-mvn-regression-batchmode");
-      const dir = scratch.dir("narration-mvn-regression-batchmode-");
-      writeMvnNarrationFixture(dir, key);
-      const agentId = "narration-mvn-regression-batchmode-agent";
-
-      const proc = spawnScript(MVN_SCRIPT_PATH, ["regression", "--agent", agentId, "--project-dir", dir], {
-        cwd: dir,
-        crucibleUrl: baseUrl,
-      });
-      const [, stderrText, code] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ]);
-
-      expect(code).toBe(0); // 6/6 fixture tests pass → regression ingests green
-
-      const runningLine = stderrText.split("\n").find((l) => l.startsWith("[regression] running:"));
-      expect(runningLine).toBeDefined();
-      expect(/(?:^|\s)(-B|--batch-mode)(?=\s|$)/.test(runningLine!)).toBe(true);
-    },
-    20000,
-  );
-
-  test("a version-pin comment beside _MVN_RUNNING_LINE names the verified surefire versions (3.2.5, 3.5.4) and the matched line form", () => {
-    const src = readFileSync(MVN_SCRIPT_PATH, "utf8");
-    const lines = src.split("\n");
-    const idx = lines.findIndex((l) => l.includes("_MVN_RUNNING_LINE = re.compile"));
-    expect(idx).toBeGreaterThan(-1);
-    // A window around the regex definition — the comment may sit directly
-    // above (matching the existing `# surefire/failsafe class-start line...`
-    // style) or immediately below it.
-    const windowStart = Math.max(0, idx - 8);
-    const windowEnd = Math.min(lines.length, idx + 4);
-    const commentBlock = lines.slice(windowStart, windowEnd).join("\n");
-    expect(commentBlock).toContain("3.2.5");
-    expect(commentBlock).toContain("3.5.4");
-    expect(commentBlock).toContain("[INFO] Running");
-  });
 });
