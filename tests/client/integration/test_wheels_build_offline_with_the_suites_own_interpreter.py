@@ -93,8 +93,11 @@ def _outdir(argv):
     return None
 
 
-def _inside_the_checkout(path):
-    resolved = Path(path).resolve()
+def _inside_the_checkout(path, cwd):
+    """True when `path` is the checkout or under it. A relative path is
+    resolved against the build's `cwd`, where the build resolves it."""
+    base = Path(cwd) if cwd is not None else Path.cwd()
+    resolved = (base / path).resolve()
     return resolved == REPO_ROOT or REPO_ROOT in resolved.parents
 
 
@@ -162,7 +165,7 @@ class EachWheelBuildsOfflineWithTheSuitesInterpreterTest(_InProcessBuild):
                     self.assertIn("--no-isolation", argv, f"the build runs offline: {argv!r}")
                     outdir = _outdir(argv)
                     self.assertIsNotNone(outdir, f"the build names its --outdir: {argv!r}")
-                    self.assertFalse(_inside_the_checkout(outdir),
+                    self.assertFalse(_inside_the_checkout(outdir, build["cwd"]),
                                      f"the build writes outside the checkout: {outdir}")
                     self.assertEqual(str(build["cwd"]), str(REPO_ROOT),
                                      "the checkout is what is built")
