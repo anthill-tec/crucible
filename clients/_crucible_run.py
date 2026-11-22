@@ -42,6 +42,38 @@ from typing import Any
 _core: Any = None
 
 
+class ClientSettings:
+    """The intervals the fleet's clients run on, held on ONE mutable instance,
+    `SETTINGS`, which the core re-exports as the same object.
+
+    Each reader reads its attribute at the point of use: the relay and the
+    stream tick when they wake, the narrator when it is built, the gate-run
+    ladder on each iteration and each client's `_get` when it is called. So an
+    attribute set on the instance reaches code built before it was set. A
+    caller sets attributes on it and never rebinds the name.
+
+    Nothing a user sets reaches it: no environment variable, configuration key
+    or flag. Its values are the production intervals.
+    """
+
+    def __init__(self) -> None:
+        #: How often the relay's and the stream tick's threads wake (the
+        #: board's LIVE_FRAME_MS and the narrator's cadence).
+        self.relay_seconds: float = 2.0
+        #: The narrator's throttle between two posted updates.
+        self.narrator_seconds: float = 2.0
+        #: How often `gate-run` asks for an interim snapshot of its run.
+        self.gate_poll_cadence_seconds: float = 2.0
+        #: How long `gate-run` sleeps between two checks of its run.
+        self.gate_poll_tick_seconds: float = 0.4
+        #: The bound on each client's board read (`_get`).
+        self.read_timeout_seconds: float = 10
+
+
+#: The one settings instance every client reads its intervals from.
+SETTINGS = ClientSettings()
+
+
 # ── CR-CRU-111 §S4 — a `unit` run that WAITS says so (AC6b) ───────────────
 #
 # `unit` is the one tier of the six whose MEANING forbids waiting ("no wait on
@@ -224,12 +256,13 @@ class RunNarrator:
     was ever known)."""
 
     def __init__(self, post, recognise, total: "int | Callable[[], int]" = 0,
-                 min_seconds=2.0, min_completions=10, unit=None):
+                 min_seconds=None, min_completions=10, unit=None):
         self._post = post
         self._recognise = recognise
         self._total = total
         self._unit_suffix = f" {unit}" if unit else ""
-        self._min_seconds = min_seconds
+        self._min_seconds = (SETTINGS.narrator_seconds if min_seconds is None
+                             else min_seconds)
         self._min_completions = min_completions
         self._count = 0
         self._label = None
@@ -1404,9 +1437,6 @@ def launched_axi_tool(argv):
 
 #: The stream route of one open run.
 RELAY_STREAM_PATH = "/api/v2/runs/{run_id}/stream"
-#: How often the relay's thread wakes to send (P3: the board's LIVE_FRAME_MS
-#: and the narrator's cadence).
-RELAY_SECONDS = 2.0
 #: The timeout of each stream post, and the bound on `finish`'s join.
 RELAY_POST_TIMEOUT_SECONDS = 10.0
 #: How many times `finish` tries one batch before it gives up on it.
@@ -1479,7 +1509,8 @@ class StreamRelay:
     """Follows the stream file at `path` and sends it, as written, to `POST
     /api/v2/runs/<runId>/stream` through `post_fn(path, payload, timeout=)`.
 
-    `start()` runs a background thread that wakes every `RELAY_SECONDS` and
+    `start()` runs a background thread that wakes every
+    `SETTINGS.relay_seconds`, read at each wake, and
     sends what lies past `held`, the bytes the board has acknowledged, cut at
     the last complete UTF-8 character into batches whose encoded body stays
     within `batch_limit` (`RELAY_DEFAULT_BATCH_BYTES` when health gave none).
@@ -1552,7 +1583,7 @@ class StreamRelay:
         return self.held, self.stopped
 
     def _follow(self):
-        while not self._halt.wait(RELAY_SECONDS):
+        while not self._halt.wait(SETTINGS.relay_seconds):
             self._tick()
 
     def _tick(self):
@@ -1717,7 +1748,8 @@ class StreamTicks:
     `run-start`'s, when the stream states one. `post(message)` delivers each
     message; the relay's `LandingPoster.withhold_ticks` wraps it.
 
-    `start()` runs a background thread that wakes every `RELAY_SECONDS`, reads
+    `start()` runs a background thread that wakes every
+    `SETTINGS.relay_seconds` (read at each wake), reads
     the whole lines written since its last reading, and moves the narrator on
     to the `test-end`s read so far (`RunNarrator.reach`). `finish(timeout)`
     stops it and joins it within `timeout`."""
@@ -1746,7 +1778,7 @@ class StreamTicks:
             self._thread.join(timeout=timeout)
 
     def _follow(self):
-        while not self._halt.wait(RELAY_SECONDS):
+        while not self._halt.wait(SETTINGS.relay_seconds):
             self._read()
             self.narrator.reach(self._ends)
 
