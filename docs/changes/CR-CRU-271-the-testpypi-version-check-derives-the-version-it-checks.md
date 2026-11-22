@@ -1,6 +1,6 @@
 # CR-CRU-271: the TestPyPI version check derives the version it checks
 
-**Status:** PENDING.
+**Status:** COMPLETED — 2026-11-22.
 
 - **Filed** 2026-11-22, from the CR-CRU-266 gap analysis (`test-reports/work/cr266-gap-analysis.md`, adjacent
   defect). User ruling: its own CR, in wave 9, after CR-CRU-266.
@@ -13,8 +13,9 @@
 **Depends on:** CR-CRU-266
 **Labels:** release, ci
 **Design lineage:** this reverses CR-CRU-198's addition of `actions/setup-python` to `publish-testpypi`. Python leaves
-the job. `publish-pypi` already runs the same publish action with neither a checkout nor `setup-python`
-(`release.yml`, the `publish-pypi` job; `rel040-publish-pypi.log:224-262`).
+the job. `publish-pypi` already runs the same publish action without `setup-python`: the action finds its own
+python (`rel040-publish-pypi.log:232`). Unlike this job after the change, `publish-pypi` still checks out the
+repository.
 
 ## Problem
 
@@ -35,8 +36,8 @@ files the job uploads: those come from the `build` job, which builds and checks 
 ## Behaviour
 
 - **S1. The check reads the version of the artifacts it uploads.**
-  - **Name.** The step keeps the name `Version sanity — reject PEP 440 local segment ('+')`. Both tests find exactly
-    one step by that name.
+  - **Name.** The step keeps the name `Version sanity — reject PEP 440 local segment ('+')`. The AC2 test finds
+    exactly one step by that name.
   - **Position.** It runs after the `actions/download-artifact` step and before the `pypa/gh-action-pypi-publish`
     step.
   - **Contents.**
@@ -80,15 +81,11 @@ files the job uploads: those come from the `build` job, which builds and checks 
 
 ## Acceptance criteria
 
-- **AC1. A bun unit test pins the job's shape.**
-  - **File:** `tests/unit/release-testpypi-version-check-reads-the-download.test.ts`.
-  - **What it reads:** it parses `release.yml` in process and finds exactly one step in `jobs.publish-testpypi.steps`
-    by the S1 name.
-  - **Order:** the step comes after the `actions/download-artifact` step and before the
-    `pypa/gh-action-pypi-publish` step.
-  - **Contents:** the step's code lines (comment lines dropped) hold no `|| true`, no `/dev/null`, no `python` or
-    `pip` token, and no `${{`.
-  - **The job:** it carries no `actions/setup-python` step and no `actions/checkout` step.
+- **AC1. The job's shape is reviewed, not tested** (user ruling, 2026-11-22: a test's subject is production code that
+  runs, never configuration text). VERIFY confirms by reading the job:
+  - the step comes after the `actions/download-artifact` step and before the `pypa/gh-action-pypi-publish` step;
+  - its code holds no `|| true`, no `/dev/null`, no `python` or `pip`, and no `${{`;
+  - the job carries no `actions/setup-python` step and no `actions/checkout` step.
 - **AC2. A bun integration test runs the step itself.**
   - **File:** `tests/integration/release-testpypi-version-check.test.ts`.
   - **Harness:** modelled on `tests/integration/release-notes-extractor.test.ts:326-414`. The test extracts the
@@ -126,3 +123,37 @@ files the job uploads: those come from the `build` job, which builds and checks 
 
 - The `build` job's own version handling.
 - The `publish-pypi` and `publish-npm` jobs.
+
+## Close-out (2026-11-22)
+
+- **The change.** The `publish-testpypi` job in `.github/workflows/release.yml`:
+  - drops its `actions/checkout` and `actions/setup-python` steps;
+  - keeps the "Version sanity" step, now after `actions/download-artifact` and before the publish step.
+
+  The step is plain bash. It uses `nullglob` and requires exactly one wheel and one sdist. It derives the version
+  only from `crucible_axi-*` file names, then checks in order:
+  1. both counts;
+  2. an empty version;
+  3. a mismatch;
+  4. the existing `+` message, word for word.
+
+  On success it prints `derived version: <v>`. Nothing is hidden and nothing is rebuilt.
+- **AC1 is reviewed, not tested** (user ruling, 2026-11-22). Its unit test of the job's shape was deleted, because
+  its subject was workflow text. VERIFY 1001 confirmed the shape by reading the job.
+- **AC2.** `tests/integration/release-testpypi-version-check.test.ts` runs the step's own text under `bash -e` (the
+  shell GitHub uses) against nine planted `dist/` cases. 9/0.
+- **AC3.** `ci-every-python-job-sets-up-the-python-floor.test.ts` lists three jobs.
+- **AC4** waits for the 0.5.0 rehearsal.
+- **AC5.** There is no CHANGELOG entry.
+- **Gates.**
+  - The cycle-1001 gate was stopped at the user's ruling on test scope.
+  - The cycle-1002 gate failed 1/14852 on a flaky, unrelated burndown test: two writes landed in the same
+    millisecond. FIX 1003 moved the test's re-point one millisecond later.
+  - The cycle-1003 gate passed: 5 suites, 14852/0.
+- **Cycles.**
+  - 1000 red-green;
+  - 1001 verify: READY, with 3 suggestions. Sug1, a foreign-wheel case, was noted only. Sug2, the lineage wording,
+    is fixed.
+  - 1002 fix: the test trim.
+  - 1003 fix: the flake.
+- **Merge:** approved by the user once the gate was green.

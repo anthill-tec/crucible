@@ -679,23 +679,6 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
-        with:
-          persist-credentials: false
-          fetch-depth: 0          # hatch-vcs needs tags to derive the version
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
-        with:
-          python-version: "3.14"
-      - name: Version sanity — reject PEP 440 local segment ('+')
-        run: |
-          python -m pip install --upgrade build
-          python -m build --sdist --no-isolation >/dev/null 2>&1 || true
-          VER=$(ls dist/*.tar.gz 2>/dev/null | sed -E 's#.*/[a-z_-]+-(.+)\.tar\.gz#\1#' | head -1)
-          echo "derived version: $VER"
-          if echo "$VER" | grep -q '+'; then
-            echo "::error::version '$VER' contains a '+' local segment — TestPyPI rejects PEP 440 local versions"
-            exit 1
-          fi
       # CR-CRU-137 §S5 — MATCHED PAIR with actions/upload-artifact in `build`:
       # never bump one side alone. This major exists to understand the upload
       # major's direct (unzipped) uploads and errors on an artifact hash
@@ -706,6 +689,54 @@ jobs:
         with:
           name: dist
           path: dist/
+      # Reads the version from the dist/ file names this job just downloaded —
+      # the files it uploads — and never rebuilds them.
+      - name: Version sanity — reject PEP 440 local segment ('+')
+        run: |
+          shopt -s nullglob
+          wheels=(dist/*.whl)
+          sdists=(dist/*.tar.gz)
+          bad=0
+          if [ "${#wheels[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one wheel in dist/, found ${#wheels[@]}: ${wheels[*]}"
+            bad=1
+          fi
+          if [ "${#sdists[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one sdist in dist/, found ${#sdists[@]}: ${sdists[*]}"
+            bad=1
+          fi
+          if [ "$bad" -ne 0 ]; then
+            exit 1
+          fi
+          wheel="${wheels[0]##*/}"
+          sdist="${sdists[0]##*/}"
+          wv=""
+          sv=""
+          if [[ "$wheel" == crucible_axi-*.whl ]]; then
+            wv="${wheel#crucible_axi-}"
+            wv="${wv%%-*}"
+          fi
+          if [[ "$sdist" == crucible_axi-*.tar.gz ]]; then
+            sv="${sdist#crucible_axi-}"
+            sv="${sv%.tar.gz}"
+          fi
+          if [ -z "$wv" ]; then
+            echo "::error::no version can be read from the wheel $wheel"
+            exit 1
+          fi
+          if [ -z "$sv" ]; then
+            echo "::error::no version can be read from the sdist $sdist"
+            exit 1
+          fi
+          if [ "$wv" != "$sv" ]; then
+            echo "::error::the wheel version $wv and the sdist version $sv differ"
+            exit 1
+          fi
+          if [[ "$wv" == *+* ]]; then
+            echo "::error::version '$wv' contains a '+' local segment — TestPyPI rejects PEP 440 local versions"
+            exit 1
+          fi
+          echo "derived version: $wv"
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1
         with:
           repository-url: https://test.pypi.org/legacy/

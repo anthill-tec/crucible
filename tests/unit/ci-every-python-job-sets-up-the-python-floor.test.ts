@@ -1,13 +1,12 @@
 // Every CI job that runs python sets up python 3.14, the declared floor.
 //
-// The release workflow has four jobs that run python: `build` (python -m
-// build), `test-python` (the client suite), `test-bun` (the bun suite spawns
-// the python client fleet) and `publish-testpypi` (python -m build for its
-// version check). A job with no `actions/setup-python` step runs on whatever
+// The release workflow has three jobs that run python: `build` (python -m
+// build), `test-python` (the client suite) and `test-bun` (the bun suite
+// spawns the python client fleet). A job with no `actions/setup-python` step runs on whatever
 // python the runner image ships, and a setup naming `3.x` floats with the
 // newest release, so neither is tied to the floor.
 //
-// Each of the four must carry exactly one `actions/setup-python` step whose
+// Each of the three must carry exactly one `actions/setup-python` step whose
 // `python-version` input is the string "3.14" (quoted: an unquoted YAML
 // version is a float, and `3.10` would read as `3.1`), placed before the
 // first step that runs python. No setup-python step anywhere in the workflow
@@ -23,7 +22,7 @@ const REPO_ROOT = join(import.meta.dir, "../..");
 const RELEASE_WORKFLOW = join(REPO_ROOT, ".github", "workflows", "release.yml");
 
 const THE_FLOOR = "3.14";
-const JOBS_THAT_RUN_PYTHON = ["build", "test-python", "test-bun", "publish-testpypi"] as const;
+const JOBS_THAT_RUN_PYTHON = ["build", "test-python", "test-bun"] as const;
 
 type WorkflowStep = {
   name?: string;
