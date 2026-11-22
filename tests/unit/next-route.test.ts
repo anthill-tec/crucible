@@ -16,8 +16,7 @@
 // the router's fallback and every assertion on the (future) NEXT/DRAINED/
 // refusal SHAPE fails — the missing route, not a broken harness.
 //
-// AC13 — every fixture is synthetic (`CR-NEXTPTR-*`, registered in
-// tests/integration/project-namespace-tripwire.test.ts's SYNTHETIC_NAMESPACES).
+// AC13 — every fixture is synthetic, naming no real CR.
 import { describe, test, expect, afterEach } from "bun:test";
 import type { BoardHandle } from "../../src/server.ts";
 import { MIGRATIONS, SCHEMA_VERSION } from "../../src/store.ts";

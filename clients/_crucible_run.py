@@ -4,9 +4,7 @@ Every suite-running verb of every stack client opens a run on the board, runs
 its runner with the output streamed and narrated, files the runner's reports
 through one ingest, and settles the run however it ends (filed, aborted, or
 left to the server's sweep after a signal). That pipeline lives here, beside
-`_crucible_axi.py`, the core every client loads, so the core stays under the
-size the citation guard can read (`BARE_LINE_IMPLAUSIBLE_THRESHOLD` in
-`tests/unit/citations-cite-by-symbol.test.ts`).
+`_crucible_axi.py`, the core every client loads.
 
 No client loads this module. The core loads it by file path from its own
 directory, eagerly, under a name derived from its own (`f"{__name__}_run"`),

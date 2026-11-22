@@ -6399,9 +6399,8 @@ TIER_MEANINGS = {
 # tell a decision from an oversight (§S1).
 #
 # That sentence NAMES the open question and cites no CR id, and the omission is
-# deliberate: the value is EMITTED into `suites[].excluded`, and a project
-# namespace literal at a position a client EMITS is what this project's own
-# tripwire forbids. The lineage belongs in this comment, where it already is;
+# deliberate: the value is EMITTED into `suites[].excluded`, and what a client
+# EMITS carries no project's CR namespace. The lineage belongs in this comment, where it already is;
 # the reader of the envelope needs the REASON, which is the unanswered
 # question, not the number of the CR that declined to answer it.
 GATE_UNCOVERED_TIERS = {
