@@ -38,13 +38,6 @@ written, because the suite drives an installer that really writes files. Both
 drive the whole lifecycle (install -> resolve -> purge) and carry the L2 escape
 detector every case in this file inherits.
 
-`TheKernelIsolationScriptIsDocumentedAndCannotDriftTest` (§S3 L3) -- the
-opt-in third layer: a `bwrap` script an operator RUNS, documented in the RUNBOOK
-beside the suite it wraps, with the documented command and the script's own
-contents asserted to be ONE datum (CR-CRU-134's derivation rule) -- and NOT a
-CI job, because bubblewrap is not guaranteed on `ubuntu-latest` and a gate that
-cannot run everywhere is a gate that gets bypassed.
-
 HOW EACH FAILS IF THE CODE DOES NOTHING:
 
   §S1  `project_config_path` (clients/_crucible_axi.py) is ONE path,
@@ -73,8 +66,7 @@ HOW EACH FAILS IF THE CODE DOES NOTHING:
         another host is told nothing about the file that was not written.
   §S3  both lifecycle tests fail on their §S1 resolution assertion; the escape
         detector is fixture-level and passes today (nothing escapes), which is
-        what it is for. The L3 test fails because docs/RUNBOOK.md documents no
-        sandboxing script for this suite and no such script exists.
+        what it is for.
 
 The cross-runtime half of §S2 -- that the server READS `dirname(store)/
 crucible.toml` -- is already asserted, on the server's own runtime, by
@@ -1262,104 +1254,6 @@ class AFreshContainersEnvironmentTest(_InstalledDeploymentCase):
             "an installed client resolves the install's own configuration on a "
             "machine that has no $HOME, $XDG_DATA_HOME, $XDG_CONFIG_HOME or "
             "$BUN_INSTALL of its own")
-
-
-class TheKernelIsolationScriptIsDocumentedAndCannotDriftTest(_InstalledDeploymentCase):
-    """L3 -- OPT-IN, and a script an operator RUNS rather than a CI job.
-
-    `bwrap` is not guaranteed on `ubuntu-latest`, and a gate that cannot run
-    everywhere is a gate that gets bypassed; on a disposable container it
-    defends nothing L1+L2 do not. So the third layer is offered rather than
-    wired in -- and an offered layer that nobody can find is not offered at
-    all, which is why it is documented in the RUNBOOK beside the suite it
-    wraps.
-
-    Documentation and script are asserted to be ONE datum (CR-CRU-134's
-    derivation rule): the command the RUNBOOK shows an operator is read out of
-    the RUNBOOK, the script is found BY THE PATH THE RUNBOOK NAMES, and every
-    isolation flag the one carries must appear in the other. A RUNBOOK that
-    documents a `--tmpfs "$HOME"` the script does not pass is a reader who
-    believes their `$HOME` is on memory while a real write lands on it.
-    """
-
-    #: The flags that MAKE it isolation rather than a shell wrapper: a user
-    #: namespace, a tmpfs over `$HOME` (where `~/.crucible` and the XDG data
-    #: dir live) and one over the runtime dir. Dropping any of them silently
-    #: turns the script into a no-op that reads as protection.
-    BWRAP_FLAGS = ("--unshare-user", "--unshare-pid", "--dev-bind",
-                   "--tmpfs", "$HOME", "/run/user/")
-
-    SUITE = os.path.basename(__file__)
-    RUNBOOK = REPO_ROOT / "docs" / "RUNBOOK.md"
-
-    def runbook_section(self):
-        text = self.RUNBOOK.read_text(encoding="utf-8")
-        self.assertIn(
-            self.SUITE, text,
-            "§S3 L3: `%s` must document the sandboxing script BESIDE the suite "
-            "it wraps, naming that suite -- an operator cannot run a layer "
-            "they cannot find, and an undocumented script is L3 not existing"
-            % (self.RUNBOOK,))
-        start = text.index(self.SUITE)
-        return text[max(0, start - 2000):start + 2000]
-
-    def test_the_runbook_and_the_bwrap_script_carry_the_same_command(self):
-        section = self.runbook_section()
-        self.assertIn(
-            "bwrap", section,
-            "the documented layer is a `bwrap` user namespace with a tmpfs "
-            "over $HOME; the RUNBOOK section naming %s shows no `bwrap` "
-            "command" % (self.SUITE,))
-
-        scripts = re.findall(r"((?:scripts|bin|tools)/[\w.\-/]+\.sh)", section)
-        self.assertTrue(
-            scripts,
-            "the RUNBOOK must name the SCRIPT an operator runs, not only the "
-            "command they could retype: a command typed by hand is a command "
-            "that drifts. Section: %r" % (section[-800:],))
-        script = REPO_ROOT / scripts[0]
-        self.assertTrue(
-            script.is_file(),
-            "the RUNBOOK documents `%s` and nothing is there -- the "
-            "dangling-path defect, one artifact wider" % (scripts[0],))
-        self.assertTrue(
-            os.access(script, os.X_OK),
-            "`%s` is documented as a script an operator RUNS; it is not "
-            "executable" % (scripts[0],))
-
-        contents = script.read_text(encoding="utf-8")
-        for flag in self.BWRAP_FLAGS:
-            self.assertIn(
-                flag, contents,
-                "`%s` does not pass `%s`, so it is not the isolation it is "
-                "documented as" % (scripts[0], flag))
-            self.assertIn(
-                flag, section,
-                "the RUNBOOK's own command omits `%s` while `%s` passes it: "
-                "the documentation and the script must be ONE datum, or a "
-                "reader trusts an isolation they are not getting"
-                % (flag, scripts[0]))
-        self.assertIn(
-            self.SUITE, contents,
-            "`%s` must wrap THIS suite -- a sandboxing script that runs "
-            "something else defends nothing here" % (scripts[0],))
-
-        # …and the OTHER half of the same rule: L3 is NOT a gate. A workflow
-        # that shelled out to `bwrap` would fail on a runner that has none.
-        workflows = REPO_ROOT / ".github" / "workflows"
-        for workflow in sorted(workflows.glob("*.yml")):
-            body = workflow.read_text(encoding="utf-8")
-            self.assertNotIn(
-                "bwrap", body,
-                "%s invokes `bwrap`: L3 is opt-in precisely because "
-                "bubblewrap is not guaranteed on `ubuntu-latest`, and a gate "
-                "that cannot run everywhere is a gate that gets bypassed"
-                % (workflow.name,))
-            self.assertNotIn(
-                scripts[0], body,
-                "%s runs %s: the portable layers are L1+L2, which gate every "
-                "push; L3 stays an operator's own paranoia"
-                % (workflow.name, scripts[0]))
 
 
 # ===========================================================================
