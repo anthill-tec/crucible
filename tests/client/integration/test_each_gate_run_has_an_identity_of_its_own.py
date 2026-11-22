@@ -8,6 +8,9 @@ on two runs never share an identity, and the first to finish never removes
 the other's. A drive that gets no run id at all (refused before any
 snapshot) opens no identity.
 
+The identity is `drive_axi_run`'s, in the shared module, so one client --
+the python client -- drives it; the other four reach the same code.
+
 (a) two concurrent drives by one caller, as REAL subprocesses against one
     `RecordingBoard`: each run's snapshots carry that run's own identity, and
     the first drive's exit leaves the second's identity online (heartbeated
@@ -45,6 +48,9 @@ from tests.client.live_run_harness import (
     new_scratch,
     scrubbed_env,
 )
+
+# One client drives the shared `drive_axi_run`.
+DRIVEN_CLIENTS = {"python": CLIENT_FILES["python"]}
 
 CALLER = "one-caller-two-runs"
 PROJECT_KEY = "one-caller-two-runs-key"
@@ -145,7 +151,7 @@ class TwoConcurrentDrivesByOneCallerTest(unittest.TestCase):
     def test_every_clients_runs_each_keep_an_identity_of_their_own(self):
         short_identity = _identity(CALLER, SHORT_RUN_ID)
         long_identity = _identity(CALLER, LONG_RUN_ID)
-        for key, path in CLIENT_FILES.items():
+        for key, path in DRIVEN_CLIENTS.items():
             with self.subTest(client=key):
                 codes, outputs, posts = self._drive_both(path.name)
                 self.assertEqual(codes, [0, 0],
@@ -216,7 +222,7 @@ class TheRunIdentityNamesItsRunTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.drives = {}
-        for key, path in CLIENT_FILES.items():
+        for key, path in DRIVEN_CLIENTS.items():
             live, final = _fixture(NAMED_RUN_ID, f"feature/named-{key}",
                                    "cafe2002", "review")
             cls.drives[key] = _drive_all(
@@ -253,7 +259,7 @@ class ARefusedDriveWithNoRunIdOpensNoIdentityTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.drives = {}
-        for key, path in CLIENT_FILES.items():
+        for key, path in DRIVEN_CLIENTS.items():
             # No snapshot while the call runs, and a final answer naming no
             # run: the tool refused the respond before any run was touched.
             cls.drives[key] = _drive_all(
