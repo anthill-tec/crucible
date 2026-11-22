@@ -1,12 +1,20 @@
 """The suite's wheels build offline, with the suite's own interpreter.
 
-Three modules build the real `crucible-axi` wheel
-(`test_crucible_axi_wheel_packaging`, `test_shipped_limits_ship_as_package_
-data`, `test_cr046_uv_env_gate`). Each builds with
+Four modules build the real `crucible-axi` distributions, each named in
+`BUILDERS` with the selector of every build it runs, in order:
 
-    [sys.executable, "-m", "build", "--wheel", "--no-isolation", ...]
+- `test_crucible_axi_wheel_packaging`, `test_shipped_limits_ship_as_package_
+  data` and `test_cr046_uv_env_gate` each build one wheel (`--wheel`);
+- `test_the_source_package_ships_only_what_builds_the_wheel` builds with no
+  selector (the sdist, then the wheel built from it), then a `--wheel`.
 
-so no isolated build environment downloads the build backend: the suite's
+Every build runs as
+
+    [sys.executable, "-m", "build", <selector>, "--no-isolation",
+     "--outdir", <a directory outside the checkout>]
+
+in the checkout, so no isolated build environment downloads the build
+backend and nothing is written into the tree: the suite's
 own interpreter carries `build`, `hatchling` and `hatch_vcs` through the
 `dev` extra. No other interpreter is tried. Before the build, an in-process
 probe (`importlib.util.find_spec`) checks the three modules; with one missing
@@ -43,16 +51,54 @@ import tests.client  # noqa: F401
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 WHEEL_MODULES = ("build", "hatchling", "hatch_vcs")
-OFFLINE_BUILD = [sys.executable, "-m", "build", "--wheel", "--no-isolation"]
+BUILD_FRONTEND = [sys.executable, "-m", "build"]
 FAKE_UV = "/fake/bin/uv"
 _REAL_FIND_SPEC = importlib.util.find_spec
 
-#: (module, the class whose setUpClass builds the wheel)
+#: (module, the class whose setUpClass builds, the selector of each build it
+#: runs, in order). `None` is a build with no selector: the sdist, then the
+#: wheel built from it.
 BUILDERS = (
-    ("tests.client.integration.test_crucible_axi_wheel_packaging", "CrucibleAxiWheelPackagingTest"),
-    ("tests.client.integration.test_shipped_limits_ship_as_package_data", "_StagedWheelCase"),
-    ("tests.client.integration.test_cr046_uv_env_gate", "Cr046UvEnvironmentGateTest"),
+    ("tests.client.integration.test_crucible_axi_wheel_packaging", "CrucibleAxiWheelPackagingTest",
+     ("--wheel",)),
+    ("tests.client.integration.test_shipped_limits_ship_as_package_data", "_StagedWheelCase",
+     ("--wheel",)),
+    ("tests.client.integration.test_cr046_uv_env_gate", "Cr046UvEnvironmentGateTest",
+     ("--wheel",)),
+    ("tests.client.integration.test_the_source_package_ships_only_what_builds_the_wheel",
+     "TheSourcePackageShipsOnlyWhatBuildsTheWheelTest", (None, "--wheel")),
 )
+
+#: `build`'s distribution selectors, each spelling to its long form.
+SELECTOR_SPELLINGS = {"--wheel": "--wheel", "-w": "--wheel", "--sdist": "--sdist", "-s": "--sdist"}
+
+
+def _selector(argv):
+    """The build's selector: `--wheel`, `--sdist`, None for none, or every
+    one it names when it names more than one."""
+    named = [SELECTOR_SPELLINGS[a] for a in argv[3:] if a in SELECTOR_SPELLINGS]
+    if not named:
+        return None
+    return named[0] if len(named) == 1 else tuple(named)
+
+
+def _outdir(argv):
+    """The build's `--outdir` (or `-o`) value, or None."""
+    for flag in ("--outdir", "-o"):
+        if flag in argv[:-1]:
+            return argv[argv.index(flag) + 1]
+    for arg in argv:
+        if arg.startswith("--outdir="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _inside_the_checkout(path, cwd):
+    """True when `path` is the checkout or under it. A relative path is
+    resolved against the build's `cwd`, where the build resolves it."""
+    base = Path(cwd) if cwd is not None else Path.cwd()
+    resolved = (base / path).resolve()
+    return resolved == REPO_ROOT or REPO_ROOT in resolved.parents
 
 
 def _names_the_dev_extra(message):
@@ -85,6 +131,9 @@ class _InProcessBuild(unittest.TestCase):
         module = importlib.import_module(module_name)
         probe = type(f"_{class_name}SetupProbe", (getattr(module, class_name),), {})
         self.addCleanup(probe.tearDownClass)
+        # A builder may clean up through `addClassCleanup`, which only
+        # `doClassCleanups` runs; the probe runs it so no directory leaks.
+        self.addCleanup(probe.doClassCleanups)
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch("importlib.util.find_spec",
                                            side_effect=self.fake_find_spec(set(missing))))
@@ -104,21 +153,28 @@ class _InProcessBuild(unittest.TestCase):
 class EachWheelBuildsOfflineWithTheSuitesInterpreterTest(_InProcessBuild):
 
     def test_each_module_builds_with_sys_executable_and_no_isolation(self):
-        for module_name, class_name in BUILDERS:
+        for module_name, class_name, selectors in BUILDERS:
             with self.subTest(module=module_name):
                 self.calls = []
                 raised = self.set_up_class(module_name, class_name)
                 self.assertIsNone(raised, f"setup proceeds with all three present: {raised!r}")
                 builds = self.build_calls()
-                self.assertEqual(len(builds), 1, f"one wheel build: {self.calls!r}")
-                self.assertEqual(builds[0]["argv"][:5], OFFLINE_BUILD,
-                                 "the build runs offline on the suite's own interpreter")
-                self.assertIn("--outdir", builds[0]["argv"])
-                self.assertEqual(str(builds[0]["cwd"]), str(REPO_ROOT),
-                                 "the checkout is what is built")
+                self.assertEqual([_selector(b["argv"]) for b in builds], list(selectors),
+                                 f"the builds run in order with their selectors: {self.calls!r}")
+                for build in builds:
+                    argv = build["argv"]
+                    self.assertEqual(argv[:3], BUILD_FRONTEND,
+                                     f"the build runs on the suite's own interpreter: {argv!r}")
+                    self.assertIn("--no-isolation", argv, f"the build runs offline: {argv!r}")
+                    outdir = _outdir(argv)
+                    self.assertIsNotNone(outdir, f"the build names its --outdir: {argv!r}")
+                    self.assertFalse(_inside_the_checkout(outdir, build["cwd"]),
+                                     f"the build writes outside the checkout: {outdir}")
+                    self.assertEqual(str(build["cwd"]), str(REPO_ROOT),
+                                     "the checkout is what is built")
 
     def test_no_module_probes_another_interpreter(self):
-        for module_name, class_name in BUILDERS:
+        for module_name, class_name, _ in BUILDERS:
             with self.subTest(module=module_name):
                 self.calls = []
                 self.set_up_class(module_name, class_name)
@@ -133,7 +189,7 @@ class EachWheelBuildsOfflineWithTheSuitesInterpreterTest(_InProcessBuild):
 class AMissingBuildModuleFailsNamingTheDevExtraTest(_InProcessBuild):
 
     def test_each_module_fails_naming_the_missing_module_and_the_dev_extra(self):
-        for module_name, class_name in BUILDERS:
+        for module_name, class_name, _ in BUILDERS:
             for missing in WHEEL_MODULES:
                 with self.subTest(module=module_name, missing=missing):
                     self.calls = []

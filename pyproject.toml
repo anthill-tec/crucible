@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "crucible-axi"
 dynamic = ["version"]
 description = "Crucible install orchestrator — ships the *-crucible.py client fleet and stages server/manifest sub-installers behind one TOON-AXI envelope"
+readme = "README.md"
 requires-python = ">=3.14"
 license = "GPL-3.0-only"
 dependencies = []
@@ -34,20 +35,25 @@ Issues = "https://github.com/anthill-tec/crucible/issues"
 #                            (CR-CRU-040 §S1); coverage.py is the only
 #                            supported coverage path for this client.
 #   build                  — the PEP 517 frontend the packaging contracts
-#                            build a real wheel with, as
-#                            `sys.executable -m build --wheel --no-isolation`:
+#                            build real artifacts with, as
+#                            `sys.executable -m build --wheel --no-isolation`
+#                            for a wheel, or with no selector for the sdist
+#                            and the wheel built from it:
 #                            the suite's OWN interpreter, offline, no other
 #                            interpreter tried. Fail-fast, never skipped:
 #                            `setUpClass` RAISES, naming this extra, when
 #                            `importlib.util.find_spec` cannot find `build`,
 #                            `hatchling` or `hatch_vcs`, because a silent
 #                            skip is how a packaging defect stays invisible.
-#                            Named demanders (each `_build_modules_gap`):
+#                            Named demanders (each `build_modules_gap`):
 #                            test_cr046_uv_env_gate.py,
-#                            test_crucible_axi_wheel_packaging.py, and
+#                            test_crucible_axi_wheel_packaging.py,
 #                            test_shipped_limits_ship_as_package_data.py
 #                            (three classes — CR-CRU-131 §S1c's travel,
-#                            one-datum and version-skew proofs).
+#                            one-datum and version-skew proofs), and
+#                            test_the_source_package_ships_only_what_builds_the_wheel.py,
+#                            which also builds the sdist and the wheel from
+#                            it, as CI's own `python -m build` does.
 #   hatchling              — the build backend `[build-system]` names. With
 #                            `--no-isolation` no isolated environment
 #                            downloads it, so the suite's interpreter carries
@@ -86,6 +92,16 @@ crucible-axi = "crucible_axi.cli:main"
 [tool.hatch.version]
 source = "vcs"
 raw-options = { local_scheme = "no-local-version", version_scheme = "release-branch-semver" }
+
+# The source package carries only what builds the wheel: the package, the
+# client fleet the wheel force-includes, and the changelog. Hatchling adds
+# by itself pyproject.toml, the root .gitignore, the declared readme, the
+# licence files its default globs match, and the generated PKG-INFO. It walks
+# the disk under these paths, honouring only the root .gitignore, so a
+# working checkout's untracked files there go in too; a clean one (CI) ships
+# exactly the tracked files.
+[tool.hatch.build.targets.sdist]
+only-include = ["/crucible_axi", "/clients", "/CHANGELOG.md"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["crucible_axi"]

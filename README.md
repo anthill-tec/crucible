@@ -175,7 +175,7 @@ bun suite and both client tiers in one run.
 
 ## Documentation
 
-- [docs/RUNBOOK.md](docs/RUNBOOK.md) — operating the server (start/stop, db
+- [docs/RUNBOOK.md](https://github.com/anthill-tec/crucible/blob/master/docs/RUNBOOK.md) — operating the server (start/stop, db
   path, health, port/bind config).
 - `clients/` — the per-stack reporting clients
   (`{bun,python,rust,mvn,arduino,go}-crucible.py`) plus the shared TOON-AXI

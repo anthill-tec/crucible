@@ -1,6 +1,6 @@
 # CR-CRU-266: the source package ships only what builds the wheel
 
-**Status:** PENDING. Filed 2026-11-21, from the 0.4.0 package smoke (`test-reports/work/rel040-smoke-report.md`,
+**Status:** COMPLETED — 2026-11-22. Filed 2026-11-21, from the 0.4.0 package smoke (`test-reports/work/rel040-smoke-report.md`,
 finding 1) and the 0.4.0 publish's `twine check` warnings. User ruling: filed for 0.5.0 after the release.
 Revised 2026-11-22 after the gap analysis (`test-reports/work/cr266-gap-analysis.md`) and the spec pre-review
 (`test-reports/work/prereview266-report.md`, F1–F10), with user rulings.
@@ -153,3 +153,43 @@ Both builds:
 - Changing what the wheel contains.
 - The npm package's file list, which `package.json` `files` already bounds.
 - The `publish-testpypi` "Version sanity" step, which never derives a version. That is CR-CRU-271.
+
+## Close-out (2026-11-22)
+
+- **S1.** `[tool.hatch.build.targets.sdist]` declares `only-include = ["/crucible_axi", "/clients", "/CHANGELOG.md"]`,
+  with a comment naming what hatchling adds itself and the walk's root-`.gitignore`-only scope.
+- **S3.** The package now has a readme:
+  - `readme = "README.md"`;
+  - the one relative README link is now absolute (`README.md:178`, `docs/RUNBOOK.md`);
+  - `release.yml`'s build job runs `twine check --strict dist/*`.
+- **AC1, AC2, AC3a:** `tests/client/integration/test_the_source_package_ships_only_what_builds_the_wheel.py`. It runs
+  two offline builds into its own temporary directories: CI's own sdist-then-wheel build, and a `--wheel` build from
+  the checkout. It proves:
+  - the sdist is bounded;
+  - the sdist is complete against `git ls-files`, and holds on a dirty tree;
+  - the shipped wheel is exactly what the sdist holds, with the same `dist-info` name;
+  - the `METADATA` description is `README.md` byte for byte;
+  - the builds leave nothing in the checkout.
+- **AC3b:** `tests/client/unit/test_the_readme_links_only_absolute_targets.py`. It scans paragraphs, so wrapped links
+  are found, and covers every link form; code is skipped. One synthetic case pins the scanner.
+- **AC4:**
+  - The bun unit test `tests/unit/release-build-checks-its-artifacts-strictly.test.ts` pins that
+    `twine check --strict dist/*` runs after `python -m build`.
+  - The CI half rides the next push of develop, with the user's OK.
+  - TestPyPI acceptance is checked at the 0.5.0 rehearsal.
+- **AC5:** `### Changed` under `## [Unreleased]`, between Upgrading and Fixed.
+- **AC6:** the offline-build guard's `BUILDERS` carries each builder's selectors, and checks every build's
+  interpreter, `--no-isolation`, an `--outdir` outside the checkout resolved against the build's cwd, and the cwd. The
+  three wheel builders are unchanged; a missing module still fails. The docstrings and the `pyproject.toml` comments
+  name the new builds.
+- **Gate:** `pre-merge-gate` cycle 999, 5 suites, 14845/0.
+- **Cycles:**
+  - 996 red-green: python and bun RED, then GREEN.
+  - 997 verify: READY, S1/S2 and Sug1–4.
+  - 998 fix, by user ruling: S1, S2, Sug1–Sug3. Sug4 (two loud edge cases in the AC4 parser) is noted only.
+  - 999 fix: the cycle-998 gate's one failure. The existing guard
+    `test_no_test_builds_its_own_path_to_the_client_source` flagged a relative `clients` spawn argument, and the
+    module now lists every tracked file and filters by prefix.
+- **Found on the way:** the 0.4.0 sdist carried the tracked `.envrc` (`dotenv` only, no secret). It is gone from
+  every sdist after this CR.
+- **Merge:** the user pre-approved it once the gate was green.

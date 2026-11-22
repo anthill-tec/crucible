@@ -122,7 +122,7 @@ jobs:
             echo "::warning::pip install failed; attempt $attempt of 2"
           done
           python -m build
-          twine check dist/*
+          twine check --strict dist/*
       # CR-CRU-137 §S5 — MATCHED PAIR with actions/download-artifact in
       # publish-pypi and publish-testpypi: these two only ever move together.
       # This step uploads the `dist` artifact both publish jobs download, and

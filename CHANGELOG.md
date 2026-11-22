@@ -20,6 +20,13 @@ Releases before 0.3.0 are described only on GitHub Releases.
   failure. A lone run that is filed with no counts now also answers `ok: false`, with a
   `gate-suite-unreported` warning, while its exit stays 0.
 
+### Changed
+
+- **The source package carries only what builds the wheel.** The `crucible-axi` sdist now holds the
+  `crucible_axi` package and the client fleet, plus the project metadata (`pyproject.toml`, the
+  README, the licence and this changelog), instead of the whole repository. The wheel built from it
+  is unchanged. The package's PyPI page now shows the README as its description.
+
 ### Fixed
 
 - **A gate drive no longer hangs on the tool's own output.** `gate-run` and `gate-respond` no
