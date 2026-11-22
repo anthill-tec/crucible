@@ -1,6 +1,6 @@
 # CR-CRU-273: time-ordered reads break ties by insertion order
 
-**Status:** PENDING. Filed 2026-11-22 from the test-cull survey (`test-reports/work/cull-survey-report.md` §6 item 1),
+**Status:** COMPLETED (2026-11-22). Filed 2026-11-22 from the test-cull survey (`test-reports/work/cull-survey-report.md` §6 item 1),
 with the user's ruling that it comes after the cull and ahead of CR-CRU-267. Revised the same day, first by the gap
 analysis (`test-reports/work/cr273-gap-analysis.md`) and the user's ruling on G1, then by the spec pre-review
 (`test-reports/work/prereview273-report.md`).
@@ -72,3 +72,18 @@ order.
 - **Sorts done in JavaScript in `src/v2.ts`.** For example, `historyGateRuns` sorts by `at` only, so tied gate runs
   list oldest first. This is noted for a later CR.
 - Changing timestamp resolution.
+
+## Close-out
+
+Closed on 2026-11-22. Board plan 271: cycle 1007 (RED+GREEN) and cycle 1008 (VERIFY).
+
+- **RED, `73a83bae`.** `tests/unit/time-ordered-reads-break-ties-by-insertion-order.test.ts` holds 7 unit tests:
+  - AC1's three `listAgents` tests failed on order alone;
+  - the four AC2 and AC3 guards passed, as the spec states.
+- **GREEN, `400a2adf`.** The six queries gained `rowid` in their own direction, and the CHANGELOG gained a `### Fixed`
+  entry. The unit tier passed 2694/0.
+- **VERIFY, READY.** No blockers and nothing graded should-fix.
+  - Sug1, the CHANGELOG wording, was applied in `65c6d2bf`.
+  - Sug2 was noted: a test for the re-registration clause of S2. The behaviour is a delete followed by a fresh row.
+- **Pre-merge gate, cycle 1008.** 13,281 passed, 0 failed, in 1,814.6 s.
+- **Left for later.** The JavaScript sort `historyGateRuns` in `src/v2.ts` is a non-goal here and goes to a later CR.
