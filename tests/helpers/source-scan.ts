@@ -2,7 +2,7 @@
 // as text: the tree walker and the comment-vs-live-text classifier.
 //
 // LIFTED, not re-derived (CR-CRU-097 §S6). Every function here was
-// file-local to tests/unit/docs-retired-mirror-references.test.ts, which proved
+// file-local to a since-deleted docs guard test, which proved
 // them; CR-CRU-097's namespace tripwire needs the same
 // comment-vs-string discrimination, and writing a second stripper is
 // exactly the failure CR-CRU-096's C1 fix round was opened for (a
