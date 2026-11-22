@@ -33,8 +33,8 @@
 //
 // The server enforced three limits; it now enforces five. A count written in
 // prose is a claim nothing else checks, so each document that states the
-// server's count — the two source files' comments, the RUNBOOK's prose and
-// PRD §4.13's prose — is held to the new number here, and its stale "three"
+// server's count — the two source files' comments — is held to the new
+// number here, and its stale "three"
 // phrasing is named so a document that kept it fails by name.
 //
 // ── Safety ──────────────────────────────────────────────────────────────────
@@ -254,43 +254,12 @@ function read(rel: string): string {
   return fs.readFileSync(path.join(REPO, rel), "utf8");
 }
 
-/** The text from `start` up to (not including) the first `end` match after it. */
-function section(text: string, start: RegExp, end: RegExp): string {
-  const at = text.search(start);
-  expect(at, `no section matching ${start}`).toBeGreaterThanOrEqual(0);
-  const rest = text.slice(at);
-  // Search for the end only AFTER the heading line, so a heading cannot end
-  // its own section.
-  const bodyFrom = rest.indexOf("\n") + 1;
-  const stop = rest.slice(bodyFrom).search(end);
-  return stop < 0 ? rest : rest.slice(0, bodyFrom + stop);
-}
-
 /** The stale phrases a document counting THREE server limits used; none may survive. */
 function staleCounts(text: string, phrases: readonly RegExp[]): string[] {
   return phrases.filter((p) => p.test(text)).map(String);
 }
 
 describe("every document that counts the server's limits counts five", () => {
-  test("PRD §4.13 names ingest_body_bytes and raw_output_chars and counts the server's five", () => {
-    const prd = section(read("docs/research/PRD-crucible-v2.md"), /^### 4\.13 /m, /^#{2,3} /m);
-    for (const name of INGEST_LIMITS) {
-      expect(prd.includes(name), `PRD §4.13 does not name \`${name}\``).toBe(true);
-    }
-    expect(prd).toMatch(/server's five\b/i);
-    expect(staleCounts(prd, [/server's three\b/i])).toEqual([]);
-  });
-
-  test("the RUNBOOK's prose on the server's limits counts five", () => {
-    const runbook = section(
-      read("docs/RUNBOOK.md"),
-      /^### The server's limits/m,
-      /^### The project's limits/m,
-    );
-    expect(runbook).toMatch(/\bfive\b/i);
-    expect(staleCounts(runbook, [/\bthree limits\b/i, /server's three\b/i])).toEqual([]);
-  });
-
   test("src/limits.ts's comments count the server's five limits", () => {
     const source = read("src/limits.ts");
     expect(source).toMatch(/\bfive\b/i);

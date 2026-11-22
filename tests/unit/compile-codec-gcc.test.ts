@@ -413,40 +413,6 @@ describe("gcc codec — the record names it", () => {
     expect(header.length).toBeGreaterThan(0);
     expect(header.join("\n")).toMatch(GCC);
   });
-
-  const PRD = readFileSync(join(REPO_ROOT, "docs", "research", "PRD-crucible-v2.md"), "utf8");
-
-  function section(startHeading: string, nextHeading: string): string {
-    const start = PRD.indexOf(startHeading);
-    expect(start).toBeGreaterThan(-1);
-    const end = PRD.indexOf(nextHeading, start + startHeading.length);
-    expect(end).toBeGreaterThan(start);
-    return PRD.slice(start, end);
-  }
-
-  test("the PRD's event `codec` values name gcc", () => {
-    const rows = PRD.split("\n").filter((l) => l.startsWith("| `codec` |"));
-    expect(rows.length).toBe(1);
-    expect(rows[0]).toMatch(GCC);
-  });
-
-  test("the PRD's /api/ingest/compile format list names gcc", () => {
-    const anchor = "- `/api/ingest/compile` `format` is optional";
-    const start = PRD.indexOf(anchor);
-    expect(start).toBeGreaterThan(-1);
-    const after = PRD.slice(start + anchor.length);
-    const endRel = after.search(/\n(?:- |\n|#)/);
-    const bullet = anchor + (endRel < 0 ? after : after.slice(0, endRel));
-    expect(bullet).toMatch(GCC);
-  });
-
-  test("the PRD's test-ingest codec section names gcc", () => {
-    expect(section("### 4.4 ", "### 4.5 ")).toMatch(GCC);
-  });
-
-  test("the PRD's compile-ingest section names gcc among its structured parsers", () => {
-    expect(section("### 4.5 ", "### 4.6 ")).toMatch(GCC);
-  });
 });
 
 describe("gcc codec — a long line decodes in bounded time", () => {

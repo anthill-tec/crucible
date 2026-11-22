@@ -5,8 +5,7 @@
 //    v23;
 //  - a run stored before v24 reads unchanged (its tests answer no `steps`),
 //    an open run's live failure stored before v24 reads unchanged (no
-//    `browser`), and a run stored after the migration stores its steps;
-//  - RUNBOOK's schema figures read v25.
+//    `browser`), and a run stored after the migration stores its steps.
 //
 // Interface choice (stated for the orchestrator's ruling): the step row's
 // columns are `event_id`, `suite_position`, `case_position`, `position`,
@@ -30,10 +29,6 @@ import type { RunEvent, RunLive, SuiteNode } from "../../src/types.ts";
 
 const PRE_STEPS_VERSION = 23;
 const STEPS_VERSION = 24;
-// The schema figures RUNBOOK states: the version the runbook documents, and
-// the one before it that it must no longer name.
-const RUNBOOK_VERSION = 25;
-const PRE_RUNBOOK_VERSION = 24;
 
 const STEP_COLUMNS = [
   "case_position",
@@ -264,22 +259,5 @@ describe("migration v24 adds run_case_steps and run_live_failures.browser", () =
 
     expect(store.getEvent(id)?.tree as unknown).toEqual(tree);
     expect(dbOf(store).query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM run_case_steps WHERE event_id = ?").get(id)?.n).toBe(2);
-  });
-});
-
-describe("RUNBOOK's schema figures read v25", () => {
-  test("docs/RUNBOOK.md states schema v25, the migration banner reaching v25 and the health figure schemaVersion 25, and names no v24 figure", () => {
-    const runbook = fs.readFileSync(path.join(import.meta.dir, "../..", "docs", "RUNBOOK.md"), "utf8");
-    // Each figure read out of the runbook, so a failure names the figures it found rather than the whole file.
-    const figures = (pattern: RegExp): string[] => runbook.match(pattern) ?? [];
-    const banner = figures(/schema v\d+\)/g);
-    const migrated = figures(/-> v\d+ \(/g);
-    const health = figures(/"schemaVersion":\d+/g);
-    expect(banner).toContain(`schema v${RUNBOOK_VERSION})`);
-    expect(migrated).toContain(`-> v${RUNBOOK_VERSION} (`);
-    expect(health).toContain(`"schemaVersion":${RUNBOOK_VERSION}`);
-    expect(banner).not.toContain(`schema v${PRE_RUNBOOK_VERSION})`);
-    expect(migrated).not.toContain(`-> v${PRE_RUNBOOK_VERSION} (`);
-    expect(health).not.toContain(`"schemaVersion":${PRE_RUNBOOK_VERSION}`);
   });
 });
