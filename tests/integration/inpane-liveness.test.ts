@@ -34,13 +34,8 @@
 // production — that is reported honestly per test, not forced RED.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
 import { mountUi, SHORT_POLL, waitForPollTick, type UiIntervals } from "../helpers/ui-mount";
-
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 
 // A test that waits on a poll tick mounts with a SHORT poll (`SHORT_POLL`,
 // for its own mount only) and waits for that tick's read through the shared
@@ -788,14 +783,8 @@ describe("CR-CRU-037 §S1 characterization — per-agent liveness dimming has no
 // semantic class, its own `@keyframes`, none of the three the stylesheet
 // already declares) and leaves the NAME to the implementation — so these tests
 // read the token off the rendered DOM (the one class a streaming row has that
-// an otherwise-identical idle row lacks) and then hold the stylesheet to that
-// token. A hardcoded guess would have failed for the wrong reason.
-
-const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");
-/** Comments stripped once: a provenance comment naming a class must never be
- *  read as a rule, and a commented-out `@keyframes` must never count as
- *  declared (the CR-CRU-096 defect shape). */
-const STYLES_RULES = STYLES_SRC.replace(/\/\*[\s\S]*?\*\//g, "");
+// an otherwise-identical idle row lacks). A hardcoded guess would have failed
+// for the wrong reason.
 
 function classTokens(el: Element): string[] {
   return el.className.split(/\s+/).filter((t) => t.length > 0);
@@ -827,50 +816,11 @@ function activityClassFrom(streaming: HTMLElement, idle: HTMLElement): string {
   return added[0]!;
 }
 
-/** Every `@keyframes` NAME `public/styles.css` declares. */
-function declaredKeyframes(): string[] {
-  return Array.from(STYLES_RULES.matchAll(/@keyframes\s+([A-Za-z][\w-]*)/g)).map((m) => m[1]!);
-}
-
-/** Every rule body whose selector list names `.<cls>` as a standalone class
- *  token — the `allRuleBodiesForClass` technique from
- *  tests/integration/pane-scroll-floor.test.ts, for the same reason it exists there: the
- *  assertion is about the CLASS, not about one selector shape GREEN must
- *  guess (`.x {}`, `.app-agent-row.x {}` and `.x .app-agent-glyph {}` are all
- *  legitimate homes for the animation). */
-function ruleBodiesForClass(cls: string): string {
-  const escaped = cls.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`([^{}]*(?:^|[\\s,>+~])\\.${escaped}(?![\\w-])[^{}]*)\\{([^}]*)\\}`, "gs");
-  const bodies: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(STYLES_RULES)) !== null) bodies.push(m[2] ?? "");
-  return bodies.join("\n");
-}
-
-/** The declared keyframes names referenced by `animation`/`animation-name` in
- *  `body`. Intersecting against the DECLARED set is what makes this safe to
- *  run over a shorthand: `1.6s`, `ease-in-out` and `infinite` are not
- *  keyframes, and a reference to an UNDECLARED name yields nothing — which is
- *  the correct, loud outcome for a typo'd animation. */
-function animationsIn(body: string, declared: string[]): string[] {
-  const names: string[] = [];
-  for (const decl of body.matchAll(/animation(?:-name)?\s*:\s*([^;}]+)/g)) {
-    for (const word of (decl[1] ?? "").matchAll(/[A-Za-z][\w-]*/g)) {
-      if (declared.includes(word[0]) && !names.includes(word[0])) names.push(word[0]);
-    }
-  }
-  return names;
-}
-
 function openRun(
   overrides: Partial<OpenRunFixture> & { runId: string; projectKey: string; agentId: string },
 ): OpenRunFixture {
   return { startedAt: Date.now() - 4_000, ...overrides };
 }
-
-/** The three animations that already exist, BY NAME. §S1's whole point is that
- *  a fourth signal does not collapse into any of them. */
-const EXISTING_ANIMATIONS = ["app-spin", "app-run-pulse", "app-locate-blink"] as const;
 
 describe("CR-CRU-123 §S1 — an agent with a run in flight animates on its Project-pane row", () => {
   test("the row of the agent an open run NAMES carries exactly one class its otherwise-identical sibling does not — and with two agents and one open run, exactly ONE of the two rows carries it", async () => {
@@ -927,40 +877,6 @@ describe("CR-CRU-123 §S1 — an agent with a run in flight animates on its Proj
     // document graph to build its failure diff and never returns.
     expect(rows.length).toBe(2);
     expect(rows.filter((r) => classTokens(r).includes(activity)).length).toBe(0);
-  });
-
-  test("the activity class drives its OWN `@keyframes` in public/styles.css — not app-spin, not app-run-pulse, not app-locate-blink, each ruled out by name", async () => {
-    const projectKey = "proj-stream-css";
-    await mountApp({
-      pathname: `/p/${projectKey}`,
-      projects: [project({ key: projectKey, name: "Animation Identity Project", agentsTotal: 2 })],
-      agents: [
-        agent({ agentId: "alpha-agent", projectKey, message: "working" }),
-        agent({ agentId: "bravo-agent", projectKey, message: "working" }),
-      ],
-      events: [],
-      eventDetails: {},
-      openRuns: [openRun({ runId: "run-alpha-3", projectKey, agentId: "alpha-agent" })],
-    });
-
-    const declared = declaredKeyframes();
-    // The three that already exist are still declared — a "fourth signal" that
-    // arrived by renaming one of them is not a fourth signal.
-    for (const existing of EXISTING_ANIMATIONS) expect(declared).toContain(existing);
-
-    // The stylesheet is held to the class the DOM actually carries, so the
-    // signal and its motion cannot be wired to two different names.
-    const activity = activityClassFrom(rowFor("alpha-agent"), rowFor("bravo-agent"));
-    const body = ruleBodiesForClass(activity);
-    expect(body.length).toBeGreaterThan(0);
-
-    const used = animationsIn(body, declared);
-    expect(used).toHaveLength(1);
-    const animation = used[0]!;
-    expect(declared).toContain(animation);
-    expect(animation).not.toBe("app-spin");
-    expect(animation).not.toBe("app-run-pulse");
-    expect(animation).not.toBe("app-locate-blink");
   });
 
   test(

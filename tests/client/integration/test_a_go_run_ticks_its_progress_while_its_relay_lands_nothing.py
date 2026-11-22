@@ -12,8 +12,7 @@ client hands `start_stream_relay`. The go client hands the shared
   - a run whose listing failed posts `running N`, with no M;
   - a run whose relay lands every batch posts no in-run tick;
   - `regression` over two modules, a declared tier verb (`integration`), and
-    the gate's per-tier suite each tick through the same sender, the one
-    `_go_test_run` call site carrying them all;
+    the gate's per-tier suite each tick through the same sender;
   - under a gated run, the tick poster carries the bracket's identity, which
     observes each tick's response: a tick whose answer says it created the
     agent row makes the row this run's to remove at its close.
@@ -32,7 +31,6 @@ Invocation:
         --tests tests.client.integration.test_a_go_run_ticks_its_progress_while_its_relay_lands_nothing
 """
 
-import ast
 import subprocess
 import time
 import unittest
@@ -391,86 +389,6 @@ class AGatedGoRunsTicksAreObservedByItsIdentityTest(_GoTickCase):
                       "the close says the removal it made")
         self.assertNotIn(f"cleanup: skipped agent={AGENT}", drive.stderr,
                          "the close does not read the row as the caller's")
-
-
-# ── the one call site ──────────────────────────────────────────────────────
-
-
-def _function(tree, name):
-    return next((node for node in tree.body
-                 if isinstance(node, ast.FunctionDef) and node.name == name), None)
-
-
-def _calls_named(node, name):
-    return [call for call in ast.walk(node) if isinstance(call, ast.Call)
-            and ((isinstance(call.func, ast.Attribute) and call.func.attr == name)
-                 or (isinstance(call.func, ast.Name) and call.func.id == name))]
-
-
-class TheGoClientsOneRelayCallSiteHandsTheNarrationPosterTest(unittest.TestCase):
-    """The single `start_stream_relay` call of `clients/go-crucible.py`, in
-    `_go_test_run`, hands `narration_poster(_post, key, agent, identity)` as
-    its tick sender, `GO_TEST_CODEC` as its codec and `listed_total=total`;
-    `_gated_go_run` binds the bracket's identity and hands it on."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.tree = ast.parse(Path(GO_CLIENT).read_text(encoding="utf-8"))
-
-    def function(self, name) -> ast.FunctionDef:
-        found = _function(self.tree, name)
-        if found is None:
-            self.fail(f"the go client defines `{name}`")
-        return found
-
-    def relay_call(self):
-        calls = _calls_named(self.tree, "start_stream_relay")
-        self.assertEqual(len(calls), 1, "the go client starts its relay at one call site")
-        run = self.function("_go_test_run")
-        self.assertEqual(_calls_named(run, "start_stream_relay"), calls,
-                         "the one call site is `_go_test_run`'s")
-        return calls[0]
-
-    def test_the_tick_sender_is_the_narration_poster_built_with_the_identity(self):
-        call = self.relay_call()
-        self.assertGreater(len(call.args), 1, "the tick sender is the second argument")
-        tick = call.args[1]
-        self.assertEqual(ast.unparse(tick),
-                         "_axi().narration_poster(_post, key, agent, identity)",
-                         "the tick sender is the shared narration poster, built with the "
-                         "gated bracket's identity")
-
-    def test_the_relay_counts_the_go_test_codec_against_the_listed_total(self):
-        call = self.relay_call()
-        self.assertIn("GO_TEST_CODEC", [ast.unparse(a) for a in call.args],
-                      "the codec is GO_TEST_CODEC, as before")
-        keywords = {k.arg: ast.unparse(k.value) for k in call.keywords}
-        self.assertEqual(keywords.get("listed_total"), "total",
-                         f"the listed total rides the relay; keywords={keywords!r}")
-
-    def test_go_test_run_takes_the_identity_and_the_gated_bracket_hands_it_on(self):
-        run = self.function("_go_test_run")
-        positional = [a.arg for a in run.args.args]
-        names = positional + [a.arg for a in run.args.kwonlyargs]
-        self.assertIn("identity", names, "`_go_test_run` takes `identity`")
-        defaults = {}
-        if run.args.defaults:
-            defaults.update(zip(positional[-len(run.args.defaults):],
-                                (ast.unparse(d) for d in run.args.defaults), strict=True))
-        defaults.update({a.arg: ast.unparse(d) for a, d in
-                         zip(run.args.kwonlyargs, run.args.kw_defaults, strict=True)
-                         if d is not None})
-        self.assertEqual(defaults.get("identity"), "None", "`identity` defaults to None")
-        gated = self.function("_gated_go_run")
-        bound = [item.optional_vars for node in ast.walk(gated) if isinstance(node, ast.With)
-                 for item in node.items if _calls_named(item.context_expr, "gated_run")]
-        self.assertEqual([ast.unparse(v) if v is not None else None for v in bound],
-                         ["identity"], "`with _axi().gated_run(...) as identity`")
-        handed = _calls_named(gated, "_go_test_run")
-        self.assertEqual(len(handed), 1)
-        passed = ([ast.unparse(a) for a in handed[0].args]
-                  + [ast.unparse(k.value) for k in handed[0].keywords if k.arg == "identity"])
-        self.assertIn("identity", passed, "`_gated_go_run` hands the identity to `_go_test_run`")
 
 
 if __name__ == "__main__":

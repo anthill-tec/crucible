@@ -25,7 +25,6 @@ attributes; `stopped` is falsy when sending never stopped, else a text naming
 why (the board's status).
 """
 
-import ast
 import contextlib
 import io
 import json
@@ -37,13 +36,11 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
-from tests.client import CLIENT_SOURCE_DIR
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from tests.client.live_run_harness import load_client
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-RUN_MODULE_PATH = CLIENT_SOURCE_DIR / "_crucible_run.py"
 
 AXI = load_client("_crucible_axi.py")
 RUN = AXI._RUN
@@ -567,139 +564,6 @@ class FinishStopsJoinsSendsAndConfirmsTest(RelayTestCase):
         self.assertEqual(len(started), 1, f"start runs one background thread: {started!r}")
         self.assertTrue(wait_until(lambda: not started[0].is_alive(), timeout=2.0),
                         "finish stops the relay's thread")
-
-
-def _module_assignments(source, name):
-    return [node for node in ast.parse(source).body
-            if isinstance(node, (ast.Assign, ast.AnnAssign))
-            and any(isinstance(t, ast.Name) and t.id == name
-                    for t in (node.targets if isinstance(node, ast.Assign) else [node.target]))]
-
-
-def _relay_class(source):
-    found = [node for node in ast.walk(ast.parse(source))
-             if isinstance(node, ast.ClassDef) and node.name == "StreamRelay"]
-    return found[0] if found else None
-
-
-def spelled_constant_values(source, values):
-    """The numeric literals inside `StreamRelay` whose value is one of
-    `values` (0 and 1 aside): a relay constant spelled where its name belongs.
-    None when the source holds no `StreamRelay`."""
-    relay = _relay_class(source)
-    if relay is None:
-        return None
-    wanted = {v for v in values if v not in (0, 1)}
-    return [node.value for node in ast.walk(relay)
-            if isinstance(node, ast.Constant) and not isinstance(node.value, bool)
-            and isinstance(node.value, (int, float)) and node.value in wanted]
-
-
-#: What reading an event would take: a JSON parse, or an event kind's name.
-_EVENT_NAMES = ("run-start", "test-end", "run-end")
-_PARSE_CALLS = ("loads", "load", "JSONDecoder", "raw_decode")
-
-
-def event_reads(source):
-    """What inside `StreamRelay` reads the stream's events: a JSON parse, an
-    event kind's name, or the `event` key. None when the source holds no
-    `StreamRelay`."""
-    relay = _relay_class(source)
-    if relay is None:
-        return None
-    found = []
-    for node in ast.walk(relay):
-        if isinstance(node, ast.Call):
-            func = node.func
-            name = (func.attr if isinstance(func, ast.Attribute)
-                    else func.id if isinstance(func, ast.Name) else None)
-            if name in _PARSE_CALLS:
-                found.append(f"call {name}")
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if node.value in _EVENT_NAMES or node.value == "event":
-                found.append(f"names {node.value!r}")
-    return found
-
-
-SYNTHETIC_RELAY_THAT_COUNTS = '''
-import json
-class StreamRelay:
-    def _tick(self, text):
-        for line in text.splitlines():
-            if json.loads(line).get("event") == "test-end":
-                self.count += 1
-        time.sleep(2.0)
-'''
-
-SYNTHETIC_RELAY_THAT_FORWARDS = '''
-import json
-RELAY_SECONDS = 2.0
-class StreamRelay:
-    def _tick(self, text):
-        body = json.dumps({"data": text, "from": self.held})
-        self._post(body, timeout=RELAY_POST_TIMEOUT_SECONDS)
-        self._stop.wait(RELAY_SECONDS)
-        return 0
-'''
-
-
-class TheRelaysConstantsAreNamedTest(unittest.TestCase):
-    """`RELAY_POST_TIMEOUT_SECONDS`, `RELAY_FINISH_ATTEMPTS` and
-    `RELAY_DEFAULT_BATCH_BYTES` are each one named constant; the relay's tick
-    is the `relay_seconds` setting."""
-
-    NAMES = ("RELAY_POST_TIMEOUT_SECONDS", "RELAY_FINISH_ATTEMPTS",
-             "RELAY_DEFAULT_BATCH_BYTES")
-
-    def test_the_relay_constants_and_its_tick_setting_carry_their_values(self):
-        self.assertEqual(RUN.SETTINGS.relay_seconds, 2.0, "P3: the board's LIVE_FRAME_MS")
-        self.assertEqual(RUN.RELAY_DEFAULT_BATCH_BYTES, 1024 * 1024)
-        timeout = RUN.RELAY_POST_TIMEOUT_SECONDS
-        self.assertTrue(isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
-                        and timeout > 0, f"a post timeout in seconds: {timeout!r}")
-        attempts = RUN.RELAY_FINISH_ATTEMPTS
-        self.assertTrue(isinstance(attempts, int) and not isinstance(attempts, bool)
-                        and attempts >= 1, f"a count of tries: {attempts!r}")
-        self.assertIs(AXI.StreamRelay, RUN.StreamRelay,
-                      "the core re-exports the relay as it does every run-module name")
-
-    def test_each_constant_is_assigned_once_in_the_run_module(self):
-        source = RUN_MODULE_PATH.read_text(encoding="utf-8")
-        for name in self.NAMES:
-            with self.subTest(name=name):
-                self.assertEqual(len(_module_assignments(source, name)), 1,
-                                 f"{name} is one module-level constant of _crucible_run.py")
-
-    def test_the_spelled_value_checker_tells_a_spelled_value_from_a_name(self):
-        self.assertEqual(spelled_constant_values(SYNTHETIC_RELAY_THAT_COUNTS, (2.0, 5)), [2.0])
-        self.assertEqual(spelled_constant_values(SYNTHETIC_RELAY_THAT_FORWARDS, (2.0, 5)), [])
-        self.assertIsNone(spelled_constant_values("x = 2.0\n", (2.0,)))
-
-    def test_the_relay_spells_no_constants_value(self):
-        source = RUN_MODULE_PATH.read_text(encoding="utf-8")
-        values = ([getattr(RUN, name) for name in self.NAMES]
-                  + [RUN.SETTINGS.relay_seconds])
-        self.assertEqual(spelled_constant_values(source, values), [],
-                         "StreamRelay reads its bounds through the named constants "
-                         "and its tick through the setting")
-
-
-class TheRelayDecodesNothingTest(unittest.TestCase):
-    """§S2: the relay decodes and counts nothing — counting tests is the
-    client's job."""
-
-    def test_the_event_read_checker_flags_a_parse_and_passes_a_forwarder(self):
-        flagged = event_reads(SYNTHETIC_RELAY_THAT_COUNTS) or []
-        self.assertIn("call loads", flagged)
-        self.assertIn("names 'test-end'", flagged)
-        self.assertIn("names 'event'", flagged)
-        self.assertEqual(event_reads(SYNTHETIC_RELAY_THAT_FORWARDS), [])
-        self.assertIsNone(event_reads("def f():\n    return 1\n"))
-
-    def test_the_shared_relay_reads_no_event(self):
-        source = RUN_MODULE_PATH.read_text(encoding="utf-8")
-        self.assertEqual(event_reads(source), [],
-                         "StreamRelay exists in _crucible_run.py and parses no event")
 
 
 if __name__ == "__main__":

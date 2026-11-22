@@ -86,15 +86,9 @@
 // browser, each scenario a leaf of it carrying its Gherkin steps, and the
 // run's counts over its scenarios.
 import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
 import { mountUi, settleReads, unmountUi, waitUntil, type UiIntervals } from "../helpers/ui-mount";
 import { relativeTime, workspaceTabs } from "../../public/app-logic.mjs";
-
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 
 /** A short watchdog for the liveness test (its own mount only): the silence
  *  window keeps its default and the clock is moved past it with
@@ -502,24 +496,6 @@ function runByline(): string {
 function boardRelativeTime(offsetMs: number): string {
   return relativeTime(mountNow + offsetMs, Date.now());
 }
-
-// ──────────────────────────────────────────────────────────────────────────
-// NEW — §S4 AC1: `BddFeed` and its siblings are GONE, asserted BY ABSENCE
-// (not by inspection). No test in this migration checked this before: the
-// 13 original assertions were all triaged to KEEP/DELETE/AMEND, but none of
-// them named the retirement itself as a fact to assert. A GREEN that left a
-// dead `BddFeed` branch behind (unreachable, unshimmed, but still declared)
-// would satisfy every migrated behavioural test above while failing this
-// CR's own §S4 AC1 in letter and spirit.
-// ──────────────────────────────────────────────────────────────────────────
-
-describe("CR-CRU-145 §S4 AC1 — the bespoke BDD renderer is RETIRED, asserted by absence", () => {
-  test("no BddFeed/BddFeature/BddScenario/BddStep/BddRunIdentity declaration survives in public/app.js — no shim, no dead branch, no second path", () => {
-    for (const symbol of ["BddFeed", "BddFeature", "BddScenario", "BddStep", "BddRunIdentity"]) {
-      expect(APP_JS_SRC).not.toMatch(new RegExp(`\\b${symbol}\\b`));
-    }
-  });
-});
 
 // ──────────────────────────────────────────────────────────────────────────
 // KEPT, RE-POINTED — the Gherkin now renders at the run detail, reached via

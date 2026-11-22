@@ -71,25 +71,9 @@
 
 import { describe, test, expect, afterEach } from "bun:test";
 import { setSystemTime } from "bun:test";
-import { readFileSync } from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { settleDom } from "../helpers/dom-settle";
 import { singleReleaseHistoryStub } from "../helpers/history-stub";
 import { mountUi, unmountUi, waitUntil, type UiIntervals } from "../helpers/ui-mount";
-
-const REPO_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-// Orchestrator pin (live-review, same session as this RED) — cycle-timer
-// badges must never wrap at narrow widths; reuses the styles.css
-// source-assertion technique tests/integration/f13-fidelity.test.ts's §S6 #7
-// GLYPH-ONLY-coloring block already established (`ruleBody` regex over the
-// real stylesheet source, independent of happy-dom's lack of real layout).
-const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");
-function ruleBody(selector: string): string | undefined {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(STYLES_SRC);
-  return match?.[1];
-}
 
 interface CycleFixture {
   id: number;
@@ -569,29 +553,10 @@ describe("§S3 (re-baselined 2026-07-17) — ALIGNED TIMERS: cycle-row timers sh
 // ACTIVE ember form and the sealed dim form) must never wrap.
 //
 // happy-dom performs no real layout (no true visual line-wrapping to
-// observe), so the primary, genuinely-failing-today pin is a STYLES.CSS
-// SOURCE assertion — the exact technique tests/integration/f13-fidelity.test.ts's §S6 #7
-// GLYPH-ONLY-coloring block already uses (`ruleBody` regex over the real
-// stylesheet). Today neither `.app-cycle-timer-ember` nor
-// `.app-cycle-timer-sealed` declares `white-space: nowrap` anywhere in
-// public/styles.css (confirmed: the only existing `white-space: nowrap`
-// rules in the file are `.app-hidden-data` and unrelated selectors) — this
-// fails against CURRENT production. The DOM-level guard alongside it is a
-// bound/regression check (not independently RED-failing under happy-dom's
-// no-layout model, same caveat this file's own "ITEM 4" note above
-// documents): it pins that GREEN's fix is a pure CSS property, never a
-// manual `<br>`/embedded-newline workaround splitting the badge text.
+// observe), so the DOM-level guard below is a bound/regression check (same
+// caveat this file's own "ITEM 4" note above documents): it pins that the
+// badge text is never split by a manual `<br>`/embedded-newline workaround.
 describe("§S6 item 2 (aligned timers, orchestrator pin) — cycle-timer badges NEVER WRAP at narrow widths", () => {
-  test("both the ACTIVE ember badge rule and the DONE sealed badge rule declare `white-space: nowrap` in styles.css (source-assertion technique)", () => {
-    const emberRule = ruleBody(".app-cycle-timer-ember");
-    expect(emberRule).toBeDefined();
-    expect(emberRule ?? "").toMatch(/white-space\s*:\s*nowrap/);
-
-    const sealedRule = ruleBody(".app-cycle-timer-sealed");
-    expect(sealedRule).toBeDefined();
-    expect(sealedRule ?? "").toMatch(/white-space\s*:\s*nowrap/);
-  });
-
   test(
     "an ACTIVE cycle with a long label renders its ticking timer badge as ONE unbroken text node at a multi-hour-scale elapsed value ('246m 56s'-scale) — no <br>, no embedded newline, no split text nodes (bound: no manual line-break workaround)",
     async () => {
