@@ -4157,7 +4157,7 @@ export class Store {
       .query<ProjectRow, []>(
         `${Store.PROJECT_SELECT}
          WHERE archived_at IS ${archived ? "NOT NULL" : "NULL"}
-         ORDER BY created_at ASC`,
+         ORDER BY created_at ASC, rowid ASC`,
       )
       .all();
     return rows.map(Store.toProject);
@@ -4570,13 +4570,13 @@ export class Store {
         ? this.db
             .query<AgentRow, []>(
               `SELECT * FROM agents WHERE ${Store.NOT_ARCHIVED_SUBQUERY}
-               ORDER BY last_seen DESC`,
+               ORDER BY last_seen DESC, rowid DESC`,
             )
             .all()
         : this.db
             .query<AgentRow, [string]>(
               `SELECT * FROM agents WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}
-               ORDER BY last_seen DESC`,
+               ORDER BY last_seen DESC, rowid DESC`,
             )
             .all(projectKey);
 
@@ -5714,14 +5714,14 @@ export class Store {
         ? this.db
             .query<RunRow, []>(
               `SELECT * FROM runs WHERE run_state = 'open' AND ${Store.NOT_ARCHIVED_SUBQUERY}
-               ORDER BY started_at DESC`,
+               ORDER BY started_at DESC, rowid DESC`,
             )
             .all()
         : this.db
             .query<RunRow, [string]>(
               `SELECT * FROM runs
                WHERE run_state = 'open' AND project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}
-               ORDER BY started_at DESC`,
+               ORDER BY started_at DESC, rowid DESC`,
             )
             .all(projectKey);
     return rows.map((row) => Store.toRun(row));
@@ -5760,7 +5760,7 @@ export class Store {
   sweepOpenRuns(now: number = Date.now()): RunEvent[] {
     const abandonAfterMs = runAbandonAfterMs();
     const open = this.db
-      .query<RunRow, []>(`SELECT * FROM runs WHERE run_state = 'open' ORDER BY started_at ASC`)
+      .query<RunRow, []>(`SELECT * FROM runs WHERE run_state = 'open' ORDER BY started_at ASC, rowid ASC`)
       .all();
     const aborted: RunEvent[] = [];
     for (const row of open) {
