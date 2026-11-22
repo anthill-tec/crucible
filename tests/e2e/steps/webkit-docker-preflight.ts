@@ -1,13 +1,10 @@
 // CR-CRU-018 §S1 AC13/AC14 (DN "WebKit provisioning — the two paths") — pure
-// decision logic for the webkit-iphone local-launch guard, split out so
-// tests/unit/webkit-docker-local-guard.test.ts can assert it directly (no
-// Playwright, no browser, no worker) — see
+// decision logic for the webkit-iphone local-launch guard, split out so it
+// runs with no Playwright, no browser and no worker — see
 // tests/e2e/steps/webkit-docker-preflight.steps.ts for the one caller.
 
 /** The ONE command a developer runs for a local WebKit pass — package.json's
- *  own script name (asserted directly against package.json by
- *  tests/unit/webkit-docker-local-guard.test.ts, so this literal and that
- *  declaration cannot drift apart unnoticed). */
+ *  own script name. */
 export const WEBKIT_DOCKER_NPM_SCRIPT = "bun run webkit:docker";
 
 export interface WebkitEngineInput {

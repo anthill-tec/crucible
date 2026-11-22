@@ -23,9 +23,7 @@
 // probe and the user-level fallback, so no cwd, HOME or XDG_DATA_HOME value
 // can route this suite at a real database. The scratch `cwd` is KEPT and the
 // scratch DB lives inside it, so rules 2 and 3 name the same file and agree
-// rather than diverge. `tests/unit/crucible-db-isolation.test.ts`
-// feeds this config's real `webServer.env` through the real `resolveDbPath`
-// and asserts the result is neither the user-level nor the XDG path.
+// rather than diverge.
 import { defineConfig, devices, type ReporterDescription } from "@playwright/test";
 import { defineBddConfig } from "playwright-bdd";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";

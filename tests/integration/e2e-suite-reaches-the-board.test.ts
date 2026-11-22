@@ -80,8 +80,7 @@ const CLIENT = clientScript("bun-crucible.py");
 const FEATURES_DIR = join(REPO_ROOT, "tests", "e2e", "features");
 const STEPS_DIR = join(REPO_ROOT, "tests", "e2e", "steps");
 /** The phone feature `chromium-mobile` and `webkit-iphone` BOTH collect
- *  (their testMatch is identical, asserted by
- *  tests/integration/webkit-iphone-engine-coverage.test.ts). */
+ *  (their testMatch is identical). */
 const PHONE_FEATURE_FILE = join(FEATURES_DIR, "mobile-viewport-responsive.feature");
 const AGENT = "e2e-suite-ingest-fixture";
 

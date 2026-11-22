@@ -5,16 +5,12 @@
 // click, and a scroll-triggered fetch all share (loadSuite), and asserts
 // every element outside that suite still carries its marker in the real
 // rendered DOM.
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect } from "@playwright/test";
 import { Step } from "./world.ts";
 import { ingestJunit, junitManySuites } from "./harness.ts";
 
 const SUITE_COUNT = 70;
 const LEAVES_PER_SUITE = 11; // 70 x 11 = 770 tests — at least 734, many suites.
-
-function overlayOf(page: Page): Locator {
-  return page.getByTestId("run-overlay");
-}
 
 Step(
   "an e2e run of at least 734 tests across many suites is ingested for agent {string}",

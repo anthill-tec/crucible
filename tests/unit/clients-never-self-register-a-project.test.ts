@@ -13,7 +13,6 @@ import { CLIENT_SOURCE_DIR } from "../helpers/test-install.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const REPO_ROOT = join(import.meta.dir, "../..");
 const CLIENTS_DIR = CLIENT_SOURCE_DIR;
 
 const CLIENT_SCRIPTS = [

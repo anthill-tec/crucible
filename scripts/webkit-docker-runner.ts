@@ -1,9 +1,8 @@
 // CR-CRU-018 §S1 AC13/AC14 (DN "WebKit provisioning — the two paths") — the
 // pure, unit-testable pieces of the LOCAL WebKit-via-Docker path. Split out
 // from scripts/webkit-docker-server.ts (the CLI entry that actually shells to
-// `docker`) so tests/unit/webkit-docker-local-guard.test.ts can assert the exact
-// image tag, port and container shape without a Docker daemon (pure lib + CLI
-// entry split).
+// `docker`) so the image tag, port and container shape are pure values a
+// caller can read without a Docker daemon (pure lib + CLI entry split).
 //
 // MEASURED 2026-09-23, against this exact host's Docker 29.8.1 (RED phase —
 // this cycle's own verification, container removed afterwards):
@@ -109,10 +108,9 @@ export function runServerWsEndpoint(port: number = RUN_SERVER_PORT): string {
   return `ws://127.0.0.1:${String(port)}/`;
 }
 
-/** The exact `docker run` argv this script spawns — a pure function so
- *  tests/unit/webkit-docker-local-guard.test.ts can assert its shape (the pinned
- *  image, the published port, the exact `run-server` command) without a
- *  Docker daemon. `--rm` so a crashed run leaves nothing behind for the NEXT
+/** The exact `docker run` argv this script spawns — a pure function, so its
+ *  shape (the pinned image, the published port, the exact `run-server`
+ *  command) is readable without a Docker daemon. `--rm` so a crashed run leaves nothing behind for the NEXT
  *  one to collide with; `--init` so `run-server`'s child browser processes
  *  are reaped correctly (the same flag Playwright's own Docker docs use). */
 export function dockerRunArgs(opts: { image: string; port: number; playwrightVersion: string }): string[] {

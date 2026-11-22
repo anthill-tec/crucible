@@ -18,8 +18,8 @@
 //
 //   // AC2 — ADDITIVE. `resolveDbPath(opts): string` keeps its EXACT signature
 //   // and return type and DELEGATES to resolveStore(opts).path. No existing
-//   // call site (`startServer` in src/server.ts, tests/integration/db-path-resolution.test.ts,
-//   // tests/unit/crucible-db-isolation.test.ts) is edited.
+//   // call site (`startServer` in src/server.ts,
+//   // tests/integration/db-path-resolution.test.ts) is edited.
 //
 //   export interface ServerHandle {
 //     server: ...; store: Store; stop(): void;

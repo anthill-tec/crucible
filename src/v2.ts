@@ -228,7 +228,7 @@ function json(body: unknown, status = 200): Response {
  * all 16 call sites for no behavioural gain, and it is precisely this
  * signature's sameness that makes "no payload moved" trivially checkable.
  */
-function reply(req: Request, url: URL, payload: Record<string, unknown>, status = 200): Response {
+function reply(_req: Request, _url: URL, payload: Record<string, unknown>, status = 200): Response {
   return json(payload, status);
 }
 

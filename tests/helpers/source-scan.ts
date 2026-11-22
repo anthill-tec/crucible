@@ -171,13 +171,13 @@ function skipLiteral(
 // A template literal contributes its PROSE only — each `${...}` interior is
 // live code and is left standing (see `skipLiteral`'s `holes`), which is why
 // `` `... ${String(fields.track)}` `` still reads as a field dereference.
-export interface JsInertSpan {
+interface JsInertSpan {
   start: number;
   end: number;
   kind: "block" | "line" | "string";
 }
 
-export function jsInertSpans(text: string): JsInertSpan[] {
+function jsInertSpans(text: string): JsInertSpan[] {
   const spans: JsInertSpan[] = [];
   let i = 0;
   while (i < text.length) {
